@@ -17,7 +17,6 @@ use warp_graphql::queries::get_blocks_for_user::{
     Block as GqlBlock, GetBlocksForUser, GetBlocksForUserVariables,
 };
 
-use super::auth::AuthClient;
 use super::ServerApi;
 use crate::ai::generate_block_title::api::{GenerateBlockTitleRequest, GenerateBlockTitleResponse};
 use crate::server::block::{Block, DisplaySetting};

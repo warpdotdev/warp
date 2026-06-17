@@ -1,19 +1,20 @@
 use chrono::{Local, TimeZone};
 use uuid::Uuid;
-use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::external_product_icon::ExternalProductIcon;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
-    Hoverable, MainAxisAlignment, MouseStateHandle, Padding, ParentElement, Radius, Shrinkable,
-    Text,
+    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Flex, Hoverable, MainAxisAlignment, MouseStateHandle, Padding, ParentElement, Radius,
+    Shrinkable, Text,
 };
 use warpui::fonts::{Properties, Weight};
+use warpui::keymap::Keystroke;
 use warpui::platform::Cursor;
-use warpui::ui_components::button::ButtonVariant;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+};
 
 use crate::ai::mcp::{Author, MCPServerUpdate};
 use crate::appearance::Appearance;
@@ -23,6 +24,9 @@ use crate::settings_view::mcp_servers::style::{
 use crate::ui_components::avatar::{Avatar, AvatarContent};
 use crate::ui_components::blended_colors;
 use crate::util::time_format::format_approx_duration_from_now;
+use crate::view_components::action_button::{
+    ActionButton, KeystrokeSource, NakedTheme, PrimaryTheme,
+};
 
 pub enum UpdateModalBodyEvent {
     Cancel,
@@ -39,21 +43,47 @@ pub enum UpdateModalBodyAction {
     SelectOption(usize),
 }
 
-#[derive(Default)]
 pub struct UpdateModalBody {
     installation_uuid: Option<Uuid>,
     server_name: Option<String>,
     update_options: Vec<MCPServerUpdate>,
     selected_updates: Vec<bool>,
-    cancel_mouse_state: MouseStateHandle,
-    update_mouse_state: MouseStateHandle,
+    cancel_button: ViewHandle<ActionButton>,
+    update_button: ViewHandle<ActionButton>,
     close_button_mouse_state: MouseStateHandle,
     option_mouse_states: Vec<MouseStateHandle>,
 }
 
 impl UpdateModalBody {
-    pub fn new() -> Self {
-        Default::default()
+    pub fn new(ctx: &mut ViewContext<Self>) -> Self {
+        let cancel_button = ctx.add_typed_action_view(|_ctx| {
+            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+                ctx.dispatch_typed_action(UpdateModalBodyAction::Cancel);
+            })
+        });
+
+        let enter_keystroke = Keystroke::parse("enter").expect("valid keystroke");
+        let update_button = ctx.add_typed_action_view(|ctx| {
+            let mut button = ActionButton::new("Update", PrimaryTheme)
+                .with_keybinding(KeystrokeSource::Fixed(enter_keystroke), ctx)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(UpdateModalBodyAction::Update);
+                });
+            // Initial state has no rows selected, so the button starts disabled.
+            button.set_disabled(true, ctx);
+            button
+        });
+
+        Self {
+            installation_uuid: None,
+            server_name: None,
+            update_options: vec![],
+            selected_updates: vec![],
+            cancel_button,
+            update_button,
+            close_button_mouse_state: Default::default(),
+            option_mouse_states: vec![],
+        }
     }
 
     pub fn set_installation(
@@ -61,6 +91,7 @@ impl UpdateModalBody {
         installation_uuid: Uuid,
         server_name: String,
         update_options: Vec<MCPServerUpdate>,
+        ctx: &mut ViewContext<Self>,
     ) {
         self.installation_uuid = Some(installation_uuid);
         self.server_name = Some(server_name);
@@ -69,14 +100,25 @@ impl UpdateModalBody {
         self.option_mouse_states = (0..self.update_options.len())
             .map(|_| MouseStateHandle::default())
             .collect();
+        // No rows are selected yet, so the Update button must start disabled.
+        self.refresh_update_button_disabled(ctx);
     }
 
-    pub fn clear(&mut self) {
+    pub fn clear(&mut self, ctx: &mut ViewContext<Self>) {
         self.installation_uuid = None;
         self.server_name = None;
         self.update_options = vec![];
         self.selected_updates = vec![];
         self.option_mouse_states = vec![];
+        self.refresh_update_button_disabled(ctx);
+    }
+
+    /// Sync the Update button's disabled state with the current selection.
+    fn refresh_update_button_disabled(&mut self, ctx: &mut ViewContext<Self>) {
+        let has_selection = self.selected_updates.iter().any(|&x| x);
+        self.update_button.update(ctx, |button, ctx| {
+            button.set_disabled(!has_selection, ctx);
+        });
     }
 
     fn render_title(&self, appearance: &Appearance) -> Box<dyn Element> {
@@ -296,96 +338,20 @@ impl UpdateModalBody {
         .finish()
     }
 
-    fn render_action_buttons(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let cancel_button = appearance
-            .ui_builder()
-            .button(ButtonVariant::Text, self.cancel_mouse_state.clone())
-            .with_text_label("Cancel".into())
-            .with_style(UiComponentStyles {
-                font_weight: Some(Weight::Bold),
-                font_color: Some(theme.active_ui_text_color().into()),
-                ..Default::default()
-            })
-            .with_hovered_styles(UiComponentStyles {
-                font_color: Some(theme.disabled_ui_text_color().into()),
-                ..Default::default()
-            })
-            .build()
-            .with_cursor(Cursor::PointingHand)
-            .on_click(|ctx, _, _| ctx.dispatch_typed_action(UpdateModalBodyAction::Cancel))
-            .finish();
-
-        // Disable the update button if no updates are selected
-        let has_selection = self.selected_updates.iter().any(|&x| x);
-        let label_color = if has_selection {
-            theme.font_color(theme.accent())
-        } else {
-            theme.disabled_text_color(theme.surface_3())
-        };
-
-        let corner_down_left_icon = Container::new(
-            ConstrainedBox::new(Icon::CornerDownLeft.to_warpui_icon(label_color).finish())
-                .with_width(appearance.monospace_font_size())
-                .with_height(appearance.monospace_font_size())
-                .finish(),
-        )
-        .with_uniform_padding(2.)
-        .with_border(Border::all(1.).with_border_fill(coloru_with_opacity(label_color.into(), 60)))
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-        .finish();
-
-        let update_button_label = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Text::new_inline(
-                    "Update",
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
-                )
-                .with_color(label_color.into())
-                .with_style(Properties::default().weight(Weight::Bold))
-                .finish(),
-            )
-            .with_child(
-                Container::new(corner_down_left_icon)
-                    .with_margin_left(8.)
-                    .finish(),
-            )
-            .finish();
-
-        let mut update_button_builder = appearance
-            .ui_builder()
-            .button(ButtonVariant::Accent, self.update_mouse_state.clone())
-            .with_custom_label(update_button_label)
-            .with_style(UiComponentStyles {
-                padding: Some(Coords::uniform(5.).left(10.).right(10.)),
-                ..Default::default()
-            });
-
-        if !has_selection {
-            update_button_builder = update_button_builder.disabled();
-        }
-
-        let update_button = update_button_builder
-            .build()
-            .with_cursor(Cursor::PointingHand)
-            .on_click(|ctx, _, _| ctx.dispatch_typed_action(UpdateModalBodyAction::Update))
-            .finish();
-
+    fn render_action_buttons(&self) -> Box<dyn Element> {
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
-                Container::new(cancel_button)
+                Container::new(ChildView::new(&self.cancel_button).finish())
                     .with_margin_right(INSTALLATION_MODAL_BUTTON_GAP)
                     .finish(),
             )
-            .with_child(Container::new(update_button).finish())
+            .with_child(Container::new(ChildView::new(&self.update_button).finish()).finish())
             .finish()
     }
 
     fn render_buttons_row(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let action_buttons = self.render_action_buttons(appearance);
+        let action_buttons = self.render_action_buttons();
 
         let spacer = Shrinkable::new(1., Container::new(Empty::new().finish()).finish()).finish();
 
@@ -473,9 +439,11 @@ impl TypedActionView for UpdateModalBody {
                 }
             }
             UpdateModalBodyAction::SelectOption(index) => {
-                // Toggle the selection at the given index
+                // Toggle the selection at the given index, then sync the
+                // Update button's disabled state with the new selection.
                 if let Some(selected) = self.selected_updates.get_mut(*index) {
                     *selected = !*selected;
+                    self.refresh_update_button_disabled(ctx);
                     ctx.notify();
                 }
             }

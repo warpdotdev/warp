@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
@@ -53,7 +52,12 @@ pub(super) fn input_context_for_request(
     additional_context: Vec<AIAgentContext>,
     app: &AppContext,
 ) -> Arc<[AIAgentContext]> {
-    let mut context = context_model.pending_context(app, is_user_query);
+    let current_working_directory_location = active_session.current_working_directory_location(app);
+    let mut context = context_model.pending_context(
+        app,
+        is_user_query,
+        current_working_directory_location.as_ref(),
+    );
 
     context.push(AIAgentContext::CurrentTime {
         current_time: Local::now(),
@@ -68,15 +72,17 @@ pub(super) fn input_context_for_request(
     {
         let session_context = SessionContext::from_session(active_session, app);
         if session_context.is_remote() {
-            add_remote_codebase_context(&mut context, app);
+            add_remote_codebase_context(&mut context, &session_context, app);
         } else {
             add_local_codebase_context(&mut context, app);
         }
     }
 
     if FeatureFlag::ListSkills.is_enabled() {
+        let path_origin = SessionContext::from_session(active_session, app).skill_path_origin();
         let skills = list_skills_if_changed(
-            active_session.current_working_directory().map(Path::new),
+            current_working_directory_location.as_ref(),
+            &path_origin,
             conversation_id,
             app,
         );
@@ -113,8 +119,15 @@ fn add_local_codebase_context(context: &mut Vec<AIAgentContext>, app: &AppContex
 }
 
 #[cfg(not(target_family = "wasm"))]
-fn add_remote_codebase_context(context: &mut Vec<AIAgentContext>, app: &AppContext) {
-    for codebase in RemoteCodebaseIndexModel::as_ref(app).codebases_for_agent_context() {
+fn add_remote_codebase_context(
+    context: &mut Vec<AIAgentContext>,
+    session_context: &SessionContext,
+    app: &AppContext,
+) {
+    let Some(host_id) = session_context.host_id() else {
+        return;
+    };
+    for codebase in RemoteCodebaseIndexModel::as_ref(app).codebases_for_agent_context(host_id) {
         context.push(AIAgentContext::Codebase {
             name: codebase.name,
             path: codebase.path,
@@ -123,7 +136,12 @@ fn add_remote_codebase_context(context: &mut Vec<AIAgentContext>, app: &AppConte
 }
 
 #[cfg(target_family = "wasm")]
-fn add_remote_codebase_context(_context: &mut Vec<AIAgentContext>, _app: &AppContext) {}
+fn add_remote_codebase_context(
+    _context: &mut Vec<AIAgentContext>,
+    _session_context: &SessionContext,
+    _app: &AppContext,
+) {
+}
 
 /// Parses context reference strings like <block:123> from the user query and returns
 /// a map of reference strings to AIAgentAttachment objects.
@@ -228,29 +246,6 @@ pub(super) fn parse_context_attachments(
                 referenced_attachments.insert(reference_string, attachment.clone());
             }
         }
-    }
-
-    // Add pending file attachments as FilePathReference.
-    // Duplicate basenames get a (1), (2), ... suffix to avoid collisions,
-    // matching the pattern in build_file_attachment_map.
-    for file in context_model.pending_files().iter() {
-        let attachment = AIAgentAttachment::FilePathReference {
-            file_id: uuid::Uuid::new_v4().to_string(),
-            file_name: file.file_name.clone(),
-            file_path: file.file_path.to_string_lossy().to_string(),
-        };
-        let mut key = file.file_name.clone();
-        if referenced_attachments.contains_key(&key) {
-            let mut suffix = 1;
-            loop {
-                key = format!("{} ({suffix})", file.file_name);
-                if !referenced_attachments.contains_key(&key) {
-                    break;
-                }
-                suffix += 1;
-            }
-        }
-        referenced_attachments.insert(key, attachment);
     }
 
     // Add pending AI document as attachment if present

@@ -12,7 +12,7 @@ use warp::integration_testing::terminal::util::{
 use warp::integration_testing::view_getters;
 use warp::terminal::shell;
 use warp::terminal::shell::ShellType;
-use warpui::{App, WindowId};
+use warpui_core::{App, WindowId};
 
 use crate::builder::cargo_target_tmpdir;
 

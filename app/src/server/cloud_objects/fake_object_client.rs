@@ -21,6 +21,7 @@ use anyhow::{anyhow, Result};
 use async_channel::Sender;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use cloud_object_client::ObjectPermissionUpdateResult;
 use warp_graphql::object_permissions::AccessLevel;
 
 use crate::cloud_object::model::actions::{ObjectActionHistory, ObjectActionType};
@@ -29,10 +30,9 @@ use crate::cloud_object::{
     BulkCreateCloudObjectResult, BulkCreateGenericStringObjectsRequest, CreateCloudObjectResult,
     CreateObjectRequest, CreatedCloudObject, GenericStringObjectFormat,
     GenericStringObjectUniqueKey, JsonObjectType, ObjectDeleteResult, ObjectIdType,
-    ObjectMetadataUpdateResult, ObjectPermissionUpdateResult, ObjectPermissionsUpdateData,
-    ObjectType, ObjectsToUpdate, Owner, Revision, RevisionAndLastEditor, ServerFolder,
-    ServerMetadata, ServerNotebook, ServerObject, ServerPermissions, ServerPreference,
-    ServerWorkflow, UpdateCloudObjectResult,
+    ObjectMetadataUpdateResult, ObjectPermissionsUpdateData, ObjectType, ObjectsToUpdate, Owner,
+    Revision, RevisionAndLastEditor, ServerFolder, ServerMetadata, ServerNotebook, ServerObject,
+    ServerPermissions, ServerPreference, ServerWorkflow, UpdateCloudObjectResult,
 };
 use crate::drive::folders::FolderId;
 use crate::drive::sharing::SharingAccessLevel;
@@ -144,12 +144,12 @@ impl FakeObjectClient {
                     anyone_link_sharing: None,
                     permissions_last_updated_ts: stored.metadata_ts.into(),
                 };
-                let server_pref = ServerPreference {
-                    id: SyncId::ServerId(ServerId::from(*id)),
-                    model: stored.model.clone(),
+                let server_pref = ServerPreference::new(
+                    SyncId::ServerId(ServerId::from(*id)),
+                    stored.model.clone(),
                     metadata,
                     permissions,
-                };
+                );
                 Box::new(server_pref) as Box<dyn ServerObject>
             })
             .collect();

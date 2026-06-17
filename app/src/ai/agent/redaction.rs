@@ -263,7 +263,8 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                     }
                     // Orchestrate results contain agent IDs / canonical error
                     // strings only; no user-provided text to redact.
-                    AIAgentActionResultType::RunAgents(_) => {}
+                    AIAgentActionResultType::RunAgents(_)
+                    | AIAgentActionResultType::WaitForEvents(_) => {}
                 }
             }
             AIAgentInput::FetchReviewComments { repo_path, context } => {
@@ -348,6 +349,8 @@ fn redact_context(context: &mut [AIAgentContext]) {
             | AIAgentContext::Codebase { .. }
             | AIAgentContext::ProjectRules { .. }
             | AIAgentContext::Git { .. }
+            | AIAgentContext::Repository { .. }
+            | AIAgentContext::PullRequest { .. }
             | AIAgentContext::File(_)
             | AIAgentContext::Skills { .. } => {}
         }

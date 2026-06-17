@@ -9,10 +9,10 @@ use instant::Instant;
 pub use remote_server::setup::RemoteServerSetupState;
 
 use super::history::HistoryEntry;
-use super::model::ansi::{FinishUpdateValue, WarpificationUnavailableReason};
+use super::model::ansi::FinishUpdateValue;
 use super::model::block::BlockId;
 use super::model::session::{SessionId, SessionInfo};
-use super::model::terminal_model::{BlockIndex, ExitReason, TmuxInstallationState};
+use super::model::terminal_model::{BlockIndex, ExitReason};
 use crate::server::ids::SyncId;
 use crate::server::telemetry::ImageProtocol;
 use crate::terminal::model::block::{BlockMetadata, SerializedBlock};
@@ -43,6 +43,13 @@ pub enum Event {
     },
     /// Sent when a new block is created.
     BlockMetadataReceived(BlockMetadataReceivedEvent),
+    /// Sent when a block's working directory has been updated outside of the
+    /// normal precmd path (e.g. via an OSC 7 escape sequence). Subscribers
+    /// that only care about CWD changes should listen for this in addition to
+    /// `BlockMetadataReceived`; subscribers tied to precmd semantics (such as
+    /// the requested-command finish detector) should keep listening only to
+    /// `BlockMetadataReceived` so they preserve their once-per-block contract.
+    BlockWorkingDirectoryUpdated(BlockWorkingDirectoryUpdatedEvent),
     /// Sent after a background block is started and added to the block list.
     BackgroundBlockStarted,
     ClipboardStore(ClipboardType, String),
@@ -74,18 +81,8 @@ pub enum Event {
     SSHControlMasterError,
     TerminalModeSwapped(TerminalMode),
     ExecutedInBandCommand(ExecutedExecutorCommandEvent),
-    TmuxControlModeReady {
-        primary_pane: u32,
-    },
     /// See comment above [crate::terminal::ModelEvent::DetectedEndOfSshLogin].
     DetectedEndOfSshLogin(SshLoginStatus),
-    RemoteWarpificationIsUnavailable(WarpificationUnavailableReason),
-    SshTmuxInstaller(TmuxInstallationState),
-    TmuxInstallFailed {
-        line: String,
-        command: String,
-    },
-    InitSsh(InitSshEvent),
     InitSubshell(InitSubshellEvent),
     /// Emitted when the user's RC file has been executed in a subshell.
     SourcedRcFileInSubshell(SourcedRcFileInSubshellEvent),
@@ -106,6 +103,7 @@ pub enum Event {
     /// Users "Tag an agent in" when they ask the agent to take over a long running command
     /// that was started outside of a conversation (and they tag the agent out when they take control back).
     AgentTaggedInChanged {
+        block_id: BlockId,
         is_tagged_in: bool,
     },
     Handler(HandlerEvent),
@@ -156,13 +154,6 @@ pub struct InitSubshellEvent {
 
 #[derive(Debug, Clone)]
 pub struct SourcedRcFileInSubshellEvent {
-    pub shell_type: ShellType,
-    pub uname: Option<String>,
-    pub tmux: Option<bool>,
-}
-
-#[derive(Debug, Clone)]
-pub struct InitSshEvent {
     pub shell_type: ShellType,
     pub uname: Option<String>,
 }
@@ -280,6 +271,27 @@ pub struct BlockMetadataReceivedEvent {
 }
 
 #[derive(Clone, Debug)]
+/// A notification that an existing block's working directory has been updated
+/// out-of-band (e.g. by an OSC 7 escape sequence) without a fresh precmd. The
+/// payload mirrors `BlockMetadataReceivedEvent` so CWD-dependent listeners can
+/// reuse the same handling, but listeners that rely on precmd semantics should
+/// keep using `BlockMetadataReceivedEvent`.
+///
+/// Note: `is_for_in_band_command` here describes the block carrying the update,
+/// while the similarly-spelled `is_after_in_band_command` on
+/// `BlockMetadataReceivedEvent` describes the *previous* block. The semantics
+/// differ because precmd fires after a block runs, while OSC 7 fires while the
+/// block is alive.
+pub struct BlockWorkingDirectoryUpdatedEvent {
+    pub block_metadata: BlockMetadata,
+    pub block_index: BlockIndex,
+    /// Whether the block carrying this update is for an in-band command.
+    pub is_for_in_band_command: bool,
+    /// Whether the session has fully completed the bootstrapping process.
+    pub is_done_bootstrapping: bool,
+}
+
+#[derive(Clone, Debug)]
 /// Contents of a normal block that a user executed.
 pub struct UserBlockCompleted {
     pub index: BlockIndex,
@@ -317,7 +329,7 @@ pub struct UserBlockCompleted {
 }
 
 /// Emitted upon completion of an executor command that goes through the pty, such as the
-/// InBandCommandExecutor or the TmuxCommandExecutor.
+/// InBandCommandExecutor.
 #[derive(Clone)]
 pub struct ExecutedExecutorCommandEvent {
     pub command_id: String,
@@ -408,6 +420,11 @@ impl Debug for Event {
                 "BlockStarted({:?}, Done bootstrapping: {:?})",
                 event.block_metadata, event.is_done_bootstrapping
             ),
+            Event::BlockWorkingDirectoryUpdated(event) => write!(
+                f,
+                "BlockWorkingDirectoryUpdated({:?}, Done bootstrapping: {:?})",
+                event.block_metadata, event.is_done_bootstrapping
+            ),
             Event::AfterBlockStarted { .. } => write!(f, "BlockExecutionStarted"),
             Event::BackgroundBlockStarted => write!(f, "BackgroundBlockStarted"),
             Event::VisibleBootstrapBlock => write!(f, "VisibleBootstrapBlock"),
@@ -422,20 +439,8 @@ impl Debug for Event {
             Event::SSH(remote_shell) => write!(f, "SSH(remote shell: {remote_shell}"),
             Event::SSHControlMasterError => write!(f, "SSH ControlMaster error"),
             Event::TerminalModeSwapped(_) => write!(f, "Terminal mode swapped"),
-            Event::TmuxControlModeReady { primary_pane } => {
-                write!(f, "TmuxControlModeReady(primary_pane: {primary_pane})")
-            }
             Event::DetectedEndOfSshLogin(check_type) => {
                 write!(f, "DetectedEndOfSshLogin: {check_type:?}")
-            }
-            Event::RemoteWarpificationIsUnavailable(_) => {
-                write!(f, "RemoteWarpificationIsUnavailable")
-            }
-            Event::SshTmuxInstaller(installer) => {
-                write!(f, "SshTmuxInstaller({installer:?})")
-            }
-            Event::TmuxInstallFailed { line, command } => {
-                write!(f, "TmuxInstallFailed(line: {line}, command: {command})")
             }
             Event::ExecutedInBandCommand(event) => write!(
                 f,
@@ -448,14 +453,17 @@ impl Debug for Event {
             Event::SourcedRcFileInSubshell(event) => {
                 write!(f, "SourcedRcFileInSubshell({event:?})")
             }
-            Event::InitSsh(event) => {
-                write!(f, "InitSsh({event:?})")
-            }
             Event::PromptUpdated => write!(f, "PromptUpdated"),
             Event::HonorPS1OutOfSync => write!(f, "HonorPS1OutOfSync"),
             Event::Typeahead => write!(f, "Typeahead"),
-            Event::AgentTaggedInChanged { is_tagged_in } => {
-                write!(f, "AgentTaggedInChanged(is_tagged_in: {is_tagged_in})")
+            Event::AgentTaggedInChanged {
+                block_id,
+                is_tagged_in,
+            } => {
+                write!(
+                    f,
+                    "AgentTaggedInChanged(block_id: {block_id:?}, is_tagged_in: {is_tagged_in})"
+                )
             }
             Event::Handler(handler_event) => write!(f, "Handler({handler_event:?}))"),
             Event::RemoteServerReady { session_id } => {

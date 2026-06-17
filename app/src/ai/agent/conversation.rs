@@ -3,6 +3,7 @@ use std::fmt::Display;
 
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 use ai::document::AIDocumentId;
+use ai::skills::SkillPathOrigin;
 use chrono::{DateTime, Local, TimeZone};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
@@ -20,14 +21,14 @@ use warp_multi_agent_api::response_event::stream_finished;
 use warp_multi_agent_api::response_event::stream_finished::TokenUsage;
 use warp_multi_agent_api::{self as api};
 use warpui::color::ColorU;
-use warpui::{EntityId, ModelContext, SingletonEntity};
+use warpui::{AppContext, EntityId, ModelContext, SingletonEntity};
 
 use super::api::ServerConversationToken;
 use super::task::helper::*;
 use super::task::transaction::{SavedTask, Transaction};
 use super::task::{
-    derive_todo_lists_from_root_task, ExtractMessagesError, Task, TaskId, UpdateTaskError,
-    UpgradeOptimisticTaskError,
+    derive_todo_lists_from_root_task, ExtractMessagesError, Task, TaskId, TaskMessageContext,
+    UpdateTaskError, UpgradeOptimisticTaskError,
 };
 use super::task_store::TaskStore;
 use super::{
@@ -48,7 +49,7 @@ use crate::ai::agent::linearization::compute_task_depths;
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
     AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, CancellationReason,
-    MessageToAIAgentOutputMessageError,
+    MessageToAIAgentOutputMessageError, SummarizationType,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
@@ -56,6 +57,7 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, ConversationStatusUpdate, RequestInput, ResponseStreamId,
     SerializedBlockListItem,
 };
+use crate::ai::llms::LLMPreferences;
 use crate::ai::skills::SkillDescriptor;
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::notebooks::NotebookId;
@@ -70,6 +72,7 @@ use crate::terminal::model::block::{
     AgentInteractionMetadata, AgentViewVisibility, BlockId, SerializedAIMetadata, SerializedBlock,
 };
 use crate::ui_components::icons::Icon;
+use crate::workspaces::user_profiles::UserProfileWithUID;
 use crate::{BlocklistAIHistoryModel, GlobalResourceHandlesProvider};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +88,72 @@ impl TodoStatus {
     pub fn is_cancelled(&self) -> bool {
         matches!(self, TodoStatus::Cancelled)
     }
+}
+
+fn footer_model_token_usage(
+    usage_metadata: &stream_finished::ConversationUsageMetadata,
+    llm_preferences: &LLMPreferences,
+) -> Vec<ModelTokenUsage> {
+    // warp + byok rows merge on their server-known model id. Custom endpoint
+    // rows live in a separate bucket keyed by their upstream `config_key` so
+    // they never collide with a warp/byok row that happens to share the same
+    // resolved alias. The `config_key` itself is not retained on
+    // `ModelTokenUsage`; it is translated to an alias up front and only the
+    // alias flows downstream (display + shared-session replay).
+    let mut standard_usage: HashMap<String, ModelTokenUsage> = HashMap::new();
+    for (model_id, usage) in &usage_metadata.warp_token_usage {
+        let entry = standard_usage
+            .entry(model_id.clone())
+            .or_insert_with(|| ModelTokenUsage {
+                model_id: model_id.clone(),
+                ..Default::default()
+            });
+        entry.warp_tokens += usage.total_tokens;
+        for (category, tokens) in &usage.token_usage_by_category {
+            *entry
+                .warp_token_usage_by_category
+                .entry(category.clone())
+                .or_default() += *tokens;
+        }
+    }
+    for (model_id, usage) in &usage_metadata.byok_token_usage {
+        let entry = standard_usage
+            .entry(model_id.clone())
+            .or_insert_with(|| ModelTokenUsage {
+                model_id: model_id.clone(),
+                ..Default::default()
+            });
+        entry.byok_tokens += usage.total_tokens;
+        for (category, tokens) in &usage.token_usage_by_category {
+            *entry
+                .byok_token_usage_by_category
+                .entry(category.clone())
+                .or_default() += *tokens;
+        }
+    }
+
+    let mut custom_usage: HashMap<String, ModelTokenUsage> = HashMap::new();
+    for (config_key, usage) in &usage_metadata.custom_endpoint_token_usage {
+        let label = llm_preferences.custom_endpoint_usage_display_label(config_key);
+        let entry = custom_usage
+            .entry(config_key.clone())
+            .or_insert_with(|| ModelTokenUsage {
+                model_id: label,
+                ..Default::default()
+            });
+        entry.custom_endpoint_tokens += usage.total_tokens;
+        for (category, tokens) in &usage.token_usage_by_category {
+            *entry
+                .custom_endpoint_token_usage_by_category
+                .entry(category.clone())
+                .or_default() += *tokens;
+        }
+    }
+
+    standard_usage
+        .into_values()
+        .chain(custom_usage.into_values())
+        .collect()
 }
 
 // basic info for creating a dummy command block based on an exchange's inputs
@@ -225,8 +294,8 @@ pub struct AIConversation {
     // is_remote_child, pinned) into a ChildAgentState sub-struct. See
     // PR #10777 review.
     /// Server-side identifier of the parent agent that spawned this child, if any.
-    /// In v1 this holds the parent's `server_conversation_token`; in v2 (OrchestrationV2)
-    /// it holds the parent's `run_id`. Persisted as `parent_agent_id` for serde compat.
+    /// For current orchestration, this holds the parent's `run_id`. Persisted as
+    /// `parent_agent_id` for serde compatibility with older conversation data.
     parent_agent_id: Option<String>,
     /// The display name for this agent (e.g. "Agent 1"), assigned by the orchestrator.
     agent_name: Option<String>,
@@ -237,7 +306,7 @@ pub struct AIConversation {
     /// True when this conversation is a placeholder for a child agent executing
     /// on a remote worker. The parent's client does not drive execution for
     /// these conversations — the remote worker's own client handles status
-    /// reporting. TaskStatusSyncModel skips status updates for these.
+    /// reporting.
     is_remote_child: bool,
 
     /// The last event sequence number observed from the v2 orchestration
@@ -310,78 +379,123 @@ impl AIConversation {
         }
     }
 
-    // TODO: derive todo list state from tasks instead of taking args.
-    //
-    // This would make it possible to fully restore a convo from tasks, instead of having to persist this additional data.
+    /// Strict restore: returns `Err(NoRootTask)` if `tasks` is empty. Use
+    /// for cloud-restore and fork-insert paths, where an empty payload is
+    /// malformed input rather than a not-yet-populated child.
     pub fn new_restored(
         id: AIConversationId,
         tasks: Vec<api::Task>,
         conversation_data: Option<AgentConversationData>,
     ) -> Result<Self, RestoreConversationError> {
-        let root_task_is_optimistic = conversation_data
-            .as_ref()
-            .and_then(|data| data.root_task_is_optimistic)
-            .unwrap_or_default();
-        let api_tasks_by_id: HashMap<String, api::Task> =
-            tasks.into_iter().map(|t| (t.id.clone(), t)).collect();
-
-        // To process a task, we need to reference some of the data in its parent task.  To
-        // avoid cloning, we process the task tree from deepest tasks to shallowest tasks.  This
-        // ensures that children are always processed before their parents, avoiding any need to
-        // clone task data to ensure the parent is available when processing the child.
-        let depths = compute_task_depths(&api_tasks_by_id);
-        let mut task_ids: Vec<String> = api_tasks_by_id.keys().cloned().collect();
-        task_ids.sort_by(|a, b| {
-            depths
-                .get(b.as_str())
-                .unwrap_or(&0)
-                .cmp(depths.get(a.as_str()).unwrap_or(&0))
-        });
-
-        let mut api_tasks_and_exchanges_by_id: HashMap<_, _> = api_tasks_by_id
-            .into_iter()
-            .map(|(id, task)| {
-                let exchanges = task.into_exchanges();
-                (id, (task, exchanges))
-            })
-            .collect();
-
-        let mut tasks_by_id = HashMap::new();
-        let mut root_task = None;
-        for task_id in task_ids {
-            let Some((task, exchanges)) = api_tasks_and_exchanges_by_id.remove(&task_id) else {
-                continue;
-            };
-
-            if let Some(parent_id) = task.parent_id() {
-                if let Some((parent_task, _)) = api_tasks_and_exchanges_by_id.get(parent_id) {
-                    tasks_by_id.insert(
-                        TaskId::new(task.id.clone()),
-                        Task::new_restored_subtask(task, parent_task, exchanges),
-                    );
-                } else {
-                    log::error!(
-                        "Could not find parent task (id: {}) for task (id: {})",
-                        parent_id,
-                        task.id
-                    );
-                }
-            } else if root_task.is_none() {
-                root_task = Some(if root_task_is_optimistic {
-                    Task::new_restored_optimistic_root(task.id.clone(), exchanges.into_iter())
-                } else {
-                    Task::new_restored_root(task, exchanges.into_iter())
-                });
-            }
-        }
-
-        let Some(root_task) = root_task else {
+        if tasks.is_empty() {
             return Err(RestoreConversationError::NoRootTask);
+        }
+        Self::new_restored_synthesizing_on_empty(id, tasks, conversation_data)
+    }
+
+    // TODO: derive todo list state from tasks instead of taking args. This
+    // would make it possible to fully restore a convo from tasks, instead of
+    // having to persist this additional data.
+    /// Lenient restore: when `tasks` is empty, synthesizes a fresh in-memory
+    /// conversation with a new `Optimistic(Root)` root task and the persisted
+    /// overlay metadata applied (mirroring the shape `AIConversation::new()`
+    /// produces). Use for the local-DB restore path, where an empty
+    /// `agent_tasks` set is the normal shape of a child conversation
+    /// persisted before its first server response.
+    pub fn new_restored_synthesizing_on_empty(
+        id: AIConversationId,
+        tasks: Vec<api::Task>,
+        conversation_data: Option<AgentConversationData>,
+    ) -> Result<Self, RestoreConversationError> {
+        let (task_store, todo_lists, status) = if tasks.is_empty() {
+            // Bypass `derive_status_from_root_task`: it would return `Success`
+            // for a root with no exchanges, silently misclassifying a restored
+            // "child waiting on server response" as done.
+            let root_task = Task::new_optimistic_root();
+            let task_store = TaskStore::with_root_task(root_task);
+            (task_store, Vec::new(), ConversationStatus::InProgress)
+        } else {
+            let api_tasks_by_id: HashMap<String, api::Task> =
+                tasks.into_iter().map(|t| (t.id.clone(), t)).collect();
+
+            // To process a task, we need to reference some of the data in its parent task.  To
+            // avoid cloning, we process the task tree from deepest tasks to shallowest tasks.  This
+            // ensures that children are always processed before their parents, avoiding any need to
+            // clone task data to ensure the parent is available when processing the child.
+            let depths = compute_task_depths(&api_tasks_by_id);
+            let mut task_ids: Vec<String> = api_tasks_by_id.keys().cloned().collect();
+            task_ids.sort_by(|a, b| {
+                depths
+                    .get(b.as_str())
+                    .unwrap_or(&0)
+                    .cmp(depths.get(a.as_str()).unwrap_or(&0))
+            });
+
+            let mut api_tasks_and_exchanges_by_id: HashMap<_, _> = api_tasks_by_id
+                .into_iter()
+                .map(|(id, task)| {
+                    let exchanges = task.into_exchanges();
+                    (id, (task, exchanges))
+                })
+                .collect();
+
+            let mut tasks_by_id = HashMap::new();
+            // Defer root selection until we've seen every parentless task so
+            // we can deterministically prefer a candidate with non-empty
+            // messages. Heals legacy DB rows that contain an orphan
+            // optimistic-UUID stub alongside the real server root; without
+            // this dedupe, `HashMap` iteration order picks between them
+            // non-deterministically. See QUALITY-774.
+            let mut parentless_candidates: Vec<(api::Task, Vec<AIAgentExchange>)> = Vec::new();
+            for task_id in task_ids {
+                let Some((task, exchanges)) = api_tasks_and_exchanges_by_id.remove(&task_id) else {
+                    continue;
+                };
+
+                if let Some(parent_id) = task.parent_id() {
+                    if let Some((parent_task, _)) = api_tasks_and_exchanges_by_id.get(parent_id) {
+                        tasks_by_id.insert(
+                            TaskId::new(task.id.clone()),
+                            Task::new_restored_subtask(task, parent_task, exchanges),
+                        );
+                    } else {
+                        log::error!(
+                            "Could not find parent task (id: {}) for task (id: {})",
+                            parent_id,
+                            task.id
+                        );
+                    }
+                } else {
+                    parentless_candidates.push((task, exchanges));
+                }
+            }
+
+            // Prefer the parentless candidate with non-empty messages (the
+            // real server root) over an empty stub. If multiple have messages
+            // or none have messages, fall back to the first-encountered
+            // candidate.
+            let root_task_pick = parentless_candidates
+                .iter()
+                .position(|(task, _)| !task.messages.is_empty())
+                .or_else(|| (!parentless_candidates.is_empty()).then_some(0))
+                .map(|idx| parentless_candidates.swap_remove(idx));
+
+            let Some((root_api_task, root_exchanges)) = root_task_pick else {
+                return Err(RestoreConversationError::NoRootTask);
+            };
+            let root_task = Task::new_restored_root(root_api_task, root_exchanges.into_iter());
+
+            // Derive todo lists from tasks by replaying UpdateTodos operations
+            let todo_lists = derive_todo_lists_from_root_task(&root_task);
+            let root_task_id = root_task.id().clone();
+            tasks_by_id.insert(root_task.id().clone(), root_task);
+
+            // Determine the correct status based on the exchanges before constructing
+            let status = Self::derive_status_from_root_task(&tasks_by_id.get(&root_task_id));
+
+            let task_store = TaskStore::from_tasks(tasks_by_id, root_task_id);
+            (task_store, todo_lists, status)
         };
-        // Derive todo lists from tasks by replaying UpdateTodos operations
-        let todo_lists = derive_todo_lists_from_root_task(&root_task);
-        let root_task_id = root_task.id().clone();
-        tasks_by_id.insert(root_task.id().clone(), root_task);
 
         let (
             server_conversation_token,
@@ -403,11 +517,16 @@ impl AIConversation {
                 .server_conversation_token
                 .map(ServerConversationToken::new);
             let conversation_usage_metadata = data.conversation_usage_metadata.unwrap_or_default();
-            let reverted_action_ids = data.reverted_action_ids.unwrap_or_default();
+            let reverted_action_ids: HashSet<AIAgentActionId> = data
+                .reverted_action_ids
+                .unwrap_or_default()
+                .into_iter()
+                .map_into()
+                .collect();
             let forked_from_server_conversation_token = data
                 .forked_from_server_conversation_token
                 .map(ServerConversationToken::new);
-            let artifacts = data
+            let artifacts: Vec<Artifact> = data
                 .artifacts_json
                 .and_then(|json| {
                     serde_json::from_str(&json)
@@ -415,14 +534,9 @@ impl AIConversation {
                         .ok()
                 })
                 .unwrap_or_default();
-            let parent_agent_id = data.parent_agent_id;
-            let agent_name = data.agent_name;
-            let orchestration_harness_type = data.orchestration_harness_type;
             let parent_conversation_id = data
                 .parent_conversation_id
                 .and_then(|id| AIConversationId::try_from(id).ok());
-            let is_remote_child = data.is_remote_child;
-            let run_id = data.run_id;
             let autoexecute_override = if FeatureFlag::RememberFastForwardState.is_enabled() {
                 data.autoexecute_override
                     .map(Into::into)
@@ -430,31 +544,28 @@ impl AIConversation {
             } else {
                 AIConversationAutoexecuteMode::default()
             };
-            let last_event_sequence = data.last_event_sequence;
-            let pinned = data.pinned;
-
             (
                 server_conversation_token,
                 forked_from_server_conversation_token,
                 conversation_usage_metadata,
                 reverted_action_ids,
                 artifacts,
-                parent_agent_id,
-                agent_name,
-                orchestration_harness_type,
+                data.parent_agent_id,
+                data.agent_name,
+                data.orchestration_harness_type,
                 parent_conversation_id,
-                is_remote_child,
-                run_id,
+                data.is_remote_child,
+                data.run_id,
                 autoexecute_override,
-                last_event_sequence,
-                pinned,
+                data.last_event_sequence,
+                data.pinned,
             )
         } else {
             (
                 None,
                 None,
                 ConversationUsageMetadata::default(),
-                Default::default(),
+                HashSet::new(),
                 Vec::new(),
                 None,
                 None,
@@ -467,14 +578,6 @@ impl AIConversation {
                 false,
             )
         };
-
-        // Convert these from the persistence type to the runtime one.
-        let reverted_action_ids = reverted_action_ids.into_iter().map_into().collect();
-
-        // Determine the correct status based on the exchanges before constructing
-        let status = Self::derive_status_from_root_task(&tasks_by_id.get(&root_task_id));
-
-        let task_store = TaskStore::from_tasks(tasks_by_id, root_task_id);
 
         Ok(Self {
             id,
@@ -546,12 +649,44 @@ impl AIConversation {
         self.conversation_usage_metadata.was_summarized
     }
 
+    /// Returns true if the conversation is currently being summarized.
+    pub fn is_summarizing(&self) -> bool {
+        let Some(exchange) = self.latest_visible_exchange() else {
+            return false;
+        };
+        let Some(output) = exchange.output_status.output() else {
+            return false;
+        };
+        output.get().messages.last().is_some_and(|m| {
+            matches!(
+                m.message,
+                AIAgentOutputMessageType::Summarization {
+                    finished_duration: None,
+                    summarization_type: SummarizationType::ConversationSummary,
+                    ..
+                }
+            )
+        })
+    }
+
     pub fn context_window_usage(&self) -> f32 {
         self.conversation_usage_metadata.context_window_usage
     }
 
+    /// Total credits spent in the conversation, including both LLM inference
+    /// and platform credits.
     pub fn credits_spent(&self) -> f32 {
-        (self.conversation_usage_metadata.credits_spent * 10.0).round() / 10.0
+        let total = self.conversation_usage_metadata.credits_spent
+            + self.conversation_usage_metadata.platform_credits_spent;
+        (total * 10.0).round() / 10.0
+    }
+
+    pub fn inference_credits_spent(&self) -> f32 {
+        self.conversation_usage_metadata.credits_spent
+    }
+
+    pub fn platform_credits_spent(&self) -> f32 {
+        self.conversation_usage_metadata.platform_credits_spent
     }
 
     /// Test-only helper that sets the conversation's credit total directly.
@@ -561,6 +696,32 @@ impl AIConversation {
     #[cfg(test)]
     pub(crate) fn set_credits_spent_for_test(&mut self, credits: f32) {
         self.conversation_usage_metadata.credits_spent = credits;
+        self.conversation_usage_metadata.platform_credits_spent = 0.0;
+    }
+
+    /// Test-only helper that simulates the root-task upgrade performed by the
+    /// `Action::CreateTask` branch of `apply_client_action` when the server
+    /// confirms the root for a newly started conversation. Replaces the
+    /// in-memory `Optimistic(Root)` root with a server-backed `Task` carrying
+    /// `server_task`'s id.
+    ///
+    /// Unlike the production `Action::CreateTask` path, this helper does NOT
+    /// update `added_exchanges_by_response`; it is only safe to call when no
+    /// in-flight response stream references the optimistic root.
+    #[cfg(test)]
+    pub(crate) fn upgrade_optimistic_root_to_server_task_for_test(
+        &mut self,
+        server_task: api::Task,
+    ) {
+        let root_task_id = self.task_store.root_task_id().clone();
+        let root_task = self
+            .task_store
+            .remove(&root_task_id)
+            .expect("root task should exist for upgrade-in-place test helper");
+        let server_root = root_task
+            .into_server_created_task(server_task, None, None, None, &SkillPathOrigin::Unavailable)
+            .expect("upgrading optimistic root to a server-backed task should succeed");
+        self.task_store.set_root_task(server_root);
     }
 
     // Credits spent over the last block, where the block comprises
@@ -710,6 +871,21 @@ impl AIConversation {
     pub fn status(&self) -> &ConversationStatus {
         &self.status
     }
+
+    /// Test-only setter for driving status-dependent logic directly.
+    #[cfg(test)]
+    pub(crate) fn set_status_for_test(&mut self, status: ConversationStatus) {
+        self.status = status;
+    }
+
+    /// Test-only helper: appends an exchange to the root task so status-derivation
+    /// logic (e.g. `map_conversation_status`) can be exercised end-to-end.
+    #[cfg(test)]
+    pub(crate) fn append_root_exchange_for_test(&mut self, exchange: AIAgentExchange) {
+        self.task_store
+            .modify_root_task(|root_task| root_task.append_exchange(exchange));
+    }
+
     pub fn status_error_message(&self) -> Option<&str> {
         self.status_error_message.as_deref()
     }
@@ -730,7 +906,10 @@ impl AIConversation {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        self.status_error_message = if matches!(&status, ConversationStatus::Error) {
+        self.status_error_message = if matches!(
+            &status,
+            ConversationStatus::Error | ConversationStatus::TransientError
+        ) {
             error_message.filter(|message| !message.trim().is_empty())
         } else {
             None
@@ -793,17 +972,9 @@ impl AIConversation {
         self.task_id = Some(id);
     }
 
-    /// Returns the server-side agent identifier appropriate for the active
-    /// orchestration version: `task_id` (as string) under v2,
-    /// `server_conversation_token` under v1.
+    /// Returns the server-side agent identifier for orchestration.
     pub fn orchestration_agent_id(&self) -> Option<String> {
-        if FeatureFlag::OrchestrationV2.is_enabled() {
-            self.run_id()
-        } else {
-            self.server_conversation_token
-                .as_ref()
-                .map(|t| t.as_str().to_string())
-        }
+        self.run_id()
     }
 
     /// Updates the server conversation token for this conversation.
@@ -885,7 +1056,11 @@ impl AIConversation {
         self.parent_conversation_id = Some(id);
     }
 
-    /// Returns the last observed v2 orchestration event sequence number, if any.
+    /// Returns the last observed v2 orchestration event sequence number,
+    /// if any. The cursor is per-conversation: the highest sequence the
+    /// streamer has seen on the run-ids this conversation watches
+    /// (`watched_run_ids` for owner-side conversations, the ancestor
+    /// subtree for viewer-mode orchestrator placeholders).
     pub fn last_event_sequence(&self) -> Option<i64> {
         self.last_event_sequence
     }
@@ -1298,10 +1473,8 @@ impl AIConversation {
         self.task_store.latest_skills()
     }
 
-    /// Get the auto-generated title of the given conversation
-    /// (falling back to the first query if the title is empty).
     /// Get the title of the given conversation.
-    /// Priority: auto-generated task description > initial query > fallback_display_title.
+    /// Priority: task description > initial query > fallback_display_title.
     pub fn title(&self) -> Option<String> {
         self.task_store
             .root_task()
@@ -1315,7 +1488,39 @@ impl AIConversation {
             .or_else(|| self.fallback_display_title.clone())
     }
 
-    /// Set a fallback title used when no task description or initial query exists.
+    /// Updates the conversation title and persists the conversation.
+    pub(crate) fn update_conversation_title(
+        &mut self,
+        title: String,
+        ctx: &mut ModelContext<BlocklistAIHistoryModel>,
+    ) {
+        let title_for_metadata = title.clone();
+        self.task_store
+            .modify_root_task(|root_task| root_task.update_description(title));
+        if let Some(metadata) = self.server_metadata.as_mut() {
+            metadata.title = title_for_metadata;
+        }
+        self.write_updated_conversation_state(ctx);
+    }
+
+    /// Restores a previous title snapshot and persists the conversation.
+    pub(crate) fn restore_conversation_title(
+        &mut self,
+        root_task_description: String,
+        server_metadata_title: Option<String>,
+        ctx: &mut ModelContext<BlocklistAIHistoryModel>,
+    ) {
+        self.task_store
+            .modify_root_task(|root_task| root_task.update_description(root_task_description));
+        if let (Some(metadata), Some(title)) =
+            (self.server_metadata.as_mut(), server_metadata_title)
+        {
+            metadata.title = title;
+        }
+        self.write_updated_conversation_state(ctx);
+    }
+
+    /// Sets a fallback title used when no task description or initial query exists.
     pub fn set_fallback_display_title(&mut self, title: String) {
         self.fallback_display_title = Some(title);
     }
@@ -1707,6 +1912,7 @@ impl AIConversation {
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<stream_finished::ConversationUsageMetadata>,
         was_user_initiated_request: bool,
+        ctx: &AppContext,
     ) -> Result<(), UpdateConversationError> {
         for usage in token_usage.into_iter() {
             let entry = self
@@ -1749,36 +1955,11 @@ impl AIConversation {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
             self.conversation_usage_metadata.credits_spent = usage_metadata.credits_spent;
-
-            let mut token_usage: HashMap<_, ModelTokenUsage> = HashMap::new();
-            for (model_id, usage) in usage_metadata.warp_token_usage {
-                let entry = token_usage.entry(model_id.clone()).or_default();
-                entry.warp_tokens += usage.total_tokens;
-                for (category, tokens) in usage.token_usage_by_category {
-                    *entry
-                        .warp_token_usage_by_category
-                        .entry(category)
-                        .or_default() += tokens;
-                }
-            }
-            for (model_id, usage) in usage_metadata.byok_token_usage {
-                let entry = token_usage.entry(model_id.clone()).or_default();
-                entry.byok_tokens += usage.total_tokens;
-                for (category, tokens) in usage.token_usage_by_category {
-                    *entry
-                        .byok_token_usage_by_category
-                        .entry(category)
-                        .or_default() += tokens;
-                }
-            }
-
-            self.conversation_usage_metadata.token_usage = token_usage
-                .into_iter()
-                .map(|(name, mut usage)| {
-                    usage.model_id = name;
-                    usage
-                })
-                .collect();
+            self.conversation_usage_metadata.platform_credits_spent =
+                usage_metadata.platform_credits_spent;
+            let llm_preferences = LLMPreferences::as_ref(ctx);
+            self.conversation_usage_metadata.token_usage =
+                footer_model_token_usage(&usage_metadata, llm_preferences);
 
             self.conversation_usage_metadata.tool_usage_metadata = usage_metadata
                 .tool_usage_metadata
@@ -1971,8 +2152,10 @@ impl AIConversation {
         self.write_updated_conversation_state(ctx);
 
         // Don't mark the conversation as Cancelled if we're just cancelling to send a follow-up
-        // on the same conversation. The conversation will be immediately set back to InProgress.
-        if !reason.is_follow_up_for_same_conversation() {
+        // on the same conversation (it will be immediately set back to InProgress), or if the
+        // user manually took over the long-running command (the conversation remains in progress
+        // and will resume once the command finishes or control is handed back).
+        if !reason.should_preserve_in_progress_status() {
             self.update_status(ConversationStatus::Cancelled, terminal_view_id, ctx);
         }
         Ok(())
@@ -1990,10 +2173,16 @@ impl AIConversation {
         Ok(())
     }
 
+    /// Marks the in-flight request's exchanges as finished with `error`.
+    ///
+    /// `recovery_pending` moves the conversation to the non-terminal `TransientError`
+    /// status instead of `Error`, so consumers don't treat it as dead while an
+    /// automatic recovery is in flight.
     pub fn mark_request_completed_with_error(
         &mut self,
         stream_id: &ResponseStreamId,
         error: RenderableAIError,
+        recovery_pending: bool,
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
@@ -2017,19 +2206,12 @@ impl AIConversation {
             model_id: None,
         };
 
-        let will_attempt_to_resume = matches!(
-            &error,
-            RenderableAIError::Other {
-                will_attempt_resume: true,
-                ..
-            }
-        );
         send_telemetry_from_ctx!(
             crate::TelemetryEvent::AgentModeError {
                 identifiers,
                 error: error.to_string(),
                 is_user_visible: true,
-                will_attempt_to_resume,
+                will_attempt_to_resume: recovery_pending,
             },
             ctx
         );
@@ -2087,8 +2269,13 @@ impl AIConversation {
         }
 
         self.write_updated_conversation_state(ctx);
+        let status = if recovery_pending {
+            ConversationStatus::TransientError
+        } else {
+            ConversationStatus::Error
+        };
         self.update_status_with_error_message(
-            ConversationStatus::Error,
+            status,
             Some(error.to_string()),
             terminal_view_id,
             ctx,
@@ -2182,6 +2369,7 @@ impl AIConversation {
         response_stream_id: &ResponseStreamId,
         terminal_view_id: EntityId,
         action: warp_multi_agent_api::client_action::Action,
+        skill_path_origin: &SkillPathOrigin,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
         use warp_multi_agent_api::client_action::*;
@@ -2230,6 +2418,7 @@ impl AIConversation {
                             parent_task.source(),
                             self.todo_lists.last(),
                             self.code_review.as_ref(),
+                            skill_path_origin,
                         )?;
                         ctx.emit(BlocklistAIHistoryEvent::UpgradedTask {
                             optimistic_id: optimistic_id.clone(),
@@ -2266,6 +2455,7 @@ impl AIConversation {
                             existing_exchange,
                             self.todo_lists.last(),
                             self.code_review.as_ref(),
+                            skill_path_origin,
                             // In shared-session viewers, we have to reconstruct what the original user input
                             // was using subsequent conversation messages (as the original input was not
                             // sent on this client). Once we reconstruct these inputs, we will insert them
@@ -2353,6 +2543,7 @@ impl AIConversation {
                             None,
                             self.todo_lists.last(),
                             self.code_review.as_ref(),
+                            skill_path_origin,
                         )?;
                         ctx.emit(BlocklistAIHistoryEvent::UpgradedTask {
                             optimistic_id: old_id,
@@ -2580,8 +2771,11 @@ impl AIConversation {
                 task.add_messages(
                     messages,
                     exchange_id,
-                    current_todo_list.as_ref(),
-                    current_comment_state.as_ref(),
+                    TaskMessageContext {
+                        current_todo_list: current_todo_list.as_ref(),
+                        active_code_review: current_comment_state.as_ref(),
+                        skill_path_origin,
+                    },
                     // In shared-session viewers, we have to reconstruct what the original user input
                     // was using subsequent conversation messages (as the original input was not
                     // sent on this client). Once we reconstruct these inputs, we will insert them
@@ -2686,8 +2880,11 @@ impl AIConversation {
                         task.upsert_message(
                             message,
                             exchange_id,
-                            current_todo_list.as_ref(),
-                            current_comment_state.as_ref(),
+                            TaskMessageContext {
+                                current_todo_list: current_todo_list.as_ref(),
+                                active_code_review: current_comment_state.as_ref(),
+                                skill_path_origin,
+                            },
                             mask,
                             is_viewing_shared_session,
                         )
@@ -2731,8 +2928,11 @@ impl AIConversation {
                         task.append_to_message_content(
                             message,
                             exchange_id,
-                            current_todo_list.as_ref(),
-                            current_comment_state.as_ref(),
+                            TaskMessageContext {
+                                current_todo_list: current_todo_list.as_ref(),
+                                active_code_review: current_comment_state.as_ref(),
+                                skill_path_origin,
+                            },
                             mask,
                         )
                         .map(|msg| msg.todos_op().cloned())
@@ -3044,8 +3244,6 @@ impl AIConversation {
             }
         };
 
-        let root_task_is_optimistic = self.get_root_task().map(Task::is_optimistic_root_task);
-
         let event = ModelEvent::UpdateMultiAgentConversation {
             conversation_id: self.id.to_string(),
             updated_tasks: self
@@ -3069,7 +3267,11 @@ impl AIConversation {
                 orchestration_harness_type: self.orchestration_harness_type.clone(),
                 parent_conversation_id: self.parent_conversation_id.map(|id| id.to_string()),
                 is_remote_child: self.is_remote_child,
-                root_task_is_optimistic,
+                // Legacy field; retained for backward-compatible
+                // deserialization but no longer written. The optimistic-root
+                // case is now handled by `Task::source_for_persistence`
+                // (returns `None`) and `new_restored_synthesizing_on_empty`.
+                root_task_is_optimistic: None,
                 run_id: self.task_id.map(|id| id.to_string()),
                 autoexecute_override: Some(self.autoexecute_override.into()),
                 last_event_sequence: self.last_event_sequence,
@@ -3915,6 +4117,8 @@ pub struct ServerAIConversationMetadata {
 
     /// Server metadata (revision, timestamps, creator info, etc.).
     pub metadata: crate::cloud_object::ServerMetadata,
+    /// Public profile for the conversation's creator, when available.
+    pub creator: Option<UserProfileWithUID>,
 
     /// Permissions for this conversation (space, guests, link sharing).
     pub permissions: crate::cloud_object::ServerPermissions,
@@ -4034,11 +4238,20 @@ pub enum ConversationStatus {
     /// The last turn of the agent completed with error.
     Error,
 
+    /// The last turn failed transiently and an automatic recovery (retry or resume)
+    /// is pending. Non-terminal: returns to `InProgress` when the recovery request
+    /// sends, or falls to `Error` if recovery is exhausted.
+    TransientError,
+
     /// The last turn of the agent was cancelled by the user.
     Cancelled,
 
     /// The last turn of the agent resulted in an action whose execution is blocked by the user.
     Blocked { blocked_action: String },
+
+    /// Agent yielded via wait_for_events and is listening for inbound
+    /// input. Quiescent but not terminal.
+    WaitingForEvents,
 }
 
 impl std::fmt::Display for ConversationStatus {
@@ -4047,8 +4260,10 @@ impl std::fmt::Display for ConversationStatus {
             ConversationStatus::InProgress => write!(f, "In progress"),
             ConversationStatus::Success => write!(f, "Done"),
             ConversationStatus::Error => write!(f, "Error"),
+            ConversationStatus::TransientError => write!(f, "Reconnecting"),
             ConversationStatus::Cancelled => write!(f, "Cancelled"),
             ConversationStatus::Blocked { .. } => write!(f, "Blocked"),
+            ConversationStatus::WaitingForEvents => write!(f, "Waiting"),
         }
     }
 }
@@ -4060,7 +4275,10 @@ impl ConversationStatus {
             ConversationStatus::Success => succeeded_icon(appearance),
             ConversationStatus::Blocked { .. } => yellow_stop_icon(appearance),
             ConversationStatus::Error => failed_icon(appearance),
+            // Recovery pending: keep the in-progress treatment rather than an error one.
+            ConversationStatus::TransientError => in_progress_icon(appearance),
             ConversationStatus::Cancelled => gray_stop_icon(appearance),
+            ConversationStatus::WaitingForEvents => in_progress_icon(appearance),
         }
     }
 
@@ -4091,6 +4309,13 @@ impl ConversationStatus {
                     StatusColorStyle::Cloud => theme.ansi_bg_red(),
                 },
             ),
+            ConversationStatus::TransientError => (
+                Icon::ClockLoader,
+                match color_style {
+                    StatusColorStyle::Standard => theme.ansi_fg_yellow(),
+                    StatusColorStyle::Cloud => theme.ansi_bg_yellow(),
+                },
+            ),
             ConversationStatus::Cancelled => (Icon::StopFilled, internal_colors::neutral_5(theme)),
             ConversationStatus::Blocked { .. } => (
                 Icon::StopFilled,
@@ -4099,11 +4324,23 @@ impl ConversationStatus {
                     StatusColorStyle::Cloud => theme.ansi_bg_yellow(),
                 },
             ),
+            ConversationStatus::WaitingForEvents => (
+                Icon::ClockLoader,
+                match color_style {
+                    StatusColorStyle::Standard => theme.ansi_fg_magenta(),
+                    StatusColorStyle::Cloud => theme.ansi_bg_magenta(),
+                },
+            ),
         }
     }
 
     pub fn is_in_progress(&self) -> bool {
         matches!(self, ConversationStatus::InProgress)
+    }
+
+    /// True while a transient failure is being automatically recovered.
+    pub fn is_transient_error(&self) -> bool {
+        matches!(self, ConversationStatus::TransientError)
     }
 
     pub fn is_blocked(&self) -> bool {
@@ -4114,11 +4351,18 @@ impl ConversationStatus {
         matches!(self, ConversationStatus::Cancelled)
     }
 
+    /// True iff the run is finished and cannot resume on its own.
     pub fn is_done(&self) -> bool {
         matches!(
             self,
             ConversationStatus::Success | ConversationStatus::Error | ConversationStatus::Cancelled
         )
+    }
+
+    /// True iff the agent has yielded via `wait_for_events` and is listening
+    /// for inbound input.
+    pub fn is_waiting_for_events(&self) -> bool {
+        matches!(self, ConversationStatus::WaitingForEvents)
     }
 
     pub fn is_error(&self) -> bool {

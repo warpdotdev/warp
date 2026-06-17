@@ -16,6 +16,7 @@ use string_offset::CharOffset;
 use url::Url;
 use vec1::{vec1, Vec1};
 use warp_core::features::FeatureFlag;
+use warp_core::r#async::debounce;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_editor::content::buffer::{
     AutoScrollBehavior, Buffer, BufferEditAction, BufferEvent, BufferSelectAction, EditOrigin,
@@ -45,7 +46,6 @@ use super::interaction_state_model::InteractionStateModel;
 use super::notebook_command::NotebookCommand;
 use super::NotebookWorkflow;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
-use crate::debounce::debounce;
 use crate::editor::InteractionState;
 use crate::notebooks::editor::interaction_state_model::InteractionStateModelEvent;
 use crate::notebooks::file::MarkdownDisplayMode;

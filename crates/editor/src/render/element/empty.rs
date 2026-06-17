@@ -31,8 +31,8 @@ impl RenderableBlock for Empty {
     fn layout(
         &mut self,
         model: &RenderState,
-        ctx: &mut warpui::LayoutContext,
-        app: &warpui::AppContext,
+        ctx: &mut warpui_core::LayoutContext,
+        app: &warpui_core::AppContext,
     ) {
         self.placeholder
             .layout(&self.viewport_item, model, ctx, app, |_| {
@@ -43,7 +43,12 @@ impl RenderableBlock for Empty {
             });
     }
 
-    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, _app: &warpui::AppContext) {
+    fn paint(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut RenderContext,
+        _app: &warpui_core::AppContext,
+    ) {
         let content = model.content();
         let cursor = extract_block!(self.viewport_item, content, (block, BlockItem::TrailingNewLine(cursor)) => block.trailing_newline(cursor));
         if self.placeholder.paint(cursor.content_origin(), model, ctx) {

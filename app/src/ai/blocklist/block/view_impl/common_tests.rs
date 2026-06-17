@@ -5,18 +5,20 @@ use std::sync::Arc;
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
 use itertools::Itertools;
 use ui_components::lightbox::{LightboxImage, LightboxImageSource};
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::Empty;
+use warpui::elements::{Empty, MouseStateHandle};
 use warpui::{App, Element};
 
 #[cfg(feature = "local_fs")]
 use super::{blocklist_image_asset_source, ResolvedBlocklistImageSources};
 use super::{
     collect_visual_markdown_lightbox_collection, compute_visual_section_width,
-    inline_image_source_label, is_supported_blocklist_image_source, lightbox_trigger_for_section,
-    query_prefix_highlight_len, render_scrollable_collapsible_content, text_sections_with_indices,
-    CollapsibleElementState, CollapsibleExpansionState, VisualMarkdownLightboxCollection,
+    image_tooltip_handles_for_group, inline_image_source_label,
+    is_supported_blocklist_image_source, lightbox_trigger_for_section, query_prefix_highlight_len,
+    render_scrollable_collapsible_content, text_sections_with_indices, CollapsibleElementState,
+    CollapsibleExpansionState, VisualMarkdownLightboxCollection,
 };
 use crate::ai::agent::{
     AIAgentInput, AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout,
@@ -30,7 +32,7 @@ fn query_prefix_highlight_len_highlights_invoke_skill_inputs() {
     let input = AIAgentInput::InvokeSkill {
         context: Arc::new([]),
         skill: ParsedSkill {
-            path: PathBuf::from("/tmp/.agents/skills/review-pr/SKILL.md"),
+            path: LocalOrRemotePath::Local(PathBuf::from("/tmp/.agents/skills/review-pr/SKILL.md")),
             name: "review-pr".to_string(),
             description: "Review a pull request.".to_string(),
             content: String::new(),
@@ -124,6 +126,17 @@ fn text_sections_with_indices_preserve_image_section_alignment_after_empty_text_
         .collect_vec();
 
     assert_eq!(rendered_image_indices, vec![2, 4]);
+}
+
+#[test]
+fn image_tooltip_handles_for_group_uses_available_handles_only() {
+    let handles = [MouseStateHandle::default(), MouseStateHandle::default()];
+
+    assert_eq!(image_tooltip_handles_for_group(&handles, 0, 1).len(), 1);
+    assert_eq!(image_tooltip_handles_for_group(&handles, 1, 4).len(), 1);
+    assert_eq!(image_tooltip_handles_for_group(&handles, 2, 1).len(), 0);
+    assert_eq!(image_tooltip_handles_for_group(&handles, 3, 1).len(), 0);
+    assert_eq!(image_tooltip_handles_for_group(&[], 1, 1).len(), 0);
 }
 
 #[test]

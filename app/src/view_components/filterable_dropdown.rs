@@ -1,21 +1,24 @@
+use std::marker::PhantomData;
+
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Dismiss, Element, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
-    PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
+    CrossAxisAlignment, Dismiss, DispatchEventResult, Element, EventHandler, Flex,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable,
+    Stack,
 };
 use warpui::geometry::vector::vec2f;
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    Action, AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle, WeakViewHandle,
 };
 
 use super::dropdown::{
-    DropdownAction, DropdownItem, MenuHeaderTextFormatter, DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT,
-    TOP_MENU_BAR_MAX_WIDTH,
+    DropdownAction, DropdownItem, DropdownItemAction, MenuHeaderTextFormatter, DROPDOWN_PADDING,
+    TOP_MENU_BAR_HEIGHT, TOP_MENU_BAR_MAX_WIDTH,
 };
 use crate::appearance::Appearance;
 use crate::editor::{
@@ -39,16 +42,17 @@ pub enum FilterableDropdownOrientation {
     Down,
 }
 
-pub struct FilterableDropdown<A: Action + Clone> {
+pub struct FilterableDropdown<A: DropdownItemAction = ()> {
     is_expanded: bool,
     disabled: bool,
     top_bar_mouse_state: MouseStateHandle,
     top_bar_max_width: f32,
     main_axis_size: MainAxisSize,
-    dropdown: ViewHandle<Menu<DropdownAction<A>>>,
+    dropdown: ViewHandle<Menu<DropdownAction>>,
     filter_editor: ViewHandle<EditorView>,
-    selected_item: Option<MenuItem<DropdownAction<A>>>,
-    items: Vec<DropdownItem<A>>,
+    self_handle: WeakViewHandle<Self>,
+    selected_item: Option<MenuItem<DropdownAction>>,
+    items: Vec<MenuItem<DropdownAction>>,
     orientation: FilterableDropdownOrientation,
     static_menu_header: Option<&'static str>,
     button_variant: ButtonVariant,
@@ -71,11 +75,12 @@ pub struct FilterableDropdown<A: Action + Clone> {
     /// instead of an overlay.
     use_overlay_layer: bool,
     match_menu_width_to_top_bar: bool,
+    _action_type: PhantomData<A>,
 }
 
 impl<A> FilterableDropdown<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let theme = Appearance::as_ref(ctx).theme();
@@ -113,6 +118,7 @@ where
             disabled: false,
             dropdown,
             filter_editor,
+            self_handle: ctx.handle(),
             top_bar_mouse_state: Default::default(),
             top_bar_max_width: TOP_MENU_BAR_MAX_WIDTH,
             main_axis_size: MainAxisSize::Max,
@@ -130,6 +136,7 @@ where
             top_bar_height: TOP_MENU_BAR_HEIGHT,
             use_overlay_layer: true,
             match_menu_width_to_top_bar: false,
+            _action_type: PhantomData,
         }
     }
 
@@ -201,12 +208,12 @@ where
     }
 
     pub fn add_items(&mut self, items: Vec<DropdownItem<A>>, ctx: &mut ViewContext<Self>) {
-        self.items.extend(items.iter().cloned());
+        self.items.extend(items.iter().map(|item| item.into()));
         self.set_filtered_items(ctx);
     }
 
     pub fn set_items(&mut self, items: Vec<DropdownItem<A>>, ctx: &mut ViewContext<Self>) {
-        self.items = items;
+        self.items = items.iter().map(|item| item.into()).collect();
         self.set_filtered_items(ctx);
 
         // set_filtered_items intentionally preserves self.selected_item when
@@ -216,43 +223,31 @@ where
         // items is stale and must be cleared — otherwise the top bar shows a
         // ghost label and selected_item_label() returns a value that doesn't
         // correspond to any actual item.
-        let label = self.current_selected_item_label();
-        if !label.is_empty() && !self.items.iter().any(|item| item.display_text == label) {
+        let label = self.current_selected_item_label().to_string();
+        if !label.is_empty()
+            && !self
+                .items
+                .iter()
+                .any(|item| Self::item_label(item) == Some(label.as_str()))
+        {
             self.selected_item = None;
             ctx.notify();
         }
     }
 
-    /// Set items from rich menu items (MenuItem). This passes the rich menu items to the
-    /// internal dropdown but also extracts searchable DropdownItem objects for filtering.
+    /// Set items from rich menu items (MenuItem). This preserves the rich menu items for
+    /// filtering and passes the filtered items to the internal dropdown.
+    ///
+    /// Rich menu items already carry erased [`DropdownAction`]s. The dropdown dispatches selected
+    /// item actions through normal action propagation, so callers should ensure each action is
+    /// handled by an appropriate view in the containing view hierarchy.
     pub fn set_rich_items(
         &mut self,
-        items: Vec<MenuItem<DropdownAction<A>>>,
+        items: Vec<MenuItem<DropdownAction>>,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Extract simple DropdownItem objects from MenuItem for filtering
-        self.items = items
-            .iter()
-            .filter_map(|item| match item {
-                MenuItem::Item(fields) => {
-                    let label = fields.label().to_string();
-                    fields.on_select_action().and_then(|action| {
-                        if let DropdownAction::SelectActionAndClose(a) = action {
-                            Some(DropdownItem::new(label, a.clone()))
-                        } else {
-                            None
-                        }
-                    })
-                }
-                _ => None, // Skip headers and separators
-            })
-            .collect();
-
-        // Set the full rich items on the internal dropdown
-        self.dropdown.update(ctx, |dropdown, ctx| {
-            dropdown.set_items(items, ctx);
-        });
-        ctx.notify();
+        self.items = items;
+        self.set_filtered_items(ctx);
     }
 
     /// The number of items in the dropdown.
@@ -305,12 +300,10 @@ where
     /// this clears the selection.
     ///
     /// This is primarily useful when items are dynamically generated and correspond to some backing data that's captured by the action.
-    pub fn set_selected_by_action(&mut self, action: A, ctx: &mut ViewContext<Self>)
-    where
-        A: PartialEq,
-    {
+    pub fn set_selected_by_action(&mut self, action: A, ctx: &mut ViewContext<Self>) {
+        let action = DropdownAction::SelectActionAndClose(Box::new(action));
         self.dropdown.update(ctx, |dropdown, ctx| {
-            dropdown.set_selected_by_action(&DropdownAction::SelectActionAndClose(action), ctx);
+            dropdown.set_selected_by_action(&action, ctx);
         });
         self.selected_item = self.selected_item_in_dropdown(ctx);
         ctx.notify();
@@ -357,7 +350,7 @@ where
     fn selected_item_in_dropdown(
         &self,
         ctx: &mut ViewContext<Self>,
-    ) -> Option<MenuItem<DropdownAction<A>>> {
+    ) -> Option<MenuItem<DropdownAction>> {
         self.dropdown
             .read(ctx, |dropdown, _| dropdown.selected_item())
     }
@@ -378,8 +371,10 @@ where
     }
 
     fn focus(&mut self, _delta: usize, ctx: &mut ViewContext<Self>) {
-        ctx.focus(&self.filter_editor);
-        ctx.notify();
+        if self.is_expanded {
+            ctx.focus(&self.filter_editor);
+            ctx.notify();
+        }
     }
 
     /// Dispatches the item's action up the responder chain and then closes the
@@ -392,7 +387,11 @@ where
     /// dropdown from their `Select`-equivalent branch, or `update_view` will
     /// panic with "Circular view update". The dropdown is already closed here
     /// after the dispatch returns, so parents don't need to close it themselves.
-    fn select_action_and_close(&mut self, action: &A, ctx: &mut ViewContext<Self>) {
+    fn select_action_and_close(
+        &mut self,
+        action: &dyn DropdownItemAction,
+        ctx: &mut ViewContext<Self>,
+    ) {
         // Check against the length of the dropdown to no-op in the case
         // there aren't any elements being rendered
         if self.dropdown_items_len(ctx) > 0 {
@@ -482,11 +481,30 @@ where
             top_bar =
                 top_bar.with_style(UiComponentStyles::default().set_font_family_id(font_family_id))
         }
-
-        top_bar
+        let disabled = self.disabled;
+        let self_handle = self.self_handle.clone();
+        let dropdown = self.dropdown.clone();
+        let filter_editor = self.filter_editor.clone();
+        let top_bar_element = top_bar
             .build()
             .on_click(|ctx, _, _| {
-                ctx.dispatch_typed_action(DropdownAction::<A>::ToggleExpanded);
+                ctx.dispatch_typed_action(DropdownAction::ToggleExpanded);
+            })
+            .finish();
+
+        EventHandler::new(top_bar_element)
+            .on_keydown(move |ctx, app, keystroke| {
+                let is_focused = self_handle
+                    .upgrade(app)
+                    .is_some_and(|handle| handle.is_focused(app))
+                    || dropdown.is_focused(app)
+                    || filter_editor.is_focused(app);
+                if !disabled && is_focused && keystroke.is_unmodified_key(" ") {
+                    ctx.dispatch_typed_action(DropdownAction::ToggleExpanded);
+                    DispatchEventResult::StopPropagation
+                } else {
+                    DispatchEventResult::PropagateToParent
+                }
             })
             .finish()
     }
@@ -581,7 +599,7 @@ where
         // Wrap with Dismiss to handle clicks outside the empty menu
         Dismiss::new(EventHandler::new(empty_menu).finish())
             .on_dismiss(|ctx, _app| {
-                ctx.dispatch_typed_action(DropdownAction::<A>::Close);
+                ctx.dispatch_typed_action(DropdownAction::Close);
             })
             .prevent_interaction_with_other_elements()
             .finish()
@@ -656,32 +674,46 @@ where
         // it won't be visible in the newly computed list of filtered items.
         // If it isn't, we set the selected element to the first index of
         // the new elements such that there's always a candidate element to select.
-        let current_label = self.current_selected_item_label();
+        let current_label = self.current_selected_item_label().to_string();
         let mut current_label_not_visible = true;
         self.dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_items(
                 self.items
                     .iter()
                     .filter(|item| {
-                        let item_matches_filter =
-                            item.display_text.to_lowercase().contains(&filter_query);
-                        if item.display_text == current_label && item_matches_filter {
+                        let item_matches_filter = Self::item_matches_filter(item, &filter_query);
+                        if Self::item_label(item) == Some(current_label.as_str())
+                            && item_matches_filter
+                        {
                             current_label_not_visible = false;
                         };
                         item_matches_filter
                     })
-                    .map(|item| item.into()),
+                    .cloned(),
                 ctx,
             );
 
             if current_label_not_visible && !dropdown.is_empty() {
                 dropdown.set_selected_by_index(0, ctx);
             } else {
-                dropdown.set_selected_by_name(current_label, ctx);
+                dropdown.set_selected_by_name(&current_label, ctx);
             }
             ctx.notify();
         });
         ctx.notify();
+    }
+
+    fn item_label(item: &MenuItem<DropdownAction>) -> Option<&str> {
+        match item {
+            MenuItem::Item(fields) => Some(fields.label()),
+            _ => None,
+        }
+    }
+
+    fn item_matches_filter(item: &MenuItem<DropdownAction>, filter_query: &str) -> bool {
+        filter_query.is_empty()
+            || Self::item_label(item)
+                .is_some_and(|label| label.to_lowercase().contains(filter_query))
     }
 
     fn dropdown_items_len(&self, ctx: &AppContext) -> usize {
@@ -702,23 +734,23 @@ where
 
 impl<A> Entity for FilterableDropdown<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
     type Event = FilterableDropdownEvent;
 }
 
 impl<A> TypedActionView for FilterableDropdown<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
-    type Action = DropdownAction<A>;
+    type Action = DropdownAction;
 
-    fn handle_action(&mut self, action: &DropdownAction<A>, ctx: &mut ViewContext<Self>) {
+    fn handle_action(&mut self, action: &DropdownAction, ctx: &mut ViewContext<Self>) {
         match action {
             DropdownAction::Focus(delta) => self.focus(*delta, ctx),
             DropdownAction::Close => self.close(ctx),
             DropdownAction::SelectActionAndClose(action) => {
-                self.select_action_and_close(action, ctx)
+                self.select_action_and_close(action.as_ref(), ctx)
             }
             DropdownAction::ToggleExpanded => self.toggle_expanded(ctx),
         }
@@ -727,14 +759,14 @@ where
 
 impl<A> View for FilterableDropdown<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
     fn ui_name() -> &'static str {
         "FilterableDropdown"
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
-        if focus_ctx.is_self_focused() {
+        if focus_ctx.is_self_focused() && self.is_expanded {
             self.focus(0, ctx)
         }
     }

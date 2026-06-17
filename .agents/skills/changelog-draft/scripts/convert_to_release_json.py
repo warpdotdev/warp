@@ -32,6 +32,11 @@ CATEGORY_MAP = {
 }
 
 
+def github_profile_link(username: str) -> str:
+    """Format a GitHub username as a markdown profile link."""
+    return f"[@{username}](https://github.com/{username})"
+
+
 def format_entry(entry: dict) -> str:
     """Format a single changelog entry as a text line with a PR link.
 
@@ -47,7 +52,7 @@ def format_entry(entry: dict) -> str:
 
     attribution = ""
     if entry.get("is_external") and entry.get("author"):
-        attribution = f" — @{entry['author']} ✨"
+        attribution = f" — {github_profile_link(entry['author'])} ✨"
     return f"{text}{link}{attribution}"
 
 

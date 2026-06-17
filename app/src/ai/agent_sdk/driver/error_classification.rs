@@ -2,7 +2,7 @@ use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::terminal::ShareSessionError;
 use super::AgentDriverError;
-use crate::ai::blocklist::task_status_sync_model::classify_renderable_error;
+use crate::ai::blocklist::local_agent_task_sync_model::classify_renderable_error;
 use crate::server::server_api::ai::TaskStatusUpdate;
 
 /// Classify an `AgentDriverError` into a task state and a `TaskStatusUpdate`
@@ -100,13 +100,22 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        AgentDriverError::MCPStartupFailed => (
-            AgentTaskState::Failed,
-            TaskStatusUpdate::with_error_code(
-                "One or more MCP servers failed to start. Check that your MCP server configuration is valid and the server process is runnable.",
-                PlatformErrorCode::EnvironmentSetupFailed,
-            ),
-        ),
+        AgentDriverError::MCPStartupFailed { details } => {
+            let server_lines = details
+                .iter()
+                .map(|detail| format!("- {detail}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (
+                AgentTaskState::Failed,
+                TaskStatusUpdate::with_error_code(
+                    format!(
+                        "One or more MCP servers failed to start:\n\n{server_lines}\n\nCheck that each server's configuration is valid and that it is reachable from the agent's environment."
+                    ),
+                    PlatformErrorCode::EnvironmentSetupFailed,
+                ),
+            )
+        }
         AgentDriverError::MCPJsonParseError(msg) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -171,7 +180,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
         // --- Conversation errors ---
         // Delegate to classify_renderable_error for proper ERROR vs FAILED
         // distinction and PlatformErrorCode. This is a belt-and-suspenders
-        // fallback — TaskStatusSyncModel handles most conversation errors,
+        // fallback — LocalAgentTaskSyncModel handles most conversation errors,
         // but the driver catches them too if the conversation ends with an error.
         AgentDriverError::ConversationError { error } => {
             let (state, update) = classify_renderable_error(error);

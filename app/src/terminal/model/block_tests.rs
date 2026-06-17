@@ -5,6 +5,7 @@ use std::time::Duration;
 use chrono::TimeZone;
 use float_cmp::assert_approx_eq;
 use futures_lite::stream::StreamExt;
+use warp_core::features::FeatureFlag;
 
 use super::*;
 use crate::ai::blocklist::agent_view::AgentViewState;
@@ -12,7 +13,9 @@ use crate::terminal::model::ansi::{Attr, Handler};
 use crate::terminal::model::cell::Flags;
 use crate::terminal::model::header_grid::PromptEndPoint;
 use crate::terminal::model::session::SessionInfo;
-use crate::terminal::model::test_utils::{create_test_block_with_grids, TestBlockBuilder};
+use crate::terminal::model::test_utils::{
+    create_test_block_with_grids, test_iterm_image, TestBlockBuilder,
+};
 use crate::test_util::mock_blockgrid;
 
 impl float_cmp::ApproxEq for BlockSection {
@@ -339,6 +342,60 @@ pub fn test_precmd_no_preexec() {
     assert_eq!("command\nerror", block.contents_to_string());
 }
 
+#[test]
+pub fn test_image_completion_before_execution_routes_to_output_grid() {
+    let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
+    let mut block = TestBlockBuilder::new()
+        .with_bootstrap_stage(BootstrapStage::ScriptExecution)
+        .build();
+    block.start();
+
+    let header_cursor_before = block
+        .prompt_and_command_grid()
+        .grid_handler()
+        .cursor_point();
+    assert_eq!(block.state(), BlockState::BeforeExecution);
+    assert_eq!(block.output_grid().len(), 0);
+
+    block.handle_completed_iterm_image(test_iterm_image(1));
+
+    assert_eq!(
+        block
+            .prompt_and_command_grid()
+            .grid_handler()
+            .cursor_point(),
+        header_cursor_before
+    );
+    assert!(block.output_grid().started());
+    assert!(!block.output_grid().is_empty());
+    assert!(block.output_grid().grid_handler().cursor_point().col > 0);
+}
+
+#[test]
+pub fn test_image_completion_drops_in_warp_input_stage() {
+    let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
+    let mut block = TestBlockBuilder::new()
+        .with_bootstrap_stage(BootstrapStage::WarpInput)
+        .build();
+    block.start();
+
+    let header_cursor_before = block
+        .prompt_and_command_grid()
+        .grid_handler()
+        .cursor_point();
+
+    block.handle_completed_iterm_image(test_iterm_image(2));
+
+    assert_eq!(
+        block
+            .prompt_and_command_grid()
+            .grid_handler()
+            .cursor_point(),
+        header_cursor_before
+    );
+    assert_eq!(block.output_grid().len(), 0);
+}
+
 // Tests that the command grid text is all bolded.
 #[test]
 pub fn test_command_grid_bold() {
@@ -521,6 +578,59 @@ pub fn test_block_duration_formatting() {
 }
 
 #[test]
+pub fn test_set_current_working_directory_updates_pwd_and_emits_cwd_event() {
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(events_tx)
+        .build();
+    let mut block = TestBlockBuilder::new()
+        .with_event_proxy(event_proxy)
+        .build();
+    assert!(block.pwd().is_none());
+
+    block.set_current_working_directory("/Users/foo/bar".to_string());
+    assert_eq!(block.pwd(), Some(&"/Users/foo/bar".to_string()));
+
+    // A second call with the same path should be a no-op (no event emitted).
+    block.set_current_working_directory("/Users/foo/bar".to_string());
+
+    // A call with a different path updates pwd again and emits another event.
+    block.set_current_working_directory("/Users/foo/baz".to_string());
+    assert_eq!(block.pwd(), Some(&"/Users/foo/baz".to_string()));
+
+    events_rx.close();
+    let mut received_paths = Vec::new();
+    let mut received_block_metadata_events = 0usize;
+    warpui::r#async::block_on(pin!(events_rx).for_each(|event| match event {
+        Event::BlockWorkingDirectoryUpdated(event) => {
+            received_paths.push(
+                event
+                    .block_metadata
+                    .current_working_directory()
+                    .map(str::to_owned),
+            );
+        }
+        Event::BlockMetadataReceived(_) => {
+            received_block_metadata_events += 1;
+        }
+        _ => {}
+    }));
+    assert_eq!(
+        received_paths,
+        vec![
+            Some("/Users/foo/bar".to_string()),
+            Some("/Users/foo/baz".to_string()),
+        ],
+        "set_current_working_directory should emit one BlockWorkingDirectoryUpdated per distinct path"
+    );
+    assert_eq!(
+        received_block_metadata_events, 0,
+        "set_current_working_directory must not emit BlockMetadataReceived — \
+         that event is contracted to fire once per block at precmd"
+    );
+}
+
+#[test]
 pub fn test_elapsed_duration_rounds_down_to_whole_seconds() {
     let mut block = TestBlockBuilder::new().build();
     // Move the block into the Executing state so `elapsed_duration` returns a value.
@@ -617,6 +727,7 @@ pub fn test_block_emits_block_completed_event_for_in_band_command() {
     block.precmd(Default::default());
     block.preexec(PreexecValue {
         command: "warp_run_generator_command 1234 foo".to_owned(),
+        session_id: None,
     });
     block.finish(0);
 

@@ -48,8 +48,8 @@ use crate::server::ids::SyncId;
 use crate::terminal::block_filter::BlockFilterQuery;
 use crate::terminal::block_list_element::GridType;
 use crate::terminal::event::{
-    BlockCompletedEvent, BlockLatencyData, BlockMetadataReceivedEvent, BlockType, Event,
-    UserBlockCompleted,
+    BlockCompletedEvent, BlockLatencyData, BlockMetadataReceivedEvent, BlockType,
+    BlockWorkingDirectoryUpdatedEvent, Event, UserBlockCompleted,
 };
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{self, PrecmdValue, PreexecValue, Processor};
@@ -2959,6 +2959,35 @@ macro_rules! delegate {
     };
 }
 
+/// Like `delegate!`, but image completions are output, even before preexec.
+macro_rules! delegate_image_completion {
+    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+        match $self.header_grid.receiving_chars_for_prompt {
+            Some(ansi::PromptKind::Initial) => {
+                $self.header_grid.$method($( $arg ),*)
+            },
+            Some(ansi::PromptKind::Right) => {
+                if !$self.ignore_next_rprompt {
+                    $self.rprompt_grid.$method($( $arg ),*)
+                } else {
+                    Default::default()
+                }
+            },
+            _ if $self.bootstrap_stage == BootstrapStage::WarpInput => Default::default(),
+            _ => {
+                let had_visible_content = $self.output_grid.has_visible_content();
+                let retval = $self.output_grid.$method($( $arg ),*);
+                if !had_visible_content && $self.output_grid.has_visible_content() {
+                    if !$self.output_grid.started() {
+                        $self.output_grid.start();
+                    }
+                }
+                retval
+            }
+        }
+    };
+}
+
 impl ansi::Handler for Block {
     fn set_title(&mut self, _: Option<String>) {
         log::error!("Handler method Block::set_title should never be called. This should be handled by TerminalModel.");
@@ -3267,6 +3296,36 @@ impl ansi::Handler for Block {
         delegate!(self.text_area_size_chars(writer));
     }
 
+    fn set_current_working_directory(&mut self, path: String) {
+        if self.pwd.as_deref() == Some(path.as_str()) {
+            return;
+        }
+        self.pwd = Some(path);
+        // Use a dedicated event variant rather than `BlockMetadataReceived`
+        // because the latter is implicitly contracted to fire once per block
+        // (at precmd) and a number of subscribers rely on that — see e.g.
+        // the requested-command finish detector in
+        // `ai/blocklist/action_model/execute/shell_command.rs`. Subscribers
+        // that genuinely care about CWD changes opt in by also listening to
+        // `BlockWorkingDirectoryUpdated`.
+        self.event_proxy
+            .send_terminal_event(Event::BlockWorkingDirectoryUpdated(
+                BlockWorkingDirectoryUpdatedEvent {
+                    block_metadata: self.metadata(),
+                    block_index: self.block_index,
+                    // Preserve the block's in-band status so listeners can keep
+                    // applying the same in-band guard they apply to precmd-driven
+                    // metadata updates (e.g. skipping repo-detection / chip
+                    // refreshes for in-band command blocks).
+                    is_for_in_band_command: self.is_for_in_band_command,
+                    is_done_bootstrapping: matches!(
+                        self.bootstrap_stage,
+                        BootstrapStage::PostBootstrapPrecmd
+                    ),
+                },
+            ));
+    }
+
     fn precmd(&mut self, data: PrecmdValue) {
         record_trace_event!("command_execution:block:precmd");
         let is_after_in_band_command = data.was_sent_after_in_band_command();
@@ -3346,7 +3405,7 @@ impl ansi::Handler for Block {
     }
 
     fn handle_completed_iterm_image(&mut self, image: ITermImage) {
-        delegate!(self.handle_completed_iterm_image(image))
+        delegate_image_completion!(self.handle_completed_iterm_image(image))
     }
 
     fn handle_completed_kitty_action(
@@ -3354,7 +3413,7 @@ impl ansi::Handler for Block {
         action: KittyAction,
         metadata: &mut HashMap<u32, StoredImageMetadata>,
     ) -> Option<KittyResponse> {
-        delegate!(self.handle_completed_kitty_action(action, metadata))
+        delegate_image_completion!(self.handle_completed_kitty_action(action, metadata))
     }
 
     fn set_keyboard_enhancement_flags(

@@ -39,6 +39,7 @@ pub fn main() -> Result<()> {
             logfile_name: "warp_integration.log".into(),
             server_config: WarpServerConfig {
                 firebase_auth_api_key: "".into(),
+                iap_config: None,
                 // Use an IP in the IANA testing range, with the TCP discard port, to
                 // black-hole server traffic.
                 server_root_url: "http://192.0.2.0:9".into(),
@@ -207,6 +208,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_warp_auto_title_disabled);
     register_test!(test_warp_honors_user_title_bash);
     register_test!(test_warp_honors_user_title_zsh);
+    register_test!(test_osc7_updates_current_working_directory);
     register_test!(test_input_focused_after_executing_command);
     register_test!(test_new_session_focuses_input);
     register_test!(test_executable_completions);
@@ -256,10 +258,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_bash_bootstraps_with_prompt_command_array);
     register_test!(test_bash_bootstraps_with_prompt_command_array_that_sets_ps1);
     register_test!(test_zsh_bootstraps_with_nounset_option);
-    register_test!(test_legacy_ssh_into_bash);
-    register_test!(test_legacy_ssh_into_zsh);
-    register_test!(test_tmux_ssh_into_bash);
-    register_test!(test_tmux_ssh_into_zsh);
+    register_test!(test_ssh_wrapper_into_bash);
+    register_test!(test_ssh_wrapper_into_zsh);
     register_test!(test_ssh_into_fish);
     register_test!(test_ssh_into_sh);
     register_test!(test_ssh_into_ash);
@@ -277,6 +277,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_copy_prompt_from_block_honor_ps1_disabled);
     register_test!(test_copy_prompt_from_block_honor_ps1_enabled);
     register_test!(test_copy_prompt_from_input_honor_ps1_disabled);
+    register_test!(test_warp_prompt_unsets_zsh_rprompt);
     register_test!(test_copy_prompt_from_input_honor_ps1_enabled);
     register_test!(test_copy_rprompt_from_input_honor_ps1_enabled);
     register_test!(test_rprompt_doesnt_show_when_not_enough_space);
@@ -286,6 +287,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_open_input_context_menu);
     register_test!(test_copy_all_from_input_context_menu);
     register_test!(test_cut_paste_from_input_context_menu);
+    register_test!(test_inline_model_selector_restores_prompt_on_dismissal);
+    register_test!(test_inline_model_selector_restores_prompt_on_model_selection);
+    register_test!(test_inline_model_selector_restores_prompt_on_chip_toggle_close);
     register_test!(test_paste_and_type_characters_before_bootstrap);
     register_test!(test_code_review_scroll_anchor_preserved_when_inserting_above);
     register_test!(test_code_review_scroll_anchor_unchanged_when_inserting_below);
@@ -447,6 +451,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_goto_line_jumps_to_line);
     register_test!(test_goto_line_with_column);
     register_test!(test_goto_line_clamps_out_of_range);
+    register_test!(test_code_editor_line_numbers_default_to_absolute);
+    register_test!(test_code_editor_relative_line_numbers_follow_cursor);
 
     // Keyboard protocol tests
     register_test!(test_keyboard_protocol_disabled_shift_enter);
@@ -461,6 +467,12 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     // Video recording test (manual only)
     register_test!(test_video_recording);
+
+    // Rich Input Ctrl+Enter submit toggle (issue #11588)
+    // Full-stack wiring guard: toggle ON → Enter inserts newline, Ctrl+Enter submits.
+    register_test!(test_rich_input_toggle_on_enter_inserts_newline_and_ctrl_enter_submits);
+    // Regression: Enter must accept inline menus (not insert newline) when toggle=true (PR #11723)
+    register_test!(test_rich_input_enter_accepts_menu_item_when_toggle_is_true);
 
     tests
 }

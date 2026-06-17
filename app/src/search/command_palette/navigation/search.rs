@@ -247,9 +247,9 @@ mod full_text_searcher {
     use std::collections::HashMap;
 
     use itertools::Itertools;
+    use warp_search_core::define_search_schema;
     use warpui::{AppContext, ModelHandle};
 
-    use crate::define_search_schema;
     use crate::pane_group::PaneId;
     use crate::search::command_palette::navigation::search::{
         searchable_session_string_and_ranges, MatchedSession, SearcherAction,

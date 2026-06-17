@@ -1,7 +1,6 @@
 pub(crate) mod agent_input_footer;
 mod agent_message_bar;
 mod agent_view_block;
-pub mod child_agent_status_card;
 mod controller;
 mod ephemeral_message_model;
 mod inline_agent_view_header;
@@ -74,9 +73,7 @@ pub static ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE: LazyLock<Keystroke
         }
     });
 
-/// Returns `true` when the current pane is in a cloud or remote context where
-/// local-to-cloud handoff is not applicable. Use this to gate the `&` hint,
-/// handoff chip, `/handoff` command activation, and `&` prefix activation.
+/// Returns `true` when the current pane is in a cloud or remote context.
 pub fn is_in_cloud_context(
     agent_view_state: &AgentViewState,
     terminal_model: &TerminalModel,

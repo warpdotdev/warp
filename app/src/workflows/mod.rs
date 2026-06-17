@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+pub use cloud_object_models::{CloudWorkflow, CloudWorkflowModel, WorkflowId};
 use serde::{Deserialize, Serialize};
 use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
@@ -25,8 +26,8 @@ pub use categories::{CategoriesView, CategoriesViewEvent, WorkflowsViewAction};
 use crate::appearance::Appearance;
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::cloud_object::{
-    CloudModelType, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
-    GenericCloudObject, GenericServerObject, ObjectType, Revision, UpdateCloudObjectResult,
+    CloudModelType, CloudObjectEventEntrypoint, CloudObjectUpsertParams, CreateCloudObjectResult,
+    CreateObjectRequest, GenericServerObject, ObjectType, Revision, UpdateCloudObjectResult,
 };
 use crate::drive::items::workflow::WarpDriveWorkflow;
 use crate::drive::items::WarpDriveItem;
@@ -80,7 +81,7 @@ pub enum WorkflowSelectionSource {
     Alias,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkflowViewMode {
     View,
     Edit,
@@ -136,10 +137,6 @@ impl WorkflowViewMode {
         }
     }
 }
-
-#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-pub struct WorkflowId(ServerId);
-crate::server_id_traits! { WorkflowId, "Workflow" }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AIWorkflowOrigin {
@@ -213,21 +210,6 @@ impl WorkflowType {
     }
 }
 
-/// The model for a `CloudWorkflow`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CloudWorkflowModel {
-    pub data: Workflow,
-}
-
-impl CloudWorkflowModel {
-    pub fn new(workflow: Workflow) -> Self {
-        Self { data: workflow }
-    }
-}
-
-/// `CloudWorkflow` is a workflow retrieved from the server.
-pub type CloudWorkflow = GenericCloudObject<WorkflowId, CloudWorkflowModel>;
-
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl CloudModelType for CloudWorkflowModel {
@@ -258,14 +240,14 @@ impl CloudModelType for CloudWorkflowModel {
         self.data.set_name(name);
     }
 
-    fn upsert_event(&self, workflow: &CloudWorkflow) -> ModelEvent {
+    fn upsert_event(params: CloudObjectUpsertParams<Self>) -> ModelEvent {
         ModelEvent::UpsertWorkflow {
-            workflow: workflow.clone(),
+            workflow: CloudWorkflow::from(params),
         }
     }
 
-    fn bulk_upsert_event(objects: &[CloudWorkflow]) -> ModelEvent {
-        ModelEvent::UpsertWorkflows(objects.to_vec())
+    fn bulk_upsert_event(objects: Vec<CloudObjectUpsertParams<Self>>) -> ModelEvent {
+        ModelEvent::UpsertWorkflows(objects.into_iter().map(CloudWorkflow::from).collect())
     }
 
     fn create_object_queue_item(
@@ -354,31 +336,3 @@ impl CloudModelType for CloudWorkflowModel {
         true
     }
 }
-
-impl PartialEq<Workflow> for CloudWorkflow {
-    fn eq(&self, other: &Workflow) -> bool {
-        self.model().data == *other
-    }
-}
-
-impl PartialEq<CloudWorkflow> for CloudWorkflow {
-    fn eq(&self, other: &CloudWorkflow) -> bool {
-        self.model().data == other.model().data && self.id == other.id
-    }
-}
-
-impl From<CloudWorkflow> for Workflow {
-    fn from(cloud_workflow: CloudWorkflow) -> Self {
-        cloud_workflow.model().data.clone()
-    }
-}
-
-impl From<&CloudWorkflow> for Workflow {
-    fn from(cloud_workflow: &CloudWorkflow) -> Self {
-        cloud_workflow.model().data.to_owned()
-    }
-}
-
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;

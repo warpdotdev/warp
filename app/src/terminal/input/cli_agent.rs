@@ -18,7 +18,7 @@ use super::{
 };
 use crate::appearance::Appearance;
 use crate::context_chips::spacing;
-use crate::editor::TextColors;
+use crate::editor::{EnterAction, EnterSettings, TextColors};
 use crate::features::FeatureFlag;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::view::TerminalAction;
@@ -190,6 +190,43 @@ impl Input {
 
         self.editor.update(ctx, |editor, ctx| {
             editor.set_text_colors(text_colors, ctx);
+        });
+    }
+
+    /// Configures the editor's enter-key behaviour for the CLI agent rich input.
+    ///
+    /// When rich input is **open**, `enter` is always `Emit` so `input_enter`
+    /// runs first and handles inline-menu acceptance before any newline or
+    /// submit logic.  `ctrl_enter` is `Emit` only when the toggle is ON
+    /// (submit on Ctrl+Enter); when the toggle is OFF it is
+    /// `InsertNewLineIfMultiLine` to restore baseline newline insertion.
+    ///
+    /// When rich input is **closed**, `EnterSettings::default()` is restored.
+    pub(super) fn update_cli_agent_enter_settings(&mut self, ctx: &mut ViewContext<Self>) {
+        let rich_input_open =
+            CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id);
+
+        let settings = if rich_input_open {
+            let submit_on_ctrl_enter =
+                *crate::settings::AISettings::as_ref(ctx).submit_on_ctrl_enter;
+            EnterSettings {
+                // Always Emit so input_enter handles menus before submit/newline.
+                enter: EnterAction::Emit,
+                // Toggle ON  → Emit (submit path in input_ctrl_enter).
+                // Toggle OFF → InsertNewLineIfMultiLine (baseline newline).
+                ctrl_enter: if submit_on_ctrl_enter {
+                    EnterAction::Emit
+                } else {
+                    EnterAction::InsertNewLineIfMultiLine
+                },
+                ..Default::default()
+            }
+        } else {
+            EnterSettings::default()
+        };
+
+        self.editor.update(ctx, |editor, _ctx| {
+            editor.set_enter_settings(settings);
         });
     }
 }

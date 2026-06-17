@@ -218,7 +218,7 @@ fn apply_mutations_generates_update_for_add_empty_directory() {
 
     let initial = dir("/repo", vec![dir("/repo/src", vec![])]);
     let mut tree = build_tree_from_entry(initial);
-    let mutations = vec![FileTreeMutation::AddEmptyDirectory {
+    let mutations = vec![FileTreeMutation::AddUnloadedDirectory {
         path: mutation_path("/repo/src/empty"),
         is_ignored: true,
     }];
@@ -250,7 +250,7 @@ fn apply_mutations_generates_update_for_mixed_mutations() {
             is_ignored: false,
             extension: Some("rs".to_string()),
         },
-        FileTreeMutation::AddEmptyDirectory {
+        FileTreeMutation::AddUnloadedDirectory {
             path: mutation_path("/repo/new_dir"),
             is_ignored: false,
         },
@@ -315,6 +315,7 @@ fn apply_complete_update_adds_files_and_directories() {
                 }),
             ],
         }],
+        standing_results_delta: Default::default(),
     };
 
     tree.apply_repo_metadata_update(&update);
@@ -361,6 +362,7 @@ fn apply_update_with_removals_and_additions() {
                 ignored: false,
             })],
         }],
+        standing_results_delta: Default::default(),
     };
 
     tree.apply_repo_metadata_update(&update);
@@ -391,6 +393,7 @@ fn apply_incomplete_update_missing_children_subtree() {
                 loaded: false,
             })],
         }],
+        standing_results_delta: Default::default(),
     };
 
     tree.apply_repo_metadata_update(&update);
@@ -419,6 +422,7 @@ fn apply_incomplete_update_missing_children_subtree() {
                 ignored: false,
             })],
         }],
+        standing_results_delta: Default::default(),
     };
 
     tree.apply_repo_metadata_update(&followup);
@@ -446,6 +450,7 @@ fn apply_incomplete_update_missing_parent_from_undelivered_page() {
                 ignored: false,
             })],
         }],
+        standing_results_delta: Default::default(),
     };
 
     tree.apply_repo_metadata_update(&update);

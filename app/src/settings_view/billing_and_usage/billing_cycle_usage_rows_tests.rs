@@ -1,4 +1,4 @@
-use super::{build_own_usage_row, SourceFilter};
+use super::{MemberUsageRow, SourceFilter};
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource, BillingCycleUsageEntry,
@@ -46,11 +46,10 @@ fn build_own_usage_row_drops_team_subject_entries() {
             999,
         ),
     ];
-    let row = build_own_usage_row(
+    let row = MemberUsageRow::for_viewer(
         &entries,
         Some(VIEWER_UID),
         "viewer".to_string(),
-        None,
         SourceFilter::All,
     );
     assert_eq!(row.total_credits, 10);
@@ -75,11 +74,10 @@ fn build_own_usage_row_drops_other_users_entries() {
             999,
         ),
     ];
-    let row = build_own_usage_row(
+    let row = MemberUsageRow::for_viewer(
         &entries,
         Some(VIEWER_UID),
         "viewer".to_string(),
-        None,
         SourceFilter::All,
     );
     assert_eq!(row.total_credits, 10);
@@ -104,11 +102,10 @@ fn build_own_usage_row_local_filter_drops_cloud_entries() {
             0,
         ),
     ];
-    let row = build_own_usage_row(
+    let row = MemberUsageRow::for_viewer(
         &entries,
         Some(VIEWER_UID),
         "viewer".to_string(),
-        None,
         SourceFilter::Local,
     );
     assert_eq!(row.total_credits, 10);
@@ -132,24 +129,11 @@ fn build_own_usage_row_cloud_filter_drops_local_entries() {
             0,
         ),
     ];
-    let row = build_own_usage_row(
+    let row = MemberUsageRow::for_viewer(
         &entries,
         Some(VIEWER_UID),
         "viewer".to_string(),
-        None,
         SourceFilter::Cloud,
     );
     assert_eq!(row.total_credits, 20);
-}
-
-#[test]
-fn build_own_usage_row_surfaces_supplied_base_limit() {
-    let row = build_own_usage_row(
-        &[],
-        Some(VIEWER_UID),
-        "viewer".to_string(),
-        Some(1500),
-        SourceFilter::All,
-    );
-    assert_eq!(row.base_limit, Some(1500));
 }

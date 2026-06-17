@@ -229,7 +229,7 @@ impl<S: Into<String>> From<S> for BindingDescription {
 /// its context predicate is false, the binding is still registered in the total set of bindings.
 ///
 /// Enabled predicates dynamically decide if a binding is registered or not. They're similar to
-/// conditionally calling [`warpui::app::AppContext::register_editable_bindings`], except
+/// conditionally calling [`warpui_core::app::AppContext::register_editable_bindings`], except
 /// that the condition is re-evaluated at runtime. The main use for enabled predicates is to check
 /// feature flags that might change post-initialization. If a feature is disabled, any bindings
 /// related to it should be as well. Once the feature is enabled, the UI framework will start

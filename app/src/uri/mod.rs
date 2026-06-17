@@ -13,6 +13,7 @@ use anyhow::{anyhow, ensure, Result};
 use itertools::Itertools;
 use session_sharing_protocol::common::SessionId;
 use url::Url;
+use warp_util::path::LineAndColumnArg;
 use warpui::notification::UserNotification;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, EntityId, SingletonEntity as _, TypedActionView, ViewHandle, WindowId};
@@ -26,7 +27,10 @@ use crate::drive::{OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings};
 use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::linear::{LinearAction, LinearIssueWork};
-use crate::root_view::{open_new_window_get_handles, OpenLaunchConfigArg};
+use crate::root_view::{
+    open_new_window_get_handles, open_new_with_workspace_source, NewWorkspaceSource,
+    OpenLaunchConfigArg,
+};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
 use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection};
@@ -339,6 +343,7 @@ impl UriHost {
                 // - warp://settings/mcp - opens MCP servers settings page
                 // - warp://settings/platform - opens platform settings page
                 // - warp://settings/appearance - opens appearance settings page (themes, fonts, etc.)
+                // - warp://settings/warp_agent - opens the Warp Agent settings page (inference / API keys)
                 let settings_sub_page: Option<String> = url
                     .path_segments()
                     .into_iter()
@@ -357,15 +362,6 @@ impl UriHost {
                                 "root_view:open_team_settings_with_email_invite_in_existing_window",
                                 "root_view:open_team_settings_with_email_invite_in_new_window",
                                 &args,
-                                ctx,
-                            );
-                        }
-                        "billing_and_usage" => {
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_settings_page_in_existing_window",
-                                "root_view:open_settings_page_in_new_window",
-                                &SettingsSection::BillingAndUsage,
                                 ctx,
                             );
                         }
@@ -403,26 +399,21 @@ impl UriHost {
                                 ctx,
                             );
                         }
-                        "platform" => {
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_settings_page_in_existing_window",
-                                "root_view:open_settings_page_in_new_window",
-                                &SettingsSection::OzCloudAPIKeys,
-                                ctx,
-                            );
-                        }
-                        "appearance" => {
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_settings_page_in_existing_window",
-                                "root_view:open_settings_page_in_new_window",
-                                &SettingsSection::Appearance,
-                                ctx,
-                            );
-                        }
-                        _ => {
-                            log::warn!("Failed to open settings pane with uri={url}");
+                        // Subpages that open a settings section directly with no extra
+                        // parameters (e.g. billing_and_usage, platform, appearance,
+                        // warp_agent) are resolved via `settings_section_for_simple_subpage`.
+                        other => {
+                            if let Some(section) = settings_section_for_simple_subpage(other) {
+                                dispatch_action_in_new_or_existing_window(
+                                    primary_window_id,
+                                    "root_view:open_settings_page_in_existing_window",
+                                    "root_view:open_settings_page_in_new_window",
+                                    &section,
+                                    ctx,
+                                );
+                            } else {
+                                log::warn!("Failed to open settings pane with uri={url}");
+                            }
                         }
                     }
                 } else {
@@ -805,6 +796,44 @@ fn parse_tab_path(url: &Url) -> Option<PathBuf> {
     Some(PathBuf::from(shellexpand::tilde(&raw).into_owned()))
 }
 
+fn parse_positive_usize_query_param(url: &Url, name: &str) -> Result<Option<usize>> {
+    let Some(raw) = url.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v) else {
+        return Ok(None);
+    };
+
+    let value = raw.parse::<usize>()?;
+    ensure!(value > 0, "`{name}` must be greater than 0");
+    Ok(Some(value))
+}
+
+fn parse_open_file_editor_url(url: &Url) -> Result<(PathBuf, Option<LineAndColumnArg>)> {
+    let raw_path = url
+        .query_pairs()
+        .find(|(k, _)| k == "path")
+        .map(|(_, v)| v)
+        .ok_or_else(|| anyhow!("missing path for open_file_editor action"))?;
+    let path = PathBuf::from(shellexpand::tilde(&raw_path).into_owned());
+    ensure!(
+        path.is_absolute(),
+        "`path` must be absolute for open_file_editor action"
+    );
+
+    let line = parse_positive_usize_query_param(url, "line")?;
+    let column = parse_positive_usize_query_param(url, "column")?;
+    ensure!(
+        line.is_some() || column.is_none(),
+        "`column` requires `line` for open_file_editor action"
+    );
+
+    Ok((
+        path,
+        line.map(|line_num| LineAndColumnArg {
+            line_num,
+            column_num: column,
+        }),
+    ))
+}
+
 fn parse_auto_handoff_trigger(url: &Url) -> AutoCloudHandoffTrigger {
     match url
         .query_pairs()
@@ -822,14 +851,22 @@ fn parse_auto_handoff_trigger(url: &Url) -> AutoCloudHandoffTrigger {
 enum Action {
     NewTab,
     NewWindow,
+    OpenFileEditor {
+        path: PathBuf,
+        line_col: Option<LineAndColumnArg>,
+    },
     Docker,
     OpenRepo,
     CloudAgentSetup,
     NewCloudAgentConversation,
     NewAgentConversation,
-    CreateEnvironment { repos: Vec<String> },
+    CreateEnvironment {
+        repos: Vec<String>,
+    },
     FocusCloudMode,
-    AutoHandoffToCloud { trigger: AutoCloudHandoffTrigger },
+    AutoHandoffToCloud {
+        trigger: AutoCloudHandoffTrigger,
+    },
 }
 
 impl Action {
@@ -837,6 +874,10 @@ impl Action {
         match url.path() {
             "/new_tab" => Ok(Self::NewTab),
             "/new_window" => Ok(Self::NewWindow),
+            "/open_file_editor" => {
+                let (path, line_col) = parse_open_file_editor_url(url)?;
+                Ok(Self::OpenFileEditor { path, line_col })
+            }
             "/docker/open_subshell" => Ok(Self::Docker),
             "/open-repo" => Ok(Self::OpenRepo),
             "/cloud_agent_setup" => Ok(Self::CloudAgentSetup),
@@ -876,6 +917,15 @@ impl Action {
                     return;
                 };
                 open_file(window_id, path, ctx);
+            }
+            Self::OpenFileEditor { path, line_col } => {
+                #[cfg(feature = "local_fs")]
+                open_file_editor(primary_window_id, path.clone(), *line_col, ctx);
+                #[cfg(not(feature = "local_fs"))]
+                {
+                    let _ = (path, line_col);
+                    log::warn!("open_file_editor action requires local_fs support");
+                }
             }
             Action::Docker => {
                 if let Err(err) = open_docker_container(url, ctx) {
@@ -940,13 +990,8 @@ impl Action {
                 }
             }
             Action::NewCloudAgentConversation => {
-                let window_id =
-                    primary_window_id.or_else(|| Some(open_new_window_get_handles(None, ctx).0));
-
-                let Some(window_id) = window_id else {
-                    log::warn!(
-                        "unable to determine window for new cloud agent conversation action"
-                    );
+                let Some(window_id) = primary_window_id else {
+                    open_new_with_workspace_source(NewWorkspaceSource::AmbientAgent, ctx);
                     return;
                 };
 
@@ -1078,6 +1123,7 @@ impl Action {
         use WindowBehaviorHint as W;
         match self {
             Self::Docker
+            | Self::OpenFileEditor { .. }
             | Self::CreateEnvironment { .. }
             | Self::OpenRepo
             | Self::CloudAgentSetup
@@ -1097,13 +1143,8 @@ impl Action {
 /// Handles all incoming urls. These urls are file urls, auth urls for login,
 /// and team urls for opening team settings.
 pub fn handle_incoming_uri(url: &Url, ctx: &mut AppContext) {
-    // Non-dogfood builds must never log the full URL here: URLs routed to this
-    // handler can carry secrets in their query string (for example, the
-    // Firebase `refresh_token` on `warp://auth/desktop_redirect?...`). Log
-    // only the non-sensitive components (scheme, host, path) on release
-    // channels; dogfood builds retain the full URL for local debugging.
     safe_info!(
-        safe: ("received url {}", safe_url_log_fields(url)),
+        safe: ("received url"),
         full: ("received url {:?}", &url)
     );
 
@@ -1184,21 +1225,21 @@ enum OpenFileAction {
 /// standing up a full `AppContext`.
 fn classify_open_file_action(path: &Path) -> OpenFileAction {
     if is_markdown_file(path) {
-        return OpenFileAction::Notebook;
+        OpenFileAction::Notebook
+    } else if is_runnable_shell_script(path) {
+        OpenFileAction::ExecuteInSession
+    } else if path.is_file()
+        && (is_file_openable_in_warp(path).is_some() || starts_with_shebang(path))
+    {
+        OpenFileAction::Editor
+    } else {
+        OpenFileAction::ExecuteInSession
     }
-    if path.is_file() {
-        if is_runnable_shell_script(path) {
-            return OpenFileAction::ExecuteInSession;
-        }
-        // Anything we can show in the editor opens there. The second branch catches
-        // shebang scripts that `is_file_openable_in_warp` rejects on extension alone
-        // (e.g. an extensionless `#!/bin/sh` file without the user-execute bit) so
-        // they don't fall through to the executor and produce a `permission denied`.
-        if is_file_openable_in_warp(path).is_some() || starts_with_shebang(path) {
-            return OpenFileAction::Editor;
-        }
-    }
-    OpenFileAction::ExecuteInSession
+}
+
+#[cfg(feature = "local_fs")]
+fn can_open_file_editor_path(path: &Path) -> bool {
+    path.is_file() && is_file_openable_in_warp(path).is_some()
 }
 
 /// Handle an incoming `file://` URL.
@@ -1213,6 +1254,7 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
     });
 
     let action = classify_open_file_action(&path);
+
     if action == OpenFileAction::Notebook {
         if let Some((primary_window_id, root_view_id)) = primary_window_and_view {
             ctx.dispatch_action(
@@ -1303,6 +1345,60 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
         }
 
         send_telemetry_from_app_ctx!(TelemetryEvent::OpenNewSessionFromFilePath, ctx);
+    }
+}
+
+#[cfg(feature = "local_fs")]
+fn open_file_editor(
+    primary_window_id: Option<WindowId>,
+    path: PathBuf,
+    line_col: Option<LineAndColumnArg>,
+    ctx: &mut AppContext,
+) {
+    #[cfg(feature = "local_fs")]
+    {
+        use crate::code::editor_management::CodeSource;
+        use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+        use crate::util::file::external_editor::EditorSettings;
+        use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
+
+        if !can_open_file_editor_path(&path) {
+            log::warn!("open_file_editor action rejected non-openable path: {path:?}");
+            return;
+        }
+
+        let editor_settings = EditorSettings::as_ref(ctx);
+        let target = resolve_file_target_to_open_in_warp(&path, editor_settings, None);
+
+        let window_id = if let Some((wid, _)) = primary_window_id.and_then(|window_id| {
+            ctx.root_view_id(window_id)
+                .map(|view_id| (window_id, view_id))
+        }) {
+            wid
+        } else {
+            open_new_with_workspace_source(
+                NewWorkspaceSource::Session {
+                    options: Box::default(),
+                },
+                ctx,
+            )
+            .0
+        };
+
+        ctx.windows().show_window_and_focus_app(window_id);
+
+        if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
+            if let Some(workspace) = workspaces.into_iter().next() {
+                workspace.update(ctx, |workspace, ctx| {
+                    let source = CodeSource::Link {
+                        path: path.clone(),
+                        range_start: line_col,
+                        range_end: None,
+                    };
+                    workspace.open_file_with_target(path, target, line_col, source, ctx);
+                });
+            }
+        }
     }
 }
 
@@ -1473,6 +1569,16 @@ fn dispatch_action_in_new_or_existing_window<T: 'static>(
     }
 }
 
+fn settings_section_for_simple_subpage(subpage: &str) -> Option<SettingsSection> {
+    match subpage {
+        "billing_and_usage" => Some(SettingsSection::BillingAndUsage),
+        "platform" => Some(SettingsSection::OzCloudAPIKeys),
+        "appearance" => Some(SettingsSection::Appearance),
+        "warp_agent" => Some(SettingsSection::WarpAgent),
+        _ => None,
+    }
+}
+
 /// Validates an incoming custom URI for security and returns the host.
 fn validate_custom_uri(url: &Url) -> Result<UriHost> {
     // For now the only scheme we support is `[scheme_name]://[host_str]/...
@@ -1515,28 +1621,6 @@ fn validate_custom_uri(url: &Url) -> Result<UriHost> {
     );
 
     Ok(host)
-}
-
-/// Formats the non-sensitive components of an incoming URL for logging on
-/// release channels.
-///
-/// The returned string contains only the URL's scheme, host, and path — never
-/// its query string, fragment, or userinfo component. URLs that reach
-/// [`handle_incoming_uri`] can carry secrets in their query (for example, the
-/// Firebase refresh token in `warp://auth/desktop_redirect?refresh_token=...`),
-/// so this helper exists to give [`safe_info!`] a redacted representation that
-/// still preserves enough signal for triage.
-///
-/// `url.host_str()` can return `None` for schemes that don't require a host
-/// (e.g. some `file://` URLs on certain platforms); the literal `-` is used
-/// as a placeholder in that case so the formatter never panics.
-fn safe_url_log_fields(url: &Url) -> String {
-    format!(
-        "scheme={} host={} path={}",
-        url.scheme(),
-        url.host_str().unwrap_or("-"),
-        url.path(),
-    )
 }
 
 fn decode_uuid_hex(hex: &str) -> Option<Vec<u8>> {

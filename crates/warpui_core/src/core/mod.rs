@@ -94,7 +94,7 @@ impl fmt::Display for DisplayIdx {
 }
 
 /// Information to display the IME editor near the active cursor.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct CursorInfo {
     /// Position of the active cursor.
     pub position: RectF,
@@ -430,6 +430,14 @@ impl RefCounts {
         } else {
             panic!("Expected ref count to be positive")
         }
+    }
+
+    fn is_model_dropped(&self, model_id: EntityId) -> bool {
+        self.dropped.models.contains(&model_id)
+    }
+
+    fn is_view_dropped(&self, view_id: EntityId) -> bool {
+        self.dropped.views.iter().any(|(_, id)| *id == view_id)
     }
 
     fn take_dropped(&mut self) -> DroppedItems {

@@ -32,7 +32,7 @@ use crate::send_telemetry_from_ctx;
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{OutOfCreditsBannerAction, TelemetryEvent};
 use crate::settings_view::create_discount_badge;
-use crate::view_components::Dropdown;
+use crate::view_components::{Dropdown, DropdownAction};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 #[derive(Default)]
@@ -368,11 +368,15 @@ impl BuyCreditsBanner {
                         })),
                         Some(primary_text)
                     )
-                    .with_on_select_action(Action::SelectDenomination(index).into())
+                    .with_on_select_action(DropdownAction::select_action_and_close(
+                        Action::SelectDenomination(index),
+                    ))
                     .into_item()
                 } else {
                     MenuItemFields::new(primary_text.clone())
-                        .with_on_select_action(Action::SelectDenomination(index).into())
+                        .with_on_select_action(DropdownAction::select_action_and_close(
+                            Action::SelectDenomination(index),
+                        ))
                         .into_item()
                 }
             })
@@ -839,7 +843,7 @@ impl View for BuyCreditsBanner {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     SelectDenomination(usize),
     Close,

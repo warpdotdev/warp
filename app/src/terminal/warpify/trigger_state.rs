@@ -4,18 +4,14 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp_core::ui::appearance::Appearance;
 use warpui::r#async::SpawnedFutureHandle;
-use warpui::{AppContext, EntityId, SingletonEntity as _, ViewContext, ViewHandle};
+use warpui::{EntityId, SingletonEntity as _, ViewContext, ViewHandle};
 
 use super::success_block::WarpifySuccessBlock;
-use crate::terminal::model::ansi::SystemDetails;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::SessionId;
-use crate::terminal::model::terminal_model::{SubshellInitializationInfo, TmuxInstallationState};
+use crate::terminal::model::terminal_model::SubshellInitializationInfo;
 use crate::terminal::settings::TerminalSettings;
 use crate::terminal::shell::ShellType;
-use crate::terminal::ssh::error::SshErrorBlock;
-use crate::terminal::ssh::install_tmux::SshInstallTmuxBlock;
-use crate::terminal::ssh::warpify::SshWarpifyBlock;
 use crate::terminal::{TerminalModel, TerminalView};
 
 /// A unique identifier for a subshell separator.
@@ -44,69 +40,19 @@ impl SubshellSeparatorState {
 
 #[derive(Debug)]
 pub enum SshBlockState {
-    Warpifying {
-        handle: ViewHandle<SshWarpifyBlock>,
-    },
     WarpifySuccess {
         handle: ViewHandle<WarpifySuccessBlock>,
-    },
-    InstallTmux {
-        handle: ViewHandle<SshInstallTmuxBlock>,
-    },
-    Error {
-        handle: ViewHandle<SshErrorBlock>,
     },
 }
 
 impl SshBlockState {
     pub fn should_prevent_input(&self) -> bool {
-        !matches!(self, SshBlockState::InstallTmux { .. })
+        true
     }
 
     pub fn get_block_view_id(&self) -> EntityId {
         match self {
-            SshBlockState::Warpifying { handle, .. } => handle.id(),
             SshBlockState::WarpifySuccess { handle, .. } => handle.id(),
-            SshBlockState::InstallTmux { handle, .. } => handle.id(),
-            SshBlockState::Error { handle } => handle.id(),
-        }
-    }
-
-    /// Returns `true` if the script was previously visible and is now collapsed.
-    pub fn collapse_script(&mut self, ctx: &mut ViewContext<TerminalView>) -> bool {
-        match self {
-            SshBlockState::InstallTmux { handle, .. } => {
-                handle.update(ctx, |block, ctx| block.collapse_script(ctx))
-            }
-            SshBlockState::Warpifying { .. } => false,
-            SshBlockState::WarpifySuccess { .. } => false,
-            SshBlockState::Error { .. } => false,
-        }
-    }
-
-    pub fn focus(&mut self, ctx: &mut ViewContext<TerminalView>) {
-        match self {
-            SshBlockState::Warpifying { handle } => {
-                handle.update(ctx, |block, ctx| block.focus(ctx));
-            }
-            SshBlockState::WarpifySuccess { .. } => {}
-            SshBlockState::InstallTmux { handle } => {
-                handle.update(ctx, |block, ctx| block.focus(ctx));
-            }
-            SshBlockState::Error { handle } => {
-                handle.update(ctx, |block, ctx| block.focus(ctx));
-            }
-        }
-    }
-
-    pub fn get_system_details(&self, app: &AppContext) -> Option<SystemDetails> {
-        match self {
-            SshBlockState::InstallTmux { handle, .. } => {
-                Some(handle.read(app, |view, _| view.system_details()))
-            }
-            SshBlockState::Warpifying { .. } => None,
-            SshBlockState::WarpifySuccess { .. } => None,
-            SshBlockState::Error { .. } => None,
         }
     }
 
@@ -115,16 +61,11 @@ impl SshBlockState {
         ctx: &mut ViewContext<TerminalView>,
     ) -> Option<EntityId> {
         match self {
-            SshBlockState::InstallTmux { .. } | SshBlockState::Warpifying { .. } => {
-                let block_id = self.get_block_view_id();
-                return Some(block_id);
-            }
             SshBlockState::WarpifySuccess { handle } => {
                 handle.update(ctx, |block, ctx| {
                     block.on_warpified_session_complete(ctx);
                 });
             }
-            SshBlockState::Error { .. } => {}
         }
         None
     }
@@ -157,8 +98,6 @@ struct WarpifyTriggerState {
     shell_type: Option<ShellType>,
 
     is_shell_detection_in_progress: bool,
-
-    tmux_installation: TmuxInstallationState,
 }
 
 #[derive(Default)]
@@ -272,23 +211,6 @@ impl WarpifyState {
         };
     }
 
-    pub fn collapse_ssh_block(&mut self, ctx: &mut ViewContext<TerminalView>) -> bool {
-        if let Some(ref mut pending_state) = self.pending_state.as_mut() {
-            if let Some(ref mut ssh_block_state) = &mut pending_state.ssh_block_state {
-                return ssh_block_state.collapse_script(ctx);
-            }
-        }
-        false
-    }
-
-    pub fn focus(&mut self, ctx: &mut ViewContext<TerminalView>) {
-        if let Some(ref mut pending_state) = self.pending_state.as_mut() {
-            if let Some(ref mut ssh_block_state) = &mut pending_state.ssh_block_state {
-                ssh_block_state.focus(ctx);
-            }
-        }
-    }
-
     pub fn clear_ssh_block_state(&mut self) {
         if let Some(ref mut pending_state) = self.pending_state.as_mut() {
             pending_state.ssh_block_state = None;
@@ -334,18 +256,6 @@ impl WarpifyState {
         let pending_state = self.pending_state.get_or_insert_with(Default::default);
         pending_state.pending_command = Some(command);
         pending_state.pending_warpify_ssh_host = ssh_host;
-    }
-
-    pub fn set_tmux_installation_state(&mut self, tmux_installation: TmuxInstallationState) {
-        if let Some(ref mut pending_state) = self.pending_state.as_mut() {
-            pending_state.tmux_installation = tmux_installation;
-        }
-    }
-
-    pub fn tmux_installation(&self) -> Option<TmuxInstallationState> {
-        self.pending_state
-            .as_ref()
-            .map(|state| state.tmux_installation)
     }
 
     pub fn set_block_id(&mut self, block_id: BlockId) {

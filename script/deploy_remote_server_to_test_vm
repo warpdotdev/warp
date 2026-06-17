@@ -122,13 +122,17 @@ if ! rustup target list --installed 2>/dev/null | grep -q "$TARGET"; then
   exit 1
 fi
 
-BINARY_NAME="oz-integration-$(app_version)"
+BUNDLE_VERSION="$(app_version)"
+BUNDLE_BINARY_NAME="oz-integration"
+BINARY_NAME="$BUNDLE_BINARY_NAME-$BUNDLE_VERSION"
 
 # ── Build ─────────────────────────────────────────────────────────
 
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT/target}"
 OUTPUT_DIR="$CARGO_TARGET_DIR/$TARGET/$CARGO_PROFILE"
 BUILT_BINARY="$OUTPUT_DIR/$WARP_BIN"
+LOCAL_BUNDLE_DIR="$OUTPUT_DIR/remote-server-integration-bundle"
+LOCAL_BUNDLE_TARBALL="$OUTPUT_DIR/remote-server-integration-bundle.tar.gz"
 
 echo "==> Building Integration-channel Oz CLI for $TARGET (profile=$CARGO_PROFILE)"
 
@@ -150,6 +154,15 @@ fi
 
 BINARY_SIZE=$(du -h "$BUILT_BINARY" | cut -f1)
 echo "==> Build complete ($BINARY_SIZE)"
+
+rm -rf "$LOCAL_BUNDLE_DIR"
+mkdir -p "$LOCAL_BUNDLE_DIR"
+cp "$BUILT_BINARY" "$LOCAL_BUNDLE_DIR/$BUNDLE_BINARY_NAME"
+"$WORKSPACE_ROOT/script/prepare_bundled_resources" \
+  "$LOCAL_BUNDLE_DIR/resources" \
+  integration \
+  "$CARGO_PROFILE"
+tar -czf "$LOCAL_BUNDLE_TARBALL" -C "$LOCAL_BUNDLE_DIR" .
 
 # ── Upload via SCP through GCP IAP tunnel ─────────────────────────
 # The test VM uses password auth (same as the SSH integration tests).
@@ -210,24 +223,44 @@ for PID_FILE in "$REMOTE_ROOT"/*/server.pid; do
   rm -f "$DAEMON_DIR/server.sock" "$DAEMON_DIR/server.pid"
 done
 
-rm -f "$REMOTE_ROOT"/oz-integration-*.tmp.*
+rm -f "$REMOTE_ROOT"/remote-server-integration-bundle-*.tar.gz
 REMOTE_SCRIPT
 
-  TMP_BINARY_NAME="$BINARY_NAME.tmp.${GITHUB_RUN_ID:-local}.$$.${REMOTE_USER}"
-  echo "==> Uploading binary to ${REMOTE_USER}@${REMOTE_HOST}:~/$REMOTE_DIR/$TMP_BINARY_NAME"
+  TMP_BUNDLE_NAME="remote-server-integration-bundle-${GITHUB_RUN_ID:-local}-$$-${REMOTE_USER}.tar.gz"
+  echo "==> Uploading bundle to ${REMOTE_USER}@${REMOTE_HOST}:~/$REMOTE_DIR/$TMP_BUNDLE_NAME"
   "${SCP_CMD[@]}" -P "$REMOTE_PORT" \
     -o "ProxyCommand=$PROXY_COMMAND" \
     -o PreferredAuthentications=password \
     -o PubkeyAuthentication=no \
     -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
-    "$BUILT_BINARY" \
-    "${REMOTE_USER}@${REMOTE_HOST}:~/$REMOTE_DIR/$TMP_BINARY_NAME"
+    "$LOCAL_BUNDLE_TARBALL" \
+    "${REMOTE_USER}@${REMOTE_HOST}:~/$REMOTE_DIR/$TMP_BUNDLE_NAME"
 
-  echo "==> Installing binary for ${REMOTE_USER}"
+  echo "==> Installing binary and resources for ${REMOTE_USER}"
+  # Args: <remote dir> <tarball name> <binary name in tarball> <installed name>.
+  # The tarball ships the unversioned binary beside its resources/ tree; the
+  # installed binary carries the version suffix the Integration channel
+  # launches. The resources tree lands at `bundled_resources`, the global
+  # version-independent location the daemon reads (must match
+  # BUNDLED_RESOURCES_DIR_NAME in crates/remote_server/src/setup.rs).
   "${SSH_CMD[@]}" "${SSH_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" \
-    "chmod 755 ~/$REMOTE_DIR/$TMP_BINARY_NAME && mv -f ~/$REMOTE_DIR/$TMP_BINARY_NAME ~/$REMOTE_DIR/$BINARY_NAME && test -x ~/$REMOTE_DIR/$BINARY_NAME"
+    "bash -s -- '$REMOTE_DIR' '$TMP_BUNDLE_NAME' '$BUNDLE_BINARY_NAME' '$BINARY_NAME'" <<'REMOTE_SCRIPT'
+set -euo pipefail
+
+cd "$HOME/$1"
+tar -xzf "$2"
+rm -f "$2"
+
+rm -rf bundled_resources
+mv resources bundled_resources
+
+chmod 755 "$3"
+mv -f "$3" "$4"
+"./$4" --version
+REMOTE_SCRIPT
 done
 
 echo ""
 echo "==> Done! Binary deployed to ${REMOTE_HOST}:~/$REMOTE_DIR/$BINARY_NAME for users: ${REMOTE_USERS[*]}"
+echo "    Bundled resources: ~/$REMOTE_DIR/bundled_resources"

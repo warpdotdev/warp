@@ -544,7 +544,7 @@ impl CloudModel {
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(folder) = self.get_folder(&server_folder.id) {
-            server_folder.model.is_open = folder.model.is_open;
+            server_folder.model.is_open = folder.model().is_open;
         }
 
         self.upsert_from_server_object(server_folder, ctx);
@@ -890,13 +890,13 @@ impl CloudModel {
             let is_open = match open_state {
                 FolderOpenState::Open => true,
                 FolderOpenState::Closed => false,
-                FolderOpenState::Reversed => !folder.model.is_open,
+                FolderOpenState::Reversed => !folder.model().is_open,
             };
 
             folder.set_model(CloudFolderModel {
                 is_open,
-                is_warp_pack: folder.model.is_warp_pack,
-                name: folder.model.name.clone(),
+                is_warp_pack: folder.model().is_warp_pack,
+                name: folder.model().name.clone(),
             });
 
             let folder_clone = folder.clone();
@@ -1780,7 +1780,10 @@ impl CloudModel {
 
         if let Some(model_event_sender) = &self.model_event_sender {
             if let Err(e) = model_event_sender.send(M::bulk_upsert_event(
-                objects_without_pending_changes.as_slice(),
+                objects_without_pending_changes
+                    .iter()
+                    .map(|object| object.upsert_params(object.object_type()))
+                    .collect(),
             )) {
                 log::error!("Error saving team objects to cache: {e:?}");
             }

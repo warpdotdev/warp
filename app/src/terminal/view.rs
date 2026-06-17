@@ -9,6 +9,10 @@ mod context_menu;
 pub mod init;
 pub mod inline_banner;
 pub mod load_ai_conversation;
+pub(crate) mod queued_prompts_panel;
+#[cfg(test)]
+#[path = "view/queued_prompts_tests.rs"]
+mod queued_prompts_tests;
 use ai::agent::action::InsertReviewComment;
 pub use load_ai_conversation::ConversationRestorationInNewPaneType;
 // TODO(advait): if we align on prompt suggestions banner in Input, move code out of inline_banner mod.
@@ -20,10 +24,11 @@ pub use init_project::{
 };
 use onboarding::callout::{FinalState, OnboardingCalloutViewEvent, OnboardingQuery};
 use onboarding::{OnboardingCalloutView, OnboardingKeybindings};
+use repo_metadata::CanonicalizedPath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 
 use crate::ai::block_context::BlockContext;
-#[cfg(feature = "local_fs")]
-use crate::ai::skills::SkillOpenOrigin;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
 pub(crate) mod docker_sandbox;
 mod link_detection;
@@ -39,6 +44,7 @@ mod shell_terminated_banner;
 pub mod ssh_file_upload;
 pub(crate) mod ssh_remote_server_choice_view;
 pub(crate) mod ssh_remote_server_failed_banner;
+pub(crate) mod ssh_tmux_deprecation_banner;
 mod tab_metadata;
 #[cfg(any(test, feature = "integration_tests"))]
 mod testing;
@@ -56,7 +62,6 @@ use std::hash::Hash;
 use std::ops::{Deref as _, Range};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::str::FromStr;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -67,7 +72,8 @@ pub use action::{AgentOnboardingVersion, OnboardingIntention, OnboardingVersion,
 use ai::api_keys::{ApiKeyManager, AwsCredentialsState};
 use ai::index::full_source_code_embedding::manager::{BuildSource, CodebaseIndexManager};
 use async_channel::{Receiver, Sender};
-use block_banner::{render_warpification_banner, WarpificationMode, WarpifyBannerState};
+use base64::Engine as _;
+use block_banner::{render_warpification_banner, WarpifyBannerState};
 pub use block_banner::{WithinBlockBanner, BLOCK_BANNER_HEIGHT};
 use block_onboarding::onboarding_agentic_suggestions_block::{
     OnboardingAgenticSuggestionsBlock, OnboardingAgenticSuggestionsBlockEvent, OnboardingChipType,
@@ -88,12 +94,12 @@ use inline_banner::{
     render_alias_expansion_banner, render_aws_bedrock_login_banner,
     render_aws_cli_not_installed_banner, render_inline_notifications_discovery_banner,
     render_inline_notifications_error_banner, render_inline_shared_session_ended_banner,
-    render_inline_shared_session_started_banner, render_inline_ssh_wrapper_banner,
-    render_open_in_warp_banner, render_shell_process_terminated_banner, render_vim_mode_banner,
-    AliasExpansionBanner, AliasExpansionBannerAction, AnonymousUserAISignUpBannerState,
-    AnonymousUserLoginBannerAction, AwsBedrockLoginBannerAction, AwsBedrockLoginBannerState,
-    AwsCliNotInstalledBannerAction, AwsCliNotInstalledBannerState, ByoLlmAuthBannerSessionState,
-    OpenInWarpBannerState, SSHBannerAction, SSHBannerState, VimModeBannerAction,
+    render_inline_shared_session_started_banner, render_open_in_warp_banner,
+    render_shell_process_terminated_banner, render_vim_mode_banner, AliasExpansionBanner,
+    AliasExpansionBannerAction, AnonymousUserAISignUpBannerState, AnonymousUserLoginBannerAction,
+    AwsBedrockLoginBannerAction, AwsBedrockLoginBannerState, AwsCliNotInstalledBannerAction,
+    AwsCliNotInstalledBannerState, ByoLlmAuthBannerSessionState, OpenInWarpBannerState,
+    VimModeBannerAction,
 };
 pub use inline_banner::{NotificationsDiscoveryBannerAction, NotificationsErrorBannerAction};
 use instant::Instant;
@@ -109,11 +115,14 @@ use repo_metadata::repositories::RepoDetectionSource;
 use serde::Serialize;
 use serde_json::json;
 use session_sharing_protocol::common::{
-    AgentAttachment, LongRunningCommandAgentInteractionState, ParticipantId, Role, RoleRequestId,
-    RoleRequestResponse, ServerConversationToken as SessionSharingServerConversationToken,
+    AgentAttachment, LongRunningCommandAgentInteraction, LongRunningCommandAgentInteractionState,
+    ParticipantId, Role, RoleRequestId, RoleRequestResponse,
+    ServerConversationToken as SessionSharingServerConversationToken,
     WindowSize as SessionSharingWindowSize,
 };
-use session_sharing_protocol::sharer::{RoleUpdateReason, SessionEndedReason, SessionSourceType};
+use session_sharing_protocol::sharer::{
+    RoleUpdateReason, SessionEndedReason, SessionRetentionReason,
+};
 use settings::{Setting, ToggleableSetting};
 use shared_session::cloud_conversation_continuation::CloudConversationContinuationUiState;
 use shared_session::{SharedSessionAdapter, Viewer};
@@ -125,6 +134,7 @@ use vec1::vec1;
 use warp_core::channel::ChannelState;
 use warp_core::command::ExitCode;
 use warp_core::context_flag::ContextFlag;
+use warp_core::r#async::debounce;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -175,7 +185,6 @@ use super::available_shells::AvailableShell;
 use super::block_list_viewport::FindMatchScrollLocation;
 use super::event::SshLoginStatus;
 use super::find::FindOptions;
-use super::model::ansi::{SystemDetails, WarpificationUnavailableReason};
 use super::model::block::{
     BlockSection, BlocklistEnvVarMetadata, LONG_RUNNING_COMMAND_DURATION_MS,
 };
@@ -186,22 +195,7 @@ use super::model::secrets::RichContentSecretTooltipInfo;
 use super::model::selection::ExpandedSelectionRange;
 use super::model::session::SessionBootstrappedEvent;
 use super::settings::AltScreenPaddingMode;
-use super::ssh::error::{SshErrorBlock, SshErrorBlockEvent, SSH_ERROR_BLOCK_VISIBLE_KEY};
-use super::ssh::install_tmux::{
-    install_root_tmux_script, install_tmux_script, SshInstallTmuxBlock, SshInstallTmuxBlockEvent,
-    SshKeyEvent, TmuxInstallMethod,
-};
-use super::ssh::root_access::RootAccess;
-use super::ssh::ssh_detection::evaluate_warpify_ssh_host;
-use super::ssh::util::{
-    convert_script_to_one_line, parse_interactive_ssh_command, InteractiveSshCommand,
-    SshWarpifyCommand,
-};
-use super::ssh::warpify::{
-    begin_warpify_ssh_session_command, warpify_ssh_session_command, SshWarpifyBlock,
-    SshWarpifyBlockEvent,
-};
-use super::ssh::SSH_WARPIFY_TIMEOUT_DURATION;
+use super::ssh::util::{parse_interactive_ssh_command, InteractiveSshCommand, SshWarpifyCommand};
 use super::warpify::success_block::{WarpifySuccessBlock, WarpifySuccessBlockEvent};
 use super::warpify::trigger_state::{SshBlockState, WarpifyState};
 use super::warpify::WarpificationSource;
@@ -229,11 +223,12 @@ use crate::ai::ambient_agents::{
 use crate::ai::blocklist::agent_view::agent_input_footer::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::agent_view::{
     agent_view_bg_fill, fork_from_last_known_good_state_exchange_id,
-    get_agent_view_entry_block_position_id, AgentViewController, AgentViewControllerEvent,
-    AgentViewDisplayMode, AgentViewEntryBlockParams, AgentViewEntryOrigin,
-    AgentViewHeaderDisabledTheme, AgentViewHeaderTheme, AgentViewZeroStateBlock,
-    AgentViewZeroStateEvent, EphemeralMessageModel, ExitConfirmationTrigger, InlineAgentViewHeader,
-    OrchestrationPillBar, ENTER_OR_EXIT_CONFIRMATION_WINDOW,
+    get_agent_view_entry_block_position_id, is_in_cloud_context, AgentViewController,
+    AgentViewControllerEvent, AgentViewDisplayMode, AgentViewEntryBlockParams,
+    AgentViewEntryOrigin, AgentViewHeaderDisabledTheme, AgentViewHeaderTheme,
+    AgentViewZeroStateBlock, AgentViewZeroStateEvent, EphemeralMessageModel,
+    ExitConfirmationTrigger, InlineAgentViewHeader, OrchestrationPillBar,
+    ENTER_OR_EXIT_CONFIRMATION_WINDOW,
 };
 use crate::ai::blocklist::block::cli::{CLISubagentView, CLISubagentViewEvent};
 use crate::ai::blocklist::block::cli_controller::{
@@ -248,6 +243,7 @@ use crate::ai::blocklist::inline_action::code_diff_view::{CodeDiffView, FileDiff
 use crate::ai::blocklist::model::{
     AIBlockModel, AIBlockModelHelper, AIBlockModelImpl, AIBlockOutputStatus,
 };
+use crate::ai::blocklist::orchestration_topology::OrchestrationNavigationDirection;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
 use crate::ai::blocklist::summarization_cancel_dialog::SummarizationCancelDialog;
@@ -258,16 +254,18 @@ use crate::ai::blocklist::usage::conversation_usage_view::{
 use crate::ai::blocklist::{
     ai_brand_color, block_context_from_terminal_model,
     get_ai_block_overflow_menu_element_position_id, get_attached_blocks_chip_element_position_id,
-    AIBlock, AIBlockEvent, BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextEvent,
-    BlocklistAIContextModel, BlocklistAIController, BlocklistAIControllerEvent,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel,
-    ClientIdentifiers, ConversationStatusUpdate, InputConfig, InputType,
-    LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
-    MaaPassiveSuggestionsModel, PassiveSuggestionsModels, PendingQueryState,
-    RequestFileEditsFormatKind, ShellCommandExecutor, ShellCommandExecutorEvent,
-    SlashCommandRequest, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
-    ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
+    AIBlock, AIBlockEvent, AutofireAction, BlocklistAIActionEvent, BlocklistAIActionModel,
+    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    BlocklistAIInputEvent, BlocklistAIInputModel, ClientIdentifiers, ConversationStatusUpdate,
+    InputConfig, InputType, InputTypeAutoDetectionSource, LegacyPassiveSuggestionsEvent,
+    LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel,
+    PassiveSuggestionsModels, PendingAttachment, PendingQueryState, QueuedQuery, QueuedQueryId,
+    QueuedQueryModel, QueuedQueryOrigin, RequestFileEditsFormatKind, ShellCommandExecutor,
+    ShellCommandExecutorEvent, SlashCommandRequest, StartAgentExecutor, StartAgentExecutorEvent,
+    StartAgentRequest, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
 };
+use crate::ai::conversation_details_panel::ConversationDetailsPanelEvent;
 use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
@@ -309,17 +307,14 @@ use crate::code_review::context::{
 #[cfg(feature = "local_fs")]
 use crate::code_review::diff_state::LocalDiffStateModel;
 use crate::code_review::diff_state::{DiffMode, GitDeltaPreference};
-#[cfg(feature = "local_fs")]
-use crate::code_review::git_status_update::{
-    GitRepoStatusModel, GitStatusMetadata, GitStatusUpdateModel,
-};
+use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusModel, GitStatusMetadata};
+use crate::code_review::github_repo_model::GitHubRepoModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 #[cfg(feature = "local_fs")]
 use crate::code_review::DiffSetScope;
-use crate::context_chips::prompt::Prompt;
+use crate::context_chips::prompt::{Prompt, PromptSelection};
 use crate::context_chips::prompt_type::PromptType;
 use crate::context_chips::ContextChipKind;
-use crate::debounce::debounce;
 use crate::drive::settings::WarpDriveSettings;
 use crate::drive::sharing::ShareableObject;
 use crate::drive::CloudObjectTypeAndId;
@@ -327,7 +322,7 @@ use crate::editor::{AutosuggestionType, CrdtOperation, EditorAction};
 use crate::env_vars::env_var_collection_block::{
     EnvVarCollectionBlock, EnvVarCollectionBlockEvent,
 };
-use crate::env_vars::{CloudEnvVarCollection, EnvVar};
+use crate::env_vars::{CloudEnvVarCollection, EnvVar, EnvVarExt};
 use crate::features::FeatureFlag;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::pane_group::focus_state::PaneFocusHandle;
@@ -389,12 +384,10 @@ use crate::terminal::block_list_viewport::{
 };
 use crate::terminal::bootstrap::init_subshell_command;
 use crate::terminal::cli_agent_sessions::event::{
-    parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType,
+    parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType,
     CLI_AGENT_NOTIFICATION_SENTINEL,
 };
-use crate::terminal::cli_agent_sessions::listener::{
-    agent_supports_rich_status, is_agent_supported, CLIAgentSessionListener,
-};
+use crate::terminal::cli_agent_sessions::listener::{is_agent_supported, CLIAgentSessionListener};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
 use crate::terminal::cli_agent_sessions::{
@@ -424,6 +417,7 @@ use crate::terminal::links::should_directly_open_link;
 use crate::terminal::local_tty::get_shell_starter;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty::shell::ShellStarter;
+#[cfg(feature = "local_tty")]
 #[cfg(all(windows, feature = "local_tty"))]
 use crate::terminal::local_tty::windows::get_user_and_system_env_variable;
 use crate::terminal::model::ansi::{ClearMode, Handler};
@@ -460,9 +454,9 @@ use crate::terminal::shared_session::role_change_modal::{
     RoleChangeCloseSource, RoleChangeOpenSource,
 };
 use crate::terminal::shared_session::{
-    SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionStatus,
+    SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
+    SharedSessionStatus,
 };
-use crate::terminal::ssh::ssh_detection::SshInteractiveSessionDetected;
 use crate::terminal::view::block_onboarding::onboarding_prompt_block::OnboardingPromptBlock;
 use crate::terminal::view::init_environment::mode_selector::{
     EnvironmentSetupMode, EnvironmentSetupModeSelector, EnvironmentSetupModeSelectorEvent,
@@ -485,6 +479,9 @@ use crate::terminal::view::ssh_remote_server_choice_view::{
 };
 use crate::terminal::view::ssh_remote_server_failed_banner::{
     SshRemoteServerFailedBanner, SshRemoteServerFailedBannerEvent,
+};
+use crate::terminal::view::ssh_tmux_deprecation_banner::{
+    SshTmuxDeprecationBanner, SshTmuxDeprecationBannerEvent,
 };
 use crate::terminal::view::telemetry::PromptSuggestionFallbackReason;
 use crate::terminal::view::zero_state_block::TerminalViewZeroStateBlock;
@@ -661,6 +658,17 @@ pub const NOTIFICATIONS_TROUBLESHOOT_URL: &str =
 
 const DEBOUNCE_PERIOD: Duration = Duration::from_millis(40);
 
+/// Key used in user preferences to persist the "don't show again" choice for the OSC 52
+/// clipboard blocked banner.
+const OSC52_CLIPBOARD_BANNER_SUPPRESSED_KEY: &str = "Osc52ClipboardBannerSuppressed";
+
+/// Which type of OSC 52 clipboard operation was blocked.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Osc52ClipboardBlockedType {
+    Read,
+    Write,
+}
+
 /// Key used in user defaults to save whether the user has seen the banner.
 pub const ALIAS_EXPANSION_BANNER_SEEN_KEY: &str = "AliasExpansionBannerSeen";
 
@@ -781,7 +789,6 @@ impl NotificationsTrigger {
             }
         }
     }
-
     /// Notifications have the following format
     /// - title: "'{start_of_command}...' {trigger_specific_details}"
     /// - body: "{additional_context} ...{end_of_output}"
@@ -977,7 +984,6 @@ pub type InlineBannerId = usize;
 pub enum InlineBannerType {
     NotificationsDiscovery,
     NotificationsError,
-    Ssh,
     PromptSuggestions,
     AliasExpansion,
     SharedSessionStart,
@@ -1007,7 +1013,6 @@ impl InlineBannerType {
             // Terminal-context banners: hidden in agent view
             Self::NotificationsDiscovery
             | Self::NotificationsError
-            | Self::Ssh
             | Self::AliasExpansion
             | Self::SharedSessionStart
             | Self::SharedSessionEnd
@@ -1042,10 +1047,6 @@ struct InlineBannersState {
     /// State for the different notification banners.
     notifications_discovery_banner: NotificationsDiscoveryBanner,
     notifications_error_banner: NotificationsErrorBanner,
-
-    /// A mapping from banner ID to state information for all SSH banners in
-    /// this view.
-    ssh_banners: HashMap<InlineBannerId, SSHBannerState>,
 
     prompt_suggestions_banner: Option<PromptSuggestionBannerState>,
 
@@ -1615,6 +1616,20 @@ pub struct ExecuteCommandEvent {
     pub source: CommandExecutionSource,
 }
 
+/// Controls how existing block/text selections influence focus when redetermining
+/// focus in [`TerminalView::redetermine_global_focus_with_policy`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionFocusPolicy {
+    /// In shell mode, selected blocks/text keep the terminal focused so blocklist
+    /// navigation continues to work.
+    HoldsFocus,
+    /// Selections only keep the terminal focused while the user is actively making a
+    /// selection (mid text-selection drag or mid block click). Used when a command
+    /// completes, so a selection made before or during the command doesn't prevent
+    /// focus from returning to the input box.
+    HoldsFocusOnlyWhileSelecting,
+}
+
 /// Actions that can be taken on a passive code diff via the input editor.
 #[derive(Clone, Debug)]
 pub enum CodeDiffAction {
@@ -1685,6 +1700,9 @@ pub enum Event {
     EnvironmentSetupModeSelectorToggled {
         is_open: bool,
     },
+    AuthSecretDeleteConfirmationDialogToggled {
+        is_open: bool,
+    },
     CtrlD,
     ShutdownPty,
     // TODO: break this event down into higher-level events that hide the
@@ -1741,7 +1759,7 @@ pub enum Event {
     },
     StartSharingCurrentSession {
         scrollback_type: SharedSessionScrollbackType,
-        source_type: SessionSourceType,
+        source: SharedSessionSource,
     },
     EstablishedSharedSession {
         session_id: session_sharing_protocol::common::SessionId,
@@ -1753,6 +1771,9 @@ pub enum Event {
     RejoinCurrentSession,
     StopSharingCurrentSession {
         reason: SessionEndedReason,
+    },
+    ExtendSessionRetention {
+        reason: SessionRetentionReason,
     },
     CloseRequested,
     OpenShareSessionModal {
@@ -1936,6 +1957,7 @@ pub enum Event {
     /// Emitted when the agent's interaction state with a long-running command changes.
     LongRunningCommandAgentInteractionStateChanged {
         state: LongRunningCommandAgentInteractionState,
+        block_id: Option<BlockId>,
     },
     /// A pluggable notification triggered via OSC 9 or OSC 777 escape sequences.
     /// Used to show an in-app toast notification.
@@ -2368,6 +2390,12 @@ pub struct TerminalViewStateChange {
     pub state: TerminalViewState,
     pub timestamp: Instant,
 }
+#[derive(Clone, Copy)]
+struct CtrlCActiveBlockState {
+    is_long_running: bool,
+    is_agent_in_control_of_command: bool,
+    conversation_id_to_stop: Option<AIConversationId>,
+}
 
 impl Default for TerminalViewStateChange {
     fn default() -> TerminalViewStateChange {
@@ -2421,6 +2449,13 @@ impl DropTargetData for TerminalDropTargetData {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+/// Cached result of [`TerminalView::canonical_session_pwd_if_local`].
+struct LocalSessionCanonicalPwdCache {
+    /// Non-canonical path
+    path: PathBuf,
+    canonical: CanonicalizedPath,
 }
 
 pub struct TerminalView {
@@ -2506,6 +2541,12 @@ pub struct TerminalView {
     /// but also the input.
     resize_tx: Sender<Vector2F>,
 
+    /// Exchange that `jump_to_latest_agent_message` wants to scroll to once the
+    /// agent view's blocks have mounted. Set when entering the agent view from the
+    /// terminal (where the target block doesn't exist yet on the current frame) and
+    /// consumed in `after_terminal_view_layout`, after layout has mounted it.
+    pending_agent_scroll_target: Option<AIAgentExchangeId>,
+
     find_link_tx: Sender<FindLinkArg>,
 
     /// Highlighted link (could be url or file path) on the screen.
@@ -2553,11 +2594,20 @@ pub struct TerminalView {
     emacs_bindings_banner: ViewHandle<Banner<TerminalAction>>,
     is_emacs_bindings_banner_open: bool,
 
+    /// Banner shown when an OSC 52 clipboard operation is blocked by the user's setting.
+    osc52_clipboard_blocked_banner: ViewHandle<Banner<TerminalAction>>,
+    /// Which type of clipboard operation was blocked (if the banner is visible).
+    osc52_clipboard_blocked_type: Option<Osc52ClipboardBlockedType>,
+    /// Whether the user has permanently dismissed the clipboard blocked banner.
+    osc52_clipboard_banner_suppressed: bool,
+
     pane_configuration: ModelHandle<PaneConfiguration>,
     focus_handle: Option<PaneFocusHandle>,
 
     sessions: ModelHandle<Sessions>,
     active_block_metadata: Option<BlockMetadata>,
+    /// Memoized result of `canonical_session_pwd_if_local`.
+    canonical_session_pwd_cache: RefCell<Option<LocalSessionCanonicalPwdCache>>,
 
     block_text_selection_start_position: Option<Vector2F>,
 
@@ -2623,6 +2673,10 @@ pub struct TerminalView {
     /// The child views that represent rich content. These can be inserted into the block list with
     /// the `insert_rich_content` helper function.
     rich_content_views: Vec<RichContent>,
+    pending_user_query_view_id: Option<EntityId>,
+    pending_user_query_kind: Option<PendingUserQueryKind>,
+    queued_prompt_callback: Option<ConversationFinishedCallback>,
+    last_observed_conversation_status: HashMap<AIConversationId, ConversationStatus>,
 
     /// Cached view ids for usage footers keyed by the AI block view id that owns them.
     usage_footer_view_ids: HashMap<EntityId, EntityId>,
@@ -2745,13 +2799,14 @@ pub struct TerminalView {
     agent_todos_popup: ViewHandle<AgentTodosPopupView>,
 
     /// Per-repo git status model for the current repository, if any.
-    #[cfg(feature = "local_fs")]
     git_repo_status: Option<ModelHandle<GitRepoStatusModel>>,
+
+    /// Per-repo GitHub-info model for the current repository, if any.
+    github_repo_model: Option<ModelHandle<GitHubRepoModel>>,
 
     /// Deferred code review open request, stashed when [`GitDeltaPreference::OnlyDirty`] is
     /// requested but git status metadata has not loaded yet. Consumed in
     /// [`Self::handle_git_repo_status_event`].
-    #[cfg(feature = "local_fs")]
     deferred_code_review_open: Option<DeferredCodeReviewOpen>,
 
     /// A list of callbacks to run on the next [`ModelEvent::AfterBlockCompleted`] received.
@@ -2778,8 +2833,7 @@ pub struct TerminalView {
     agent_view_controller: ModelHandle<AgentViewController>,
     agent_view_back_button: ViewHandle<ActionButton>,
     /// Pill bar shown above the agent view header listing the orchestrator and
-    /// child agents. Gated by `FeatureFlag::OrchestrationPillBar`. The view is
-    /// always constructed; render-time guards control whether it draws anything.
+    /// child agents. Always constructed; render-time guards control whether it draws anything.
     orchestration_pill_bar: ViewHandle<OrchestrationPillBar>,
     /// `true` when this view hosts a child agent split off into its own
     /// pane/tab. Drives breadcrumb-vs-pill-bar rendering in the pane header.
@@ -2846,16 +2900,6 @@ pub struct TerminalView {
 
     ephemeral_message_model: ModelHandle<EphemeralMessageModel>,
 
-    /// Tracks the view ID of an inserted pending user query block, if any.
-    /// Used to remove the block when summarization completes or is cancelled.
-    pending_user_query_view_id: Option<EntityId>,
-    pending_user_query_kind: Option<PendingUserQueryKind>,
-
-    /// Callback for the queued prompt that fires when the current conversation finishes.
-    /// Stored separately from `conversation_completed_callbacks` so that queuing a prompt
-    /// (via `/queue`, `/compact-and`, etc.) does not wipe unrelated callbacks.
-    queued_prompt_callback: Option<ConversationFinishedCallback>,
-
     /// Per-session PTY recorder for writing PTY bytes to a file.
     pty_recorder: ModelHandle<PtyRecorder>,
 
@@ -2873,7 +2917,6 @@ pub struct TerminalView {
 /// Parameters stashed when a code review pane open is requested with
 /// [`GitDeltaPreference::OnlyDirty`] but git status metadata is not yet available.
 /// Consumed once the per-repo [`GitRepoStatusModel`] delivers its first update.
-#[cfg(feature = "local_fs")]
 struct DeferredCodeReviewOpen {
     git_delta_preference: GitDeltaPreference,
     focus_new_pane: bool,
@@ -2895,6 +2938,23 @@ pub struct BlockSelectionDetails {
     delta: BlockSelectionDelta,
     is_cmd_down: bool,
     is_shift_down: bool,
+}
+
+/// Why `apply_block_metadata_update` is being invoked. The two sources have
+/// different cardinalities — precmd fires exactly once per block, whereas OSC 7
+/// can fire many times mid-block from chatty prompts. Once-per-block work
+/// (git-repo detection on unchanged CWDs, `block_completed_callbacks` drain)
+/// must be gated on this distinction.
+#[derive(Copy, Clone, Debug)]
+enum BlockMetadataUpdateSource {
+    /// `Event::BlockMetadataReceived` — the shell's precmd hook fired between
+    /// blocks. Run all once-per-block work.
+    Precmd,
+    /// `Event::BlockWorkingDirectoryUpdated` — the running command emitted an
+    /// OSC 7 sequence (`\e]7;file://host/path\a`). Skip repo detection unless
+    /// the CWD actually changed, and never run block-completion callbacks
+    /// (the block hasn't completed).
+    Osc7,
 }
 
 impl TerminalView {
@@ -3132,7 +3192,7 @@ impl TerminalView {
                                 let agent_view_zero_state = ctx.add_typed_action_view(|ctx| {
                                     AgentViewZeroStateBlock::new(
                                         *conversation_id,
-                                        *origin,
+                                        origin.clone(),
                                         me.agent_view_controller.clone(),
                                         &me.sessions,
                                         me.ambient_agent_view_model.as_ref(),
@@ -3330,7 +3390,7 @@ impl TerminalView {
                                 conversation_id: *conversation_id,
                                 is_new: was_new,
                                 is_restored: false, /* is_restored */
-                                origin: *origin,
+                                origin: origin.clone(),
                                 agent_view_controller: me.agent_view_controller.clone(),
                             },
                             RichContentInsertionPosition::Append {
@@ -3405,7 +3465,7 @@ impl TerminalView {
             if !model.is_autodetection_enabled_for_current_context(ctx) {
                 if let Some(input_config) = initial_input_config {
                     let is_input_buffer_empty = true;
-                    model.set_input_config(input_config, is_input_buffer_empty, ctx);
+                    model.set_input_config(input_config, is_input_buffer_empty, None, ctx);
                 }
             }
             model
@@ -3468,7 +3528,7 @@ impl TerminalView {
             legacy: legacy_passive_suggestions_model,
         };
 
-        let find_model = ctx.add_model(|_| TerminalFindModel::new(model.clone()));
+        let find_model = ctx.add_model(|ctx| TerminalFindModel::new(model.clone(), ctx));
 
         ctx.subscribe_to_model(
             &TerminalSettings::handle(ctx),
@@ -3888,6 +3948,44 @@ impl TerminalView {
             });
         }
 
+        let osc52_clipboard_blocked_banner = ctx.add_typed_action_view(|_| {
+            Banner::<TerminalAction>::new_with_buttons(
+                BannerTextContent::plain_text(
+                    "A terminal program tried to access your clipboard. This is disabled by default for security reasons.",
+                ),
+                vec![
+                    BannerTextButton::new(
+                        "Allow".to_string(),
+                        Rc::new(|event_ctx, _ctx, _position| {
+                            event_ctx.dispatch_typed_action(BannerAction::<TerminalAction>::Action(
+                                TerminalAction::Osc52AllowBlockedClipboardOperation,
+                            ));
+                        }),
+                    ),
+                    BannerTextButton::new(
+                        "Don't show again".to_string(),
+                        Rc::new(|event_ctx, _ctx, _position| {
+                            event_ctx.dispatch_typed_action(
+                                BannerAction::<TerminalAction>::Dismiss(DismissalType::Permanent),
+                            );
+                        }),
+                    ),
+                ],
+                true,
+            )
+            .with_icon(icons::Icon::AlertTriangle)
+        });
+        ctx.subscribe_to_view(&osc52_clipboard_blocked_banner, |me, _, event, ctx| {
+            me.handle_osc52_clipboard_banner_event(event, ctx);
+        });
+
+        let osc52_clipboard_banner_suppressed = ctx
+            .private_user_preferences()
+            .read_value(OSC52_CLIPBOARD_BANNER_SUPPRESSED_KEY)
+            .ok()
+            .flatten()
+            .is_some_and(|v| v == "true");
+
         let windowing_state_handle = WindowManager::handle(ctx);
         ctx.subscribe_to_model(&windowing_state_handle, |me, _handle, evt, ctx| match evt {
             windowing::StateEvent::ValueChanged { current, previous } => {
@@ -3940,16 +4038,21 @@ impl TerminalView {
         );
 
         let block_list_settings_handle = BlockListSettings::handle(ctx);
-        ctx.subscribe_to_model(&block_list_settings_handle, |_, _, evt, ctx| match evt {
-            BlockListSettingsChangedEvent::ShowJumpToBottomOfBlockButton { .. } => ctx.notify(),
-            BlockListSettingsChangedEvent::SnackbarEnabled { .. } => ctx.notify(),
-            BlockListSettingsChangedEvent::ShowBlockDividers { .. } => ctx.notify(),
+        ctx.subscribe_to_model(&block_list_settings_handle, |me, _, evt, ctx| match evt {
+            BlockListSettingsChangedEvent::ShowJumpToBottomOfBlockButton { .. }
+            | BlockListSettingsChangedEvent::SnackbarEnabled { .. }
+            | BlockListSettingsChangedEvent::ShowBlockDividers { .. } => ctx.notify(),
+            BlockListSettingsChangedEvent::PreserveInputFocusOnBlockSelection { .. } => {
+                // Fires for every terminal view, so use the focus-gated variant to avoid
+                // stealing focus from another pane or Settings.
+                me.redetermine_terminal_focus(ctx);
+                ctx.notify();
+            }
         });
 
         ctx.subscribe_to_model(&SessionSettings::handle(ctx), move |me, _, evt, ctx| {
             me.handle_session_settings_event(evt, ctx);
         });
-
         // Re-evaluate git status subscription when the prompt configuration
         // changes (e.g. chips added/removed, input type toggled).
         ctx.subscribe_to_model(&Prompt::handle(ctx), |me, _, _, ctx| {
@@ -4123,7 +4226,6 @@ impl TerminalView {
             )
         });
         ctx.subscribe_to_view(&conversation_details_panel, |me, _, event, ctx| {
-            use crate::ai::conversation_details_panel::ConversationDetailsPanelEvent;
             match event {
                 ConversationDetailsPanelEvent::Close => {
                     me.is_conversation_details_panel_open = false;
@@ -4170,6 +4272,7 @@ impl TerminalView {
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
             find_bar,
             resize_tx,
+            pending_agent_scroll_target: None,
             find_link_tx,
             highlighted_link: HighlightedLinkOption::default(),
             last_hover_fragment_boundary: None,
@@ -4186,11 +4289,15 @@ impl TerminalView {
             is_emacs_bindings_banner_open: false,
             control_master_error_banner,
             control_master_error_banner_state: Default::default(),
+            osc52_clipboard_blocked_banner,
+            osc52_clipboard_blocked_type: None,
+            osc52_clipboard_banner_suppressed,
             pane_configuration,
             focus_handle: None,
             sessions,
             remote_server_shimmer_handle: ShimmeringTextStateHandle::new(),
             active_block_metadata: None,
+            canonical_session_pwd_cache: RefCell::new(None),
             block_text_selection_start_position: None,
             background_executor: ctx.background_executor().clone(),
             inline_banners_state: Default::default(),
@@ -4209,6 +4316,10 @@ impl TerminalView {
             block_filter_editor,
             active_filter_editor_block_index: None,
             rich_content_views: Vec::new(),
+            pending_user_query_view_id: None,
+            pending_user_query_kind: None,
+            queued_prompt_callback: None,
+            last_observed_conversation_status: Default::default(),
             usage_footer_view_ids: Default::default(),
             block_onboarding_active: false,
             onboarding_agentic_suggestions_block: None,
@@ -4252,9 +4363,8 @@ impl TerminalView {
             model_events_handle,
             is_todo_popup_visible: false,
             agent_todos_popup,
-            #[cfg(feature = "local_fs")]
             git_repo_status: None,
-            #[cfg(feature = "local_fs")]
+            github_repo_model: None,
             deferred_code_review_open: None,
             block_completed_callbacks: Default::default(),
             conversation_completed_callbacks: Default::default(),
@@ -4288,9 +4398,6 @@ impl TerminalView {
             pending_cloud_mode_start_callback: None,
             pending_cloud_mode_start_abort_handle: None,
             ephemeral_message_model,
-            pending_user_query_view_id: None,
-            pending_user_query_kind: None,
-            queued_prompt_callback: None,
             pty_recorder: ctx
                 .add_model(|ctx| PtyRecorder::new(inactive_pty_reads_rx, window_id, ctx)),
             active_viewer_driven_size: None,
@@ -4605,9 +4712,21 @@ impl TerminalView {
                         DetectedRepositories::handle(ctx).update(ctx, |repos, _| {
                             repos.remove_roots_for_host(host_id);
                         });
+
+                        // Drop and broadcast the stale remote repo so downstream consumers
+                        // stop acting on a host with no live client.
+                        let matches_host = matches!(
+                            me.current_repo_path.as_ref(),
+                            Some(LocalOrRemotePath::Remote(rp)) if &rp.host_id == host_id,
+                        );
+                        if matches_host {
+                            me.current_repo_path = None;
+                            ctx.emit(Event::Pane(PaneEvent::RepoChanged));
+                        }
                     }
                     RemoteServerManagerEvent::SessionConnecting { .. }
                     | RemoteServerManagerEvent::HostConnected { .. }
+                    | RemoteServerManagerEvent::BundledSkillsSnapshot { .. }
                     | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
                     | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
                     | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
@@ -4619,7 +4738,15 @@ impl TerminalView {
                     | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
                     | RemoteServerManagerEvent::DiffStateMetadataUpdateReceived { .. }
                     | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. }
-                    | RemoteServerManagerEvent::GetBranchesResponse { .. } => {}
+                    | RemoteServerManagerEvent::GetBranchesResponse { .. }
+                    | RemoteServerManagerEvent::CommitChainResponse { .. }
+                    | RemoteServerManagerEvent::GitPushResponse { .. }
+                    | RemoteServerManagerEvent::CreatePrResponse { .. }
+                    | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
+                    | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. }
+                    | RemoteServerManagerEvent::GitStatusPushReceived { .. }
+                    | RemoteServerManagerEvent::GitHubPrInfoPushReceived { .. }
+                    | RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived { .. } => {}
                 }
             });
         }
@@ -4762,7 +4889,81 @@ impl TerminalView {
             .push(Box::new(callback));
     }
 
-    #[cfg(feature = "local_fs")]
+    /// Handles `conversation_id`'s turn finishing with `finish_reason`: fires
+    /// the pane-level finished callbacks and drains the conversation's queued
+    /// prompts.
+    fn handle_finished_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        finish_reason: FinishReason,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.fire_conversation_finished_callbacks(finish_reason, ctx);
+        self.drain_queued_prompts(conversation_id, finish_reason, ctx);
+    }
+
+    /// Fires the pane-level one-shot callbacks registered via
+    /// [`Self::on_next_conversation_finished`], plus the queued-prompt
+    /// callback if one is armed.
+    fn fire_conversation_finished_callbacks(
+        &mut self,
+        finish_reason: FinishReason,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let queued_prompt = self.queued_prompt_callback.take();
+        let callbacks = self
+            .conversation_completed_callbacks
+            .drain(..)
+            .collect_vec();
+        for callback in callbacks {
+            callback(self, finish_reason, ctx);
+        }
+        if let Some(callback) = queued_prompt {
+            callback(self, finish_reason, ctx);
+        }
+    }
+
+    /// Advances the queued-prompts queue after a dispatched queued command's block completes.
+    /// Runs after input cleanup so queued-command draft preservation can observe the in-flight
+    /// flag first.
+    /// No-ops unless a queued command is in flight for a conversation owned by this terminal view;
+    /// clearing the flag before draining keeps repeated calls idempotent.
+    pub(crate) fn on_queued_command_finished(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(conversation_id) = QueuedQueryModel::as_ref(ctx)
+            .command_in_flight_for_terminal_view(
+                self.view_id,
+                BlocklistAIHistoryModel::as_ref(ctx),
+            )
+        else {
+            return;
+        };
+        QueuedQueryModel::handle(ctx).update(ctx, |model, _ctx| {
+            model.clear_command_in_flight(conversation_id);
+        });
+        self.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+    }
+
+    /// Clears queued-command state for this terminal view if dispatch fails.
+    pub(crate) fn clear_queued_command_in_flight(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(conversation_id) = QueuedQueryModel::as_ref(ctx)
+            .command_in_flight_for_terminal_view(
+                self.view_id,
+                BlocklistAIHistoryModel::as_ref(ctx),
+            )
+        else {
+            return;
+        };
+        QueuedQueryModel::handle(ctx).update(ctx, |model, _ctx| {
+            model.clear_command_in_flight(conversation_id);
+        });
+    }
+
+    pub(crate) fn has_queued_command_in_flight(&self, ctx: &AppContext) -> bool {
+        QueuedQueryModel::as_ref(ctx)
+            .command_in_flight_for_terminal_view(self.view_id, BlocklistAIHistoryModel::as_ref(ctx))
+            .is_some()
+    }
+
     fn handle_git_repo_status_event(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(deferred) = self.deferred_code_review_open.take() {
             self.toggle_code_review_pane(
@@ -4782,9 +4983,12 @@ impl TerminalView {
     /// repo path. Use this when unsubscribing because the subscription is no
     /// longer needed (e.g. the git chip was removed) but the user is still in
     /// the same repository.
-    #[cfg(feature = "local_fs")]
     fn clear_git_repo_status_subscription(&mut self, ctx: &mut ViewContext<Self>) {
-        self.git_repo_status = None;
+        let git_repo_status = self.git_repo_status.take();
+        if let Some(handle) = &git_repo_status {
+            ctx.unsubscribe_to_model(handle);
+        }
+        self.clear_github_repo_model(ctx);
         self.deferred_code_review_open = None;
 
         self.current_prompt.update(ctx, |prompt_type, ctx| {
@@ -4796,9 +5000,31 @@ impl TerminalView {
         });
     }
 
+    fn clear_github_repo_model(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(handle) = self.github_repo_model.take() else {
+            return;
+        };
+
+        self.current_prompt.update(ctx, |prompt_type, ctx| {
+            if let PromptType::Dynamic { prompt } = prompt_type {
+                prompt.update(ctx, |current_prompt, ctx| {
+                    current_prompt.set_github_repo_model(None, ctx);
+                });
+            }
+        });
+        self.ai_context_model.update(ctx, |context_model, _| {
+            context_model.set_github_repo_model(None);
+        });
+
+        // TerminalView doesn't currently subscribe to GitHubRepoModel events
+        // directly, but keep cleanup paired with the owned handle in case that
+        // changes. The prompt's own subscription is removed above while the
+        // strong handle is still alive.
+        ctx.unsubscribe_to_model(&handle);
+    }
+
     /// Fully clear the per-repo git status handle, including the input's repo
     /// path. Use this when navigating out of a git repository.
-    #[cfg(feature = "local_fs")]
     fn clear_git_repo_status(&mut self, ctx: &mut ViewContext<Self>) {
         self.clear_git_repo_status_subscription(ctx);
         self.input.update(ctx, |input, ctx| {
@@ -4807,79 +5033,216 @@ impl TerminalView {
     }
 
     /// Helper to read metadata from the per-repo sub-model.
-    #[cfg(feature = "local_fs")]
     fn git_status_metadata<'a>(&'a self, ctx: &'a AppContext) -> Option<&'a GitStatusMetadata> {
         self.git_repo_status
             .as_ref()
-            .and_then(|h| h.as_ref(ctx).metadata())
+            .and_then(|h| h.as_ref(ctx).metadata(ctx))
     }
 
-    /// Returns whether this terminal view should subscribe to git status
-    /// updates. We subscribe when:
-    /// 1. Agent mode is active and its chip list includes `GitDiffStats`, or
-    /// 2. Terminal mode with the Warp prompt enabled and the git stats chip
-    ///    configured.
-    #[cfg(feature = "local_fs")]
+    fn uses_git_status_chips(chips: Vec<ContextChipKind>) -> bool {
+        chips.iter().any(|chip| {
+            matches!(
+                chip,
+                ContextChipKind::GitDiffStats | ContextChipKind::GithubPullRequest
+            )
+        })
+    }
+
+    /// Returns whether visible prompt/footer chips need git status updates.
+    fn needs_git_status_for_chip_ui(&self, ctx: &AppContext) -> bool {
+        // Agent view: subscribe when the configured agent footer includes
+        // git stats or PR info.
+        if self.agent_view_controller.as_ref(ctx).is_active() {
+            return Self::uses_git_status_chips(
+                SessionSettings::as_ref(ctx)
+                    .agent_footer_chip_selection
+                    .all_chips(),
+            );
+        }
+        // CLI-agent footer: subscribe only while a CLI-agent session is active,
+        // so normal terminal panes do not subscribe just because of CLI footer defaults.
+        if self.has_active_cli_agent_session(ctx)
+            && Self::uses_git_status_chips(
+                SessionSettings::as_ref(ctx)
+                    .cli_agent_footer_chip_selection
+                    .all_chips(),
+            )
+        {
+            return true;
+        }
+
+        // Terminal prompt path: the Warp prompt is active when honor_ps1 is
+        // off, or when UDI overrides PS1. The prompt must include a chip backed
+        // by git status.
+        let is_using_warp_prompt = !*SessionSettings::as_ref(ctx).honor_ps1
+            || InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx);
+        if is_using_warp_prompt && Self::should_retry_default_pr_chip_validation(ctx) {
+            return true;
+        }
+        is_using_warp_prompt && Self::uses_git_status_chips(Prompt::as_ref(ctx).chip_kinds())
+    }
+
+    fn needs_git_status_for_agent_context(&self, ctx: &AppContext) -> bool {
+        self.current_repo_path.is_some() && self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
+    }
+
+    /// Returns whether this terminal view should subscribe to git status updates.
     fn should_subscribe_to_git_status(&self, ctx: &AppContext) -> bool {
-        // Agent view: subscribe only when the configured agent footer includes git stats.
+        self.needs_git_status_for_chip_ui(ctx) || self.needs_git_status_for_agent_context(ctx)
+    }
+
+    /// Whether the terminal's prompt/footer chips need PR info.
+    fn needs_pr_info_for_chip_ui(&self, ctx: &AppContext) -> bool {
         if self.agent_view_controller.as_ref(ctx).is_active() {
             return SessionSettings::as_ref(ctx)
                 .agent_footer_chip_selection
                 .all_chips()
-                .contains(&ContextChipKind::GitDiffStats);
+                .contains(&ContextChipKind::GithubPullRequest);
+        }
+        if self.has_active_cli_agent_session(ctx)
+            && SessionSettings::as_ref(ctx)
+                .cli_agent_footer_chip_selection
+                .all_chips()
+                .contains(&ContextChipKind::GithubPullRequest)
+        {
+            return true;
         }
 
-        // Terminal prompt path: the Warp prompt is active when honor_ps1 is
-        // off, or when UDI overrides PS1. GitDiffStats must also be in the
-        // configured chip list.
         let is_using_warp_prompt = !*SessionSettings::as_ref(ctx).honor_ps1
             || InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx);
         is_using_warp_prompt
-            && Prompt::as_ref(ctx)
-                .chip_kinds()
-                .contains(&ContextChipKind::GitDiffStats)
+            && (Self::should_retry_default_pr_chip_validation(ctx)
+                || Prompt::as_ref(ctx)
+                    .chip_kinds()
+                    .contains(&ContextChipKind::GithubPullRequest))
     }
 
-    /// No-op when the `local_fs` feature is disabled – git status is not
-    /// available so there is nothing to subscribe to.
-    #[cfg(not(feature = "local_fs"))]
-    fn update_git_status_subscription(&mut self, _ctx: &mut ViewContext<Self>) {}
+    fn needs_pr_info_for_agent_context(&self, ctx: &AppContext) -> bool {
+        self.current_repo_path.is_some() && self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
+    }
+
+    /// Whether this terminal needs PR info from the git status model.
+    fn needs_pr_info(&self, ctx: &AppContext) -> bool {
+        self.needs_pr_info_for_chip_ui(ctx) || self.needs_pr_info_for_agent_context(ctx)
+    }
+
+    fn should_retry_default_pr_chip_validation(ctx: &AppContext) -> bool {
+        let settings = SessionSettings::as_ref(ctx);
+        FeatureFlag::GithubPrPromptChip.is_enabled()
+            && settings.github_pr_chip_default_validation.is_suppressed()
+            && matches!(*settings.saved_prompt, PromptSelection::Default)
+    }
+
+    /// Re-evaluate whether the terminal needs a PR-info subscription, and
+    /// acquire or drop the handle accordingly.
+    fn sync_pr_info_subscription(&mut self, ctx: &mut ViewContext<Self>) {
+        let needs_pr_info = self.needs_pr_info(ctx);
+        if needs_pr_info && self.github_repo_model.is_none() {
+            // Acquire a GitHub-info handle for the current repo. The factory
+            // dispatches on the `LocalOrRemotePath` to a local `gh`-driven model
+            // or a remote push receiver, both wired up identically.
+            let Some(repo) = self.current_repo_path.clone() else {
+                return;
+            };
+            let result = GitRepoModels::handle(ctx)
+                .update(ctx, |model, ctx| model.subscribe_github_repo(&repo, ctx));
+            match result {
+                Ok(handle) => {
+                    let weak_for_prompt = handle.downgrade();
+                    let weak_for_context = handle.downgrade();
+                    self.github_repo_model = Some(handle);
+                    self.current_prompt.update(ctx, |prompt_type, ctx| {
+                        if let PromptType::Dynamic { prompt } = prompt_type {
+                            prompt.update(ctx, |current_prompt, ctx| {
+                                current_prompt.set_github_repo_model(Some(weak_for_prompt), ctx);
+                            });
+                        }
+                    });
+                    self.ai_context_model.update(ctx, |context_model, _| {
+                        context_model.set_github_repo_model(Some(weak_for_context));
+                    });
+                }
+                Err(err) => {
+                    log::warn!("TerminalView subscribe_github_repo failed: {err}");
+                }
+            }
+        } else if !needs_pr_info {
+            self.clear_github_repo_model(ctx);
+        }
+    }
+
+    /// Triggers a PR info refresh after a `gh`/`gt` command completes.
+    ///
+    /// These commands don't touch `.git/` so the filesystem watcher won't
+    /// catch them; we refresh explicitly while a PR-info subscription is
+    /// active for this terminal.
+    #[cfg(feature = "local_fs")]
+    fn refresh_pr_info_after_gh_or_gt_command(&mut self, ctx: &mut ViewContext<Self>) {
+        // Ensure we have a subscription to the per-repo status model and the
+        // per-repo PR-info model. `should_subscribe_to_git_status` already
+        // returns true while suppression is active so the default chip can
+        // recover, so this is a no-op when already subscribed and creates a
+        // fresh subscription when one is needed.
+        self.update_git_status_subscription(ctx);
+
+        let Some(handle) = self.github_repo_model.clone() else {
+            return;
+        };
+        handle.update(ctx, |model, ctx| {
+            model.refresh_pr_info(ctx);
+        });
+    }
 
     /// Re-evaluate whether this terminal view should be subscribed to git
     /// status updates and subscribe/unsubscribe accordingly.
-    #[cfg(feature = "local_fs")]
     fn update_git_status_subscription(&mut self, ctx: &mut ViewContext<Self>) {
         let should_subscribe = self.should_subscribe_to_git_status(ctx);
-        if should_subscribe {
-            // Subscribe if we have a repo path but no active subscription.
-            if self.git_repo_status.is_none() {
-                if let Some(repo_path) = self.current_local_repo_path().map(Path::to_path_buf) {
-                    let result = GitStatusUpdateModel::handle(ctx)
-                        .update(ctx, |model, ctx| model.subscribe(&repo_path, ctx));
-                    match result {
-                        Ok(handle) => {
-                            ctx.subscribe_to_model(&handle, |me, _, _, ctx| {
-                                me.handle_git_repo_status_event(ctx);
-                            });
-                            let weak_for_prompt = handle.downgrade();
-                            self.git_repo_status = Some(handle);
-                            self.current_prompt.update(ctx, |prompt_type, ctx| {
-                                if let PromptType::Dynamic { prompt } = prompt_type {
-                                    prompt.update(ctx, |current_prompt, ctx| {
-                                        current_prompt
-                                            .set_git_repo_status(Some(weak_for_prompt), ctx);
-                                    });
-                                }
-                            });
-                        }
-                        Err(err) => {
-                            log::warn!("GitStatusUpdateModel subscribe failed: {err}");
-                        }
-                    }
-                }
+        if !should_subscribe {
+            if self.git_repo_status.is_some() {
+                self.clear_git_repo_status_subscription(ctx);
             }
-        } else if self.git_repo_status.is_some() {
-            self.clear_git_repo_status_subscription(ctx);
+            return;
+        }
+
+        // Already subscribed — keep the PR-info (GitHub) subscription in sync.
+        if self.git_repo_status.is_some() {
+            self.sync_pr_info_subscription(ctx);
+            return;
+        }
+
+        // No active subscription: create one for the current repo. The factory
+        // dispatches on the `LocalOrRemotePath` to a local watcher-backed model
+        // or a remote push receiver, both wired up identically.
+        let Some(repo) = self.current_repo_path.clone() else {
+            return;
+        };
+        let result =
+            GitRepoModels::handle(ctx).update(ctx, |model, ctx| model.subscribe(&repo, ctx));
+        match result {
+            Ok(handle) => {
+                // Wire the freshly-obtained per-repo `GitRepoStatusModel` handle
+                // (local or remote) into this view: subscribe for events, feed
+                // the prompt, store the handle, and sync the PR-info consumer slot.
+                ctx.subscribe_to_model(&handle, |me, _, _, ctx| {
+                    me.handle_git_repo_status_event(ctx);
+                });
+                let weak_for_prompt = handle.downgrade();
+                self.git_repo_status = Some(handle);
+                self.current_prompt.update(ctx, |prompt_type, ctx| {
+                    if let PromptType::Dynamic { prompt } = prompt_type {
+                        prompt.update(ctx, |current_prompt, ctx| {
+                            current_prompt.set_git_repo_status(Some(weak_for_prompt), ctx);
+                        });
+                    }
+                });
+                // Acquire a GitHub-info handle if the terminal's prompt/footer
+                // chips or agent context need PR or repository info. The AI
+                // context model reads PR / repository info from that GitHub-info
+                // handle, so it is wired up by `sync_pr_info_subscription` rather
+                // than here.
+                self.sync_pr_info_subscription(ctx);
+            }
+            Err(err) => log::warn!("GitRepoModels subscribe failed: {err}"),
         }
     }
 
@@ -4911,18 +5274,12 @@ impl TerminalView {
             // handing off to it — not the end of the overall turn. Defer
             // conversation-finished side effects (e.g. firing a queued `/queue`
             // prompt) until the entire turn is actually done.
-            let has_active_subagent = || {
-                BlocklistAIHistoryModel::as_ref(ctx)
-                    .conversation(conversation_id)
-                    .is_some_and(|c| c.has_active_subagent())
-            };
+            let has_active_subagent = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(conversation_id)
+                .is_some_and(|c| c.has_active_subagent());
 
-            let mut finish_reason: Option<FinishReason> = None;
+            let mut pane_finish_reason: Option<FinishReason> = None;
             if let Some(active_ai_block) = self.active_ai_block(ctx) {
-                // Focus the block so that the user can interact
-                // with any blocking actions (if any).
-                self.focus_ai_block_if_self_focused(active_ai_block, ctx);
-
                 // A new exchange is already active, so callbacks for the
                 // just-finished exchange will be skipped. Clear any pending
                 // user query now to prevent its callback from firing when
@@ -4938,23 +5295,27 @@ impl TerminalView {
                 if self.pending_user_query_view_id.is_some() && !is_same_conversation {
                     self.remove_pending_user_query_block(ctx);
                 }
-            } else if !has_active_subagent() {
+            } else if !has_active_subagent {
                 if let Some(last_ai_block) = self.last_ai_block() {
-                    finish_reason = last_ai_block.as_ref(ctx).finish_reason();
+                    pane_finish_reason = last_ai_block.as_ref(ctx).finish_reason();
                 }
             }
 
-            if let Some(reason) = finish_reason {
-                let queued_prompt = self.queued_prompt_callback.take();
-                let callbacks = self
-                    .conversation_completed_callbacks
-                    .drain(..)
-                    .collect_vec();
-                for callback in callbacks {
-                    callback(self, reason, ctx);
-                }
-                if let Some(callback) = queued_prompt {
-                    callback(self, reason, ctx);
+            // Pane-scoped: the one-shot conversation-finished callbacks fire
+            // when the pane's most recent block is done.
+            if let Some(reason) = pane_finish_reason {
+                self.fire_conversation_finished_callbacks(reason, ctx);
+            }
+
+            // Conversation-scoped: drain this conversation's queued prompts
+            // keyed off its own most recent block. The pane-global lookup
+            // above can observe a sibling conversation's block instead
+            // (orchestration panes host the lead and local child conversations
+            // in one view), so it can't drive the drain decision or supply the
+            // finish reason.
+            if !has_active_subagent {
+                if let Some(reason) = self.finish_reason_for_conversation(*conversation_id, ctx) {
+                    self.drain_queued_prompts(*conversation_id, reason, ctx);
                 }
             }
 
@@ -5010,6 +5371,227 @@ impl TerminalView {
             self.update_input_prompt_suggestions_banner_state(ctx);
             ctx.notify();
         }
+    }
+
+    /// Append a prompt to the queued-query singleton for regular Agent Mode queueing surfaces
+    /// such as the queue-next toggle and `/queue`. Returns `None` if no conversation is selected
+    /// (e.g. the agent view is closed), in which case the prompt is silently dropped.
+    pub fn enqueue_prompt(
+        &mut self,
+        prompt: String,
+        origin: QueuedQueryOrigin,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<QueuedQueryId> {
+        // Guard against queueing when no conversation is active to avoid stranding prompts.
+        let conversation_id = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)?;
+        let id = QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.append(conversation_id, QueuedQuery::new(prompt, origin), ctx)
+        });
+        Some(id)
+    }
+
+    pub fn enqueue_initial_cloud_mode_prompt(
+        &mut self,
+        prompt: String,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<QueuedQueryId> {
+        self.enqueue_prompt(prompt, QueuedQueryOrigin::InitialCloudMode, ctx)
+    }
+
+    /// Files a follow-up prompt that will run after the next conversation finishes on
+    /// `conversation_id`. Used by `/compact-and` (targets the active conversation) and
+    /// `/fork-and-compact` (targets the newly forked conversation, which may differ from the
+    /// currently selected one). Falls back to the legacy pending-user-query block when
+    /// `QueuedPromptsV2` is disabled.
+    pub fn enqueue_followup_prompt(
+        &mut self,
+        prompt: String,
+        origin: QueuedQueryOrigin,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if FeatureFlag::QueuedPromptsV2.is_enabled() {
+            let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
+                context_model.take_pending_attachments(ctx)
+            });
+            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.append(
+                    conversation_id,
+                    QueuedQuery::new_with_attachments(prompt, origin, attachments),
+                    ctx,
+                );
+            });
+        } else {
+            self.send_user_query_after_next_conversation_finished(
+                prompt, /* show_close_button */ true, /* show_send_now_button */ false,
+                ctx,
+            );
+        }
+    }
+
+    /// Drains one prompt from the queued-query singleton for `conversation_id` when that
+    /// conversation finishes.
+    fn drain_queued_prompts(
+        &mut self,
+        conversation_id: AIConversationId,
+        finish_reason: FinishReason,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match finish_reason {
+            FinishReason::Complete => {
+                let input_is_empty = self.input.as_ref(ctx).buffer_text(ctx).is_empty();
+                let first_row_is_in_edit_mode =
+                    QueuedQueryModel::as_ref(ctx).first_row_is_in_edit_mode(conversation_id);
+                if first_row_is_in_edit_mode && !input_is_empty {
+                    return;
+                }
+
+                // Peek the head row's action without removing it so the send path can read its
+                // attachments by id; the row is removed afterward via `remove_fired_row`.
+                let action = QueuedQueryModel::as_ref(ctx).peek_autofire(conversation_id);
+                match action {
+                    Some(AutofireAction::Submit { query_id, text }) => {
+                        self.input.update(ctx, |input, ctx| {
+                            input.submit_queued_prompt_for_active_pane(
+                                text,
+                                conversation_id,
+                                query_id,
+                                ctx,
+                            );
+                        });
+                        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.remove_fired_row(conversation_id, query_id, ctx);
+                        });
+                    }
+                    Some(AutofireAction::ExecuteCommand { query_id, command }) => {
+                        let started = self.input.update(ctx, |input, ctx| {
+                            input.execute_queued_command(&command, conversation_id, ctx)
+                        });
+                        // If the command couldn't start (e.g. precmd not yet received) no
+                        // completion will arrive. Keep the row queued when the user has a draft;
+                        // otherwise restore it into the empty input and remove the row.
+                        if started {
+                            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                                model.remove_fired_row(conversation_id, query_id, ctx);
+                            });
+                        } else if self.input.as_ref(ctx).buffer_text(ctx).is_empty() {
+                            self.input.update(ctx, |input, ctx| {
+                                input.replace_buffer_content(&command, ctx);
+                                input.set_input_mode_terminal(/* steal_focus */ false, ctx);
+                            });
+                            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                                model.remove_fired_row(conversation_id, query_id, ctx);
+                            });
+                        }
+                    }
+                    Some(AutofireAction::PopFromEditMode {
+                        query_id,
+                        text,
+                        attachments,
+                        is_command,
+                    }) => {
+                        if self.input.as_ref(ctx).buffer_text(ctx).is_empty() {
+                            self.input.update(ctx, |input, ctx| {
+                                input.replace_buffer_content(&text, ctx);
+                                if is_command {
+                                    // Keep a restored command in shell mode so it stays a command
+                                    // rather than being submitted as an agent prompt.
+                                    input.set_input_mode_terminal(/* steal_focus */ true, ctx);
+                                } else {
+                                    input.focus_input_box(ctx);
+                                }
+                            });
+                            // Commands never carry attachments; only restore them for prompts.
+                            if !is_command {
+                                self.ai_context_model.update(ctx, |context_model, ctx| {
+                                    context_model.append_pending_attachments(attachments, ctx);
+                                });
+                            }
+                        }
+                        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.remove_fired_row(conversation_id, query_id, ctx);
+                        });
+                    }
+                    None => {}
+                }
+            }
+            FinishReason::Error
+            | FinishReason::Cancelled
+            | FinishReason::CancelledDuringRequestedCommandExecution => {
+                // Only restore the head into the input when the user is
+                // currently viewing this conversation in agent view. Cancels
+                // triggered by exiting the agent view leave `agent_view_state`
+                // Inactive by the time the cancel fires, so the head stays in
+                // the queue and re-entering the agent view shows the same
+                // queue the user left.
+                let is_active_in_agent_view = self
+                    .agent_view_controller
+                    .as_ref(ctx)
+                    .agent_view_state()
+                    .active_conversation_id()
+                    == Some(conversation_id);
+                if !is_active_in_agent_view {
+                    return;
+                }
+
+                let input_is_empty = self.input.as_ref(ctx).buffer_text(ctx).is_empty();
+                if !input_is_empty {
+                    return;
+                }
+
+                let popped = QueuedQueryModel::handle(ctx)
+                    .update(ctx, |model, ctx| model.pop_front(conversation_id, ctx));
+                if let Some(query) = popped {
+                    let is_command = query.is_command();
+                    self.input.update(ctx, |input, ctx| {
+                        input.replace_buffer_content(query.text(), ctx);
+                        if is_command {
+                            // Keep a restored command in shell mode so it stays a command
+                            // rather than being submitted as an agent prompt.
+                            input.set_input_mode_terminal(/* steal_focus */ false, ctx);
+                        }
+                    });
+                    // Commands never carry attachments; only restore them for prompts.
+                    if !is_command {
+                        // Re-stage the restored row's attachments so a manual re-submit keeps them.
+                        self.ai_context_model.update(ctx, |context_model, ctx| {
+                            context_model
+                                .append_pending_attachments(query.attachments().to_vec(), ctx);
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drains one queued prompt when the cloud setup phase completes for a promptless handoff run
+    /// (a prompt will not be auto-sent by the worker so there's no normal event to initiate a queued prompt sending).
+    pub(crate) fn maybe_drain_queue_after_promptless_setup(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_promptless_run = self
+            .ambient_agent_view_model()
+            .and_then(|model| {
+                model
+                    .as_ref(ctx)
+                    .request()
+                    .map(|request| request.prompt.is_none())
+            })
+            .unwrap_or(false);
+        if !is_promptless_run {
+            return;
+        }
+
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
+            return;
+        };
+
+        self.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
     }
 
     fn handle_legacy_passive_suggestions_event(
@@ -5072,17 +5654,19 @@ impl TerminalView {
     }
 
     pub fn attach_path_as_context(&mut self, path: &Path, ctx: &mut ViewContext<Self>) {
-        // If a CLI agent is running, write the path directly to the PTY.
-        if self.active_cli_agent(ctx).is_some() {
-            let content = path.to_string_lossy().to_string();
-            self.write_to_pty(content.into_bytes(), ctx);
-            self.focus_terminal(ctx);
+        let content = path.to_string_lossy().to_string();
+
+        // If a CLI agent is running, route the context to rich input when it is
+        // open, otherwise fall back to writing directly to the PTY.
+        if self
+            .try_send_text_to_cli_agent_or_rich_input(content.clone(), ctx)
+            .is_some()
+        {
             return;
         }
 
         self.input.update(ctx, |input, ctx| {
-            let content = path.to_string_lossy();
-            input.append_to_buffer(content.as_ref(), ctx);
+            input.append_to_buffer(content.as_str(), ctx);
             ctx.notify();
         });
     }
@@ -5299,9 +5883,6 @@ impl TerminalView {
                 self.update_pane_configuration(ctx);
                 ctx.notify();
             }
-            BlocklistAIContextEvent::QueueNextPromptToggled => {
-                ctx.notify();
-            }
         }
     }
 
@@ -5310,7 +5891,10 @@ impl TerminalView {
         ai_block_model: &AIBlockModelImpl<AIBlock>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if self.pending_user_query_kind != Some(PendingUserQueryKind::CloudMode) {
+        let kind_is_cloud_mode =
+            self.pending_user_query_kind == Some(PendingUserQueryKind::CloudMode);
+        let v2_is_enabled = FeatureFlag::QueuedPromptsV2.is_enabled();
+        if !kind_is_cloud_mode && !v2_is_enabled {
             return;
         }
 
@@ -5322,11 +5906,17 @@ impl TerminalView {
                 .display_user_query(initial_conversation_query.as_ref())
                 .is_some()
         });
-        if has_renderable_user_query {
+        if !has_renderable_user_query {
+            return;
+        }
+        // Pending-user-query block removal stays scoped to the legacy CloudMode kind so we
+        // don't tear down /queue or other PendingUserQueryKind blocks under V2. The V2
+        // queue-row removal is independent and is a no-op when no InitialCloudMode row exists.
+        if kind_is_cloud_mode {
             self.remove_pending_user_query_block(ctx);
         }
+        self.remove_cloud_mode_queue_row(ctx);
     }
-
     fn render_owner_for_ai_history_event(
         &self,
         history_model: &BlocklistAIHistoryModel,
@@ -5342,16 +5932,19 @@ impl TerminalView {
             | BlocklistAIHistoryEvent::UpdatedConversationStatus {
                 conversation_id, ..
             }
-            | BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+            | BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
                 conversation_id, ..
             }
-            | BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
+            | BlocklistAIHistoryEvent::UpdatedConversationTitle {
                 conversation_id, ..
             } => history_model.terminal_view_id_for_conversation(conversation_id),
             BlocklistAIHistoryEvent::ReassignedExchange {
                 new_conversation_id,
                 ..
             } => history_model.terminal_view_id_for_conversation(new_conversation_id),
+            BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                conversation_id, ..
+            } => history_model.terminal_view_id_for_conversation(conversation_id),
             BlocklistAIHistoryEvent::StartedNewConversation { .. }
             | BlocklistAIHistoryEvent::CreatedSubtask { .. }
             | BlocklistAIHistoryEvent::UpgradedTask { .. }
@@ -5368,7 +5961,8 @@ impl TerminalView {
             | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
             | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
-            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => None,
+            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => None,
         }
     }
 
@@ -5397,10 +5991,10 @@ impl TerminalView {
             && matches!(
                 event,
                 BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
+                    | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
                     | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
                     | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
                     | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
-                    | BlocklistAIHistoryEvent::AppendedExchange { .. }
                     | BlocklistAIHistoryEvent::SetActiveConversation { .. }
                     | BlocklistAIHistoryEvent::RestoredConversations { .. }
             )
@@ -5470,6 +6064,7 @@ impl TerminalView {
                     .is_some_and(|model| model.as_ref(ctx).is_local_to_cloud_handoff())
                 {
                     self.remove_pending_user_query_block(ctx);
+                    self.remove_cloud_mode_queue_row(ctx);
                 }
 
                 let should_add_ai_block = history_model
@@ -5703,16 +6298,50 @@ impl TerminalView {
             BlocklistAIHistoryEvent::UpdatedConversationStatus {
                 conversation_id,
                 update,
+                new_status,
                 ..
             } => {
                 // When the conversation state changes or a new conversation
                 // is selected, update the title to reflect that change.
                 self.update_pane_configuration(ctx);
 
+                let previous_status = self
+                    .last_observed_conversation_status
+                    .insert(*conversation_id, new_status.clone())
+                    .or_else(|| match update {
+                        ConversationStatusUpdate::Changed { prev_status } => {
+                            Some(prev_status.clone())
+                        }
+                        ConversationStatusUpdate::Restored => None,
+                    });
+
                 // Don't send notifications or insert ambient agent session ended tombstone
                 // if we're restoring this conversation on startup.
                 if matches!(update, ConversationStatusUpdate::Restored) {
                     return;
+                }
+
+                if FeatureFlag::QueuedPromptsV2.is_enabled()
+                    && self.is_ambient_agent_session(ctx)
+                    && previous_status.is_some_and(|status| {
+                        status.is_in_progress()
+                            || status.is_transient_error()
+                            || status.is_blocked()
+                    })
+                {
+                    let finish_reason = match new_status {
+                        ConversationStatus::Success => Some(FinishReason::Complete),
+                        ConversationStatus::Error => Some(FinishReason::Error),
+                        ConversationStatus::Cancelled => Some(FinishReason::Cancelled),
+                        // TransientError is non-terminal: an automatic recovery is pending.
+                        ConversationStatus::InProgress
+                        | ConversationStatus::TransientError
+                        | ConversationStatus::Blocked { .. }
+                        | ConversationStatus::WaitingForEvents => None,
+                    };
+                    if let Some(finish_reason) = finish_reason {
+                        self.handle_finished_conversation(*conversation_id, finish_reason, ctx);
+                    }
                 }
 
                 self.maybe_send_agent_mode_desktop_notification(conversation_id, ctx);
@@ -5776,10 +6405,16 @@ impl TerminalView {
                     }
                 }
             }
+            BlocklistAIHistoryEvent::UpdatedConversationTitle { .. } => {
+                self.update_pane_configuration(ctx);
+            }
             BlocklistAIHistoryEvent::ClearedConversationsInTerminalView {
                 active_conversation_id,
                 ..
             } => {
+                // The singleton's own history subscriber drops queue state for cleared
+                // conversations, so no `clear_all` call is needed here.
+                self.last_observed_conversation_status.clear();
                 if let Some(active_conversation_id) = active_conversation_id {
                     self.ai_controller.update(ctx, |controller, ctx| {
                         controller.cancel_conversation_progress(
@@ -5803,10 +6438,9 @@ impl TerminalView {
                 // The conversation has moved to another terminal view. We are
                 // the previous owner (the per-view filter at the top of this
                 // function uses `previous_terminal_view_id`), so drop any
-                // rendered AI blocks and agent-view entry blocks tagged to
-                // this conversation. Otherwise the user sees a transcript
-                // split across two panes (old exchanges here, new exchanges
-                // in the new owner).
+                // rendered blocks tagged to this conversation. Leave the
+                // agent-view entry in place so the user can click it to
+                // navigate to the current owner pane later.
                 if *previous_terminal_view_id != self.view_id {
                     return;
                 }
@@ -5814,16 +6448,12 @@ impl TerminalView {
                     .rich_content_views
                     .iter()
                     .filter_map(|view| {
-                        let belongs_to_conversation = match view.metadata() {
-                            Some(RichContentMetadata::AIBlock(metadata)) => {
-                                metadata.conversation_id == *conversation_id
-                            }
-                            Some(RichContentMetadata::AgentViewEntry(metadata)) => {
-                                metadata.conversation_id == *conversation_id
-                            }
-                            _ => false,
-                        };
-                        belongs_to_conversation.then_some(view.view_id())
+                        let is_ai_block_for_conversation = matches!(
+                            view.metadata(),
+                            Some(RichContentMetadata::AIBlock(metadata))
+                                if metadata.conversation_id == *conversation_id
+                        );
+                        is_ai_block_for_conversation.then_some(view.view_id())
                     })
                     .collect_vec();
                 for view_id_to_remove in view_ids_to_remove.into_iter() {
@@ -5834,20 +6464,35 @@ impl TerminalView {
                     self.rich_content_views
                         .retain(|view| view.view_id() != view_id_to_remove);
                 }
+                self.model
+                    .lock()
+                    .block_list_mut()
+                    .remove_command_blocks_for_conversation(*conversation_id);
+            }
+            BlocklistAIHistoryEvent::RemoveConversation {
+                conversation_id, ..
+            }
+            | BlocklistAIHistoryEvent::DeletedConversation {
+                conversation_id, ..
+            } => {
+                // The queue is always for the currently active conversation; agent-view exit
+                // already wipes it via `ExitedAgentView`, so no per-conversation cleanup is
+                // needed here.
+                self.last_observed_conversation_status
+                    .remove(conversation_id);
             }
             BlocklistAIHistoryEvent::CreatedSubtask { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
             | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
-            | BlocklistAIHistoryEvent::RemoveConversation { .. }
             | BlocklistAIHistoryEvent::RestoredConversations { .. }
             | BlocklistAIHistoryEvent::UpgradedTask { .. }
             | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
             | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
-            | BlocklistAIHistoryEvent::DeletedConversation { .. }
             | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
             | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
-            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. } => {}
+            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
         }
         ctx.notify();
     }
@@ -5958,11 +6603,14 @@ impl TerminalView {
                 }
             }
             CLISubagentEvent::UpdatedControl {
-                agent_has_control, ..
+                block_id,
+                agent_has_control,
+                ..
             } => {
                 self.redetermine_terminal_focus(ctx);
                 self.emit_long_running_command_agent_interaction_state_changed(
                     *agent_has_control,
+                    block_id.clone(),
                     ctx,
                 );
             }
@@ -6044,7 +6692,11 @@ impl TerminalView {
 
             // Set input config to AI mode, preserving user's autodetect preference
             self.ai_input_model.update(ctx, |input_model, ctx| {
-                input_model.set_input_type(InputType::AI, ctx);
+                input_model.set_input_type(
+                    InputType::AI,
+                    Some(InputTypeAutoDetectionSource::ContinueConversation),
+                    ctx,
+                );
             });
         }
 
@@ -6128,7 +6780,8 @@ impl TerminalView {
             conversation.wall_to_wall_response_time_since_last_query();
 
         let conversation_usage_info = ConversationUsageInfo {
-            credits_spent: conversation.credits_spent(),
+            credits_spent: conversation.inference_credits_spent(),
+            platform_credits_spent: conversation.platform_credits_spent(),
             credits_spent_for_last_block: conversation.credits_spent_for_last_block(),
             tool_calls: tool_usage.total_tool_calls(),
             models: conversation.token_usage().to_vec(),
@@ -6370,7 +7023,11 @@ impl TerminalView {
         self.input.update(ctx, |input, ctx| {
             // Remove the @-trigger text (e.g. "@uncom") that was used to open the context menu.
             input.replace_at_symbol_with_text(&attachment_reference, ctx);
-            input.ensure_agent_mode_for_ai_features(true, ctx);
+            input.ensure_agent_mode_for_ai_features(
+                true,
+                Some(InputTypeAutoDetectionSource::AttachmentForcedAi),
+                ctx,
+            );
         });
 
         // Load the diff data asynchronously and complete the attachment when done
@@ -6449,6 +7106,8 @@ impl TerminalView {
         match event {
             BlocklistAIInputEvent::InputTypeChanged { config } => {
                 self.ai_render_context.borrow_mut().is_ai_input_enabled = config.input_type.is_ai();
+                #[cfg(feature = "local_fs")]
+                self.update_git_status_subscription(ctx);
 
                 // Force re-render all AIBlocks to ensure that selected text is recolored properly
                 self.rerender_rich_content_blocks(ctx);
@@ -6755,6 +7414,7 @@ impl TerminalView {
                             participant_id: participant_id.clone(),
                             block_id: model.block_list().active_block_id().clone(),
                             ai_metadata: Some(agent_metadata.clone()),
+                            preserve_input: false,
                         }
                     }
                 }
@@ -6833,7 +7493,16 @@ impl TerminalView {
     ) {
         match event {
             StartAgentExecutorEvent::CreateAgent(request) => {
-                ctx.emit(Event::StartAgentConversation(request.clone()));
+                ctx.emit(Event::StartAgentConversation(request.as_ref().clone()));
+            }
+            StartAgentExecutorEvent::CleanupFailedChildLaunch { conversation_id } => {
+                // The child failed at launch and never started a server-side
+                // run; reuse the Kill path to drop its hidden pane and
+                // conversation so the orchestration pill bar stops showing a
+                // dead chip.
+                ctx.emit(Event::KillAgentConversation {
+                    conversation_id: *conversation_id,
+                });
             }
         }
     }
@@ -6914,6 +7583,14 @@ impl TerminalView {
                         success: false,
                         title: title.clone(),
                         description: error_message.clone(),
+                    }),
+                    FinishedAIAgentOutput::Error {
+                        error: error @ RenderableAIError::TransientNetworkError { .. },
+                        ..
+                    } => Some(AIBlockNotificationSummary {
+                        success: false,
+                        title: title.clone(),
+                        description: error.to_string(),
                     }),
                     _ => Some(AIBlockNotificationSummary {
                         success: false,
@@ -7060,6 +7737,36 @@ impl TerminalView {
         }
     }
 
+    /// Returns the active local session's CWD, canonicalized via `dunce::canonicalize` to resolve
+    /// symlinks and normalize the path.
+    ///
+    /// The canonicalization is memoized in `canonical_session_pwd_cache`, keyed on the
+    /// non-canonical path, and only recomputed when that path changes.
+    pub fn canonical_session_pwd_if_local<C: ModelAsRef>(
+        &self,
+        ctx: &C,
+    ) -> Option<CanonicalizedPath> {
+        let path = self.active_session_path_if_local(ctx)?;
+
+        // Return the cached value when the non-canonical path has not changed.
+        if let Some(cached) = self.canonical_session_pwd_cache.borrow().as_ref() {
+            if cached.path == path {
+                return Some(cached.canonical.clone());
+            }
+        }
+
+        let canonical = CanonicalizedPath::try_from(&path).ok()?;
+
+        if let Ok(mut cache) = self.canonical_session_pwd_cache.try_borrow_mut() {
+            *cache = Some(LocalSessionCanonicalPwdCache {
+                path,
+                canonical: canonical.clone(),
+            });
+        }
+
+        Some(canonical)
+    }
+
     pub fn input(&self) -> &ViewHandle<Input> {
         &self.input
     }
@@ -7103,10 +7810,38 @@ impl TerminalView {
             .active_conversation_id()
     }
 
+    pub fn active_conversation_task_id(&self, app: &AppContext) -> Option<AmbientAgentTaskId> {
+        let history = BlocklistAIHistoryModel::as_ref(app);
+        let conversation_id = self.active_conversation_id(app).or_else(|| {
+            self.ai_context_model
+                .as_ref(app)
+                .selected_conversation_id(app)
+        })?;
+        history.conversation(&conversation_id)?.task_id()
+    }
+
     pub fn ambient_agent_view_model(
         &self,
     ) -> Option<&ModelHandle<ambient_agent::AmbientAgentViewModel>> {
         self.ambient_agent_view_model.as_ref()
+    }
+
+    /// Tear down the Cloud Mode Setup V2 UI in response to a
+    /// setup-phase-ended signal: clear the BlockList
+    /// executing-startup-commands flag AND finish/collapse the active
+    /// ambient setup command group. Owns both pieces of state so callers
+    /// (the shared-session viewer arm, legacy fallbacks) don't have to
+    /// orchestrate two unrelated mutations. Idempotent across both.
+    pub(crate) fn tear_down_cloud_mode_setup_phase(&mut self, ctx: &mut ViewContext<Self>) {
+        self.model
+            .lock()
+            .block_list_mut()
+            .set_is_executing_oz_environment_startup_commands(false);
+        if let Some(ambient_model) = self.ambient_agent_view_model.clone() {
+            ambient_model.update(ctx, |model, ctx| {
+                model.tear_down_active_setup_command_group(ctx);
+            });
+        }
     }
 
     fn ambient_agent_task_id_for_details_panel_from_model(
@@ -7320,9 +8055,7 @@ impl TerminalView {
         let focus_reporting_enabled = *AltScreenReporting::as_ref(ctx)
             .focus_reporting_enabled
             .value();
-        focus_reporting_enabled
-            && model.is_alt_screen_active()
-            && model.alt_screen().is_mode_set(TermMode::FOCUS_IN_OUT)
+        focus_reporting_enabled && model.is_term_mode_set(TermMode::FOCUS_IN_OUT)
     }
 
     fn maybe_report_focus_in(&mut self, ctx: &mut ViewContext<Self>) {
@@ -7391,6 +8124,9 @@ impl TerminalView {
             return false;
         }
         if self.conversation_ended_tombstone_view_id.is_some() {
+            return false;
+        }
+        if self.blocks_cloud_followups_for_ambient_agent_session_from_model(model, app) {
             return false;
         }
         if self.has_active_cli_agent_input_session(app) {
@@ -7559,39 +8295,77 @@ impl TerminalView {
         ctx.notify();
     }
 
+    fn current_long_running_command_agent_interaction_state(
+        &self,
+    ) -> LongRunningCommandAgentInteractionState {
+        let model = self.model.lock();
+        let active_block = model.block_list().active_block();
+        if active_block.is_agent_in_control() {
+            LongRunningCommandAgentInteractionState::InControl
+        } else if active_block.is_agent_tagged_in() {
+            LongRunningCommandAgentInteractionState::TaggedIn
+        } else {
+            LongRunningCommandAgentInteractionState::NotInteracting
+        }
+    }
+
     fn emit_long_running_command_agent_interaction_state_changed(
         &self,
         agent_has_control: bool,
+        block_id: BlockId,
         ctx: &mut ViewContext<Self>,
     ) {
         let state = if agent_has_control {
             LongRunningCommandAgentInteractionState::InControl
+        } else if self
+            .model
+            .lock()
+            .block_list()
+            .block_with_id(&block_id)
+            .is_some_and(|block| block.is_agent_tagged_in())
+        {
+            LongRunningCommandAgentInteractionState::TaggedIn
         } else {
-            let is_tagged_in = self
-                .model
-                .lock()
-                .block_list()
-                .active_block()
-                .is_agent_tagged_in();
-            if is_tagged_in {
-                LongRunningCommandAgentInteractionState::TaggedIn
-            } else {
-                LongRunningCommandAgentInteractionState::NotInteracting
-            }
+            LongRunningCommandAgentInteractionState::NotInteracting
         };
-        log::info!(
-            "emit_long_running_command_agent_interaction_state_changed: \
-             agent_has_control={agent_has_control}, emitting state={state:?}"
-        );
-        ctx.emit(Event::LongRunningCommandAgentInteractionStateChanged { state });
+        ctx.emit(Event::LongRunningCommandAgentInteractionStateChanged {
+            state,
+            block_id: Some(block_id),
+        });
     }
 
     /// Applies a long-running command agent interaction state received from a shared session participant.
     pub fn apply_long_running_command_agent_interaction_state(
         &mut self,
         state: LongRunningCommandAgentInteractionState,
+        block_id: Option<&BlockId>,
         ctx: &mut ViewContext<Self>,
     ) {
+        if let Some(block_id) = block_id {
+            let (is_active_block_long_running, active_block_id) = {
+                let model = self.model.lock();
+                let active_block = model.block_list().active_block();
+                (
+                    active_block.is_active_and_long_running(),
+                    active_block.id().clone(),
+                )
+            };
+            let should_apply = is_active_block_long_running && active_block_id == *block_id;
+            if !should_apply {
+                log::info!(
+                    "Ignoring stale shared-session LRC interaction_state={state:?} for block_id={block_id:?}. Currently active block id={} is_active_and_long_running={}",
+                    active_block_id,
+                    is_active_block_long_running,
+                );
+                return;
+            }
+        }
+        if self.current_long_running_command_agent_interaction_state() == state {
+            return;
+        }
+        log::info!(
+            "Applying shared-session LRC interaction_state={state:?} to block_id={block_id:?}"
+        );
         match state {
             LongRunningCommandAgentInteractionState::InControl => {
                 self.cli_subagent_controller.update(ctx, |controller, ctx| {
@@ -7613,6 +8387,20 @@ impl TerminalView {
         }
     }
 
+    /// Applies a block-scoped long-running command agent interaction state received from a shared
+    /// session participant.
+    pub fn apply_long_running_command_agent_interaction(
+        &mut self,
+        interaction: LongRunningCommandAgentInteraction,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let block_id = BlockId::from(interaction.block_id);
+        self.apply_long_running_command_agent_interaction_state(
+            interaction.state,
+            Some(&block_id),
+            ctx,
+        );
+    }
     /// Shows or hides the CLI agent footer from a shared session update.
     pub fn apply_cli_agent_footer_visibility(&mut self, show: bool, ctx: &mut ViewContext<Self>) {
         if show {
@@ -7741,23 +8529,31 @@ impl TerminalView {
     /// Windows users expect ctrl-c to copy if there is selected text. Otherwise,
     /// we perform the normal ctrl-c action.
     fn ctrl_c(&mut self, ctx: &mut ViewContext<Self>) {
-        let (
-            has_block_list_selection,
-            has_alt_screen_selection,
-            is_long_running,
-            is_agent_in_control_of_command,
-        ) = {
+        let (has_block_list_selection, has_alt_screen_selection, active_block_state) = {
             let model = self.model.lock();
             let has_alt_screen_selection = model.alt_screen().selection().is_some();
             let has_block_list_selection = model.block_list().selection().is_some();
             let active_block = model.block_list().active_block();
             let is_long_running = active_block.is_active_and_long_running();
             let is_agent_in_control_of_command = active_block.is_agent_in_control();
+            let conversation_id_to_stop = active_block
+                .long_running_control_state()
+                .and_then(|state| {
+                    state
+                        .user_take_over_reason()
+                        .is_some_and(UserTakeOverReason::is_stop)
+                        .then(|| active_block.ai_conversation_id())
+                })
+                .flatten();
+            let active_block_state = CtrlCActiveBlockState {
+                is_long_running,
+                is_agent_in_control_of_command,
+                conversation_id_to_stop,
+            };
             (
                 has_block_list_selection,
                 has_alt_screen_selection,
-                is_long_running,
-                is_agent_in_control_of_command,
+                active_block_state,
             )
         };
         // We don't want to copy blocks in AI input mode because those are
@@ -7769,8 +8565,7 @@ impl TerminalView {
             has_copiable_block_selection,
             has_block_list_selection,
             has_alt_screen_selection,
-            is_long_running,
-            is_agent_in_control_of_command,
+            active_block_state,
             ctx,
         );
 
@@ -7787,8 +8582,7 @@ impl TerminalView {
         has_copiable_block_selection: bool,
         has_block_list_selection: bool,
         has_alt_screen_selection: bool,
-        is_long_running: bool,
-        is_agent_in_control_of_command: bool,
+        active_block_state: CtrlCActiveBlockState,
         ctx: &mut ViewContext<Self>,
     ) {
         if has_block_list_selection {
@@ -7806,13 +8600,16 @@ impl TerminalView {
             self.clear_selections_when_shell_mode_without_focusing_input(ctx);
         }
 
-        self.ctrl_c_to_active_block(is_long_running, is_agent_in_control_of_command, ctx);
+        self.ctrl_c_to_active_block(active_block_state, ctx);
     }
 
     /// Focuses the provided AI block if this terminal view (or some part of it)
     /// are focused. This helps ensure AI block interactions (which are primarily async)
     /// don't steal focus from the user if they've focused another part of the app
     /// (e.g. another session).
+    ///
+    /// Skips the steal when the user is navigating another AI block / code diff
+    /// (e.g. arrowing diff hunks), unless the target block is blocked on user input.
     ///
     /// Warning: this should not be called when focusing the [`TerminalView`]. It could
     /// lead to a focus cycle because [`AIBlock::try_focus`] conditionally yields focus
@@ -7822,9 +8619,23 @@ impl TerminalView {
         block: &ViewHandle<AIBlock>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if ctx.is_self_or_child_focused() {
+        if !ctx.is_self_or_child_focused() {
+            return;
+        }
+        let target_needs_attention = block.as_ref(ctx).is_blocked_on_user_confirmation(ctx);
+        if target_needs_attention || !self.is_any_ai_block_focused(ctx) {
             block.update(ctx, |block, ctx| block.try_steal_focus(ctx));
         }
+    }
+
+    /// Returns `true` if focus is inside any AI block (e.g. the user is arrowing
+    /// through a code diff's hunks).
+    fn is_any_ai_block_focused(&self, ctx: &mut ViewContext<Self>) -> bool {
+        self.rich_content_views.iter().any(|rich_content| {
+            rich_content
+                .ai_block_metadata()
+                .is_some_and(|metadata| metadata.ai_block_handle.is_self_or_child_focused(ctx))
+        })
     }
 
     #[cfg(not(windows))]
@@ -7833,8 +8644,7 @@ impl TerminalView {
         has_copiable_block_selection: bool,
         has_block_list_selection: bool,
         has_alt_screen_selection: bool,
-        is_long_running: bool,
-        is_agent_in_control_of_command: bool,
+        active_block_state: CtrlCActiveBlockState,
         ctx: &mut ViewContext<Self>,
     ) {
         if has_block_list_selection || has_copiable_block_selection {
@@ -7842,21 +8652,25 @@ impl TerminalView {
         } else if has_alt_screen_selection {
             self.model.lock().alt_screen_mut().clear_selection();
         }
-        self.ctrl_c_to_active_block(is_long_running, is_agent_in_control_of_command, ctx);
+        self.ctrl_c_to_active_block(active_block_state, ctx);
     }
 
     fn ctrl_c_to_active_block(
         &mut self,
-        is_long_running: bool,
-        is_agent_in_control_of_command: bool,
+        active_block_state: CtrlCActiveBlockState,
         ctx: &mut ViewContext<Self>,
     ) {
-        if is_agent_in_control_of_command {
+        if active_block_state.is_agent_in_control_of_command {
             self.cli_subagent_controller.update(ctx, |controller, ctx| {
                 controller.switch_control_to_user(UserTakeOverReason::Stop, ctx);
             });
-        } else if is_long_running {
-            self.user_write_ctrl_c_to_pty(ctx);
+        } else if active_block_state.is_long_running {
+            // A second Ctrl+C after Stop takeover should cancel both the command and conversation.
+            if let Some(conversation_id) = active_block_state.conversation_id_to_stop {
+                self.stop_local_agent_conversation(conversation_id, ctx);
+            } else {
+                self.user_write_ctrl_c_to_pty(ctx);
+            }
         } else {
             self.maybe_handle_ctrl_c_in_rich_content_block(ctx);
         }
@@ -8064,7 +8878,6 @@ impl TerminalView {
 
     fn control_sequence_on_terminal(&mut self, bytes: &[u8], ctx: &mut ViewContext<Self>) {
         if self.is_long_running() {
-            self.on_ssh_warpification_key_event(Some(SshKeyEvent::from_bytes(bytes)), ctx);
             self.write_user_bytes_to_pty(bytes.to_owned(), ctx);
         } else {
             safe_warn!(
@@ -8133,7 +8946,6 @@ impl TerminalView {
     /// Generally, this should be control characters rather than printable characters.
     fn keydown_on_terminal(&mut self, characters: &str, ctx: &mut ViewContext<Self>) {
         if self.is_long_running() {
-            self.on_ssh_warpification_key_event(Some(SshKeyEvent::from_chars(characters)), ctx);
             self.highlighted_link.invalidate();
             self.report_possible_typeahead(characters);
             self.write_user_bytes_to_pty(characters.as_bytes().to_vec(), ctx);
@@ -8177,8 +8989,6 @@ impl TerminalView {
     /// We can assume `characters` consists of all printable characters, and therefore,
     /// can go into the input box.
     fn typed_characters_on_terminal(&mut self, characters: &str, ctx: &mut ViewContext<Self>) {
-        self.on_ssh_warpification_key_event(Some(SshKeyEvent::from_chars(characters)), ctx);
-
         if self.should_write_typed_chars_to_pty(ctx) {
             self.highlighted_link.invalidate();
             self.report_possible_typeahead(characters);
@@ -8265,32 +9075,6 @@ impl TerminalView {
     /// Writes a shared session viewer's bytes to the pty
     pub fn write_viewer_bytes_to_pty(&mut self, bytes: Vec<u8>, ctx: &mut ViewContext<Self>) {
         self.write_user_bytes_to_pty(bytes, ctx);
-    }
-
-    /// Ends the current line before writing 1000 byte chunks to the pty with a small delay in
-    /// between to work around a macos pty bug.
-    fn clear_line_editor_and_write_to_pty_with_mac_workaround_hack<B: Into<Cow<'static, [u8]>>>(
-        &mut self,
-        data: B,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        // Ctrl-u + ctrl-k clears everything before the cursor, then everything after the cursor.
-        // Ctrl-c is dangerous because it could cancel an ongoing command. We add an arbitrary space
-        // first so that the ctrl-u always clears at least one character, avoiding the audible bell.
-        let mut to_write = vec![
-            b' ',
-            escape_sequences::C0::VT,  // ctrl-k to clear forward
-            escape_sequences::C0::NAK, // ctrl-u to clear backward
-        ];
-        to_write.extend_from_slice(&data.into());
-
-        for (i, chunk) in to_write.chunks(1000).enumerate() {
-            let chunk = chunk.to_vec();
-            ctx.spawn(
-                Timer::after(Duration::from_millis(i as u64 * 10)),
-                move |me, _, ctx| me.write_to_pty(chunk, ctx),
-            );
-        }
     }
 
     /// Ends the current line before writing the given bytes to the PTY.
@@ -8739,15 +9523,6 @@ impl TerminalView {
         false
     }
 
-    fn cancel_bootstrap_workflow(&mut self, ctx: &mut ViewContext<Self>) {
-        self.clear_ssh_blocks(ctx);
-        self.update_long_running_ssh_block_with_lock(|block| {
-            block.unhide();
-        });
-        self.warpify_state.delete_state();
-        ctx.notify();
-    }
-
     fn remove_ssh_block_by_id(&mut self, view_id: EntityId) {
         self.model
             .lock()
@@ -8766,277 +9541,6 @@ impl TerminalView {
 
             self.warpify_state.clear_ssh_block_state();
         }
-    }
-
-    /// Collapses any expanded UX within SSH blocks.
-    /// To ensure we can always see what we're typing, we collapse
-    /// the SSH block when typing.
-    fn on_ssh_warpification_key_event(
-        &mut self,
-        key_event: Option<SshKeyEvent>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if self.warpify_state.ssh_block_state().is_some() {
-            if key_event.is_some_and(|key| key.is_ctrl_c()) {
-                send_telemetry_from_ctx!(TelemetryEvent::SshTmuxWarpifyBlockDismissed, ctx);
-                self.cancel_bootstrap_workflow(ctx);
-            } else if self.warpify_state.should_prevent_input() {
-                self.warpify_state.focus(ctx);
-                self.warpify_state.collapse_ssh_block(ctx);
-                self.update_scroll_position_locking(
-                    ScrollPositionUpdate::AfterRichBlockUpdated,
-                    ctx,
-                );
-                ctx.notify();
-            }
-        }
-    }
-
-    fn handle_remote_warpification_is_unavailable(
-        &mut self,
-        reason: WarpificationUnavailableReason,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        // Stop the pending timeout on warpification.
-        self.warpify_state.abort_ssh_warpify_timeout();
-        match &reason {
-            WarpificationUnavailableReason::TmuxNotInstalled {
-                system_details,
-                root_access,
-            } => {
-                if system_details.writable_home != Some(true) {
-                    if let Some(shell_type) = ShellType::from_name(&system_details.shell) {
-                        self.trigger_subshell_bootstrap(Some(shell_type), false, ctx);
-                        return;
-                    }
-                }
-
-                if let Some(tmux_install_script) = install_tmux_script(system_details, ctx) {
-                    let root_access = RootAccess::from_str(root_access).unwrap_or_default();
-                    let tmux_root_install_script = if root_access == RootAccess::NoRootAccess {
-                        None
-                    } else {
-                        install_root_tmux_script(
-                            system_details,
-                            ctx,
-                            root_access == RootAccess::CanRunSudo,
-                        )
-                    };
-                    self.add_ssh_install_tmux_block(
-                        system_details,
-                        tmux_install_script,
-                        tmux_root_install_script,
-                        false,
-                        ctx,
-                    );
-                    return;
-                }
-            }
-            WarpificationUnavailableReason::UnsupportedTmuxVersion { system_details } => {
-                if system_details.writable_home != Some(true) {
-                    if let Some(shell_type) = ShellType::from_name(&system_details.shell) {
-                        self.trigger_subshell_bootstrap(Some(shell_type), false, ctx);
-                        return;
-                    }
-                }
-
-                if let Some(tmux_install_script) = install_tmux_script(system_details, ctx) {
-                    self.add_ssh_install_tmux_block(
-                        system_details,
-                        tmux_install_script,
-                        None,
-                        true,
-                        ctx,
-                    );
-                    return;
-                }
-            }
-            _ => {}
-        }
-        self.add_ssh_error_block(reason, ctx);
-    }
-
-    fn add_ssh_warpify_prompt(
-        &mut self,
-        command: &str,
-        ssh_host: Option<String>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.clear_ssh_blocks(ctx);
-        self.handle_action(
-            &TerminalAction::ShowWarpifySshBanner(command.to_owned(), ssh_host),
-            ctx,
-        );
-    }
-
-    /// This method assumes the active block in the blocklist is a long-running SSH command.
-    fn add_ssh_warpifying_block(&mut self, ctx: &mut ViewContext<Self>) {
-        // Shared session viewers can't initiate warpification currently.
-        if self.model.lock().shared_session_status().is_viewer() {
-            return;
-        }
-
-        self.clear_ssh_blocks(ctx);
-
-        let show_ssh_block_debug = BlockVisibilitySettings::as_ref(ctx)
-            .should_show_ssh_block
-            .value();
-        let (full_ssh_command, hidden_ssh_block_id) = {
-            let mut model = self.model.lock();
-            if !show_ssh_block_debug {
-                model.block_list_mut().active_block_mut().hide();
-            }
-
-            (
-                model.block_list().active_block().command_to_string(),
-                model.block_list().active_block_id().clone(),
-            )
-        };
-
-        let ssh_warpify_block_handle =
-            ctx.add_typed_action_view(|_| SshWarpifyBlock::new(full_ssh_command));
-        ctx.subscribe_to_view(&ssh_warpify_block_handle, move |me, _, event, ctx| {
-            me.handle_ssh_warpify_block_event(event, ctx);
-        });
-
-        self.insert_rich_content(
-            None,
-            ssh_warpify_block_handle.clone(),
-            Some(RichContentMetadata::SshWarpifyBlock {
-                ssh_warpify_block_handle: ssh_warpify_block_handle.clone(),
-            }),
-            RichContentInsertionPosition::Append {
-                insert_below_long_running_block: true,
-            },
-            ctx,
-        );
-
-        ctx.focus(&ssh_warpify_block_handle);
-
-        self.warpify_state.set_block_id(hidden_ssh_block_id);
-        self.warpify_state
-            .set_ssh_block_state(SshBlockState::Warpifying {
-                handle: ssh_warpify_block_handle,
-            });
-
-        self.warpify_ssh_session(ctx);
-    }
-
-    /// This method assumes the active block in the blocklist is a long-running SSH command.
-    fn add_ssh_install_tmux_block(
-        &mut self,
-        system_details: &SystemDetails,
-        tmux_install_script: String,
-        tmux_root_install_script: Option<String>,
-        outdated_version: bool,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.clear_ssh_blocks(ctx);
-
-        let show_ssh_block_debug = BlockVisibilitySettings::as_ref(ctx)
-            .should_show_ssh_block
-            .value();
-        let (full_ssh_command, hidden_ssh_block_id) = {
-            let mut model = self.model.lock();
-            if !show_ssh_block_debug {
-                model.block_list_mut().active_block_mut().hide();
-            }
-            (
-                model.block_list().active_block().command_to_string(),
-                model.block_list().active_block_id().clone(),
-            )
-        };
-
-        let ssh_host = self.warpify_state.get_pending_ssh_host();
-
-        let ssh_install_tmux_block_handle = ctx.add_typed_action_view(|_| {
-            SshInstallTmuxBlock::new(
-                system_details.clone(),
-                tmux_install_script,
-                tmux_root_install_script,
-                full_ssh_command,
-                ssh_host,
-                outdated_version,
-            )
-        });
-        ctx.subscribe_to_view(&ssh_install_tmux_block_handle, move |me, _, event, ctx| {
-            me.handle_ssh_install_tmux_block_event(event, ctx);
-        });
-
-        self.insert_rich_content(
-            None,
-            ssh_install_tmux_block_handle.clone(),
-            Some(RichContentMetadata::SshInstallTmuxBlock {
-                ssh_install_tmux_block_handle: ssh_install_tmux_block_handle.clone(),
-            }),
-            RichContentInsertionPosition::Append {
-                insert_below_long_running_block: true,
-            },
-            ctx,
-        );
-
-        ctx.focus(&ssh_install_tmux_block_handle);
-
-        send_telemetry_from_ctx!(TelemetryEvent::SshInstallTmuxBlockDisplayed, ctx);
-
-        self.warpify_state.set_block_id(hidden_ssh_block_id);
-        self.warpify_state
-            .set_ssh_block_state(SshBlockState::InstallTmux {
-                handle: ssh_install_tmux_block_handle,
-            });
-    }
-
-    fn add_ssh_error_block(
-        &mut self,
-        error_reason: WarpificationUnavailableReason,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        // If there's already an error block showing, don't overwrite the existing one.
-        if matches!(
-            self.warpify_state.ssh_block_state(),
-            Some(SshBlockState::Error { .. })
-        ) {
-            return;
-        }
-
-        self.clear_ssh_blocks(ctx);
-        self.update_long_running_ssh_block_with_lock(|block| {
-            block.unhide();
-        });
-
-        let ssh_host = self.warpify_state.take_pending_ssh_host();
-
-        let ssh_error_block_handle =
-            ctx.add_typed_action_view(|_| SshErrorBlock::new(error_reason.clone(), ssh_host));
-        ctx.subscribe_to_view(&ssh_error_block_handle, move |me, _, event, ctx| {
-            me.handle_ssh_error_block_events(event, ctx);
-        });
-
-        self.insert_rich_content(
-            None,
-            ssh_error_block_handle.clone(),
-            Some(RichContentMetadata::SshErrorBlock {
-                ssh_error_block_handle: ssh_error_block_handle.clone(),
-            }),
-            RichContentInsertionPosition::Append {
-                insert_below_long_running_block: true,
-            },
-            ctx,
-        );
-
-        send_telemetry_from_ctx!(
-            TelemetryEvent::SshTmuxWarpificationErrorBlock {
-                error: error_reason,
-                tmux_installation: self.warpify_state.tmux_installation(),
-            },
-            ctx
-        );
-
-        self.warpify_state
-            .set_ssh_block_state(SshBlockState::Error {
-                handle: ssh_error_block_handle,
-            });
-        self.warpify_state.focus(ctx);
     }
 
     fn add_bootstrap_success_block(
@@ -9063,16 +9567,12 @@ impl TerminalView {
             BootstrapSessionType::WarpifiedRemote => WarpificationSource::Ssh,
             BootstrapSessionType::Local => WarpificationSource::Subshell,
         };
-        let disable_tmux = FeatureFlag::SSHTmuxWrapper.is_enabled()
-            && matches!(warpification_source, WarpificationSource::Ssh)
-            && { !self.model.lock().tmux_control_mode_active() };
         let ssh_success_block_handle = ctx.add_typed_action_view(|ctx| {
             WarpifySuccessBlock::new(
                 warpification_source,
                 spawning_command,
                 subshell_info,
                 shell,
-                disable_tmux,
                 ctx,
             )
         });
@@ -9101,119 +9601,6 @@ impl TerminalView {
         self.refresh_warp_prompt(ctx);
     }
 
-    fn handle_ssh_warpify_block_event(
-        &mut self,
-        event: &SshWarpifyBlockEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        fn dismiss_ssh_warpify_block(me: &mut TerminalView, ctx: &mut ViewContext<TerminalView>) {
-            send_telemetry_from_ctx!(TelemetryEvent::SshTmuxWarpifyBlockDismissed, ctx);
-            me.cancel_bootstrap_workflow(ctx);
-        }
-
-        match event {
-            SshWarpifyBlockEvent::Cancel => {
-                self.warpify_state.replace_timeout_id();
-                dismiss_ssh_warpify_block(self, ctx);
-            }
-            SshWarpifyBlockEvent::Interrupt => {
-                dismiss_ssh_warpify_block(self, ctx);
-                self.warpify_state.abort_ssh_warpify_timeout();
-                self.user_write_ctrl_c_to_pty(ctx);
-            }
-            SshWarpifyBlockEvent::WarpifySession => {
-                send_telemetry_from_ctx!(TelemetryEvent::SshTmuxWarpifyBlockAccepted, ctx);
-                self.add_ssh_warpifying_block(ctx);
-                self.update_scroll_position_locking(
-                    ScrollPositionUpdate::AfterRichBlockUpdated,
-                    ctx,
-                );
-                ctx.notify();
-            }
-        }
-    }
-
-    fn handle_ssh_install_tmux_block_event(
-        &mut self,
-        event: &SshInstallTmuxBlockEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        fn cancel_tmux_install(me: &mut TerminalView, ctx: &mut ViewContext<TerminalView>) {
-            send_telemetry_from_ctx!(TelemetryEvent::SshInstallTmuxBlockDismissed, ctx);
-            me.cancel_bootstrap_workflow(ctx);
-        }
-
-        match event {
-            SshInstallTmuxBlockEvent::Cancel => {
-                cancel_tmux_install(self, ctx);
-            }
-            SshInstallTmuxBlockEvent::Interrupt => {
-                cancel_tmux_install(self, ctx);
-                self.warpify_state.abort_ssh_warpify_timeout();
-                self.user_write_ctrl_c_to_pty(ctx);
-            }
-            SshInstallTmuxBlockEvent::InstallTmuxAndWarpify(install_source) => {
-                send_telemetry_from_ctx!(TelemetryEvent::SshInstallTmuxBlockAccepted, ctx);
-                self.clear_ssh_blocks(ctx);
-                self.install_tmux_and_warpify(ctx, install_source);
-                self.update_scroll_position_locking(
-                    ScrollPositionUpdate::AfterRichBlockUpdated,
-                    ctx,
-                );
-                ctx.notify();
-            }
-            SshInstallTmuxBlockEvent::ToggleScriptVisibility => {
-                self.update_scroll_position_locking(
-                    ScrollPositionUpdate::AfterRichBlockUpdated,
-                    ctx,
-                );
-                ctx.notify();
-            }
-            SshInstallTmuxBlockEvent::ToggleTmuxInstallVisibility => {
-                if let Some(ssh_block_id) = self.warpify_state.block_id() {
-                    if let Some(is_visible) = self
-                        .model
-                        .lock()
-                        .block_list_mut()
-                        .toggle_visibility_of_block(&ssh_block_id)
-                    {
-                        if is_visible {
-                            ctx.focus_self();
-                        }
-                    }
-                    ctx.notify();
-                }
-            }
-            SshInstallTmuxBlockEvent::UnhideTmuxInstall => {
-                if let Some(ssh_block_id) = self.warpify_state.block_id() {
-                    self.model
-                        .lock()
-                        .block_list_mut()
-                        .unhide_block(&ssh_block_id);
-                    ctx.focus_self();
-                    ctx.notify();
-                }
-            }
-        }
-    }
-
-    fn handle_ssh_error_block_events(
-        &mut self,
-        event: &SshErrorBlockEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match event {
-            SshErrorBlockEvent::WarpifyWithoutTmux => {
-                let shell_type = self.warpify_state.get_shell_type();
-                self.clear_ssh_blocks(ctx);
-                self.trigger_subshell_bootstrap(shell_type, false, ctx);
-            }
-            SshErrorBlockEvent::ContinueWithoutWarpification => {
-                self.cancel_bootstrap_workflow(ctx);
-            }
-        }
-    }
-
     fn handle_ssh_success_block_events(
         &mut self,
         event: &WarpifySuccessBlockEvent,
@@ -9240,7 +9627,7 @@ impl TerminalView {
         // starts, fails, or is cancelled.
         if FeatureFlag::WarpifyFooter.is_enabled() {
             self.use_agent_footer.update(ctx, |footer, ctx| {
-                footer.clear_warpify_mode(ctx);
+                footer.clear_warpify(ctx);
             });
         }
 
@@ -9262,7 +9649,7 @@ impl TerminalView {
 
     fn show_warpify_banner(
         &mut self,
-        input: WarpificationMode,
+        command: String,
         title: &str,
         lowercase_title: &str,
         warpify_keybinding: Option<Keystroke>,
@@ -9295,7 +9682,7 @@ impl TerminalView {
         model
             .block_list_mut()
             .set_active_block_banner(Some(WithinBlockBanner::WarpifyBanner(
-                WarpifyBannerState::new(input, warpify_keybinding),
+                WarpifyBannerState::new(command, warpify_keybinding),
             )));
 
         let a11y_content = AccessibilityContent::new(
@@ -10393,13 +10780,25 @@ impl TerminalView {
     ///
     /// See [`Self::redetermine_global_focus`] to change focus without checking that the terminal is focused.
     fn redetermine_terminal_focus(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        // Only reset the focus if this terminal is currently focused, don't steal it from
-        // another part of the app
+        self.redetermine_terminal_focus_with_policy(SelectionFocusPolicy::HoldsFocus, ctx)
+    }
+
+    /// Like [`Self::redetermine_terminal_focus`], but with an explicit
+    /// [`SelectionFocusPolicy`] controlling whether existing block/text selections keep
+    /// the terminal focused.
+    fn redetermine_terminal_focus_with_policy(
+        &mut self,
+        selection_focus_policy: SelectionFocusPolicy,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        // Only reset focus if this terminal is focused; don't steal it from another part
+        // of the app, or from an AI block / code diff the user is navigating.
         let reset_focus = ctx.is_self_or_child_focused()
             && !self.find_bar.is_self_or_child_focused(ctx)
-            && !self.block_filter_editor.is_self_or_child_focused(ctx);
+            && !self.block_filter_editor.is_self_or_child_focused(ctx)
+            && !self.is_any_ai_block_focused(ctx);
         if reset_focus {
-            self.redetermine_global_focus(ctx);
+            self.redetermine_global_focus_with_policy(selection_focus_policy, ctx);
         }
 
         reset_focus
@@ -10480,11 +10879,6 @@ impl TerminalView {
     }
 
     fn on_user_block_completed(&mut self, block_id: &BlockId, ctx: &mut ViewContext<Self>) {
-        {
-            self.model
-                .lock()
-                .clear_pending_warp_initiated_control_mode();
-        }
         self.model.lock().end_notify_on_ssh_login_complete();
 
         // If the block that just ended was an agent-requested long running command for which the user took over control,
@@ -10809,6 +11203,272 @@ impl TerminalView {
         });
     }
 
+    /// Apply a block metadata update from either the precmd hook
+    /// ([`Event::BlockMetadataReceived`]) or an OSC 7 sequence emitted
+    /// mid-block ([`Event::BlockWorkingDirectoryUpdated`]). The `source`
+    /// controls work that's safe to do once per block but wrong to do
+    /// repeatedly mid-block — see [`BlockMetadataUpdateSource`].
+    fn apply_block_metadata_update(
+        &mut self,
+        block_metadata: &BlockMetadata,
+        is_after_in_band_command: bool,
+        is_done_bootstrapping: bool,
+        source: BlockMetadataUpdateSource,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // In-band commands don't change the CWD, git state, or session
+        // metadata. Skip the expensive processing (git repo detection,
+        // directory indexing, re-renders) to avoid an infinite loop where
+        // a re-render triggers completions which fire another in-band
+        // command. See also the complementary guard in
+        // Input::set_active_block_metadata.
+        if is_after_in_band_command {
+            self.active_block_metadata = Some(block_metadata.clone());
+            self.input.update(ctx, |view, ctx| {
+                view.set_active_block_metadata(
+                    block_metadata.clone(),
+                    true, // is_after_in_band_command
+                    ctx,
+                );
+            });
+            return;
+        }
+
+        if let Some(prev_block_metadata) = self.active_block_metadata.take() {
+            // Only send event to save app state when the block is post bootstrap
+            // and working directory has changed.
+            if prev_block_metadata.current_working_directory()
+                != block_metadata.current_working_directory()
+                && is_done_bootstrapping
+            {
+                ctx.emit(Event::AppStateChanged);
+            }
+
+            // Update the shell launch data for the active session.
+            if prev_block_metadata.session_id() != block_metadata.session_id()
+                && is_done_bootstrapping
+            {
+                let shell_launch_data = self.shell_launch_data_if_local(ctx);
+                self.on_active_shell_launch_data_updated(shell_launch_data, ctx);
+            }
+
+            // Check if the block is done bootstrapping and the directory is set.
+            if let Some(active_directory) = block_metadata.current_working_directory() {
+                // See `BlockMetadataUpdateSource` for why OSC 7 needs the
+                // CWD-changed gate; precmd keeps its once-per-block semantics.
+                let should_run_detection = match source {
+                    BlockMetadataUpdateSource::Precmd => true,
+                    BlockMetadataUpdateSource::Osc7 => {
+                        prev_block_metadata.current_working_directory()
+                            != block_metadata.current_working_directory()
+                    }
+                };
+                if is_done_bootstrapping && should_run_detection {
+                    // Derive locality directly from the incoming block's
+                    // session_id. We cannot use `active_session_is_local(ctx)`
+                    // here because `active_block_metadata` was just consumed
+                    // via `take()` above, so it would always return `None`
+                    // and misclassify every local session as Remote.
+                    //
+                    // `session_is_local` keeps the shared-session viewer /
+                    // conversation-transcript guard intact.
+                    let session_id = block_metadata.session_id();
+                    let session_type = session_id.map(|sid| {
+                        if self.session_is_local(sid, ctx) {
+                            RepoDetectionSessionType::Local
+                        } else {
+                            RepoDetectionSessionType::Remote { session_id: sid }
+                        }
+                    });
+                    if let Some(session_type) = session_type {
+                        let is_local = matches!(session_type, RepoDetectionSessionType::Local);
+
+                        // For local sessions, convert the shell-native CWD
+                        // (e.g. "/c/Users/..." for Git Bash/MSYS2) to a
+                        // Windows-native path before repo detection.
+                        let directory_for_detection = if is_local {
+                            block_metadata
+                                .session_id()
+                                .and_then(|sid| self.sessions.as_ref(ctx).get(sid))
+                                .and_then(|session| {
+                                    session.launch_data().and_then(|data| {
+                                        data.maybe_convert_absolute_path(active_directory)
+                                    })
+                                })
+                                .map(|path| path.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| active_directory.to_string())
+                        } else {
+                            active_directory.to_string()
+                        };
+
+                        let fut = detect_possible_git_repo(
+                            session_type,
+                            &directory_for_detection,
+                            RepoDetectionSource::TerminalNavigation,
+                            ctx,
+                        );
+
+                        ctx.spawn(fut, move |me, repo_path_opt, ctx| {
+                            let old_repo_path = me.current_repo_path.clone();
+                            me.current_repo_path = repo_path_opt.clone();
+
+                            if old_repo_path != me.current_repo_path {
+                                ctx.emit(Event::Pane(PaneEvent::RepoChanged));
+                            }
+
+                            // `block_completed_callbacks` are scheduled via
+                            // `on_next_block_completed` and expect the block
+                            // to have finished. OSC 7 fires mid-block, so
+                            // draining them here would run callbacks like
+                            // `maybe_set_pending_repo_init_path`'s project
+                            // init before the actual command (e.g. `git
+                            // clone`) finishes.
+                            if matches!(source, BlockMetadataUpdateSource::Precmd) {
+                                let callbacks =
+                                    me.block_completed_callbacks.drain(..).collect_vec();
+                                for callback in callbacks {
+                                    callback(me, ctx);
+                                }
+                            }
+
+                            match &repo_path_opt {
+                                Some(LocalOrRemotePath::Remote(remote_path)) => {
+                                    #[cfg(not(target_family = "wasm"))]
+                                    DetectedRepositories::handle(ctx).update(
+                                        ctx,
+                                        |repos, _| {
+                                            repos.register_remote_repo_root(remote_path.clone());
+                                        },
+                                    );
+
+                                    // Remote sessions can only materialize their working
+                                    // directory after repo detection has resolved the host.
+                                    // Re-run app-state propagation now that the remote path
+                                    // is known so the active session's working directory catches up.
+                                    ctx.emit(Event::AppStateChanged);
+
+                                    if FeatureFlag::AIContextMenuEnabled.is_enabled() {
+                                        me.input.update(ctx, |input, ctx| {
+                                            input
+                                                .check_and_update_ai_context_menu_disabled_state(
+                                                    ctx,
+                                                );
+                                        });
+                                    }
+                                    ctx.emit(Event::Pane(PaneEvent::RemoteRepoNavigated {
+                                        remote_path: remote_path.clone(),
+                                    }));
+
+                                    // Wire up the remote git-status chips when the
+                                    // remote repo changed (mirrors the local branch).
+                                    let changed = !matches!(
+                                        old_repo_path.as_ref(),
+                                        Some(LocalOrRemotePath::Remote(rp)) if rp == remote_path
+                                    );
+                                    if changed {
+                                        me.clear_git_repo_status_subscription(ctx);
+                                        me.update_git_status_subscription(ctx);
+                                    }
+                                }
+                                Some(LocalOrRemotePath::Local(repo_path)) => {
+                                    #[cfg(feature = "local_fs")]
+                                    {
+                                        let Some(active_directory) =
+                                            me.active_session_path_if_local(ctx)
+                                        else {
+                                            me.clear_git_repo_status(ctx);
+                                            return;
+                                        };
+
+                                        let Ok(active_directory) =
+                                            CanonicalizedPath::try_from(
+                                                active_directory,
+                                            )
+                                        else {
+                                            return;
+                                        };
+
+                                        let is_ancestor = active_directory
+                                            .as_path_buf()
+                                            .ancestors()
+                                            .any(|ancestor| ancestor == repo_path.as_path());
+                                        if !is_ancestor {
+                                            return;
+                                        }
+
+                                        PersistedWorkspace::handle(ctx).update(
+                                            ctx,
+                                            |manager, _| {
+                                                manager.navigated_to_path(
+                                                    active_directory.as_path_buf(),
+                                                );
+                                            },
+                                        );
+
+                                        if old_repo_path
+                                            .as_ref()
+                                            .and_then(|p| p.to_local_path())
+                                            != Some(repo_path.as_path())
+                                        {
+                                                me.clear_git_repo_status_subscription(ctx);
+                                            me.update_git_status_subscription(ctx);
+                                        }
+
+                                        me.input.update(ctx, |input, ctx| {
+                                            input.update_repo_path(
+                                                Some(repo_path.clone()),
+                                                ctx,
+                                            );
+                                        });
+
+                                        if FeatureFlag::AIContextMenuEnabled.is_enabled() {
+                                            me.input.update(ctx, |input, ctx| {
+                                                input
+                                                    .check_and_update_ai_context_menu_disabled_state(
+                                                        ctx,
+                                                    );
+                                            });
+                                        }
+
+                                        me.start_lsp_server_in_active_pwd(ctx);
+
+                                        me.update_repo_banner_state(repo_path.clone(), ctx);
+                                    }
+                                    #[cfg(not(feature = "local_fs"))]
+                                    let _ = repo_path;
+                                }
+                                None => {
+                                    me.clear_git_repo_status(ctx);
+                                    ctx.notify();
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        }
+
+        self.active_block_metadata = Some(block_metadata.clone());
+
+        if let Some(session) = block_metadata
+            .session_id()
+            .and_then(|id| self.sessions.as_ref(ctx).get(id))
+        {
+            let shell_host = ShellHost::from_session(session.as_ref());
+            self.model
+                .lock()
+                .block_list_mut()
+                .set_active_shell_host(shell_host);
+        }
+
+        self.input.update(ctx, |view, ctx| {
+            view.set_active_block_metadata(block_metadata.clone(), is_after_in_band_command, ctx);
+            // Now that we've received the metadata for the active block, redraw the
+            // prompt area so it's up to date.
+            ctx.notify();
+        });
+    }
+
     fn handle_terminal_event(&mut self, event: &ModelEvent, ctx: &mut ViewContext<Self>) {
         match event {
             ModelEvent::TerminalClear => {
@@ -10825,18 +11485,34 @@ impl TerminalView {
                 }
             }
             ModelEvent::ClipboardStore(_, contents) => {
-                ctx.clipboard()
-                    .write(ClipboardContent::plain_text(contents.to_owned()));
+                let access = *TerminalSettings::as_ref(ctx).osc52_clipboard_access;
+                if access.allows_write() {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(contents.to_owned()));
+                } else {
+                    log::info!(
+                        "OSC 52 clipboard write blocked by terminal.osc52_clipboard_access setting"
+                    );
+                    self.show_osc52_clipboard_blocked_banner(Osc52ClipboardBlockedType::Write, ctx);
+                }
             }
             ModelEvent::ClipboardLoad(_, format) => {
-                self.write_to_pty(
-                    format(&TerminalView::read_from_clipboard(
-                        Some(self.shell_family(ctx)),
+                let access = *TerminalSettings::as_ref(ctx).osc52_clipboard_access;
+                if access.allows_read() {
+                    self.write_to_pty(
+                        format(&TerminalView::read_from_clipboard(
+                            Some(self.shell_family(ctx)),
+                            ctx,
+                        ))
+                        .into_bytes(),
                         ctx,
-                    ))
-                    .into_bytes(),
-                    ctx,
-                );
+                    );
+                } else {
+                    log::info!(
+                        "OSC 52 clipboard read blocked by terminal.osc52_clipboard_access setting"
+                    );
+                    self.show_osc52_clipboard_blocked_banner(Osc52ClipboardBlockedType::Read, ctx);
+                }
             }
             ModelEvent::CursorBlinkingChange(_) => {}
             ModelEvent::MouseCursorDirty => {}
@@ -10931,8 +11607,16 @@ impl TerminalView {
 
                 // In-band commands finishing should never trigger a focus change as it could steal
                 // focus from the TerminalView.
+                //
+                // A block/text selection made before or during the command shouldn't pin focus
+                // to the terminal now that the command has finished -- focus should return to
+                // the input box so the user can type the next command. The exception is when
+                // the user is actively making a selection at this very moment.
                 if !matches!(block_completed_event.block_type, BlockType::InBandCommand) {
-                    let reset_focus = self.redetermine_terminal_focus(ctx);
+                    let reset_focus = self.redetermine_terminal_focus_with_policy(
+                        SelectionFocusPolicy::HoldsFocusOnlyWhileSelecting,
+                        ctx,
+                    );
                     // There are two different cases for redraws here:
                     // 1. If this terminal or its children were focused, redraw immediately after
                     //    this event.
@@ -10959,9 +11643,9 @@ impl TerminalView {
                     self.on_user_block_completed(&block_completed_event.block_id, ctx);
                 }
 
-                // Clear any stale warpify mode so it doesn't leak into the next command's footer rendering.
+                // Clear any stale warpify footer so it doesn't leak into the next command's footer rendering.
                 self.use_agent_footer.update(ctx, |footer, ctx| {
-                    footer.clear_warpify_mode(ctx);
+                    footer.clear_warpify(ctx);
                 });
                 self.hide_use_agent_footer_in_blocklist(ctx);
                 if matches!(block_completed_event.block_type, BlockType::User(_)) {
@@ -11102,10 +11786,7 @@ impl TerminalView {
                                 Timer::after(*SUBSHELL_BANNER_DELAY_DURATION),
                                 |view, _, ctx| {
                                     if FeatureFlag::WarpifyFooter.is_enabled() {
-                                        view.show_warpify_footer(
-                                            WarpificationMode::subshell(command),
-                                            ctx,
-                                        );
+                                        view.show_warpify_footer(ctx);
                                     } else {
                                         view.handle_action(
                                             &TerminalAction::ShowSubshellBanner(command),
@@ -11121,12 +11802,10 @@ impl TerminalView {
                         if let Some(ssh_host) =
                             parse_interactive_ssh_command(warpify_command).map(|cmd| cmd.host)
                         {
-                            if !self.model.lock().tmux_control_mode_active() {
-                                self.warpify_state
-                                    .set_pending_ssh_host(warpify_command.to_string(), ssh_host);
-                                self.model.lock().start_notify_on_end_of_ssh_login();
-                                ctx.emit(Event::TerminalViewStateChanged);
-                            }
+                            self.warpify_state
+                                .set_pending_ssh_host(warpify_command.to_string(), ssh_host);
+                            self.model.lock().start_notify_on_end_of_ssh_login();
+                            ctx.emit(Event::TerminalViewStateChanged);
                         } else {
                             self.warpify_state.clear_pending_ssh_host();
 
@@ -11170,6 +11849,7 @@ impl TerminalView {
                                                         remote_host,
                                                         draft_text: None,
                                                         custom_command_prefix: custom_command_prefix.clone(),
+                                                        received_rich_notification: false,
                                                     },
                                                     ctx,
                                                 );
@@ -11360,6 +12040,16 @@ impl TerminalView {
                     }
                 }
 
+                // Advance the queued-prompts queue when a dispatched queued command's block
+                // completes. `on_queued_command_finished` no-ops unless a queued command is in
+                // flight, and the `!was_part_of_agent_interaction` filter keeps agent-executed
+                // command blocks (including LRC snapshots) from advancing the queue.
+                if let BlockType::User(user_block_completed) = block_type {
+                    if !user_block_completed.was_part_of_agent_interaction {
+                        self.on_queued_command_finished(ctx);
+                    }
+                }
+
                 // For the case when the user uses session configuration with a
                 // command list, we execute the command after a delay.
                 // The delay is necessary because the shell needs a tiny bit of
@@ -11390,6 +12080,50 @@ impl TerminalView {
                         .is_bootstrapping_precmd_done()
                 {
                     self.refresh_warp_prompt(ctx);
+
+                    // If the completed command was a `gh` or `gt` invocation, eagerly refresh PR
+                    // info since these don't touch .git/ and won't be caught by the filesystem watcher.
+                    #[cfg(feature = "local_fs")]
+                    if (FeatureFlag::GitOperationsInCodeReview.is_enabled()
+                        || FeatureFlag::GithubPrPromptChip.is_enabled())
+                        && match &block_type {
+                            BlockType::User(user_block_completed) => {
+                                let command = user_block_completed.command.as_str();
+                                let top_level = user_block_completed
+                                    .serialized_block
+                                    .session_id
+                                    .and_then(|session_id| {
+                                        self.sessions.as_ref(ctx).get(session_id)
+                                    })
+                                    .and_then(|session| {
+                                        let escape_char = session.shell_family().escape_char();
+                                        let cmd =
+                                            warp_completer::parsers::simple::top_level_command(
+                                                command,
+                                                escape_char,
+                                            )?;
+                                        let cmd = session
+                                            .alias_value(cmd.as_str())
+                                            .and_then(|alias| {
+                                                warp_completer::parsers::simple::top_level_command(
+                                                    alias,
+                                                    escape_char,
+                                                )
+                                            })
+                                            .unwrap_or(cmd);
+                                        Some(cmd)
+                                    })
+                                    .or_else(|| {
+                                        command.split_whitespace().next().map(|cmd| cmd.to_owned())
+                                    });
+
+                                matches!(top_level.as_deref(), Some("gh" | "gt"))
+                            }
+                            _ => false,
+                        }
+                    {
+                        self.refresh_pr_info_after_gh_or_gt_command(ctx);
+                    }
                 }
 
                 if let BlockType::User(block_completed) = block_type {
@@ -11595,267 +12329,43 @@ impl TerminalView {
                 self.handle_control_master_error(ctx);
             }
             ModelEvent::BlockMetadataReceived(block_metadata_received_event) => {
-                let block_metadata = &block_metadata_received_event.block_metadata;
-
-                // In-band commands don't change the CWD, git state, or session
-                // metadata. Skip the expensive processing (git repo detection,
-                // directory indexing, re-renders) to avoid an infinite loop where
-                // a re-render triggers completions which fire another in-band
-                // command. See also the complementary guard in
-                // Input::set_active_block_metadata.
-                if block_metadata_received_event.is_after_in_band_command {
-                    self.active_block_metadata = Some(block_metadata.clone());
-                    self.input.update(ctx, |view, ctx| {
-                        view.set_active_block_metadata(
-                            block_metadata.clone(),
-                            true, // is_after_in_band_command
-                            ctx,
-                        );
-                    });
-                    return;
-                }
-
-                if let Some(prev_block_metadata) = self.active_block_metadata.take() {
-                    // Only send event to save app state when the block is post bootstrap
-                    // and working directory has changed.
-                    if prev_block_metadata.current_working_directory()
-                        != block_metadata.current_working_directory()
-                        && block_metadata_received_event.is_done_bootstrapping
-                    {
-                        ctx.emit(Event::AppStateChanged);
-                    }
-
-                    // Update the shell launch data for the active session.
-                    if prev_block_metadata.session_id() != block_metadata.session_id()
-                        && block_metadata_received_event.is_done_bootstrapping
-                    {
-                        let shell_launch_data = self.shell_launch_data_if_local(ctx);
-                        self.on_active_shell_launch_data_updated(shell_launch_data, ctx);
-                    }
-
-                    // Check if the block is done bootstrapping and the directory is set.
-                    if let Some(active_directory) = block_metadata_received_event
-                        .block_metadata
-                        .current_working_directory()
-                    {
-                        if block_metadata_received_event.is_done_bootstrapping {
-                            // Derive locality directly from the incoming block's
-                            // session_id. We cannot use `active_session_is_local(ctx)`
-                            // here because `active_block_metadata` was just consumed
-                            // via `take()` above, so it would always return `None`
-                            // and misclassify every local session as Remote.
-                            //
-                            // `session_is_local` keeps the shared-session viewer /
-                            // conversation-transcript guard intact.
-                            let session_id = block_metadata.session_id();
-                            let session_type = session_id.map(|sid| {
-                                if self.session_is_local(sid, ctx) {
-                                    RepoDetectionSessionType::Local
-                                } else {
-                                    RepoDetectionSessionType::Remote { session_id: sid }
-                                }
-                            });
-                            let Some(session_type) = session_type else {
-                                // Skip detection entirely when session type can't be determined.
-                                self.active_block_metadata = Some(block_metadata.clone());
-                                self.input.update(ctx, |view, ctx| {
-                                    view.set_active_block_metadata(
-                                        block_metadata.clone(),
-                                        block_metadata_received_event.is_after_in_band_command,
-                                        ctx,
-                                    );
-                                    ctx.notify();
-                                });
-                                return;
-                            };
-                            let is_local = matches!(session_type, RepoDetectionSessionType::Local);
-
-                            // For local sessions, convert the shell-native CWD
-                            // (e.g. "/c/Users/..." for Git Bash/MSYS2) to a
-                            // Windows-native path before repo detection.
-                            let directory_for_detection = if is_local {
-                                block_metadata_received_event
-                                    .block_metadata
-                                    .session_id()
-                                    .and_then(|sid| self.sessions.as_ref(ctx).get(sid))
-                                    .and_then(|session| {
-                                        session.launch_data().and_then(|data| {
-                                            data.maybe_convert_absolute_path(active_directory)
-                                        })
-                                    })
-                                    .map(|path| path.to_string_lossy().into_owned())
-                                    .unwrap_or_else(|| active_directory.to_string())
-                            } else {
-                                active_directory.to_string()
-                            };
-
-                            let fut = detect_possible_git_repo(
-                                session_type,
-                                &directory_for_detection,
-                                RepoDetectionSource::TerminalNavigation,
-                                ctx,
-                            );
-
-                            ctx.spawn(fut, move |me, repo_path_opt, ctx| {
-                                let old_repo_path = me.current_repo_path.clone();
-                                me.current_repo_path = repo_path_opt.clone();
-
-                                if old_repo_path != me.current_repo_path {
-                                    ctx.emit(Event::Pane(PaneEvent::RepoChanged));
-                                }
-
-                                let callbacks = me.block_completed_callbacks.drain(..).collect_vec();
-                                for callback in callbacks {
-                                    callback(me, ctx);
-                                }
-
-                                match &repo_path_opt {
-                                    Some(LocalOrRemotePath::Remote(remote_path)) => {
-                                        #[cfg(not(target_family = "wasm"))]
-                                        DetectedRepositories::handle(ctx).update(
-                                            ctx,
-                                            |repos, _| {
-                                                repos.register_remote_repo_root(
-                                                    remote_path.clone(),
-                                                );
-                                            },
-                                        );
-
-                                        // Force the workspace to re-evaluate
-                                        // ActiveSession::working_directory. The
-                                        // AppStateChanged at line 11671 already ran
-                                        // update_active_session once, but for remote
-                                        // sessions pwd_as_local_or_remote() may have
-                                        // returned None at that point because host_id
-                                        // wasn't set yet. Now that remote repo
-                                        // detection succeeded we know host_id is
-                                        // available, so a second pass populates
-                                        // working_directory correctly.
-                                        // Local sessions don't need this because
-                                        // pwd_as_local_or_remote always succeeds for
-                                        // local paths (no host_id dependency).
-                                        ctx.emit(Event::AppStateChanged);
-
-                                        if FeatureFlag::AIContextMenuEnabled.is_enabled() {
-                                            me.input.update(ctx, |input, ctx| {
-                                                input
-                                                    .check_and_update_ai_context_menu_disabled_state(
-                                                        ctx,
-                                                    );
-                                            });
-                                        }
-
-                                        ctx.emit(Event::Pane(PaneEvent::RemoteRepoNavigated {
-                                            remote_path: remote_path.clone(),
-                                        }));
-                                    }
-                                    Some(LocalOrRemotePath::Local(repo_path)) => {
-                                        #[cfg(feature = "local_fs")]
-                                        {
-                                            let Some(active_directory) =
-                                                me.active_session_path_if_local(ctx)
-                                            else {
-                                                me.clear_git_repo_status(ctx);
-                                                return;
-                                            };
-
-                                            let Ok(active_directory) =
-                                                repo_metadata::CanonicalizedPath::try_from(
-                                                    active_directory,
-                                                )
-                                            else {
-                                                return;
-                                            };
-
-                                            let is_ancestor = active_directory
-                                                .as_path_buf()
-                                                .ancestors()
-                                                .any(|ancestor| {
-                                                    ancestor == repo_path.as_path()
-                                                });
-                                            if !is_ancestor {
-                                                return;
-                                            }
-
-                                            PersistedWorkspace::handle(ctx).update(
-                                                ctx,
-                                                |manager, _| {
-                                                    manager.navigated_to_path(
-                                                        active_directory.as_path_buf(),
-                                                    );
-                                                },
-                                            );
-
-                                            if old_repo_path
-                                                .as_ref()
-                                                .and_then(|p| p.to_local_path())
-                                                != Some(repo_path.as_path())
-                                            {
-                                                me.git_repo_status = None;
-                                                me.update_git_status_subscription(ctx);
-                                            }
-
-                                            me.input.update(ctx, |input, ctx| {
-                                                input.update_repo_path(
-                                                    Some(repo_path.clone()),
-                                                    ctx,
-                                                );
-                                            });
-
-                                            if FeatureFlag::AIContextMenuEnabled.is_enabled() {
-                                                me.input.update(ctx, |input, ctx| {
-                                                    input
-                                                        .check_and_update_ai_context_menu_disabled_state(
-                                                            ctx,
-                                                        );
-                                                });
-                                            }
-
-                                            me.start_lsp_server_in_active_pwd(ctx);
-
-                                            me.update_repo_banner_state(
-                                                repo_path.clone(),
-                                                ctx,
-                                            );
-                                        }
-                                        #[cfg(not(feature = "local_fs"))]
-                                        let _ = repo_path;
-                                    }
-                                    None => {
-                                        #[cfg(feature = "local_fs")]
-                                        me.clear_git_repo_status(ctx);
-                                        ctx.notify();
-                                    }
-                                }
-                            });
-                        }
-                    }
-                }
-
-                self.active_block_metadata = Some(block_metadata.clone());
-
-                if let Some(session) = block_metadata
-                    .session_id()
-                    .and_then(|id| self.sessions.as_ref(ctx).get(id))
-                {
-                    let shell_host = ShellHost::from_session(session.as_ref());
-                    self.model
-                        .lock()
-                        .block_list_mut()
-                        .set_active_shell_host(shell_host);
-                }
-
-                self.input.update(ctx, |view, ctx| {
-                    view.set_active_block_metadata(
-                        block_metadata.clone(),
-                        block_metadata_received_event.is_after_in_band_command,
-                        ctx,
-                    );
-                    // Now that we've received the metadata for the active block, redraw the
-                    // prompt area so it's up to date.
-                    ctx.notify();
-                });
+                self.apply_block_metadata_update(
+                    &block_metadata_received_event.block_metadata,
+                    block_metadata_received_event.is_after_in_band_command,
+                    block_metadata_received_event.is_done_bootstrapping,
+                    BlockMetadataUpdateSource::Precmd,
+                    ctx,
+                );
             }
+            ModelEvent::BlockWorkingDirectoryUpdated(block_working_directory_updated_event) => {
+                self.apply_block_metadata_update(
+                    &block_working_directory_updated_event.block_metadata,
+                    block_working_directory_updated_event.is_for_in_band_command,
+                    block_working_directory_updated_event.is_done_bootstrapping,
+                    BlockMetadataUpdateSource::Osc7,
+                    ctx,
+                );
+                // Recompute Warp-prompt chip values (notably the
+                // `WorkingDirectory` chip text that feeds the vertical-tab
+                // subtitle via `display_working_directory`). The chip
+                // generator reads from `CurrentPrompt::latest_context`, which
+                // is only refreshed through `refresh_warp_prompt` →
+                // `current_prompt.update_context`. In the normal precmd flow
+                // that refresh is triggered by `BlockCompleted`, but an OSC 7
+                // fires mid-command — the block never completes — so without
+                // this call the chip text stays stuck on the previous CWD
+                // even though the underlying block metadata is up to date.
+                //
+                // Skip in-band-command blocks for the same reason
+                // `apply_block_metadata_update` bails early on them: in-band
+                // commands don't change CWD, and refreshing the prompt here
+                // can re-fire chip generators that schedule another in-band
+                // command, leading to a refresh loop.
+                if !block_working_directory_updated_event.is_for_in_band_command {
+                    self.refresh_warp_prompt(ctx);
+                }
+            }
+
             ModelEvent::TerminalModeSwapped(mode) => {
                 #[cfg(feature = "local_tty")]
                 {
@@ -11945,33 +12455,8 @@ impl TerminalView {
                     self.update_agent_view_back_button_state(ctx);
                 }
             }
-            ModelEvent::TmuxControlModeReady { .. } => {
-                self.trigger_subshell_bootstrap(None, false, ctx);
-            }
             ModelEvent::DetectedEndOfSshLogin(check_type) => {
                 self.handle_detected_end_of_ssh_login(check_type, ctx);
-            }
-            ModelEvent::RemoteWarpificationIsUnavailable(reason) => {
-                self.handle_remote_warpification_is_unavailable(reason.clone(), ctx);
-            }
-            ModelEvent::SshTmuxInstaller(tmux_installation) => {
-                self.warpify_state
-                    .set_tmux_installation_state(*tmux_installation);
-            }
-            ModelEvent::TmuxInstallFailed { line, command } => {
-                let system_details = self
-                    .warpify_state
-                    .ssh_block_state()
-                    .and_then(|s| s.get_system_details(ctx));
-                self.warpify_state.abort_ssh_warpify_timeout();
-                self.add_ssh_error_block(
-                    WarpificationUnavailableReason::TmuxInstallFailed {
-                        system_details,
-                        line: Some(line.to_string()),
-                        command: Some(command.to_string()),
-                    },
-                    ctx,
-                );
             }
             ModelEvent::ExecutedInBandCommand(event) => {
                 // TODO(vorporeal): Figure out a way to not need the terminal view involved
@@ -11987,16 +12472,9 @@ impl TerminalView {
                 let shell_type = event.shell_type;
                 self.trigger_subshell_bootstrap(Some(shell_type), false, ctx);
             }
-            ModelEvent::InitSsh(event) => {
-                let shell_type = event.shell_type;
-                let uname = event.uname.as_ref().unwrap_or(&String::default()).clone();
-                self.continue_warpify_ssh_session(&uname, shell_type, ctx);
-            }
             ModelEvent::SourcedRcFileInSubshell(event) => {
                 send_telemetry_from_ctx!(TelemetryEvent::ReceivedSubshellRcFileDcs, ctx);
                 let shell_type = event.shell_type;
-                let uname = event.uname.clone();
-                let disable_tmux = event.tmux == Some(false);
 
                 ctx.spawn(
                     async {
@@ -12004,33 +12482,18 @@ impl TerminalView {
                             .await
                     },
                     move |me, _, ctx| {
-                        let uname = uname.to_owned().unwrap_or_default();
-                        let (is_ssh, is_tmux_control_mode_active, has_ai_metadata) = {
-                            let lock = me.model.lock();
-                            let has_ai_metadata = lock
-                                .block_list()
-                                .active_block()
-                                .agent_interaction_metadata()
-                                .is_some();
-                            (
-                                lock.is_ssh_block(),
-                                lock.tmux_control_mode_active(),
-                                has_ai_metadata,
-                            )
-                        };
+                        let has_ai_metadata = me
+                            .model
+                            .lock()
+                            .block_list()
+                            .active_block()
+                            .agent_interaction_metadata()
+                            .is_some();
                         // Never warpify for agent-requested commands.
                         if has_ai_metadata {
                             return;
                         }
-                        // To simplify the implementation, we do not support warpifying while SSH-warpified.
-                        if is_tmux_control_mode_active {
-                            return;
-                        }
-                        if is_ssh && !disable_tmux {
-                            me.continue_warpify_ssh_session(&uname, shell_type, ctx);
-                        } else {
-                            me.trigger_subshell_bootstrap(Some(shell_type), true, ctx);
-                        }
+                        me.trigger_subshell_bootstrap(Some(shell_type), true, ctx);
                     },
                 );
             }
@@ -12111,13 +12574,19 @@ impl TerminalView {
             ModelEvent::BootstrapPrecmdDone => {
                 self.execute_pending_command((), ctx);
             }
-            ModelEvent::AgentTaggedInChanged { is_tagged_in } => {
+            ModelEvent::AgentTaggedInChanged {
+                block_id,
+                is_tagged_in,
+            } => {
                 let state = if *is_tagged_in {
                     LongRunningCommandAgentInteractionState::TaggedIn
                 } else {
                     LongRunningCommandAgentInteractionState::NotInteracting
                 };
-                ctx.emit(Event::LongRunningCommandAgentInteractionStateChanged { state });
+                ctx.emit(Event::LongRunningCommandAgentInteractionStateChanged {
+                    state,
+                    block_id: Some(block_id.clone()),
+                });
             }
             ModelEvent::PluggableNotification { title, body } => {
                 // Intercept structured CLI agent notifications (e.g. from Claude Code plugin).
@@ -12390,6 +12859,81 @@ impl TerminalView {
         ctx.notify();
     }
 
+    /// Shows the one-time banner informing users who had opted into the deprecated tmux SSH
+    /// wrapper that it has been turned off in favor of the remote-server SSH extension. The
+    /// pending flag is cleared immediately so the banner is shown at most once.
+    fn show_ssh_tmux_deprecation_banner(
+        &mut self,
+        session_id: SessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let already_present = self.rich_content_views.iter().any(|view| {
+            matches!(
+                view.metadata(),
+                Some(RichContentMetadata::SshTmuxDeprecationBanner { handle })
+                if handle.as_ref(ctx).session_id() == session_id
+            )
+        });
+        if already_present {
+            return;
+        }
+
+        // Clear the pending flag up front so the notice is shown at most once, even if the
+        // banner is dismissed without interaction or the session ends early.
+        WarpifySettings::handle(ctx).update(ctx, |settings, ctx| {
+            settings.mark_tmux_deprecation_notice_shown(ctx);
+        });
+
+        let banner = ctx.add_typed_action_view(|_| SshTmuxDeprecationBanner::new(session_id));
+
+        ctx.subscribe_to_view(&banner, move |me, _, event, ctx| match event {
+            SshTmuxDeprecationBannerEvent::Dismissed => {
+                me.remove_ssh_tmux_deprecation_banner(session_id, ctx);
+            }
+        });
+
+        self.insert_rich_content(
+            None,
+            banner.clone(),
+            Some(RichContentMetadata::SshTmuxDeprecationBanner { handle: banner }),
+            RichContentInsertionPosition::Append {
+                insert_below_long_running_block: true,
+            },
+            ctx,
+        );
+    }
+
+    /// Removes the tmux deprecation banner for the given session, if present.
+    fn remove_ssh_tmux_deprecation_banner(
+        &mut self,
+        session_id: SessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let mut view_ids_to_remove = Vec::new();
+        for rich_content in self.rich_content_views.iter() {
+            if let Some(RichContentMetadata::SshTmuxDeprecationBanner { handle }) =
+                rich_content.metadata()
+            {
+                if handle.as_ref(ctx).session_id() == session_id {
+                    view_ids_to_remove.push(rich_content.view_id());
+                }
+            }
+        }
+
+        if view_ids_to_remove.is_empty() {
+            return;
+        }
+
+        let mut model = self.model.lock();
+        for view_id in &view_ids_to_remove {
+            model.block_list_mut().remove_rich_content(*view_id);
+        }
+        drop(model);
+        self.rich_content_views
+            .retain(|rich_content| !view_ids_to_remove.contains(&rich_content.view_id()));
+        ctx.notify();
+    }
+
     /// Removes [`SshRemoteServerChoiceView`] with the given `session_id`, if present.
     fn remove_ssh_remote_server_choice_block(
         &mut self,
@@ -12437,6 +12981,11 @@ impl TerminalView {
         if !is_agent_supported(&notification.agent) {
             return;
         }
+
+        if notification.agent == CLIAgent::Codex && !FeatureFlag::CodexPlugin.is_enabled() {
+            return;
+        }
+
         if !self.register_cli_agent_listener_from_event(&notification, ctx) {
             return;
         }
@@ -12505,15 +13054,21 @@ impl TerminalView {
         agent: CLIAgent,
         ctx: &mut ViewContext<Self>,
     ) {
-        // No SessionStart event in this path (mid-session install/update).
-        // Assume the just-installed plugin meets the minimum version for this agent
-        // so the update chip doesn't flash before the user runs /reload-plugins.
         #[cfg(not(target_family = "wasm"))]
-        let plugin_version =
-            plugin_manager_for(agent).map(|m| m.minimum_plugin_version().to_owned());
+        let plugin_version = if matches!(agent, CLIAgent::Codex) {
+            // We use the lack of a plugin version for codex to differentiate between
+            // OSC 9 notification fallback and real plugin.
+            None
+        } else {
+            // No SessionStart event in this path (mid-session install/update).
+            // Assume the just-installed plugin meets the minimum version for this agent
+            // so the update chip doesn't flash before the user runs /reload-plugins.
+            plugin_manager_for(agent).map(|m| m.minimum_plugin_version().to_owned())
+        };
         #[cfg(target_family = "wasm")]
         let plugin_version = None;
         let notification = CLIAgentEvent {
+            source: CLIAgentEventSource::RichPlugin,
             v: 1,
             agent,
             event: CLIAgentEventType::SessionStart,
@@ -12621,6 +13176,15 @@ impl TerminalView {
             self.update_pane_configuration(ctx);
             ctx.notify();
         }
+        if event.terminal_view_id() == self.view_id
+            && matches!(
+                event,
+                CLIAgentSessionsModelEvent::Started { .. }
+                    | CLIAgentSessionsModelEvent::Ended { .. }
+            )
+        {
+            self.update_git_status_subscription(ctx);
+        }
 
         let CLIAgentSessionsModelEvent::StatusChanged {
             terminal_view_id,
@@ -12657,11 +13221,7 @@ impl TerminalView {
         {
             let should_auto_toggle_input = CLIAgentSessionsModel::as_ref(ctx)
                 .session(self.view_id)
-                .is_some_and(|s| {
-                    s.listener.is_some()
-                        && s.should_auto_toggle_input
-                        && agent_supports_rich_status(&s.agent)
-                });
+                .is_some_and(|s| s.supports_rich_status() && s.should_auto_toggle_input);
             if should_auto_toggle_input {
                 match status {
                     CLIAgentSessionStatus::Blocked { .. } => {
@@ -12770,18 +13330,16 @@ impl TerminalView {
 
         // If we were waiting to share this session once it was bootstrapped,
         // we can now attempt to share it.
-        let source_type_opt = match self.model.lock().shared_session_status() {
-            SharedSessionStatus::SharePendingPreBootstrap { source_type } => {
-                Some(source_type.clone())
-            }
+        let pending_share = match self.model.lock().shared_session_status() {
+            SharedSessionStatus::SharePendingPreBootstrap { source } => Some(source.clone()),
             _ => None,
         };
-        if let Some(source_type) = source_type_opt {
+        if let Some(source) = pending_share {
             log::info!("Terminal bootstrapped with pending shared session; attempting to share");
             self.attempt_to_share_session(
                 SharedSessionScrollbackType::All,
                 None,
-                source_type,
+                source,
                 false,
                 ctx,
             );
@@ -12828,17 +13386,29 @@ impl TerminalView {
         // If we were waiting for a successful warpification, it's come. Stop the timeout.
         self.warpify_state.abort_ssh_warpify_timeout();
 
+        let is_warpified_remote = matches!(
+            bootstrap_event.session_type,
+            BootstrapSessionType::WarpifiedRemote
+        );
         if bootstrap_event.subshell_info.is_some() {
             self.add_bootstrap_success_block(bootstrap_event, ctx);
+        }
+
+        // Show the one-time tmux deprecation notice when an SSH session successfully
+        // warpifies. The end-of-ssh-login path (`handle_detected_end_of_ssh_login`) only
+        // fires for sessions that stay unwarpified, since warpification replaces the
+        // original ssh block before login detection can confirm completion.
+        if is_warpified_remote && WarpifySettings::as_ref(ctx).should_show_tmux_deprecation_notice()
+        {
+            self.show_ssh_tmux_deprecation_banner(session_id, ctx);
         }
         self.any_session_contains_restored_remote_blocks = self.contains_restored_remote_blocks();
         self.any_session_contains_remote_blocks |= self.active_block_is_considered_remote(ctx);
         self.update_focused_terminal_info(ctx);
 
-        if let Some(working_directory) = self.pwd_if_local(ctx) {
+        if let Some(working_directory) = self.active_session_path_if_local(ctx) {
             CodebaseIndexManager::handle(ctx).update(ctx, |manager, _ctx| {
-                let path_buf = PathBuf::from(&working_directory);
-                manager.handle_session_bootstrapped(&path_buf);
+                manager.handle_session_bootstrapped(&working_directory);
             });
         }
 
@@ -13225,8 +13795,9 @@ impl TerminalView {
             self.maybe_set_pending_repo_init_path(path_buf);
         }
 
+        let escaped = self.shell_family(ctx).shell_escape(&path);
         self.input.update(ctx, |input, ctx| {
-            input.try_execute_command(format!("cd \"{path}\"").as_str(), ctx);
+            input.try_execute_command(&format!("cd {escaped}"), ctx);
         });
 
         self.toggle_left_panel_file_tree(true, ctx);
@@ -13278,11 +13849,10 @@ impl TerminalView {
         self.init_project(true, ctx);
     }
 
-    // Show or hide codebase index speedbump depending when a settings change happens.
+    /// Show or hide codebase index speedbump depending when a settings change happens.
     fn check_codebase_index_speedbump_on_settings_changed(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(working_directory) = self.pwd_if_local(ctx) {
-            let path_buf = PathBuf::from(&working_directory);
-            self.update_repo_banner_state(path_buf, ctx);
+        if let Some(working_directory) = self.active_session_path_if_local(ctx) {
+            self.update_repo_banner_state(working_directory, ctx);
         }
     }
 
@@ -13877,28 +14447,9 @@ impl TerminalView {
             .input_mode
             .value();
         let inverted = input_mode.is_inverted_blocklist();
-        let blocklist_selected_text =
-            self.model
-                .lock()
-                .selection_to_string(semantic_selection, inverted, ctx);
-        blocklist_selected_text.or_else(|| self.pending_user_query_selected_text(ctx))
-    }
-
-    /// Returns selected text from the pending user query block, if any.
-    fn pending_user_query_selected_text(&self, ctx: &AppContext) -> Option<String> {
-        let view_id = self.pending_user_query_view_id?;
-        self.rich_content_views
-            .iter()
-            .find_map(|rc| match rc.metadata() {
-                Some(RichContentMetadata::PendingUserQuery {
-                    pending_user_query_block_handle,
-                }) if pending_user_query_block_handle.id() == view_id => {
-                    pending_user_query_block_handle
-                        .as_ref(ctx)
-                        .selected_text(ctx)
-                }
-                _ => None,
-            })
+        self.model
+            .lock()
+            .selection_to_string(semantic_selection, inverted, ctx)
     }
 
     /// Gets the selected text from the terminal input editor, if any.
@@ -14238,7 +14789,11 @@ impl TerminalView {
                 OnboardingQuery::AgentPrompt(text) => {
                     input.replace_buffer_content(text, ctx);
                     // Force agent mode, overriding any shell lock
-                    input.ensure_agent_mode_for_ai_features(true, ctx);
+                    input.ensure_agent_mode_for_ai_features(
+                        true,
+                        Some(InputTypeAutoDetectionSource::OnboardingAgentPrompt),
+                        ctx,
+                    );
                 }
                 _ => {}
             }
@@ -14378,8 +14933,10 @@ impl TerminalView {
         shell_type: Option<ShellType>,
         ctx: &mut ViewContext<Self>,
     ) {
+        let session_id = crate::terminal::bootstrap::generate_session_id();
+        self.model.lock().register_session_id(session_id);
         self.clear_line_editor_and_write_to_pty(
-            init_subshell_command(shell_type, &self.env_vars, ctx).into_bytes(),
+            init_subshell_command(shell_type, &self.env_vars, session_id, ctx).into_bytes(),
             ctx,
         );
         self.write_to_pty(vec![escape_sequences::C0::CR], ctx);
@@ -15531,6 +16088,15 @@ impl TerminalView {
     /// size of the entire terminal (block_list + input OR alt-grid OR shared session viewer loading) as its
     /// argument.
     fn after_terminal_view_layout(&mut self, size: Vector2F, ctx: &mut ViewContext<Self>) {
+        // A pending `jump_to_latest_agent_message` enters the agent view, which
+        // mounts the target block over this layout. Now that layout is done the
+        // block exists, so scroll to it — once. Doing it here (after layout, after
+        // the agent view's own entry scroll) means a single shot lands without any
+        // retry loop. Each agent turn is one block, so this lands on its top.
+        if let Some(exchange_id) = self.pending_agent_scroll_target.take() {
+            self.scroll_to_exchange(exchange_id, ctx);
+        }
+
         let size_update = SizeUpdateBuilder::after_layout(*self.size_info, size).build(self, ctx);
         self.resize_internal(size_update, ctx);
 
@@ -15732,14 +16298,24 @@ impl TerminalView {
             let clipboard_content = ctx.clipboard().read();
 
             if is_cli_agent_paste && clipboard_content.has_image_data() {
-                // Windows Claude Code paste is `Alt+V` (ESC + 'v'); macOS/Linux is `Ctrl+V` (SYN).
-                let paste_bytes: Vec<u8> = if cfg!(windows) {
-                    vec![0x1b, b'v']
-                } else {
-                    vec![0x16]
-                };
-                self.write_user_bytes_to_pty(paste_bytes, ctx);
-                return;
+                if !cfg!(windows) {
+                    self.write_user_bytes_to_pty(vec![escape_sequences::C0::SYN], ctx);
+                    return;
+                }
+
+                // On Windows, Claude Code uses Alt+V for native image paste.
+                let is_claude = CLIAgentSessionsModel::as_ref(ctx)
+                    .session(self.view_id)
+                    .is_some_and(|s| s.agent == CLIAgent::Claude);
+                if is_claude {
+                    self.write_user_bytes_to_pty(vec![escape_sequences::C0::ESC, b'v'], ctx);
+                    return;
+                }
+
+                // For all other agents on Windows, fall through to the normal paste path. When
+                // bracketed paste is enabled (true for TUI-based CLI agents), the empty-text paste
+                // sends \x1b[200~\x1b[201~ to the PTY. The agent interprets this as a "paste
+                // happened" signal and reads the Windows clipboard directly for image data.
             }
 
             clipboard_content_with_escaped_paths(clipboard_content, shell_family, false)
@@ -15802,12 +16378,6 @@ impl TerminalView {
                 ctx.clipboard().write(ClipboardContent::plain_text(text));
                 return;
             }
-        }
-
-        if let Some(selected_text) = self.pending_user_query_selected_text(ctx) {
-            ctx.clipboard()
-                .write(ClipboardContent::plain_text(selected_text));
-            return;
         }
 
         let semantic_selection = SemanticSelection::as_ref(ctx);
@@ -17554,9 +18124,8 @@ impl TerminalView {
         let selection_settings = SelectionSettings::handle(ctx);
         let semantic_selection = SemanticSelection::as_ref(ctx);
         let model = self.model.lock();
-        let selected_text = model
-            .selection_to_string(semantic_selection, self.is_inverted_blocklist(ctx), ctx)
-            .or_else(|| self.pending_user_query_selected_text(ctx));
+        let selected_text =
+            model.selection_to_string(semantic_selection, self.is_inverted_blocklist(ctx), ctx);
         if let Some(selected) = selected_text {
             selection_settings.update(ctx, |selection_settings, ctx| {
                 selection_settings
@@ -18690,6 +19259,7 @@ impl TerminalView {
                     is_locked: true,
                 },
                 query.is_none(),
+                Some(InputTypeAutoDetectionSource::AskAi),
                 ctx,
             );
         });
@@ -18746,7 +19316,11 @@ impl TerminalView {
         }
 
         self.ai_input_model.update(ctx, |ai_input, ctx| {
-            ai_input.set_input_type(InputType::AI, ctx);
+            ai_input.set_input_type(
+                InputType::AI,
+                Some(InputTypeAutoDetectionSource::AskAi),
+                ctx,
+            );
         });
 
         if !context_block_indices.is_empty() {
@@ -18838,8 +19412,19 @@ impl TerminalView {
     }
 
     fn close_find_bar(&mut self, ctx: &mut ViewContext<Self>) {
-        self.find_model.update(ctx, |find_model, _ctx| {
+        self.find_model.update(ctx, |find_model, ctx| {
             find_model.set_is_find_bar_open(false);
+            // Notify rich-content child views (e.g. AI blocks) to repaint and
+            // drop their stale find highlights. Terminal grid highlights are
+            // gated at paint time on `is_find_bar_open()`, but AI blocks are
+            // separate child views that won't repaint on their own when the
+            // find bar closes.
+            //
+            // Uses `clear_rich_content_matches` (rich-content only) rather
+            // than the broader `clear_matches`: on the async-find path the
+            // latter drops `current_find_options`, breaking `open_find_bar`'s
+            // restore-previous-query path (it reads `active_find_options`).
+            find_model.clear_rich_content_matches(ctx);
         });
         ctx.notify();
     }
@@ -18974,12 +19559,14 @@ impl TerminalView {
             ctx.notify();
         });
 
-        // In Agent Mode, block selection is used to attach blocks as context. To allow users to
-        // submit queries quickly, we don't want to divert the focus away from the input box. With
-        // AgentView enabled, blocks can be attached as context in terminal mode too.
-        if !self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
-            && !FeatureFlag::AgentView.is_enabled()
-        {
+        // In AI input mode, block selection is used to attach blocks as context. To allow users to
+        // submit queries quickly, we don't want to divert the focus away from the input box.
+        //
+        // In shell mode, selecting a block should focus the terminal so blocklist navigation keeps
+        // working, unless the user has opted to preserve input focus on block selection.
+        let preserve_input_focus =
+            *BlockListSettings::as_ref(ctx).preserve_input_focus_on_block_selection;
+        if !self.ai_input_model.as_ref(ctx).is_ai_input_enabled() && !preserve_input_focus {
             self.focus_terminal(ctx);
         }
 
@@ -19260,18 +19847,6 @@ impl TerminalView {
                     }
                     env_var_collection_block_handle.update(ctx, |env_var_collection_block, ctx| {
                         env_var_collection_block.clear_selection(ctx);
-                    });
-                }
-                Some(RichContentMetadata::PendingUserQuery {
-                    pending_user_query_block_handle,
-                }) => {
-                    if exempt_rich_content_view_id
-                        .is_some_and(|view_id| pending_user_query_block_handle.id() == view_id)
-                    {
-                        continue;
-                    }
-                    pending_user_query_block_handle.update(ctx, |block, ctx| {
-                        block.clear_selection(ctx);
                     });
                 }
                 Some(RichContentMetadata::WarpifySuccessBlock { .. }) => {
@@ -19766,8 +20341,7 @@ impl TerminalView {
     }
 
     fn active_ai_block(&self, ctx: &AppContext) -> Option<&ViewHandle<AIBlock>> {
-        // Skip trailing non-AI items (usage footers, pending user query blocks)
-        // as they don't impact the conversation state.
+        // Skip trailing non-AI items (usage footers) as they don't impact the conversation state.
         let candidate = self
             .rich_content_views
             .iter()
@@ -19783,6 +20357,19 @@ impl TerminalView {
                 && !ai_block.is_passive_conversation(ctx))
             .then_some(&ai_metadata.ai_block_handle)
         })
+    }
+
+    /// Returns the finish reason of the most recent AI block belonging to
+    /// `conversation_id`, or `None` when the conversation has no AI blocks in
+    /// this view or its most recent block is still in flight.
+    fn finish_reason_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &AppContext,
+    ) -> Option<FinishReason> {
+        self.ai_block_metadata_for_current_thread(&conversation_id, ctx)
+            .next()
+            .and_then(|ai_metadata| ai_metadata.ai_block_handle.as_ref(ctx).finish_reason())
     }
 
     /// Check if there's an active (non-completed, non-cancelled) /init in progress
@@ -19923,6 +20510,17 @@ impl TerminalView {
     ///
     /// TODO: https://linear.app/warpdotdev/issue/CORE-277
     pub fn redetermine_global_focus(&mut self, ctx: &mut ViewContext<Self>) {
+        self.redetermine_global_focus_with_policy(SelectionFocusPolicy::HoldsFocus, ctx);
+    }
+
+    /// Like [`Self::redetermine_global_focus`], but with an explicit
+    /// [`SelectionFocusPolicy`] controlling whether existing block/text selections keep
+    /// the terminal focused.
+    fn redetermine_global_focus_with_policy(
+        &mut self,
+        selection_focus_policy: SelectionFocusPolicy,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if self.context_menu_state.is_some() {
             // This is a hack to avoid focusing on the terminal which
             // calls on_blur and closes the context menu when it is supposed
@@ -19972,11 +20570,20 @@ impl TerminalView {
             // Leave the input box focused when selecting blocks or text as context in AI input
             // mode so users can quickly submit queries.
             //
-            // In the new modality, block selection always represents context attachment and the
-            // input should remain focused.
+            // In shell mode, selected blocks/text should focus the terminal so blocklist
+            // navigation continues to work, unless the user has opted to preserve input focus.
+            let preserve_input_focus =
+                *BlockListSettings::as_ref(ctx).preserve_input_focus_on_block_selection;
+            let selection_holds_focus = match selection_focus_policy {
+                SelectionFocusPolicy::HoldsFocus => true,
+                SelectionFocusPolicy::HoldsFocusOnlyWhileSelecting => {
+                    self.is_selecting || self.mouse_down_block_index.is_some()
+                }
+            };
             let has_block_or_text_selection_in_shell_mode = is_shell_mode
-                && !FeatureFlag::AgentView.is_enabled()
-                && (are_blocks_selected || is_text_selected);
+                && !preserve_input_focus
+                && (are_blocks_selected || is_text_selected)
+                && selection_holds_focus;
 
             has_active_user_terminal_command || has_block_or_text_selection_in_shell_mode
         };
@@ -20209,9 +20816,8 @@ impl TerminalView {
             send_telemetry_from_ctx!(TelemetryEvent::ContextMenuCopySelectedText, ctx);
             let semantic_selection = SemanticSelection::as_ref(ctx);
             let model = self.model.lock();
-            let selected_text = model
-                .selection_to_string(semantic_selection, self.is_inverted_blocklist(ctx), ctx)
-                .or_else(|| self.pending_user_query_selected_text(ctx));
+            let selected_text =
+                model.selection_to_string(semantic_selection, self.is_inverted_blocklist(ctx), ctx);
             if let Some(selected_text) = selected_text {
                 ctx.clipboard()
                     .write(ClipboardContent::plain_text(selected_text));
@@ -20380,6 +20986,14 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if !FeatureFlag::HandoffCloudCloud.is_enabled() {
+            return false;
+        }
+        let blocks_cloud_followups = {
+            let model = self.model.lock();
+            self.blocks_cloud_followups_for_ambient_agent_session_from_model(&model, ctx)
+        };
+        if blocks_cloud_followups {
+            self.pending_cloud_followup_task_id = None;
             return false;
         }
         let Some(task_id) = self
@@ -20570,7 +21184,7 @@ impl TerminalView {
                 Some(id) => {
                     self.enter_agent_view_for_conversation(
                         initial_prompt.clone(),
-                        *origin,
+                        origin.clone(),
                         *id,
                         ctx,
                     );
@@ -20578,7 +21192,7 @@ impl TerminalView {
                 None => {
                     self.enter_agent_view_for_new_conversation(
                         initial_prompt.clone(),
-                        *origin,
+                        origin.clone(),
                         ctx,
                     );
                 }
@@ -20878,6 +21492,9 @@ impl TerminalView {
                     purchased_credits: *purchased_credits,
                 });
             }
+            InputEvent::AuthSecretDeleteConfirmationDialogToggled { is_open } => {
+                ctx.emit(Event::AuthSecretDeleteConfirmationDialogToggled { is_open: *is_open });
+            }
             InputEvent::ShowToast { message, flavor } => {
                 ctx.emit(Event::ShowToast {
                     message: message.clone(),
@@ -20901,10 +21518,13 @@ impl TerminalView {
                 self.open_share_session_modal(SharedSessionActionSource::FooterChip, ctx);
             }
             InputEvent::StartRemoteControl => {
+                let source = SharedSessionSource::user(
+                    self.active_conversation_task_id(ctx).map(|t| t.to_string()),
+                );
                 self.attempt_to_share_session(
                     SharedSessionScrollbackType::All,
                     Some(SharedSessionActionSource::FooterChip),
-                    SessionSourceType::default(),
+                    source,
                     true,
                     ctx,
                 );
@@ -21254,6 +21874,63 @@ impl TerminalView {
         }
     }
 
+    fn show_osc52_clipboard_blocked_banner(
+        &mut self,
+        blocked_type: Osc52ClipboardBlockedType,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.osc52_clipboard_banner_suppressed {
+            return;
+        }
+        // Dedup: if already showing the same type, do not re-show.
+        if self.osc52_clipboard_blocked_type == Some(blocked_type) {
+            return;
+        }
+        let text = match blocked_type {
+            Osc52ClipboardBlockedType::Write => {
+                "A terminal program tried to write to your clipboard. This is disabled by default for security reasons, to protect against malicious software."
+            }
+            Osc52ClipboardBlockedType::Read => {
+                "A terminal program tried to read your clipboard. This is disabled by default for security reasons, to protect against malicious software."
+            }
+        };
+        let button_label = match blocked_type {
+            Osc52ClipboardBlockedType::Write => "Allow clipboard writes",
+            Osc52ClipboardBlockedType::Read => "Allow clipboard reads and writes",
+        };
+        self.osc52_clipboard_blocked_banner
+            .update(ctx, |banner, ctx| {
+                banner.set_content(BannerTextContent::plain_text(text), ctx);
+                banner.set_action_button_label(0, button_label, ctx);
+            });
+        self.osc52_clipboard_blocked_type = Some(blocked_type);
+        ctx.notify();
+    }
+
+    fn handle_osc52_clipboard_banner_event(
+        &mut self,
+        event: &BannerEvent<TerminalAction>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            BannerEvent::Dismiss(DismissalType::Temporary) => {
+                self.osc52_clipboard_blocked_type = None;
+                ctx.notify();
+            }
+            BannerEvent::Dismiss(DismissalType::Permanent) => {
+                self.osc52_clipboard_blocked_type = None;
+                self.osc52_clipboard_banner_suppressed = true;
+                let _ = ctx
+                    .private_user_preferences()
+                    .write_value(OSC52_CLIPBOARD_BANNER_SUPPRESSED_KEY, "true".to_owned());
+                ctx.notify();
+            }
+            BannerEvent::Action(terminal_action) => {
+                self.handle_action(terminal_action, ctx);
+            }
+        }
+    }
+
     fn handle_incompatible_configuration_banner_event(
         &mut self,
         event: &BannerEvent<TerminalAction>,
@@ -21424,7 +22101,6 @@ impl TerminalView {
                 }
             }
         } else if self.is_long_running() {
-            self.on_ssh_warpification_key_event(None, ctx);
             let sequence =
                 EscCodes::build_escape_sequence(self.model.lock().deref(), &[EscCodes::ARROW_UP]);
             self.write_user_bytes_to_pty(sequence, ctx);
@@ -21487,6 +22163,79 @@ impl TerminalView {
             send_telemetry_from_ctx!(TelemetryEvent::JumpToBookmark, ctx);
             ctx.notify();
         }
+    }
+
+    fn jump_to_latest_agent_message(&mut self, ctx: &mut ViewContext<Self>) {
+        // Agent messages only render inside the agent view; in the terminal they
+        // collapse to a hidden, zero-height block. So "jump to latest agent
+        // message" makes sure we're in the agent view for the most recent
+        // conversation and then scrolls to its latest exchange.
+        if !FeatureFlag::AgentView.is_enabled() {
+            return;
+        }
+        // Follow actual agent activity. Prefer the active conversation — the one
+        // currently or most recently streaming, which tracks where the latest
+        // agent message landed even after the user switches back to an older
+        // conversation — and target its latest visible exchange. When there is no
+        // active conversation, fall back to the single most-recently-streamed
+        // exchange across all conversations (rather than the most-recently-
+        // *created* conversation) and enter the conversation that owns it.
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        let (conversation_id, exchange_id) =
+            if let Some(active_conversation_id) = history.active_conversation_id(self.id()) {
+                // Resolve the target exchange from the conversation model rather than
+                // from the currently-mounted blocks: when entering from the terminal
+                // the blocks mount over later frames, so the latest block may not
+                // exist yet this tick. Use the latest *visible* exchange so we land on
+                // a block that actually renders (skipping passive/hidden exchanges).
+                let Some(exchange_id) = history
+                    .conversation(&active_conversation_id)
+                    .and_then(|conversation| conversation.latest_visible_exchange())
+                    .map(|exchange| exchange.id)
+                else {
+                    return;
+                };
+                (active_conversation_id, exchange_id)
+            } else {
+                let Some(exchange_id) = history
+                    .latest_exchange_across_all_conversations(self.id())
+                    .map(|exchange| exchange.id)
+                else {
+                    return;
+                };
+                let Some(conversation_id) =
+                    history.conversation_id_for_exchange(exchange_id, self.id())
+                else {
+                    return;
+                };
+                (conversation_id, exchange_id)
+            };
+        // Only re-enter the agent view when we're not already in this
+        // conversation's view; re-entering when already there is needless churn.
+        let already_in_view = self
+            .agent_view_controller
+            .as_ref(ctx)
+            .agent_view_state()
+            .active_conversation_id()
+            == Some(conversation_id);
+        if already_in_view {
+            // Blocks are already mounted, so the exchange resolves immediately.
+            self.scroll_to_exchange(exchange_id, ctx);
+        } else {
+            self.enter_agent_view_for_conversation(
+                None,
+                AgentViewEntryOrigin::JumpToLatestAgentMessage,
+                conversation_id,
+                ctx,
+            );
+            // The target block doesn't exist on this frame — entering the agent view
+            // mounts it over the following layout. Record it and let
+            // `after_terminal_view_layout` scroll once the block is mounted, which
+            // also runs after the agent view's own entry scroll so it isn't
+            // overridden.
+            self.pending_agent_scroll_target = Some(exchange_id);
+        }
+        send_telemetry_from_ctx!(TelemetryEvent::JumpToLatestAgentMessage, ctx);
     }
 
     fn terminal_down(&mut self, ctx: &mut ViewContext<Self>) {
@@ -21723,6 +22472,30 @@ impl TerminalView {
         output: String,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<AIBlock> {
+        self.insert_dummy_ai_block_internal(query, Some(output), ctx)
+    }
+
+    /// Inserts a dummy AI block that is still streaming (unfinished), for tests
+    /// that need an in-flight block in the pane.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn insert_dummy_streaming_ai_block(
+        &mut self,
+        query: String,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<AIBlock> {
+        self.insert_dummy_ai_block_internal(query, None, ctx)
+    }
+
+    /// Shared body for the dummy AI block insertion helpers. Creates a fresh
+    /// conversation for the block; a `None` output models a block that is
+    /// still streaming (unfinished).
+    #[cfg(any(test, feature = "integration_tests"))]
+    fn insert_dummy_ai_block_internal(
+        &mut self,
+        query: String,
+        output: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<AIBlock> {
         use rand::distributions::{Alphanumeric, DistString};
 
         use crate::ai::agent::{
@@ -21746,7 +22519,7 @@ impl TerminalView {
             intended_agent: None,
         }];
 
-        let output = AIAgentOutput {
+        let output = output.map(|output| AIAgentOutput {
             messages: vec![AIAgentOutputMessage::text(
                 MessageId::new("fake-id".to_owned()),
                 AIAgentText {
@@ -21760,7 +22533,7 @@ impl TerminalView {
                 Alphanumeric.sample_string(&mut rand::thread_rng(), 24)
             ))),
             ..Default::default()
-        };
+        });
 
         // Create a real conversation in the history model for this dummy block so it renders.
         let terminal_view_id = ctx.view_id();
@@ -21774,7 +22547,10 @@ impl TerminalView {
         });
         let conversation_id = new_conversation_id.expect("conversation created for dummy AI block");
 
-        let ai_block_model = Rc::new(FakeAIBlockModel::new(inputs, output));
+        let ai_block_model = Rc::new(match output {
+            Some(output) => FakeAIBlockModel::new(inputs, output),
+            None => FakeAIBlockModel::new_streaming(inputs),
+        });
         let ai_block = ctx.add_typed_action_view(|ctx| {
             AIBlock::new(
                 ai_block_model,
@@ -21835,6 +22611,15 @@ impl TerminalView {
             .then_some(&self.environment_setup_mode_selector)
     }
 
+    pub fn auth_secret_delete_confirmation_dialog_element(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        self.input
+            .as_ref(ctx)
+            .auth_secret_delete_confirmation_dialog_element(ctx)
+    }
+
     pub fn summarization_cancel_dialog_handle(
         &self,
         ctx: &AppContext,
@@ -21862,10 +22647,15 @@ impl TerminalView {
             ctx,
         );
 
-        let context = self
-            .ai_context_model
+        let current_working_directory_location = self
+            .active_session
             .as_ref(ctx)
-            .pending_context(ctx, true /* is_user_query */);
+            .current_working_directory_location(ctx);
+        let context = self.ai_context_model.as_ref(ctx).pending_context(
+            ctx,
+            true, /* is_user_query */
+            current_working_directory_location.as_ref(),
+        );
 
         let code_review_input = AIAgentInput::CodeReview {
             context: context.into(),
@@ -21891,6 +22681,7 @@ impl TerminalView {
                         .with_input_type(InputType::AI)
                         .unlocked_if_autodetection_enabled(false, ctx),
                     true,
+                    Some(InputTypeAutoDetectionSource::InlineCodeReviewSend),
                     ctx,
                 );
             });
@@ -22035,6 +22826,11 @@ impl TerminalView {
                 if !is_rich_input_chip_in_cli_toolbar(ctx) {
                     self.close_cli_agent_rich_input(CLIAgentRichInputCloseReason::Other, ctx);
                 }
+                self.update_git_status_subscription(ctx);
+            }
+            SessionSettingsChangedEvent::AgentToolbarChipSelectionSetting { .. }
+            | SessionSettingsChangedEvent::GithubPrChipDefaultValidation { .. } => {
+                self.update_git_status_subscription(ctx);
             }
             _ => {}
         }
@@ -22192,10 +22988,10 @@ impl TerminalView {
                 SessionType::WarpifiedRemote { host_id } => host_id,
                 SessionType::Local => return None,
             }?;
-            let std_path = warp_util::standardized_path::StandardizedPath::try_new(cwd_str).ok()?;
-            Some(LocalOrRemotePath::Remote(
-                warp_util::remote_path::RemotePath::new(host_id, std_path),
-            ))
+            let std_path = StandardizedPath::try_new(cwd_str).ok()?;
+            Some(LocalOrRemotePath::Remote(RemotePath::new(
+                host_id, std_path,
+            )))
         }
     }
 
@@ -22634,13 +23430,6 @@ impl TerminalView {
             );
         }
 
-        for (banner_id, state) in &self.inline_banners_state.ssh_banners {
-            inline_banners.insert(
-                *banner_id,
-                render_inline_ssh_wrapper_banner(state, appearance),
-            );
-        }
-
         if let AliasExpansionBanner::Open { state } =
             &self.inline_banners_state.alias_expansion_banner
         {
@@ -22954,7 +23743,7 @@ impl TerminalView {
             .block_banner()
             .map(|banner| match banner {
                 WithinBlockBanner::WarpifyBanner(state) => {
-                    render_warpification_banner(state, appearance, app)
+                    render_warpification_banner(state, appearance)
                 }
             });
 
@@ -24127,23 +24916,6 @@ impl TerminalView {
         );
     }
 
-    fn ssh_banner_action(&self, action: SSHBannerAction, ctx: &mut ViewContext<Self>) {
-        use SSHBannerAction::*;
-
-        match action {
-            LearnMore => {
-                ctx.open_url("https://docs.warp.dev/terminal/warpify/ssh-legacy#implementation");
-            }
-            Settings => {
-                if FeatureFlag::SSHTmuxWrapper.is_enabled() {
-                    ctx.emit(Event::OpenSettings(SettingsSection::Warpify));
-                } else {
-                    ctx.emit(Event::OpenSettings(SettingsSection::Features));
-                }
-            }
-        }
-    }
-
     // Invokes the on_next_frame_drawn API to time from the provided block started at to the moment
     // the frame is drawn.
     // It doesn't matter when this method is called, as long as it's before the next frame is drawn.
@@ -24157,7 +24929,7 @@ impl TerminalView {
             .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
             .map(|session| {
                 let shell_name = session.shell().shell_type().name();
-                (session.is_legacy_ssh_session(), shell_name)
+                (session.is_ssh_wrapper_session(), shell_name)
             });
 
         if let Some((is_ssh, shell)) = session_info {
@@ -24618,7 +25390,7 @@ impl TerminalView {
             return;
         };
 
-        let sshed = self.model.lock().is_warpified_ssh() || session.is_legacy_ssh_session();
+        let sshed = session.is_ssh_wrapper_session();
         if sshed && !paths.is_empty() && FeatureFlag::SshDragAndDrop.is_enabled() {
             self.initiate_ssh_file_upload(paths, ctx);
         } else {
@@ -24696,86 +25468,6 @@ impl TerminalView {
             .and_then(|info| info.ssh_connection_info.clone())
     }
 
-    fn warpify_ssh_session(&mut self, ctx: &mut ViewContext<Self>) {
-        self.warpify_state.set_shell_detection_in_progress();
-        self.begin_ssh_warpify_timeout(SSH_WARPIFY_TIMEOUT_DURATION, ctx);
-        self.clear_line_editor_and_write_to_pty(
-            convert_script_to_one_line(&begin_warpify_ssh_session_command(ctx)).into_bytes(),
-            ctx,
-        );
-    }
-
-    fn continue_warpify_ssh_session(
-        &mut self,
-        uname: &str,
-        shell_type: ShellType,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.warpify_state.set_shell_type(&shell_type);
-        self.model.lock().set_pending_warp_initiated_control_mode();
-        if let Some(script) = warpify_ssh_session_command(uname, shell_type, ctx) {
-            self.clear_line_editor_and_write_to_pty_with_mac_workaround_hack(
-                convert_script_to_one_line(&script).into_bytes(),
-                ctx,
-            );
-        } else {
-            self.add_ssh_error_block(
-                WarpificationUnavailableReason::UnsupportedShell {
-                    shell_name: shell_type.name().to_string(),
-                },
-                ctx,
-            );
-        }
-    }
-
-    fn install_tmux_and_warpify(
-        &mut self,
-        ctx: &mut ViewContext<Self>,
-        install_method: &TmuxInstallMethod,
-    ) {
-        let install_with_root_method = install_method.should_use_package_manager;
-        let install_script = &install_method.script;
-        self.model
-            .lock()
-            .set_pending_warp_initiated_control_mode_with_install_tmux(install_with_root_method);
-        self.clear_line_editor_and_write_to_pty(
-            convert_script_to_one_line(install_script).into_bytes(),
-            ctx,
-        );
-    }
-
-    fn begin_ssh_warpify_timeout(&mut self, duration: Duration, ctx: &mut ViewContext<Self>) {
-        let timeout_id = self.warpify_state.replace_timeout_id();
-        let active_block_id = self.model.lock().block_list().active_block_id().clone();
-        let system_details = self
-            .warpify_state
-            .ssh_block_state()
-            .and_then(|s| s.get_system_details(ctx))
-            .to_owned();
-        self.warpify_state.add_ssh_warpify_timeout_handle(ctx.spawn(
-            async move {
-                Timer::after(duration).await;
-                (timeout_id, active_block_id, system_details)
-            },
-            |terminal_view, (timeout_id, active_block_id, system_details), ctx| {
-                let is_shell_detection =
-                    terminal_view.warpify_state.is_shell_detection_in_progress();
-                if timeout_id == terminal_view.warpify_state.timeout_id()
-                    && terminal_view.model.lock().block_list().active_block_id() == &active_block_id
-                {
-                    terminal_view.add_ssh_error_block(
-                        WarpificationUnavailableReason::Timeout {
-                            is_tmux_install: false,
-                            is_shell_detection,
-                            system_details,
-                        },
-                        ctx,
-                    );
-                }
-            },
-        ));
-    }
-
     fn handle_detected_end_of_ssh_login(
         &mut self,
         check_type: &SshLoginStatus,
@@ -24805,41 +25497,14 @@ impl TerminalView {
                 );
             }
             SshLoginStatus::ReadyToWarpify => {
-                // After the confirmation check, we are confident enough to auto-warpify or offer warpification.
-                let Some(command) = &self.warpify_state.get_pending_ssh_command() else {
-                    return;
-                };
-                let ssh_host = &self.warpify_state.get_pending_ssh_host();
-
-                let shell_family = self.shell_family(ctx);
-                let warpify_settings = WarpifySettings::as_ref(ctx);
-
-                let ssh_interactive_session_event = evaluate_warpify_ssh_host(
-                    command,
-                    ssh_host.as_deref(),
-                    shell_family,
-                    warpify_settings,
-                );
-
-                if let SshInteractiveSessionDetected::ShouldPromptWarpification {
-                    ref host,
-                    ref command,
-                } = ssh_interactive_session_event
-                {
-                    if FeatureFlag::WarpifyFooter.is_enabled() {
-                        self.show_warpify_footer(
-                            WarpificationMode::ssh(command.clone(), host.to_owned()),
-                            ctx,
-                        );
-                    } else {
-                        self.add_ssh_warpify_prompt(command, host.to_owned(), ctx)
+                // The tmux-based SSH warpification flow has been removed in favor of the
+                // remote-server SSH extension. If this user had previously opted into the tmux
+                // wrapper, show them a one-time deprecation notice on their next SSH session.
+                if WarpifySettings::as_ref(ctx).should_show_tmux_deprecation_notice() {
+                    if let Some(session_id) = self.active_block_session_id() {
+                        self.show_ssh_tmux_deprecation_banner(session_id, ctx);
                     }
                 }
-
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::SshInteractiveSessionDetected(ssh_interactive_session_event),
-                    ctx
-                );
             }
         }
     }
@@ -24872,8 +25537,8 @@ impl TerminalView {
         self.shell_indicator_type
     }
 
-    /// Shows the warpify footer for a detected subshell/SSH command.
-    fn show_warpify_footer(&mut self, mode: WarpificationMode, ctx: &mut ViewContext<Self>) {
+    /// Shows the warpify footer for a detected subshell command.
+    fn show_warpify_footer(&mut self, ctx: &mut ViewContext<Self>) {
         let model = self.model.lock();
 
         // Shared session viewers can't initiate warpification currently.
@@ -24885,13 +25550,12 @@ impl TerminalView {
         }
         drop(model);
 
-        let is_ssh = mode.is_ssh();
         self.use_agent_footer.update(ctx, |footer, ctx| {
-            footer.set_warpify_mode(mode, ctx);
+            footer.show_warpify(ctx);
         });
         self.maybe_show_use_agent_footer_in_blocklist(ctx);
 
-        send_telemetry_from_ctx!(TelemetryEvent::WarpifyFooterShown { is_ssh }, ctx);
+        send_telemetry_from_ctx!(TelemetryEvent::WarpifyFooterShown { is_ssh: false }, ctx);
     }
 
     fn show_initialization_block(&mut self) {
@@ -24934,16 +25598,17 @@ impl TerminalView {
     fn start_lsp_server_in_active_pwd(&self, ctx: &mut ViewContext<Self>) {
         use crate::ai::persisted_workspace::LspTask;
 
-        let Some(cwd) = self
-            .pwd_if_local(ctx)
-            .map(PathBuf::from)
-            .and_then(|p| p.canonicalize().ok())
-        else {
+        let Some(cwd) = self.canonical_session_pwd_if_local(ctx) else {
             return;
         };
 
         PersistedWorkspace::handle(ctx).update(ctx, |workspace, ctx| {
-            workspace.execute_lsp_task(LspTask::Spawn { file_path: cwd }, ctx);
+            workspace.execute_lsp_task(
+                LspTask::Spawn {
+                    file_path: cwd.into(),
+                },
+                ctx,
+            );
         });
     }
 
@@ -25003,6 +25668,7 @@ impl TypedActionView for TerminalView {
             | SelectNextBlock
             | SelectBookmarkUp
             | SelectBookmarkDown
+            | JumpToLatestAgentMessage
             | Up
             | Down
             | JumpToBookmark(_)
@@ -25184,9 +25850,6 @@ impl TypedActionView for TerminalView {
             | OnboardingFlow(_)
             | ImportSettings
             | DragAndDropFiles(_)
-            | WarpifySSHSession
-            | ShowWarpifySshBanner(_, _)
-            | NotifySshErrorBlock(_)
             | ToggleBlockFilterOnSelectedOrLastBlock(_)
             | SetMarkedText { .. }
             | ResumeConversation
@@ -25241,7 +25904,6 @@ impl TypedActionView for TerminalView {
             | InputContextMenuItem(_)
             | NotificationsDiscoveryBanner(_)
             | NotificationsErrorBanner(_)
-            | LegacySSHBanner(_)
             | OpenWorkflowModal
             | OpenWorkflowModalForAIWorkflow(_)
             | OpenWorkflowModalForBlock(_)
@@ -25266,6 +25928,7 @@ impl TypedActionView for TerminalView {
             | GenerateCodebaseIndex
             | LoadAgentModeConversation
             | DeleteAttachment { .. }
+            | OpenAttachmentLightbox { .. }
             | WriteCodebaseIndex
             | ToggleAutoexecuteMode
             | ToggleQueueNextPrompt
@@ -25297,7 +25960,7 @@ impl TypedActionView for TerminalView {
             | OpenConversationsPalette
             | ExitAgentView
             | EnterCloudAgentView
-            | StartNewAgentConversation
+            | StartNewAgentConversation { .. }
             | ToggleConversationDetailsPanel
             | CancelAmbientAgentTask
             | OpenInlineHistoryMenu
@@ -25313,8 +25976,11 @@ impl TypedActionView for TerminalView {
             | OpenChildAgentInNewTab { .. }
             | StopAgentConversation { .. }
             | KillAgentConversation { .. }
+            | CyclePreviousOrchestrationChildAgent
+            | CycleNextOrchestrationChildAgent
             | ToggleCLIAgentRichInput
-            | ToggleSessionRecording => Empty,
+            | ToggleSessionRecording
+            | Osc52AllowBlockedClipboardOperation => Empty,
         }
     }
 
@@ -25523,6 +26189,7 @@ impl TypedActionView for TerminalView {
                 InputMode::PinnedToBottom | InputMode::Waterfall => self.bookmark_down(ctx),
                 InputMode::PinnedToTop => self.bookmark_up(ctx),
             },
+            JumpToLatestAgentMessage => self.jump_to_latest_agent_message(ctx),
             BookmarkSelectedBlock => self.bookmark_selected_block(ctx),
             UserInputSequence(bytes) => self.user_input_sequence(bytes, ctx),
             ControlSequence(bytes) => self.control_sequence_on_terminal(bytes, ctx),
@@ -25586,7 +26253,6 @@ impl TypedActionView for TerminalView {
             NotificationsDiscoveryBanner(action) => {
                 self.notifications_discovery_banner_action(*action, ctx)
             }
-            LegacySSHBanner(action) => self.ssh_banner_action(*action, ctx),
             JumpToBookmark(index) => self.jump_to_bookmark(*index, ctx),
             InsertCommandCorrection { correction } => {
                 self.insert_command_correction(correction, ctx);
@@ -25668,7 +26334,7 @@ impl TypedActionView for TerminalView {
                 let warpify_keybinding =
                     keybinding_name_to_keystroke("terminal:warpify_subshell", ctx);
                 self.show_warpify_banner(
-                    WarpificationMode::subshell(command.to_owned()),
+                    command.to_owned(),
                     "Subshell",
                     "subshell",
                     warpify_keybinding,
@@ -25676,23 +26342,9 @@ impl TypedActionView for TerminalView {
                     ctx,
                 );
             }
-            ShowWarpifySshBanner(command, host) => {
-                let warpify_keybinding =
-                    keybinding_name_to_keystroke("terminal:warpify_ssh_session", ctx);
-                self.show_warpify_banner(
-                    WarpificationMode::ssh(command.to_string(), host.to_owned()),
-                    "SSH Session",
-                    "SSH session",
-                    warpify_keybinding,
-                    TelemetryEvent::SshTmuxWarpifyBannerDisplayed,
-                    ctx,
-                );
-            }
             DismissWarpifyBanner(remember) => {
                 self.dismiss_warpify_banner(remember, ctx);
-                if remember.is_ssh() {
-                    send_telemetry_from_ctx!(TelemetryEvent::SshTmuxWarpifyBlockDismissed, ctx);
-                } else {
+                if !remember.is_ssh() {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::DeclineSubshellBootstrap {
                             remember: remember.as_bool()
@@ -25770,17 +26422,6 @@ impl TypedActionView for TerminalView {
             }
             DragAndDropFiles(paths) => {
                 self.drag_and_drop_files(paths, ctx);
-            }
-            WarpifySSHSession => self.add_ssh_warpifying_block(ctx),
-            NotifySshErrorBlock(action) => {
-                if let Some(SshBlockState::Error {
-                    handle: ssh_error_block_handle,
-                }) = self.warpify_state.ssh_block_state()
-                {
-                    ssh_error_block_handle.update(ctx, |error_block, ctx| {
-                        error_block.handle_action(action, ctx);
-                    });
-                }
             }
             SetInputModeAgent => {
                 // Guard: when a CLI agent session is active, block mode
@@ -25912,7 +26553,7 @@ impl TypedActionView for TerminalView {
                 else {
                     return;
                 };
-                let sshed = self.model.lock().is_warpified_ssh() || session.is_legacy_ssh_session();
+                let sshed = session.is_ssh_wrapper_session();
                 if sshed && !self.is_file_drop_target {
                     self.is_file_drop_target = true;
                     ctx.notify();
@@ -25962,10 +26603,80 @@ impl TypedActionView for TerminalView {
                     context_model.remove_pending_attachment(*index, ctx);
                 });
             }
+            OpenAttachmentLightbox { index } => {
+                let pending_images = self
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .pending_attachments()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(attachment_index, attachment)| match attachment {
+                        PendingAttachment::Image(image) => Some((attachment_index, image.clone())),
+                        PendingAttachment::File(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                let mut images = Vec::new();
+                let mut initial_index = None;
+                for (attachment_index, image) in pending_images {
+                    let image_bytes =
+                        match base64::engine::general_purpose::STANDARD.decode(&image.data) {
+                            Ok(image_bytes) => image_bytes,
+                            Err(error) => {
+                                log::warn!(
+                                "Failed to decode pending image attachment for lightbox: {error}"
+                            );
+                                continue;
+                            }
+                        };
+
+                    let asset_id = format!("pending-attachment-lightbox-{attachment_index}");
+                    AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
+                        asset_cache.insert_raw_asset_bytes::<ImageType>(
+                            asset_id.clone(),
+                            &image_bytes,
+                            ctx,
+                        );
+                    });
+
+                    if attachment_index == *index {
+                        initial_index = Some(images.len());
+                    }
+                    images.push(ui_components::lightbox::LightboxImage {
+                        source: ui_components::lightbox::LightboxImageSource::Resolved {
+                            asset_source: warpui::assets::asset_cache::AssetSource::Raw {
+                                id: asset_id,
+                            },
+                        },
+                        description: Some(image.file_name.clone()),
+                    });
+                }
+
+                let Some(initial_index) = initial_index else {
+                    return;
+                };
+
+                ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
+                    images,
+                    initial_index,
+                });
+            }
             WriteCodebaseIndex => {
                 self.write_codebase_index(ctx);
             }
             ToggleAutoexecuteMode => {
+                // Cloud (ambient) agent conversations run with fast-forward conceptually
+                // always on, so toggling it from the chip or keybinding is a no-op there.
+                let is_locked = {
+                    let terminal_model = self.model.lock();
+                    is_in_cloud_context(
+                        terminal_model.block_list().agent_view_state(),
+                        &terminal_model,
+                    )
+                };
+                if is_locked {
+                    return;
+                }
+
                 // If there's a pending (blocked) requested code diff, accept it first.
                 if let Some(ai_block) = self.last_ai_block() {
                     ai_block.update(ctx, |ai_block, ctx| {
@@ -25979,8 +26690,13 @@ impl TypedActionView for TerminalView {
                 ctx.notify();
             }
             ToggleQueueNextPrompt => {
-                self.ai_context_model.update(ctx, |context_model, ctx| {
-                    context_model.toggle_queue_next_prompt(ctx);
+                let Some(conversation_id) =
+                    BlocklistAIHistoryModel::as_ref(ctx).active_conversation_id(self.view_id)
+                else {
+                    return;
+                };
+                QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.toggle_queue_next_prompt(conversation_id, ctx);
                 });
                 ctx.notify();
             }
@@ -26037,6 +26753,7 @@ impl TypedActionView for TerminalView {
                             summarize_after_fork: false,
                             summarization_prompt: None,
                             initial_prompt: None,
+                            initial_attachments: vec![],
                             destination: ForkedConversationDestination::SplitPane,
                         });
                     }
@@ -26158,7 +26875,9 @@ impl TypedActionView for TerminalView {
                     warp_md_path.push(WARP_MD_PATH);
                     #[cfg(feature = "local_fs")]
                     ctx.emit(Event::OpenCodeInWarp {
-                        source: CodeSource::ProjectRules { path: warp_md_path },
+                        source: CodeSource::ProjectRules {
+                            location: LocalOrRemotePath::Local(warp_md_path),
+                        },
                         layout: *crate::util::file::external_editor::EditorSettings::as_ref(ctx)
                             .open_file_layout
                             .value(),
@@ -26194,8 +26913,8 @@ impl TypedActionView for TerminalView {
                             ctx.emit(Event::OpenCodeInWarp {
                                 source: CodeSource::Skill {
                                     reference: skill_reference.clone(),
-                                    path: path.clone(),
-                                    origin: SkillOpenOrigin::OpenSkillCommand,
+                                    location: path.clone(),
+                                    origin: crate::ai::skills::SkillOpenOrigin::OpenSkillCommand,
                                 },
                                 layout:
                                     *crate::util::file::external_editor::EditorSettings::as_ref(ctx)
@@ -26304,9 +27023,14 @@ impl TypedActionView for TerminalView {
                 let initial_prompt = (!draft_text.trim().is_empty()).then_some(draft_text);
                 self.enter_cloud_agent_view(initial_prompt, ctx);
             }
-            StartNewAgentConversation => {
+            StartNewAgentConversation { origin } => {
                 self.input.update(ctx, |input, ctx| {
-                    input.handle_action(&InputAction::StartNewAgentConversation, ctx);
+                    input.handle_action(
+                        &InputAction::StartNewAgentConversation {
+                            origin: origin.clone(),
+                        },
+                        ctx,
+                    );
                 });
             }
             OpenInlineHistoryMenu => {
@@ -26383,6 +27107,22 @@ impl TypedActionView for TerminalView {
                     conversation_id: *conversation_id,
                 });
             }
+            CyclePreviousOrchestrationChildAgent | CycleNextOrchestrationChildAgent => {
+                let direction = match action {
+                    CyclePreviousOrchestrationChildAgent => {
+                        OrchestrationNavigationDirection::Previous
+                    }
+                    CycleNextOrchestrationChildAgent => OrchestrationNavigationDirection::Next,
+                    _ => unreachable!("matched orchestration cycle action"),
+                };
+                if let Some(conversation_id) = self
+                    .agent_view_controller
+                    .as_ref(ctx)
+                    .adjacent_orchestration_conversation_id(direction, ctx)
+                {
+                    ctx.emit(Event::RevealChildAgent { conversation_id });
+                }
+            }
             ToggleSessionRecording => {
                 self.pty_recorder.update(ctx, |recorder, ctx| {
                     recorder.toggle_recording(ctx);
@@ -26393,6 +27133,22 @@ impl TypedActionView for TerminalView {
                     self.close_cli_agent_rich_input_and_disable_auto_toggle(ctx);
                 } else {
                     self.open_cli_agent_rich_input(CLIAgentInputEntrypoint::CtrlG, ctx);
+                }
+            }
+            Osc52AllowBlockedClipboardOperation => {
+                use crate::terminal::settings::Osc52ClipboardAccess;
+                if let Some(blocked_type) = self.osc52_clipboard_blocked_type {
+                    let new_value = match blocked_type {
+                        Osc52ClipboardBlockedType::Write => Osc52ClipboardAccess::WriteOnly,
+                        Osc52ClipboardBlockedType::Read => Osc52ClipboardAccess::ReadWrite,
+                    };
+                    TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
+                        let _ = terminal_settings
+                            .osc52_clipboard_access
+                            .set_value(new_value, ctx);
+                    });
+                    self.osc52_clipboard_blocked_type = None;
+                    ctx.notify();
                 }
             }
         }
@@ -26465,10 +27221,11 @@ impl View for TerminalView {
                         .with_constrain_absolute_children()
                         .with_child(column.finish())
                 } else {
-                    let output_area = if (model.shared_session_status().is_view_pending()
-                        && !self.is_ambient_agent_session(app))
-                        || model.is_loading_conversation_transcript()
-                    {
+                    let is_view_pending_clause = model.shared_session_status().is_view_pending()
+                        && !self.is_ambient_agent_session(app);
+                    let is_loading_transcript = model.is_loading_conversation_transcript();
+                    let should_show_loading = is_view_pending_clause || is_loading_transcript;
+                    let output_area = if should_show_loading {
                         self.render_viewer_loading(app)
                     } else if is_alt_screen_active {
                         did_wrap_terminal_size = true;
@@ -26756,6 +27513,8 @@ impl View for TerminalView {
                 stack.add_child(ChildView::new(&self.incompatible_configuration_banner).finish());
             } else if self.is_emacs_bindings_banner_open {
                 stack.add_child(ChildView::new(&self.emacs_bindings_banner).finish());
+            } else if self.osc52_clipboard_blocked_type.is_some() {
+                stack.add_child(ChildView::new(&self.osc52_clipboard_blocked_banner).finish());
             }
         }
 
@@ -27050,28 +27809,16 @@ impl View for TerminalView {
             context.set.insert(init::ROOT_CLOUD_MODE_PANE_KEY);
         }
 
-        if let Some(WithinBlockBanner::WarpifyBanner(state)) =
+        if let Some(WithinBlockBanner::WarpifyBanner(_)) =
             model_lock.block_list().active_block().block_banner()
         {
-            if state.is_ssh() {
-                context.set.insert("SshWarpificationBanner");
-            } else {
-                context.set.insert("SubshellBanner");
-            }
+            context.set.insert("SubshellBanner");
         }
 
         // Also set the warpify context when the footer (flag-gated replacement
         // for the in-block banner) is active, so the ctrl-i keybinding works.
-        if let Some(warpify_mode) = self.use_agent_footer.as_ref(app).warpify_mode(app) {
-            if warpify_mode.is_ssh() {
-                context.set.insert("SshWarpificationBanner");
-            } else {
-                context.set.insert("SubshellBanner");
-            }
-        }
-
-        if let Some(SshBlockState::Error { .. }) = self.warpify_state.ssh_block_state() {
-            context.set.insert(SSH_ERROR_BLOCK_VISIBLE_KEY);
+        if self.use_agent_footer.as_ref(app).is_warpify_active(app) {
+            context.set.insert("SubshellBanner");
         }
 
         if self

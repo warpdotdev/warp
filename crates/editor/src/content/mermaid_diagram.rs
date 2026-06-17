@@ -2,13 +2,12 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use bytes::Bytes;
-use mermaid_to_svg::MermaidTheme;
-use warpui::assets::asset_cache::{
+use warpui_core::assets::asset_cache::{
     AssetCache, AssetSource, AssetState, AsyncAssetId, AsyncAssetType,
 };
-use warpui::image_cache::ImageType;
-use warpui::units::{IntoPixels, Pixels};
-use warpui::{AppContext, SingletonEntity};
+use warpui_core::image_cache::ImageType;
+use warpui_core::units::{IntoPixels, Pixels};
+use warpui_core::{AppContext, SingletonEntity};
 
 use crate::render::layout::TextLayout;
 use crate::render::model::{BlockSpacing, ImageBlockConfig};
@@ -24,7 +23,7 @@ pub fn mermaid_asset_source(source: &str) -> AssetSource {
     let source = source.to_string();
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
-    let id = format!("light:{:x}", hasher.finish());
+    let id = format!("configured:{:x}", hasher.finish());
     let fetch_source = source.clone();
 
     AssetSource::Async {
@@ -32,7 +31,7 @@ pub fn mermaid_asset_source(source: &str) -> AssetSource {
         fetch: Arc::new(move || {
             let source = fetch_source.clone();
             Box::pin(async move {
-                mermaid_to_svg::render_mermaid_to_svg(&source, Some(&MermaidTheme::light()))
+                mermaid_to_svg::render_mermaid_to_svg(&source, None)
                     .map(|svg| Bytes::from(svg.into_bytes()))
                     .map_err(Into::into)
             })

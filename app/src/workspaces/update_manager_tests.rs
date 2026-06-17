@@ -1,4 +1,5 @@
 use chrono::Utc;
+use cloud_object_client::MockObjectClient;
 use itertools::Itertools;
 use warpui::{AddSingletonModel, App};
 
@@ -9,7 +10,6 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions, ServerWorkflow};
 use crate::server::cloud_objects::update_manager::InitialLoadResponse;
 use crate::server::ids::SyncId;
-use crate::server::server_api::object::MockObjectClient;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::{MockWorkspaceClient, WorkspaceClient};
 use crate::server::sync_queue::SyncQueue;
@@ -55,10 +55,10 @@ fn mock_workflow(id: WorkflowId, owner: Owner) -> CloudWorkflow {
 }
 
 fn mock_server_workflow(id: WorkflowId, owner: Owner) -> ServerWorkflow {
-    ServerWorkflow {
-        id: SyncId::ServerId(id.into()),
-        model: CloudWorkflowModel::new(Workflow::new("Test Workflow", "echo hello")),
-        metadata: ServerMetadata {
+    ServerWorkflow::new(
+        SyncId::ServerId(id.into()),
+        CloudWorkflowModel::new(Workflow::new("Test Workflow", "echo hello")),
+        ServerMetadata {
             uid: id.into(),
             revision: Revision::now(),
             metadata_last_updated_ts: Utc::now().into(),
@@ -69,13 +69,13 @@ fn mock_server_workflow(id: WorkflowId, owner: Owner) -> ServerWorkflow {
             last_editor_uid: None,
             current_editor_uid: None,
         },
-        permissions: ServerPermissions {
+        ServerPermissions {
             space: owner,
             permissions_last_updated_ts: Utc::now().into(),
             anyone_link_sharing: None,
             guests: vec![],
         },
-    }
+    )
 }
 
 #[test]

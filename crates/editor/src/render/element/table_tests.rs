@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use pathfinder_color::ColorU;
 use string_offset::CharOffset;
-use warpui::elements::{Axis, scroll_delta_for_pointer_movement};
-use warpui::fonts::FamilyId;
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::vec2f;
-use warpui::text_layout::TextFrame;
-use warpui::units::{IntoPixels, Pixels};
+use warpui_core::elements::{Axis, scroll_delta_for_pointer_movement};
+use warpui_core::fonts::FamilyId;
+use warpui_core::geometry::rect::RectF;
+use warpui_core::geometry::vector::vec2f;
+use warpui_core::text_layout::TextFrame;
+use warpui_core::units::{IntoPixels, Pixels};
 
 use crate::content::text::{FormattedTable, table_cell_offset_maps};
 use crate::render::element::table::{
@@ -211,7 +211,7 @@ fn cells_in_range_entire_table() {
 }
 
 fn single_line_cell_layout(char_count: usize, line_height: f32, line_width: f32) -> CellLayout {
-    use warpui::text_layout::CaretPosition;
+    use warpui_core::text_layout::CaretPosition;
     let mut carets = Vec::with_capacity(char_count);
     let char_width = if char_count > 0 {
         line_width / char_count as f32

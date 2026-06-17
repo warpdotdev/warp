@@ -19,6 +19,7 @@ mod pane_restoration;
 #[cfg(target_os = "macos")]
 mod preview_config_migration;
 mod remote_server;
+mod rich_input_ctrl_enter;
 mod rules;
 mod secrets;
 mod session_restoration;
@@ -63,6 +64,7 @@ use pathfinder_geometry::vector::Vector2F;
 #[cfg(target_os = "macos")]
 pub use preview_config_migration::*;
 pub use remote_server::*;
+pub use rich_input_ctrl_enter::*;
 pub use rules::*;
 use rust_embed::RustEmbed;
 pub use secrets::*;
@@ -175,14 +177,14 @@ use warp::workspace::{
     Workspace, WorkspaceAction, NEW_SESSION_MENU_BUTTON_POSITION_ID, NEW_TAB_BUTTON_POSITION_ID,
 };
 use warp::{cmd_or_ctrl_shift, AgentModeEntrypoint};
-use warpui::event::KeyState;
-use warpui::integration::{AssertionOutcome, StepData, TestStep};
-use warpui::keymap::{Keystroke, PerPlatformKeystroke, Trigger};
-use warpui::platform::keyboard::KeyCode;
-use warpui::platform::{OperatingSystem, TerminationMode};
-use warpui::units::Lines;
-use warpui::windowing::WindowManager;
-use warpui::{
+use warpui_core::event::KeyState;
+use warpui_core::integration::{AssertionOutcome, StepData, TestStep};
+use warpui_core::keymap::{Keystroke, PerPlatformKeystroke, Trigger};
+use warpui_core::platform::keyboard::KeyCode;
+use warpui_core::platform::{OperatingSystem, TerminationMode};
+use warpui_core::units::Lines;
+use warpui_core::windowing::WindowManager;
+use warpui_core::{
     async_assert, async_assert_eq, AssetProvider, Event, SingletonEntity, UpdateView, ViewHandle,
 };
 pub use websockets::*;
@@ -1879,8 +1881,8 @@ pub fn test_change_font_size() -> Builder {
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(
-            new_step_with_default_assertions("Press ctrl-shift-> and verify font size increases")
-                .with_keystrokes(&["ctrl-shift->"])
+            new_step_with_default_assertions("Press alt-shift-> and verify font size increases")
+                .with_keystrokes(&["alt-shift->"])
                 .add_assertion(|app, window_id| {
                     let input_view = single_input_view_for_tab(app, window_id, 0);
                     input_view.read(app, |view, _ctx| {
@@ -1901,8 +1903,8 @@ pub fn test_change_font_size() -> Builder {
                 }),
         )
         .with_step(
-            new_step_with_default_assertions("Press ctrl-shift-< and verify font size decreases")
-                .with_keystrokes(&["ctrl-shift-<"])
+            new_step_with_default_assertions("Press alt-shift-< and verify font size decreases")
+                .with_keystrokes(&["alt-shift-<"])
                 .add_assertion(|app, window_id| {
                     let input_view = single_input_view_for_tab(app, window_id, 0);
                     input_view.read(app, |view, _ctx| {
@@ -3333,7 +3335,7 @@ pub fn test_custom_ps1_expansion_bash() -> Builder {
         )
 }
 
-/// Default auto title. We test that Warp's auto title is used and verify that that
+/// Default auto title. We test that Warp's auto title is used and verify that
 /// DISABLE_AUTO_TITLE is set correctly.
 pub fn test_auto_title() -> Builder {
     new_builder()
@@ -3457,6 +3459,72 @@ precmd_functions+=(set_title)
             "Assert the user's tab title used",
             "TEST_TAB_TITLE".to_string(),
         ))
+}
+
+/// Checks that an OSC 7 escape sequence (`\e]7;file://host/path\a`) emitted by
+/// the running command updates the block's current working directory mid-command
+/// without waiting for the next prompt. This lets external tools that change
+/// directory (for example `wt switch` from worktrunk) keep Warp's per-block CWD
+/// in sync with the shell. See issue #9125.
+pub fn test_osc7_updates_current_working_directory() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            let (starter, _) = current_shell_starter_and_version();
+            matches!(
+                starter.shell_type(),
+                shell::ShellType::Bash | shell::ShellType::Zsh
+            )
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0, /*tab_idx*/
+            // OSC 7 is only honored when the host portion matches the local
+            // hostname; substitute it dynamically so the test works on any
+            // machine.
+            r#"mkdir -p /tmp/osc7-test && cd /tmp/osc7-test && printf "\033]7;file://$(hostname)/tmp/osc7-test\a""#.to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(
+            new_step_with_default_assertions("Assert OSC 7 updated the previous block's pwd")
+                .add_assertion(|app, window_id| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.read(app, |view, _ctx| {
+                        let model = view.model.lock();
+                        let last_finished_pwd = model
+                            .block_list()
+                            .blocks()
+                            .iter()
+                            .rev()
+                            .find(|block| block.finished() && !block.is_background())
+                            .and_then(|block| block.pwd().cloned());
+                        async_assert_eq!(
+                            Some("/tmp/osc7-test".to_string()),
+                            last_finished_pwd,
+                            "expected OSC 7 to set the printf block's pwd to /tmp/osc7-test"
+                        )
+                    })
+                })
+                // Locks in the fix for the user-visible regression Zach saw:
+                // the `WorkingDirectory` prompt chip text (read by
+                // `display_working_directory`, which feeds the vertical-tab
+                // subtitle) must be refreshed after OSC 7. Without
+                // `refresh_warp_prompt` in the `BlockWorkingDirectoryUpdated`
+                // path, the block's `pwd` updates but the chip text stays on
+                // the old CWD until the next `BlockCompleted`.
+                .add_assertion(|app, window_id| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.read(app, |view, ctx| {
+                        let displayed = view.display_working_directory(ctx);
+                        async_assert_eq!(
+                            Some("/tmp/osc7-test".to_string()),
+                            displayed,
+                            "expected the WorkingDirectory chip / tab subtitle to reflect the OSC 7 CWD"
+                        )
+                    })
+                }),
+        )
 }
 
 /// Checks that we focus the prompt after executing a command, regardless
@@ -3838,7 +3906,7 @@ pub fn test_command_xray_hover() -> Builder {
         )
         .with_step(
             new_step_with_default_assertions("Hover past buffer text")
-                // Add post step pause so that the the async assert in the next
+                // Add post step pause so that the async assert in the next
                 // step doesn't succeed right away just because we didn't give enough
                 // time for the xray to trigger.
                 .set_post_step_pause(Duration::from_secs(1))
@@ -3900,7 +3968,7 @@ pub fn test_command_xray_for_partial_command() -> Builder {
         )
         .with_step(
             new_step_with_default_assertions("Hover over st")
-                // Add post step pause so that the the async assert in the next
+                // Add post step pause so that the async assert in the next
                 // step doesn't succeed right away just because we didn't give enough
                 // time for the xray to trigger.
                 .set_post_step_pause(Duration::from_secs(1))
@@ -5797,6 +5865,28 @@ pub fn test_copy_prompt_from_input_honor_ps1_disabled() -> Builder {
                 .with_click_on_saved_position("Copy prompt")
                 .add_assertion(assert_clipboard_contains_string("~".into())),
         )
+}
+pub fn test_warp_prompt_unsets_zsh_rprompt() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            let (starter, _) = current_shell_starter_and_version();
+            starter.shell_type() == shell::ShellType::Zsh
+        })
+        .with_user_defaults(HashMap::from([(
+            HonorPS1::storage_key().to_owned(),
+            false.to_string(),
+        )]))
+        .with_setup(|utils| {
+            let dir = utils.test_dir();
+            write_rc_files_for_test(&dir, r#"export RPROMPT="right prompt""#, [ShellRcType::Zsh]);
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "print -r -- ${+RPROMPT}".into(),
+            ExpectedExitStatus::Success,
+            ExactLine::from("0"),
+        ))
 }
 
 pub fn test_copy_prompt_from_input_honor_ps1_enabled() -> Builder {

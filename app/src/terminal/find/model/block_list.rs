@@ -238,6 +238,18 @@ pub struct BlockGridMatch {
 }
 
 /// Represents a single find match in the blocklist.
+///
+/// Match values are snapshots of the find run that produced them. The grid
+/// `range` on `CommandBlock` and the `index` on `RichContent` are captured at
+/// scan time and can be invalidated by subsequent block list mutations (new
+/// blocks, removals, rich content rescans, etc.). Callers should consume
+/// cloned values inline; long-lived storage outside a `BlockListFindRun` is
+/// not supported.
+///
+/// TODO(vkodithala): The `RichContent` variant mirrors `AsyncFocusedAiMatch` in the async
+/// path. Both derive `Clone` even though their contents are short-lived;
+/// explore removing `Clone` from both in a future PR to enforce the snapshot
+/// contract in the type system.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockListMatch {
     CommandBlock(BlockGridMatch),

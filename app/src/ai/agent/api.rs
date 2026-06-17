@@ -14,6 +14,7 @@ pub use convert_from::{
     MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError,
 };
 use futures_lite::Stream;
+use mcp::TemplatableMCPServerInfo;
 pub use r#impl::generate_multi_agent_output;
 use serde::Serialize;
 use warp_core::channel::ChannelState;
@@ -27,8 +28,8 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{BlocklistAIPermissions, RequestInput, SessionContext};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::execution_profiles::AIExecutionProfileAppExt;
 use crate::ai::llms::LLMId;
-use crate::ai::mcp::templatable_manager::TemplatableMCPServerInfo;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::server::server_api::AIApiError;
 use crate::settings::AISettings;
@@ -236,9 +237,14 @@ impl RequestParams {
         let user_workspaces = UserWorkspaces::as_ref(app);
         let api_key_manager = ApiKeyManager::as_ref(app);
         let is_byo_enabled = user_workspaces.is_byo_api_key_enabled(app);
+        #[cfg(not(target_family = "wasm"))]
+        let geap_binding = crate::ai::geap_credentials::current_geap_policy(app).mint_binding();
+        #[cfg(target_family = "wasm")]
+        let geap_binding: Option<::ai::api_keys::GeapMintBinding> = None;
         let api_keys = api_key_manager.api_keys_for_request(
             is_byo_enabled,
             user_workspaces.is_aws_bedrock_credentials_enabled(app),
+            geap_binding,
         );
         let is_custom_inference_enabled = user_workspaces.is_custom_inference_enabled(app);
         let custom_model_providers = FeatureFlag::CustomInferenceEndpoints
@@ -297,19 +303,10 @@ impl RequestParams {
         // server-side, drop the override; otherwise clamp it to the model's
         // current `[min, max]` range. This closes the window between an
         // in-flight model metadata refresh and the next request.
-        let context_window_limit = {
-            let profile_data = AIExecutionProfilesModel::as_ref(app)
-                .active_profile(terminal_view_id, app)
-                .data()
-                .clone();
-            profile_data
-                .configurable_context_window(app)
-                .and_then(|cw| {
-                    profile_data
-                        .context_window_limit
-                        .map(|v| v.clamp(cw.min, cw.max))
-                })
-        };
+        let context_window_limit = AIExecutionProfilesModel::as_ref(app)
+            .active_profile(terminal_view_id, app)
+            .data()
+            .context_window_limit_for_request(app);
 
         Self {
             input: request_input.all_inputs().cloned().collect(),

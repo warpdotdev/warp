@@ -103,9 +103,7 @@ impl SyncDataSource for CommandBindingDataSource {
         self.searcher
             .search(&query.text.trim().to_lowercase())
             .map_err(|err| {
-                let search_error = DataSourceSearchError {
-                    message: err.to_string(),
-                };
+                let search_error = DataSourceSearchError::new(err.to_string());
                 Box::new(search_error) as DataSourceRunErrorWrapper
             })
     }
@@ -186,9 +184,9 @@ mod full_text_searcher {
     use std::sync::Arc;
 
     use fuzzy_match::FuzzyMatchResult;
+    use warp_search_core::define_search_schema;
     use warpui::keymap::{BindingId, DescriptionContext};
 
-    use crate::define_search_schema;
     use crate::search::action::data_source::{is_excluded_binding, ActionSearcher, SearcherAction};
     use crate::search::action::search_item::MatchedBinding;
     use crate::search::data_source::QueryResult;

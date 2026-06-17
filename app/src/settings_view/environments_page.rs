@@ -43,7 +43,8 @@ use crate::ai::cloud_environments::{self, CloudAmbientAgentEnvironment};
 use crate::appearance::Appearance;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{
-    CloudObjectLocation, GenericStringObjectFormat, JsonObjectType, Owner, Space,
+    CloudObjectLocation, CloudObjectLookup as _, GenericStringObjectFormat, JsonObjectType, Owner,
+    Space,
 };
 use crate::drive::CloudObjectTypeAndId;
 use crate::editor::{

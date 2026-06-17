@@ -135,6 +135,7 @@ Output JSON (only external reporters are included):
       "issue_number": 5678,
       "title": "Crash when opening large file",
       "reporter": "community-user",
+      "reporter_url": "https://github.com/community-user",
       "url": "https://github.com/warpdotdev/warp/issues/5678"
     }
   ]
@@ -142,6 +143,7 @@ Output JSON (only external reporters are included):
 ```
 
 The `--org` flag checks each reporter's org membership via the GitHub API, filtering out internal members so they aren't misattributed as external community reporters. These reporters will be credited in the "Community" section of the changelog.
+Whenever the markdown draft credits a PR author, contributor, or issue reporter, render the username as a GitHub profile link such as `[@username](https://github.com/username)`.
 
 ### Step 6 — Classify unmarked PRs
 
@@ -200,7 +202,7 @@ Write two files to `output_dir`:
 **Generated:** 2026-05-06T15:00:00Z
 
 ## New Features
-- Added dark mode ([#1234](https://github.com/warpdotdev/warp/pull/1234)) — @external-contributor ✨
+- Added dark mode ([#1234](https://github.com/warpdotdev/warp/pull/1234)) — [@external-contributor](https://github.com/external-contributor) ✨
 
 ## Improvements
 - Faster tab switching ([#1235](https://github.com/warpdotdev/warp/pull/1235))
@@ -213,11 +215,11 @@ Write two files to `output_dir`:
 
 ## Community
 ### Contributors
-- @contributor1 — [#1234](https://github.com/warpdotdev/warp/pull/1234)  ✨
+- [@contributor1](https://github.com/contributor1) — [#1234](https://github.com/warpdotdev/warp/pull/1234)  ✨
 
 ### Issue Reporters
 Thanks to the community members who reported issues fixed in this release:
-- @reporter1 — [#5678](https://github.com/warpdotdev/warp/issues/5678) "Crash when opening large file"
+- [@reporter1](https://github.com/reporter1) — [#5678](https://github.com/warpdotdev/warp/issues/5678) "Crash when opening large file"
 ```
 
 The markdown draft must **not** include "Needs Review" or "Skipped PRs" sections — those are internal details that belong only in the JSON audit artifact.

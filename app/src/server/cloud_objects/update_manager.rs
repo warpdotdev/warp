@@ -1,16 +1,20 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+#[cfg(test)]
+pub use cloud_object_client::GetCloudObjectResponse;
+pub use cloud_object_client::InitialLoadResponse;
 use futures::channel::oneshot::{self, Receiver};
 use futures::stream::AbortHandle;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
 use warp_core::features::FeatureFlag;
+use warp_core::report_error;
 use warp_graphql::mcp_gallery_template::MCPGalleryTemplate;
 use warp_graphql::object_permissions::AccessLevel;
 use warp_graphql::scalars::time::ServerTimestamp;
@@ -26,6 +30,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::scheduled::{
     CloudScheduledAmbientAgentModel, ScheduledAmbientAgent,
 };
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -50,9 +55,14 @@ use crate::cloud_object::{
     ObjectDeleteResult, ObjectIdType, ObjectMetadataUpdateResult, ObjectPermissionsUpdateData,
     ObjectType, Owner, Revision, RevisionAndLastEditor, ServerAIExecutionProfile, ServerAIFact,
     ServerAmbientAgentEnvironment, ServerCloudAgentConfig, ServerCloudObject,
-    ServerEnvVarCollection, ServerFolder, ServerMCPServer, ServerMetadata, ServerNotebook,
-    ServerObject, ServerPermissions, ServerPreference, ServerScheduledAmbientAgent,
-    ServerTemplatableMCPServer, ServerWorkflow, ServerWorkflowEnum, Space, UpdateCloudObjectResult,
+    ServerEnvVarCollection, ServerMCPServer, ServerMetadata, ServerPermissions, ServerPreference,
+    ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflowEnum, Space,
+    UpdateCloudObjectResult,
+};
+use crate::drive::drive_helpers::{
+    is_feature_gated_anonymous_user_past_env_var_limit,
+    is_feature_gated_anonymous_user_past_notebook_limit,
+    is_feature_gated_anonymous_user_past_workflow_limit,
 };
 use crate::drive::folders::{CloudFolderModel, FolderId};
 use crate::drive::sharing::SharingAccessLevel;
@@ -127,10 +137,19 @@ pub struct ObjectOperationResult {
 
 #[derive(Debug)]
 pub enum UpdateManagerEvent {
-    ObjectOperationComplete { result: ObjectOperationResult },
-    CloudPreferencesUpdated { updated: Vec<Preference> },
-    MCPGalleryUpdated { templates: Vec<MCPGalleryTemplate> },
-    AmbientTaskUpdated { timestamp: DateTime<Utc> },
+    ObjectOperationComplete {
+        result: ObjectOperationResult,
+    },
+    CloudPreferencesUpdated {
+        updated: Vec<Preference>,
+    },
+    MCPGalleryUpdated {
+        templates: Vec<MCPGalleryTemplate>,
+    },
+    AmbientTaskUpdated {
+        task_id: AmbientAgentTaskId,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 /// An enum for choosing the behavior of the fetch_single_cloud_object function.
@@ -150,27 +169,6 @@ pub enum FetchSingleObjectOption {
 pub enum InitiatedBy {
     User,
     System,
-}
-#[derive(Default)]
-pub struct InitialLoadResponse {
-    pub updated_notebooks: Vec<ServerNotebook>,
-    pub deleted_notebooks: Vec<NotebookId>,
-    pub updated_workflows: Vec<ServerWorkflow>,
-    pub deleted_workflows: Vec<WorkflowId>,
-    pub updated_folders: Vec<ServerFolder>,
-    pub deleted_folders: Vec<FolderId>,
-    pub updated_generic_string_objects:
-        HashMap<GenericStringObjectFormat, Vec<Box<dyn ServerObject>>>,
-    pub deleted_generic_string_objects: Vec<GenericStringObjectId>,
-    pub user_profiles: Vec<UserProfileWithUID>,
-    pub action_histories: Vec<ObjectActionHistory>,
-    pub mcp_gallery: Vec<MCPGalleryTemplate>,
-}
-
-pub struct GetCloudObjectResponse {
-    pub object: ServerCloudObject,
-    pub descendants: Vec<ServerCloudObject>,
-    pub action_histories: Vec<ObjectActionHistory>,
 }
 
 #[derive(Debug)]
@@ -1110,11 +1108,20 @@ impl UpdateManager {
 
     fn handle_ambient_task_changed(
         &mut self,
-        _task_id: String,
+        task_id: String,
         timestamp: DateTime<Utc>,
         ctx: &mut ModelContext<UpdateManager>,
     ) {
-        ctx.emit(UpdateManagerEvent::AmbientTaskUpdated { timestamp });
+        let task_id = match task_id.parse::<AmbientAgentTaskId>() {
+            Ok(task_id) => task_id,
+            Err(err) => {
+                report_error!(anyhow::Error::from(err).context(format!(
+                    "AmbientTaskUpdated has unparseable task_id: {task_id}"
+                )));
+                return;
+            }
+        };
+        ctx.emit(UpdateManagerEvent::AmbientTaskUpdated { task_id, timestamp });
     }
 
     /// Fetches environment "last used" timestamps from the server and merges them
@@ -1170,7 +1177,12 @@ impl UpdateManager {
                 )
             });
 
-        GenericCloudObject::<K, M>::bulk_upsert_event(&objects_without_pending_changes)
+        M::bulk_upsert_event(
+            objects_without_pending_changes
+                .iter()
+                .map(|object| object.upsert_params(object.object_type()))
+                .collect(),
+        )
     }
 
     /// Generic handler deleting all objects of a given model type from the server (e.g. all updated/deleted notebooks or workflows).
@@ -3331,10 +3343,10 @@ impl UpdateManager {
                 .count()
         });
         if AuthStateProvider::handle(ctx).read(ctx, |auth_state_provider, _ctx| {
-            auth_state_provider
-                .get()
-                .is_anonymous_user_past_object_limit(ObjectType::Notebook, count + 1)
-                .unwrap_or_default()
+            is_feature_gated_anonymous_user_past_notebook_limit(
+                auth_state_provider.get(),
+                count + 1,
+            )
         }) {
             AuthManager::handle(ctx).update(ctx, |auth_manager: &mut AuthManager, ctx| {
                 auth_manager.anonymous_user_hit_drive_object_limit(ctx);
@@ -3402,10 +3414,10 @@ impl UpdateManager {
                 .count()
         });
         if AuthStateProvider::handle(ctx).read(ctx, |auth_state_provider, _ctx| {
-            auth_state_provider
-                .get()
-                .is_anonymous_user_past_object_limit(ObjectType::Workflow, count + 1)
-                .unwrap_or_default()
+            is_feature_gated_anonymous_user_past_workflow_limit(
+                auth_state_provider.get(),
+                count + 1,
+            )
         }) {
             AuthManager::handle(ctx).update(ctx, |auth_manager: &mut AuthManager, ctx| {
                 auth_manager.anonymous_user_hit_drive_object_limit(ctx);
@@ -3467,14 +3479,8 @@ impl UpdateManager {
                 .active_non_welcome_env_var_collections_in_space(Space::Personal, ctx)
                 .count()
         });
-        let env_var_collection_type = ObjectType::GenericStringObject(
-            GenericStringObjectFormat::Json(JsonObjectType::EnvVarCollection),
-        );
         if AuthStateProvider::handle(ctx).read(ctx, |auth_state_provider, _ctx| {
-            auth_state_provider
-                .get()
-                .is_anonymous_user_past_object_limit(env_var_collection_type, count + 1)
-                .unwrap_or_default()
+            is_feature_gated_anonymous_user_past_env_var_limit(auth_state_provider.get(), count + 1)
         }) {
             AuthManager::handle(ctx).update(ctx, |auth_manager: &mut AuthManager, ctx| {
                 auth_manager.anonymous_user_hit_drive_object_limit(ctx);
@@ -3582,7 +3588,10 @@ impl UpdateManager {
 
         // Update sqlite with a single bulk request
         self.save_to_db(vec![GenericStringModel::<T, S>::bulk_upsert_event(
-            &objects,
+            objects
+                .iter()
+                .map(|object| object.upsert_params(object.object_type()))
+                .collect(),
         )]);
 
         // Populate sync queue with a single bulk request

@@ -4,12 +4,15 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Duration, Utc};
+use cloud_object_client::MockObjectClient;
+use cloud_objects::cloud_object::ServerPermissions;
 use firebase::FirebaseError;
 use itertools::Itertools;
-use warp_server_client::cloud_object::ServerPermissions;
 use warpui::r#async::Timer;
 use warpui::{App, Entity, ModelHandle, SingletonEntity};
 
+use super::QueueDependency;
+use crate::ai::facts::{AIFact, AIMemory, CloudAIFactModel};
 use crate::cloud_object::model::actions::{
     ObjectAction, ObjectActionHistory, ObjectActionSubtype, ObjectActionType,
 };
@@ -24,10 +27,11 @@ use crate::notebooks::{CloudNotebookModel, NotebookId};
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::server::ids::{ClientId, HashableId, ServerId, ServerIdAndType, SyncId};
 use crate::server::server_api::auth::UserAuthenticationError;
-#[cfg(test)]
-use crate::server::server_api::object::MockObjectClient;
 use crate::server::server_api::ServerApiProvider;
-use crate::server::sync_queue::{CreationFailureReason, QueueItemId, SyncQueueEvent};
+use crate::server::sync_queue::{
+    CreationFailureReason, GenericStringObjectToCreate, QueueItemId, SerializedModel,
+    SyncQueueEvent,
+};
 use crate::system::SystemStats;
 use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
 use crate::workflows::CloudWorkflowModel;
@@ -52,6 +56,22 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     app.add_singleton_model(|_| NetworkStatus::new());
     app.add_singleton_model(|_| SystemStats::new());
+}
+
+fn queue_item_dependencies<const N: usize>(
+    queue_item_ids: [QueueItemId; N],
+) -> HashSet<QueueDependency> {
+    queue_item_ids
+        .into_iter()
+        .map(QueueDependency::QueueItem)
+        .collect()
+}
+
+fn bulk_create_dependency(queue_item_id: QueueItemId, client_id: ClientId) -> QueueDependency {
+    QueueDependency::BulkCreateGenericStringObject {
+        queue_item_id,
+        client_id,
+    }
 }
 
 fn create_sync_queue(
@@ -1032,15 +1052,15 @@ fn test_sync_queue_dependency_successes() {
             // Assert initial state of the queue dependencies
             assert_eq!(
                 sync_queue.queue_dependencies().get(&create_id).unwrap(),
-                &HashSet::<QueueItemId>::new()
+                &HashSet::<QueueDependency>::new()
             );
             assert_eq!(
                 sync_queue.queue_dependencies().get(&update_id).unwrap(),
-                &HashSet::<QueueItemId>::from([create_id])
+                &queue_item_dependencies([create_id])
             );
 
             // Simulate success of the create request
-            sync_queue.handle_dependency_success(&create_id);
+            sync_queue.handle_dependency_success(&QueueDependency::QueueItem(create_id));
 
             // We should no longer store a dependency on the update request
             assert_eq!(
@@ -1126,15 +1146,15 @@ fn test_sync_queue_dependency_failure() {
             // Assert initial state of the queue dependencies
             assert_eq!(
                 sync_queue.queue_dependencies().get(&create_id).unwrap(),
-                &HashSet::<QueueItemId>::new()
+                &HashSet::<QueueDependency>::new()
             );
             assert_eq!(
                 sync_queue.queue_dependencies().get(&update_id).unwrap(),
-                &HashSet::<QueueItemId>::from([create_id])
+                &queue_item_dependencies([create_id])
             );
             assert_eq!(
                 sync_queue.queue_dependencies().get(&update_id_2).unwrap(),
-                &HashSet::<QueueItemId>::from([create_id, update_id])
+                &queue_item_dependencies([create_id, update_id])
             );
 
             // Simulate failure of the create request
@@ -1236,11 +1256,11 @@ fn test_sync_queue_dependency_mixed_ids() {
             // Assert initial state of the queue dependencies
             assert_eq!(
                 sync_queue.queue_dependencies().get(&create_id).unwrap(),
-                &HashSet::<QueueItemId>::new()
+                &HashSet::<QueueDependency>::new()
             );
             assert_eq!(
                 sync_queue.queue_dependencies().get(&update_id).unwrap(),
-                &HashSet::<QueueItemId>::from([create_id])
+                &queue_item_dependencies([create_id])
             );
 
             // Simulate success of create request
@@ -1273,7 +1293,7 @@ fn test_sync_queue_dependency_mixed_ids() {
 
             assert_eq!(
                 sync_queue.queue_dependencies().get(&update_id).unwrap(),
-                &HashSet::<QueueItemId>::new()
+                &HashSet::<QueueDependency>::new()
             );
 
             let update_id_2 = sync_queue.enqueue(
@@ -1294,12 +1314,298 @@ fn test_sync_queue_dependency_mixed_ids() {
             // Even though one request uses client ID and one uses server ID, we should find a dependency here
             assert_eq!(
                 sync_queue.queue_dependencies().get(&update_id_2).unwrap(),
-                &HashSet::<QueueItemId>::from([update_id])
+                &queue_item_dependencies([update_id])
             );
         });
     });
 }
 
+#[test]
+fn test_sync_queue_generic_string_object_update_depends_on_pending_create() {
+    let client_id = ClientId::new();
+    let server_id = SyncId::ServerId(GenericStringObjectId::from(123).into());
+    let revision_after_create = Revision::from(DateTime::<Utc>::default());
+    let revision_after_update = Revision::from(DateTime::<Utc>::default() + Duration::minutes(1));
+
+    App::test((), |mut app| async move {
+        let cloud_objects_client_mock = MockObjectClient::new();
+        initialize_app(&mut app);
+        let sync_queue = create_sync_queue(&mut app, vec![], cloud_objects_client_mock, false);
+
+        sync_queue.update(&mut app, |sync_queue, ctx| {
+            let create_id = sync_queue.enqueue(
+                QueueItem::CreateObject {
+                    object_type: ObjectType::GenericStringObject(GenericStringObjectFormat::Json(
+                        JsonObjectType::AIFact,
+                    )),
+                    owner: Owner::mock_current_user(),
+                    id: client_id,
+                    title: None,
+                    serialized_model: None,
+                    initial_folder_id: None,
+                    entrypoint: CloudObjectEventEntrypoint::Unknown,
+                    initiated_by: InitiatedBy::User,
+                },
+                ctx,
+            );
+
+            let update_id = sync_queue.enqueue(
+                QueueItem::UpdateAIFact {
+                    model: CloudAIFactModel::new(AIFact::Memory(AIMemory {
+                        name: Some("new rule".to_string()),
+                        content: "remember this".to_string(),
+                        is_autogenerated: false,
+                        suggested_logging_id: None,
+                    }))
+                    .into(),
+                    id: SyncId::ClientId(client_id),
+                    revision: Some(revision_after_create.clone()),
+                },
+                ctx,
+            );
+
+            assert_eq!(
+                sync_queue.queue_dependencies().get(&create_id).unwrap(),
+                &HashSet::<QueueDependency>::new()
+            );
+            assert_eq!(
+                sync_queue.queue_dependencies().get(&update_id).unwrap(),
+                &queue_item_dependencies([create_id])
+            );
+
+            sync_queue.remove_id_from_queue(&create_id);
+            sync_queue.queue_dependencies.remove(&create_id);
+            sync_queue.handle_success_response(
+                &server_id.uid(),
+                super::ResponseType::Creation {
+                    creation_result: super::CreationResponseType::Success {
+                        client_id,
+                        revision_and_editor: super::RevisionAndLastEditor {
+                            revision: revision_after_create.clone(),
+                            last_editor_uid: None,
+                        },
+                        metadata_ts: DateTime::<Utc>::default().into(),
+                        server_creation_info: ServerCreationInfo {
+                            server_id_and_type: ServerIdAndType {
+                                id: server_id.into_server().expect("Expect server id"),
+                                id_type: ObjectIdType::GenericStringObject,
+                            },
+                            creator_uid: Default::default(),
+                            permissions: ServerPermissions::mock_personal(),
+                        },
+                    },
+                },
+                create_id,
+                InitiatedBy::User,
+                ctx,
+            );
+
+            assert_eq!(
+                sync_queue.queue_dependencies().get(&update_id).unwrap(),
+                &HashSet::<QueueDependency>::new()
+            );
+
+            let update_id_2 = sync_queue.enqueue(
+                QueueItem::UpdateAIFact {
+                    model: CloudAIFactModel::new(AIFact::Memory(AIMemory {
+                        name: Some("final rule".to_string()),
+                        content: "remember this too".to_string(),
+                        is_autogenerated: false,
+                        suggested_logging_id: None,
+                    }))
+                    .into(),
+                    id: server_id,
+                    revision: Some(revision_after_create),
+                },
+                ctx,
+            );
+
+            assert_eq!(
+                sync_queue.queue_dependencies().get(&update_id_2).unwrap(),
+                &queue_item_dependencies([update_id])
+            );
+
+            sync_queue.remove_id_from_queue(&update_id);
+            sync_queue.queue_dependencies.remove(&update_id);
+            sync_queue.handle_success_response(
+                &server_id.uid(),
+                super::ResponseType::Update {
+                    update_result: super::UpdateResponseType::Success {
+                        revision_and_editor: super::RevisionAndLastEditor {
+                            revision: revision_after_update.clone(),
+                            last_editor_uid: None,
+                        },
+                    },
+                },
+                update_id,
+                InitiatedBy::User,
+                ctx,
+            );
+
+            assert_eq!(
+                sync_queue.queue_dependencies().get(&update_id_2).unwrap(),
+                &HashSet::<QueueDependency>::new()
+            );
+            let queued_revision = sync_queue.queue().iter().find_map(|(_, item)| match item {
+                QueueItem::UpdateAIFact { id, revision, .. } if *id == server_id => {
+                    Some(revision.clone())
+                }
+                _ => None,
+            });
+            assert_eq!(queued_revision, Some(Some(revision_after_update)));
+        });
+    });
+}
+
+#[test]
+fn test_sync_queue_bulk_generic_string_object_update_waits_for_matching_create() {
+    let client_id_a = ClientId::new();
+    let client_id_b = ClientId::new();
+    let server_id_a = SyncId::ServerId(GenericStringObjectId::from(123).into());
+    let server_id_b = SyncId::ServerId(GenericStringObjectId::from(456).into());
+    let revision_after_create_a = Revision::from(DateTime::<Utc>::default());
+    let revision_after_create_b = Revision::from(DateTime::<Utc>::default() + Duration::minutes(1));
+
+    App::test((), |mut app| async move {
+        let cloud_objects_client_mock = MockObjectClient::new();
+        initialize_app(&mut app);
+        let sync_queue = create_sync_queue(&mut app, vec![], cloud_objects_client_mock, false);
+
+        sync_queue.update(&mut app, |sync_queue, ctx| {
+            let object_to_create = |id| GenericStringObjectToCreate {
+                id,
+                format: GenericStringObjectFormat::Json(JsonObjectType::AIFact),
+                serialized_model: Arc::new(SerializedModel::new("{}".to_string())),
+                initial_folder_id: None,
+                entrypoint: CloudObjectEventEntrypoint::Unknown,
+                uniqueness_key: None,
+                initiated_by: InitiatedBy::User,
+            };
+
+            let bulk_create_id = sync_queue.enqueue(
+                QueueItem::BulkCreateGenericStringObjects {
+                    owner: Owner::mock_current_user(),
+                    objects: vec![object_to_create(client_id_a), object_to_create(client_id_b)],
+                },
+                ctx,
+            );
+
+            // Simulate the state after the bulk create has been dequeued and is waiting
+            // on a single server response for both client IDs.
+            sync_queue.remove_id_from_queue(&bulk_create_id);
+            sync_queue.queue_dependencies.remove(&bulk_create_id);
+            sync_queue
+                .in_flight_bulk_create_objects
+                .insert(bulk_create_id, HashSet::from([client_id_a, client_id_b]));
+            for client_id in [client_id_a, client_id_b] {
+                sync_queue
+                    .waiting_response
+                    .entry(client_id.to_string())
+                    .or_default()
+                    .insert(bulk_create_id);
+            }
+
+            let update_b_id = sync_queue.enqueue(
+                QueueItem::UpdateAIFact {
+                    model: CloudAIFactModel::new(AIFact::Memory(AIMemory {
+                        name: Some("updated rule".to_string()),
+                        content: "remember this".to_string(),
+                        is_autogenerated: false,
+                        suggested_logging_id: None,
+                    }))
+                    .into(),
+                    id: SyncId::ClientId(client_id_b),
+                    revision: Some(revision_after_create_a.clone()),
+                },
+                ctx,
+            );
+
+            assert_eq!(
+                sync_queue.queue_dependencies().get(&update_b_id).unwrap(),
+                &HashSet::from([bulk_create_dependency(bulk_create_id, client_id_b)])
+            );
+
+            sync_queue.handle_success_response(
+                &server_id_a.uid(),
+                super::ResponseType::Creation {
+                    creation_result: super::CreationResponseType::Success {
+                        client_id: client_id_a,
+                        revision_and_editor: super::RevisionAndLastEditor {
+                            revision: revision_after_create_a,
+                            last_editor_uid: None,
+                        },
+                        metadata_ts: DateTime::<Utc>::default().into(),
+                        server_creation_info: ServerCreationInfo {
+                            server_id_and_type: ServerIdAndType {
+                                id: server_id_a.into_server().expect("Expect server id"),
+                                id_type: ObjectIdType::GenericStringObject,
+                            },
+                            creator_uid: Default::default(),
+                            permissions: ServerPermissions::mock_personal(),
+                        },
+                    },
+                },
+                bulk_create_id,
+                InitiatedBy::User,
+                ctx,
+            );
+
+            assert_eq!(
+                sync_queue.queue_dependencies().get(&update_b_id).unwrap(),
+                &HashSet::from([bulk_create_dependency(bulk_create_id, client_id_b)])
+            );
+            assert_eq!(
+                sync_queue
+                    .in_flight_bulk_create_objects
+                    .get(&bulk_create_id)
+                    .unwrap(),
+                &HashSet::from([client_id_b])
+            );
+
+            sync_queue.handle_success_response(
+                &server_id_b.uid(),
+                super::ResponseType::Creation {
+                    creation_result: super::CreationResponseType::Success {
+                        client_id: client_id_b,
+                        revision_and_editor: super::RevisionAndLastEditor {
+                            revision: revision_after_create_b.clone(),
+                            last_editor_uid: None,
+                        },
+                        metadata_ts: DateTime::<Utc>::default().into(),
+                        server_creation_info: ServerCreationInfo {
+                            server_id_and_type: ServerIdAndType {
+                                id: server_id_b.into_server().expect("Expect server id"),
+                                id_type: ObjectIdType::GenericStringObject,
+                            },
+                            creator_uid: Default::default(),
+                            permissions: ServerPermissions::mock_personal(),
+                        },
+                    },
+                },
+                bulk_create_id,
+                InitiatedBy::User,
+                ctx,
+            );
+
+            assert_eq!(
+                sync_queue.queue_dependencies().get(&update_b_id).unwrap(),
+                &HashSet::<QueueDependency>::new()
+            );
+            assert!(!sync_queue
+                .in_flight_bulk_create_objects
+                .contains_key(&bulk_create_id));
+            let queued_revision = sync_queue.queue().iter().find_map(|(_, item)| match item {
+                QueueItem::UpdateAIFact { id, revision, .. }
+                    if *id == SyncId::ClientId(client_id_b) =>
+                {
+                    Some(revision.clone())
+                }
+                _ => None,
+            });
+            assert_eq!(queued_revision, Some(Some(revision_after_create_b)));
+        });
+    });
+}
 #[test]
 fn test_sync_queue_enum_dependency() {
     let enum_id_1 = ClientId::new();
@@ -1453,7 +1759,7 @@ fn test_sync_queue_enum_dependency() {
             // Assert initial state of the queue dependencies
             assert_eq!(
                 sync_queue.queue_dependencies().get(&create_id).unwrap(),
-                &HashSet::<QueueItemId>::from([create_enum_2])
+                &queue_item_dependencies([create_enum_2])
             );
 
             // Assert that the workflow that was enqueued has the enum_id that is a server id
@@ -1477,7 +1783,7 @@ fn test_sync_queue_enum_dependency() {
             sync_queue.remove_id_from_queue(&create_enum_2);
             sync_queue.queue_dependencies.remove(&create_enum_2);
             sync_queue.update_dependencies_on_creation(
-                &create_enum_2,
+                &QueueDependency::QueueItem(create_enum_2),
                 enum_id_2,
                 enum_server_id_2.into_server().expect("Expect server id"),
                 ObjectType::GenericStringObject(GenericStringObjectFormat::Json(
@@ -1512,7 +1818,7 @@ fn test_sync_queue_enum_dependency() {
             // Assert updated state of the queue dependencies
             assert_eq!(
                 sync_queue.queue_dependencies().get(&create_id).unwrap(),
-                &HashSet::<QueueItemId>::new()
+                &HashSet::<QueueDependency>::new()
             );
 
             // Assert that the workflow was updated to reference the server ID of the second enum

@@ -24,8 +24,8 @@ pub mod dialog;
 mod qr_code;
 mod style;
 
-// Re-export types from warp_server_client.
-pub use warp_server_client::drive::sharing::{
+// Re-export types from cloud_objects.
+pub use cloud_objects::drive::sharing::{
     LinkSharingSubjectType, SharingAccessLevel, Subject, TeamKind, UserKind,
 };
 

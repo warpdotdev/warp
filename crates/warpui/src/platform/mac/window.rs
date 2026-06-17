@@ -1,25 +1,26 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::os::raw::c_uchar;
 use std::path::Path;
+use std::ptr;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{panic, ptr, slice, str};
 
 use anyhow::{anyhow, Result};
-use cocoa::appkit::{NSApp, NSView, NSWindow, NSWindowButton, NSWindowStyleMask};
-use cocoa::base::{id, nil};
-use cocoa::foundation::{
-    NSArray, NSAutoreleasePool, NSInteger, NSPoint, NSRange, NSRect, NSSize, NSString, NSUInteger,
-};
-use foreign_types::ForeignType;
+use cocoa::base::id;
 use instant::Instant;
-use itertools::Itertools;
 use num_traits::FromPrimitive;
-use objc::runtime::{Object, BOOL, NO, YES};
-use objc::{class, msg_send, sel, sel_impl};
+use objc::runtime::Object;
+use objc2::rc::{autoreleasepool, Retained};
+use objc2::runtime::{AnyObject, Bool, ProtocolObject};
+use objc2::{msg_send, MainThreadMarker};
+use objc2_app_kit::{NSApplication, NSScreen, NSView, NSWindow, NSWindowButton, NSWindowStyleMask};
+use objc2_foundation::{
+    NSArray, NSInteger, NSPoint, NSRange, NSRect, NSSize, NSString, NSUInteger,
+};
+use objc2_metal::{MTLCopyAllDevices, MTLCreateSystemDefaultDevice, MTLDevice};
+use objc2_quartz_core::CAMetalLayer;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warpui_core::accessibility::AccessibilityContent;
@@ -36,8 +37,8 @@ use warpui_core::windowing::WindowCallbacks;
 use warpui_core::{DisplayId, DisplayIdx, Event, OptionalPlatformWindow, Scene, WindowId};
 
 use super::delegate::DispatchDelegate;
-use super::rendering::{is_integrated_gpu, Device, RendererManager};
-use super::{app, make_nsstring, RectFExt as _};
+use super::rendering::{self, is_integrated_gpu, Device, RendererManager};
+use super::{app, RectFExt as _};
 
 extern "C" {
     fn screenFrame() -> NSRect;
@@ -106,8 +107,9 @@ impl platform::WindowManager for WindowManager {
     }
 
     fn app_is_active(&self) -> bool {
-        let res: BOOL = unsafe { msg_send![app::get_warp_app(), isActive] };
-        res == YES
+        // SAFETY: `get_warp_app()` returns the running NSApplication subclass instance.
+        let app = unsafe { &*app::get_warp_app().cast::<NSApplication>() };
+        app.isActive()
     }
 
     fn hide_app(&self) {
@@ -160,10 +162,9 @@ impl platform::WindowManager for WindowManager {
     }
 
     fn display_count(&self) -> usize {
-        unsafe {
-            let screens: id = msg_send![class!(NSScreen), screens];
-            screens.count() as usize
-        }
+        // SAFETY: `WindowManager` methods run on the main thread.
+        let mtm = unsafe { MainThreadMarker::new_unchecked() };
+        NSScreen::screens(mtm).count()
     }
 
     fn active_display_bounds(&self) -> RectF {
@@ -182,21 +183,20 @@ impl platform::WindowManager for WindowManager {
     }
 
     fn bounds_for_display_idx(&self, display_idx: DisplayIdx) -> Option<RectF> {
-        let rect: NSRect = unsafe {
-            let screens: id = msg_send![class!(NSScreen), screens];
+        // SAFETY: `WindowManager` methods run on the main thread.
+        let mtm = unsafe { MainThreadMarker::new_unchecked() };
+        let screens = NSScreen::screens(mtm);
 
-            let idx: u64 = match display_idx {
-                DisplayIdx::Primary => 0,
-                DisplayIdx::External(idx) => (idx + 1) as u64,
-            };
-
-            if idx >= screens.count() {
-                return None;
-            }
-
-            let screen: id = screens.objectAtIndex(idx);
-            msg_send![screen, frame]
+        let idx: usize = match display_idx {
+            DisplayIdx::Primary => 0,
+            DisplayIdx::External(idx) => idx + 1,
         };
+
+        if idx >= screens.count() {
+            return None;
+        }
+
+        let rect = screens.objectAtIndex(idx).frame();
 
         let point = Vector2F::new(rect.origin.x as f32, rect.origin.y as f32);
         let size = Vector2F::new(rect.size.width as f32, rect.size.height as f32);
@@ -224,18 +224,26 @@ impl platform::WindowManager for WindowManager {
     }
 
     fn ordered_window_ids(&self) -> Vec<WindowId> {
-        unsafe {
-            let ordered_windows: id = msg_send![NSApp(), orderedWindows];
-            let count = ordered_windows.count();
-            let mut result = Vec::with_capacity(count as usize);
-            for i in 0..count {
-                let window: id = ordered_windows.objectAtIndex(i);
-                if is_warp_window(window) == YES {
-                    result.push(get_window_state(&*window).window_id);
+        // SAFETY: `WindowManager` methods run on the main thread.
+        let mtm = unsafe { MainThreadMarker::new_unchecked() };
+        let app = NSApplication::sharedApplication(mtm);
+        // `orderedWindows` is not exposed by objc2-app-kit, so message it directly.
+        // SAFETY: `orderedWindows` returns a retained `NSArray<NSWindow>`.
+        let ordered_windows: Retained<NSArray<NSWindow>> =
+            unsafe { msg_send![&*app, orderedWindows] };
+        let count = ordered_windows.count();
+        let mut result = Vec::with_capacity(count);
+        for i in 0..count {
+            let window = ordered_windows.objectAtIndex(i);
+            // SAFETY: `is_warp_window` is an FFI call into the WarpWindow class, and
+            // warp windows always carry the window-state ivar.
+            unsafe {
+                if is_warp_window(&window).as_bool() {
+                    result.push(get_window_state(as_objc_object(&window)).window_id);
                 }
             }
-            result
         }
+        result
     }
 
     /// Cancels any in-flight synthetic mouse-drag event loop for the given window.
@@ -418,58 +426,62 @@ mod Ivar {
 extern "C" {
     fn create_warp_nswindow(
         contentRect: NSRect,
-        metalDevice: id,
-        hideTitleBar: BOOL,
+        metalDevice: *mut ProtocolObject<dyn MTLDevice>,
+        hideTitleBar: Bool,
         backgroundBlurRadiusPixels: u8,
-        testMode: BOOL,
-    ) -> id;
+        testMode: Bool,
+    ) -> *mut NSWindow;
     fn create_warp_nspanel(
         contentRect: NSRect,
-        metalDevice: id,
-        hideTitleBar: BOOL,
+        metalDevice: *mut ProtocolObject<dyn MTLDevice>,
+        hideTitleBar: Bool,
         backgroundBlurRadiusPixels: u8,
-        testMode: BOOL,
-    ) -> id;
-    fn is_warp_window(window: id) -> BOOL;
-    fn get_frontmost_window() -> id;
+        testMode: Bool,
+    ) -> *mut NSWindow;
+    fn is_warp_window(window: &NSWindow) -> Bool;
+    fn get_frontmost_window() -> *mut NSWindow;
     fn set_accessibility_contents(
-        window: id,
-        value: id,    /* NSString */
-        help: id,     /* NSString */
-        warpRole: id, /* NSString */
-        setFrame: BOOL,
+        window: &NSWindow,
+        value: &NSString,
+        help: &NSString,
+        warpRole: &NSString,
+        setFrame: Bool,
         frame: NSRect,
     );
 
     fn hide_app();
     fn activate_app();
-    fn show_window_and_focus_app(window: id, bringToFront: BOOL);
-    fn hide_window(window: id);
-    fn set_window_alpha(window: id, alpha: f64);
-    fn position_and_order_front(window: id);
-    fn position_at_given_location(window: id, origin: NSPoint);
-    fn order_front_without_focus(window: id, origin: NSPoint);
-    fn set_window_title(window: id, title: id);
-    fn set_window_bounds(window: id, bound: NSRect);
-    fn set_window_background_blur_radius(window: id, blurRadiusPixels: u8);
-    fn open_file_path(pathString: id);
-    fn open_file_path_in_explorer(pathString: id);
+    fn show_window_and_focus_app(window: &NSWindow, bringToFront: bool);
+    fn hide_window(window: &NSWindow);
+    fn set_window_alpha(window: &NSWindow, alpha: f64);
+    fn position_and_order_front(window: &NSWindow);
+    fn position_at_given_location(window: &NSWindow, origin: NSPoint);
+    fn order_front_without_focus(window: &NSWindow, origin: NSPoint);
+    fn set_window_title(window: &NSWindow, title: &NSString);
+    fn set_window_bounds(window: &NSWindow, bound: NSRect);
+    fn set_window_background_blur_radius(window: &NSWindow, blurRadiusPixels: u8);
+    fn open_file_path(pathString: &NSString);
+    fn open_file_path_in_explorer(pathString: &NSString);
     fn open_file_picker(
         callback: *mut c_void,
-        file_types: id,
-        allow_files: BOOL,
-        allow_folders: BOOL,
-        allow_multi_selection: BOOL,
+        file_types: &NSArray<NSString>,
+        allow_files: Bool,
+        allow_folders: Bool,
+        allow_multi_selection: Bool,
     );
-    fn open_save_file_picker(callback: *mut c_void, default_filename: id, default_directory: id);
-    fn open_url(urlString: id);
-    fn set_titlebar_height(window: id, height: f64);
+    fn open_save_file_picker(
+        callback: *mut c_void,
+        default_filename: &NSString,
+        default_directory: &NSString,
+    );
+    fn open_url(urlString: &NSString);
+    fn set_titlebar_height(window: &NSWindow, height: f64);
 }
 
 pub type FrameCaptureCallback = Box<dyn FnOnce(platform::CapturedFrame) + Send + 'static>;
 
 pub struct WindowState {
-    native_window: id,
+    native_window: *mut NSWindow,
     window_id: WindowId,
     callbacks: WindowCallbacks,
     next_scene: RefCell<Option<Rc<Scene>>>,
@@ -490,8 +502,10 @@ impl Window {
         renderer_manager: Rc<RefCell<RendererManager>>,
     ) -> Result<Self> {
         log::info!("Opening window with id {window_id}");
-        unsafe {
-            let pool = NSAutoreleasePool::new(nil);
+        // Wrap window creation in an autorelease pool. AppKit produces many
+        // autoreleased temporaries here; the window itself survives the drain
+        // because it is retained by being shown.
+        autoreleasepool(move |_| {
             let frame = match options.bounds {
                 WindowBounds::ExactPosition(bounds) => RectF::new(
                     transform_origin_from_rect_coord_to_frame_coord(bounds.origin(), bounds.size()),
@@ -509,77 +523,92 @@ impl Window {
             let test_mode = cfg!(feature = "integration_tests")
                 && std::env::var("WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS").is_err();
 
-            let (metal_device, metal_device_ptr) = if test_mode {
-                (None, nil)
+            // Pick the GPU: for `LowPower`, scan all devices for
+            // an integrated GPU and fall back to the system default; otherwise use
+            // the system default. No device is created in test mode.
+            // TODO: device appears to be leaked here.
+            let metal_device: Option<rendering::MetalDevice> = if test_mode {
+                None
             } else {
-                // TODO: device appears to be leaked here.
-                let metal_device = match options.gpu_power_preference {
-                    GPUPowerPreference::LowPower => metal::Device::all()
-                        .into_iter()
-                        .find(is_integrated_gpu)
-                        .or_else(metal::Device::system_default),
-                    _ => metal::Device::system_default(),
+                let device = match options.gpu_power_preference {
+                    GPUPowerPreference::LowPower => {
+                        let all = MTLCopyAllDevices();
+                        (0..all.count())
+                            .map(|i| all.objectAtIndex(i))
+                            .find(|device| is_integrated_gpu(device))
+                            .or_else(|| MTLCreateSystemDefaultDevice())
+                    }
+                    _ => MTLCreateSystemDefaultDevice(),
                 }
                 .ok_or_else(|| anyhow!("could not obtain metal device"))?;
                 log::info!(
                     "Using {} GPU for rendering new window.",
-                    if is_integrated_gpu(&metal_device) {
+                    if is_integrated_gpu(&device) {
                         "integrated"
                     } else {
                         "discrete"
                     }
                 );
-
-                let ptr = metal_device.as_ptr() as id;
-                (Some(metal_device), ptr)
+                Some(device)
             };
+            let metal_device_ptr: *mut ProtocolObject<dyn MTLDevice> = metal_device
+                .as_ref()
+                .map_or(ptr::null_mut(), |device| Retained::as_ptr(device) as *mut _);
 
-            let native_window: id = match options.style {
-                WindowStyle::Pin => {
-                    let panel: id = create_warp_nspanel(
+            let background_blur_radius_pixels = options
+                .background_blur_radius_pixels
+                .unwrap_or(DEFAULT_WINDOW_BACKGROUND_BLUR_RADIUS);
+
+            // SAFETY: these call into the hand-written Objective-C window factories.
+            let native_window: *mut NSWindow = unsafe {
+                match options.style {
+                    WindowStyle::Pin => {
+                        let panel = create_warp_nspanel(
+                            frame,
+                            metal_device_ptr,
+                            Bool::new(options.hide_title_bar),
+                            background_blur_radius_pixels,
+                            Bool::new(test_mode),
+                        );
+
+                        let _: () = msg_send![panel, positionPinnedPanel];
+                        panel
+                    }
+                    _ => create_warp_nswindow(
                         frame,
                         metal_device_ptr,
-                        options.hide_title_bar as BOOL,
-                        options
-                            .background_blur_radius_pixels
-                            .unwrap_or(DEFAULT_WINDOW_BACKGROUND_BLUR_RADIUS),
-                        test_mode as BOOL,
-                    );
-
-                    let _: () = msg_send![panel, positionPinnedPanel];
-                    panel
+                        Bool::new(options.hide_title_bar),
+                        background_blur_radius_pixels,
+                        Bool::new(test_mode),
+                    ),
                 }
-                _ => create_warp_nswindow(
-                    frame,
-                    metal_device_ptr,
-                    options.hide_title_bar as BOOL,
-                    options
-                        .background_blur_radius_pixels
-                        .unwrap_or(DEFAULT_WINDOW_BACKGROUND_BLUR_RADIUS),
-                    test_mode as BOOL,
-                ),
             };
-            if native_window == nil {
+            // SAFETY: `native_window` is either null or a valid `WarpWindow`.
+            let Some(native_window_ref) = (unsafe { native_window.as_ref() }) else {
                 return Err(anyhow!("WarpWindow returned nil from initializer"));
-            }
+            };
 
             if options.fullscreen_state == FullscreenState::Fullscreen {
                 // Instead of directly calling toggleFullScreen, we call a wrapper method that
                 // ensures MacOS window animations don't overlap.
-                let _: () = msg_send![native_window, enqueueFullscreenTransition];
+                // SAFETY: `enqueueFullscreenTransition` is a custom WarpWindow selector.
+                let _: () = unsafe { msg_send![native_window_ref, enqueueFullscreenTransition] };
             }
 
-            let native_view: id = msg_send![native_window, contentView];
+            let native_view = native_window_ref
+                .contentView()
+                .expect("WarpWindow always has a content view");
 
-            let device = metal_device.map(move |metal_device| {
-                Device::new(
+            let device = match metal_device {
+                Some(metal_device) => Some(Device::new(
                     metal_device,
-                    native_view as id,
-                    native_window as id,
+                    &native_view,
+                    native_window_ref,
                     options.gpu_power_preference,
                     options.on_gpu_device_info_reported,
-                )
-            });
+                )),
+                None => None,
+            };
 
             let window_state = Rc::new(WindowState {
                 native_window,
@@ -594,61 +623,70 @@ impl Window {
                 capture_callback: RefCell::new(None),
             });
 
-            (*native_window).set_ivar(WINDOW_STATE_IVAR, Ivar::from_state(&window_state));
-            (*native_view).set_ivar(WINDOW_STATE_IVAR, Ivar::from_state(&window_state));
-
-            let native_window_delegate: id = msg_send![native_window, delegate];
-            (*native_window_delegate).set_ivar(WINDOW_STATE_IVAR, Ivar::from_state(&window_state));
+            // Store a +1 reference to the window state in the window, its content
+            // view, and its delegate ivars.
+            // SAFETY: the window, content view, and delegate are freshly created and
+            // each declares the `windowState` ivar.
+            unsafe {
+                (*native_window.cast::<Object>())
+                    .set_ivar(WINDOW_STATE_IVAR, Ivar::from_state(&window_state));
+                (*Retained::as_ptr(&native_view).cast::<Object>().cast_mut())
+                    .set_ivar(WINDOW_STATE_IVAR, Ivar::from_state(&window_state));
+                let native_window_delegate = native_window_ref
+                    .delegate()
+                    .expect("WarpWindow always has a delegate");
+                (*Retained::as_ptr(&native_window_delegate)
+                    .cast::<Object>()
+                    .cast_mut())
+                .set_ivar(WINDOW_STATE_IVAR, Ivar::from_state(&window_state));
+            }
 
             // Set the initial scale properly.
-            warp_view_did_change_backing_properties(&*native_view, true);
+            warp_view_did_change_backing_properties(as_objc_object(&native_view), true);
 
-            match options.style {
-                WindowStyle::Normal | WindowStyle::Pin => {
-                    match options.bounds {
-                        WindowBounds::ExactPosition(_) => {
-                            // If specfied, we should set the window to the exact position.
-                            // Note that the final position could be different from the set one as the original
-                            // frame may no longer exist (e.g. user unplugs the monitor).
-                            position_at_given_location(native_window, frame.origin)
-                        }
-                        WindowBounds::ExactSize(_) | WindowBounds::Default => {
-                            // Otherwise we put it in the center of the window or cascade from the previous window.
-                            position_and_order_front(native_window)
+            // SAFETY: these call into the hand-written Objective-C positioning helpers.
+            unsafe {
+                match options.style {
+                    WindowStyle::Normal | WindowStyle::Pin => {
+                        match options.bounds {
+                            WindowBounds::ExactPosition(_) => {
+                                // If specfied, we should set the window to the exact position.
+                                // Note that the final position could be different from the set one as the original
+                                // frame may no longer exist (e.g. user unplugs the monitor).
+                                position_at_given_location(native_window_ref, frame.origin)
+                            }
+                            WindowBounds::ExactSize(_) | WindowBounds::Default => {
+                                // Otherwise we put it in the center of the window or cascade from the previous window.
+                                position_and_order_front(native_window_ref)
+                            }
                         }
                     }
-                }
-                WindowStyle::Cascade => position_and_order_front(native_window),
-                WindowStyle::NotStealFocus => (),
-                WindowStyle::PositionedNoFocus => {
-                    order_front_without_focus(native_window, frame.origin)
+                    WindowStyle::Cascade => position_and_order_front(native_window_ref),
+                    WindowStyle::NotStealFocus => (),
+                    WindowStyle::PositionedNoFocus => {
+                        order_front_without_focus(native_window_ref, frame.origin)
+                    }
                 }
             }
 
-            pool.drain();
-
             Ok(Self(window_state))
-        }
+        })
     }
 
     /// Returns the key window, if any.
-    pub fn key_window() -> Option<id> {
-        unsafe {
-            let native_window: id = msg_send![NSApp(), keyWindow];
-            if native_window == nil {
-                None
-            } else {
-                Some(native_window)
-            }
-        }
+    pub fn key_window() -> Option<Retained<NSWindow>> {
+        // SAFETY: this runs on the main thread.
+        let mtm = unsafe { MainThreadMarker::new_unchecked() };
+        NSApplication::sharedApplication(mtm).keyWindow()
     }
 
     pub fn active_window_id() -> Option<WindowId> {
+        let native_window = Self::key_window()?;
+        // SAFETY: `is_warp_window` and the window-state ivar accessor are FFI calls
+        // into the WarpWindow class.
         unsafe {
-            let native_window = Self::key_window()?;
-            let is_ours: bool = is_warp_window(native_window) == YES;
-            if is_ours {
-                Some(get_window_state(&*native_window).window_id)
+            if is_warp_window(&native_window).as_bool() {
+                Some(get_window_state(as_objc_object(&native_window)).window_id)
             } else {
                 None
             }
@@ -656,11 +694,12 @@ impl Window {
     }
 
     pub fn frontmost_window_id() -> Option<WindowId> {
+        // SAFETY: `get_frontmost_window` returns null or a valid `WarpWindow`, and
+        // the window-state ivar accessor reads its ivar.
         unsafe {
-            let native_window: id = get_frontmost_window();
-            let is_ours: bool = is_warp_window(native_window) == YES;
-            if is_ours {
-                Some(get_window_state(&*native_window).window_id)
+            let native_window = get_frontmost_window().as_ref()?;
+            if is_warp_window(native_window).as_bool() {
+                Some(get_window_state(as_objc_object(native_window)).window_id)
             } else {
                 None
             }
@@ -668,77 +707,82 @@ impl Window {
     }
 
     pub fn key_window_is_modal_panel() -> bool {
-        unsafe {
-            let Some(native_window) = Self::key_window() else {
-                return false;
-            };
-            let is_modal_panel: BOOL = msg_send![native_window, isModalPanel];
-            is_modal_panel == YES
-        }
+        let Some(native_window) = Self::key_window() else {
+            return false;
+        };
+        // `isModalPanel` is a custom WarpWindow selector returning a BOOL.
+        // SAFETY: messaging a valid window.
+        unsafe { msg_send![&*native_window, isModalPanel] }
     }
 
     pub fn close_ime_on_active_window() {
-        unsafe {
-            let Some(native_window) = Self::key_window() else {
-                return;
-            };
-            let is_ours: bool = is_warp_window(native_window) == YES;
-            if is_ours {
-                Self::send_close_ime_msg(&*native_window);
-            }
+        let Some(native_window) = Self::key_window() else {
+            return;
+        };
+        // SAFETY: `is_warp_window` is an FFI call into the WarpWindow class.
+        if unsafe { is_warp_window(&native_window) }.as_bool() {
+            Self::send_close_ime_msg(&native_window);
         }
     }
 
-    fn send_close_ime_msg(native_window: &Object) {
+    fn send_close_ime_msg(native_window: &NSWindow) {
+        // SAFETY: warp windows carry the window-state ivar, and the content view is a
+        // WarpHostView exposing the custom `closeIMEAsync` selector.
         unsafe {
-            let view = get_window_state(native_window).native_window.contentView();
-            let _: () = msg_send![view, closeIMEAsync];
+            let state = get_window_state(as_objc_object(native_window));
+            if let Some(view) = (*state.native_window).contentView() {
+                let _: () = msg_send![&*view, closeIMEAsync];
+            }
         }
     }
 
     pub fn close_ime_async(window_id: WindowId) {
-        unsafe {
-            if let Some(native_window) = Self::find_window_with_id(window_id) {
-                Self::send_close_ime_msg(&*native_window);
-            }
+        // SAFETY: `find_window_with_id` enumerates AppKit's window list.
+        if let Some(native_window) = unsafe { Self::find_window_with_id(window_id) } {
+            Self::send_close_ime_msg(&native_window);
         }
     }
 
     pub fn open_url(url: &str) {
+        // SAFETY: `open_url` reads the string for the duration of the call.
         unsafe {
-            open_url(make_nsstring(url));
+            open_url(&NSString::from_str(url));
         }
     }
 
     pub fn open_file_path(path: &Path) {
-        unsafe {
-            if let Some(path_string) = path.to_str() {
-                open_file_path(make_nsstring(path_string));
+        if let Some(path_string) = path.to_str() {
+            // SAFETY: `open_file_path` reads the string for the duration of the call.
+            unsafe {
+                open_file_path(&NSString::from_str(path_string));
             }
         }
     }
 
     pub fn open_file_path_in_explorer(path: &Path) {
-        unsafe {
-            if let Some(path_string) = path.to_str() {
-                open_file_path_in_explorer(make_nsstring(path_string));
+        if let Some(path_string) = path.to_str() {
+            // SAFETY: `open_file_path_in_explorer` reads the string for the duration of the call.
+            unsafe {
+                open_file_path_in_explorer(&NSString::from_str(path_string));
             }
         }
     }
 
     pub fn open_file_picker(callback: FilePickerCallback, config: FilePickerConfiguration) {
-        let file_types = config
+        let file_types: Vec<Retained<NSString>> = config
             .file_types()
             .iter()
-            .map(|file_type| make_nsstring(file_type.to_string()))
-            .collect_vec();
+            .map(|file_type| NSString::from_str(&file_type.to_string()))
+            .collect();
+        let file_types = NSArray::from_retained_slice(&file_types);
+        // SAFETY: `open_file_picker` consumes the callback box and reads the array.
         unsafe {
             open_file_picker(
                 Box::into_raw(Box::new(callback)) as *mut c_void,
-                NSArray::arrayWithObjects(nil, &file_types),
-                config.allows_files() as BOOL,
-                config.allows_folder() as BOOL,
-                config.allows_multi_select() as BOOL,
+                &file_types,
+                Bool::new(config.allows_files()),
+                Bool::new(config.allows_folder()),
+                Bool::new(config.allows_multi_select()),
             );
         }
     }
@@ -749,29 +793,33 @@ impl Window {
     ) {
         let default_directory = config
             .default_directory
-            .map(|path| make_nsstring(path.display().to_string()))
-            .unwrap_or_else(|| make_nsstring(""));
+            .map(|path| NSString::from_str(&path.display().to_string()))
+            .unwrap_or_else(|| NSString::from_str(""));
         let default_filename = config
             .default_filename
-            .map(make_nsstring)
-            .unwrap_or_else(|| make_nsstring(""));
+            .map(|filename| NSString::from_str(&filename))
+            .unwrap_or_else(|| NSString::from_str(""));
+        // SAFETY: `open_save_file_picker` consumes the callback box and reads the strings.
         unsafe {
             open_save_file_picker(
                 Box::into_raw(Box::new(callback)) as *mut c_void,
-                default_filename,
-                default_directory,
+                &default_filename,
+                &default_directory,
             );
         }
     }
 
     pub fn is_ime_open() -> bool {
+        let Some(native_window) = Self::key_window() else {
+            return false;
+        };
+        // SAFETY: `is_warp_window` and the window-state ivar accessor are FFI calls
+        // into the WarpWindow class.
         unsafe {
-            let Some(native_window) = Self::key_window() else {
-                return false;
-            };
-            let is_ours: bool = is_warp_window(native_window) == YES;
-            if is_ours {
-                get_window_state(&*native_window).ime_active.get()
+            if is_warp_window(&native_window).as_bool() {
+                get_window_state(as_objc_object(&native_window))
+                    .ime_active
+                    .get()
             } else {
                 false
             }
@@ -779,74 +827,80 @@ impl Window {
     }
 
     pub fn set_accessibility_contents(content: AccessibilityContent) {
-        unsafe {
-            let Some(native_window) = Self::key_window() else {
-                return;
+        let Some(native_window) = Self::key_window() else {
+            return;
+        };
+        // SAFETY: `is_warp_window` is an FFI call into the WarpWindow class.
+        if unsafe { is_warp_window(&native_window) }.as_bool() {
+            let frame = if let Some(frame) = content.frame {
+                RectF::new(
+                    transform_origin_from_rect_coord_to_frame_coord(frame.origin(), frame.size()),
+                    frame.size(),
+                )
+                .to_ns_rect()
+            } else {
+                RectF::default().to_ns_rect()
             };
-            if is_warp_window(native_window) == YES {
-                let frame = if let Some(frame) = content.frame {
-                    RectF::new(
-                        transform_origin_from_rect_coord_to_frame_coord(
-                            frame.origin(),
-                            frame.size(),
-                        ),
-                        frame.size(),
-                    )
-                    .to_ns_rect()
-                } else {
-                    RectF::default().to_ns_rect()
-                };
-                // Wrap in a local autorelease pool: under VoiceOver this is invoked
-                // from `AppContext::handle_action` on every user action, so it's a hot
-                // path. The ObjC `set_accessibility_contents` callee retains the strings,
-                // so draining after the call safely bounds peak memory.
-                let pool = NSAutoreleasePool::new(nil);
-                set_accessibility_contents(
-                    native_window,
-                    make_nsstring(&content.value),
-                    make_nsstring(content.help.unwrap_or_default()),
-                    make_nsstring(content.role.to_string()),
-                    content.frame.is_some() as BOOL,
-                    frame,
-                );
-                pool.drain();
-            }
+            // Wrap in a local autorelease pool: under VoiceOver this is invoked
+            // from `AppContext::handle_action` on every user action, so it's a hot
+            // path. The ObjC `set_accessibility_contents` callee retains the strings,
+            // so draining after the call safely bounds peak memory.
+            autoreleasepool(|_| {
+                // SAFETY: `set_accessibility_contents` reads the window and strings.
+                unsafe {
+                    set_accessibility_contents(
+                        &native_window,
+                        &NSString::from_str(&content.value),
+                        &NSString::from_str(&content.help.unwrap_or_default()),
+                        &NSString::from_str(&content.role.to_string()),
+                        Bool::new(content.frame.is_some()),
+                        frame,
+                    );
+                }
+            });
         }
     }
 
     /// Sets the background blur radius for all active windows to `blur_radius_pixels`.
     pub fn set_all_windows_background_blur_radius(blur_radius_pixels: u8) {
-        unsafe {
-            let windows: id = msg_send![NSApp(), windows];
-            for i in 0..windows.count() {
-                let window: id = windows.objectAtIndex(i);
-                if is_warp_window(window) == YES {
-                    set_window_background_blur_radius(window, blur_radius_pixels)
+        // SAFETY: this runs on the main thread.
+        let mtm = unsafe { MainThreadMarker::new_unchecked() };
+        let windows = NSApplication::sharedApplication(mtm).windows();
+        for i in 0..windows.count() {
+            let window = windows.objectAtIndex(i);
+            // SAFETY: `is_warp_window` / `set_window_background_blur_radius` are FFI
+            // calls into the WarpWindow class.
+            unsafe {
+                if is_warp_window(&window).as_bool() {
+                    set_window_background_blur_radius(&window, blur_radius_pixels)
                 }
             }
         }
     }
 
     pub fn show_window_and_focus_app(window_id: WindowId, bring_to_front: bool) {
+        // SAFETY: `find_window_with_id` / `show_window_and_focus_app` are FFI calls.
         unsafe {
             if let Some(window) = Self::find_window_with_id(window_id) {
-                show_window_and_focus_app(window, bring_to_front as BOOL);
+                show_window_and_focus_app(&window, bring_to_front);
             }
         }
     }
 
     pub fn hide_window(window_id: WindowId) {
+        // SAFETY: `find_window_with_id` / `hide_window` are FFI calls.
         unsafe {
             if let Some(window) = Self::find_window_with_id(window_id) {
-                hide_window(window)
+                hide_window(&window)
             }
         }
     }
 
     pub fn set_window_alpha(window_id: WindowId, alpha: f32) {
+        // SAFETY: `find_window_with_id` / `set_window_alpha` are FFI calls.
         unsafe {
             if let Some(window) = Self::find_window_with_id(window_id) {
-                set_window_alpha(window, alpha as f64)
+                set_window_alpha(&window, alpha as f64)
             }
         }
     }
@@ -855,35 +909,38 @@ impl Window {
     ///
     /// # Safety
     /// This code is unsafe since it requires interfacing with platform code.
-    unsafe fn find_window_with_id(window_id: WindowId) -> Option<id> {
-        let windows: id = msg_send![NSApp(), windows];
+    unsafe fn find_window_with_id(window_id: WindowId) -> Option<Retained<NSWindow>> {
+        let mtm = MainThreadMarker::new_unchecked();
+        let windows = NSApplication::sharedApplication(mtm).windows();
         (0..windows.count())
-            .find(|i| {
-                let window: id = windows.objectAtIndex(*i);
-                let is_ours: bool = is_warp_window(window) == YES;
-
-                is_ours && get_window_state(&*window).window_id == window_id
+            .find(|&i| {
+                let window = windows.objectAtIndex(i);
+                is_warp_window(&window).as_bool()
+                    && get_window_state(as_objc_object(&window)).window_id == window_id
             })
             .map(|idx| windows.objectAtIndex(idx))
     }
 
     pub fn close_window_async(window_id: WindowId, termination_mode: TerminationMode) {
         let force_terminate = match termination_mode {
-            TerminationMode::Cancellable => NO,
-            TerminationMode::ForceTerminate | TerminationMode::ContentTransferred => YES,
+            TerminationMode::Cancellable => false,
+            TerminationMode::ForceTerminate | TerminationMode::ContentTransferred => true,
         };
+        // SAFETY: `find_window_with_id` enumerates the window list; `closeWindowAsync:`
+        // is a custom WarpWindow selector taking a BOOL.
         unsafe {
             if let Some(window) = Self::find_window_with_id(window_id) {
-                let _: id = msg_send![window, closeWindowAsync: force_terminate];
+                let _: () = msg_send![&*window, closeWindowAsync: Bool::new(force_terminate)];
             }
         }
     }
 
     pub fn set_window_bounds(window_id: WindowId, bound: RectF) {
+        // SAFETY: `find_window_with_id` / `set_window_bounds` are FFI calls.
         unsafe {
             if let Some(window) = Self::find_window_with_id(window_id) {
                 set_window_bounds(
-                    window,
+                    &window,
                     RectF::new(
                         // Transform the bound from the UI internal coordinate system
                         // to Cocoa's coordinate system.
@@ -900,9 +957,10 @@ impl Window {
     }
 
     pub fn set_window_title(window_id: WindowId, title: &str) {
+        // SAFETY: `find_window_with_id` / `set_window_title` are FFI calls.
         unsafe {
             if let Some(window) = Self::find_window_with_id(window_id) {
-                set_window_title(window, make_nsstring(title));
+                set_window_title(&window, &NSString::from_str(title));
             }
         }
     }
@@ -910,20 +968,15 @@ impl Window {
 
 impl platform::Window for Window {
     fn minimize(&self) {
-        let native_window = self.0.native_window;
-        unsafe {
-            let _: () = msg_send![native_window, miniaturize: nil];
-        }
+        self.0.window().miniaturize(None);
     }
 
     fn fullscreen_state(&self) -> FullscreenState {
-        let native_window = self.0.native_window;
-        let zoomed: BOOL = unsafe { msg_send![native_window, isZoomed] };
-        if unsafe {
-            NSWindow::styleMask(native_window).contains(NSWindowStyleMask::NSFullScreenWindowMask)
-        } {
+        let window = self.0.window();
+        let zoomed = window.isZoomed();
+        if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
             FullscreenState::Fullscreen
-        } else if zoomed == YES {
+        } else if zoomed {
             FullscreenState::Maximized
         } else {
             FullscreenState::Normal
@@ -931,17 +984,15 @@ impl platform::Window for Window {
     }
 
     fn toggle_fullscreen(&self) {
-        let native_window = self.0.native_window;
-        unsafe {
-            let _: () = msg_send![native_window, enqueueFullscreenTransition];
-        }
+        // `enqueueFullscreenTransition` is a custom WarpWindow selector.
+        // SAFETY: messaging a valid window.
+        let _: () = unsafe { msg_send![self.0.window(), enqueueFullscreenTransition] };
     }
 
     fn toggle_maximized(&self) {
-        let native_window = self.0.native_window;
-        unsafe {
-            let _: () = msg_send![native_window, zoomAsync: nil];
-        }
+        // `zoomAsync:` is a custom WarpWindow selector taking a nil sender.
+        // SAFETY: messaging a valid window.
+        let _: () = unsafe { msg_send![self.0.window(), zoomAsync: ptr::null_mut::<AnyObject>()] };
     }
 
     fn as_ctx(&self) -> &dyn platform::WindowContext {
@@ -1016,9 +1067,22 @@ impl WindowState {
         self.window_id
     }
 
+    /// Returns a reference to the backing `NSWindow`.
+    ///
+    /// The window outlives the `WindowState`: the window owns the state through its
+    /// ivar and clears it in `warp_dealloc_window`.
+    fn window(&self) -> &NSWindow {
+        // SAFETY: `native_window` stays valid for the whole lifetime of the state.
+        unsafe { &*self.native_window }
+    }
+
     /// Returns the logical (resolution-agnostic) size of the current window.
     pub fn logical_size(&self) -> Vector2F {
-        let view_frame = unsafe { NSView::frame(self.native_window.contentView()) };
+        let view = self
+            .window()
+            .contentView()
+            .expect("WarpWindow always has a content view");
+        let view_frame = view.frame();
         vec2f(view_frame.size.width as f32, view_frame.size.height as f32)
     }
 
@@ -1028,7 +1092,7 @@ impl WindowState {
     }
 
     pub fn backing_scale_factor(&self) -> f64 {
-        unsafe { NSWindow::backingScaleFactor(self.native_window) }
+        self.window().backingScaleFactor()
     }
 
     fn next_synthetic_drag_id(&self) -> usize {
@@ -1049,9 +1113,18 @@ impl WindowState {
         }
     }
 
-    /// Returns an `id` to the current `NSView` of the window.
-    pub(super) fn native_view(&self) -> id {
-        unsafe { msg_send![self.native_window, contentView] }
+    /// Returns the window's backing `CAMetalLayer`.
+    pub fn metal_layer(&self) -> Retained<CAMetalLayer> {
+        let view = self
+            .window()
+            .contentView()
+            .expect("WarpHostView content view");
+        let layer = view
+            .layer()
+            .expect("WarpHostView always has a backing layer");
+        layer
+            .downcast::<CAMetalLayer>()
+            .expect("backing layer is a CAMetalLayer")
     }
 
     /// Returns the current [`Device`] for rendering. `None` if the window was configured with no
@@ -1061,53 +1134,50 @@ impl WindowState {
     }
 
     fn has_window_buttons(&self) -> bool {
-        unsafe {
-            // Use the close button as a proxy, since we modify all standard buttons together.
-            let button = NSWindow::standardWindowButton_(
-                self.native_window,
-                NSWindowButton::NSWindowCloseButton,
-            );
-            let is_hidden: BOOL = msg_send![button, isHidden];
-            is_hidden == NO
+        // Use the close button as a proxy, since we modify all standard buttons together.
+        match self
+            .window()
+            .standardWindowButton(NSWindowButton::CloseButton)
+        {
+            Some(button) => !button.isHidden(),
+            None => true,
         }
     }
 
     fn set_window_buttons(&self, show_window_buttons: bool) {
-        let hide_buttons = !show_window_buttons as BOOL;
-        unsafe {
-            let close_button = NSWindow::standardWindowButton_(
-                self.native_window,
-                NSWindowButton::NSWindowCloseButton,
-            );
-            let _: () = msg_send![close_button, setHidden: hide_buttons];
-            let miniaturize_button = NSWindow::standardWindowButton_(
-                self.native_window,
-                NSWindowButton::NSWindowMiniaturizeButton,
-            );
-            let _: () = msg_send![miniaturize_button, setHidden: hide_buttons];
-            let zoom_button = NSWindow::standardWindowButton_(
-                self.native_window,
-                NSWindowButton::NSWindowZoomButton,
-            );
-            let _: () = msg_send![zoom_button, setHidden: hide_buttons];
+        let hide_buttons = !show_window_buttons;
+        let window = self.window();
+        if let Some(button) = window.standardWindowButton(NSWindowButton::CloseButton) {
+            button.setHidden(hide_buttons);
+        }
+        if let Some(button) = window.standardWindowButton(NSWindowButton::MiniaturizeButton) {
+            button.setHidden(hide_buttons);
+        }
+        if let Some(button) = window.standardWindowButton(NSWindowButton::ZoomButton) {
+            button.setHidden(hide_buttons);
         }
     }
 
     fn set_titlebar_height(&self, height: f64) {
+        // SAFETY: `set_titlebar_height` reads the window for the duration of the call.
         unsafe {
-            set_titlebar_height(self.native_window, height);
+            set_titlebar_height(self.window(), height);
         }
     }
 }
 
 impl platform::WindowContext for WindowState {
     fn size(&self) -> Vector2F {
-        let view_frame = unsafe { NSView::frame(self.native_window.contentView()) };
+        let view = self
+            .window()
+            .contentView()
+            .expect("WarpWindow always has a content view");
+        let view_frame = view.frame();
         vec2f(view_frame.size.width as f32, view_frame.size.height as f32)
     }
 
     fn origin(&self) -> Vector2F {
-        let view_frame = unsafe { NSWindow::frame(self.native_window) };
+        let view_frame = self.window().frame();
         transform_origin_from_frame_coord_to_rect_coord(
             vec2f(view_frame.origin.x as f32, view_frame.origin.y as f32),
             vec2f(view_frame.size.width as f32, view_frame.size.height as f32),
@@ -1115,7 +1185,7 @@ impl platform::WindowContext for WindowState {
     }
 
     fn backing_scale_factor(&self) -> f32 {
-        unsafe { NSWindow::backingScaleFactor(self.native_window) as f32 }
+        self.window().backingScaleFactor() as f32
     }
 
     fn max_texture_dimension_2d(&self) -> Option<u32> {
@@ -1125,16 +1195,16 @@ impl platform::WindowContext for WindowState {
 
     fn render_scene(&self, scene: Rc<Scene>) {
         *self.next_scene.borrow_mut() = Some(scene);
-        unsafe {
-            let _: () = msg_send![self.native_window, setNeedsDisplayAsync];
-        }
+        // `setNeedsDisplayAsync` is a custom WarpWindow selector.
+        // SAFETY: messaging a valid window.
+        let _: () = unsafe { msg_send![self.window(), setNeedsDisplayAsync] };
     }
 
     fn request_redraw(&self) {
         let _ = self.next_scene.borrow_mut().take();
-        unsafe {
-            let _: () = msg_send![self.native_window, setNeedsDisplayAsync];
-        }
+        // `setNeedsDisplayAsync` is a custom WarpWindow selector.
+        // SAFETY: messaging a valid window.
+        let _: () = unsafe { msg_send![self.window(), setNeedsDisplayAsync] };
     }
 
     fn request_frame_capture(
@@ -1142,9 +1212,9 @@ impl platform::WindowContext for WindowState {
         callback: Box<dyn FnOnce(platform::CapturedFrame) + Send + 'static>,
     ) {
         *self.capture_callback.borrow_mut() = Some(callback);
-        unsafe {
-            let _: () = msg_send![self.native_window, setNeedsDisplayAsync];
-        }
+        // `setNeedsDisplayAsync` is a custom WarpWindow selector.
+        // SAFETY: messaging a valid window.
+        let _: () = unsafe { msg_send![self.window(), setNeedsDisplayAsync] };
     }
 }
 
@@ -1186,25 +1256,33 @@ impl WindowExt for &dyn platform::Window {
 
 #[no_mangle]
 extern "C-unwind" fn warp_view_did_change_backing_properties(this: &Object, async_callback: bool) {
-    let window;
-    unsafe {
-        window = get_window_state(this);
-        let layer: id = msg_send![this, layer];
-        let _: () = msg_send![layer, setContentsScale: window.backing_scale_factor()];
-        let size = window.logical_size();
+    // SAFETY: `this` is a WarpHostView carrying the window-state ivar; its backing
+    // layer is always a CAMetalLayer.
+    let (window, layer) = unsafe {
+        let window = get_window_state(this);
+        let view = &*(this as *const Object).cast::<NSView>();
+        let layer = view
+            .layer()
+            .expect("WarpHostView always has a backing layer");
+        (window, layer)
+    };
+    layer.setContentsScale(window.backing_scale_factor());
+    let size = window.logical_size();
 
-        let scale_factor = window.backing_scale_factor();
+    let scale_factor = window.backing_scale_factor();
 
-        if !size.is_zero() {
-            // Manually convert the size into the drawable size by multiplying by the scale factor. For
-            // some reason using `convertSizeToBacking` incorrectly upscales the drawable size in some
-            // cases even when the backing scale factor is 1.0.
-            let drawable_size: NSSize = NSSize::new(
-                size.x() as f64 * scale_factor,
-                size.y() as f64 * scale_factor,
-            );
-            let _: () = msg_send![layer, setDrawableSize: drawable_size];
-        }
+    if !size.is_zero() {
+        // Manually convert the size into the drawable size by multiplying by the scale factor. For
+        // some reason using `convertSizeToBacking` incorrectly upscales the drawable size in some
+        // cases even when the backing scale factor is 1.0.
+        let drawable_size = NSSize::new(
+            size.x() as f64 * scale_factor,
+            size.y() as f64 * scale_factor,
+        );
+        layer
+            .downcast_ref::<CAMetalLayer>()
+            .expect("WarpHostView backing layer is a CAMetalLayer")
+            .setDrawableSize(drawable_size);
     }
 
     window.resize_renderer();
@@ -1239,7 +1317,8 @@ pub extern "C-unwind" fn warp_get_accessibility_contents(object: &mut Object) ->
     let accessibility_contents = accessibility_data
         .map(|data| data.content)
         .unwrap_or_default();
-    make_nsstring(accessibility_contents.as_str())
+    // Hand the autoreleased NSString back to the Objective-C caller as an `id`.
+    Retained::autorelease_return(NSString::from_str(accessibility_contents.as_str())).cast()
 }
 
 #[no_mangle]
@@ -1273,20 +1352,28 @@ pub extern "C-unwind" fn warp_ime_position(object: &mut Object, content_rect: NS
 
 #[no_mangle]
 extern "C-unwind" fn warp_view_set_frame_size(this: &Object, size: NSSize, async_callback: bool) {
-    let window;
-    unsafe {
-        window = get_window_state(this);
-        // Manually convert the size into the drawable size by multiplying by the scale factor. For
-        // some reason using `convertSizeToBacking` incorrectly upscales the drawable size in some
-        // cases even when the backing scale factor is 1.0.
-        let scale_factor = window.backing_scale_factor();
-        let drawable_size: NSSize = NSSize {
-            width: size.width * scale_factor,
-            height: size.height * scale_factor,
-        };
-        let layer: id = msg_send![this, layer];
-        let _: () = msg_send![layer, setDrawableSize: drawable_size];
-    }
+    // SAFETY: `this` is a WarpHostView carrying the window-state ivar; its backing
+    // layer is always a CAMetalLayer.
+    let (window, layer) = unsafe {
+        let window = get_window_state(this);
+        let view = &*(this as *const Object).cast::<NSView>();
+        let layer = view
+            .layer()
+            .expect("WarpHostView always has a backing layer");
+        (window, layer)
+    };
+    // Manually convert the size into the drawable size by multiplying by the scale factor. For
+    // some reason using `convertSizeToBacking` incorrectly upscales the drawable size in some
+    // cases even when the backing scale factor is 1.0.
+    let scale_factor = window.backing_scale_factor();
+    let drawable_size = NSSize {
+        width: size.width * scale_factor,
+        height: size.height * scale_factor,
+    };
+    layer
+        .downcast_ref::<CAMetalLayer>()
+        .expect("WarpHostView backing layer is a CAMetalLayer")
+        .setDrawableSize(drawable_size);
 
     window.resize_renderer();
 
@@ -1434,7 +1521,8 @@ extern "C-unwind" fn warp_handle_first_mouse_event(this: &Object, native_event: 
 
 #[no_mangle]
 extern "C-unwind" fn warp_handle_insert_text(this: &Object, characters: id) {
-    let string = unsafe { to_string(characters) };
+    // SAFETY: `characters` is a valid `NSString` of the inserted text.
+    let string = unsafe { &*characters.cast::<NSString>() }.to_string();
     let window = unsafe { get_window_state(this) };
     app::callback_dispatcher()
         .for_window(&Window(window.clone()))
@@ -1443,12 +1531,11 @@ extern "C-unwind" fn warp_handle_insert_text(this: &Object, characters: id) {
 
 #[no_mangle]
 extern "C-unwind" fn warp_handle_drag_and_drop(this: &Object, paths: id, point: NSPoint) {
+    // SAFETY: `paths` is an `NSArray<NSString>` of dropped file paths.
     let paths = unsafe {
+        let paths = &*paths.cast::<NSArray<NSString>>();
         (0..paths.count())
-            .map(|i| {
-                let directory = paths.objectAtIndex(i);
-                to_string(directory)
-            })
+            .map(|i| paths.objectAtIndex(i).to_string())
             .collect::<Vec<_>>()
     };
 
@@ -1487,8 +1574,8 @@ extern "C-unwind" fn warp_update_ime_state(this: &mut Object, ime_active: bool) 
 /// Converts an NSRange to a Rust Range<usize>
 /// NSRange has location (start) and length, while Rust Range has start and end
 fn nsrange_to_rust_range(ns_range: NSRange) -> std::ops::Range<usize> {
-    let start = ns_range.location as usize;
-    let end = start + ns_range.length as usize;
+    let start = ns_range.location;
+    let end = start + ns_range.length;
     start..end
 }
 
@@ -1499,7 +1586,8 @@ extern "C-unwind" fn warp_marked_text_updated(
     selected_range: NSRange,
 ) {
     let state = unsafe { get_window_state(this) };
-    let marked_text = unsafe { to_string(marked_text) };
+    // SAFETY: `marked_text` is a valid `NSString`.
+    let marked_text = unsafe { &*marked_text.cast::<NSString>() }.to_string();
     let selected_range = nsrange_to_rust_range(selected_range);
     app::callback_dispatcher()
         .for_window(&Window(state.clone()))
@@ -1519,7 +1607,7 @@ extern "C-unwind" fn warp_marked_text_cleared(this: &mut Object) {
 
 #[no_mangle]
 pub extern "C-unwind" fn warp_dispatch_standard_action(this: id, tag: NSInteger) {
-    if let Some(action) = StandardAction::from_isize(tag as isize) {
+    if let Some(action) = StandardAction::from_isize(tag) {
         let state = unsafe { get_window_state(&*this) };
         app::callback_dispatcher()
             .for_window(&Window(state.clone()))
@@ -1566,16 +1654,26 @@ unsafe fn remove_state_ivar_from_object(object: &mut Object) -> Rc<WindowState> 
 pub extern "C-unwind" fn warp_dealloc_window(native_window: &mut Object) {
     log::info!("dealloc native window {native_window:p}");
     let state;
+    // SAFETY: `native_window` is a WarpWindow being deallocated; its content view
+    // and delegate both carry the window-state ivar.
     unsafe {
+        let window = &*(native_window as *const Object).cast::<NSWindow>();
+
         // Remove the window state from the content NSView and drop a reference.
-        let view_id: id = msg_send![native_window, contentView];
-        let native_view = &mut (*view_id);
-        let _ = remove_state_ivar_from_object(native_view);
+        let native_view = window
+            .contentView()
+            .expect("WarpWindow always has a content view");
+        let _ = remove_state_ivar_from_object(
+            &mut *Retained::as_ptr(&native_view).cast::<Object>().cast_mut(),
+        );
 
         // Remove the window state from the NSWindowDelegate and drop a reference.
-        let delegate_id: id = msg_send![native_window, delegate];
-        let native_window_delegate = &mut (*delegate_id);
-        let _ = remove_state_ivar_from_object(native_window_delegate);
+        let native_window_delegate = window.delegate().expect("WarpWindow always has a delegate");
+        let _ = remove_state_ivar_from_object(
+            &mut *Retained::as_ptr(&native_window_delegate)
+                .cast::<Object>()
+                .cast_mut(),
+        );
 
         // Remove the window state from the NSWindow.
         state = remove_state_ivar_from_object(native_window);
@@ -1670,8 +1768,10 @@ fn transform_origin_from_rect_coord_to_frame_coord(origin: Vector2F, size: Vecto
     Vector2F::new(origin.x(), -(origin.y() + size.y()))
 }
 
-/// Converts an Objective-C `Object` into a `String`
-unsafe fn to_string(value: *mut Object) -> String {
-    let slice = slice::from_raw_parts(value.UTF8String() as *const c_uchar, value.len());
-    str::from_utf8_unchecked(slice).to_string()
+/// Reinterprets an objc2 object reference as the legacy `objc` `Object` type used
+/// for instance-variable access. The pointer identity is preserved.
+fn as_objc_object(object: &AnyObject) -> &Object {
+    // SAFETY: an objc2 `AnyObject` and an `objc` `Object` are both opaque handles
+    // to the same Objective-C instance; only the Rust view of it differs.
+    unsafe { &*(object as *const AnyObject).cast::<Object>() }
 }

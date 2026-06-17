@@ -1,16 +1,7 @@
 #[cfg(not(target_family = "wasm"))]
 mod native;
-#[cfg(not(target_family = "wasm"))]
-pub use native::McpIntegration;
-#[cfg(not(target_family = "wasm"))]
-mod oauth;
-#[cfg(not(target_family = "wasm"))]
-mod utils;
 #[cfg(target_family = "wasm")]
 mod wasm;
-
-#[cfg(all(test, not(target_family = "wasm")))]
-mod utils_tests;
 
 use std::collections::{HashMap, HashSet};
 #[cfg(not(target_family = "wasm"))]
@@ -19,6 +10,11 @@ use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use diesel::SqliteConnection;
 use futures_util::stream::AbortHandle;
+#[cfg(not(target_family = "wasm"))]
+use mcp::oauth;
+use mcp::TemplatableMCPServerInfo;
+#[cfg(not(target_family = "wasm"))]
+pub use native::McpIntegration;
 #[cfg(not(target_family = "wasm"))]
 use parking_lot::Mutex;
 use uuid::Uuid;
@@ -96,48 +92,6 @@ struct SpawnedServerInfo {
     abort_handle: AbortHandle,
     #[cfg(not(target_family = "wasm"))]
     oauth_result_tx: async_channel::Sender<oauth::CallbackResult>,
-}
-
-/// Information about a single connected MCP server.
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
-pub struct TemplatableMCPServerInfo {
-    name: String,
-    service: rmcp::service::RunningService<
-        rmcp::RoleClient,
-        Box<dyn rmcp::service::DynService<rmcp::RoleClient>>,
-    >,
-    resources: Vec<rmcp::model::Resource>,
-    tools: Vec<rmcp::model::Tool>,
-    installation_id: Uuid,
-    description: Option<String>,
-    /// Whether the underlying transport uses authentication.
-    ///
-    /// TODO(vorporeal): Use this to display a toast when server authentication and connection is complete, and
-    /// to provide a "log out" button.
-    #[allow(dead_code)]
-    is_authenticated_transport: bool,
-}
-
-impl TemplatableMCPServerInfo {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn resources(&self) -> &Vec<rmcp::model::Resource> {
-        &self.resources
-    }
-
-    pub fn tools(&self) -> &Vec<rmcp::model::Tool> {
-        &self.tools
-    }
-
-    pub fn installation_id(&self) -> Uuid {
-        self.installation_id
-    }
-
-    pub fn description(&self) -> Option<&str> {
-        self.description.as_deref()
-    }
 }
 
 /// The current status of the Figma MCP server.
@@ -222,13 +176,13 @@ impl TemplatableMCPServerManager {
     pub fn resources(&self) -> impl Iterator<Item = &rmcp::model::Resource> {
         self.active_servers
             .values()
-            .flat_map(|server| server.resources.iter())
+            .flat_map(|server| server.resources().iter())
     }
 
     pub fn tools(&self) -> impl Iterator<Item = &rmcp::model::Tool> {
         self.active_servers
             .values()
-            .flat_map(|server| server.tools.iter())
+            .flat_map(|server| server.tools().iter())
     }
 
     /// Returns a reconnecting peer for a server that has the given resource.
@@ -242,12 +196,7 @@ impl TemplatableMCPServerManager {
         let spawner = self.spawner.as_ref()?;
         self.active_servers
             .iter()
-            .find(|(_, server)| {
-                server
-                    .resources
-                    .iter()
-                    .any(|other_resource| resource.uri == other_resource.uri)
-            })
+            .find(|(_, server)| server.has_resource(resource))
             .map(|(installation_uuid, _)| {
                 super::reconnecting_peer::ReconnectingPeer::new(*installation_uuid, spawner.clone())
             })
@@ -256,7 +205,7 @@ impl TemplatableMCPServerManager {
     pub fn tools_for_server(&self, uuid: Uuid) -> Vec<rmcp::model::Tool> {
         self.active_servers
             .get(&uuid)
-            .map(|server| server.tools.clone())
+            .map(|server| server.tools().clone())
             .unwrap_or_default()
     }
 
@@ -274,24 +223,21 @@ impl TemplatableMCPServerManager {
         installation_id: Option<Uuid>,
         tool_name: &str,
     ) -> Option<std::sync::Arc<rmcp::model::JsonObject>> {
-        let candidates: Box<dyn Iterator<Item = &TemplatableMCPServerInfo>> =
+        let mut candidates: Box<dyn Iterator<Item = &TemplatableMCPServerInfo>> =
             if let Some(uuid) = installation_id {
                 Box::new(self.active_servers.get(&uuid).into_iter())
             } else {
                 Box::new(self.active_servers.values())
             };
 
-        candidates
-            .flat_map(|server| server.tools.iter())
-            .find(|t| t.name == tool_name)
-            .map(|t| t.input_schema.clone())
+        candidates.find_map(|server| server.tool_input_schema(tool_name))
     }
 
     #[cfg(not(target_family = "wasm"))]
     pub fn server_from_tool(&self, tool: String) -> Option<&Uuid> {
         self.active_servers
             .iter()
-            .find(|(_, server)| server.tools.iter().any(|t| t.name == tool))
+            .find(|(_, server)| server.has_tool(&tool))
             .map(|(uuid, _)| uuid)
     }
 
@@ -301,15 +247,7 @@ impl TemplatableMCPServerManager {
     pub fn server_from_resource(&self, name: &str, uri: Option<&str>) -> Option<&Uuid> {
         self.active_servers
             .iter()
-            .find(|(_, server)| {
-                server.resources.iter().any(|r| {
-                    if let Some(uri) = uri {
-                        r.uri == uri
-                    } else {
-                        r.name == name
-                    }
-                })
-            })
+            .find(|(_, server)| server.has_resource_name_or_uri(name, uri))
             .map(|(uuid, _)| uuid)
     }
 

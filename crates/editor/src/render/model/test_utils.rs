@@ -6,12 +6,12 @@ use std::sync::Arc;
 use ordered_float::OrderedFloat;
 use parking_lot::Once;
 use vec1::{Vec1, vec1};
-use warpui::color::ColorU;
-use warpui::elements::{Border, Fill, ListIndentLevel};
-use warpui::fonts::{FamilyId, Weight};
-use warpui::geometry::vector::vec2f;
-use warpui::text_layout::{CaretPosition, Glyph, Line, Run, TextFrame};
-use warpui::units::{IntoPixels, Pixels};
+use warpui_core::color::ColorU;
+use warpui_core::elements::{Border, Fill, ListIndentLevel};
+use warpui_core::fonts::{FamilyId, Weight};
+use warpui_core::geometry::vector::vec2f;
+use warpui_core::text_layout::{CaretPosition, Glyph, Line, Run, TextFrame};
+use warpui_core::units::{IntoPixels, Pixels};
 
 use super::{
     BlockItem, BrokenLinkStyle, CheckBoxStyle, DEFAULT_BLOCK_SPACINGS, HorizontalRuleStyle,
@@ -239,7 +239,7 @@ pub fn layout(text: &str, styles: &RichTextStyles, max_width: impl IntoPixels) -
                 width: line_width.as_f32(),
                 trailing_whitespace_width: 0.,
                 runs: vec![Run {
-                    font_id: warpui::fonts::FontId(0),
+                    font_id: warpui_core::fonts::FontId(0),
                     styles: Default::default(),
                     glyphs: mem::take(&mut glyphs_acc),
                     width: line_width.as_f32(),
@@ -278,7 +278,7 @@ pub fn layout(text: &str, styles: &RichTextStyles, max_width: impl IntoPixels) -
             width: line_width.as_f32(),
             trailing_whitespace_width: 0.,
             runs: vec![Run {
-                font_id: warpui::fonts::FontId(0),
+                font_id: warpui_core::fonts::FontId(0),
                 styles: Default::default(),
                 glyphs: glyphs_acc,
                 width: line_width.as_f32(),

@@ -72,7 +72,7 @@ fn construct_bundled_asset(asset_name: &str, asset_dir: &str) -> Result<TokenStr
     if full_asset_path(asset_name, asset_dir).exists() {
         let full_location = format!("{asset_dir}/{asset_name}");
         Ok(quote! {
-            ::warpui::assets::asset_cache::AssetSource::Bundled {
+            ::warpui_core::assets::asset_cache::AssetSource::Bundled {
                 path: #full_location .into(),
             }
         })

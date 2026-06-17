@@ -9,6 +9,7 @@ use async_executor::LocalExecutor;
 use futures::future::{BoxFuture, LocalBoxFuture};
 use futures::{Future, FutureExt};
 use futures_util::future::{AbortHandle, Abortable};
+use tracing::Instrument as _;
 
 use crate::platform;
 use crate::r#async::executor::Error;
@@ -85,6 +86,7 @@ impl Foreground {
     /// less code than a generic implementation, with no noticeable performance
     /// impact.
     pub fn spawn_boxed(&self, future: LocalBoxFuture<'static, ()>) -> ForegroundTask {
+        let future = future.instrument(tracing::Span::current());
         match self {
             Foreground::Platform {
                 not_send_or_sync: _,
@@ -191,6 +193,7 @@ impl Background {
     /// less code than a generic implementation, with no noticeable performance
     /// impact.
     pub fn spawn_boxed(&self, future: BoxFuture<'static, ()>) -> BackgroundTask {
+        let future = future.instrument(tracing::Span::current());
         let inner = match &self.runtime {
             Some(runtime) => Some(runtime.spawn(future)),
             None => {

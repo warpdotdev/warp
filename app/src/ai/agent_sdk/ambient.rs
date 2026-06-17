@@ -12,9 +12,9 @@ use warp_cli::json_filter::JsonOutput;
 use warp_cli::task::{
     ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, MessageCommand, MessageDeliveredArgs,
     MessageListArgs, MessageReadArgs, MessageSendArgs, MessageWatchArgs, RunSortByArg,
-    RunSortOrderArg, RunSourceArg, RunStateArg, TaskGetArgs,
+    RunSourceArg, RunStateArg, TaskGetArgs,
 };
-use warp_cli::GlobalOptions;
+use warp_cli::{GlobalOptions, SortOrderArg};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warpui::platform::TerminationMode;
@@ -22,7 +22,7 @@ use warpui::r#async::{Spawnable, Timer};
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::common::{parse_ambient_task_id, EnvironmentChoice, ResolveConfigurationError};
-use crate::ai::agent::extract_user_query_mode;
+use crate::ai::agent::{extract_user_query_mode, UserQueryMode};
 use crate::ai::agent_sdk::driver::attachments::{
     process_attachment, MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY,
 };
@@ -181,10 +181,10 @@ fn sort_by_from_arg(arg: RunSortByArg) -> RunSortBy {
     }
 }
 
-fn sort_order_from_arg(arg: RunSortOrderArg) -> RunSortOrder {
+fn sort_order_from_arg(arg: SortOrderArg) -> RunSortOrder {
     match arg {
-        RunSortOrderArg::Asc => RunSortOrder::Asc,
-        RunSortOrderArg::Desc => RunSortOrder::Desc,
+        SortOrderArg::Asc => RunSortOrder::Asc,
+        SortOrderArg::Desc => RunSortOrder::Desc,
     }
 }
 
@@ -262,11 +262,8 @@ impl AmbientAgentRunner {
                 );
                 return;
             }
-
-            // TODO: Consider making the server's prompt field optional when skill is provided,
-            // rather than sending an empty string for skill-only invocations.
-            let prompt_string = match prompt {
-                Some(Prompt::PlainText(text)) => text,
+            let prompt = match prompt {
+                Some(Prompt::PlainText(text)) => Some(text),
                 Some(Prompt::SavedPrompt(id)) => {
                     // Resolve the saved prompt to pass along as the ambient agent query.
                     // We look up the prompt text here, rather than passing along the saved prompt ID,
@@ -290,7 +287,7 @@ impl AmbientAgentRunner {
 
                     match workflow {
                         Some(cloud_workflow) => match cloud_workflow.model().data.prompt() {
-                            Some(prompt_text) => prompt_text.to_string(),
+                            Some(prompt_text) => Some(prompt_text.to_string()),
                             None => {
                                 super::report_fatal_error(
                                     anyhow::anyhow!("'{id}' is not a saved prompt"),
@@ -308,8 +305,7 @@ impl AmbientAgentRunner {
                         }
                     }
                 }
-                // Skill-only invocation: use empty prompt, skill provides instructions
-                None => String::new(),
+                None => None,
             };
 
             let loaded_file = match args.config_file.file.as_deref() {
@@ -470,7 +466,13 @@ impl AmbientAgentRunner {
                 None
             };
 
-            let (prompt, mode) = extract_user_query_mode(prompt_string);
+            let (prompt, mode) = match prompt {
+                Some(prompt) => {
+                    let (prompt, mode) = extract_user_query_mode(prompt);
+                    (Some(prompt), mode)
+                }
+                None => (None, UserQueryMode::Normal),
+            };
             let request = SpawnAgentRequest {
                 prompt,
                 mode,
@@ -491,6 +493,7 @@ impl AmbientAgentRunner {
                 conversation_id: args.conversation,
                 initial_snapshot_token: None,
                 snapshot_disabled: None,
+                orchestration_handoff: None,
             };
 
             let should_open = args.open;

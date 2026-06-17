@@ -531,7 +531,7 @@ impl CodeView {
                 );
             }
             LocalCodeEditorEvent::FileSaved => {
-                me.sync_active_tab_path(ctx);
+                me.sync_active_tab_location(ctx);
                 me.set_title_after_content_update(ctx);
                 CodeView::display_save_success(ctx.window_id(), ctx);
                 ctx.notify();
@@ -863,6 +863,14 @@ impl CodeView {
                 // If there's no file ID, this is a new file - trigger Save As
                 self.save_as(index, callback, ctx)
             }
+            Err(ImmediateSaveError::RemoteDisconnected) => {
+                log::warn!("Cannot save: remote session disconnected");
+                CodeView::display_remote_disconnected_save_failure(ctx.window_id(), ctx);
+                if let Some(callback) = callback {
+                    callback(SaveOutcome::Failed, self, ctx);
+                }
+                SaveStatus::Failed(ImmediateSaveError::RemoteDisconnected)
+            }
             Err(err) => {
                 log::warn!("Failed to save file. {err:?}");
                 CodeView::display_save_failure(ctx.window_id(), ctx);
@@ -927,6 +935,15 @@ impl CodeView {
         });
     }
 
+    fn display_remote_disconnected_save_failure(window_id: WindowId, ctx: &mut ViewContext<Self>) {
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            let toast =
+                DismissibleToast::error(String::from("Cannot save — remote session disconnected."))
+                    .with_object_id("failed_to_save_file_remote_disconnected".to_string());
+            toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+        });
+    }
+
     fn display_save_success(window_id: WindowId, ctx: &mut ViewContext<Self>) {
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
             let toast = DismissibleToast::success(String::from("File saved."))
@@ -973,16 +990,11 @@ impl CodeView {
         self.set_title(self.contains_unsaved_changes(ctx), ctx);
     }
 
-    /// Update the TabData path for the active tab to match the LocalCodeEditor metadata.
-    /// This is needed after save_as operations to keep the paths in sync.
-    fn sync_active_tab_path(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Update the TabData location for the active tab to match the LocalCodeEditor metadata.
+    /// This is needed after save operations to keep local and remote locations in sync.
+    fn sync_active_tab_location(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(tab) = self.tab_group.get_mut(self.active_tab_index) {
-            let new_path = tab
-                .editor_view
-                .as_ref(ctx)
-                .file_path()
-                .map(|p| LocalOrRemotePath::Local(p.to_path_buf()));
-            tab.location = new_path;
+            tab.location = tab.editor_view.as_ref(ctx).file_location().cloned();
         }
     }
 

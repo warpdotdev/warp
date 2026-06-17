@@ -24,6 +24,17 @@ use crate::{
     server::server_api::ServerApiProvider,
 };
 
+#[cfg(not(target_family = "wasm"))]
+fn format_upload_artifact_error(err: &anyhow::Error) -> String {
+    let error_chain = format!("{err:#}");
+
+    if error_chain != err.to_string() {
+        format!("Artifact upload failed: {error_chain}")
+    } else {
+        error_chain
+    }
+}
+
 pub struct UploadArtifactExecutor {
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     active_session: ModelHandle<ActiveSession>,
@@ -148,7 +159,7 @@ impl UploadArtifactExecutor {
                         })
                     }
                     Err(err) => AIAgentActionResultType::UploadArtifact(
-                        UploadArtifactResult::Error(err.to_string()),
+                        UploadArtifactResult::Error(format_upload_artifact_error(&err)),
                     ),
                 },
             )

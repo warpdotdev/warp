@@ -918,3 +918,7 @@ enum ActionResult {
     Cancelled,
     BlockNotFound,
 }
+
+#[cfg(test)]
+#[path = "shell_command_tests.rs"]
+mod tests;

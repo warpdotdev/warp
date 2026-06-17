@@ -24,9 +24,16 @@ pub struct ApiKeyProperties {
     pub name: String,
     pub key_suffix: String,
     pub owner_type: OwnerType,
+    pub agent_info: Option<ApiKeyAgentInfo>,
     pub expires_at: Option<Time>,
     pub last_used_at: Option<Time>,
     pub created_at: Time,
+}
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "APIKeyAgentInfo")]
+pub struct ApiKeyAgentInfo {
+    pub name: String,
+    pub uid: cynic::Id,
 }
 
 #[derive(cynic::InlineFragments, Debug)]

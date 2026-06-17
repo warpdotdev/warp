@@ -747,6 +747,17 @@ mod tests;
 pub struct LlmHostSettings {
     pub enabled: bool,
     pub enablement_setting: HostEnablementSetting,
+    /// Full resource name of the GCP workload identity provider that Gemini Enterprise
+    /// (GEAP) credential minting exchanges Warp OIDC JWTs against. Only populated on the
+    /// `GeminiEnterprise` host entry; `None` for other hosts and for workspace caches
+    /// written before this field existed.
+    #[serde(default)]
+    pub gcp_audience: Option<String>,
+    /// Email of the GCP service account that Gemini Enterprise credential minting
+    /// impersonates after the STS exchange. `None` (or empty) means the federated token
+    /// is used directly.
+    #[serde(default)]
+    pub gcp_sa_email: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

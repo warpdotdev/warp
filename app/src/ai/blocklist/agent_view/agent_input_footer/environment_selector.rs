@@ -22,6 +22,7 @@ use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::appearance::Appearance;
 use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::CloudObjectLookup as _;
 use crate::context_chips::display_menu::{
     ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
 };

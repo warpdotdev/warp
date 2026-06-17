@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
 
-use super::super::auth::CLOUD_AGENT_ID_HEADER;
+use super::super::base_client::CLOUD_AGENT_ID_HEADER;
 use super::super::ServerApi;
 use super::{
     build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
@@ -37,7 +37,7 @@ fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
 #[test]
 fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
     let request = SpawnAgentRequest {
-        prompt: "hello".to_string(),
+        prompt: Some("hello".to_string()),
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
@@ -52,6 +52,7 @@ fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        orchestration_handoff: None,
     };
 
     let value = serde_json::to_value(&request).unwrap();
@@ -110,6 +111,33 @@ fn deserialize_connected_self_hosted_workers_response() {
         ]
     );
 }
+
+#[test]
+fn spawn_agent_request_omits_prompt_when_none() {
+    let request = SpawnAgentRequest {
+        prompt: None,
+        mode: UserQueryMode::Normal,
+        config: None,
+        title: None,
+        team: None,
+        agent_identity_uid: None,
+        skill: None,
+        attachments: vec![],
+        interactive: None,
+        parent_run_id: None,
+        runtime_skills: vec![],
+        referenced_attachments: vec![],
+        conversation_id: None,
+        initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
+    };
+
+    let value = serde_json::to_value(&request).unwrap();
+
+    assert!(value.get("prompt").is_none());
+}
+
 #[test]
 fn test_deserialize_file_artifact_download_response() {
     let json = r#"{

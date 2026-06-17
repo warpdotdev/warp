@@ -17,9 +17,9 @@ use warp_editor::content::edit::PreciseDelta;
 use warp_editor::content::text::IndentUnit;
 use warp_editor::content::version::BufferVersion;
 use warp_editor::decoration::DecorationLayer;
-use warpui::color::ColorU;
-use warpui::text::point::Point;
-use warpui::{AppContext, Entity, ModelContext, WeakModelHandle};
+use warpui_core::color::ColorU;
+use warpui_core::text::point::Point;
+use warpui_core::{AppContext, Entity, ModelContext, WeakModelHandle};
 
 const MAX_SYNTAX_TREES: usize = 3;
 

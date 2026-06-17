@@ -76,6 +76,7 @@ def fetch_issue_reporter(repo: str, issue_number: int) -> dict | None:
         "issue_number": data.get("number", issue_number),
         "title": data.get("title", ""),
         "reporter": author,
+        "reporter_url": f"https://github.com/{author}" if author else "",
         "url": data.get("url", ""),
     }
 

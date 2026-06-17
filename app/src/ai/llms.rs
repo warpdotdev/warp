@@ -20,17 +20,29 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 /// Checks if a user's' API key is being used for the given provider.
 /// Returns `true` if BYO API key is enabled and a key exists for the provider.
+/// For xAI, a connected Grok subscription counts: its OAuth access token is
+/// sent like a BYO key (see `ApiKeyManager::api_keys_for_request`).
 pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -> bool {
-    let api_keys = UserWorkspaces::as_ref(app)
-        .is_byo_api_key_enabled(app)
-        .then(|| ApiKeyManager::as_ref(app).keys().clone());
+    if !UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app) {
+        return false;
+    }
+    let manager = ApiKeyManager::as_ref(app);
 
     match provider {
-        LLMProvider::OpenAI => api_keys.is_some_and(|keys| keys.openai.is_some()),
-        LLMProvider::Anthropic => api_keys.is_some_and(|keys| keys.anthropic.is_some()),
-        LLMProvider::Google => api_keys.is_some_and(|keys| keys.google.is_some()),
-        _ => false,
+        LLMProvider::OpenAI => manager.keys().openai.is_some(),
+        LLMProvider::Anthropic => manager.keys().anthropic.is_some(),
+        LLMProvider::Google => manager.keys().google.is_some(),
+        LLMProvider::Xai => manager.grok_tokens().is_some(),
+        LLMProvider::Unknown => false,
     }
+}
+
+pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
+    UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(app)
+        && llm
+            .host_configs
+            .get(&LLMModelHost::AwsBedrock)
+            .is_some_and(|config| config.enabled)
 }
 
 /// Key for cached LLM metadata in user preferences.
@@ -38,6 +50,7 @@ pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -
 /// Note: this key used to store a single [`AvailableLLMs`]
 /// but was migrated to store a full [`ModelsByFeature`].
 pub const MODELS_BY_FEATURE_CACHE_KEY: &str = "AvailableLLMs";
+const CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL: &str = "Custom endpoint";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LLMUsageMetadata {
@@ -121,6 +134,7 @@ pub enum LLMModelHost {
     DirectApi,
     AwsBedrock,
     CustomEndpoint,
+    GeminiEnterprise,
     #[serde(other)]
     Unknown,
 }
@@ -811,6 +825,16 @@ impl LLMPreferences {
         self.custom_llms.iter().find(|info| info.id == *id)
     }
 
+    /// Footer label for custom endpoint usage keyed by the request config_key.
+    /// The synthetic custom LLMInfo already owns alias-or-name display semantics.
+    pub fn custom_endpoint_usage_display_label(&self, config_key: &str) -> String {
+        let config_key = LLMId::from(config_key);
+        self.custom_llm_info_for_id(&config_key)
+            .map(|info| info.display_name.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL.to_string())
+    }
+
     fn custom_llm_info_for_id_if_enabled(&self, id: &LLMId, app: &AppContext) -> Option<&LLMInfo> {
         Self::custom_inference_enabled(app)
             .then(|| self.custom_llm_info_for_id(id))
@@ -1172,7 +1196,10 @@ impl LLMPreferences {
                     let effective_base_model_usable = self
                         .models_by_feature
                         .agent_mode
-                        .usable_info_for_id(effective_base_model_id, ctx);
+                        .usable_info_for_id(effective_base_model_id, ctx)
+                        .or_else(|| {
+                            self.custom_llm_info_for_id_if_enabled(effective_base_model_id, ctx)
+                        });
                     let effective_base_model_unusable = effective_base_model_usable.is_none();
                     let effective_base_model_is_configurable = effective_base_model_usable
                         .is_some_and(|info| info.context_window.is_configurable);
@@ -1191,6 +1218,9 @@ impl LLMPreferences {
                             .models_by_feature
                             .coding
                             .usable_info_for_id(preferred_llm_id, ctx)
+                            .or_else(|| {
+                                self.custom_llm_info_for_id_if_enabled(preferred_llm_id, ctx)
+                            })
                             .is_none()
                         {
                             profiles.set_coding_model(profile_id, None, ctx);
@@ -1200,6 +1230,9 @@ impl LLMPreferences {
                         if self
                             .get_cli_agent_available()
                             .usable_info_for_id(preferred_llm_id, ctx)
+                            .or_else(|| {
+                                self.custom_llm_info_for_id_if_enabled(preferred_llm_id, ctx)
+                            })
                             .is_none()
                         {
                             profiles.set_cli_agent_model(profile_id, None, ctx);

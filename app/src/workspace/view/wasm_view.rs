@@ -200,7 +200,7 @@ impl Workspace {
                 if let Some(error_message) = conversations_model_handle
                     .as_ref(ctx)
                     .task_fetch_error(&task_id)
-                    .map(str::to_owned)
+                    .cloned()
                 {
                     let details =
                         ConversationDetailsData::from_task_id(task_id, Some(error_message));

@@ -126,7 +126,6 @@
           buildFeatures = [
             "release_bundle"
             "gui"
-            "nld_improvements"
           ];
 
           warp-terminal-experimental = rustPlatform.buildRustPackage {

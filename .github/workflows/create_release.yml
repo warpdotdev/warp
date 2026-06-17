@@ -1668,6 +1668,14 @@ jobs:
             You are running in a GitHub Actions workflow. The repo is checked out at the default branch (HEAD) with full history. Use the release_tag input as the git range endpoint — do NOT check out the release tag. `gh` is authenticated. Do not commit, push, or create PRs.
           warp_api_key: ${{ secrets.WARP_API_KEY }}
           share: team
+      - name: Upload raw Markdown changelog artifact (stable only)
+        if: inputs.channel == 'stable'
+        id: upload_changelog_draft_markdown
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: changelog-draft-markdown
+          path: ${{ runner.temp }}/changelog-draft/changelog-draft.md
+          if-no-files-found: error
 
       - name: Convert draft JSON to release format (stable only)
         if: inputs.channel == 'stable'
@@ -1728,56 +1736,26 @@ jobs:
         id: build_slack_payload
         shell: bash
         env:
-          CHANGELOG_MD: ${{ steps.generate_changelog.outputs.changelog }}
+          CHANGELOG_JSON: ${{ steps.generate_changelog.outputs.changelog }}
           RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          MARKDOWN_ARTIFACT_URL: ${{ steps.upload_changelog_draft_markdown.outputs.artifact-url }}
         run: |
-          # Rename the keys in the Changelog JSON to something more human readable.
-          # This is the changelog that goes to slack so it doesn't need to be extremely filtered.
-          NEW_CHANGELOG=$(echo $CHANGELOG_MD | jq 'with_entries(if .key == "newFeatures" then .key = "New Features" else . end)' | jq 'with_entries(if .key == "improvements" then .key = "Improvements" else . end)' | jq 'with_entries(if .key == "bugFixes" then .key = "Bug Fixes" else . end)' | jq 'with_entries(if .key == "images" then .key = "Image" else . end)')
-
-          # Generate the full markdown text as individual lines.
-          MARKDOWN=$(echo "$NEW_CHANGELOG" | jq -r 'to_entries[] | select(.value | length > 0) | "*\(.key)*", (.value[] | "  \u2022 \(.)")')
-
-          if [ -z "$MARKDOWN" ]; then
+          CHANGELOG_INPUT="${{ runner.temp }}/slack-changelog-input.json"
+          SLACK_PAYLOAD="${{ runner.temp }}/slack-changelog-payload.json"
+          printf '%s\n' "$CHANGELOG_JSON" > "$CHANGELOG_INPUT"
+          python3 .agents/skills/changelog-draft/scripts/build_slack_payload.py \
+            --input "$CHANGELOG_INPUT" \
+            --release-tag "$RELEASE_TAG" \
+            --markdown-artifact-url "$MARKDOWN_ARTIFACT_URL" \
+            --output "$SLACK_PAYLOAD"
+          if ! jq -e '.blocks | length > 0' "$SLACK_PAYLOAD" >/dev/null; then
             echo "has_content=" >> $GITHUB_OUTPUT
             exit 0
           fi
           echo "has_content=true" >> $GITHUB_OUTPUT
 
-          # Split markdown into chunks of <= 3000 characters at newline boundaries.
-          # Each chunk will become its own section block in the Slack payload.
-          CHUNKS='[]'
-          BUFFER=""
-          while IFS= read -r line; do
-            if [ -z "$BUFFER" ]; then
-              CANDIDATE="$line"
-            else
-              CANDIDATE="$BUFFER"
-              CANDIDATE+=$'\n'
-              CANDIDATE+="$line"
-            fi
-            if [ ${#CANDIDATE} -gt 3000 ]; then
-              # Flush the current buffer as a chunk (if non-empty), start a new one with this line.
-              if [ -n "$BUFFER" ]; then
-                CHUNKS=$(echo "$CHUNKS" | jq --arg chunk "$BUFFER" '. + [$chunk]')
-              fi
-              BUFFER="$line"
-            else
-              BUFFER="$CANDIDATE"
-            fi
-          done <<< "$MARKDOWN"
-          # Flush the remaining buffer.
-          if [ -n "$BUFFER" ]; then
-            CHUNKS=$(echo "$CHUNKS" | jq --arg chunk "$BUFFER" '. + [$chunk]')
-          fi
-
-          # Build the full Slack Block Kit payload: header block + one section block per chunk.
-          PAYLOAD=$(echo "$CHUNKS" | jq -c \
-            --arg version "$RELEASE_TAG" \
-            '{blocks: ([{type: "header", text: {type: "plain_text", text: ("Changelog for " + $version)}}] + [.[] | {type: "section", text: {type: "mrkdwn", text: .}}])}')
-
           echo "payload<<SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
-          echo "$PAYLOAD" >> $GITHUB_OUTPUT
+          cat "$SLACK_PAYLOAD" >> $GITHUB_OUTPUT
           echo "SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
 
       - name: Post to a Slack channel

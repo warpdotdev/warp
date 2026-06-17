@@ -19,6 +19,7 @@ use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 
 use super::terminal::TerminalDriver;
 use super::AgentDriverError;
+use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, GithubRepo};
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
@@ -56,6 +57,7 @@ pub fn prepare_environment(
     working_dir: PathBuf,
     is_sandbox: bool,
     harness: Harness,
+    setup_events: SetupClientEventReporter,
     ctx: &mut ModelContext<TerminalDriver>,
 ) -> impl Future<Output = Result<(), PrepareEnvironmentError>> {
     let spawner = ctx.spawner();
@@ -84,10 +86,11 @@ pub fn prepare_environment(
             setup_commands,
             should_index_codebase,
             Arc::clone(&repo_channels),
+            setup_events,
         )
         .await;
 
-        if should_subscribe_to_index_updates {
+        if should_subscribe_to_index_updates && result.is_err() {
             let _ = spawner
                 .spawn(|_, ctx| {
                     ctx.unsubscribe_from_model(&CodebaseIndexManager::handle(ctx));
@@ -99,6 +102,7 @@ pub fn prepare_environment(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn prepare_environment_impl(
     spawner: &ModelSpawner<TerminalDriver>,
     working_dir: &Path,
@@ -107,6 +111,7 @@ async fn prepare_environment_impl(
     setup_commands: Vec<String>,
     should_index_codebase: bool,
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
+    setup_events: SetupClientEventReporter,
 ) -> Result<(), PrepareEnvironmentError> {
     let working_dir_string = working_dir.to_string_lossy().to_string();
 
@@ -122,77 +127,90 @@ async fn prepare_environment_impl(
     }
     let mut codebase_context_receivers = Vec::new();
 
-    for repo in github_repos {
-        ensure_repo_cloned(repo, working_dir, is_sandbox, spawner).await?;
-        if !is_sandbox && should_index_codebase {
-            let receiver =
-                index_repo_codebase(&repo.repo, working_dir, Arc::clone(&repo_channels), spawner)
-                    .await?;
-            if let Some(receiver) = receiver {
-                codebase_context_receivers.push(receiver);
-            }
+    if !github_repos.is_empty() {
+        setup_events
+            .record_result(SetupStep::EnvironmentRepoClone, async {
+                clone_repos(github_repos, working_dir, spawner).await?;
+                for repo in github_repos {
+                    register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
+                    if !is_sandbox && should_index_codebase {
+                        let receiver = index_repo_codebase(
+                            &repo.repo,
+                            working_dir,
+                            Arc::clone(&repo_channels),
+                            spawner,
+                        )
+                        .await?;
+                        if let Some(receiver) = receiver {
+                            codebase_context_receivers.push(receiver);
+                        }
+                    }
+                }
+                Ok::<(), PrepareEnvironmentError>(())
+            })
+            .await?;
+
+        if should_index_codebase {
+            record_codebase_indexing(
+                setup_events.clone(),
+                spawner.clone(),
+                codebase_context_receivers,
+            );
         }
     }
 
     let has_setup_commands = !setup_commands.is_empty();
     if has_setup_commands {
-        // Set CI=true so setup commands run in a CI-like environment. This should help us run
-        // non-interactive versions of setup commands, as many command line tools recognize the CI
-        // environment variable.
-        execute_command("export CI=true".to_string(), spawner).await?;
+        setup_events
+            .record_result(SetupStep::EnvironmentSetupCommands, async {
+                // Set CI=true so setup commands run in a CI-like environment. This should help us run
+                // non-interactive versions of setup commands, as many command line tools recognize the CI
+                // environment variable.
+                execute_command("export CI=true".to_string(), spawner).await?;
+
+                for command in setup_commands {
+                    let command_for_error = command.clone();
+                    safe_info!(
+                        safe: ("Running setup command"),
+                        full: ("Running setup command: {command}")
+                    );
+
+                    let exit_code = execute_command(command, spawner).await?;
+                    if exit_code != 0.into() {
+                        return Err(PrepareEnvironmentError::SetupCommand {
+                            command: command_for_error,
+                        });
+                    }
+
+                    let working_dir_string = working_dir.to_string_lossy().to_string();
+                    if let Err(error) = cd_in_terminal(working_dir_string, spawner).await {
+                        log::warn!(
+                            "Failed to reset working directory after setup command: {error}"
+                        );
+                    }
+
+                    safe_info!(
+                        safe: ("Successfully completed setup command"),
+                        full: ("Successfully completed setup command: {command_for_error}")
+                    );
+                }
+
+                // Unset CI after setup commands complete so the agent session
+                // does not run with CI=true.
+                execute_command("unset CI".to_string(), spawner).await?;
+                Ok::<(), PrepareEnvironmentError>(())
+            })
+            .await?;
+    } else if should_index_codebase && github_repos.is_empty() {
+        let _ = spawner
+            .spawn(|_, ctx| {
+                ctx.unsubscribe_from_model(&CodebaseIndexManager::handle(ctx));
+            })
+            .await;
     }
 
-    for command in setup_commands {
-        let command_for_error = command.clone();
-        safe_info!(
-            safe: ("Running setup command"),
-            full: ("Running setup command: {command}")
-        );
-
-        let exit_code = execute_command(command, spawner).await?;
-        if exit_code != 0.into() {
-            return Err(PrepareEnvironmentError::SetupCommand {
-                command: command_for_error,
-            });
-        }
-
-        let working_dir_string = working_dir.to_string_lossy().to_string();
-        if let Err(error) = cd_in_terminal(working_dir_string, spawner).await {
-            log::warn!("Failed to reset working directory after setup command: {error}");
-        }
-
-        safe_info!(
-            safe: ("Successfully completed setup command"),
-            full: ("Successfully completed setup command: {command_for_error}")
-        );
-    }
-
-    if has_setup_commands {
-        // Unset CI after setup commands complete so the agent session
-        // does not run with CI=true.
-        execute_command("unset CI".to_string(), spawner).await?;
-    }
-
-    if !github_repos.is_empty() {
-        // We need to skip this if running in Docker sandboxes since they don't have a cache volume.
-        // For now, we're also skipping for self hosted and Namespace to reduce startup time, since
-        // we should only wait for indexing if there's an optimized cache volume and it's quick.
-        let should_wait_for_indexing = false;
-        if should_wait_for_indexing {
-            let repos_indexed = join_all(codebase_context_receivers);
-            if repos_indexed
-                .with_timeout(CODEBASE_INDEX_SYNC_TIMEOUT)
-                .await
-                .is_err()
-            {
-                log::warn!(
-                    "Timed out waiting for codebase index sync; continuing without guaranteed codebase context",
-                );
-            }
-        } else {
-            drop(codebase_context_receivers);
-            log::info!("Not waiting for codebase index sync");
-        }
+    if should_index_codebase && github_repos.is_empty() {
+        log::info!("No repositories to index for codebase context");
     }
 
     // If there's only one repo in the environment, start the agent in that repo.
@@ -211,8 +229,156 @@ async fn prepare_environment_impl(
     Ok(())
 }
 
+fn record_codebase_indexing(
+    setup_events: SetupClientEventReporter,
+    spawner: ModelSpawner<TerminalDriver>,
+    codebase_context_receivers: Vec<oneshot::Receiver<()>>,
+) {
+    if codebase_context_receivers.is_empty() {
+        setup_events.record_value_detached(SetupStep::EnvironmentCodebaseIndexing, async move {
+            let _ = spawner
+                .spawn(|_, ctx| {
+                    ctx.unsubscribe_from_model(&CodebaseIndexManager::handle(ctx));
+                })
+                .await;
+        });
+        return;
+    }
+
+    setup_events.record_value_detached(SetupStep::EnvironmentCodebaseIndexing, async move {
+        let repos_indexed = join_all(codebase_context_receivers);
+        if repos_indexed
+            .with_timeout(CODEBASE_INDEX_SYNC_TIMEOUT)
+            .await
+            .is_err()
+        {
+            log::warn!(
+                "Timed out waiting for codebase index sync; continuing without guaranteed codebase context",
+            );
+        }
+        let _ = spawner
+            .spawn(|_, ctx| {
+                ctx.unsubscribe_from_model(&CodebaseIndexManager::handle(ctx));
+            })
+            .await;
+    });
+}
+
+fn build_parallel_clone_command(repos: &[GithubRepo], shell_type: ShellType) -> String {
+    let mut script = String::from(
+        r#"set +e
+failed=0
+pids=""
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/warp-clone-logs.XXXXXX")"
+cleanup_clone_logs() {
+  rm -rf "$tmp_dir"
+}
+trap cleanup_clone_logs EXIT
+clone_repo() {
+  repo_name="$1"
+  repo_url="$2"
+  target="$3"
+  if [ -d "$target" ]; then
+    printf '%s\n' "Repository directory $target already exists, skipping clone..."
+    return 0
+  fi
+  printf '%s\n' "Cloning repository $repo_name..."
+  git clone --filter=tree:0 "$repo_url" "$target"
+}
+"#,
+    );
+
+    let mut log_outputs = String::new();
+    for (index, repo) in repos.iter().enumerate() {
+        let repo_name = format!("{}/{}", repo.owner, repo.repo);
+        let repo_url = format!("https://github.com/{repo_name}.git");
+        let escaped_repo_name = shell_escape_single_quotes(&repo_name, ShellType::Bash);
+        let escaped_repo_url = shell_escape_single_quotes(&repo_url, ShellType::Bash);
+        let escaped_target = shell_escape_single_quotes(&repo.repo, ShellType::Bash);
+        let log_var = format!("log_file_{index}");
+        script.push_str(&format!(
+            "{log_var}=\"$tmp_dir/repo-{index}.log\"\n\
+             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' >\"${log_var}\" 2>&1 &\n"
+        ));
+        script.push_str("pids=\"$pids $!\"\n");
+        log_outputs.push_str(&format!(
+            "printf '%s\\n' '===== {escaped_repo_name} ====='\n\
+             if [ -s \"${log_var}\" ]; then\n\
+             \tcat \"${log_var}\"\n\
+             else\n\
+             \tprintf '%s\\n' '(no output)'\n\
+             fi\n"
+        ));
+    }
+
+    script.push_str(
+        r#"for pid in $pids; do
+  if ! wait "$pid"; then
+    failed=1
+  fi
+done
+"#,
+    );
+    script.push_str(&log_outputs);
+    script.push_str(
+        r#"
+exit "$failed"
+"#,
+    );
+
+    let escaped_script = shell_escape_single_quotes(&script, shell_type);
+    format!("sh -c '{escaped_script}'")
+}
+
+/// Clone all GitHub repositories to `{working_dir}/{repo.repo}` if they do not already exist.
+/// Multiple repositories are cloned in parallel to reduce environment setup time.
+pub(super) async fn clone_repos(
+    repos: &[GithubRepo],
+    working_dir: &Path,
+    spawner: &ModelSpawner<TerminalDriver>,
+) -> Result<(), PrepareEnvironmentError> {
+    match repos {
+        [] => Ok(()),
+        [repo] => clone_repo(repo, working_dir, spawner).await,
+        repos => {
+            let shell_type = spawner
+                .spawn(|driver, ctx| {
+                    driver
+                        .active_session_shell_type(ctx)
+                        .unwrap_or(ShellType::Bash)
+                })
+                .await
+                .unwrap_or(ShellType::Bash);
+
+            let repo_names = repos
+                .iter()
+                .map(|repo| format!("{}/{}", repo.owner, repo.repo))
+                .collect::<Vec<_>>();
+            safe_info!(
+                safe: ("Cloning repositories via terminal"),
+                full: ("Cloning repositories via terminal: {}", repo_names.join(", "))
+            );
+
+            let command = build_parallel_clone_command(repos, shell_type);
+            let exit_code = execute_command(command, spawner).await?;
+            if exit_code != 0.into() {
+                return Err(PrepareEnvironmentError::CloneRepo {
+                    repo_name: repo_names.join(", "),
+                });
+            }
+
+            safe_info!(
+                safe: ("Successfully cloned repositories"),
+                full: ("Successfully cloned repositories: {}", repo_names.join(", "))
+            );
+            Ok(())
+        }
+    }
+}
+
 /// Clone a GitHub repository to `{working_dir}/{repo.repo}` if it does not already exist.
 /// This only performs the clone -- it does NOT register the repo with `DetectedRepositories`.
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo))]
 pub(super) async fn clone_repo(
     repo: &GithubRepo,
     working_dir: &Path,
@@ -271,16 +437,15 @@ pub(super) async fn clone_repo(
     Ok(())
 }
 
-/// Clone a GitHub repository and register it with `DetectedRepositories` so that
-/// the skill watcher and other repo-aware subsystems can discover it.
-pub(super) async fn ensure_repo_cloned(
+/// Register a cloned GitHub repository with `DetectedRepositories` so that the
+/// skill watcher and other repo-aware subsystems can discover it.
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo, is_sandbox = is_sandbox))]
+pub(super) async fn register_cloned_repo(
     repo: &GithubRepo,
     working_dir: &Path,
     is_sandbox: bool,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<(), PrepareEnvironmentError> {
-    clone_repo(repo, working_dir, spawner).await?;
-
     let repo_dir = working_dir.join(&repo.repo);
 
     // Register the repo with DetectedRepositories so that the skill watcher
@@ -383,6 +548,7 @@ async fn subscribe_to_codebase_index_events(
         .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)
 }
 
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo_name))]
 async fn index_repo_codebase(
     repo_name: &str,
     working_dir: &Path,

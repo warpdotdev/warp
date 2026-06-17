@@ -16,7 +16,6 @@ use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationProvenance, AgentConversationsModel,
     AgentRunDisplayStatus,
 };
-use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::view::TerminalView;
 use crate::terminal::CLIAgent;
@@ -72,7 +71,7 @@ pub(crate) fn terminal_view_agent_icon_variant(
             agent: session.agent,
             has_listener: session.listener.is_some(),
             status: session.status.to_conversation_status(),
-            supports_rich_status: agent_supports_rich_status(&session.agent),
+            supports_rich_status: session.supports_rich_status(),
         }),
         selected_third_party_cli_agent: terminal_view
             .ambient_agent_view_model()

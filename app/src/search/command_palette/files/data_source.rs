@@ -15,7 +15,7 @@ use warpui::{AppContext, Entity, SingletonEntity};
 use super::search_item::{CreateFileSearchItem, FileSearchItem};
 use crate::code::opened_files::{OpenedFilesInRepo, OpenedFilesModel};
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
-use crate::search::data_source::{Query, QueryResult};
+use crate::search::data_source::{Query, QueryFilter, QueryResult};
 use crate::search::files::model::FileSearchModel;
 use crate::search::files::search_item::FileSearchResult;
 use crate::search::mixer::{AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper};
@@ -84,7 +84,11 @@ impl AsyncDataSource for FileDataSource {
             self.run_zero_state_query(app)
         } else {
             // Non-empty query: use fuzzy matching
-            self.run_fuzzy_search_query(app, query_text)
+            self.run_fuzzy_search_query(
+                app,
+                query_text,
+                query.filters.contains(&QueryFilter::Files),
+            )
         }
     }
 }
@@ -105,11 +109,11 @@ impl FileDataSource {
         }
     }
 
-    fn contents(&self, app: &AppContext) -> Arc<Vec<FileSearchResult>> {
+    fn contents(&self, query: &str, app: &AppContext) -> Arc<Vec<FileSearchResult>> {
         match &self.mode {
             FileDataSourceMode::Repo => {
                 let file_search_model = FileSearchModel::as_ref(app);
-                file_search_model.get_repo_contents(app)
+                file_search_model.get_repo_contents(query, app)
             }
             FileDataSourceMode::CurrentFolder { cached_contents } => {
                 Arc::new(cached_contents.clone())
@@ -184,13 +188,12 @@ impl FileDataSource {
         &self,
         app: &AppContext,
         query_text: &str,
+        allow_create_file: bool,
     ) -> BoxFuture<
         'static,
         Result<Vec<QueryResult<CommandPaletteItemAction>>, DataSourceRunErrorWrapper>,
     > {
         let file_search_model = FileSearchModel::as_ref(app);
-
-        let contents = self.contents(app);
 
         // Strip any trailing : in case user is in the middle of typing a line / column arg.
         let query_text = query_text.strip_suffix(':').unwrap_or(query_text);
@@ -237,6 +240,11 @@ impl FileDataSource {
         let opened_files = repo_root_location
             .and_then(|repo_root| opened_files.opened_files_for_repo(&repo_root))
             .cloned();
+
+        // Fetch contents using the finalized query so it is pushed down into
+        // the repo-metadata traversal as a filter (matching files are not
+        // truncated away before fuzzy matching).
+        let contents = self.contents(&query_file_content, app);
 
         const CHUNK_SIZE: usize = 50;
 
@@ -286,8 +294,8 @@ impl FileDataSource {
                 .collect();
 
             // If no files matched and we have a valid query and current directory,
-            // add a "Create <filename>..." option
-            if results.is_empty() && !query_file_name.trim().is_empty() {
+            // add a "Create a file named <filename>..." option
+            if allow_create_file && results.is_empty() && !query_file_name.trim().is_empty() {
                 if let Some(current_dir) = current_directory {
                     let create_item = CreateFileSearchItem {
                         file_name: query_file_name,

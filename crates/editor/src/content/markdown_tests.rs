@@ -4,7 +4,7 @@ use markdown_parser::{compute_formatted_text_delta, parse_markdown};
 use serde_yaml::Value;
 use string_offset::CharOffset;
 use vec1::Vec1;
-use warpui::{App, ReadModel};
+use warpui_core::{App, ReadModel};
 
 use super::MarkdownStyle;
 use crate::content::buffer::tests::TestEmbeddedItem;

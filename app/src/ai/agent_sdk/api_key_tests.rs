@@ -27,7 +27,7 @@ fn sort_api_keys_sorts_by_name_ascending() {
     sort_api_keys(
         &mut keys,
         Some(ApiKeySortByArg::Name),
-        Some(ApiKeySortOrderArg::Asc),
+        Some(SortOrderArg::Asc),
     );
 
     assert_eq!(keys[0].name, "alpha");
@@ -43,7 +43,7 @@ fn sort_api_keys_sorts_by_created_at_descending() {
     sort_api_keys(
         &mut keys,
         Some(ApiKeySortByArg::CreatedAt),
-        Some(ApiKeySortOrderArg::Desc),
+        Some(SortOrderArg::Desc),
     );
 
     assert_eq!(keys[0].name, "newer");

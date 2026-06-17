@@ -11,13 +11,13 @@ use std::sync::Arc;
 use warp_util::standardized_path::StandardizedPath;
 
 use super::proto;
-use crate::code_review::diff_size_limits::DiffSize;
+use crate::code_review::diff_size_limits::{DiffSize, UnrenderableReason, MAX_DIFF_SIZE};
 use crate::code_review::diff_state::{
-    DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState,
-    DiffStats, FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffData, GitDiffWithBaseContent,
-    GitFileStatus,
+    CommitChainMode, DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase,
+    DiffMode, DiffState, DiffStats, FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffData,
+    GitDiffWithBaseContent, GitFileStatus,
 };
-use crate::util::git::{Commit, PrInfo};
+use crate::util::git::{Commit, FileChangeEntry, PrInfo};
 
 // ── Proto → Rust (for incoming client messages) ────────────────────
 
@@ -29,6 +29,18 @@ impl From<&proto::DiffMode> for DiffMode {
             Some(proto::diff_mode::Mode::OtherBranch(ob)) => {
                 DiffMode::OtherBranch(ob.branch_name.clone())
             }
+        }
+    }
+}
+
+impl From<&proto::PrInfo> for PrInfo {
+    fn from(pr_info: &proto::PrInfo) -> Self {
+        PrInfo {
+            number: pr_info.number,
+            url: pr_info.url.clone(),
+            state: pr_info.state.clone(),
+            draft: pr_info.draft,
+            base_branch: pr_info.base_branch.clone(),
         }
     }
 }
@@ -99,7 +111,18 @@ impl TryFrom<&proto::DiffMetadataAgainstBase> for DiffMetadataAgainstBase {
                 .as_ref()
                 .map(DiffStats::from)
                 .ok_or_else(|| "missing aggregate_stats in DiffMetadataAgainstBase".to_string())?,
+            files: base.files.iter().map(FileChangeEntry::from).collect(),
         })
+    }
+}
+
+impl From<&proto::FileChangeEntry> for FileChangeEntry {
+    fn from(file: &proto::FileChangeEntry) -> Self {
+        FileChangeEntry {
+            path: file.path.clone(),
+            additions: file.additions as usize,
+            deletions: file.deletions as usize,
+        }
     }
 }
 
@@ -111,15 +134,7 @@ impl From<&proto::Commit> for Commit {
             files_changed: commit.files_changed as usize,
             additions: commit.additions as usize,
             deletions: commit.deletions as usize,
-        }
-    }
-}
-
-impl From<&proto::PrInfo> for PrInfo {
-    fn from(pr: &proto::PrInfo) -> Self {
-        PrInfo {
-            number: pr.number,
-            url: pr.url.clone(),
+            files: commit.files.iter().map(FileChangeEntry::from).collect(),
         }
     }
 }
@@ -144,7 +159,6 @@ impl TryFrom<&proto::DiffMetadata> for DiffMetadata {
             has_head_commit: metadata.has_head_commit,
             unpushed_commits: metadata.unpushed_commits.iter().map(Commit::from).collect(),
             upstream_ref: metadata.upstream_ref.clone(),
-            pr_info: metadata.pr_info.as_ref().map(PrInfo::from),
         })
     }
 }
@@ -208,7 +222,12 @@ impl TryFrom<proto::DiffSize> for DiffSize {
         match s {
             proto::DiffSize::Normal => Ok(DiffSize::Normal),
             proto::DiffSize::Large => Ok(DiffSize::Large),
-            proto::DiffSize::Unrenderable => Ok(DiffSize::Unrenderable),
+            proto::DiffSize::UnrenderableDiffTooLarge => {
+                Ok(DiffSize::Unrenderable(UnrenderableReason::DiffTooLarge))
+            }
+            proto::DiffSize::UnrenderableFileTooLarge => {
+                Ok(DiffSize::Unrenderable(UnrenderableReason::FileTooLarge))
+            }
             proto::DiffSize::Unspecified => Err("missing DiffSize".to_string()),
         }
     }
@@ -390,6 +409,17 @@ impl From<&DiffMetadataAgainstBase> for proto::DiffMetadataAgainstBase {
     fn from(m: &DiffMetadataAgainstBase) -> Self {
         proto::DiffMetadataAgainstBase {
             aggregate_stats: Some((&m.aggregate_stats).into()),
+            files: m.files.iter().map(proto::FileChangeEntry::from).collect(),
+        }
+    }
+}
+
+impl From<&FileChangeEntry> for proto::FileChangeEntry {
+    fn from(file: &FileChangeEntry) -> Self {
+        proto::FileChangeEntry {
+            path: file.path.clone(),
+            additions: file.additions as u64,
+            deletions: file.deletions as u64,
         }
     }
 }
@@ -402,15 +432,19 @@ impl From<&Commit> for proto::Commit {
             files_changed: c.files_changed as u64,
             additions: c.additions as u64,
             deletions: c.deletions as u64,
+            files: c.files.iter().map(proto::FileChangeEntry::from).collect(),
         }
     }
 }
 
 impl From<&PrInfo> for proto::PrInfo {
-    fn from(p: &PrInfo) -> Self {
+    fn from(pr_info: &PrInfo) -> Self {
         proto::PrInfo {
-            number: p.number,
-            url: p.url.clone(),
+            number: pr_info.number,
+            url: pr_info.url.clone(),
+            state: pr_info.state.clone(),
+            draft: pr_info.draft,
+            base_branch: pr_info.base_branch.clone(),
         }
     }
 }
@@ -425,7 +459,6 @@ impl From<&DiffMetadata> for proto::DiffMetadata {
             has_head_commit: m.has_head_commit,
             unpushed_commits: m.unpushed_commits.iter().map(proto::Commit::from).collect(),
             upstream_ref: m.upstream_ref.clone(),
-            pr_info: m.pr_info.as_ref().map(proto::PrInfo::from),
         }
     }
 }
@@ -516,7 +549,32 @@ impl From<&DiffSize> for proto::DiffSize {
         match s {
             DiffSize::Normal => proto::DiffSize::Normal,
             DiffSize::Large => proto::DiffSize::Large,
-            DiffSize::Unrenderable => proto::DiffSize::Unrenderable,
+            DiffSize::Unrenderable(UnrenderableReason::DiffTooLarge) => {
+                proto::DiffSize::UnrenderableDiffTooLarge
+            }
+            DiffSize::Unrenderable(UnrenderableReason::FileTooLarge) => {
+                proto::DiffSize::UnrenderableFileTooLarge
+            }
+        }
+    }
+}
+
+impl From<&CommitChainMode> for proto::GitCommitChainMode {
+    fn from(mode: &CommitChainMode) -> Self {
+        match mode {
+            CommitChainMode::CommitOnly => proto::GitCommitChainMode::CommitOnly,
+            CommitChainMode::CommitAndPush => proto::GitCommitChainMode::CommitAndPush,
+            CommitChainMode::CommitAndCreatePr => proto::GitCommitChainMode::CommitAndCreatePr,
+        }
+    }
+}
+
+impl From<proto::GitCommitChainMode> for CommitChainMode {
+    fn from(mode: proto::GitCommitChainMode) -> Self {
+        match mode {
+            proto::GitCommitChainMode::CommitOnly => CommitChainMode::CommitOnly,
+            proto::GitCommitChainMode::CommitAndPush => CommitChainMode::CommitAndPush,
+            proto::GitCommitChainMode::CommitAndCreatePr => CommitChainMode::CommitAndCreatePr,
         }
     }
 }
@@ -547,6 +605,23 @@ impl From<&DiffState> for proto::DiffState {
 /// Converts a `FileDiff` to proto with an optional `content_at_base`.
 /// Cannot be a `From` impl because of the extra parameter.
 pub fn file_diff_to_proto(f: &FileDiff, content_at_base: Option<&str>) -> proto::FileDiff {
+    // Decide what base content (if any) to send over the wire, adjusting the
+    // rendered size accordingly. This gating is remote-only: it runs when the
+    // daemon serializes a diff for a subscriber, never on the local in-memory
+    // path, so local rendering keeps full content regardless of size.
+    let (size, content_at_base) = if f.is_binary {
+        // Binary base content is never rendered by the client; never ship it.
+        (f.size, None)
+    } else if content_at_base.is_some_and(|c| c.len() > MAX_DIFF_SIZE) {
+        // Base blob too large for the wire and won't be rendered by the client.
+        (
+            DiffSize::Unrenderable(UnrenderableReason::FileTooLarge),
+            None,
+        )
+    } else {
+        (f.size, content_at_base)
+    };
+
     proto::FileDiff {
         file_path: f.file_path.clone(),
         status: Some((&f.status).into()),
@@ -555,7 +630,7 @@ pub fn file_diff_to_proto(f: &FileDiff, content_at_base: Option<&str>) -> proto:
         is_autogenerated: f.is_autogenerated,
         max_line_number: f.max_line_number as u64,
         has_hidden_bidi_chars: f.has_hidden_bidi_chars,
-        size: proto::DiffSize::from(&f.size).into(),
+        size: proto::DiffSize::from(&size).into(),
         content_at_base: content_at_base.map(|s| s.to_string()),
     }
 }

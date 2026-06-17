@@ -24,7 +24,7 @@ use warpui::{
 
 use super::styles;
 use crate::appearance::Appearance;
-use crate::debounce::debounce;
+use crate::debounce;
 use crate::drive::settings::WarpDriveSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::blocks::data_source::BlockDataSource;
@@ -389,7 +389,7 @@ impl AIContextMenu {
                     .and_then(|window_id| ActiveSession::as_ref(app).working_directory(window_id))
                     .is_some_and(|dir| {
                         DetectedRepositories::as_ref(app)
-                            .get_root_for_path(dir)
+                            .get_root_for_canonical_path(dir)
                             .is_some()
                     })
             }

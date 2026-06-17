@@ -1,5 +1,5 @@
+use cloud_objects::cloud_object::ServerPermissions;
 use warp_core::ui::appearance::Appearance;
-use warp_server_client::cloud_object::ServerPermissions;
 use warpui::platform::WindowStyle;
 use warpui::{AddSingletonModel, App, SingletonEntity, TypedActionView, ViewHandle};
 
