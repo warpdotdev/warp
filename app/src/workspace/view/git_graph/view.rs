@@ -372,10 +372,10 @@ pub(crate) struct GitGraphView {
     op_shimmer: ShimmeringTextStateHandle,
     /// Draggable state for the detail area's height. The initial pixel value is
     /// just a placeholder; on the first frame's layout the bounds callback in
-    /// [`Self::render_resizable_detail`] overrides it to 1/3 of the window
+    /// [`Self::render_resizable_detail`] overrides it to 1/2 of the window
     /// height.
     detail_resizable_state: ResizableStateHandle,
-    /// Whether the detail area's height has had its "default to 1/3 on first
+    /// Whether the detail area's height has had its "default to 1/2 on first
     /// open" initialization: this runs only once; afterwards we keep the height
     /// the user dragged to.
     detail_height_initialized: Arc<AtomicBool>,
@@ -1937,13 +1937,13 @@ impl GitGraphView {
         .with_bounds_callback(Box::new(move |window_size| {
             let min = 100.0;
             let max = (window_size.y() * 0.7).max(min);
-            // The first time the detail area appears, default it to 1/3 of the
+            // The first time the detail area appears, default it to 1/2 of the
             // window height (taking effect on the first frame's layout, with no
             // flicker); afterwards keep the height the user dragged to and don't
             // override it again.
             if !initialized.swap(true, Ordering::Relaxed) {
                 if let Ok(mut s) = state.lock() {
-                    s.set_size((window_size.y() / 3.0).clamp(min, max));
+                    s.set_size((window_size.y() / 2.0).clamp(min, max));
                 }
             }
             (min, max)
