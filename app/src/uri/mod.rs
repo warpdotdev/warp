@@ -1569,10 +1569,6 @@ fn dispatch_action_in_new_or_existing_window<T: 'static>(
     }
 }
 
-/// Maps a `warp://settings/<subpage>` path segment to the `SettingsSection` it
-/// should open, for the "simple" subpages that open a settings section directly
-/// with no extra parameters. Subpages that require additional arguments or side
-/// effects (`teams`, `environments`, `mcp`) are handled separately by the caller.
 fn settings_section_for_simple_subpage(subpage: &str) -> Option<SettingsSection> {
     match subpage {
         "billing_and_usage" => Some(SettingsSection::BillingAndUsage),
