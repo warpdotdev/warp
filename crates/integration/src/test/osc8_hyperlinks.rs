@@ -161,10 +161,7 @@ pub fn test_osc8_open_link_action_opens_url() -> Builder {
                     app.dispatch_typed_action(
                         window_id,
                         &[view_id],
-                        &TerminalAction::OpenGridLink(GridHighlightedLink::Hyperlink {
-                            link,
-                            uri,
-                        }),
+                        &TerminalAction::OpenGridLink(GridHighlightedLink::Hyperlink { link, uri }),
                     );
                 })
                 .add_assertion(|_app, _window_id| {
