@@ -37,3 +37,21 @@ fn token_response_parses_minimal_and_full() {
     assert_eq!(full.refresh_token.as_deref(), Some("r"));
     assert_eq!(full.expires_in, Some(3600));
 }
+
+#[test]
+fn manual_code_exchange_captures_attempt_verifier() {
+    let pkce = PkceParams::generate();
+    let exchange = ManualCodeExchange {
+        verifier: pkce.verifier.clone(),
+    };
+    assert_eq!(exchange.verifier, pkce.verifier);
+}
+
+#[test]
+fn manual_code_exchange_rejects_blank_code() {
+    let exchange = ManualCodeExchange {
+        verifier: "verifier".to_string(),
+    };
+    let result = warpui_core::r#async::block_on(exchange.exchange("   "));
+    assert!(result.is_err());
+}
