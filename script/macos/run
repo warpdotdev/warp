@@ -25,10 +25,16 @@ if [ "$WARP_CHANNEL" != "oss" ] || [ "$WARP_BIN_NAME" != "warp-oss" ]; then
     exit 1
 fi
 
-WARP_APP_PATH="target/debug/bundle/osx/Warper.app"
+TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
+if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
+    TARGET_DIR="${REPO_ROOT}/target"
+fi
+
+WARP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/Warper.app"
 WARP_SCHEME_NAME="warper"
 WARP_DISPLAY_NAME="Warper"
 DONT_OPEN=false
+PRINT_APP_PATH_ONLY=false
 # Launches the binary with "open", meaning the Warp process is
 # launched by the MacOS application launcher instead of a shell session.
 # Note that since Warp isn't launched as a child process, using ctrl+c
@@ -58,15 +64,15 @@ while (( "$#" )); do
       shift
       ;;
     --release)
-      echo "Detected release build, pointing at release bundle under target/release/bundle"
-      WARP_APP_PATH="target/release/bundle/osx/Warper.app"
+      echo "Detected release build, pointing at release bundle under ${TARGET_DIR}/release/bundle"
+      WARP_APP_PATH="${TARGET_DIR}/release/bundle/osx/Warper.app"
       PARAMS="$PARAMS $1"
       shift
       ;;
     --profile)
       PROFILE="$2"
       shift 2
-      WARP_APP_PATH="target/${PROFILE}/bundle/osx/Warper.app"
+      WARP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/Warper.app"
       PARAMS="$PARAMS --profile $PROFILE"
       ;;
     --open_with_launchd)
@@ -77,12 +83,21 @@ while (( "$#" )); do
       GENERATE_SCHEMA=true
       shift
       ;;
+    --print-app-path)
+      PRINT_APP_PATH_ONLY=true
+      shift
+      ;;
     *) # preserve positional arguments
       PARAMS="$PARAMS $1"
       shift
       ;;
   esac
 done
+
+if [ "$PRINT_APP_PATH_ONLY" = true ]; then
+  echo "$WARP_APP_PATH"
+  exit 0
+fi
 
 rm -rf "$WARP_APP_PATH"
 
@@ -126,10 +141,10 @@ codesign --force --deep --options runtime --sign "${SIGNING_CERT:--}" "$WARP_APP
 if [ "$DONT_OPEN" = false ] ; then
     if  [ "$OPEN_WITH_LAUNCHD" = true ]; then
         echo "Launching with MacOS application launcher"
-        PATH="" /usr/bin/open "./$WARP_APP_PATH"
+        PATH="" /usr/bin/open "$WARP_APP_PATH"
         tail -f ~/Library/Logs/warp_local.log
     else
-        echo "Opening app at ./$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
-        "./$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME" "${WARP_ARGS[@]}"
+        echo "Opening app at $WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
+        "$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME" "${WARP_ARGS[@]}"
     fi
 fi
