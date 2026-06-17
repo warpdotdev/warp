@@ -72,6 +72,9 @@ fn size_change_triggers_full_repaint() {
     let _ = draw_to_string(&mut renderer, &line_buffer("abc"));
 
     let output = draw_to_string(&mut renderer, &line_buffer("wxyz!"));
+    // A resize repaints authoritatively (clear + redraw) so no stale content is
+    // left from the previous, differently-wrapped frame. The clear is wrapped
+    // in a synchronized update by `draw`, so it is applied atomically.
     assert!(
         output.contains("\u{1b}[2J"),
         "a size change should force a full repaint"

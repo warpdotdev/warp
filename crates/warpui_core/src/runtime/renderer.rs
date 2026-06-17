@@ -5,14 +5,24 @@
 //! asks ratatui's [`Buffer::diff`](TuiBuffer::diff) for the cells that changed
 //! since the last frame and writes them through ratatui's [`CrosstermBackend`]
 //! (which emits the minimal cursor-move + SGR + print sequence for each run).
-//! The first frame — and any frame whose dimensions differ from the previous
-//! one — clears the screen and repaints in full. Because it writes to a generic
-//! writer, it is exercised headlessly against an in-memory buffer in tests
-//! rather than requiring a real tty.
+//!
+//! The first frame, and any frame whose dimensions differ from the previous one
+//! (a resize), is painted in full: the screen is cleared and every non-blank
+//! cell redrawn. Clearing is required for correctness because a terminal keeps
+//! its old contents across a resize while the text reflows to a new width — a
+//! plain diff would leave stale fragments behind. To keep that clear + repaint
+//! from flickering, the whole frame is wrapped in a terminal *synchronized
+//! update*, so a supporting terminal presents the cleared-and-repainted frame
+//! atomically and never shows the blank intermediate state.
+//!
+//! Because it writes to a generic writer, it is exercised headlessly against an
+//! in-memory buffer in tests rather than requiring a real tty.
 
 use std::io::{self, Write};
 
 use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::crossterm::queue;
+use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use ratatui::layout::Position;
 
 use crate::elements::tui::TuiBuffer;
@@ -40,7 +50,8 @@ impl TuiFrameRenderer {
 
     /// Draws `buffer` to `writer`, emitting either a full repaint (first frame
     /// or a size change) or just the cells that differ from the previous frame,
-    /// then positions or hides the cursor and flushes.
+    /// then positions or hides the cursor and flushes. The whole frame is
+    /// wrapped in a synchronized update so it is applied atomically.
     pub fn draw<W: Write>(
         &mut self,
         writer: &mut W,
@@ -49,9 +60,15 @@ impl TuiFrameRenderer {
     ) -> io::Result<()> {
         let mut backend = CrosstermBackend::new(writer);
 
-        // First frame or a size change: clear, then repaint every cell by
-        // diffing against a blank buffer of the new size. Otherwise diff
-        // against the previously drawn frame so only changed cells are emitted.
+        // Group the whole frame into one synchronized update so the terminal
+        // applies it atomically — in particular, the clear + repaint on a
+        // resize is presented as a single frame, never as a visible blank.
+        queue!(backend, BeginSynchronizedUpdate)?;
+
+        // First frame or a size change: clear, then diff against a blank buffer
+        // of the new size. The clear overwrites the stale contents the terminal
+        // keeps across a resize (the text reflows to a new width), which a plain
+        // diff against the previous frame could not do.
         let repaint = self
             .previous_buffer
             .as_ref()
@@ -75,6 +92,7 @@ impl TuiFrameRenderer {
             None => backend.hide_cursor()?,
         }
 
+        queue!(backend, EndSynchronizedUpdate)?;
         Backend::flush(&mut backend)?;
         self.previous_buffer = Some(buffer.clone());
         Ok(())

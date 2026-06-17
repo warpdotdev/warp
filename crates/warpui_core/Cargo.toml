@@ -119,3 +119,8 @@ cfg_aliases.workspace = true
 [[test]]
 name = "tui_integration"
 required-features = ["tui"]
+
+# Interactive manual smoke test for the TUI backend; tui-only API.
+[[example]]
+name = "tui_demo"
+required-features = ["tui"]
