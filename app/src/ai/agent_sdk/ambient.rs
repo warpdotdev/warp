@@ -423,6 +423,7 @@ impl AmbientAgentRunner {
                 AgentConfigSnapshot {
                     name: args.name,
                     environment_id,
+                    runner_id: args.runner,
                     model_id: args.model.model.clone(),
                     base_prompt: None,
                     mcp_servers: cli_mcp_servers,

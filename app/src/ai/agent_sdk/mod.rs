@@ -387,6 +387,7 @@ fn build_merged_config_and_task(
         // CLI name > skill name > file name
         name: args.name.clone().or(skill_name).or(file_merged.name),
         environment_id: args.environment.clone().or(file_merged.environment_id),
+        runner_id: file_merged.runner_id,
         model_id: oz_model,
         // Skill base_prompt takes precedence over file base_prompt
         base_prompt: runtime_base_prompt.clone().or(file_merged.base_prompt),
@@ -486,6 +487,7 @@ fn build_server_side_task(
     let config = AgentConfigSnapshot {
         name: args.name.clone().or(skill_name),
         environment_id: environment.clone(),
+        runner_id: None,
         model_id: model_id_string,
         base_prompt: None,
         mcp_servers: cli_mcp_servers,
