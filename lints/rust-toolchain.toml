@@ -1,0 +1,10 @@
+[toolchain]
+# Pin to a nightly that includes the rustc-dev component (required for
+# rustc_private APIs).  Update this when rustc internals change enough to
+# break the lint; this is the main ongoing maintenance cost of a dylint lint.
+#
+# When choosing a date, pick a nightly that post-dates the stable release you
+# want to lint against (Warp currently uses 1.92.0 / 2025-12-08) so that the
+# nightly compiler can handle all of the same Rust code.
+channel = "nightly-2025-11-15"
+components = ["rustc-dev", "llvm-tools-preview"]
