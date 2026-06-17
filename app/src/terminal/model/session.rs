@@ -902,9 +902,6 @@ pub struct Session {
     info: SessionInfo,
     external_commands: Arc<OnceCell<HashSet<SmolStr>>>,
     /// Function names collected asynchronously after bootstrap via an in-band command.
-    /// Only populated for shells (currently PowerShell) that restrict their sync bootstrap
-    /// to a core subset to avoid blocking on large third-party modules like Microsoft.Graph.
-    /// Names already present in `info.function_names` are excluded to avoid duplicates.
     additional_function_names: Arc<OnceCell<HashSet<SmolStr>>>,
     /// The command executor for this session. Behind a `RwLock` so it can be
     /// swapped after a remote server reconnect (via `set_command_executor`).
@@ -1127,12 +1124,13 @@ impl Session {
         self.external_commands.get().is_some()
     }
 
-    /// Asynchronously collects all function names via an in-band shell command, for shells
-    /// where the sync bootstrap only collected a core subset (currently PowerShell only).
-    /// Names already present in `info.function_names` are excluded to avoid duplicates.
-    /// No-op for shells that already collect all functions synchronously at bootstrap.
+    /// Asynchronously collects all function names via an in-band shell command.
     pub async fn load_all_function_names(&self) {
-        let Some(command) = self.info.shell.shell_type().shell_command_to_get_all_functions()
+        let Some(command) = self
+            .info
+            .shell
+            .shell_type()
+            .shell_command_to_get_all_functions()
         else {
             return;
         };

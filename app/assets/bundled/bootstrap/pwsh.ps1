@@ -143,11 +143,10 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         $aliasesRaw = Get-Command -CommandType Alias | Select-Object -ExpandProperty DisplayName
         $aliases = $aliasesRaw -join [Environment]::NewLine
         # Only query modules that ship with PowerShell itself. This keeps bootstrap fast by
-        # avoiding Windows system modules, third-party modules, and large module families
-        # like Microsoft.Graph (~20k functions). Everything else is collected asynchronously
-        # after bootstrap via Warp-Send-AllFunctionNames.
+        # avoiding Windows system modules and third-party modules from the Gallery. The rest are
+        # loaded asynchronously later.
         $corePsModules = @(
-            'Microsoft.PowerShell.*', # All built-in PS modules (cross-platform)
+            'Microsoft.PowerShell.*',  # All built-in PS modules (cross-platform)
             'Microsoft.WSMan.*',       # WS-Management (Windows PS)
             'CimCmdlets',              # CIM/WMI (Windows)
             'PackageManagement',       # Package management

@@ -13370,7 +13370,7 @@ impl TerminalView {
         // doing the decoration to ensure we don't erroneously apply error
         // underlines to valid commands.
         let input = self.input().clone();
-        let session_for_fn = session.clone();
+        let session_clone = session.clone();
         ctx.spawn(
             async move { session.load_external_commands().await },
             move |me, _, ctx| {
@@ -13384,11 +13384,8 @@ impl TerminalView {
             },
         );
 
-        // For shells that restrict their sync bootstrap to a core subset (currently PowerShell
-        // only), collect the full function list asynchronously via an in-band command so it
-        // doesn't block startup. No-op for other shells.
         ctx.background_executor()
-            .spawn(async move { session_for_fn.load_all_function_names().await })
+            .spawn(async move { session_clone.load_all_function_names().await })
             .detach();
 
         // If we were waiting for a successful warpification, it's come. Stop the timeout.
