@@ -18644,6 +18644,12 @@ impl TerminalView {
                 .block_list()
                 .active_block()
                 .is_agent_monitoring();
+            let is_agent_driving_command = self
+                .model
+                .lock()
+                .block_list()
+                .active_block()
+                .is_agent_driving_command();
 
             // If there isn't an active long running block, then "clear buffer" just starts a new convo.
             if !active_block_is_long_running {
@@ -18673,7 +18679,7 @@ impl TerminalView {
                     ctx,
                 );
                 true
-            } else if is_agent_monitoring {
+            } else if is_agent_monitoring || is_agent_driving_command {
                 // Otherwise, if the agent is monitoring this long-running block,
                 // then clear just that block and leave the rest of the blocklist in tact.
                 self.model.lock().clear_screen(ClearMode::ActiveBlock);
@@ -18710,8 +18716,14 @@ impl TerminalView {
             .block_list()
             .active_block()
             .is_agent_monitoring();
+        let is_agent_driving_command = self
+            .model
+            .lock()
+            .block_list()
+            .active_block()
+            .is_agent_driving_command();
 
-        if is_agent_monitoring {
+        if is_agent_monitoring || is_agent_driving_command {
             return;
         }
 
