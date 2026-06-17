@@ -17,6 +17,8 @@ fontkit-rasterizer = []
 traces = ["warpui_core/traces"]
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = ["warpui_core/integration_tests"]
+# Feature enabled only when the app is compiled for agent-mode evals.
+agent_mode_evals = ["warpui_core/agent_mode_evals"]
 # If enabled, writes named telemetry events to the info log.  Should never be
 # enabled in release builds without a PII audit of telemetry data.
 log_named_telemetry_events = ["warpui_core/log_named_telemetry_events"]

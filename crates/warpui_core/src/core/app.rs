@@ -2502,21 +2502,23 @@ impl AppContext {
                         // of the actual work later.
                         window.request_redraw();
 
-                        // In unit tests there's no real event loop, so build_scene must be
-                        // called eagerly here so rendering keeps up with state changes.
+                        // Unit tests and integration UI tests don't have an event loop that
+                        // drives rendering synchronously with their assertions, so we build
+                        // the scene eagerly here. This is also what dispatches the synthetic
+                        // MouseMoved that keeps `Hoverable` state correct after layout changes,
+                        // which hover- and focus-driven UI tests rely on.
                         //
-                        // Integration tests run with a real winit/X11 event loop, so we do NOT
-                        // call build_scene eagerly here. Doing so in integration_tests mode
-                        // creates a tight render loop when running under Xvfb (headless):
-                        //   on_window_invalidated → build_scene → synthetic MouseMoved →
-                        //   view notifications → flush_effects → update_windows →
-                        //   on_window_invalidated → build_scene → ...
-                        // This loop keeps the main thread at 100% CPU and prevents
-                        // CustomEvent::RunTask events from being processed, which starves the
-                        // async executor. Async action callbacks (e.g., ReadFiles completions)
-                        // never fire, causing agent conversations to hang indefinitely.
-                        // The winit RedrawRequested event will drive rendering naturally.
-                        if ctx.is_unit_test {
+                        // Agent-mode evals are the exception. They run under a continuous
+                        // stream of invalidations from streaming output, where building eagerly
+                        // here forms an invalidation → build_scene → synthetic MouseMoved →
+                        // invalidation loop that pins the main thread and starves the async
+                        // executor, so RunTask callbacks (e.g. ReadFiles completions) never fire
+                        // and conversations hang. Evals rely on the winit RedrawRequested path
+                        // instead.
+                        if ctx.is_unit_test
+                            || (cfg!(feature = "integration_tests")
+                                && !cfg!(feature = "agent_mode_evals"))
+                        {
                             ctx.build_scene(window_id, window.as_ctx());
                         }
                     }

@@ -10,6 +10,10 @@ license = "MIT"
 traces = []
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = ["dep:minimp4", "dep:openh264"]
+# Feature enabled only when the app is compiled for agent-mode evals (which also
+# enables integration_tests). Used to opt agent-mode evals out of eager scene
+# building in the window-invalidation callback; see core/app.rs.
+agent_mode_evals = []
 # If enabled, writes named telemetry events to the info log.  Should never be
 # enabled in release builds without a PII audit of telemetry data.
 log_named_telemetry_events = []
