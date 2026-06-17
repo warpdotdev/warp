@@ -3206,6 +3206,7 @@ impl CodeReviewView {
                     },
                     ctx
                 );
+                ctx.notify();
             }
             LocalCodeEditorEvent::FailedToSave { .. } => {}
             LocalCodeEditorEvent::DelayedRenderingFlushed
