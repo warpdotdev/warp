@@ -2608,6 +2608,27 @@ impl BlocklistAIController {
             .has_active_stream_for_conversation(conversation_id, app)
     }
 
+    #[cfg(test)]
+    pub fn register_mock_stream_for_test(
+        &mut self,
+        stream_id: ResponseStreamId,
+        conversation_id: AIConversationId,
+        stream: ModelHandle<ResponseStream>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let stream_clone = stream.clone();
+        ctx.subscribe_to_model(&stream, move |me, event, ctx| {
+            me.handle_response_stream_event(false, event, &stream_clone, ctx);
+        });
+        self.in_flight_response_streams.register_new_stream(
+            stream_id,
+            conversation_id,
+            stream,
+            CancellationReason::ManuallyCancelled,
+            ctx,
+        );
+    }
+
     /// Cancels 'progress' for the active conversation if there is one:
     ///  * If there is an in-flight request, cancels it.
     ///  * Else, if the request finished, but actions from the response are pending or mid-execution, cancels all of them.

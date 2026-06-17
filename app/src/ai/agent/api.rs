@@ -154,6 +154,43 @@ pub struct ConversationData {
 }
 
 impl RequestParams {
+    #[cfg(test)]
+    pub fn new_for_test() -> Self {
+        Self {
+            input: vec![],
+            conversation_token: None,
+            forked_from_conversation_token: None,
+            ambient_agent_task_id: None,
+            tasks: vec![],
+            existing_suggestions: None,
+            metadata: None,
+            session_context: SessionContext::new_for_test(),
+            model: LLMId::from("test-model"),
+            coding_model: LLMId::from("test-model"),
+            cli_agent_model: LLMId::from("test-model"),
+            computer_use_model: LLMId::from("test-model"),
+            is_memory_enabled: false,
+            warp_drive_context_enabled: false,
+            context_window_limit: None,
+            mcp_context: None,
+            planning_enabled: false,
+            should_redact_secrets: false,
+            api_keys: None,
+            custom_model_providers: None,
+            allow_use_of_warp_credits: false,
+            autonomy_level: Default::default(),
+            isolation_level: Default::default(),
+            web_search_enabled: false,
+            computer_use_enabled: false,
+            ask_user_question_enabled: false,
+            research_agent_enabled: false,
+            orchestration_enabled: false,
+            supported_tools_override: None,
+            parent_agent_id: None,
+            agent_name: None,
+        }
+    }
+
     pub fn new(
         terminal_view_id: Option<EntityId>,
         session_context: SessionContext,
