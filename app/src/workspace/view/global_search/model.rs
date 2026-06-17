@@ -7,8 +7,8 @@ use futures::StreamExt as _;
 use instant::Instant;
 use num_traits::SaturatingSub;
 use regex::escape;
-use remote_server::manager::{HostRequestError, RemoteServerManager};
-use remote_server::proto::{RipgrepSearchRequest, RipgrepSearchSuccess};
+use remote_server::manager::{HostRequestError, RemoteServerManager, RipgrepSearchParams};
+use remote_server::proto::RipgrepSearchSuccess;
 use remote_server::protocol::RequestId;
 use remote_server::HostId;
 use string_offset::ByteOffset;
@@ -36,10 +36,17 @@ struct ActiveSearch {
     search_id: u32,
     remaining_sources: usize,
     completed_sources: usize,
-    failed_sources: usize,
+    local_source_failed: bool,
+    remote_source_failures: usize,
     total_match_count: usize,
     /// True when any remote source hit the server-side match cap.
     capped: bool,
+}
+
+#[derive(Clone, Copy)]
+enum SearchSource {
+    Local,
+    Remote,
 }
 
 /// Result of one search source (the local ripgrep run, or one remote
@@ -163,7 +170,8 @@ impl GlobalSearch {
                 search_id,
                 total_match_count: 0,
                 capped: false,
-                source_failures: 0,
+                local_source_failed: false,
+                remote_source_failures: 0,
             });
             return;
         }
@@ -172,7 +180,8 @@ impl GlobalSearch {
             search_id,
             remaining_sources: source_count,
             completed_sources: 0,
-            failed_sources: 0,
+            local_source_failed: false,
+            remote_source_failures: 0,
             total_match_count: 0,
             capped: false,
         });
@@ -189,14 +198,14 @@ impl GlobalSearch {
         }
 
         for (host_id, paths) in remote_roots {
-            let request = RipgrepSearchRequest {
+            let params = RipgrepSearchParams {
                 pattern: effective_pattern.clone(),
-                roots: paths.iter().map(|p| p.to_string()).collect(),
+                roots: paths,
                 ignore_case,
                 multiline,
                 max_matches: REMOTE_MAX_MATCH_COUNT,
             };
-            self.spawn_remote_search(search_id, host_id, request, ctx);
+            self.spawn_remote_search(search_id, host_id, params, ctx);
         }
     }
 
@@ -212,6 +221,7 @@ impl GlobalSearch {
         let spawner = ctx.spawner();
         self.spawn_source(
             search_id,
+            SearchSource::Local,
             async move {
                 let result = Self::run_warp_ripgrep_cli(
                     search_id,
@@ -243,17 +253,18 @@ impl GlobalSearch {
         &mut self,
         search_id: u32,
         host_id: HostId,
-        request: RipgrepSearchRequest,
+        params: RipgrepSearchParams,
         ctx: &mut ModelContext<Self>,
     ) {
         let pending = RemoteServerManager::handle(ctx).update(ctx, |manager, _| {
-            manager.start_ripgrep_search(&host_id, request)
+            manager.start_ripgrep_search(&host_id, params)
         });
         self.in_flight_remote_requests
             .push(pending.request_id().clone());
         let spawner = ctx.spawner();
         self.spawn_source(
             search_id,
+            SearchSource::Remote,
             async move {
                 match pending.result().await {
                     Ok(success) => {
@@ -287,11 +298,12 @@ impl GlobalSearch {
     fn spawn_source(
         &mut self,
         search_id: u32,
+        source_kind: SearchSource,
         source: impl Future<Output = Option<SourceResult>> + Send + 'static,
         ctx: &mut ModelContext<Self>,
     ) {
         let task = ctx.spawn(source, move |me, outcome, ctx| {
-            me.handle_source_completed(search_id, outcome, ctx);
+            me.handle_source_completed(search_id, source_kind, outcome, ctx);
         });
         self.search_handles.push(task);
     }
@@ -339,6 +351,7 @@ impl GlobalSearch {
     fn handle_source_completed(
         &mut self,
         search_id: u32,
+        source_kind: SearchSource,
         outcome: Option<SourceResult>,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -358,7 +371,10 @@ impl GlobalSearch {
                 active.total_match_count += match_count;
                 active.capped |= capped;
             }
-            None => active.failed_sources += 1,
+            None => match source_kind {
+                SearchSource::Local => active.local_source_failed = true,
+                SearchSource::Remote => active.remote_source_failures += 1,
+            },
         }
 
         active.remaining_sources = active.remaining_sources.saturating_sub(1);
@@ -380,7 +396,8 @@ impl GlobalSearch {
                 search_id,
                 total_match_count: active.total_match_count,
                 capped: active.capped,
-                source_failures: active.failed_sources,
+                local_source_failed: active.local_source_failed,
+                remote_source_failures: active.remote_source_failures,
             });
         }
     }

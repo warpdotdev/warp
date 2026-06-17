@@ -1596,9 +1596,12 @@ pub enum TelemetryEvent {
         /// Whether the result set was capped (locally or by a remote
         /// server-side cap).
         capped: bool,
-        /// Number of search sources (local, or one per remote host) that
-        /// failed while the others completed.
-        source_failures: usize,
+        /// Whether the local search source failed while another source
+        /// completed.
+        local_source_failed: bool,
+        /// Number of remote host search sources that failed while another
+        /// source completed.
+        remote_source_failures: usize,
     },
     AICommandSearchOpened {
         entrypoint: AICommandSearchEntrypoint,
@@ -4248,13 +4251,15 @@ impl TelemetryEvent {
                 remote_host_count,
                 total_match_count,
                 capped,
-                source_failures,
+                local_source_failed,
+                remote_source_failures,
             } => Some(json!({
                 "duration_ms": duration_ms,
                 "remote_host_count": remote_host_count,
                 "total_match_count": total_match_count,
                 "capped": capped,
-                "source_failures": source_failures,
+                "local_source_failed": local_source_failed,
+                "remote_source_failures": remote_source_failures,
             })),
             TelemetryEvent::SSHControlMasterError { has_remote_server } => Some(json!({
                 "has_remote_server": has_remote_server,

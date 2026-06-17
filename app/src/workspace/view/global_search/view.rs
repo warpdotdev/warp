@@ -8,7 +8,6 @@ use std::time::Duration;
 use async_channel::Sender;
 use instant::Instant;
 use pathfinder_geometry::vector::vec2f;
-use remote_server::manager::RemoteServerManager;
 use remote_server::HostId;
 use string_offset::{ByteOffset, CharCounter};
 use warp_core::r#async::debounce;
@@ -52,6 +51,7 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
 use crate::ui_components::render_file_search_row::{render_file_search_row, FileSearchRowOptions};
+use crate::util::path::{display_name_with_host, display_path_with_host};
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 use crate::workspace::view::global_search::model::GlobalSearch;
 use crate::workspace::view::global_search::{GlobalSearchMatch, SearchConfig};
@@ -128,10 +128,12 @@ pub enum GlobalSearchEvent {
         total_match_count: usize,
         /// True when a remote source hit the server-side match cap.
         capped: bool,
-        /// Number of search sources (local, or one remote host) that failed
-        /// while the others completed. Results from the surviving sources
-        /// remain valid.
-        source_failures: usize,
+        /// Whether the local search source failed while another source
+        /// completed. Results from the surviving sources remain valid.
+        local_source_failed: bool,
+        /// Number of remote host search sources that failed while another
+        /// source completed. Results from the surviving sources remain valid.
+        remote_source_failures: usize,
     },
     Failed {
         search_id: u32,
@@ -972,7 +974,8 @@ impl GlobalSearchView {
                 search_id,
                 total_match_count,
                 capped,
-                source_failures,
+                local_source_failed,
+                remote_source_failures,
             } => {
                 if Some(*search_id) != self.current_search_id {
                     return;
@@ -989,7 +992,8 @@ impl GlobalSearchView {
                             remote_host_count: self.active_search_remote_host_count,
                             total_match_count: *total_match_count,
                             capped: self.capped_matches,
-                            source_failures: *source_failures,
+                            local_source_failed: *local_source_failed,
+                            remote_source_failures: *remote_source_failures,
                         },
                         ctx
                     );
@@ -1932,37 +1936,13 @@ impl GlobalSearchView {
         let is_collapsed = dir_entry.is_collapsed;
         let directory_path = &dir_entry.path;
 
-        // Get the display name (last component of the path)
-        let mut display_name = match directory_path.file_name() {
-            Some(name) if !name.is_empty() => name.to_string(),
-            _ => directory_path.display_path(),
+        let display_name = if directory_path.display_name().is_empty() {
+            display_path_with_host(directory_path, false, app)
+        } else {
+            display_name_with_host(directory_path, app)
         };
-        let remote_host_label = match directory_path {
-            LocalOrRemotePath::Remote(remote) => Some(
-                RemoteServerManager::as_ref(app)
-                    .host_label(&remote.host_id)
-                    .unwrap_or(remote.host_id.as_str())
-                    .to_string(),
-            ),
-            LocalOrRemotePath::Local(_) => None,
-        };
-        if let Some(host_label) = &remote_host_label {
-            display_name = format!("{display_name} — {host_label}");
-        }
         let directory_path_for_click = directory_path.clone();
-
-        // Include the host on remote directories so identically-named
-        // directories on different hosts are distinguishable.
-        let tooltip_text = match directory_path {
-            LocalOrRemotePath::Local(path) => path.to_string_lossy().to_string(),
-            LocalOrRemotePath::Remote(remote) => format!(
-                "{} on {}",
-                remote.path,
-                remote_host_label
-                    .as_deref()
-                    .unwrap_or(remote.host_id.as_str())
-            ),
-        };
+        let tooltip_text = display_path_with_host(directory_path, false, app);
 
         Hoverable::new(mouse_state, move |mouse_state| {
             let list_highlight_state = ItemHighlightState::new(is_selected, mouse_state);
@@ -2089,7 +2069,7 @@ impl View for GlobalSearchView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         match self.enablement {
             CodingPanelEnablementState::PendingRemoteSession => {
-                return self.render_remote_state(app);
+                return self.render_remote_loading_state(app);
             }
             CodingPanelEnablementState::RemoteSession { has_remote_server } => {
                 // Remote-server sessions can search via the daemon; sessions
@@ -2368,6 +2348,14 @@ impl GlobalSearchView {
             Icon::AlertTriangle,
             "Global search unavailable",
             "Global search isn't available for this remote session.",
+            app,
+        )
+    }
+    fn render_remote_loading_state(&self, app: &AppContext) -> Box<dyn Element> {
+        self.render_zero_state(
+            Icon::Loading,
+            "Connecting to remote session",
+            "Global search will be available once the connection is ready.",
             app,
         )
     }
