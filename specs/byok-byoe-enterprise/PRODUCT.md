@@ -1,10 +1,10 @@
 # Enterprise BYOK / BYOE
 
 ## Summary
-Let enterprise teams use their own LLM providers in Warp. A team admin configures shared API keys and OpenAI-compatible custom endpoints (e.g. OpenRouter, LiteLLM, Samba) once in the Warp Admin Panel, and those providers appear automatically in every member's model picker. Admins can also choose whether members may add their own local keys and endpoints. Team-managed provider keys are stored by Warp, so they work for both interactive agent requests and Oz cloud agents; member-managed providers work only for interactive requests.
+Let enterprise teams use their own LLM providers in Warp. A team admin configures shared API keys and OpenAI-compatible custom endpoints (e.g. OpenRouter, LiteLLM, Samba) once in the Warp Admin Panel, and those providers appear automatically in every member's model picker. Admins can also choose whether members may add their own local keys and endpoints. Team-managed provider keys are stored by Warp, so they work for both interactive agent requests and Oz cloud agents; member-managed providers are stored locally in secure storage (the current art), and work only for interactive requests
 
 ## Problem
-Today BYOK and BYO-endpoint are self-serve only: each user pastes keys locally, nothing is stored, and those providers can't be shared across a team or used by cloud agents. Enterprises want to (a) provision approved providers for the whole team centrally, (b) optionally let members bring their own, and (c) be confident inference actually goes to their providers. A recurring admin complaint is configuring BYO but still being able to pick Warp-managed models, or silently falling back to them.
+Today BYOK and BYO-endpoint are self-serve only: each user pastes keys locally, nothing is stored, and those providers can't be shared across a team or used by cloud agents. Enterprises want to (a) provision approved providers for the whole team centrally, (b) optionally let members bring their own, and (c) be confident inference actually goes to their providers.
 
 ## Goals
 - A team admin configures shared keys and custom endpoints once; they appear for all members.
@@ -50,12 +50,12 @@ A [Loom walkthrough](https://www.loom.com/share/6eb6e0f8f0764d2a9e8ec4f886957e63
 - Team-managed models (each team endpoint's models, shown by alias when set, and the providers the team supplies) appear in the member's model picker.
 - User-managed models also appear in the picker when "Allow users to bring their own models" is on.
 - Currently, custom-endpoint models appear in the picker as `<model alias> (Custom • <endpoint name>)`. Since an enterprise admin may set endpoint name `a`, and the user may also set an endpoint with name `a`, we always disambiguiate by showing Team-provided endpoints as `<model alias> (Team • endpoint name)`, and user-provided endpoints as `<model alias> (Custom • endpoint name)`. i.e. we are doing Team provided custom endpoints `UNION` User provided custom endpoints. 
-- First-party provider keys (OpenAI/Anthropic/Google) never create duplicate picker entries: a member's own key for a provider takes precedence over the team key for that provider, so the standard model appears once — routing through the member's key when set, otherwise the team key. This precedence is automatic; there is no member-facing toggle in MVP.
+- First-party provider keys (OpenAI/Anthropic/Google) never create duplicate picker entries: a member's own key for a provider takes precedence over the team key for that provider, so the standard model appears once — routing through the member's key when set, otherwise the team key. This precedence is automatic.
 
 ### Cloud agents (Oz)
 - Team-managed keys and endpoints are usable by Oz cloud agents for that team: a cloud agent run can perform inference through the team's configured providers without any per-member device state.
-- Member-managed (local) keys and endpoints are never used by cloud agents; they exist only on the member's device for interactive requests.
-- The product communicates this distinction in both surfaces (admin "available to cloud agents" note, member "stays on your device" note) so the difference in cloud-agent availability is never surprising.
+- Member-managed (local) keys and endpoints are never used by cloud agents, only interactive requests.
+- The product communicates this distinction in both surfaces (admin "available to cloud agents" note, member "interactive agents only" note).
 
 ### States, edge cases, and invariants
 - Non-enterprise/self-serve users see no change: the existing single BYOK/BYOE settings experience is preserved, with no "Provided by your team" group.
@@ -70,12 +70,12 @@ Team-managed configuration is split into public metadata and secrets.
   - **BYOK (OpenAI/Anthropic/Google):** just a per-provider boolean — whether the team has a key configured. The provider is an already-known, built-in identity, so no value or id is synced. That boolean drives the member's "configured" checkmark and tells the picker which standard models can route through a team key.
   - **Custom endpoints:** Endpoint name, and each model's name, alias, and reference id (`config_key`) — since the client knows nothing about an admin-defined endpoint otherwise. Only the endpoint's API key is withheld.
   This metadata is what lets a member's model picker show team-provided models without the client ever holding a key.
-- **Secrets**: first-party provider keys and endpoint API keys — are stored server-side, scoped to the team. They are never synced to clients. At request time the server resolves that reference against the team's stored secrets for the authenticated member, injects the matching key, and routes — at the same boundary that redacts secrets from logs. Two reference paths:
+- **Secrets**: First-party provider keys and endpoint API (+ URL) keys are stored server-side, scoped to the team. They are never synced to clients. At request time the server resolves that reference against the team's stored secrets for the authenticated member, injects the matching key, and routes — at the same boundary that redacts secrets from logs. Two reference paths:
 - **First-party keys**: The server resolves by provider and priority: a user key present on the request wins; otherwise the team's stored key for that provider is injected.
-- **Custom endpoints** use a stable per-model reference id (the same `config_key` that maps a model selection back to its provider today). A user endpoint's request carries both the selected model's reference id and a provider entry holding its URL + API key; a team endpoint's request carries only the reference id, and the server fills in the stored URL + API key for the team endpoint that owns it. For team endpoints this id is minted and owned server-side and travels to clients as public metadata. Resolution checks the request's own provider entries first (user endpoint, secret present), then the team's stored endpoints by reference id, so a user endpoint and a team endpoint with the same name never collide.
+- **Custom endpoints** Use a stable per-model reference id (the same `config_key` that maps a model selection back to its provider currently). A user endpoint's request carries both the selected model's reference id and a provider entry holding its URL + API key; a team endpoint's request carries only the reference id, and the server fills in the stored URL + API key for the team endpoint that owns it. For team endpoints this `config_key` is minted and owned server-side and travels to clients as public metadata. Resolution checks the request's own provider entries first (user endpoint, secret present), then the team's stored endpoints by reference id, so a user endpoint and a team endpoint with the same name never collide.
 
 
 ## Open Questions
 
-- Should admins be able to prevent team members from adding their own API key and Custom Endpoints separately? (i.e. it's okay for users to add their own API key, but it's not okay for them to add their own Custom Endpoint). Do we need separate toggles, or should we just treat these the same? **My vote**: For the immediate sprint I think both being under the same toggle makes more sense / aligns more with what we already have in the backend. 
+- Should admins be able to prevent team members from adding their own API key and Custom Endpoints separately? (i.e. it's okay for users to add their own API key, but it's not okay for them to add their own Custom Endpoint). Do we want separate toggles, or should we just treat these the same? **My vote**: Unless enterprise demand for this is strong, I think both being under the same toggle makes more sense / aligns more with what we already have in the backend for the immediate sprint.
 - Should we default to "Allow users to bring their own models" for a newly enabled team? **My vote**: No, we should not. 
