@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: script/check_warper_packaging [-h]
+
+Checks Warper packaging invariants that are cheap to validate locally:
+  - script/macos/run resolves CARGO_TARGET_DIR for the app bundle path.
+  - OSS Linux desktop Exec matches the deb-installed launcher.
+  - OSS AppImage rewriting points the desktop Exec at the bundled warp-oss binary.
+  - deb packaging does not reference absent common repository templates.
+USAGE
+}
+
+while getopts ":h" opt; do
+  case "$opt" in
+    h)
+      usage
+      exit 0
+      ;;
+    \?)
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+cd "$repo_root"
+
+expected_target_dir="$(mktemp -d "${TMPDIR:-/tmp}/warper-target-dir.XXXXXX")"
+trap 'rm -rf "$expected_target_dir"' EXIT
+
+resolved_app_path="$(
+  WARP_BIN_NAME=warp-oss \
+  WARP_CHANNEL=oss \
+  FEATURES=release_bundle,gui,nld_improvements \
+  CARGO_TARGET_DIR="$expected_target_dir" \
+  script/macos/run --dont-open --print-app-path
+)"
+
+expected_app_path="$expected_target_dir/debug/bundle/osx/Warper.app"
+if [ "$resolved_app_path" != "$expected_app_path" ]; then
+  echo "macOS run script resolved '$resolved_app_path', expected '$expected_app_path'" >&2
+  exit 1
+fi
+
+desktop_file="app/channels/oss/dev.warper.Warper.desktop"
+if ! grep -qx 'Exec=warp-terminal %U' "$desktop_file"; then
+  echo "$desktop_file must use the deb-installed warp-terminal launcher" >&2
+  exit 1
+fi
+
+if ! grep -q 'ln -s @@OPTDIR@@/@@BINARY_NAME@@ /usr/bin/warp-terminal@@CHANNEL_SUFFIX@@' \
+  resources/linux/debian/app/postinst.template; then
+  echo "debian app postinst no longer creates the launcher used by the desktop file" >&2
+  exit 1
+fi
+
+if grep -q 'resources/linux/debian/common' script/linux/bundle_deb; then
+  echo "bundle_deb still references absent common debian repository templates" >&2
+  exit 1
+fi
+
+if ! grep -q 's/Exec=warp-terminal/Exec=$BINARY_NAME/' script/linux/bundle_appimage; then
+  echo "bundle_appimage must rewrite OSS desktop Exec to the bundled binary name" >&2
+  exit 1
+fi
