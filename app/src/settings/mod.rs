@@ -31,6 +31,10 @@ mod theme;
 mod vim_banner;
 
 #[cfg(test)]
+#[path = "code_tests.rs"]
+mod code_tests;
+
+#[cfg(test)]
 #[path = "schema_validation_tests.rs"]
 mod schema_validation_tests;
 
