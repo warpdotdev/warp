@@ -25,9 +25,15 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             ),
         ),
         AgentDriverError::ShareSessionFailed { error: share_err } => {
+            let bin = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
             let message = match share_err {
                 ShareSessionError::Internal(_) => {
                     "Failed to share agent session due to an internal error. Please try running your task again.".to_string()
+                }
+                ShareSessionError::Failed(reason) if share_err.is_authentication_required() => {
+                    format!(
+                        "Failed to share agent session because Warp authentication is missing or expired. Log in via '{bin} login', provide an API key via '--api-key', or set the WARP_API_KEY environment variable."
+                    )
                 }
                 ShareSessionError::Failed(reason) => {
                     // The reason string comes from the session-sharing layer and is aimed at
@@ -58,6 +64,9 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                     message,
                     match share_err {
                         ShareSessionError::Disabled => PlatformErrorCode::FeatureNotAvailable,
+                        _ if share_err.is_authentication_required() => {
+                            PlatformErrorCode::AuthenticationRequired
+                        }
                         _ => PlatformErrorCode::InternalError,
                     },
                 ),

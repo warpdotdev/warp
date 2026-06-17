@@ -1,7 +1,9 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::classify_driver_error;
-use crate::ai::agent_sdk::driver::terminal::ShareSessionError;
+use crate::ai::agent_sdk::driver::terminal::{
+    ShareSessionError, LOGIN_REQUIRED_SHARE_SESSION_REASON,
+};
 use crate::ai::agent_sdk::driver::AgentDriverError;
 
 fn assert_state_and_code(
@@ -183,6 +185,20 @@ fn share_session_failed_includes_reason() {
     });
     assert_eq!(state, AgentTaskState::Error);
     assert!(update.message.contains("server rejected"));
+}
+
+#[test]
+fn share_session_login_required_gets_auth_required() {
+    let (state, update) = classify_driver_error(&AgentDriverError::ShareSessionFailed {
+        error: ShareSessionError::Failed(LOGIN_REQUIRED_SHARE_SESSION_REASON.into()),
+    });
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::AuthenticationRequired)
+    );
+    assert!(update.message.contains("Warp authentication"));
+    assert!(update.message.contains("WARP_API_KEY"));
 }
 
 // --- Conversation-level outcomes ---

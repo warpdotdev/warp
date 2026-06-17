@@ -61,9 +61,17 @@ pub(crate) enum ShareSessionError {
     Interrupted,
 }
 
+pub(super) const LOGIN_REQUIRED_SHARE_SESSION_REASON: &str =
+    "You must be logged in to share sessions.";
 const TERMINAL_SESSION_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
 /// The total time to wait for session sharing to start, including retries.
 const TERMINAL_SESSION_SHARE_DELAY: Duration = Duration::from_secs(20);
+
+impl ShareSessionError {
+    pub(super) fn is_authentication_required(&self) -> bool {
+        matches!(self, Self::Failed(reason) if reason == LOGIN_REQUIRED_SHARE_SESSION_REASON)
+    }
+}
 
 /// Options for creating the terminal view before constructing a [`TerminalDriver`].
 pub(crate) struct TerminalDriverOptions {
