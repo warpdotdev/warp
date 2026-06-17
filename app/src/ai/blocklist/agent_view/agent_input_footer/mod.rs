@@ -799,6 +799,7 @@ impl AgentInputFooter {
                     | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
                     | BlocklistAIHistoryEvent::RemoveConversation { .. }
                     | BlocklistAIHistoryEvent::DeletedConversation { .. }
+                    | BlocklistAIHistoryEvent::RestoredConversations { .. }
                     | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. } => {
                         me.sync_fast_forward_button(ctx);
                         me.sync_handoff_to_cloud_button(ctx);
@@ -2060,80 +2061,19 @@ impl AgentInputFooter {
                 new_conversation_id,
                 ..
             } => is_descendant(*new_conversation_id),
-            BlocklistAIHistoryEvent::CreatedSubtask {
-                conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::AppendedExchange {
-                conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::ReassignedExchange {
-                new_conversation_id,
-                ..
-            } => is_descendant(*new_conversation_id),
-            BlocklistAIHistoryEvent::UpdatedStreamingExchange {
-                conversation_id, ..
-            } => is_descendant(*conversation_id),
             BlocklistAIHistoryEvent::UpdatedConversationStatus {
                 conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::SetActiveConversation {
-                conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::ClearedActiveConversation {
-                conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::ClearedConversationsInTerminalView {
-                active_conversation_id,
-                cleared_conversation_ids,
-                ..
-            } => {
-                active_conversation_id.is_some_and(is_descendant)
-                    || cleared_conversation_ids.iter().copied().any(is_descendant)
             }
-            BlocklistAIHistoryEvent::SplitConversation {
-                old_conversation_id,
-                new_conversation_id,
-                ..
-            } => is_descendant(*old_conversation_id) || is_descendant(*new_conversation_id),
-            BlocklistAIHistoryEvent::RemoveConversation {
+            | BlocklistAIHistoryEvent::RemoveConversation {
                 conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::DeletedConversation {
+            }
+            | BlocklistAIHistoryEvent::DeletedConversation {
                 conversation_id, ..
             } => is_descendant(*conversation_id),
             BlocklistAIHistoryEvent::RestoredConversations {
                 conversation_ids, ..
             } => conversation_ids.iter().copied().any(is_descendant),
-            BlocklistAIHistoryEvent::UpdatedConversationMetadata {
-                conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::UpdatedConversationTitle {
-                conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
-                conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
-                conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::ConversationOwnershipTransferred {
-                conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::NewConversationRequestComplete {
-                conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
-                conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { conversation_id } => {
-                is_descendant(*conversation_id)
-            }
-            BlocklistAIHistoryEvent::LocalSharedSessionEstablished {
-                conversation_id, ..
-            } => is_descendant(*conversation_id),
-            BlocklistAIHistoryEvent::UpgradedTask { .. }
-            | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
-            | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. } => false,
+            _ => false,
         }
     }
 
