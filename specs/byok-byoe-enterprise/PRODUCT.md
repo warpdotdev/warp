@@ -71,11 +71,11 @@ Team-managed configuration is split into public metadata and secrets.
   - **Custom endpoints:** Endpoint name + URL, and each model's name, alias, and reference id (`config_key`) — since the client knows nothing about an admin-defined endpoint otherwise. Only the endpoint's API key is withheld.
   This metadata is what lets a member's model picker show team-provided models without the client ever holding a key.
 - **Secrets**: first-party provider keys and endpoint API keys — are stored server-side, scoped to the team. They are never synced to clients. At request time the server resolves that reference against the team's stored secrets for the authenticated member, injects the matching key, and routes — at the same boundary that redacts secrets from logs. Two reference paths:
-- **First-party keys**: so the server resolves by provider and priority: a user key present on the request wins; otherwise the team's stored key for that provider is injected.
+- **First-party keys**: The server resolves by provider and priority: a user key present on the request wins; otherwise the team's stored key for that provider is injected.
 - **Custom endpoints** use a stable per-model reference id (the same `config_key` that maps a model selection back to its provider today). A user endpoint's request carries both the selected model's reference id and a provider entry holding its URL + API key; a team endpoint's request carries only the reference id, and the server fills in the stored URL + API key for the team endpoint that owns it. For team endpoints this id is minted and owned server-side and travels to clients as public metadata. Resolution checks the request's own provider entries first (user endpoint, secret present), then the team's stored endpoints by reference id, so a user endpoint and a team endpoint with the same name never collide.
 
 
 ## Open Questions
 
-- Should admins be able to prevent team members from adding their own API key and Custom Endpoints separately? (i.e. it's okay for users to add their own API key, but it's not okay for them to add their own Custom Endpoint). Do we need separate toggles, or should we just treat these the same?
-- Should we default to "Allow users to bring their own models" for a newly enabled team?
+- Should admins be able to prevent team members from adding their own API key and Custom Endpoints separately? (i.e. it's okay for users to add their own API key, but it's not okay for them to add their own Custom Endpoint). Do we need separate toggles, or should we just treat these the same? **My vote**: For the immediate sprint I think both being under the same toggle makes more sense / aligns more with what we already have in the backend. 
+- Should we default to "Allow users to bring their own models" for a newly enabled team? **My vote**: No, we should not. 
