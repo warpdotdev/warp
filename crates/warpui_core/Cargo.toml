@@ -112,3 +112,10 @@ woothee = "0.13.0"
 
 [build-dependencies]
 cfg_aliases.workspace = true
+
+# The TUI integration test references tui-only API, so it must be skipped
+# entirely when the feature is off; `required-features` needs an explicit
+# target section.
+[[test]]
+name = "tui_integration"
+required-features = ["tui"]
