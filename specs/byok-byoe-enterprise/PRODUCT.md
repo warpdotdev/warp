@@ -25,15 +25,14 @@ A [Loom walkthrough](https://www.loom.com/share/6eb6e0f8f0764d2a9e8ec4f886957e63
 ### Roles and terms
 - "Team admin" is a member with admin/owner permissions; only admins see and edit the Admin Panel. 
 - "Team member" is any member; members see the in-app settings surface. 
-- A "team-managed" provider is a key or endpoint an admin configured in the Admin Panel - stored by Warp and shared with the whole team. 
-- A "user-managed" provider is a key or endpoint a member added in their own Warp settings - stored only on that member's device.
+- A "team-managed" provider is a key or endpoint an admin configured in the Admin Panel. Its secret is stored server-side by Warp and never synced to member devices. The member's client references the provider by ID; the server injects the stored secret at request time.
+- A "user-managed" provider is a key or endpoint a member added in their own Warp settings - stored only on that member's device (OS secure storage). The client attaches the secret to each interactive request, where the server uses it transiently and never persists it (current BYOK/BYOE for self-serve behaviour). 
 
 ### Admin Panel — Models page (Enterprise Team Admin)
 - The Models page gains a "Bring Your Own Keys & Endpoints" section alongside the existing Direct API and AWS Bedrock sections. The section has a master enable toggle. When off, no team-managed providers are active for the team and the section's configuration controls are hidden/disabled. When on, the admin can configure team keys and endpoints and they become available to members. When the admin enables team-managed BYO (adds keys/endpoints) while Direct API is still enabled, the section surfaces a prominent prompt explaining that members can still select Warp-managed models, with a one-click affordance to turn off Direct API.
 - Team API keys: the admin can paste a key for each first-party provider Warp supports for BYOK (e.g. OpenAI, Anthropic, Google). Each provider row shows whether a key is currently set without revealing the stored value. Saving a key persists it for the team; clearing a row removes that team key.
 - Team custom endpoints: the admin can add one or more OpenAI-compatible Chat Completions endpoints. Each endpoint has a name, URL, API key, and one or more models, where each model has a model name (sent to the endpoint) and an optional alias (shown to members). The admin can add, edit, and remove endpoints.
   - Endpoint validation: an endpoint cannot be saved without a name, a valid URL, an API key, and at least one model with a non-empty model name. Invalid fields are indicated inline and block saving (same behaviour as current client). 
-- Secrets entered by the admin (provider keys and endpoint API keys) are never displayed back in plaintext after saving — to the admin or to members. They render as a masked/"set" state.
 - "Allow users to bring their own models" toggle: when on, members may add their own local keys and custom endpoints in their Warp settings; when off, the member-facing self-serve BYO UI is disabled.
 - Cloud-agent note: the section states that team-managed keys and endpoints are stored by Warp and are therefore available to Oz cloud agents, unlike member-managed providers which never leave the member's device.
 - Saving any team-managed configuration propagates to members: the next time a member's client loads team settings, the team-managed providers (and the "allow users" permission) reflect the admin's latest saved state.
@@ -41,18 +40,17 @@ A [Loom walkthrough](https://www.loom.com/share/6eb6e0f8f0764d2a9e8ec4f886957e63
 
 ### Team member — Warp settings surface
 - The member's AI/Custom Inference settings present two clearly distinct groups: "Provided by your team" (team-managed, read-only) shown first, and "User added keys" (the member's own, editable) shown below. Both groups use the same visual layout (provider key rows and endpoint cards). _The API key section of the "Provided by your team" will not show the redacted API key, instead just whether the API key is configured (checkmark) or not, and whether it's active or overridden by the "user added keys"_. 
-- The "Provided by your team" group lists the enabled and disabled team-managed providers and team-managed endpoints (name + model chips). It is read-only: members cannot edit, add, or remove these entries, and the stored secret values are never shown.
+- The "Provided by your team" group lists the enabled team-managed providers and team-managed endpoints (name + model chips). Providers or models the admin has disabled do not appear here, mirroring the picker (disabling a model in the Admin Panel removes it from the member's picker automatically). It is read-only: members cannot edit, add, or remove these entries.
 - The team group includes a short explanation that these were configured by the team admin, are shared with everyone, and also power cloud agents.
 - The "User added keys" group is the existing self-serve BYOK/BYOE experience: paste provider keys, and add/edit/remove custom endpoints (name, URL, API key, model name + alias). It carries a one-line description clarifying that these stay on the member's device and are not available to cloud agents.
-- When the admin's "Allow users to bring their own models" is off, the "User added keys" group is visibly disabled (controls non-interactive and dimmed) with an explanation that the team admin has turned it off; the member can still use the team-provided providers above. Any keys/endpoints the member previously saved locally are not editable while disabled, but will persist in the event the enterprise admin switches this setting back on. 
-- When "Allow users to bring their own models" is on (and the member's plan permits BYO), the "User added keys" group is fully interactive as it is for self-serve users today (excluding the SuperGrok and Warp credit fallback toggles). 
+- When the admin's "Allow users to bring their own models" is off, the "User added keys" group is visibly disabled (controls non-interactive and dimmed). Any keys/endpoints the member previously saved locally are not editable while disabled, but will persist in the event the enterprise admin switches this setting back on.
+- When "Allow users to bring their own models" is on, the "User added keys" group is fully interactive as it is for self-serve users today (excluding the SuperGrok toggle). 
 
 ### Model picker and routing behaviour/logic
 - Team-managed models (each team endpoint's models, shown by alias when set, and the providers the team supplies) appear in the member's model picker.
-- User-managed models also appear in the picker when "Allow users to bring their own models" is on, exactly as in the self-serve experience.
-- With Direct API off, a member's request to a configured team or user provider does not fall back to Warp-managed inference; if the provider is unreachable or misconfigured the request surfaces an error rather than silently using Warp credits.
+- User-managed models also appear in the picker when "Allow users to bring their own models" is on.
 - Currently, custom-endpoint models appear in the picker as `<model alias> (Custom • <endpoint name>)`. Since an enterprise admin may set endpoint name `a`, and the user may also set an endpoint with name `a`, we always disambiguiate by showing Team-provided endpoints as `<model alias> (Team • endpoint name)`, and user-provided endpoints as `<model alias> (Custom • endpoint name)`. i.e. we are doing Team provided custom endpoints `UNION` User provided custom endpoints. 
-- First-party provider keys (OpenAI/Anthropic/Google) never create duplicate picker entries: a member's own key for a provider takes precedence over the team key for that provider, so the standard model appears once — routing through the member's key when set, otherwise the team key. The user will be able to toggle a "Use my api key when team-provided key and user-provided key" are both present (on by default). 
+- First-party provider keys (OpenAI/Anthropic/Google) never create duplicate picker entries: a member's own key for a provider takes precedence over the team key for that provider, so the standard model appears once — routing through the member's key when set, otherwise the team key. This precedence is automatic; there is no member-facing toggle in MVP.
 
 ### Cloud agents (Oz)
 - Team-managed keys and endpoints are usable by Oz cloud agents for that team: a cloud agent run can perform inference through the team's configured providers without any per-member device state.
@@ -61,8 +59,21 @@ A [Loom walkthrough](https://www.loom.com/share/6eb6e0f8f0764d2a9e8ec4f886957e63
 
 ### States, edge cases, and invariants
 - Non-enterprise/self-serve users see no change: the existing single BYOK/BYOE settings experience is preserved, with no "Provided by your team" group.
-- Disabling the section master toggle (3) removes team-managed providers from members' pickers and hides the member "Provided by your team" group on their next settings/picker load; it does not delete the member's own user-managed providers.
+- Disabling the section master toggle (3) removes team-managed providers from members' pickers and hides the member "Provided by your team" group on their next settings/picker load.
 - Turning "Allow users to bring their own models" off does not delete a member's locally stored keys/endpoints; it disables the UI and prevents their selection/use until re-enabled.
+
+### How team-managed providers are stored, synced, and injected
+This is meant to just be a high-level overview for alignment, more details will be in the tech spec. 
+
+Team-managed configuration is split into public metadata and secrets.
+- **Public metadata** syncs from the server down to every member's client through the existing workspace-settings channel and never includes secret values. What syncs differs by provider type:
+  - **BYOK (OpenAI/Anthropic/Google):** just a per-provider boolean — whether the team has a key configured. The provider is an already-known, built-in identity, so no value or id is synced. That boolean drives the member's "configured" checkmark and tells the picker which standard models can route through a team key.
+  - **Custom endpoints:** Endpoint name + URL, and each model's name, alias, and reference id (`config_key`) — since the client knows nothing about an admin-defined endpoint otherwise. Only the endpoint's API key is withheld.
+  This metadata is what lets a member's model picker show team-provided models without the client ever holding a key.
+- **Secrets**: first-party provider keys and endpoint API keys — are stored server-side, scoped to the team. They are never synced to clients. At request time the server resolves that reference against the team's stored secrets for the authenticated member, injects the matching key, and routes — at the same boundary that redacts secrets from logs. Two reference paths:
+- **First-party keys**: so the server resolves by provider and priority: a user key present on the request wins; otherwise the team's stored key for that provider is injected.
+- **Custom endpoints** use a stable per-model reference id (the same `config_key` that maps a model selection back to its provider today). A user endpoint's request carries both the selected model's reference id and a provider entry holding its URL + API key; a team endpoint's request carries only the reference id, and the server fills in the stored URL + API key for the team endpoint that owns it. For team endpoints this id is minted and owned server-side and travels to clients as public metadata. Resolution checks the request's own provider entries first (user endpoint, secret present), then the team's stored endpoints by reference id, so a user endpoint and a team endpoint with the same name never collide.
+
 
 ## Open Questions
 
