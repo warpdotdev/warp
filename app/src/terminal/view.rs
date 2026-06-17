@@ -8444,7 +8444,7 @@ impl TerminalView {
                 || active_block.is_active_and_long_running();
 
             if active_block_matches && command_is_running {
-                active_block.set_user_control_with_stop_reason();
+                active_block.set_user_control_and_suppress_auto_resume();
                 true
             } else {
                 false
@@ -10868,13 +10868,10 @@ impl TerminalView {
             match ai_metadata {
                 Some(ai_metadata)
                     if ai_metadata.requested_command_action_id().is_some()
+                        && !ai_metadata.should_suppress_auto_resume()
                         && ai_metadata
                             .long_running_control_state()
-                            .is_some_and(|state| {
-                                state
-                                    .user_take_over_reason()
-                                    .is_some_and(|reason| !reason.is_stop())
-                            }) =>
+                            .is_some_and(|state| state.user_take_over_reason().is_some()) =>
                 {
                     Some(*ai_metadata.conversation_id())
                 }
@@ -24589,7 +24586,7 @@ impl TerminalView {
         });
 
         // If the active block is a running command from this conversation, stop it and
-        // set the take-over reason to Stop to prevent automatic conversation resume.
+        // suppress automatic conversation resume when the command completes.
         let should_stop_running_command = {
             let mut model = self.model.lock();
             let active_block = model.block_list_mut().active_block_mut();
@@ -24598,7 +24595,7 @@ impl TerminalView {
                 && active_block.ai_conversation_id() == Some(conversation_id);
 
             if is_from_this_conversation {
-                active_block.set_user_control_with_stop_reason();
+                active_block.set_user_control_and_suppress_auto_resume();
             }
 
             is_from_this_conversation
