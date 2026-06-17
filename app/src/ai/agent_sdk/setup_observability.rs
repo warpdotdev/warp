@@ -2,6 +2,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use futures::FutureExt as _;
+use tracing::Instrument as _;
 use warpui::r#async::executor::Background;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -37,16 +39,26 @@ impl SetupClientEventReporter {
         }
     }
 
-    pub(crate) async fn record_result<T, E>(
+    pub(crate) async fn record_result<T, E: std::error::Error>(
         &self,
         step: SetupStep,
         future: impl Future<Output = Result<T, E>>,
     ) -> Result<T, E> {
+        let (step_name, span) = step.to_event_name_and_span();
+
         let start_timestamp = Utc::now();
-        let result = future.await;
+        let result = future
+            .map(|result| {
+                result.inspect_err(|err| {
+                    tracing::error!(error = %err);
+                })
+            })
+            .instrument(span)
+            .await;
         let finish_timestamp = Utc::now();
+
         self.post_setup_metric_event_best_effort(
-            step,
+            step_name,
             start_timestamp,
             finish_timestamp,
             result.is_err(),
@@ -59,10 +71,18 @@ impl SetupClientEventReporter {
         step: SetupStep,
         future: impl Future<Output = T>,
     ) -> T {
+        let (step_name, span) = step.to_event_name_and_span();
+
         let start_timestamp = Utc::now();
-        let value = future.await;
+        let value = future.instrument(span).await;
         let finish_timestamp = Utc::now();
-        self.post_setup_metric_event_best_effort(step, start_timestamp, finish_timestamp, false);
+
+        self.post_setup_metric_event_best_effort(
+            step_name,
+            start_timestamp,
+            finish_timestamp,
+            false,
+        );
         value
     }
     pub(crate) fn record_value_detached<T>(
@@ -72,14 +92,16 @@ impl SetupClientEventReporter {
     ) where
         T: Send + 'static,
     {
+        let (step_name, span) = step.to_event_name_and_span();
+
         let reporter = self.clone();
         self.background
             .spawn(async move {
                 let start_timestamp = Utc::now();
-                future.await;
+                future.instrument(span).await;
                 let finish_timestamp = Utc::now();
                 reporter.post_setup_metric_event_best_effort(
-                    step,
+                    step_name,
                     start_timestamp,
                     finish_timestamp,
                     false,
@@ -100,7 +122,7 @@ impl SetupClientEventReporter {
 
     fn post_setup_metric_event_best_effort(
         &self,
-        step: SetupStep,
+        event_name: &'static str,
         start_timestamp: DateTime<Utc>,
         finish_timestamp: DateTime<Utc>,
         is_error: bool,
@@ -112,7 +134,6 @@ impl SetupClientEventReporter {
         let ai_client = self.ai_client.clone();
         self.background
             .spawn(async move {
-                let event_name = step.as_event_name();
                 let request = AgentRunClientEventRequest::setup_metric_event(
                     event_name,
                     start_timestamp,
@@ -130,6 +151,8 @@ impl SetupClientEventReporter {
         event_name: &'static str,
         request: AgentRunClientEventRequest,
     ) {
+        tracing::info!(event_name, tags.cloud_agent = true);
+
         if let Err(err) = ai_client
             .post_agent_run_client_event(&run_id, request)
             .await
@@ -181,33 +204,83 @@ pub(crate) enum SetupStep {
     ThirdPartyHarnessExternalConversation,
 }
 
+macro_rules! span_and_name {
+    ($name:literal) => {
+        ($name, tracing::info_span!($name, tags.cloud_agent = true))
+    };
+}
+
 impl SetupStep {
-    fn as_event_name(self) -> &'static str {
+    fn to_event_name_and_span(self) -> (&'static str, tracing::Span) {
         match self {
-            Self::TeamMetadataRefresh => "setup_team_metadata_refresh",
-            Self::WarpDriveSync => "setup_warp_drive_sync",
-            Self::TaskDataFetch => "setup_task_metadata_secrets_attachments_git_credentials_fetch",
-            Self::EnvironmentResolution => "setup_environment_resolution",
-            Self::SkillRepoClone => "setup_skill_repo_clone",
-            Self::TerminalBootstrap => "setup_terminal_bootstrap",
-            Self::CloudProviderSetup => "setup_cloud_provider_setup",
-            Self::McpServerStartup => "setup_mcp_server_startup",
-            Self::AgentProfileConfiguration => "setup_agent_profile_configuration",
-            Self::ProfileMcpServerStartup => "setup_profile_mcp_server_startup",
-            Self::SharedSessionEstablishment => "setup_shared_session_establishment",
-            Self::GlobalSkillResolution => "setup_global_skill_resolution",
-            Self::GlobalSkillRepoClone => "setup_global_skill_repo_clone",
-            Self::EnvironmentRepoClone => "setup_environment_repo_clone",
-            Self::EnvironmentSetupCommands => "setup_environment_setup_commands",
-            Self::EnvironmentCodebaseIndexing => "setup_environment_codebase_indexing",
-            Self::FileBasedMcpDiscovery => "setup_file_based_mcp_discovery",
-            Self::FileBasedMcpReadiness => "setup_file_based_mcp_readiness",
-            Self::EnvironmentSkillLoading => "setup_environment_skill_loading",
-            Self::GlobalSkillLoading => "setup_global_skill_loading",
-            Self::ConversationResumeLoading => "setup_conversation_resume_loading",
-            Self::ThirdPartyHarnessPreparation => "setup_third_party_harness_preparation",
+            Self::TeamMetadataRefresh => {
+                span_and_name!("setup_team_metadata_refresh")
+            }
+            Self::WarpDriveSync => {
+                span_and_name!("setup_warp_drive_sync")
+            }
+            Self::TaskDataFetch => {
+                span_and_name!("setup_task_metadata_secrets_attachments_git_credentials_fetch")
+            }
+            Self::EnvironmentResolution => {
+                span_and_name!("setup_environment_resolution")
+            }
+            Self::SkillRepoClone => {
+                span_and_name!("setup_skill_repo_clone")
+            }
+            Self::TerminalBootstrap => {
+                span_and_name!("setup_terminal_bootstrap")
+            }
+            Self::CloudProviderSetup => {
+                span_and_name!("setup_cloud_provider_setup")
+            }
+            Self::McpServerStartup => {
+                span_and_name!("setup_mcp_server_startup")
+            }
+            Self::AgentProfileConfiguration => {
+                span_and_name!("setup_agent_profile_configuration")
+            }
+            Self::ProfileMcpServerStartup => {
+                span_and_name!("setup_profile_mcp_server_startup")
+            }
+            Self::SharedSessionEstablishment => {
+                span_and_name!("setup_shared_session_establishment")
+            }
+            Self::GlobalSkillResolution => {
+                span_and_name!("setup_global_skill_resolution")
+            }
+            Self::GlobalSkillRepoClone => {
+                span_and_name!("setup_global_skill_repo_clone")
+            }
+            Self::EnvironmentRepoClone => {
+                span_and_name!("setup_environment_repo_clone")
+            }
+            Self::EnvironmentSetupCommands => {
+                span_and_name!("setup_environment_setup_commands")
+            }
+            Self::EnvironmentCodebaseIndexing => {
+                span_and_name!("setup_environment_codebase_indexing")
+            }
+            Self::FileBasedMcpDiscovery => {
+                span_and_name!("setup_file_based_mcp_discovery")
+            }
+            Self::FileBasedMcpReadiness => {
+                span_and_name!("setup_file_based_mcp_readiness")
+            }
+            Self::EnvironmentSkillLoading => {
+                span_and_name!("setup_environment_skill_loading")
+            }
+            Self::GlobalSkillLoading => {
+                span_and_name!("setup_global_skill_loading")
+            }
+            Self::ConversationResumeLoading => {
+                span_and_name!("setup_conversation_resume_loading")
+            }
+            Self::ThirdPartyHarnessPreparation => {
+                span_and_name!("setup_third_party_harness_preparation")
+            }
             Self::ThirdPartyHarnessExternalConversation => {
-                "setup_third_party_harness_external_conversation"
+                span_and_name!("setup_third_party_harness_external_conversation")
             }
         }
     }

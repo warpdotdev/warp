@@ -134,9 +134,6 @@ pub enum FeatureFlag {
     /// Enables AI rules for use with Agent Mode.
     AIRules,
 
-    /// Routes SSH sessions through the tmux-backed SSH wrapper.
-    SSHTmuxWrapper,
-
     /// Enables the shell selector, allowing us to open a new tab in
     /// a shell other than the default shell.
     ShellSelector,
@@ -372,10 +369,6 @@ pub enum FeatureFlag {
 
     /// Gates the bundled skill-based implementation of PR comment fetching.
     PRCommentsSkill,
-
-    /// An entrypoint pane type to launch other pane types from a search palette. The default view
-    /// when creating a tab.
-    WelcomeTab,
 
     /// A new first-time user experience which prioritizes choosing a coding repository.
     GetStartedTab,
@@ -692,17 +685,14 @@ pub enum FeatureFlag {
     /// flows while the default behavior temporarily keeps them disabled.
     LocalClaudeCodexChildHarnesses,
 
-    /// Renders a horizontal pill bar in the agent view pane header showing the
-    /// orchestrator agent and all of its child agents, with click-to-switch
-    /// behavior between siblings.
-    OrchestrationPillBar,
-
-    /// Enables the orchestration pill bar in shared session viewers (web and
-    /// native). When enabled, viewing a shared session that used orchestration
-    /// shows a pill bar above the agent view header with the orchestrator and
-    /// each child agent. Clicking a child pill joins the child's shared session
-    /// and switches the view to its transcript.
-    OrchestrationViewerPillBar,
+    /// Gates client-side support for the `orchestrate` tool, which batches
+    /// multiple child agents into a single tool call with an inline
+    /// confirmation card. When enabled, the client advertises
+    /// `RequestSettings.SupportsOrchestrate = true` and the server's
+    /// orchestrate tool replaces `start_agent` / `start_agent_v2` for
+    /// orchestration-capable conversations. Layered on top of
+    /// `OrchestrationV2`; has no effect when v2 is off.
+    RunAgentsTool,
 
     /// Replaces `OrchestrationViewerModel`'s REST polling loop with an SSE-driven
     /// `ancestor_run_id` stream consumed via `OrchestrationEventStreamer`'s new
@@ -710,6 +700,9 @@ pub enum FeatureFlag {
     /// per-orchestrator viewer-mode consumer and the broadcast `ChildSpawned`
     /// / `ChildStatusChanged` events. See `specs/orch-viewer-polling/TECH.md`.
     OrchestrationViewerStreamer,
+
+    /// Uses a parent-family ancestor stream for owner-side orchestrator event delivery.
+    OwnerOrchestrationAncestorStreamer,
 
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
@@ -794,6 +787,9 @@ pub enum FeatureFlag {
     /// Enables tab configs — user-definable TOML templates for launching custom tab layouts.
     TabConfigs,
 
+    /// Enables Warp local control through the standalone warpctrl CLI.
+    WarpControlCli,
+
     /// When enabled, free-tier users are blocked from AI features (no-AI experiment arm).
     FreeUserNoAi,
 
@@ -874,6 +870,19 @@ pub enum FeatureFlag {
 
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
+
+    /// Gates the Pinned Tabs feature, which lets users pin individual tabs
+    /// and whole tab groups so they stay at the front of the tab list and
+    /// are protected from reordering.
+    PinnedTabs,
+
+    /// Gates the SuperGrok feature, which lets users
+    /// connect a Grok subscription instead of pasting an API key.
+    SuperGrok,
+
+    /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
+    /// route eliglible models to GEAP instead of Warp-managed inference.
+    GeminiEnterprise,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -892,6 +901,8 @@ static FEATURES_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Features used in debugging.
 pub const DEBUG_FLAGS: &[FeatureFlag] = &[FeatureFlag::DebugMode, FeatureFlag::RuntimeFeatureFlags];
+/// Features enabled only for the WarpLocal developer build.
+pub const LOCAL_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarnesses];
 
 /// Features enabled for the development team.  The expectation is that, over
 /// time, these will move on to PREVIEW_FLAGS before being launched.
@@ -902,8 +913,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::RemoveAutosuggestionDuringTabCompletions,
     FeatureFlag::ResizeFix,
     FeatureFlag::AgentModeWorkflows,
-    #[cfg(not(windows))]
-    FeatureFlag::SSHTmuxWrapper,
     FeatureFlag::AgentModeAnalytics,
     FeatureFlag::LazySceneBuilding,
     FeatureFlag::SshDragAndDrop,
@@ -937,10 +946,10 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::RemoteCodebaseIndexing,
-    FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
+    FeatureFlag::WarpControlCli,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
@@ -948,6 +957,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     #[cfg(target_os = "macos")]
     FeatureFlag::DragTabsToWindows,
+    FeatureFlag::GroupedTabs,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
@@ -990,7 +1000,9 @@ impl FeatureFlag {
         // Allow calling this in integration tests because we sometimes use it in the app
         // during flows that integration tests cover.
         if cfg!(test) && cfg!(not(feature = "integration_tests")) {
-            panic!("Tried to globally enable {self:?} in a test. Use FeatureFlag::{self:?}.override_enabled instead");
+            panic!(
+                "Tried to globally enable {self:?} in a test. Use FeatureFlag::{self:?}.override_enabled instead"
+            );
         }
         FLAG_STATES[self as usize].store(enabled, Ordering::Relaxed);
     }
@@ -1033,15 +1045,26 @@ impl FeatureFlag {
             BlocklistMarkdownImages => {
                 Some("Enables rendering markdown images inline in AI block list responses.")
             }
-            CloudEnvironments => Some("Enables creating and managing Warp Environments via the CLI."),
-            CreateEnvironmentSlashCommand => Some("Enables the /create environment slash command for setting up Warp Environments with custom configurations."),
+            CloudEnvironments => {
+                Some("Enables creating and managing Warp Environments via the CLI.")
+            }
+            CreateEnvironmentSlashCommand => Some(
+                "Enables the /create environment slash command for setting up Warp Environments with custom configurations.",
+            ),
             GlobalSearch => Some("Enables global search in the left panel"),
             BlocklistMarkdownTableRendering => {
                 Some("Enables rendering markdown tables inline in AI block list responses.")
             }
-            MarkdownTables => Some("Enables rendering and interaction support for markdown tables in notebooks."),
-            SettingsFile => Some("Enables configuring Warp via a user-editable `settings.toml` file, with hot reload and error reporting for invalid values."),
-            GitOperationsInCodeReview => Some("Enables commit, push, and create-PR actions directly from the code review panel."),
+            MarkdownTables => {
+                Some("Enables rendering and interaction support for markdown tables in notebooks.")
+            }
+            SettingsFile => Some(
+                "Enables configuring Warp via a user-editable `settings.toml` file, with hot reload and error reporting for invalid values.",
+            ),
+            GitOperationsInCodeReview => Some(
+                "Enables commit, push, and create-PR actions directly from the code review panel.",
+            ),
+            GroupedTabs => Some("Enables organizing tabs into named, collapsible groups."),
             _ => None,
         }
     }

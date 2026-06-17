@@ -107,15 +107,11 @@ fn has_terminal_for_workspace(root: &Path, app: &AppContext) -> bool {
     for window_id in app.window_ids() {
         if let Some(terminals) = app.views_of_type::<TerminalView>(window_id) {
             for terminal in terminals {
-                let Some(pwd) = terminal.as_ref(app).pwd_if_local(app) else {
+                let Some(pwd) = terminal.as_ref(app).canonical_session_pwd_if_local(app) else {
                     continue;
                 };
 
-                let Ok(cwd) = PathBuf::from(pwd).canonicalize() else {
-                    continue;
-                };
-
-                if cwd.starts_with(root) {
+                if pwd.as_path().starts_with(root) {
                     return true;
                 }
             }

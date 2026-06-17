@@ -88,7 +88,7 @@ pub fn time24_with_seconds(_: &GeneratorContext) -> Option<ChipValue> {
 /// Generator function for SSH session chip.
 pub fn ssh_session(ctx: &GeneratorContext) -> Option<ChipValue> {
     let session = ctx.active_session?;
-    if session.is_legacy_ssh_session()
+    if session.is_ssh_wrapper_session()
         || matches!(
             session.session_type(),
             crate::terminal::model::session::SessionType::WarpifiedRemote { .. }

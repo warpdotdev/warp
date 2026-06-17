@@ -54,6 +54,7 @@ impl Block {
     }
 
     pub fn set_is_agent_tagged_in(&mut self, value: bool) {
+        let block_id = self.id().clone();
         if let InteractionMode::User(UserMode {
             ref mut did_user_tag_in_agent,
         }) = &mut self.interaction_mode
@@ -62,6 +63,7 @@ impl Block {
                 *did_user_tag_in_agent = value;
                 self.event_proxy
                     .send_terminal_event(Event::AgentTaggedInChanged {
+                        block_id,
                         is_tagged_in: value,
                     });
             }

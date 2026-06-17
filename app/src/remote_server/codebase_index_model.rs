@@ -451,6 +451,7 @@ impl RemoteCodebaseIndexModel {
             RemoteServerManagerEvent::SessionConnecting { .. }
             | RemoteServerManagerEvent::SessionConnectionFailed { .. }
             | RemoteServerManagerEvent::HostConnected { .. }
+            | RemoteServerManagerEvent::BundledSkillsSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
             | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
@@ -459,7 +460,15 @@ impl RemoteCodebaseIndexModel {
             | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
             | RemoteServerManagerEvent::DiffStateMetadataUpdateReceived { .. }
             | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. }
+            | RemoteServerManagerEvent::GitStatusPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubPrInfoPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived { .. }
             | RemoteServerManagerEvent::GetBranchesResponse { .. }
+            | RemoteServerManagerEvent::CommitChainResponse { .. }
+            | RemoteServerManagerEvent::GitPushResponse { .. }
+            | RemoteServerManagerEvent::CreatePrResponse { .. }
+            | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
+            | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. }
             | RemoteServerManagerEvent::SetupStateChanged { .. }
             | RemoteServerManagerEvent::BinaryCheckComplete { .. }
             | RemoteServerManagerEvent::BinaryInstallComplete { .. }

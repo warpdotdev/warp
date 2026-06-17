@@ -105,10 +105,10 @@ impl SyncDataSource for ZeroStateDataSource {
         {
             let slash_command_data_source = self.slash_command_data_source.as_ref(app);
             let cli_agent_providers = slash_command_data_source.active_cli_agent_providers(app);
-            let cwd = slash_command_data_source
+            let active_session = slash_command_data_source
                 .active_session_for_v2_zero_state()
-                .as_ref(app)
-                .current_working_directory_location(app);
+                .as_ref(app);
+            let cwd = active_session.current_working_directory_location(app);
             let skill_manager_handle = SkillManager::handle(app);
             let skill_manager = skill_manager_handle.as_ref(app);
             let skills = skill_manager.get_skills_for_working_directory(cwd.as_ref(), app);

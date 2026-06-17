@@ -96,7 +96,16 @@ pub struct PtyOptions {
     // Refers to the original SSH wrapper that uses ControlMaster and
     // requires overwriting the user's SSH command at the shell layer.
     pub enable_ssh_wrapper: bool,
+    /// Whether the legacy SSH wrapper should attach to an existing
+    /// ControlMaster for the destination host (discovered via `ssh -G` and
+    /// verified with `ssh -O check`) instead of always creating its own.
+    #[serde(default)]
+    pub reuse_ssh_control_master: bool,
     pub shell_debug_mode: bool,
     pub honor_ps1: bool,
+    /// Whether the Node.js Version context chip is enabled for this session. When
+    /// `false`, the shell bootstrap skips the per-prompt `node --version` detection
+    /// (gated via the `WARP_PROMPT_NODE_VERSION_ENABLED` env var).
+    pub node_version_chip_enabled: bool,
     pub close_fds: bool,
 }

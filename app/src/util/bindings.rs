@@ -896,21 +896,21 @@ pub fn is_binding_pty_compliant(binding: BindingLens) -> IsBindingValid {
     let Some(keystroke) = trigger_to_keystroke(trigger) else {
         return IsBindingValid::Yes;
     };
-
-    let is_binding_in_allowlist = (OperatingSystem::get().is_mac()
-        && MAC_PTY_NON_COMPLIANT_ACTIONS.contains(binding.name))
-        || (OperatingSystem::get().is_windows()
-            && WINDOWS_PTY_NON_COMPLIANT_KEYSTROKES.contains(&keystroke))
-        || PTY_NON_COMPLIANT_KEYSTROKES.contains(&keystroke);
-
     if CONTROL_CHARACTER_KEY_REGEX.is_match(keystroke.normalized().as_str())
-        && !is_binding_in_allowlist
+        && !is_pty_non_compliant_binding_allowed(binding.name, &keystroke)
     {
         // The binding interferes with a control character so it is not valid.
         IsBindingValid::No
     } else {
         IsBindingValid::Yes
     }
+}
+
+fn is_pty_non_compliant_binding_allowed(binding_name: &str, keystroke: &Keystroke) -> bool {
+    (OperatingSystem::get().is_mac() && MAC_PTY_NON_COMPLIANT_ACTIONS.contains(binding_name))
+        || (OperatingSystem::get().is_windows()
+            && WINDOWS_PTY_NON_COMPLIANT_KEYSTROKES.contains(keystroke))
+        || PTY_NON_COMPLIANT_KEYSTROKES.contains(keystroke)
 }
 
 /// Validates all that bindings are cross-platform by returning [`IsBindingValid::No`] if a `cmd-*`

@@ -174,7 +174,18 @@ impl OrchestrationEventService {
             .pending_events
             .get(&conversation_id)
             .is_some_and(|events| !events.is_empty());
-        if !is_restored && matches!(&current_status, ConversationStatus::Success) && has_pending {
+        // Re-fire EventsReady whenever the conversation reaches a status
+        // that `conversation_ready_for_pending_events` would accept, so
+        // events queued while the stream was in flight drain as soon as
+        // the stream finishes — either to `Success` or to
+        // `WaitingForEvents` via a `wait_for_events` yield.
+        if !is_restored
+            && matches!(
+                &current_status,
+                ConversationStatus::Success | ConversationStatus::WaitingForEvents
+            )
+            && has_pending
+        {
             ctx.emit(OrchestrationEventServiceEvent::EventsReady { conversation_id });
         }
     }

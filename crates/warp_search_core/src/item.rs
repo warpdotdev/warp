@@ -94,12 +94,6 @@ pub trait SearchItem: Send + Sync {
         None
     }
 
-    /// Returns an optional deduplication key for this item.
-    /// Items with the same deduplication key will be considered duplicates.
-    fn dedup_key(&self) -> Option<String> {
-        None
-    }
-
     /// Returns whether this item is a static separator,
     /// meaning it is a non-interactible item that should act as a simple UI element.
     fn is_static_separator(&self) -> bool {

@@ -44,6 +44,7 @@ use crate::server::telemetry::telemetry_context;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shared_session::network::heartbeat::{Event as HeartbeatEvent, Heartbeat};
+use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
 use crate::terminal::shared_session::viewer::event_loop::{
     EventLoop, SharedSessionInitialLoadMode,
 };
@@ -118,6 +119,7 @@ pub struct Network {
     channel_event_proxy: ChannelEventListener,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     initial_load_mode: SharedSessionInitialLoadMode,
+    remote_update_guard: RemoteUpdateGuard,
 
     stage: Stage,
 
@@ -147,6 +149,7 @@ pub struct Network {
 }
 
 impl Network {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         session_id: SessionId,
         channel_event_proxy: ChannelEventListener,
@@ -154,6 +157,7 @@ impl Network {
         terminal_model: Arc<FairMutex<TerminalModel>>,
         write_to_pty_events_rx: Receiver<Vec<u8>>,
         initial_load_mode: SharedSessionInitialLoadMode,
+        remote_update_guard: RemoteUpdateGuard,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
@@ -172,6 +176,7 @@ impl Network {
             channel_event_proxy,
             terminal_model,
             initial_load_mode,
+            remote_update_guard,
             terminal_view,
             stage: Stage::BeforeJoined,
             id: None,
@@ -211,6 +216,7 @@ impl Network {
         terminal_view: WeakViewHandle<TerminalView>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
         write_to_pty_events_rx: Receiver<Vec<u8>>,
+        remote_update_guard: RemoteUpdateGuard,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         use session_sharing_protocol::common::SessionId;
@@ -235,6 +241,7 @@ impl Network {
             channel_event_proxy,
             terminal_model,
             initial_load_mode: SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+            remote_update_guard,
             terminal_view,
             stage: Stage::BeforeJoined,
             id: Some(viewer_id.clone()),
@@ -593,6 +600,7 @@ impl Network {
                         *scrollback,
                         latest_event_no,
                         self.initial_load_mode,
+                        self.remote_update_guard.clone(),
                         ctx,
                     )
                 });

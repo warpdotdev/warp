@@ -186,6 +186,8 @@ const SPACE_BETWEEN_SELECTED_BLOCK_AVATARS: f32 = 2.;
 
 const CLI_SUBAGENT_HORIZONTAL_MARGIN: f32 = 8.;
 const CLI_SUBAGENT_VERTICAL_MARGIN: f32 = 8.;
+const CLI_SUBAGENT_MAX_WIDTH_RATIO: f32 = 0.75;
+const CLI_SUBAGENT_MAX_HEIGHT_RATIO: f32 = 0.75;
 
 pub type LabelBuilderFn = dyn Fn(
     Vec<BlockIndex>,
@@ -3360,14 +3362,16 @@ impl Element for BlockListElement {
                                 self.cli_subagent_views.get_mut(block.id())
                             {
                                 let block_height = (height.as_f64() as f32) * cell_size.y();
+                                let max_width = (constraint.max.x() * CLI_SUBAGENT_MAX_WIDTH_RATIO
+                                    - CLI_SUBAGENT_HORIZONTAL_MARGIN)
+                                    .max(0.);
+                                let max_height = (block_height - CLI_SUBAGENT_VERTICAL_MARGIN * 2.)
+                                    .min(constraint.max.y() * CLI_SUBAGENT_MAX_HEIGHT_RATIO)
+                                    .max(0.);
                                 cli_subagent_view.layout(
                                     SizeConstraint {
                                         min: vec2f(0., 0.),
-                                        max: vec2f(
-                                            constraint.max.x() * 0.4
-                                                - CLI_SUBAGENT_HORIZONTAL_MARGIN,
-                                            block_height - CLI_SUBAGENT_VERTICAL_MARGIN * 2.,
-                                        ),
+                                        max: vec2f(max_width, max_height),
                                     },
                                     ctx,
                                     app,

@@ -28,6 +28,15 @@ pub fn red_x_icon(appearance: &Appearance) -> warpui::elements::Icon {
     )
 }
 
+/// Yellow warning triangle for terminal states that only partially succeeded
+/// (e.g. some child agents launched and others failed).
+pub fn warning_icon(appearance: &Appearance) -> warpui::elements::Icon {
+    warpui::elements::Icon::new(
+        Icon::Triangle.into(),
+        AnsiColorIdentifier::Yellow.to_ansi_color(&appearance.theme().terminal_colors().normal),
+    )
+}
+
 pub fn cancelled_icon(appearance: &Appearance) -> warpui::elements::Icon {
     warpui::elements::Icon::new(
         Icon::Cancelled.into(),

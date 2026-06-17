@@ -826,9 +826,11 @@ impl<V> ViewSpawner<V> {
         work: impl FnOnce(&mut V, &mut ViewContext<V>) -> R + Send + 'static,
     ) -> Result<R, ViewDropped> {
         let (tx, rx) = futures::channel::oneshot::channel();
+        let span = tracing::Span::current();
 
         self.task_sender
             .send(Box::new(move |me, ctx| {
+                let _guard = span.enter();
                 let result = work(me, ctx);
                 // If the background task has dropped the receiver, then we don't need to send
                 // the result, and there's no one to inform regardless.

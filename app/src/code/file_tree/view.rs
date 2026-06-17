@@ -64,6 +64,8 @@ use crate::util::openable_file_type::{
 mod editing;
 mod render;
 
+use crate::settings::{CodeSettings, CodeSettingsChangedEvent};
+
 const REMOTE_TEXT: &str = "The Project Explorer requires access to your local workspace, which isn’t supported in remote sessions.";
 const DISABLED_TEXT: &str = "The Project Explorer requires access to your local workspace. Open a new session or navigate to an active session to view.";
 const WSL_TEXT: &str = "The Project Explorer doesn't currently work in WSL.";
@@ -286,6 +288,8 @@ pub struct FileTreeView {
     /// the target is selected by the user or when the target root stops
     /// being displayed.
     pending_focus_target: Option<PendingFocusTarget>,
+    /// Whether to show hidden files (dotfiles) in the file tree.
+    show_hidden_files: bool,
 }
 
 /// Directory the file tree wants to focus once its entry becomes available.
@@ -347,6 +351,8 @@ impl FileTreeView {
         if is_active {
             self.subscribe_to_repository_metadata(ctx);
             self.subscribe_to_active_file_model(ctx);
+            self.subscribe_to_code_settings(ctx);
+            self.show_hidden_files = *CodeSettings::as_ref(ctx).show_hidden_files;
 
             // Catch up on any repository/file changes that happened while inactive.
             // Skip remote-backed roots — their data comes from server pushes,
@@ -380,6 +386,7 @@ impl FileTreeView {
         } else {
             ctx.unsubscribe_to_model(&self.repository_metadata_model);
             self.unsubscribe_from_active_file_model(ctx);
+            self.unsubscribe_from_code_settings(ctx);
             let repository_metadata_model = self.repository_metadata_model.clone();
             let paths: Vec<_> = self.registered_lazy_loaded_paths.drain().collect();
             repository_metadata_model.update(ctx, move |model: &mut RepoMetadataModel, ctx| {
@@ -643,6 +650,20 @@ impl FileTreeView {
         ctx.unsubscribe_to_model(active_file_model);
     }
 
+    fn subscribe_to_code_settings(&self, ctx: &mut ViewContext<Self>) {
+        ctx.subscribe_to_model(&CodeSettings::handle(ctx), |me, _, event, ctx| {
+            if let CodeSettingsChangedEvent::ShowHiddenFiles { .. } = event {
+                me.show_hidden_files = *CodeSettings::as_ref(ctx).show_hidden_files;
+                me.rebuild_flattened_items();
+                ctx.notify();
+            }
+        });
+    }
+
+    fn unsubscribe_from_code_settings(&self, ctx: &mut ViewContext<Self>) {
+        ctx.unsubscribe_to_model(&CodeSettings::handle(ctx));
+    }
+
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let context_menu = ctx.add_typed_action_view(|_| {
             Menu::new()
@@ -704,6 +725,7 @@ impl FileTreeView {
             #[cfg(feature = "local_fs")]
             registered_lazy_loaded_paths: HashSet::new(),
             pending_focus_target: None,
+            show_hidden_files: *CodeSettings::as_ref(ctx).show_hidden_files,
         };
 
         picker
@@ -1653,13 +1675,19 @@ impl FileTreeView {
                 root_dir.items = items;
             }
 
-            // If we found the selection in this root, update selected_item
-            if let (Some(index), Some(id)) = (new_index, id_to_preserve.as_ref()) {
+            // If we found the selection in this root, update selected_item.
+            // If the selection was expected but not found (e.g. filtered out as hidden),
+            // clear selected_item to avoid stale references.
+            if let Some(id) = id_to_preserve.as_ref() {
                 if id.root == root_path {
-                    self.selected_item = Some(FileTreeIdentifier {
-                        root: root_path,
-                        index,
-                    });
+                    if let Some(index) = new_index {
+                        self.selected_item = Some(FileTreeIdentifier {
+                            root: root_path,
+                            index,
+                        });
+                    } else if selected_item_path.is_some() {
+                        self.selected_item = None;
+                    }
                 }
             }
 
@@ -1686,6 +1714,17 @@ impl FileTreeView {
 
         if path_of_removed_item == Some(current_path) {
             return (None, true);
+        }
+
+        // Filter hidden files/directories when show_hidden_files is disabled.
+        // Only filter descendants (depth > 0), not the root entry itself,
+        // so that hidden workspace directories (e.g. ~/.config) are still shown.
+        if !self.show_hidden_files && depth > 0 {
+            if let Some(name) = current_path.file_name() {
+                if name.starts_with('.') {
+                    return (selected_item_index, removed_item);
+                }
+            }
         }
 
         if path_of_selected_item == Some(current_path) {

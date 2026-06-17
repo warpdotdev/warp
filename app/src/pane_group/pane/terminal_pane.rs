@@ -36,8 +36,6 @@ use crate::ai::llms::LLMPreferences;
 use crate::ai::skills::SkillManager;
 use crate::app_state::{AmbientAgentPaneSnapshot, LeafContents, TerminalPaneSnapshot};
 use crate::code::buffer_location::LocalOrRemotePath;
-#[cfg(not(target_family = "wasm"))]
-use crate::features::FeatureFlag;
 use crate::pane_group::child_agent::{
     create_error_child_agent_conversation, ErrorChildAgentConversationRequest,
 };
@@ -161,17 +159,13 @@ pub(in crate::pane_group) fn host_terminal_shared_session_source_type(
 
 /// Builds the `IsSharedSessionCreator` for a child pane spawned by
 /// `run_agents(local)`. Returns `Yes` (stamped with the child's `task_id`)
-/// only when `OrchestrationViewerPillBar` is enabled and the host carries
-/// an orchestrator `task_id`. The host's variant kind is preserved so
-/// cloud-only UI stays gated on `AmbientAgent`.
+/// when the host carries an orchestrator `task_id`. The host's variant kind
+/// is preserved so cloud-only UI stays gated on `AmbientAgent`.
 #[cfg(not(target_family = "wasm"))]
 pub(in crate::pane_group) fn inherit_share_for_local_child(
     host_source: Option<&SharedSessionSource>,
     child_task_id: AmbientAgentTaskId,
 ) -> IsSharedSessionCreator {
-    if !FeatureFlag::OrchestrationViewerPillBar.is_enabled() {
-        return IsSharedSessionCreator::No;
-    }
     let Some(host_source) = host_source else {
         return IsSharedSessionCreator::No;
     };
@@ -2186,13 +2180,21 @@ fn handle_ai_history_event(
                 return;
             }
 
+            // Only query-bearing inputs (e.g. user queries) are persisted for
+            // up-arrow history. Early return and skip writing for exchanges that
+            // carry empty input.
+            let inputs: Vec<_> = exchange
+                .input
+                .iter()
+                .filter_map(|input| PersistedAIInputType::try_from(input).ok())
+                .collect();
+            if inputs.is_empty() {
+                return;
+            }
+
             let persisted_query = PersistedAIInput {
                 start_ts: exchange.start_time,
-                inputs: exchange
-                    .input
-                    .iter()
-                    .filter_map(|input| PersistedAIInputType::try_from(input).ok())
-                    .collect(),
+                inputs,
                 exchange_id: exchange.id,
                 conversation_id: *conversation_id,
                 output_status: AIQueryHistoryOutputStatus::from(&exchange.output_status),
@@ -2254,6 +2256,7 @@ fn handle_ai_history_event(
         | BlocklistAIHistoryEvent::RestoredConversations { .. }
         | BlocklistAIHistoryEvent::CreatedSubtask { .. }
         | BlocklistAIHistoryEvent::UpgradedTask { .. }
+        | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
         | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
         | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
         | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }

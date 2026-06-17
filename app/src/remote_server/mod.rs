@@ -22,8 +22,11 @@ mod codebase_index_status;
 pub mod diff_state_proto;
 #[cfg(not(target_family = "wasm"))]
 pub mod diff_state_tracker;
+pub mod git_status_proto;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod handoff_snapshot;
+#[cfg(not(target_family = "wasm"))]
+mod ripgrep_search;
 #[cfg(not(target_family = "wasm"))]
 pub mod server_buffer_tracker;
 #[cfg(not(target_family = "wasm"))]

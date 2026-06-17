@@ -8,8 +8,10 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures::channel::oneshot;
+use futures::TryFutureExt as _;
 use session_sharing_protocol::common::{Role, SessionId};
 use session_sharing_protocol::sharer::SessionRetentionReason;
+use tracing::Instrument as _;
 use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_completer::completer::CommandOutput;
 use warp_core::command::ExitCode;
@@ -547,11 +549,17 @@ impl TerminalDriver {
             session_bootstrapped
                 .wait()
                 .with_timeout(TERMINAL_SESSION_BOOTSTRAP_TIMEOUT)
-                .await
-                .map_err(|_| {
+                .map_err(|err| {
                     log::error!("Timed out waiting for session bootstrap");
+                    tracing::error!(error = %err);
+
                     AgentDriverError::BootstrapFailed
                 })
+                .instrument(tracing::info_span!(
+                    "wait_for_session_bootstrapped",
+                    tags.cloud_agent = true
+                ))
+                .await
         }
     }
 

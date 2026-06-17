@@ -7,10 +7,17 @@ use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warpui::App;
 
 use super::super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
-use super::{classify_renderable_error, map_cli_session_status, LocalAgentTaskSyncModel};
-use crate::ai::agent::conversation::{AIConversation, AIConversationId};
-use crate::ai::agent::RenderableAIError;
+use super::{
+    classify_renderable_error, map_cli_session_status, map_conversation_status,
+    LocalAgentTaskSyncModel,
+};
+use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
+use crate::ai::agent::{
+    AIAgentExchange, AIAgentExchangeId, AIAgentOutputStatus, FinishedAIAgentOutput,
+    RenderableAIError, TransientNetworkErrorKind,
+};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::llms::LLMId;
 use crate::server::server_api::ai::{AIClient, MockAIClient, TaskStatusUpdate};
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
 
@@ -119,6 +126,161 @@ fn other_error_is_error_with_internal() {
         AgentTaskState::Error,
         Some(PlatformErrorCode::InternalError),
         Some("something broke"),
+    );
+}
+
+#[test]
+fn transient_network_error_is_error_with_internal_and_debug_details() {
+    assert_update(
+        classify_renderable_error(&RenderableAIError::transient_network_error(
+            false,
+            false,
+            TransientNetworkErrorKind::UnfinishedExchange,
+        )),
+        AgentTaskState::Error,
+        Some(PlatformErrorCode::InternalError),
+        Some("Debug info: stream completed with an unfinished exchange"),
+    );
+}
+
+// --- map_conversation_status ---
+
+/// A yielded conversation must report `IN_PROGRESS` to the task service
+/// so the task row stays active across the yield. No status message is
+/// attached because the yield is an internal state.
+#[test]
+fn map_conversation_status_waiting_for_events_reports_in_progress_with_no_message() {
+    App::test((), |mut app| async move {
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let conversation = AIConversation::new(false, false);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+        history_model.update(&mut app, |model, ctx| {
+            let conv = model
+                .conversation_mut(&conversation_id)
+                .expect("conversation was just restored");
+            conv.update_status(ConversationStatus::WaitingForEvents, terminal_view_id, ctx);
+        });
+
+        history_model.read(&app, |model, _| {
+            let conv = model.conversation(&conversation_id).unwrap();
+            assert_eq!(conv.status(), &ConversationStatus::WaitingForEvents);
+            let (state, update) = map_conversation_status(conv);
+            assert_eq!(state, AgentTaskState::InProgress);
+            assert!(
+                update.is_none(),
+                "WaitingForEvents must not attach a status message"
+            );
+        });
+    });
+}
+
+#[test]
+fn map_conversation_status_in_progress_reports_in_progress_with_no_message() {
+    let conversation = AIConversation::new(false, false);
+    assert_eq!(
+        conversation.status(),
+        &ConversationStatus::InProgress,
+        "freshly constructed conversation should start in InProgress"
+    );
+
+    let (state, update) = map_conversation_status(&conversation);
+
+    assert_eq!(state, AgentTaskState::InProgress);
+    assert!(update.is_none());
+}
+
+#[test]
+fn transient_error_status_maps_to_in_progress_with_no_message() {
+    // Recovery stays IN_PROGRESS with no status message; see the rationale in
+    // `map_conversation_status`.
+    let mut conversation = AIConversation::new(false, false);
+    conversation.set_status_for_test(ConversationStatus::TransientError);
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::InProgress,
+        None,
+        None,
+    );
+}
+
+// --- map_conversation_status (Error path) ---
+
+/// Builds a finished-with-error root exchange so the `Error` arm of
+/// `map_conversation_status` can be exercised end-to-end.
+fn error_exchange(error: RenderableAIError) -> AIAgentExchange {
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input: vec![],
+        output_status: AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Error {
+                output: None,
+                error,
+            },
+        },
+        added_message_ids: Default::default(),
+        start_time: chrono::Local::now(),
+        finish_time: None,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from("test-model"),
+        request_cost: None,
+        coding_model_id: LLMId::from("test-model"),
+        cli_agent_model_id: LLMId::from("test-model"),
+        computer_use_model_id: LLMId::from("test-model"),
+        response_initiator: None,
+    }
+}
+
+/// Drives the production `Error` path end-to-end: `map_conversation_status` must
+/// extract the `RenderableAIError` from the last root exchange and classify it.
+#[test]
+fn map_conversation_status_error_classifies_exchange_error() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.append_root_exchange_for_test(error_exchange(RenderableAIError::QuotaLimit {
+        user_display_message: None,
+    }));
+    conversation.set_status_for_test(ConversationStatus::Error);
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::InsufficientCredits),
+        Some("credits"),
+    );
+}
+
+/// The `will_attempt_resume` rendering hint must not affect terminal classification.
+#[test]
+fn map_conversation_status_error_ignores_will_attempt_resume() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.append_root_exchange_for_test(error_exchange(RenderableAIError::Other {
+        error_message: "connection reset".into(),
+        will_attempt_resume: true,
+        waiting_for_network: false,
+    }));
+    conversation.set_status_for_test(ConversationStatus::Error);
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::Error,
+        Some(PlatformErrorCode::InternalError),
+        Some("connection reset"),
+    );
+}
+
+/// An `Error` status with no extractable exchange error falls back to a generic message.
+#[test]
+fn map_conversation_status_error_without_exchange_error_is_generic() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.set_status_for_test(ConversationStatus::Error);
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::Error,
+        None,
+        Some("Agent encountered an error"),
     );
 }
 
