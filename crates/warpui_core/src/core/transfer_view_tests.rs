@@ -874,10 +874,12 @@ fn test_transfer_view_tree_moves_child_view_ids_owned_views() {
     }
 
     App::test((), |mut app| async move {
-        let (window_1_id, _) =
-            app.add_window(WindowStyle::NotStealFocus, |_| OwnerView { owned: Vec::new() });
-        let (window_2_id, _) =
-            app.add_window(WindowStyle::NotStealFocus, |_| OwnerView { owned: Vec::new() });
+        let (window_1_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| OwnerView {
+            owned: Vec::new(),
+        });
+        let (window_2_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| OwnerView {
+            owned: Vec::new(),
+        });
 
         // Child created without a structural parent and never rendered, so it
         // is reachable only through the parent's `child_view_ids`.
