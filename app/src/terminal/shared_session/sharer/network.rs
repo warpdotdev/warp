@@ -37,7 +37,7 @@ use session_sharing_protocol::sharer::{
 };
 use warp_core::features::FeatureFlag;
 use warpui::r#async::Timer;
-use warpui::{Entity, ModelContext, ModelHandle, RequestState, RetryOption, SingletonEntity};
+use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 
 use crate::auth::{AuthStateProvider, UserUid};
@@ -45,7 +45,6 @@ use crate::editor::{CrdtOperation, ReplicaId};
 use crate::server::iap::IapManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
-use crate::terminal::shared_session::network::heartbeat::{Event as HeartbeatEvent, Heartbeat};
 use crate::terminal::shared_session::{
     connect_endpoint, max_session_size, EventNumber, SharedSessionScrollbackType,
     SharedSessionSource, SELECTION_THROTTLE_PERIOD,
@@ -253,7 +252,6 @@ fn startup_max_attempts(source: &SharedSessionSource) -> usize {
 pub struct Network {
     model: Arc<FairMutex<TerminalModel>>,
     stage: Stage,
-    heartbeat: ModelHandle<Heartbeat>,
 
     /// The next event number to use when sending an event to the server.
     event_no: EventNumber,
@@ -309,10 +307,7 @@ impl Network {
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let init_block_id = model.lock().block_list().active_block_id().clone();
-        let heartbeat = ctx.add_model(|_| Heartbeat::default());
-
         let network = Network {
-            heartbeat,
             event_no: EventNumber::new(),
             selection_event_no: EventNumber::new(),
             model: model.clone(),
@@ -385,7 +380,6 @@ impl Network {
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let init_block_id = model.lock().block_list().active_block_id().clone();
-        let heartbeat = ctx.add_model(|_| Heartbeat::default());
         let window_size = {
             let size_info = *model.lock().block_list().size();
             WindowSize {
@@ -410,7 +404,6 @@ impl Network {
         };
 
         let mut network = Network {
-            heartbeat,
             event_no: EventNumber::new(),
             selection_event_no: EventNumber::new(),
             model: model.clone(),
@@ -506,21 +499,6 @@ impl Network {
         let message = UpstreamMessage::EndSession { reason };
         self.send_message_to_server(message);
         self.close_without_reconnection();
-    }
-
-    /// We need to ensure we're maintaining a heartbeat with the server.
-    /// This helps us detect if the server has gone away silently and helps
-    /// the server detect if we (the client) have disconnected quietly.
-    fn handle_heartbeat_event(&mut self, event: &HeartbeatEvent, ctx: &mut ModelContext<Self>) {
-        match event {
-            HeartbeatEvent::Ping => {
-                self.send_message_to_server(UpstreamMessage::Ping { data: vec![] });
-            }
-            HeartbeatEvent::Idle => {
-                sharer_info!(self, "Sharer reconnecting: heartbeat idle timeout");
-                self.reconnect_websocket(ctx);
-            }
-        }
     }
 
     pub fn send_active_prompt_update_if_changed(&mut self, active_prompt: ActivePrompt) {
@@ -762,7 +740,7 @@ impl Network {
         };
 
         self.abort_startup_handles();
-        self.close_startup_transport(ctx);
+        self.close_startup_transport();
 
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
         self.ws_proxy_tx = ws_proxy_tx;
@@ -963,7 +941,7 @@ impl Network {
         }
     }
 
-    fn close_startup_transport(&mut self, ctx: &mut ModelContext<Self>) {
+    fn close_startup_transport(&mut self) {
         self.ws_proxy_tx.close();
     }
 
@@ -997,7 +975,7 @@ impl Network {
                 );
             }
             self.abort_startup_handles();
-            self.close_startup_transport(ctx);
+            self.close_startup_transport();
 
             #[cfg(not(any(test, feature = "integration_tests")))]
             self.start_create_session_attempt(ctx);
@@ -1017,7 +995,7 @@ impl Network {
         }
         self.abort_startup_handles();
         self.stage = Stage::Finished;
-        self.close_startup_transport(ctx);
+        self.close_startup_transport();
         self.startup_config = None;
 
         #[cfg(not(any(test, feature = "integration_tests")))]

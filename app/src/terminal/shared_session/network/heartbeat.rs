@@ -1,3 +1,8 @@
+// Session sharing now relies on the server sending protocol-level ping frames that the client responds to,
+// and the server initiates disconnect if the client is unresponsive.
+// This module is no longer used, but we keep the code around for now.
+#![allow(dead_code)]
+
 use std::time::Duration;
 
 use futures::stream::AbortHandle;

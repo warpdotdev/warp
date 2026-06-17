@@ -43,7 +43,6 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::telemetry_context;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::block::BlockId;
-use crate::terminal::shared_session::network::heartbeat::{Event as HeartbeatEvent, Heartbeat};
 use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
 use crate::terminal::shared_session::viewer::event_loop::{
     EventLoop, SharedSessionInitialLoadMode,
@@ -108,8 +107,6 @@ struct CachedLatestState {
 /// The network interface to allow communication to and from the
 /// cloud-backed shared session.
 pub struct Network {
-    heartbeat: ModelHandle<Heartbeat>,
-
     session_id: SessionId,
     /// [`None`] until the viewer receives the successful join ack.
     event_loop: Option<ModelHandle<EventLoop>>,
@@ -163,10 +160,7 @@ impl Network {
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
-        let heartbeat = ctx.add_model(|_| Heartbeat::default());
-
         let model = Network {
-            heartbeat,
             session_id,
             event_loop: None,
             ws_proxy_tx,
@@ -223,15 +217,12 @@ impl Network {
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
-        let heartbeat = ctx.add_model(|_| Heartbeat::default());
-
         let session_id = SessionId::new();
         let viewer_id = ParticipantId::new();
         let viewer_firebase_uid = UserUid::new("mock_firebase_uid");
         let active_prompt = ActivePrompt::WarpPrompt("test warp prompt".to_owned());
 
         let model = Network {
-            heartbeat,
             session_id,
             event_loop: None,
             ws_proxy_tx,
@@ -279,21 +270,6 @@ impl Network {
             |_, _| {},
         );
         model
-    }
-
-    /// We need to ensure we're maintaining a heartbeat with the server.
-    /// This helps us detect if the server has gone away silently and helps
-    /// the server detect if we (the client) have disconnected quietly.
-    fn handle_heartbeat_event(&mut self, event: &HeartbeatEvent, ctx: &mut ModelContext<Self>) {
-        match event {
-            HeartbeatEvent::Ping => {
-                self.send_message_to_server(UpstreamMessage::Ping { data: vec![] });
-            }
-            HeartbeatEvent::Idle => {
-                log::info!("Viewer reconnecting: heartbeat idle timeout");
-                self.reconnect_websocket(ctx);
-            }
-        }
     }
 
     async fn get_user_id(
