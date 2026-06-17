@@ -175,6 +175,12 @@ struct ActiveDrag {
     /// to constrain the ghost chip so it has the same dimensions as the
     /// source tab.
     source_element_size: Vector2F,
+    /// True while the cursor is over the source window's own tab bar during a
+    /// multi-tab drag and we are reordering the existing detached placeholder
+    /// in place instead of showing a `GhostInTarget` slot. Tracked so the
+    /// preview window's alpha is only toggled on the transition in/out of this
+    /// mode; the phase stays `Floating` throughout.
+    reordering_in_source: bool,
     phase: DragPhase,
 }
 
@@ -283,6 +289,13 @@ pub enum DragResult {
     /// This happens in the single-tab case where the source window is physically
     /// repositioned and the draggable coordinates must be corrected to match.
     AdjustDraggable { adjustment: Vector2F },
+    /// The cursor is back over the source window's own tab bar during a
+    /// multi-tab drag. Rather than a deferred ghost slot, the caller should
+    /// reorder its existing detached placeholder in place (like an in-window
+    /// reorder) and report the placeholder's new index via
+    /// [`CrossWindowTabDrag::set_source_placeholder_index`]. The real put-back
+    /// transfer still happens at drop time.
+    ReorderInSource,
 }
 
 /// Result of processing a drop event (`on_drop`).
@@ -480,6 +493,7 @@ impl CrossWindowTabDrag {
             source_placeholder_consumed: false,
             was_vertical_layout,
             source_element_size,
+            reordering_in_source: false,
             phase: DragPhase::Floating,
         });
     }
@@ -514,6 +528,7 @@ impl CrossWindowTabDrag {
             source_placeholder_consumed: false,
             was_vertical_layout,
             source_element_size,
+            reordering_in_source: false,
             phase: DragPhase::Floating,
         });
     }
@@ -525,6 +540,23 @@ impl CrossWindowTabDrag {
     pub fn mark_source_placeholder_consumed(&mut self) {
         if let Some(drag) = self.active_drag.as_mut() {
             drag.source_placeholder_consumed = true;
+        }
+    }
+
+    /// Updates the recorded index of the detached placeholder in the source
+    /// window after it has been reordered in place during a source-reorder
+    /// drag (see [`DragResult::ReorderInSource`]). Keeps `source_tab_index`
+    /// live so the drop-time put-back, `RemoveSourceTab` cleanup, and
+    /// `source_placeholder_tab_index` all operate on the placeholder's current
+    /// position rather than its original one. No-op for single-tab drags.
+    pub fn set_source_placeholder_index(&mut self, index: usize) {
+        if let Some(drag) = self.active_drag.as_mut() {
+            if let DragSource::MultiTabWindow {
+                source_tab_index, ..
+            } = &mut drag.source
+            {
+                *source_tab_index = index;
+            }
         }
     }
 
@@ -920,10 +952,50 @@ impl CrossWindowTabDrag {
                 return drag_result;
             };
 
-            // Cross-window target (including back to the source's own tab bar):
-            // enter GhostInTarget — show a cheap visual in the target without any
-            // view-tree transfer. The real `transfer_view_tree_to_window` is
-            // deferred until drop.
+            // Re-entering the source window's own tab bar during a multi-tab
+            // drag: instead of a deferred ghost slot (which would sit on top of
+            // the still-present detached placeholder and show as a second
+            // slot), reuse that placeholder and let the source reorder it in
+            // place like an in-window drag. The real put-back transfer is still
+            // deferred to drop. Skip once a prior put-back already consumed the
+            // placeholder.
+            let is_source_reorder = target.window_id == drag.source_window_id
+                && drag.has_dedicated_preview_window()
+                && !drag.source_placeholder_consumed;
+
+            if is_source_reorder {
+                if !drag.reordering_in_source {
+                    drag.reordering_in_source = true;
+                    log::info!(
+                        "tab_drag: on_drag_while_floating -> ReorderInSource source_wid={} (reuse detached placeholder)",
+                        target.window_id
+                    );
+                    // Hide the preview (same cheap alpha trick as the
+                    // GhostInTarget entry below) so only the source's
+                    // placeholder and its own floating overlay chip show
+                    // through. Do NOT raise/focus the source:
+                    // `cross_window_attach_target` only finds windows *behind*
+                    // the preview, so bringing the source to the front would
+                    // make the next frame resolve no target, flip back to
+                    // Floating, and flash the preview back to visible.
+                    ctx.windows().set_window_alpha(preview_window_id, 0.0);
+                    if let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(target.window_id, ctx) {
+                        ws.update(ctx, |_, ctx| ctx.notify());
+                    }
+                }
+                // The caller reorders the placeholder and reports its new index
+                // via `set_source_placeholder_index`.
+                return DragResult::ReorderInSource;
+            }
+
+            // A real cross-window target: leaving any prior source-reorder
+            // mode. Clear the flag; the GhostInTarget alpha handling below keeps
+            // the preview hidden either way.
+            drag.reordering_in_source = false;
+
+            // Cross-window target: enter GhostInTarget — show a cheap visual in
+            // the target without any view-tree transfer. The real
+            // `transfer_view_tree_to_window` is deferred until drop.
             log::info!(
                 "tab_drag: on_drag_while_floating -> GhostInTarget target_wid={} insertion_index={} caller_wid={caller_window_id} (Floating->GhostInTarget)",
                 target.window_id,
@@ -964,6 +1036,17 @@ impl CrossWindowTabDrag {
             }
 
             return drag_result;
+        }
+
+        // No target (floating over empty space). If we were reordering the
+        // placeholder in the source, restore the preview's opacity so it
+        // follows the cursor again — mirrors the `on_drag_while_ghost` leave.
+        if let Some(drag) = self.active_drag.as_mut() {
+            if drag.reordering_in_source {
+                drag.reordering_in_source = false;
+                ctx.windows().set_window_alpha(preview_window_id, 1.0);
+                ctx.windows().show_window_and_focus_app(preview_window_id);
+            }
         }
 
         drag_result

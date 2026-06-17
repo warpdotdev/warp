@@ -26224,6 +26224,35 @@ impl Workspace {
                         tab.draggable_state.adjust_mouse_position(adjustment);
                     }
                 }
+                DragResult::ReorderInSource => {
+                    // The cursor is back over the source window's own tab bar.
+                    // Reorder the existing detached placeholder in place, just
+                    // like an in-window drag, and report its new index so the
+                    // eventual drop puts the real tab back at this position.
+                    // Deliberately skip the group-reassignment logic used by
+                    // the normal reorder path below: the placeholder is
+                    // detached mid cross-window drag and shouldn't churn group
+                    // membership.
+                    let use_vertical_tabs = FeatureFlag::VerticalTabs.is_enabled()
+                        && *TabSettings::as_ref(ctx).use_vertical_tabs;
+                    let new_index = if use_vertical_tabs {
+                        self.calculate_updated_tab_index_vertical(current_index, position, ctx)
+                    } else {
+                        self.calculate_updated_tab_index(current_index, position, ctx)
+                    };
+                    if new_index != current_index {
+                        self.tabs.swap(new_index, current_index);
+                        if current_index == self.active_tab_index {
+                            self.set_active_tab_index(new_index, ctx);
+                        } else if new_index == self.active_tab_index {
+                            self.set_active_tab_index(current_index, ctx);
+                        }
+                        ctx.notify();
+                    }
+                    CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                        drag.set_source_placeholder_index(new_index);
+                    });
+                }
             }
             return;
         }
