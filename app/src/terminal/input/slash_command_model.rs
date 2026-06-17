@@ -6,7 +6,7 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 use crate::ai::blocklist::{BlocklistAIInputEvent, BlocklistAIInputModel};
 use crate::ai::skills::SkillManager;
 use crate::search::slash_command_menu::StaticCommand;
-use crate::settings::InputSettings;
+use crate::settings::{AISettings, InputSettings};
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
 use crate::terminal::input::slash_commands::SlashCommandDataSource;
 use crate::terminal::model::session::active_session::ActiveSession;
@@ -262,12 +262,20 @@ impl SlashCommandModel {
         event: &InputBufferUpdateEvent,
         ctx: &mut ModelContext<Self>,
     ) {
+        let InputBufferUpdateEvent {
+            new_content: new,
+            old_content: old,
+        } = &event;
+
         // AI-off is no longer a blanket disable: AI-dependent commands are filtered out
         // of `active_commands` via `Availability::AI_ENABLED`, so parsing still works for
         // non-AI commands like `/open-file`.
         if !FeatureFlag::AgentView.is_enabled() {
             let ai_input_model = self.ai_input_model.as_ref(ctx);
-            if ai_input_model.is_input_type_locked() && !ai_input_model.is_ai_input_enabled() {
+            if ai_input_model.is_input_type_locked()
+                && !ai_input_model.is_ai_input_enabled()
+                && !new.starts_with('/')
+            {
                 if !self.state.is_disabled() {
                     let old_state = std::mem::replace(
                         &mut self.state,
@@ -291,11 +299,6 @@ impl SlashCommandModel {
             ctx.emit(UpdatedSlashCommandModel { old_state });
             return;
         }
-
-        let InputBufferUpdateEvent {
-            new_content: new,
-            old_content: old,
-        } = &event;
 
         if new.is_empty() {
             // The buffer was cleared, so reset state.
@@ -321,16 +324,12 @@ impl SlashCommandModel {
                     }
                 }
 
-                if !FeatureFlag::AgentView.is_enabled()
-                    || detected_command.command.auto_enter_ai_mode
+                if detected_command.command.auto_enter_ai_mode
+                    || (!FeatureFlag::AgentView.is_enabled()
+                        && AISettings::as_ref(ctx).is_any_ai_enabled(ctx))
                 {
-                    // In the old modality, when there is a detected slash command, the input _must_ be in
-                    // AI mode; we don't respect `StaticCommand::auto_enter_ai_mode = false`. That field is
-                    // only used in the new modality.
-                    //
-                    // The fact that we've even detected a command implies that the input mode is in AI
-                    // mode, either locked or unlocked; if the input were locked to shell mode then the
-                    // state would be `DisabledUntilEmptyBuffer` and we would have shortcircuited above.
+                    // Legacy input still uses AI mode while executing slash commands to preserve
+                    // the old command UI state. AI-off local commands skip this and stay parseable.
                     self.ai_input_model.update(ctx, |input_model, ctx| {
                         input_model.set_input_type(InputType::AI, ctx);
                     });
@@ -360,18 +359,11 @@ impl SlashCommandModel {
                     return;
                 }
 
-                if !FeatureFlag::AgentView.is_enabled() {
-                    // In the old modality, when composing a slash command, the input _must_ be in
-                    // AI mode; we don't respect `StaticCommand::auto_enter_ai_mode = false`. That
-                    // field is only used in the new modality.
-                    //
-                    // We don't even rely on the fact that the input is in AI mode while a slash
-                    // command is being composed, its solely used to disable error underlining.
-                    //
-                    // In the new modality, slash commands declare whether or not they are
-                    // available in terminal mode, and syntax highlighting/error underlining is
-                    // handled appropriately. I am just making this change to preserve the existing
-                    // product behavior (agent icon in NLD toggle becomes yellow).
+                if !FeatureFlag::AgentView.is_enabled()
+                    && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
+                {
+                    // Legacy input keeps AI mode while composing slash commands so the old
+                    // highlighting path does not show terminal-mode errors.
                     self.ai_input_model.update(ctx, |input_model, ctx| {
                         input_model.set_input_type(InputType::AI, ctx);
                     });
