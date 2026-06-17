@@ -37,6 +37,38 @@ fn repository_info_from_gh_output_parses_name_and_owner() {
     );
 }
 
+#[cfg(all(feature = "local_fs", unix))]
+#[tokio::test]
+async fn get_repository_info_returns_none_when_gh_cannot_resolve_github_repo() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    let (_dir, repo) = init_repo().await;
+
+    let fake_bin = tempfile::tempdir().expect("failed to create fake bin dir");
+    let gh_path = fake_bin.path().join("gh");
+    fs::write(
+        &gh_path,
+        "#!/bin/sh\nprintf 'none of the git remotes configured for this repository point to a known GitHub host\\n' >&2\nexit 1\n",
+    )
+    .expect("failed to write fake gh");
+    let mut permissions = fs::metadata(&gh_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&gh_path, permissions).unwrap();
+
+    let path_env = format!(
+        "{}:{}",
+        fake_bin.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    assert_eq!(
+        super::get_repository_info(&repo, Some(&path_env))
+            .await
+            .unwrap(),
+        None
+    );
+}
+
 #[cfg(feature = "local_fs")]
 #[test]
 fn repository_info_from_gh_output_rejects_missing_name() {
@@ -111,10 +143,10 @@ async fn get_repository_info_reads_gh_repo_view() {
         super::get_repository_info(&repo, Some(&path_env))
             .await
             .unwrap(),
-        RepositoryInfo {
+        Some(RepositoryInfo {
             name: "warp-internal".to_owned(),
             owner: Some("warpdotdev".to_owned()),
-        }
+        })
     );
 }
 
@@ -149,6 +181,26 @@ fn detects_no_pr_for_branch_errors() {
     ));
     assert!(!super::is_no_pr_for_branch_error("authentication required"));
     assert!(!super::is_no_pr_for_branch_error("repository not found"));
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn detects_repository_lookup_not_applicable_errors() {
+    assert!(super::is_repository_lookup_not_applicable_error(
+        "gh command failed: none of the git remotes configured for this repository point to a known GitHub host"
+    ));
+    assert!(super::is_repository_lookup_not_applicable_error(
+        "gh command failed: no GitHub remotes"
+    ));
+    assert!(super::is_repository_lookup_not_applicable_error(
+        "gh command failed: not a GitHub repository"
+    ));
+    assert!(!super::is_repository_lookup_not_applicable_error(
+        "authentication required"
+    ));
+    assert!(!super::is_repository_lookup_not_applicable_error(
+        "repository not found"
+    ));
 }
 
 #[tokio::test]

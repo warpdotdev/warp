@@ -5491,18 +5491,20 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         let is_queued_prompt = queued_query_id.is_some();
-        // Resolve the skill from SkillManager
+        // Resolve the skill from the catalog selected by the active session's host,
+        // so remote sessions invoke the host-rendered bundled skill.
+        let path_origin = self.ai_controller.as_ref(ctx).skill_path_origin(ctx);
         let skill = match SkillManager::handle(ctx)
             .as_ref(ctx)
-            .active_skill_by_reference(&reference, ctx)
+            .active_skill_by_reference_with_origin(&reference, &path_origin, ctx)
         {
-            Some(skill) => skill.clone(),
-            None => {
+            Ok(skill) => skill.clone(),
+            Err(error) => {
                 // Show error toast if skill not found
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(format!("Skill not found: {}", reference)),
+                        DismissibleToast::error(error.to_string()),
                         window_id,
                         ctx,
                     );
@@ -6357,9 +6359,6 @@ impl Input {
             }
             PromptAlertEvent::OpenBillingAndUsagePage => {
                 ctx.emit(Event::OpenSettings(SettingsSection::BillingAndUsage));
-            }
-            PromptAlertEvent::OpenPrivacyPage => {
-                ctx.emit(Event::OpenSettings(SettingsSection::Privacy));
             }
             PromptAlertEvent::OpenBillingPortal { team_uid } => {
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
@@ -15193,12 +15192,16 @@ impl Input {
         banner: Box<dyn Element>,
         is_compact_mode: bool,
         input_mode: InputMode,
+        appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
+        let constrained_banner = ConstrainedBox::new(banner)
+            .with_height(2. * appearance.line_height_ratio() * appearance.monospace_font_size())
+            .finish();
         let should_use_udi_spacing = self.should_show_universal_developer_input(app)
             || (FeatureFlag::AgentView.is_enabled()
                 && self.agent_view_controller.as_ref(app).is_active());
-        let mut container: Container = Container::new(banner);
+        let mut container: Container = Container::new(constrained_banner);
         let (suggestion_to_prompt_padding, suggestion_to_input_border_padding) =
             if should_use_udi_spacing {
                 (0., 0.)
@@ -15223,6 +15226,7 @@ impl Input {
     /// Renders a banner that should stay next to the input box.
     fn render_input_banner(
         &self,
+        appearance: &Appearance,
         app: &AppContext,
         input_mode: InputMode,
         is_compact_mode: bool,
@@ -15238,6 +15242,7 @@ impl Input {
                 prompt_suggestions_banner,
                 is_compact_mode,
                 input_mode,
+                appearance,
                 app,
             ))
         } else {
@@ -15547,9 +15552,6 @@ impl Input {
             }),
             PromptSuggestionsEvent::OpenBillingAndUsagePage => {
                 ctx.emit(Event::OpenSettings(SettingsSection::BillingAndUsage))
-            }
-            PromptSuggestionsEvent::OpenPrivacyPage => {
-                ctx.emit(Event::OpenSettings(SettingsSection::Privacy))
             }
             PromptSuggestionsEvent::OpenBillingPortal { team_uid } => {
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {

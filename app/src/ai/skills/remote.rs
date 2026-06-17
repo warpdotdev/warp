@@ -60,8 +60,10 @@ impl SkillManager {
             | RemoteServerManagerEvent::GitPushResponse { .. }
             | RemoteServerManagerEvent::CreatePrResponse { .. }
             | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
-            | RemoteServerManagerEvent::GetPrInfoResponse { .. }
             | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. }
+            | RemoteServerManagerEvent::GitStatusPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubPrInfoPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived { .. }
             | RemoteServerManagerEvent::SetupStateChanged { .. }
             | RemoteServerManagerEvent::BinaryCheckComplete { .. }
             | RemoteServerManagerEvent::BinaryInstallComplete { .. }
@@ -141,9 +143,10 @@ fn bundled_skill_from_protos(host_id: &HostId, skills: &[BundledSkillProto]) -> 
 ///
 /// `RequiresFile` activations are evaluated here — the daemon owns the
 /// files — so the client only ever receives `Always` or `RequiresMcp`
-/// conditions.
+/// conditions. The result is sorted by skill ID so pushes are
+/// deterministic across daemon restarts.
 pub(crate) fn bundled_skills_snapshot_protos(catalog: &BundledSkill) -> Vec<BundledSkillProto> {
-    catalog
+    let mut protos: Vec<BundledSkillProto> = catalog
         .iter_definitions()
         .filter_map(|(id, skill, activation)| {
             let requires_mcp = match activation {
@@ -173,7 +176,9 @@ pub(crate) fn bundled_skills_snapshot_protos(catalog: &BundledSkill) -> Vec<Bund
                 requires_mcp,
             })
         })
-        .collect()
+        .collect();
+    protos.sort_by(|a, b| a.id.cmp(&b.id));
+    protos
 }
 
 #[cfg(test)]

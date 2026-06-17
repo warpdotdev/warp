@@ -16,9 +16,16 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         grok_refresh_in_flight: false,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
+        geap_credentials_state: GeapCredentialsState::Missing,
         secure_storage_write_version: 0,
         grok_secure_storage_write_version: 0,
     }
+}
+
+fn make_manager_with_geap(geap_credentials_state: GeapCredentialsState) -> ApiKeyManager {
+    let mut manager = make_manager(ApiKeys::default());
+    manager.geap_credentials_state = geap_credentials_state;
+    manager
 }
 
 fn grok_tokens(access_token: &str, expires_in: Option<u64>) -> GrokTokens {
@@ -27,6 +34,39 @@ fn grok_tokens(access_token: &str, expires_in: Option<u64>) -> GrokTokens {
         refresh_token: Some("refresh".into()),
         expires_at: expires_in.map(|secs| SystemTime::now() + Duration::from_secs(secs)),
         connected_at: None,
+    }
+}
+
+fn geap_credentials(access_token: &str, expires_in: Option<u64>) -> GeapCredentials {
+    GeapCredentials::new(
+        access_token.into(),
+        expires_in.map(|secs| SystemTime::now() + Duration::from_secs(secs)),
+    )
+}
+
+fn geap_binding() -> GeapMintBinding {
+    GeapMintBinding {
+        user_uid: "user-1".into(),
+        audience:
+            "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q"
+                .into(),
+        federation: GeapFederation::ServiceAccount {
+            email: "sa@proj.iam.gserviceaccount.com".into(),
+        },
+    }
+}
+
+// The expected binding the request build site passes in is the same type as
+// the stored `minted_for`, so the attach check is a plain `==`.
+fn geap_gate() -> GeapMintBinding {
+    geap_binding()
+}
+
+fn geap_loaded(access_token: &str, expires_in: Option<u64>) -> GeapCredentialsState {
+    GeapCredentialsState::Loaded {
+        credentials: geap_credentials(access_token, expires_in),
+        loaded_at: SystemTime::now(),
+        minted_for: geap_binding(),
     }
 }
 
@@ -321,7 +361,7 @@ fn display_label_falls_back_to_name_when_alias_is_whitespace() {
 #[test]
 fn api_keys_for_request_none_when_empty() {
     let mgr = make_manager(ApiKeys::default());
-    assert!(mgr.api_keys_for_request(true, false).is_none());
+    assert!(mgr.api_keys_for_request(true, false, None).is_none());
 }
 
 #[test]
@@ -331,7 +371,7 @@ fn api_keys_for_request_populates_provider_keys() {
         anthropic: Some("sk-a".into()),
         ..Default::default()
     });
-    let result = mgr.api_keys_for_request(true, false).unwrap();
+    let result = mgr.api_keys_for_request(true, false, None).unwrap();
     assert_eq!(result.openai, "sk-o");
     assert_eq!(result.anthropic, "sk-a");
     assert!(result.google.is_empty());
@@ -344,7 +384,7 @@ fn api_keys_for_request_omits_keys_when_byo_disabled() {
         ..Default::default()
     });
     // With BYO disabled and no other credentials, returns None.
-    assert!(mgr.api_keys_for_request(false, false).is_none());
+    assert!(mgr.api_keys_for_request(false, false, None).is_none());
 }
 
 #[test]
@@ -353,7 +393,7 @@ fn api_keys_for_request_none_for_custom_endpoints_only() {
         custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
         ..Default::default()
     });
-    assert!(mgr.api_keys_for_request(true, false).is_none());
+    assert!(mgr.api_keys_for_request(true, false, None).is_none());
 }
 
 // ── grok oauth token ────────────────────────────────────────────
@@ -405,7 +445,7 @@ fn api_keys_for_request_includes_grok_token() {
         ApiKeys::default(),
         Some(grok_tokens("grok-abc", Some(3600))),
     );
-    let result = mgr.api_keys_for_request(true, false).unwrap();
+    let result = mgr.api_keys_for_request(true, false, None).unwrap();
     assert_eq!(result.grok_oauth_access_token, "grok-abc");
     assert!(result.anthropic.is_empty());
 }
@@ -418,7 +458,7 @@ fn api_keys_for_request_omits_grok_token_when_byo_disabled() {
         ApiKeys::default(),
         Some(grok_tokens("grok-abc", Some(3600))),
     );
-    assert!(mgr.api_keys_for_request(false, false).is_none());
+    assert!(mgr.api_keys_for_request(false, false, None).is_none());
 }
 
 #[test]
@@ -426,6 +466,150 @@ fn api_keys_for_request_includes_expired_grok_token() {
     // Expired tokens are still sent in requests; the server rejects truly
     // invalid ones and the background refresh replaces them.
     let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("grok-abc", Some(0))));
-    let result = mgr.api_keys_for_request(true, false).unwrap();
+    let result = mgr.api_keys_for_request(true, false, None).unwrap();
     assert_eq!(result.grok_oauth_access_token, "grok-abc");
+}
+
+// ── geap credentials ────────────────────────────────────────────
+
+#[test]
+fn geap_access_token_present_without_expiry() {
+    let credentials = GeapCredentials::new("tok".into(), None);
+    assert_eq!(credentials.access_token_for_request(), Some("tok"));
+}
+
+#[test]
+fn geap_access_token_blank_is_none() {
+    let credentials = GeapCredentials::new("   ".into(), None);
+    assert_eq!(credentials.access_token_for_request(), None);
+}
+
+#[test]
+fn geap_access_token_near_expiry_still_sent() {
+    // Expired tokens are still sent; Google is the authority on validity.
+    let credentials = geap_credentials("tok", Some(0));
+    assert_eq!(credentials.access_token_for_request(), Some("tok"));
+}
+
+#[test]
+fn geap_needs_refresh_lead_time_boundaries() {
+    // Within the 5-minute lead window.
+    assert!(geap_credentials("tok", Some(30)).needs_refresh());
+    // Comfortably fresh.
+    assert!(!geap_credentials("tok", Some(3600)).needs_refresh());
+    // Already expired -> still needs a refresh.
+    assert!(geap_credentials("tok", Some(0)).needs_refresh());
+    // Unknown expiry never reports as needing a refresh.
+    assert!(!geap_credentials("tok", None).needs_refresh());
+}
+
+#[test]
+fn api_keys_for_request_includes_geap_token_when_gate_and_binding_match() {
+    let mgr = make_manager_with_geap(geap_loaded("geap-abc", Some(3600)));
+    let result = mgr
+        .api_keys_for_request(false, false, Some(geap_gate()))
+        .unwrap();
+    let credentials = result.google_cloud_credentials.unwrap();
+    assert_eq!(credentials.access_token, "geap-abc");
+    // The GEAP token is independent of the BYO key gate.
+    assert!(result.anthropic.is_empty());
+}
+
+#[test]
+fn api_keys_for_request_includes_expired_geap_token() {
+    // Expired tokens are still attached — never silently dropped. Google
+    // rejects truly invalid ones, which surfaces a recoverable error instead
+    // of a silent fallback to another route.
+    let mgr = make_manager_with_geap(geap_loaded("geap-abc", Some(0)));
+    let result = mgr
+        .api_keys_for_request(false, false, Some(geap_gate()))
+        .unwrap();
+    assert_eq!(
+        result.google_cloud_credentials.unwrap().access_token,
+        "geap-abc"
+    );
+}
+
+#[test]
+fn api_keys_for_request_omits_geap_token_without_gate() {
+    // No gate (policy off at the call site) ⇒ no GEAP credentials, even when
+    // a token is loaded.
+    let mgr = make_manager_with_geap(geap_loaded("geap-abc", Some(3600)));
+    assert!(mgr.api_keys_for_request(false, false, None).is_none());
+}
+
+#[test]
+fn api_keys_for_request_omits_geap_token_on_binding_mismatch() {
+    let mgr = make_manager_with_geap(geap_loaded("geap-abc", Some(3600)));
+
+    // A different user (sign-out/account switch).
+    let mut gate = geap_gate();
+    gate.user_uid = "someone-else".into();
+    assert!(mgr.api_keys_for_request(false, false, Some(gate)).is_none());
+
+    // A different audience (admin changed the pool/provider).
+    let mut gate = geap_gate();
+    gate.audience = "//iam.googleapis.com/projects/2/locations/global/workloadIdentityPools/other/providers/other".into();
+    assert!(mgr.api_keys_for_request(false, false, Some(gate)).is_none());
+
+    // A different service account (admin changed impersonation target).
+    let mut gate = geap_gate();
+    gate.federation = GeapFederation::ServiceAccount {
+        email: "other@proj.iam.gserviceaccount.com".into(),
+    };
+    assert!(mgr.api_keys_for_request(false, false, Some(gate)).is_none());
+}
+
+#[test]
+fn api_keys_for_request_serves_previous_geap_token_while_refreshing() {
+    // A re-mint in flight keeps serving the previous token — tokens stay
+    // until replaced.
+    let mgr = make_manager_with_geap(GeapCredentialsState::Refreshing {
+        previous: Some((geap_credentials("geap-old", Some(10)), geap_binding())),
+    });
+    let result = mgr
+        .api_keys_for_request(false, false, Some(geap_gate()))
+        .unwrap();
+    assert_eq!(
+        result.google_cloud_credentials.unwrap().access_token,
+        "geap-old"
+    );
+}
+
+#[test]
+fn api_keys_for_request_omits_geap_token_during_first_mint() {
+    // The very first mint has nothing to serve yet.
+    let mgr = make_manager_with_geap(GeapCredentialsState::Refreshing { previous: None });
+    assert!(mgr
+        .api_keys_for_request(false, false, Some(geap_gate()))
+        .is_none());
+}
+
+#[test]
+fn api_keys_for_request_omits_geap_token_for_non_loaded_states() {
+    for state in [
+        GeapCredentialsState::Missing,
+        GeapCredentialsState::Disabled,
+        GeapCredentialsState::Failed {
+            error: LoadGeapCredentialsError::ExchangeToken {
+                status: None,
+                detail: "boom".into(),
+            },
+        },
+    ] {
+        let mgr = make_manager_with_geap(state);
+        assert!(mgr
+            .api_keys_for_request(false, false, Some(geap_gate()))
+            .is_none());
+    }
+}
+
+#[test]
+fn api_keys_for_request_omits_geap_token_when_previous_binding_mismatches() {
+    let mgr = make_manager_with_geap(GeapCredentialsState::Refreshing {
+        previous: Some((geap_credentials("geap-old", Some(10)), geap_binding())),
+    });
+    let mut gate = geap_gate();
+    gate.user_uid = "someone-else".into();
+    assert!(mgr.api_keys_for_request(false, false, Some(gate)).is_none());
 }

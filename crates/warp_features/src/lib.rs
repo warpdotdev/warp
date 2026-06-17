@@ -370,10 +370,6 @@ pub enum FeatureFlag {
     /// Gates the bundled skill-based implementation of PR comment fetching.
     PRCommentsSkill,
 
-    /// An entrypoint pane type to launch other pane types from a search palette. The default view
-    /// when creating a tab.
-    WelcomeTab,
-
     /// A new first-time user experience which prioritizes choosing a coding repository.
     GetStartedTab,
 
@@ -895,6 +891,10 @@ pub enum FeatureFlag {
     /// Kept separate so the read-only base can ship independently of the
     /// mutating layer.
     GitGraphWrite,
+
+    /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
+    /// route eliglible models to GEAP instead of Warp-managed inference.
+    GeminiEnterprise,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -963,6 +963,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GitGraphWrite,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
+    FeatureFlag::WarpControlCli,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

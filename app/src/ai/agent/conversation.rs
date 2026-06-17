@@ -871,6 +871,21 @@ impl AIConversation {
     pub fn status(&self) -> &ConversationStatus {
         &self.status
     }
+
+    /// Test-only setter for driving status-dependent logic directly.
+    #[cfg(test)]
+    pub(crate) fn set_status_for_test(&mut self, status: ConversationStatus) {
+        self.status = status;
+    }
+
+    /// Test-only helper: appends an exchange to the root task so status-derivation
+    /// logic (e.g. `map_conversation_status`) can be exercised end-to-end.
+    #[cfg(test)]
+    pub(crate) fn append_root_exchange_for_test(&mut self, exchange: AIAgentExchange) {
+        self.task_store
+            .modify_root_task(|root_task| root_task.append_exchange(exchange));
+    }
+
     pub fn status_error_message(&self) -> Option<&str> {
         self.status_error_message.as_deref()
     }
@@ -891,7 +906,10 @@ impl AIConversation {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        self.status_error_message = if matches!(&status, ConversationStatus::Error) {
+        self.status_error_message = if matches!(
+            &status,
+            ConversationStatus::Error | ConversationStatus::TransientError
+        ) {
             error_message.filter(|message| !message.trim().is_empty())
         } else {
             None
@@ -2155,10 +2173,16 @@ impl AIConversation {
         Ok(())
     }
 
+    /// Marks the in-flight request's exchanges as finished with `error`.
+    ///
+    /// `recovery_pending` moves the conversation to the non-terminal `TransientError`
+    /// status instead of `Error`, so consumers don't treat it as dead while an
+    /// automatic recovery is in flight.
     pub fn mark_request_completed_with_error(
         &mut self,
         stream_id: &ResponseStreamId,
         error: RenderableAIError,
+        recovery_pending: bool,
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
@@ -2182,19 +2206,12 @@ impl AIConversation {
             model_id: None,
         };
 
-        let will_attempt_to_resume = matches!(
-            &error,
-            RenderableAIError::Other {
-                will_attempt_resume: true,
-                ..
-            }
-        );
         send_telemetry_from_ctx!(
             crate::TelemetryEvent::AgentModeError {
                 identifiers,
                 error: error.to_string(),
                 is_user_visible: true,
-                will_attempt_to_resume,
+                will_attempt_to_resume: recovery_pending,
             },
             ctx
         );
@@ -2252,8 +2269,13 @@ impl AIConversation {
         }
 
         self.write_updated_conversation_state(ctx);
+        let status = if recovery_pending {
+            ConversationStatus::TransientError
+        } else {
+            ConversationStatus::Error
+        };
         self.update_status_with_error_message(
-            ConversationStatus::Error,
+            status,
             Some(error.to_string()),
             terminal_view_id,
             ctx,
@@ -4216,6 +4238,11 @@ pub enum ConversationStatus {
     /// The last turn of the agent completed with error.
     Error,
 
+    /// The last turn failed transiently and an automatic recovery (retry or resume)
+    /// is pending. Non-terminal: returns to `InProgress` when the recovery request
+    /// sends, or falls to `Error` if recovery is exhausted.
+    TransientError,
+
     /// The last turn of the agent was cancelled by the user.
     Cancelled,
 
@@ -4233,6 +4260,7 @@ impl std::fmt::Display for ConversationStatus {
             ConversationStatus::InProgress => write!(f, "In progress"),
             ConversationStatus::Success => write!(f, "Done"),
             ConversationStatus::Error => write!(f, "Error"),
+            ConversationStatus::TransientError => write!(f, "Reconnecting"),
             ConversationStatus::Cancelled => write!(f, "Cancelled"),
             ConversationStatus::Blocked { .. } => write!(f, "Blocked"),
             ConversationStatus::WaitingForEvents => write!(f, "Waiting"),
@@ -4247,6 +4275,8 @@ impl ConversationStatus {
             ConversationStatus::Success => succeeded_icon(appearance),
             ConversationStatus::Blocked { .. } => yellow_stop_icon(appearance),
             ConversationStatus::Error => failed_icon(appearance),
+            // Recovery pending: keep the in-progress treatment rather than an error one.
+            ConversationStatus::TransientError => in_progress_icon(appearance),
             ConversationStatus::Cancelled => gray_stop_icon(appearance),
             ConversationStatus::WaitingForEvents => in_progress_icon(appearance),
         }
@@ -4279,6 +4309,13 @@ impl ConversationStatus {
                     StatusColorStyle::Cloud => theme.ansi_bg_red(),
                 },
             ),
+            ConversationStatus::TransientError => (
+                Icon::ClockLoader,
+                match color_style {
+                    StatusColorStyle::Standard => theme.ansi_fg_yellow(),
+                    StatusColorStyle::Cloud => theme.ansi_bg_yellow(),
+                },
+            ),
             ConversationStatus::Cancelled => (Icon::StopFilled, internal_colors::neutral_5(theme)),
             ConversationStatus::Blocked { .. } => (
                 Icon::StopFilled,
@@ -4299,6 +4336,11 @@ impl ConversationStatus {
 
     pub fn is_in_progress(&self) -> bool {
         matches!(self, ConversationStatus::InProgress)
+    }
+
+    /// True while a transient failure is being automatically recovered.
+    pub fn is_transient_error(&self) -> bool {
+        matches!(self, ConversationStatus::TransientError)
     }
 
     pub fn is_blocked(&self) -> bool {

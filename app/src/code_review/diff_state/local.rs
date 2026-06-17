@@ -252,7 +252,7 @@ impl LocalDiffStateModel {
                         ctx.emit(DiffStateModelEvent::SingleFileUpdated { path, diff });
                     }
                     Err(err) => {
-                        warp_core::report_error!(err.as_ref());
+                        err.report_and_log();
                         send_telemetry_from_ctx!(
                             CodeReviewTelemetryEvent::LoadDiffFailed {
                                 backend_origin: me.backend_origin,
@@ -1571,7 +1571,6 @@ impl LocalDiffStateModel {
             has_head_commit,
             unpushed_commits,
             upstream_ref,
-            pr_info: None,
         })
     }
 
@@ -1637,7 +1636,7 @@ impl LocalDiffStateModel {
             }
             Err(e) => {
                 let err = DiffStateError::from(e);
-                warp_core::report_error!(&err);
+                err.report_and_log();
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::LoadMetadataFailed {
                         backend_origin: self.backend_origin,
@@ -1684,7 +1683,7 @@ impl LocalDiffStateModel {
                     .take()
                     .map(|start| start.elapsed());
                 let err = DiffStateError::from_message(e);
-                warp_core::report_error!(&err);
+                err.report_and_log();
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::LoadDiffFailed {
                         backend_origin: self.backend_origin,

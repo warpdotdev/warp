@@ -189,8 +189,10 @@ impl Sessions {
                 | RemoteServerManagerEvent::GitPushResponse { .. }
                 | RemoteServerManagerEvent::CreatePrResponse { .. }
                 | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
-                | RemoteServerManagerEvent::GetPrInfoResponse { .. }
-                | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. } => {}
+                | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. }
+                | RemoteServerManagerEvent::GitStatusPushReceived { .. }
+                | RemoteServerManagerEvent::GitHubPrInfoPushReceived { .. }
+                | RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived { .. } => {}
                 RemoteServerManagerEvent::SessionReconnected {
                     session_id: sid,
                     client,

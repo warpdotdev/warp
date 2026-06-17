@@ -8,6 +8,13 @@
 //! `client_id` bound to a specific port, so we reuse the Grok-CLI client and
 //! bind the callback server to that exact port.
 //!
+//! Some browsers/networks can't reach the loopback callback (e.g. Private
+//! Network Access is blocked), in which case xAI's consent screen instead
+//! *displays* the authorization code for the user to paste back into the app.
+//! [`OauthAttempt::manual_code_exchange`] supports that fallback by capturing
+//! the attempt's PKCE verifier so a pasted code can be exchanged directly,
+//! without ever observing the loopback redirect.
+//!
 //! This module owns only the network/protocol side: building the authorize
 //! URL, running the loopback callback server, and exchanging/refreshing tokens
 //! at xAI's token endpoint. Persistence of the resulting tokens, proactive
@@ -87,6 +94,34 @@ impl OauthAttempt {
     /// code for tokens. Consumes the attempt so its secrets can't be reused.
     pub async fn finish(self) -> anyhow::Result<TokenResponse> {
         run_oauth_flow(self.listener, self.pkce).await
+    }
+
+    /// Clones the PKCE verifier for the pasted-code fallback while the
+    /// loopback flow continues racing in parallel.
+    pub fn manual_code_exchange(&self) -> ManualCodeExchange {
+        ManualCodeExchange {
+            verifier: self.pkce.verifier.clone(),
+        }
+    }
+}
+
+/// Completes OAuth from a manually-pasted authorization code.
+///
+/// There is no redirect `state` to validate in this out-of-band path; PKCE
+/// protects the exchange.
+#[derive(Clone)]
+pub struct ManualCodeExchange {
+    verifier: String,
+}
+
+impl ManualCodeExchange {
+    /// Exchanges a user-pasted authorization `code` with the attempt's PKCE verifier.
+    pub async fn exchange(&self, code: &str) -> anyhow::Result<TokenResponse> {
+        let code = code.trim();
+        if code.is_empty() {
+            bail!("enter the code shown in your browser to finish connecting");
+        }
+        exchange_code_for_tokens(code, &self.verifier).await
     }
 }
 

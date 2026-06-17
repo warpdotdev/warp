@@ -5212,6 +5212,124 @@ fn inline_agent_view_exits_when_tagged_in_long_running_command_is_tagged_out() {
 }
 
 #[test]
+fn ctrl_c_after_stop_takeover_cancels_conversation() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.start_new_conversation(view.view_id, false, false, false, ctx)
+                });
+
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 20", "running");
+            let task_id = TaskId::new("test-cli-subagent".to_owned());
+            view.model
+                .lock()
+                .block_list_mut()
+                .active_block_mut()
+                .set_agent_interaction_mode_for_agent_monitored_command(&task_id, conversation_id)
+                .expect("command should become agent monitored");
+
+            view.cli_subagent_controller.update(ctx, |controller, ctx| {
+                controller.switch_control_to_user(UserTakeOverReason::Stop, ctx);
+            });
+
+            conversation_id
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(&TerminalAction::CtrlC, ctx);
+        });
+
+        assert_eq!(*pty_writes.borrow(), vec![vec![C0::ETX]]);
+        terminal.read(&app, |_, ctx| {
+            let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            assert_eq!(conversation.status(), &ConversationStatus::Cancelled);
+        });
+    })
+}
+
+#[test]
+fn ctrl_c_after_transfer_takeover_does_not_cancel_conversation() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.start_new_conversation(view.view_id, false, false, false, ctx)
+                });
+
+            view.model
+                .lock()
+                .simulate_long_running_block("ssh localhost", "Password:");
+            let task_id = TaskId::new("test-cli-subagent".to_owned());
+            view.model
+                .lock()
+                .block_list_mut()
+                .active_block_mut()
+                .set_agent_interaction_mode_for_agent_monitored_command(&task_id, conversation_id)
+                .expect("command should become agent monitored");
+
+            view.cli_subagent_controller.update(ctx, |controller, ctx| {
+                controller.switch_control_to_user(
+                    UserTakeOverReason::TransferFromAgent {
+                        reason: "Enter your password".to_owned(),
+                    },
+                    ctx,
+                );
+            });
+
+            conversation_id
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(&TerminalAction::CtrlC, ctx);
+        });
+
+        assert_eq!(*pty_writes.borrow(), vec![vec![C0::ETX]]);
+        terminal.read(&app, |_, ctx| {
+            let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            // Transfer takeover is still waiting to report control handback or command
+            // completion to the agent, so Ctrl-C should interrupt the command without
+            // cancelling the conversation.
+            assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+        });
+    })
+}
+
+#[test]
 fn inline_agent_view_persists_across_transfer_takeover_for_monitored_long_running_command() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
@@ -5933,6 +6051,38 @@ fn submit_cli_agent_rich_input_opencode_defers_enter_and_close() {
     })
 }
 
+#[test]
+fn attach_path_as_context_routes_to_open_cli_agent_rich_input() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+        let _hoa_code_review = FeatureFlag::HoaCodeReview.override_enabled(true);
+
+        let terminal = open_cli_agent_rich_input_for_agent(&mut app, CLIAgent::Claude);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.attach_path_as_context(std::path::Path::new("src/main.rs"), ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(view.input.as_ref(ctx).buffer_text(ctx), "src/main.rs");
+        });
+        assert!(
+            pty_writes.borrow().is_empty(),
+            "context should be inserted into rich input instead of written to PTY"
+        );
+    })
+}
 #[test]
 fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
     // Regression test: dropping an image file into a tab where a CLI agent

@@ -361,6 +361,8 @@ impl AgentRunDisplayStatus {
     pub fn from_conversation_status(status: &ConversationStatus) -> Self {
         match status {
             ConversationStatus::InProgress => Self::ConversationInProgress,
+            // A recovery is in flight; the run is still working.
+            ConversationStatus::TransientError => Self::ConversationInProgress,
             ConversationStatus::Success => Self::ConversationSucceeded,
             ConversationStatus::Error => Self::ConversationError,
             ConversationStatus::Cancelled => Self::ConversationCancelled,

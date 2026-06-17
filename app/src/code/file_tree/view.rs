@@ -457,8 +457,9 @@ impl FileTreeView {
             let Some(repo_path) = root.to_local_path() else {
                 continue;
             };
+            let repo = LocalOrRemotePath::Local(repo_path);
             let result = GitRepoModels::handle(ctx)
-                .update(ctx, |model, ctx| model.subscribe(&repo_path, ctx));
+                .update(ctx, |model, ctx| model.subscribe(&repo, ctx));
             match result {
                 Ok(handle) => {
                     let root_for_event = root.clone();

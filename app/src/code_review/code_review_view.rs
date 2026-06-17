@@ -99,9 +99,7 @@ use crate::code_review::diff_state::{
 };
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::find_model::CodeReviewFindModel;
-#[cfg(feature = "local_fs")]
 use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusEvent, GitRepoStatusModel};
-#[cfg(feature = "local_fs")]
 use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
 use crate::code_review::hidden_lines::calculate_hidden_lines;
 #[cfg(feature = "local_fs")]
@@ -671,10 +669,8 @@ pub struct CodeReviewView {
     /// Active git-operation dialog overlay (commit / push / publish), if open.
     git_dialog: Option<ViewHandle<GitDialog>>,
     /// Per-repo git status model for the current repository, if any.
-    #[cfg(feature = "local_fs")]
     git_repo_status: Option<ModelHandle<GitRepoStatusModel>>,
     /// Per-repo GitHub-info model for the current repository, if any.
-    #[cfg(feature = "local_fs")]
     github_repo_model: Option<ModelHandle<GitHubRepoModel>>,
 }
 
@@ -721,20 +717,8 @@ impl CodeReviewView {
         self.is_open = true;
 
         ctx.subscribe_to_model(&self.diff_state_model, Self::handle_diff_state_model_event);
-        #[cfg(feature = "local_fs")]
-        {
-            self.subscribe_to_git_repo_status_model(ctx);
-            self.subscribe_to_github_repo_model(ctx);
-        }
-        // Remote repos kick off a separate `GetPrInfo` fetch via the remote server manager.
-        // TODO: source the info from the `GitRepoStatusModel` as done for local repos.
-        if FeatureFlag::GitOperationsInCodeReview.is_enabled()
-            && self.repo_path().is_some_and(LocalOrRemotePath::is_remote)
-        {
-            self.diff_state_model.update(ctx, |model, ctx| {
-                model.fetch_pr_info(ctx);
-            });
-        }
+        self.subscribe_to_git_repo_status_model(ctx);
+        self.subscribe_to_github_repo_model(ctx);
         if self.repo_path().is_some() {
             self.fetch_branches_and_setup_dropdown(ctx);
         }
@@ -799,11 +783,8 @@ impl CodeReviewView {
         }
 
         ctx.unsubscribe_to_model(&self.diff_state_model);
-        #[cfg(feature = "local_fs")]
-        {
-            self.unsubscribe_from_git_repo_status_model(ctx);
-            self.unsubscribe_from_github_repo_model(ctx);
-        }
+        self.unsubscribe_from_git_repo_status_model(ctx);
+        self.unsubscribe_from_github_repo_model(ctx);
 
         self.code_review_footer = None;
 
@@ -1379,9 +1360,7 @@ impl CodeReviewView {
             is_open: false,
             code_review_footer: None,
             git_dialog: None,
-            #[cfg(feature = "local_fs")]
             git_repo_status: None,
-            #[cfg(feature = "local_fs")]
             github_repo_model: None,
         };
         view.set_active_repo_comment_model(comment_batch_model, ctx);
@@ -2335,17 +2314,6 @@ impl CodeReviewView {
             DiffStateModelEvent::CurrentBranchChanged => {
                 self.fetch_branches_and_setup_dropdown(ctx);
                 self.update_diff_selector_selection(ctx);
-                // PR info is branch-specific. Local repos re-fetch automatically
-                // via `GitRepoStatusModel` (it keys off branch changes); remote
-                // repos must re-issue `GetPrInfo` here, since the diff-state
-                // sync doesn't carry PR info.
-                if FeatureFlag::GitOperationsInCodeReview.is_enabled()
-                    && self.repo_path().is_some_and(LocalOrRemotePath::is_remote)
-                {
-                    self.diff_state_model.update(ctx, |model, ctx| {
-                        model.fetch_pr_info(ctx);
-                    });
-                }
             }
             DiffStateModelEvent::NewDiffsComputed {
                 diffs,
@@ -5053,6 +5021,7 @@ impl CodeReviewView {
 
         Container::new(inner_header)
             .with_background(outer_bg)
+            .with_corner_radius(inner_corner_radius)
             .finish()
     }
 
@@ -6290,40 +6259,22 @@ impl CodeReviewView {
 
     /// Returns PR info for the current branch.
     ///
-    /// Routed by repo location: local repos read from the per-repo
-    /// `GitHubRepoModel`, while remote repos read from the diff model.
+    /// Local and remote repos both read from the per-repo `GitHubRepoModel`.
+    /// The model dispatches to a local `gh`-driven backend or a remote
+    /// GitHub PR-info push receiver.
     fn pr_info(&self, ctx: &AppContext) -> Option<PrInfo> {
-        if self.repo_path().is_some_and(LocalOrRemotePath::is_remote) {
-            return self.diff_state_model.as_ref(ctx).pr_info(ctx);
-        }
-        cfg_if::cfg_if! {
-            if #[cfg(feature = "local_fs")] {
-                let github_repo_model = self.github_repo_model.as_ref()?;
-                github_repo_model.as_ref(ctx).pr_info(ctx).cloned()
-            } else {
-                None
-            }
-        }
+        let github_repo_model = self.github_repo_model.as_ref()?;
+        github_repo_model.as_ref(ctx).pr_info(ctx).cloned()
     }
 
     /// Whether a `gh pr view` lookup is currently in flight.
     fn is_pr_info_refreshing(&self, ctx: &AppContext) -> bool {
-        #[cfg(feature = "local_fs")]
-        {
-            self.github_repo_model
-                .as_ref()
-                .map(|h| h.as_ref(ctx).is_refreshing_pr_info(ctx))
-                .unwrap_or(false)
-        }
-
-        #[cfg(not(feature = "local_fs"))]
-        {
-            let _ = ctx;
-            false
-        }
+        self.github_repo_model
+            .as_ref()
+            .map(|h| h.as_ref(ctx).is_refreshing_pr_info(ctx))
+            .unwrap_or(false)
     }
 
-    #[cfg(feature = "local_fs")]
     fn refresh_pr_info(&self, ctx: &mut ViewContext<Self>) {
         let Some(handle) = self.github_repo_model.as_ref() else {
             return;
@@ -6333,21 +6284,13 @@ impl CodeReviewView {
         });
     }
 
-    #[cfg(not(feature = "local_fs"))]
-    fn refresh_pr_info(&self, _ctx: &mut ViewContext<Self>) {}
-
     /// Subscribes to the per-repo git status model.
-    #[cfg(feature = "local_fs")]
     fn subscribe_to_git_repo_status_model(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(repo_path) = self
-            .repo_path()
-            .and_then(LocalOrRemotePath::to_local_path)
-            .map(Path::to_path_buf)
-        else {
+        let Some(repo) = self.repo_path().cloned() else {
             return;
         };
         let result =
-            GitRepoModels::handle(ctx).update(ctx, |model, ctx| model.subscribe(&repo_path, ctx));
+            GitRepoModels::handle(ctx).update(ctx, |model, ctx| model.subscribe(&repo, ctx));
         let handle = match result {
             Ok(handle) => handle,
             Err(err) => {
@@ -6366,19 +6309,13 @@ impl CodeReviewView {
     }
 
     /// Subscribes to the per-repo GitHub-info model.
-    #[cfg(feature = "local_fs")]
     fn subscribe_to_github_repo_model(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(repo_path) = self
-            .repo_path()
-            .and_then(LocalOrRemotePath::to_local_path)
-            .map(Path::to_path_buf)
-        else {
+        let Some(repo) = self.repo_path().cloned() else {
             return;
         };
 
-        let result = GitRepoModels::handle(ctx).update(ctx, |model, ctx| {
-            model.subscribe_github_repo(&repo_path, ctx)
-        });
+        let result = GitRepoModels::handle(ctx)
+            .update(ctx, |model, ctx| model.subscribe_github_repo(&repo, ctx));
         let handle = match result {
             Ok(handle) => handle,
             Err(err) => {
@@ -6396,14 +6333,12 @@ impl CodeReviewView {
         self.github_repo_model = Some(handle);
     }
 
-    #[cfg(feature = "local_fs")]
     fn unsubscribe_from_git_repo_status_model(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(handle) = self.git_repo_status.take() {
             ctx.unsubscribe_to_model(&handle);
         }
     }
 
-    #[cfg(feature = "local_fs")]
     fn unsubscribe_from_github_repo_model(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(handle) = self.github_repo_model.take() {
             ctx.unsubscribe_to_model(&handle);
@@ -6550,7 +6485,14 @@ impl CodeReviewView {
                     button.set_label("Commit", ctx);
                     button.set_icon(Some(Icon::GitCommit), ctx);
                     button.set_disabled(disabled, ctx);
-                    button.set_tooltip(disabled.then_some("No changes to commit"), ctx);
+                    button.set_tooltip(
+                        Some(if disabled {
+                            "No changes to commit"
+                        } else {
+                            "Commit changes locally"
+                        }),
+                        ctx,
+                    );
                     button.set_on_click(
                         |ctx| ctx.dispatch_typed_action(CodeReviewAction::OpenCommitDialog),
                         ctx,
@@ -6567,7 +6509,7 @@ impl CodeReviewView {
                     button.set_label("Push", ctx);
                     button.set_icon(Some(Icon::ArrowUp), ctx);
                     button.set_disabled(false, ctx);
-                    button.clear_tooltip(ctx);
+                    button.set_tooltip(Some("Push commits to remote"), ctx);
                     button.set_on_click(
                         |ctx| ctx.dispatch_typed_action(CodeReviewAction::OpenPushDialog),
                         ctx,
@@ -6583,7 +6525,7 @@ impl CodeReviewView {
                     button.set_label("Create PR", ctx);
                     button.set_icon(Some(Icon::Github), ctx);
                     button.set_disabled(false, ctx);
-                    button.clear_tooltip(ctx);
+                    button.set_tooltip(Some("Create a pull request"), ctx);
                     button.set_on_click(
                         |ctx| ctx.dispatch_typed_action(CodeReviewAction::OpenCreatePrDialog),
                         ctx,
@@ -6603,7 +6545,11 @@ impl CodeReviewView {
                         button.set_icon(Some(Icon::Github), ctx);
                         button.set_disabled(is_pr_info_refreshing, ctx);
                         button.set_tooltip(
-                            is_pr_info_refreshing.then_some("Refreshing PR info"),
+                            Some(if is_pr_info_refreshing {
+                                "Refreshing PR info"
+                            } else {
+                                "View pull request on GitHub"
+                            }),
                             ctx,
                         );
                         button.set_on_click(
@@ -6621,7 +6567,7 @@ impl CodeReviewView {
                     button.set_label("Publish", ctx);
                     button.set_icon(Some(Icon::UploadCloud), ctx);
                     button.set_disabled(false, ctx);
-                    button.clear_tooltip(ctx);
+                    button.set_tooltip(Some("Publish branch to remote"), ctx);
                     button.set_on_click(
                         |ctx| ctx.dispatch_typed_action(CodeReviewAction::PublishBranch),
                         ctx,

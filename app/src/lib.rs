@@ -151,6 +151,7 @@ use auth::auth_manager::AuthManager;
 use auth::auth_state::{AuthState, AuthStateProvider};
 use code::editor_management::CodeManager;
 use code::opened_files::OpenedFilesModel;
+use code_review::git_repo_model::GitRepoModels;
 use code_review::GlobalCodeReviewModel;
 use quit_warning::UnsavedStateSummary;
 #[cfg(feature = "local_fs")]
@@ -178,6 +179,8 @@ use watcher::HomeDirectoryWatcher;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::AwsCredentialRefresher as _;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::geap_credentials::GeapCredentialRefresher as _;
 use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
 use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 pub mod workflows;
@@ -1364,6 +1367,12 @@ pub(crate) fn initialize_app(
         let mut manager = ::ai::api_keys::ApiKeyManager::new(ctx);
         #[cfg(not(target_family = "wasm"))]
         manager.subscribe_to_settings_changes(ctx);
+        // Gemini Enterprise (GEAP) credential refresh triggers: workspace
+        // settings saves / team changes and the member's enablement toggle.
+        #[cfg(not(target_family = "wasm"))]
+        if FeatureFlag::GeminiEnterprise.is_enabled() {
+            manager.subscribe_to_geap_settings_changes(ctx);
+        }
         // The Grok subscription refresher (`ai::grok_subscription`) has no
         // visibility into workspace policy, so wire the BYO API key policy in
         // here. The initial value resumes proactive refresh of any tokens
@@ -1636,11 +1645,7 @@ pub(crate) fn initialize_app(
         });
     }
 
-    #[cfg(feature = "local_fs")]
-    {
-        use code_review::git_repo_model::GitRepoModels;
-        ctx.add_singleton_model(|_| GitRepoModels::new());
-    }
+    ctx.add_singleton_model(|_| GitRepoModels::new());
 
     ctx.add_singleton_model(|ctx| {
         ProjectManagementModel::new(persisted_projects, persistence_writer.sender(), ctx)
