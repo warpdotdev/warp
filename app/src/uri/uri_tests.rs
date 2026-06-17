@@ -321,6 +321,30 @@ fn test_action_create_environment_parse_no_repos() {
     }
 }
 
+#[test]
+fn test_settings_section_for_simple_subpage() {
+    // Known parameterless subpages map to their settings section.
+    assert_eq!(
+        settings_section_for_simple_subpage("warp_agent"),
+        Some(SettingsSection::WarpAgent)
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("billing_and_usage"),
+        Some(SettingsSection::BillingAndUsage)
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("platform"),
+        Some(SettingsSection::OzCloudAPIKeys)
+    );
+    assert_eq!(
+        settings_section_for_simple_subpage("appearance"),
+        Some(SettingsSection::Appearance)
+    );
+
+    // Unknown subpages return None so the caller can warn and no-op.
+    assert_eq!(settings_section_for_simple_subpage("unknown"), None);
+}
+
 fn open_file_editor_test_path(file_name: &str) -> (String, PathBuf) {
     #[cfg(windows)]
     let path = format!("C:/tmp/{file_name}");
