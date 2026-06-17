@@ -738,7 +738,7 @@ fn get_skills_for_working_directory_respects_location() {
                 )
                 .map(|skill| skill.content.clone())
         });
-        assert_eq!(resolved_content, Some("# remote-bundled".to_string()));
+        assert_eq!(resolved_content, Ok("# remote-bundled".to_string()));
         let wrong_origin_content = handle.read(&app, |manager, ctx| {
             manager
                 .active_skill_by_reference_with_origin(
@@ -748,10 +748,10 @@ fn get_skills_for_working_directory_respects_location() {
                 )
                 .map(|skill| skill.content.clone())
         });
-        assert_eq!(
-            wrong_origin_content, None,
-            "Remote bundled paths must only resolve for their active host"
-        );
+        assert!(matches!(
+            wrong_origin_content,
+            Err(ActiveSkillLookupError::NotFound { .. })
+        ));
 
         let disconnected_remote_skills = handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(None, ctx)
@@ -985,6 +985,45 @@ fn active_skill_by_reference_distinguishes_remote_hosts_with_the_same_display_pa
             )
         });
         assert_eq!(resolved, (Some(first_path), Some(second_path)));
+    });
+}
+
+// Origin-aware lookup reports why an active bundled skill could not be resolved.
+#[test]
+fn active_skill_by_reference_with_origin_returns_typed_lookup_errors() {
+    App::test((), |app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+        let reference = SkillReference::BundledSkillId("missing".to_string());
+
+        let unavailable_error = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(
+                    &reference,
+                    &SkillPathOrigin::Unavailable,
+                    ctx,
+                )
+                .unwrap_err()
+        });
+        assert_eq!(
+            unavailable_error,
+            ActiveSkillLookupError::BundledSkillsUnavailable
+        );
+
+        let not_found_error = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(&reference, &SkillPathOrigin::Local, ctx)
+                .unwrap_err()
+        });
+        assert_eq!(
+            not_found_error,
+            ActiveSkillLookupError::NotFound { reference }
+        );
     });
 }
 

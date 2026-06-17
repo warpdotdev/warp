@@ -1,5 +1,4 @@
 use ai::agent::action_result::{AnyFileContent, FileContext};
-use ai::skills::{SkillPathOrigin, SkillReference};
 use futures::future::{BoxFuture, FutureExt};
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
@@ -49,7 +48,7 @@ impl ReadSkillExecutor {
             &path_origin,
             ctx,
         ) {
-            Some(skill) => {
+            Ok(skill) => {
                 send_telemetry_from_ctx!(
                     SkillTelemetryEvent::Read {
                         reference: skill_ref.clone(),
@@ -68,7 +67,7 @@ impl ReadSkillExecutor {
                 );
                 ActionExecution::Sync(ReadSkillResult::Success { content }.into())
             }
-            None => {
+            Err(error) => {
                 send_telemetry_from_ctx!(
                     SkillTelemetryEvent::Read {
                         reference: skill_ref.clone(),
@@ -79,14 +78,7 @@ impl ReadSkillExecutor {
                     },
                     ctx
                 );
-                let error = if matches!(&path_origin, SkillPathOrigin::Unavailable)
-                    && matches!(skill_ref, SkillReference::BundledSkillId(_))
-                {
-                    "Bundled skills are not available on this remote session".to_string()
-                } else {
-                    format!("Skill not found: {skill_ref:?}")
-                };
-                ActionExecution::Sync(ReadSkillResult::Error(error).into())
+                ActionExecution::Sync(ReadSkillResult::Error(error.to_string()).into())
             }
         }
     }

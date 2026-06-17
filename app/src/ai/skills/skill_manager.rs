@@ -18,7 +18,7 @@ use super::bundled::{
     BundledSkillActivation,
 };
 use super::bundled::{BundledSkill, BundledSkills};
-use super::{SkillDescriptor, SkillPathQuery};
+use super::{ActiveSkillLookupError, SkillDescriptor, SkillPathQuery};
 use crate::ai::skills::skill_utils::unique_skills;
 
 pub struct SkillManager {
@@ -360,6 +360,7 @@ impl SkillManager {
         ctx: &AppContext,
     ) -> Option<&ParsedSkill> {
         self.active_skill_by_reference_with_origin(reference, &SkillPathOrigin::Local, ctx)
+            .ok()
     }
 
     /// Get the definition of a skill for the selected execution host only if it is active.
@@ -368,8 +369,8 @@ impl SkillManager {
         reference: &SkillReference,
         path_origin: &SkillPathOrigin,
         ctx: &AppContext,
-    ) -> Option<&ParsedSkill> {
-        match reference {
+    ) -> Result<&ParsedSkill, ActiveSkillLookupError> {
+        let skill = match reference {
             SkillReference::Path(path) => self.skills_by_path.get(path).or_else(|| {
                 let remote = path.as_remote()?;
                 let SkillPathOrigin::Remote { host_id } = path_origin else {
@@ -383,11 +384,12 @@ impl SkillManager {
             SkillReference::BundledSkillId(id) => {
                 self.bundled_skills.active_skill(id, path_origin, ctx)
             }
-        }
+        };
+        skill.ok_or_else(|| ActiveSkillLookupError::for_reference(reference, path_origin))
     }
 
-    /// Returns a bundled skill by ID only if its activation condition is met.
-    pub fn active_bundled_skill(&self, id: &str, ctx: &AppContext) -> Option<&ParsedSkill> {
+    /// Returns a local bundled skill by ID only if its activation condition is met.
+    pub fn active_local_bundled_skill(&self, id: &str, ctx: &AppContext) -> Option<&ParsedSkill> {
         self.bundled_skills
             .active_skill(id, &SkillPathOrigin::Local, ctx)
     }

@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ai::skills::{SkillPathOrigin, SkillReference};
+use ai::skills::SkillReference;
 use async_channel::Sender;
 use base64::Engine as _;
 #[cfg(feature = "local_fs")]
@@ -5498,20 +5498,13 @@ impl Input {
             .as_ref(ctx)
             .active_skill_by_reference_with_origin(&reference, &path_origin, ctx)
         {
-            Some(skill) => skill.clone(),
-            None => {
+            Ok(skill) => skill.clone(),
+            Err(error) => {
                 // Show error toast if skill not found
-                let message = if matches!(&path_origin, SkillPathOrigin::Unavailable)
-                    && matches!(&reference, SkillReference::BundledSkillId(_))
-                {
-                    "Bundled skills are not available on this remote session".to_string()
-                } else {
-                    format!("Skill not found: {reference}")
-                };
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(message),
+                        DismissibleToast::error(error.to_string()),
                         window_id,
                         ctx,
                     );

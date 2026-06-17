@@ -127,6 +127,8 @@ impl BundledSkills {
             .get(&path.host_id)?
             .active_skill_by_path(&LocalOrRemotePath::Remote(path.clone()), ctx)
     }
+
+    /// Returns the bundled catalog selected by the execution path origin.
     fn for_path_origin(&self, path_origin: &SkillPathOrigin) -> Option<&BundledSkill> {
         match path_origin {
             SkillPathOrigin::Local | SkillPathOrigin::RestoredDisplayOnly => Some(&self.local),
