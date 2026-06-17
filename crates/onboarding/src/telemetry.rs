@@ -37,8 +37,6 @@ pub enum OnboardingEvent {
     SlideNavigatedNext,
     /// The user navigated to the previous slide.
     SlideNavigatedBack,
-    /// The user clicked the upgrade/subscribe button on the FreeUserNoAi experiment slide.
-    FreeUserNoAiUpgradeClicked,
     /// The user clicked the "Upgrade" button on the "Customize your agent" slide.
     AgentSlideUpgradeClicked,
     /// The user clicked the "Log in" link on the welcome/intro slide.
@@ -60,9 +58,6 @@ impl TelemetryEvent for OnboardingEvent {
             OnboardingEvent::CalloutCompleted { .. } => "onboarding_callout_completed",
             OnboardingEvent::SlideNavigatedNext => "onboarding_slide_navigated_next",
             OnboardingEvent::SlideNavigatedBack => "onboarding_slide_navigated_back",
-            OnboardingEvent::FreeUserNoAiUpgradeClicked => {
-                "onboarding_free_user_no_ai_upgrade_clicked"
-            }
             OnboardingEvent::AgentSlideUpgradeClicked => "onboarding_agent_slide_upgrade_clicked",
             OnboardingEvent::WelcomeLoginClicked => "onboarding_welcome_login_clicked",
         }
@@ -101,7 +96,6 @@ impl TelemetryEvent for OnboardingEvent {
             })),
             OnboardingEvent::SlideNavigatedNext => None,
             OnboardingEvent::SlideNavigatedBack => None,
-            OnboardingEvent::FreeUserNoAiUpgradeClicked => None,
             OnboardingEvent::AgentSlideUpgradeClicked => None,
             OnboardingEvent::WelcomeLoginClicked => None,
         }
@@ -123,9 +117,6 @@ impl TelemetryEvent for OnboardingEvent {
             OnboardingEvent::CalloutCompleted { .. } => "User completed the callout flow",
             OnboardingEvent::SlideNavigatedNext => "User navigated to the next slide",
             OnboardingEvent::SlideNavigatedBack => "User navigated to the previous slide",
-            OnboardingEvent::FreeUserNoAiUpgradeClicked => {
-                "User clicked the upgrade button on the free-user no-AI experiment slide"
-            }
             OnboardingEvent::AgentSlideUpgradeClicked => {
                 "User clicked the Upgrade button on the Customize your agent slide"
             }
@@ -165,9 +156,6 @@ impl TelemetryEventDesc for OnboardingEventDiscriminant {
             OnboardingEventDiscriminant::CalloutCompleted => "onboarding_callout_completed",
             OnboardingEventDiscriminant::SlideNavigatedNext => "onboarding_slide_navigated_next",
             OnboardingEventDiscriminant::SlideNavigatedBack => "onboarding_slide_navigated_back",
-            OnboardingEventDiscriminant::FreeUserNoAiUpgradeClicked => {
-                "onboarding_free_user_no_ai_upgrade_clicked"
-            }
             OnboardingEventDiscriminant::AgentSlideUpgradeClicked => {
                 "onboarding_agent_slide_upgrade_clicked"
             }
@@ -196,9 +184,6 @@ impl TelemetryEventDesc for OnboardingEventDiscriminant {
             OnboardingEventDiscriminant::SlideNavigatedNext => "User navigated to the next slide",
             OnboardingEventDiscriminant::SlideNavigatedBack => {
                 "User navigated to the previous slide"
-            }
-            OnboardingEventDiscriminant::FreeUserNoAiUpgradeClicked => {
-                "User clicked the upgrade button on the free-user no-AI experiment slide"
             }
             OnboardingEventDiscriminant::AgentSlideUpgradeClicked => {
                 "User clicked the Upgrade button on the Customize your agent slide"

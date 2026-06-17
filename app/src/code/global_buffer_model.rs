@@ -265,6 +265,7 @@ pub enum GlobalBufferModelEvent {
     },
     FileSaved {
         file_id: FileId,
+        content_version: ContentVersion,
     },
     FailedToSave {
         file_id: FileId,
@@ -272,9 +273,7 @@ pub enum GlobalBufferModelEvent {
     },
     /// A remote buffer update conflicted with local edits.
     /// The UI should present a resolution dialog.
-    RemoteBufferConflict {
-        file_id: FileId,
-    },
+    RemoteBufferConflict { file_id: FileId },
     /// A server-local buffer was updated from a file-watcher event.
     /// Carries the incremental diff edits for the ServerModel to push
     /// to connected clients as `BufferUpdatedPush`.
@@ -778,7 +777,10 @@ impl GlobalBufferModel {
                 if let Some(state) = self.buffers.get_mut(id) {
                     state.set_base_content_version(*version);
                 }
-                ctx.emit(GlobalBufferModelEvent::FileSaved { file_id: *id });
+                ctx.emit(GlobalBufferModelEvent::FileSaved {
+                    file_id: *id,
+                    content_version: *version,
+                });
             }
             FileModelEvent::FailedToSave { id, error } => {
                 ctx.emit(GlobalBufferModelEvent::FailedToSave {
@@ -834,7 +836,10 @@ impl GlobalBufferModel {
                     async move { handle.save_buffer(path).await },
                     move |_me, result, ctx| match result {
                         Ok(()) => {
-                            ctx.emit(GlobalBufferModelEvent::FileSaved { file_id });
+                            ctx.emit(GlobalBufferModelEvent::FileSaved {
+                                file_id,
+                                content_version: version,
+                            });
                         }
                         Err(error) => {
                             log::warn!("Remote save failed: {error}");

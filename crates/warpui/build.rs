@@ -81,8 +81,27 @@ fn compile_metal_shaders() {
 
     println!("cargo:rerun-if-changed={header_path}");
     println!("cargo:rerun-if-changed={metal_path}");
+    println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
 
-    let mut compile_args = vec!["-sdk", "macosx", "metal", "-c", metal_path, "-o", air_path];
+    // Pin the AIR bytecode target to `MACOSX_DEPLOYMENT_TARGET`. Without an
+    // explicit `-mmacosx-version-min`, `xcrun metal` on recent Xcode toolchains
+    // emits AIR for the current SDK (e.g. `air64_v27-apple-macosx15.0.0`)
+    // regardless of the env var, and older Metal driver stacks reject the
+    // resulting `.metallib` during pipeline state creation. See #11700.
+    let min_macos_version = env::var("MACOSX_DEPLOYMENT_TARGET")
+        .expect("MACOSX_DEPLOYMENT_TARGET must be set for macOS builds");
+    let min_version_arg = format!("-mmacosx-version-min={min_macos_version}");
+
+    let mut compile_args = vec![
+        "-sdk",
+        "macosx",
+        "metal",
+        "-c",
+        metal_path,
+        "-o",
+        air_path,
+        &min_version_arg,
+    ];
     if cfg!(feature = "enable-metal-frame-capture") {
         compile_args.push("-frecord-sources");
         compile_args.push("-gline-tables-only");

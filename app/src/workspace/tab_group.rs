@@ -30,6 +30,8 @@ pub struct TabGroup {
     pub color: SelectedTabColor,
     pub collapsed: bool,
     pub draggable_state: DraggableState,
+    /// True when this whole group is pinned to the front of the tab list.
+    pub pinned: bool,
 }
 
 impl TabGroup {
@@ -41,6 +43,7 @@ impl TabGroup {
             color: SelectedTabColor::default(),
             collapsed: false,
             draggable_state: Default::default(),
+            pinned: false,
         }
     }
 }

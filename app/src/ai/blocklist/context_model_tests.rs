@@ -24,7 +24,9 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin,
 };
 #[cfg(feature = "local_fs")]
-use crate::code_review::git_status_update::GitRepoStatusModel;
+use crate::code_review::git_repo_model::GitRepoStatusModel;
+#[cfg(feature = "local_fs")]
+use crate::code_review::github_repo_model::GitHubRepoModel;
 use crate::terminal::color::{self, Colors};
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::test_utils::block_size;
@@ -51,7 +53,7 @@ impl BlocklistAIContextModel {
 
 #[cfg(feature = "local_fs")]
 #[test]
-fn repository_context_reads_git_repo_status_model() {
+fn repository_context_reads_github_repo_model() {
     App::test((), |mut app| async move {
         let context_model = build_test_context_model(&mut app);
         let temp_dir = tempfile::TempDir::new().unwrap();
@@ -64,9 +66,12 @@ fn repository_context_reads_git_repo_status_model() {
                 )
                 .unwrap()
         });
-        let git_status = app.add_model(move |_| GitRepoStatusModel::new_for_test(repository, None));
+        let git_status =
+            app.add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repository, None, ctx));
+        let github_repo_model =
+            app.add_model(move |ctx| GitHubRepoModel::new_local_for_test(git_status, ctx));
 
-        git_status.update(&mut app, |model, ctx| {
+        github_repo_model.update(&mut app, |model, ctx| {
             model.set_repository_info_for_test(
                 Some(RepositoryInfo {
                     name: "warp-internal".to_owned(),
@@ -77,7 +82,7 @@ fn repository_context_reads_git_repo_status_model() {
         });
 
         context_model.update(&mut app, |model, _| {
-            model.set_git_repo_status(Some(git_status.downgrade()));
+            model.set_github_repo_model(Some(github_repo_model.downgrade()));
         });
 
         context_model.read(&app, |model, ctx| {
@@ -91,7 +96,7 @@ fn repository_context_reads_git_repo_status_model() {
         });
 
         context_model.update(&mut app, |model, _| {
-            model.set_git_repo_status(None);
+            model.set_github_repo_model(None);
         });
 
         context_model.read(&app, |model, ctx| {
@@ -232,7 +237,7 @@ fn pull_request_context_from_pr_info_rejects_numbers_that_do_not_fit_agent_conte
 
 #[cfg(feature = "local_fs")]
 #[test]
-fn pull_request_context_reads_git_repo_status_model() {
+fn pull_request_context_reads_github_repo_model() {
     App::test((), |mut app| async move {
         let context_model = build_test_context_model(&mut app);
         let temp_dir = tempfile::TempDir::new().unwrap();
@@ -245,9 +250,12 @@ fn pull_request_context_reads_git_repo_status_model() {
                 )
                 .unwrap()
         });
-        let git_status = app.add_model(move |_| GitRepoStatusModel::new_for_test(repository, None));
+        let git_status =
+            app.add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repository, None, ctx));
+        let github_repo_model =
+            app.add_model(move |ctx| GitHubRepoModel::new_local_for_test(git_status, ctx));
 
-        git_status.update(&mut app, |model, ctx| {
+        github_repo_model.update(&mut app, |model, ctx| {
             model.set_pr_info_for_test(
                 Some(PrInfo {
                     number: 123,
@@ -261,7 +269,7 @@ fn pull_request_context_reads_git_repo_status_model() {
         });
 
         context_model.update(&mut app, |model, _| {
-            model.set_git_repo_status(Some(git_status.downgrade()));
+            model.set_github_repo_model(Some(github_repo_model.downgrade()));
         });
 
         context_model.read(&app, |model, ctx| {
@@ -277,7 +285,7 @@ fn pull_request_context_reads_git_repo_status_model() {
         });
 
         context_model.update(&mut app, |model, _| {
-            model.set_git_repo_status(None);
+            model.set_github_repo_model(None);
         });
 
         context_model.read(&app, |model, ctx| {

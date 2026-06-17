@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_channel::Sender;
+use instant::Instant;
 use pathfinder_geometry::vector::vec2f;
+use remote_server::HostId;
 use string_offset::{ByteOffset, CharCounter};
 use warp_core::r#async::debounce;
 use warp_core::send_telemetry_from_ctx;
@@ -15,7 +17,10 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill as ThemeFill};
 use warp_core::ui::Icon;
 use warp_editor::editor::NavigationKey;
-use warp_ripgrep::search::{Match as RipgrepMatch, Submatch};
+use warp_ripgrep::search::Submatch;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Fill, Flex, FormattedTextElement,
@@ -46,9 +51,10 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
 use crate::ui_components::render_file_search_row::{render_file_search_row, FileSearchRowOptions};
+use crate::util::path::{display_name_with_host, display_path_with_host};
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 use crate::workspace::view::global_search::model::GlobalSearch;
-use crate::workspace::view::global_search::SearchConfig;
+use crate::workspace::view::global_search::{GlobalSearchMatch, SearchConfig};
 use crate::TelemetryEvent;
 
 const BORDER_RADIUS: f32 = 6.;
@@ -76,19 +82,19 @@ enum FocusMode {
 #[derive(Debug, Clone)]
 pub enum GlobalSearchAction {
     SelectRow {
-        directory_path: PathBuf,
-        file_path: PathBuf,
+        directory_path: LocalOrRemotePath,
+        file_path: LocalOrRemotePath,
         match_index: Option<usize>,
     },
     ToggleFileCollapsed {
-        directory_path: PathBuf,
-        file_path: PathBuf,
+        directory_path: LocalOrRemotePath,
+        file_path: LocalOrRemotePath,
     },
     ToggleDirectoryCollapsed {
-        directory_path: PathBuf,
+        directory_path: LocalOrRemotePath,
     },
     OpenMatch {
-        path: PathBuf,
+        location: LocalOrRemotePath,
         line_number: u32,
         column_num: Option<usize>,
     },
@@ -107,18 +113,27 @@ pub enum GlobalSearchAction {
 pub enum GlobalSearchEvent {
     Started {
         search_id: u32,
+        remote_host_count: usize,
     },
     Progress {
         search_id: u32,
-        result: RipgrepMatch,
+        result: GlobalSearchMatch,
     },
     ProgressBatch {
         search_id: u32,
-        items: Vec<RipgrepMatch>,
+        items: Vec<GlobalSearchMatch>,
     },
     Completed {
         search_id: u32,
         total_match_count: usize,
+        /// True when a remote source hit the server-side match cap.
+        capped: bool,
+        /// Whether the local search source failed while another source
+        /// completed. Results from the surviving sources remain valid.
+        local_source_failed: bool,
+        /// Number of remote host search sources that failed while another
+        /// source completed. Results from the surviving sources remain valid.
+        remote_source_failures: usize,
     },
     Failed {
         search_id: u32,
@@ -129,7 +144,7 @@ pub enum GlobalSearchEvent {
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub enum Event {
     OpenMatch {
-        path: PathBuf,
+        location: LocalOrRemotePath,
         line_number: u32,
         column_num: Option<usize>,
     },
@@ -166,14 +181,14 @@ enum RowIndexType {
 
 /// A root directory containing matched files.
 struct DirectoryEntry {
-    path: PathBuf,
+    path: LocalOrRemotePath,
     is_collapsed: bool,
     mouse_state: MouseStateHandle,
     matched_paths: MatchedPaths,
 }
 
 impl DirectoryEntry {
-    fn new(path: PathBuf) -> Self {
+    fn new(path: LocalOrRemotePath) -> Self {
         Self {
             path,
             is_collapsed: false,
@@ -206,7 +221,7 @@ impl DirectoryEntry {
 /// Collection of matched files within a directory.
 struct MatchedPaths {
     paths: Vec<MatchedPath>,
-    index_by_path: HashMap<PathBuf, usize>,
+    index_by_path: HashMap<LocalOrRemotePath, usize>,
 }
 
 impl MatchedPaths {
@@ -222,21 +237,21 @@ impl MatchedPaths {
         self.paths.iter().map(|p| p.visible_count()).sum()
     }
 
-    /// Gets or creates a MatchedPath entry for the given file path.
+    /// Gets or creates a MatchedPath entry for the given file location.
     /// Returns a mutable reference to the entry and its index.
-    fn get_or_create(&mut self, path: &Path) -> (&mut MatchedPath, usize) {
+    fn get_or_create(&mut self, path: &LocalOrRemotePath) -> (&mut MatchedPath, usize) {
         if let Some(&index) = self.index_by_path.get(path) {
             (&mut self.paths[index], index)
         } else {
             let index = self.paths.len();
-            self.paths.push(MatchedPath::new(path.to_path_buf()));
-            self.index_by_path.insert(path.to_path_buf(), index);
+            self.paths.push(MatchedPath::new(path.clone()));
+            self.index_by_path.insert(path.clone(), index);
             (&mut self.paths[index], index)
         }
     }
 
-    /// Gets a mutable MatchedPath entry by file path.
-    fn get_mut(&mut self, path: &Path) -> Option<&mut MatchedPath> {
+    /// Gets a mutable MatchedPath entry by file location.
+    fn get_mut(&mut self, path: &LocalOrRemotePath) -> Option<&mut MatchedPath> {
         self.index_by_path
             .get(path)
             .copied()
@@ -246,14 +261,14 @@ impl MatchedPaths {
 
 /// A file containing matches.
 struct MatchedPath {
-    path: PathBuf,
+    path: LocalOrRemotePath,
     is_collapsed: bool,
     mouse_state: MouseStateHandle,
     matches: Vec<Match>,
 }
 
 impl MatchedPath {
-    fn new(path: PathBuf) -> Self {
+    fn new(path: LocalOrRemotePath) -> Self {
         Self {
             path,
             is_collapsed: false,
@@ -278,15 +293,22 @@ impl MatchedPath {
 struct Match {
     line_text: String,
     line_number: u32,
+    column_num: Option<usize>,
     submatches: Vec<Submatch>,
     mouse_state: MouseStateHandle,
 }
 
 impl Match {
-    fn new(line_text: String, line_number: u32, submatches: Vec<Submatch>) -> Self {
+    fn new(
+        line_text: String,
+        line_number: u32,
+        column_num: Option<usize>,
+        submatches: Vec<Submatch>,
+    ) -> Self {
         Self {
             line_text,
             line_number,
+            column_num,
             submatches,
             mouse_state: MouseStateHandle::default(),
         }
@@ -298,17 +320,20 @@ pub struct GlobalSearchView {
     query_editor: ViewHandle<EditorView>,
     query_change_tx: Sender<()>,
     /// All terminal working directories for display grouping (preserved as-is)
-    root_directories: Vec<PathBuf>,
-    /// Deduplicated roots for ripgrep search (excludes nested subdirectories)
-    search_roots: Vec<PathBuf>,
+    root_directories: Vec<LocalOrRemotePath>,
+    /// Deduplicated roots for search (excludes nested subdirectories)
+    search_roots: Vec<LocalOrRemotePath>,
     last_searched_pattern: Option<String>,
     directory_entries: Vec<DirectoryEntry>,
-    directory_path_to_directory_index_entry: HashMap<PathBuf, usize>,
+    directory_path_to_directory_index_entry: HashMap<LocalOrRemotePath, usize>,
     selected_row: Option<RowIndex>,
     total_match_count: usize,
     is_search_in_progress: bool,
     capped_matches: bool,
     last_error: Option<String>,
+    /// When the current search started, for completion telemetry.
+    search_started_at: Option<Instant>,
+    active_search_remote_host_count: usize,
     scroll_state: ScrollStateHandle,
     uniform_list_state: UniformListState,
     handle: WeakViewHandle<GlobalSearchView>,
@@ -352,12 +377,12 @@ impl TypedActionView for GlobalSearchView {
                 self.toggle_directory_collapsed(directory_path, ctx);
             }
             GlobalSearchAction::OpenMatch {
-                path,
+                location,
                 line_number,
                 column_num,
             } => {
                 ctx.emit(Event::OpenMatch {
-                    path: path.clone(),
+                    location: location.clone(),
                     line_number: *line_number,
                     column_num: *column_num,
                 });
@@ -485,24 +510,6 @@ impl TypedActionView for GlobalSearchView {
 }
 
 impl GlobalSearchView {
-    /// Calculate the 1-indexed column number from the first submatch.
-    /// Returns None if there are no submatches or the line is empty.
-    fn column_from_submatches(line_text: &str, submatches: &[Submatch]) -> Option<usize> {
-        if line_text.is_empty() || submatches.is_empty() {
-            return None;
-        }
-
-        let first_submatch = &submatches[0];
-        let max_byte = ByteOffset::from(line_text.len());
-        let start_b = first_submatch.byte_start.min(max_byte);
-
-        let mut char_counter = CharCounter::new(line_text);
-        let start_char = char_counter.char_offset(start_b)?;
-
-        // Return 1-indexed column number
-        Some(start_char.as_usize() + 1)
-    }
-
     /// Convert submatch byte ranges into character indices for highlighting.
     fn highlight_indices_from_submatches(line_text: &str, submatches: &[Submatch]) -> Vec<usize> {
         if line_text.is_empty() || submatches.is_empty() {
@@ -704,6 +711,8 @@ impl GlobalSearchView {
             is_search_in_progress: false,
             capped_matches: false,
             last_error: None,
+            search_started_at: None,
+            active_search_remote_host_count: 0,
             scroll_state: ScrollStateHandle::default(),
             uniform_list_state: UniformListState::new(),
             handle,
@@ -745,32 +754,30 @@ impl GlobalSearchView {
         ctx.notify();
     }
 
-    /// Returns an iterator over all directory paths where the given file path should appear.
-    /// A file matches a directory if the file path starts with that directory.
+    /// Returns an iterator over all directory locations where the given file should appear.
+    /// A file matches a directory if the file location starts with that directory
+    /// (remote files only match directories on the same host).
     fn find_matching_directories<'a>(
         &'a self,
-        file_path: &'a Path,
-    ) -> impl Iterator<Item = &'a PathBuf> {
+        location: &'a LocalOrRemotePath,
+    ) -> impl Iterator<Item = &'a LocalOrRemotePath> {
         self.root_directories
             .iter()
-            .filter(move |root| file_path.starts_with(root))
+            .filter(move |root| location.starts_with(root))
     }
 
-    fn apply_progress_item(&mut self, result: RipgrepMatch, ctx: &mut ViewContext<Self>) {
+    fn apply_progress_item(&mut self, result: GlobalSearchMatch, ctx: &mut ViewContext<Self>) {
         if self.total_match_count >= MAX_MATCH_COUNT {
             return;
         }
 
-        let file_path = result.file_path.clone();
+        let location = result.location.clone();
 
         // Find all directories that this file belongs to
-        let mut matching_directories = self.find_matching_directories(&file_path).peekable();
+        let mut matching_directories = self.find_matching_directories(&location).peekable();
         if matching_directories.peek().is_none() {
             // File doesn't match any root directory, skip it
-            let file_path_name = file_path
-                .file_name()
-                .map(|name| name.to_string_lossy())
-                .unwrap_or_else(|| std::borrow::Cow::Borrowed("<unknown>"));
+            let file_path_name = location.file_name().unwrap_or("<unknown>");
             log::warn!("[Global search] file {file_path_name} was not found in directories");
             return;
         }
@@ -794,12 +801,13 @@ impl GlobalSearchView {
 
             // Get or create the matched path entry within this directory
             let dir_entry = &mut directory_entries[dir_index];
-            let (matched_path, _path_index) = dir_entry.matched_paths.get_or_create(&file_path);
+            let (matched_path, _path_index) = dir_entry.matched_paths.get_or_create(&location);
 
             // Add the match
             matched_path.matches.push(Match::new(
                 result.line_text.clone(),
                 result.line_number,
+                result.column_num,
                 result.submatches.clone(),
             ));
         }
@@ -812,11 +820,16 @@ impl GlobalSearchView {
     }
     fn abort_search(&mut self, ctx: &mut ViewContext<Self>) {
         self.capped_matches = true;
+        self.cancel_search(ctx);
+    }
+
+    fn cancel_search(&mut self, ctx: &mut ViewContext<Self>) {
         self.is_search_in_progress = false;
         self.current_search_id = None;
+        self.search_started_at = None;
 
-        self.find_model.update(ctx, |model, _| {
-            model.abort_search();
+        self.find_model.update(ctx, |model, model_ctx| {
+            model.abort_search(model_ctx);
         });
     }
     fn handle_debounced_query_change(&mut self, _event: (), ctx: &mut ViewContext<Self>) {
@@ -839,8 +852,7 @@ impl GlobalSearchView {
             | EditorEvent::BufferReinitialized => {
                 let query_text = self.query_editor.as_ref(ctx).buffer_text(ctx);
                 if query_text.is_empty() {
-                    self.current_search_id = None;
-                    self.is_search_in_progress = false;
+                    self.cancel_search(ctx);
                     self.reset_search_state(true);
                     ctx.notify();
                     return;
@@ -880,8 +892,7 @@ impl GlobalSearchView {
 
         let pattern = self.query_editor.as_ref(ctx).buffer_text(ctx);
         if pattern.is_empty() {
-            self.current_search_id = None;
-            self.is_search_in_progress = false;
+            self.cancel_search(ctx);
             self.reset_search_state(true);
             ctx.notify();
             return;
@@ -923,10 +934,15 @@ impl GlobalSearchView {
 
     fn handle_find_model_event(&mut self, event: &GlobalSearchEvent, ctx: &mut ViewContext<Self>) {
         match event {
-            GlobalSearchEvent::Started { search_id } => {
+            GlobalSearchEvent::Started {
+                search_id,
+                remote_host_count,
+            } => {
                 send_telemetry_from_ctx!(TelemetryEvent::GlobalSearchQueryStarted, ctx);
 
                 self.current_search_id = Some(*search_id);
+                self.search_started_at = Some(Instant::now());
+                self.active_search_remote_host_count = *remote_host_count;
 
                 self.is_search_in_progress = true;
                 self.reset_search_state(false);
@@ -957,6 +973,9 @@ impl GlobalSearchView {
             GlobalSearchEvent::Completed {
                 search_id,
                 total_match_count,
+                capped,
+                local_source_failed,
+                remote_source_failures,
             } => {
                 if Some(*search_id) != self.current_search_id {
                     return;
@@ -964,6 +983,21 @@ impl GlobalSearchView {
 
                 self.is_search_in_progress = false;
                 self.total_match_count = *total_match_count;
+                self.capped_matches |= capped;
+
+                if let Some(started_at) = self.search_started_at.take() {
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::GlobalSearchQueryCompleted {
+                            duration_ms: started_at.elapsed().as_millis() as u64,
+                            remote_host_count: self.active_search_remote_host_count,
+                            total_match_count: *total_match_count,
+                            capped: self.capped_matches,
+                            local_source_failed: *local_source_failed,
+                            remote_source_failures: *remote_source_failures,
+                        },
+                        ctx
+                    );
+                }
                 ctx.notify();
             }
             GlobalSearchEvent::Failed { search_id, error } => {
@@ -972,6 +1006,7 @@ impl GlobalSearchView {
                 }
 
                 self.is_search_in_progress = false;
+                self.search_started_at = None;
                 self.reset_search_state(false);
                 self.last_error = Some(error.clone());
                 ctx.notify();
@@ -979,11 +1014,53 @@ impl GlobalSearchView {
         }
     }
 
-    pub fn set_root_directories(&mut self, roots: Vec<PathBuf>, _ctx: &mut ViewContext<Self>) {
+    pub fn set_root_directories(
+        &mut self,
+        roots: Vec<LocalOrRemotePath>,
+        _ctx: &mut ViewContext<Self>,
+    ) {
         // Ancestor-dedup search roots so we don't search the same file twice
         // when terminal directories are nested (e.g. `~/code` + `~/code/a`).
-        // Shared with `FileTreeView` for consistency.
-        self.search_roots = warp_util::path::group_roots_by_common_ancestor(&roots).roots;
+        // Local and remote roots share `group_roots_by_common_ancestor` with
+        // `FileTreeView` for consistency; remote roots are grouped per host
+        // and deduped within each host independently.
+        let local_roots: Vec<PathBuf> = roots
+            .iter()
+            .filter_map(|root| root.to_local_path().map(Path::to_path_buf))
+            .collect();
+        let deduped_local = warp_util::path::group_roots_by_common_ancestor(&local_roots).roots;
+
+        let mut remote_roots_by_host: Vec<(HostId, Vec<StandardizedPath>)> = Vec::new();
+        for root in &roots {
+            let LocalOrRemotePath::Remote(remote) = root else {
+                continue;
+            };
+            match remote_roots_by_host
+                .iter_mut()
+                .find(|(host_id, _)| host_id == &remote.host_id)
+            {
+                Some((_, paths)) => paths.push(remote.path.clone()),
+                None => {
+                    remote_roots_by_host.push((remote.host_id.clone(), vec![remote.path.clone()]))
+                }
+            }
+        }
+        let deduped_remote = remote_roots_by_host
+            .into_iter()
+            .flat_map(|(host_id, paths)| {
+                warp_util::path::group_roots_by_common_ancestor(&paths)
+                    .roots
+                    .into_iter()
+                    .map(move |path| {
+                        LocalOrRemotePath::Remote(RemotePath::new(host_id.clone(), path))
+                    })
+            });
+
+        self.search_roots = deduped_local
+            .into_iter()
+            .map(LocalOrRemotePath::Local)
+            .chain(deduped_remote)
+            .collect();
         self.root_directories = roots;
     }
 
@@ -1029,7 +1106,7 @@ impl GlobalSearchView {
 
         match &row_index.index_type {
             RowIndexType::DirectoryHeader => {
-                self.render_directory_header_from_entry(index, dir_entry, appearance, theme)
+                self.render_directory_header_from_entry(index, dir_entry, appearance, theme, app)
             }
             RowIndexType::FileHeader { path_index } => {
                 let Some(matched_path) = dir_entry.matched_paths.paths.get(*path_index) else {
@@ -1070,7 +1147,7 @@ impl GlobalSearchView {
     fn render_file_header(
         &self,
         index: usize,
-        directory_path: &Path,
+        directory_path: &LocalOrRemotePath,
         matched_path: &MatchedPath,
         appearance: &Appearance,
         theme: &warp_core::ui::theme::WarpTheme,
@@ -1082,14 +1159,14 @@ impl GlobalSearchView {
         let file_path = matched_path.path.clone();
         let match_count = matched_path.matches.len();
 
-        let directory_path_for_select = directory_path.to_path_buf();
+        let directory_path_for_select = directory_path.clone();
         let file_path_clone = file_path.clone();
-        let directory_path_for_toggle = directory_path.to_path_buf();
+        let directory_path_for_toggle = directory_path.clone();
 
-        let display_path = file_path
-            .strip_prefix(directory_path)
-            .unwrap_or(file_path.as_path());
-        let display_path = display_path.to_path_buf();
+        let display_path = directory_path
+            .strip_repo_prefix(&file_path)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(file_path.display_path()));
 
         Hoverable::new(file_mouse_state, move |mouse_state| {
             let item_highlight_state = ItemHighlightState::new(is_selected, mouse_state);
@@ -1112,7 +1189,7 @@ impl GlobalSearchView {
                 .finish();
             let chevron_container = Container::new(chevron_icon).with_margin_right(8.).finish();
 
-            let tooltip_text = file_path.to_string_lossy().to_string();
+            let tooltip_text = file_path.display_path();
 
             let header_text_fill = match list_highlight_state {
                 ItemHighlightState::None => {
@@ -1149,7 +1226,7 @@ impl GlobalSearchView {
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
                 .finish();
 
-            let icon_from_file_path = icon_from_file_path(&file_path.to_string_lossy(), appearance)
+            let icon_from_file_path = icon_from_file_path(&file_path.display_path(), appearance)
                 .map(ImageOrIcon::Image)
                 .unwrap_or(ImageOrIcon::Icon(Icon::File));
 
@@ -1243,7 +1320,7 @@ impl GlobalSearchView {
     fn render_match_row(
         &self,
         index: usize,
-        directory_path: &Path,
+        directory_path: &LocalOrRemotePath,
         matched_path: &MatchedPath,
         matched: &Match,
         match_index: usize,
@@ -1252,17 +1329,14 @@ impl GlobalSearchView {
     ) -> Box<dyn Element> {
         let is_selected = self.is_row_at_index_selected(index);
         let line_number = matched.line_number;
+        let column_num = matched.column_num;
         let line_text = matched.line_text.clone();
         let submatches = matched.submatches.clone();
         let mouse_state = matched.mouse_state.clone();
 
-        let directory_path_for_select = directory_path.to_path_buf();
+        let directory_path_for_select = directory_path.clone();
         let file_path_for_select = matched_path.path.clone();
-        let path_for_click = matched_path.path.clone();
-
-        // Clone for the on_click closure since line_text and submatches are moved into Hoverable
-        let line_text_for_click = line_text.clone();
-        let submatches_for_click = submatches.clone();
+        let location_for_click = matched_path.path.clone();
 
         Hoverable::new(mouse_state, move |mouse_state| {
             let list_highlight_state = ItemHighlightState::new(is_selected, mouse_state);
@@ -1318,12 +1392,8 @@ impl GlobalSearchView {
                 file_path: file_path_for_select.clone(),
                 match_index: Some(match_index),
             });
-            let column_num = GlobalSearchView::column_from_submatches(
-                &line_text_for_click,
-                &submatches_for_click,
-            );
             ctx.dispatch_typed_action(GlobalSearchAction::OpenMatch {
-                path: path_for_click.clone(),
+                location: location_for_click.clone(),
                 line_number,
                 column_num,
             });
@@ -1482,18 +1552,21 @@ impl GlobalSearchView {
             .sum()
     }
 
-    /// Gets or creates a DirectoryEntry for the given path.
+    /// Gets or creates a DirectoryEntry for the given location.
     /// Returns a mutable reference to the entry and its index.
     #[allow(dead_code)] // Will be used in later PRs
-    fn get_or_create_directory_entry(&mut self, path: &Path) -> (&mut DirectoryEntry, usize) {
+    fn get_or_create_directory_entry(
+        &mut self,
+        path: &LocalOrRemotePath,
+    ) -> (&mut DirectoryEntry, usize) {
         if let Some(&index) = self.directory_path_to_directory_index_entry.get(path) {
             (&mut self.directory_entries[index], index)
         } else {
             let index = self.directory_entries.len();
             self.directory_entries
-                .push(DirectoryEntry::new(path.to_path_buf()));
+                .push(DirectoryEntry::new(path.clone()));
             self.directory_path_to_directory_index_entry
-                .insert(path.to_path_buf(), index);
+                .insert(path.clone(), index);
             (&mut self.directory_entries[index], index)
         }
     }
@@ -1502,8 +1575,8 @@ impl GlobalSearchView {
     /// Returns None if the paths are not found
     fn path_to_row_index(
         &self,
-        directory_path: &Path,
-        file_path: &Path,
+        directory_path: &LocalOrRemotePath,
+        file_path: &LocalOrRemotePath,
         match_index: Option<usize>,
     ) -> Option<RowIndex> {
         let &directory_index = self
@@ -1526,15 +1599,15 @@ impl GlobalSearchView {
         })
     }
 
-    /// Gets the directory path for a given RowIndex.
-    fn directory_path_for_row_index(&self, row: &RowIndex) -> Option<&PathBuf> {
+    /// Gets the directory location for a given RowIndex.
+    fn directory_path_for_row_index(&self, row: &RowIndex) -> Option<&LocalOrRemotePath> {
         self.directory_entries
             .get(row.directory_index)
             .map(|e| &e.path)
     }
 
-    /// Gets the file path for a given RowIndex (if it refers to a file or match).
-    fn file_path_for_row_index(&self, row: &RowIndex) -> Option<&PathBuf> {
+    /// Gets the file location for a given RowIndex (if it refers to a file or match).
+    fn file_path_for_row_index(&self, row: &RowIndex) -> Option<&LocalOrRemotePath> {
         let dir_entry = self.directory_entries.get(row.directory_index)?;
         match &row.index_type {
             RowIndexType::DirectoryHeader => None,
@@ -1723,12 +1796,10 @@ impl GlobalSearchView {
                 let Some(matched) = matched_path.matches.get(*match_index) else {
                     return;
                 };
-                let column_num =
-                    Self::column_from_submatches(&matched.line_text, &matched.submatches);
                 ctx.emit(Event::OpenMatch {
-                    path: matched_path.path.clone(),
+                    location: matched_path.path.clone(),
                     line_number: matched.line_number,
-                    column_num,
+                    column_num: matched.column_num,
                 });
             }
             RowIndexType::DirectoryHeader => {
@@ -1739,7 +1810,11 @@ impl GlobalSearchView {
         }
     }
 
-    fn toggle_directory_collapsed(&mut self, directory_path: &Path, ctx: &mut ViewContext<Self>) {
+    fn toggle_directory_collapsed(
+        &mut self,
+        directory_path: &LocalOrRemotePath,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let Some(&dir_idx) = self
             .directory_path_to_directory_index_entry
             .get(directory_path)
@@ -1773,8 +1848,8 @@ impl GlobalSearchView {
 
     fn toggle_file_collapsed(
         &mut self,
-        directory_path: &Path,
-        file_path: &PathBuf,
+        directory_path: &LocalOrRemotePath,
+        file_path: &LocalOrRemotePath,
         ctx: &mut ViewContext<Self>,
     ) {
         // Get directory index
@@ -1853,6 +1928,7 @@ impl GlobalSearchView {
         dir_entry: &DirectoryEntry,
         appearance: &Appearance,
         theme: &warp_core::ui::theme::WarpTheme,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let is_selected = self.is_row_at_index_selected(index);
         let mouse_state = dir_entry.mouse_state.clone();
@@ -1860,15 +1936,13 @@ impl GlobalSearchView {
         let is_collapsed = dir_entry.is_collapsed;
         let directory_path = &dir_entry.path;
 
-        // Get the display name (last component of the path)
-        let display_name = directory_path
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| directory_path.to_string_lossy().to_string());
-        let directory_path = directory_path.clone();
+        let display_name = if directory_path.display_name().is_empty() {
+            display_path_with_host(directory_path, false, app)
+        } else {
+            display_name_with_host(directory_path, app)
+        };
         let directory_path_for_click = directory_path.clone();
-
-        let tooltip_text = directory_path.to_string_lossy().to_string();
+        let tooltip_text = display_path_with_host(directory_path, false, app);
 
         Hoverable::new(mouse_state, move |mouse_state| {
             let list_highlight_state = ItemHighlightState::new(is_selected, mouse_state);
@@ -1994,9 +2068,15 @@ impl View for GlobalSearchView {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         match self.enablement {
-            CodingPanelEnablementState::PendingRemoteSession
-            | CodingPanelEnablementState::RemoteSession { .. } => {
-                return self.render_remote_state(app);
+            CodingPanelEnablementState::PendingRemoteSession => {
+                return self.render_remote_loading_state(app);
+            }
+            CodingPanelEnablementState::RemoteSession { has_remote_server } => {
+                // Remote-server sessions can search via the daemon; sessions
+                // without one (tmux / subshell SSH) stay unavailable.
+                if !has_remote_server {
+                    return self.render_remote_state(app);
+                }
             }
             CodingPanelEnablementState::UnsupportedSession => {
                 return self.render_unsupported_session_state(app);
@@ -2066,8 +2146,10 @@ impl View for GlobalSearchView {
         let files = self.unique_match_count();
         let file_word = if files == 1 { "file" } else { "files" };
 
-        let message = if self.is_search_in_progress && self.total_match_count == 0 {
-            "".to_string()
+        let message = if let Some(error) = &self.last_error {
+            error.clone()
+        } else if self.is_search_in_progress && self.total_match_count == 0 {
+            "Searching…".to_string()
         } else if !self.is_search_in_progress && self.total_match_count == 0 {
             "No results found. Review your gitignore files.".to_string()
         } else {
@@ -2265,7 +2347,15 @@ impl GlobalSearchView {
         self.render_zero_state(
             Icon::AlertTriangle,
             "Global search unavailable",
-            "Global search requires access to your local workspace, which isn't supported in remote sessions",
+            "Global search isn't available for this remote session.",
+            app,
+        )
+    }
+    fn render_remote_loading_state(&self, app: &AppContext) -> Box<dyn Element> {
+        self.render_zero_state(
+            Icon::Loading,
+            "Connecting to remote session",
+            "Global search will be available once the connection is ready.",
             app,
         )
     }

@@ -361,6 +361,7 @@ diesel::table! {
         name -> Nullable<Text>,
         color -> Nullable<Text>,
         collapsed -> Bool,
+        pinned -> Bool,
     }
 }
 
@@ -371,6 +372,7 @@ diesel::table! {
         custom_title -> Nullable<Text>,
         color -> Nullable<Text>,
         tab_group_id -> Nullable<Integer>,
+        pinned -> Bool,
     }
 }
 
@@ -430,14 +432,6 @@ diesel::table! {
     users (id) {
         id -> Integer,
         firebase_uid -> Text,
-    }
-}
-
-diesel::table! {
-    welcome_panes (id) {
-        id -> Integer,
-        kind -> Text,
-        startup_directory -> Nullable<Text>,
     }
 }
 

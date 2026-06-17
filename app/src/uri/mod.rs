@@ -343,6 +343,7 @@ impl UriHost {
                 // - warp://settings/mcp - opens MCP servers settings page
                 // - warp://settings/platform - opens platform settings page
                 // - warp://settings/appearance - opens appearance settings page (themes, fonts, etc.)
+                // - warp://settings/warp_agent - opens the Warp Agent settings page (inference / API keys)
                 let settings_sub_page: Option<String> = url
                     .path_segments()
                     .into_iter()
@@ -361,15 +362,6 @@ impl UriHost {
                                 "root_view:open_team_settings_with_email_invite_in_existing_window",
                                 "root_view:open_team_settings_with_email_invite_in_new_window",
                                 &args,
-                                ctx,
-                            );
-                        }
-                        "billing_and_usage" => {
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_settings_page_in_existing_window",
-                                "root_view:open_settings_page_in_new_window",
-                                &SettingsSection::BillingAndUsage,
                                 ctx,
                             );
                         }
@@ -407,26 +399,21 @@ impl UriHost {
                                 ctx,
                             );
                         }
-                        "platform" => {
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_settings_page_in_existing_window",
-                                "root_view:open_settings_page_in_new_window",
-                                &SettingsSection::OzCloudAPIKeys,
-                                ctx,
-                            );
-                        }
-                        "appearance" => {
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_settings_page_in_existing_window",
-                                "root_view:open_settings_page_in_new_window",
-                                &SettingsSection::Appearance,
-                                ctx,
-                            );
-                        }
-                        _ => {
-                            log::warn!("Failed to open settings pane with uri={url}");
+                        // Subpages that open a settings section directly with no extra
+                        // parameters (e.g. billing_and_usage, platform, appearance,
+                        // warp_agent) are resolved via `settings_section_for_simple_subpage`.
+                        other => {
+                            if let Some(section) = settings_section_for_simple_subpage(other) {
+                                dispatch_action_in_new_or_existing_window(
+                                    primary_window_id,
+                                    "root_view:open_settings_page_in_existing_window",
+                                    "root_view:open_settings_page_in_new_window",
+                                    &section,
+                                    ctx,
+                                );
+                            } else {
+                                log::warn!("Failed to open settings pane with uri={url}");
+                            }
                         }
                     }
                 } else {
@@ -1579,6 +1566,16 @@ fn dispatch_action_in_new_or_existing_window<T: 'static>(
         );
     } else {
         ctx.dispatch_global_action(new_window_action, args);
+    }
+}
+
+fn settings_section_for_simple_subpage(subpage: &str) -> Option<SettingsSection> {
+    match subpage {
+        "billing_and_usage" => Some(SettingsSection::BillingAndUsage),
+        "platform" => Some(SettingsSection::OzCloudAPIKeys),
+        "appearance" => Some(SettingsSection::Appearance),
+        "warp_agent" => Some(SettingsSection::WarpAgent),
+        _ => None,
     }
 }
 

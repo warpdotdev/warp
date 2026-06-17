@@ -160,6 +160,8 @@ pub struct TabData {
     /// True while this tab is in the active multi-selection (shift-click range
     /// or cmd-click toggle).
     pub in_multi_selection: bool,
+    /// True when this tab is pinned to the front of the tab list.
+    pub pinned: bool,
 }
 
 const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
@@ -179,6 +181,7 @@ impl TabData {
             detached: false,
             group_id: None,
             in_multi_selection: false,
+            pinned: false,
         }
     }
 
@@ -193,16 +196,29 @@ impl TabData {
         index: usize,
         tabs_len: usize,
         tab_groups: &HashMap<TabGroupId, TabGroup>,
+        can_move_left: bool,
+        can_move_right: bool,
         ctx: &AppContext,
     ) -> Vec<MenuItem<WorkspaceAction>> {
-        self.menu_items_with_pane_name_target(index, tabs_len, tab_groups, None, ctx)
+        self.menu_items_with_pane_name_target(
+            index,
+            tabs_len,
+            tab_groups,
+            can_move_left,
+            can_move_right,
+            None,
+            ctx,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn menu_items_with_pane_name_target(
         &self,
         index: usize,
         tabs_len: usize,
         tab_groups: &HashMap<TabGroupId, TabGroup>,
+        can_move_left: bool,
+        can_move_right: bool,
         pane_name_target: Option<PaneNameMenuTarget>,
         ctx: &AppContext,
     ) -> Vec<MenuItem<WorkspaceAction>> {
@@ -211,10 +227,11 @@ impl TabData {
         let mut menu_items = vec![];
 
         for section_items in [
+            self.pin_menu_items(index),
             self.tab_group_menu_items(index, tab_groups),
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
-            self.modify_tab_menu_items(index, tabs_len, pane_name_target, ctx),
+            self.modify_tab_menu_items(index, can_move_left, can_move_right, pane_name_target, ctx),
             self.close_tab_menu_items(index, tabs_len, ctx),
             Self::save_config_menu_items(index),
             self.color_option_menu_items(index, terminal_colors),
@@ -416,7 +433,8 @@ impl TabData {
     fn modify_tab_menu_items(
         &self,
         index: usize,
-        tabs_len: usize,
+        can_move_left: bool,
+        can_move_right: bool,
         pane_name_target: Option<PaneNameMenuTarget>,
         ctx: &AppContext,
     ) -> Vec<MenuItem<WorkspaceAction>> {
@@ -441,10 +459,10 @@ impl TabData {
         if let Some(pane_name_target) = pane_name_target {
             menu_items.extend(self.pane_name_menu_items(pane_name_target, ctx));
         }
-        // Don't show options that aren't relevant (moving end tabs, closing
-        // other tabs when you don't have any others to close)
-        let not_last_tab = index != tabs_len - 1;
-        if not_last_tab {
+        // `can_move_left` / `can_move_right` come from `Workspace::can_move_tab`
+        // and gate the "Move Tab Up/Down" entries so they disappear when the
+        // move would cross the pinned/unpinned boundary, group boundary or tab list bounds.
+        if can_move_right {
             menu_items.push(
                 MenuItemFields::new(if uses_vertical_tabs {
                     "Move Tab Down"
@@ -455,7 +473,7 @@ impl TabData {
                 .into_item(),
             );
         }
-        if index != 0 {
+        if can_move_left {
             menu_items.push(
                 MenuItemFields::new(if uses_vertical_tabs {
                     "Move Tab Up"
@@ -544,6 +562,22 @@ impl TabData {
         }
         vec![MenuItemFields::new("Save as new config")
             .with_on_select_action(WorkspaceAction::SaveCurrentTabAsNewConfig(index))
+            .into_item()]
+    }
+
+    /// Pin/unpin entry for the per-tab right-click menu.
+    fn pin_menu_items(&self, index: usize) -> Vec<MenuItem<WorkspaceAction>> {
+        if !FeatureFlag::PinnedTabs.is_enabled() {
+            return vec![];
+        }
+
+        let (label, action) = if self.pinned {
+            ("Unpin tab", WorkspaceAction::UnpinTab(index))
+        } else {
+            ("Pin tab", WorkspaceAction::PinTab(index))
+        };
+        vec![MenuItemFields::new(label)
+            .with_on_select_action(action)
             .into_item()]
     }
 

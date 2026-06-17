@@ -87,6 +87,23 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
     experiments, workspace, AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions,
 };
+#[test]
+fn query_for_rewind_prefill_uses_custom_display_query_inputs() {
+    let context: std::sync::Arc<[crate::ai::agent::AIAgentContext]> = Vec::new().into();
+    let input = crate::ai::agent::AIAgentInput::FetchReviewComments {
+        repo_path: "/repo".to_string(),
+        context,
+    };
+
+    assert_eq!(
+        query_for_rewind_prefill(&[input]),
+        Some(
+            crate::search::slash_command_menu::static_commands::commands::PR_COMMENTS
+                .name
+                .to_string()
+        )
+    );
+}
 
 pub(crate) fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -191,7 +208,7 @@ pub(crate) fn initialize_app(app: &mut App) {
     app.add_singleton_model(|ctx| ServerExperiments::new_from_cache(vec![], ctx));
     app.add_singleton_model(DefaultTerminal::new);
     app.add_singleton_model(|_| IgnoredSuggestionsModel::new(vec![]));
-    app.add_singleton_model(|_| crate::code_review::git_status_update::GitStatusUpdateModel::new());
+    app.add_singleton_model(|_| crate::code_review::git_repo_model::GitRepoModels::new());
     app.add_singleton_model(remote_server::manager::RemoteServerManager::new);
     #[cfg(not(target_family = "wasm"))]
     app.add_singleton_model(RemoteCodebaseIndexModel::new);
@@ -316,6 +333,94 @@ fn test_tab_bar_traffic_light_space_regression_for_resource_center_overlap() {
     }
 }
 
+#[test]
+fn test_theme_chooser_does_not_suppress_tab_bar_traffic_light_padding() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let closed_padding = workspace.compute_tab_bar_left_padding(ctx);
+            assert!(
+                closed_padding > 0.,
+                "Tab bar should reserve left padding when no left panel is open"
+            );
+
+            workspace.current_workspace_state.is_theme_chooser_open = true;
+            assert_eq!(
+                workspace.compute_tab_bar_left_padding(ctx),
+                closed_padding,
+                "Theme chooser should not be treated as a left panel for tab bar padding"
+            );
+
+            workspace.open_left_panel(ctx);
+            assert_eq!(
+                workspace.compute_tab_bar_left_padding(ctx),
+                closed_padding,
+                "Open tools panel should still reserve tab bar traffic light padding"
+            );
+        });
+    });
+}
+
+fn assert_vertical_tabs_tools_panel_preserves_padding(config: HeaderToolbarChipSelection) {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.update(|ctx| {
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
+                report_if_error!(settings
+                    .header_toolbar_chip_selection
+                    .set_value(config, ctx));
+            });
+        });
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let closed_padding = workspace.compute_tab_bar_left_padding(ctx);
+            assert!(
+                closed_padding > 0.,
+                "Vertical tabs should reserve traffic light padding"
+            );
+
+            workspace.open_left_panel(ctx);
+            assert_eq!(
+                workspace.compute_tab_bar_left_padding(ctx),
+                closed_padding,
+                "An open tools panel should still reserve traffic light padding in vertical tabs"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_tools_panel_does_not_suppress_vertical_tab_bar_traffic_light_padding() {
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    for config in [
+        HeaderToolbarChipSelection::Custom {
+            left: vec![HeaderToolbarItemKind::AgentManagement],
+            right: vec![
+                HeaderToolbarItemKind::TabsPanel,
+                HeaderToolbarItemKind::ToolsPanel,
+                HeaderToolbarItemKind::CodeReview,
+                HeaderToolbarItemKind::NotificationsMailbox,
+            ],
+        },
+        HeaderToolbarChipSelection::Custom {
+            left: vec![
+                HeaderToolbarItemKind::TabsPanel,
+                HeaderToolbarItemKind::ToolsPanel,
+                HeaderToolbarItemKind::AgentManagement,
+            ],
+            right: vec![
+                HeaderToolbarItemKind::CodeReview,
+                HeaderToolbarItemKind::NotificationsMailbox,
+            ],
+        },
+    ] {
+        assert_vertical_tabs_tools_panel_preserves_padding(config);
+    }
+}
 #[cfg(feature = "local_fs")]
 fn open_worktree_sidecar(workspace: &ViewHandle<Workspace>, app: &mut App) {
     workspace.update(app, |workspace, ctx| {
@@ -1891,7 +1996,7 @@ fn test_tab_context_menu_share_session_items() {
         // When there's a single shared session in a tab (focused), the options
         // for sharing are "Stop sharing" and "Stop sharing all".
         workspace.read(&app, |workspace, ctx| {
-            let items = workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, ctx);
+            let items = workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, true, true, ctx);
             assert!(items[0]
                 .is_approximately_same_item_as(&MenuItemFields::new("Stop sharing").into_item()));
             assert!(items[1].is_approximately_same_item_as(
@@ -1912,7 +2017,7 @@ fn test_tab_context_menu_share_session_items() {
         // When there's a single shared session in a tab (unfocused), the options
         // for sharing are "Share session" and "Stop sharing all".
         workspace.read(&app, |workspace, ctx| {
-            let items = workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, ctx);
+            let items = workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, true, true, ctx);
             assert!(items[0]
                 .is_approximately_same_item_as(&MenuItemFields::new("Share session").into_item()));
             assert!(items[1].is_approximately_same_item_as(
@@ -1928,7 +2033,7 @@ fn test_tab_context_menu_share_session_items() {
 
         // When there's no shared sessions in a tab, the only option is "Share session".
         workspace.read(&app, |workspace, ctx| {
-            let items = workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, ctx);
+            let items = workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, true, true, ctx);
             assert!(items[0]
                 .is_approximately_same_item_as(&MenuItemFields::new("Share session").into_item()));
             assert!(items[1].is_approximately_same_item_as(&MenuItem::Separator));
@@ -2497,6 +2602,23 @@ fn test_vertical_tabs_panel_visibility_restores_from_window_snapshot() {
             assert!(!workspace.vertical_tabs_panel_open);
         });
         restored_open.read(&app, |workspace, _| {
+            assert!(workspace.vertical_tabs_panel_open);
+        });
+    });
+}
+
+#[test]
+fn test_open_vertical_tabs_panel_is_idempotent() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.vertical_tabs_panel_open = false;
+            workspace.handle_action(&WorkspaceAction::OpenVerticalTabsPanel, ctx);
+            assert!(workspace.vertical_tabs_panel_open);
+
+            workspace.handle_action(&WorkspaceAction::OpenVerticalTabsPanel, ctx);
             assert!(workspace.vertical_tabs_panel_open);
         });
     });
@@ -3868,6 +3990,140 @@ fn test_new_tab_in_group_expands_collapsed_group_member_active() {
                 !workspace.tab_groups[&group_id].collapsed,
                 "group should expand when a new tab is opened in it"
             );
+        });
+    });
+}
+
+#[test]
+fn test_pin_unpin_ungrouped_tab_moves_to_and_from_boundary() {
+    let _pinned_guard = FeatureFlag::PinnedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 3);
+
+            let id0 = workspace.tabs[0].pane_group.id();
+            let id1 = workspace.tabs[1].pane_group.id();
+            let id2 = workspace.tabs[2].pane_group.id();
+
+            // Pin tab at index 2: it should move to the front of the list.
+            workspace.handle_action(&WorkspaceAction::PinTab(2), ctx);
+            let order: Vec<_> = workspace.tabs.iter().map(|t| t.pane_group.id()).collect();
+            assert_eq!(order, vec![id2, id0, id1]);
+            assert!(workspace.tabs[0].pinned);
+            assert!(!workspace.tabs[1].pinned);
+            assert!(!workspace.tabs[2].pinned);
+
+            // Unpin tab at index 0: it should move to the start of the unpinned region.
+            workspace.handle_action(&WorkspaceAction::UnpinTab(0), ctx);
+            let order: Vec<_> = workspace.tabs.iter().map(|t| t.pane_group.id()).collect();
+            assert_eq!(order, vec![id2, id0, id1]);
+            assert!(workspace.tabs.iter().all(|t| !t.pinned));
+        });
+    });
+}
+
+#[test]
+fn test_pin_unpin_tab_group_moves_block_without_syncing_members() {
+    // The group's own `pinned` flag is the sole source of truth for grouped
+    // tabs — members keep `tab.pinned = false` regardless.
+    let _pinned_guard = FeatureFlag::PinnedTabs.override_enabled(true);
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 4);
+
+            let id0 = workspace.tabs[0].pane_group.id();
+            let id1 = workspace.tabs[1].pane_group.id();
+            let id2 = workspace.tabs[2].pane_group.id();
+            let id3 = workspace.tabs[3].pane_group.id();
+
+            // Group tabs at indices 2, 3.
+            let group = TabGroup::new();
+            let group_id = group.id;
+            workspace.tab_groups.insert(group_id, group);
+            workspace.tabs[2].group_id = Some(group_id);
+            workspace.tabs[3].group_id = Some(group_id);
+
+            // Pin the group: the block moves to the front; only the group's
+            // flag flips — member tabs keep `pinned = false`.
+            workspace.handle_action(&WorkspaceAction::PinTabGroup(group_id), ctx);
+            let order: Vec<_> = workspace.tabs.iter().map(|t| t.pane_group.id()).collect();
+            assert_eq!(order, vec![id2, id3, id0, id1]);
+            assert!(workspace.tab_groups[&group_id].pinned);
+            assert!(workspace.tabs.iter().all(|t| !t.pinned));
+
+            // Unpin the group: block moves to the start of the unpinned
+            // region; group's flag clears.
+            workspace.handle_action(&WorkspaceAction::UnpinTabGroup(group_id), ctx);
+            assert!(!workspace.tab_groups[&group_id].pinned);
+            assert!(workspace.tabs.iter().all(|t| !t.pinned));
+
+            // Group is still contiguous.
+            let group_indices: Vec<usize> = workspace
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.group_id == Some(group_id))
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(group_indices.len(), 2);
+            assert_eq!(group_indices[1] - group_indices[0], 1);
+        });
+    });
+}
+
+#[test]
+fn test_pin_tab_on_grouped_tab_extracts_then_pins() {
+    let _pinned_guard = FeatureFlag::PinnedTabs.override_enabled(true);
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 3);
+
+            let id0 = workspace.tabs[0].pane_group.id();
+            let id1 = workspace.tabs[1].pane_group.id();
+            let id2 = workspace.tabs[2].pane_group.id();
+
+            // Group tabs 0 and 1; tab 1 is the target.
+            let group = TabGroup::new();
+            let group_id = group.id;
+            workspace.tab_groups.insert(group_id, group);
+            workspace.tabs[0].group_id = Some(group_id);
+            workspace.tabs[1].group_id = Some(group_id);
+
+            // Pin tab at index 1: extracts from group, then pins as ungrouped.
+            workspace.handle_action(&WorkspaceAction::PinTab(1), ctx);
+
+            // Pinned tab (id1) is at the front, ungrouped.
+            assert_eq!(workspace.tabs[0].pane_group.id(), id1);
+            assert!(workspace.tabs[0].pinned);
+            assert!(workspace.tabs[0].group_id.is_none());
+
+            // Source group still has its one remaining member (id0).
+            assert_eq!(workspace.tabs[1].pane_group.id(), id0);
+            assert_eq!(workspace.tabs[1].group_id, Some(group_id));
+            assert!(!workspace.tabs[1].pinned);
+
+            // Ungrouped tab id2 remains untouched.
+            assert_eq!(workspace.tabs[2].pane_group.id(), id2);
+            assert!(workspace.tabs[2].group_id.is_none());
+            assert!(!workspace.tabs[2].pinned);
         });
     });
 }

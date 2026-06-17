@@ -1,7 +1,6 @@
 mod agent_slide;
 mod bottom_nav;
 mod customize_slide;
-mod free_user_no_ai_slide;
 mod intention_slide;
 mod intro_slide;
 pub mod layout;
@@ -19,7 +18,6 @@ pub use agent_slide::{
 };
 pub use bottom_nav::onboarding_bottom_nav;
 pub use customize_slide::CustomizeUISlide;
-pub use free_user_no_ai_slide::FreeUserNoAiSlide;
 pub use intention_slide::IntentionSlide;
 pub use intro_slide::{IntroSlide, IntroSlideEvent};
 pub use onboarding_slide::OnboardingSlide;

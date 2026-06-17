@@ -283,6 +283,7 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
             left_panel: None,
             right_panel: None,
             group_id: None,
+            pinned: false,
         }],
         active_tab_index: 0,
         bounds: None,
@@ -368,6 +369,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
                 left_panel: None,
                 right_panel: None,
                 group_id: None,
+                pinned: false,
             }],
             active_tab_index: 0,
             bounds: None,
@@ -444,6 +446,7 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
                 left_panel: None,
                 right_panel: None,
                 group_id: None,
+                pinned: false,
             }],
             active_tab_index: 0,
             bounds: None,
@@ -528,6 +531,7 @@ fn test_sqlite_round_trips_tab_groups() {
         left_panel: None,
         right_panel: None,
         group_id: Some(group_id),
+        pinned: false,
     };
     let tab_outside_group = TabSnapshot {
         custom_title: None,
@@ -555,6 +559,7 @@ fn test_sqlite_round_trips_tab_groups() {
         left_panel: None,
         right_panel: None,
         group_id: None,
+        pinned: false,
     };
 
     let app_state = AppState {
@@ -578,6 +583,7 @@ fn test_sqlite_round_trips_tab_groups() {
                 name: Some("Backend".to_string()),
                 color: SelectedTabColor::Color(AnsiColorIdentifier::Blue),
                 collapsed: true,
+                pinned: false,
             }],
         }],
         active_window_index: Some(0),
@@ -608,6 +614,172 @@ fn test_sqlite_round_trips_tab_groups() {
     assert_eq!(restored_window.tabs.len(), 2);
     assert_eq!(restored_window.tabs[0].group_id, Some(restored_group.id));
     assert_eq!(restored_window.tabs[1].group_id, None);
+}
+
+/// Verifies that the `pinned` flag on tabs and tab groups round-trips through
+/// save/restore so the user's pinned layout survives an app restart.
+#[test]
+fn test_sqlite_round_trips_pinned_state() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let pinned_group_id = TabGroupId::new();
+    let unpinned_group_id = TabGroupId::new();
+
+    let pinned_tab = TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![10],
+                cwd: Some("/tmp/pinned".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: true,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: None,
+        pinned: true,
+    };
+    let unpinned_tab = TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: false,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![11],
+                cwd: Some("/tmp/unpinned".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: false,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: Some(unpinned_group_id),
+        pinned: false,
+    };
+    let tab_in_pinned_group = TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: false,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![12],
+                cwd: Some("/tmp/pinned-group".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: false,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: Some(pinned_group_id),
+        pinned: false,
+    };
+
+    let app_state = AppState {
+        windows: vec![WindowSnapshot {
+            tabs: vec![pinned_tab, tab_in_pinned_group, unpinned_tab],
+            active_tab_index: 0,
+            bounds: None,
+            fullscreen_state: Default::default(),
+            quake_mode: false,
+            universal_search_width: None,
+            warp_ai_width: None,
+            voltron_width: None,
+            warp_drive_index_width: None,
+            left_panel_open: false,
+            vertical_tabs_panel_open: false,
+            left_panel_width: None,
+            right_panel_width: None,
+            agent_management_filters: None,
+            tab_groups: vec![
+                TabGroupSnapshot {
+                    id: pinned_group_id,
+                    name: Some("Pinned".to_string()),
+                    color: SelectedTabColor::default(),
+                    collapsed: false,
+                    pinned: true,
+                },
+                TabGroupSnapshot {
+                    id: unpinned_group_id,
+                    name: Some("Loose".to_string()),
+                    color: SelectedTabColor::default(),
+                    collapsed: false,
+                    pinned: false,
+                },
+            ],
+        }],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("app state should load")
+        .app_state;
+
+    assert_eq!(restored.windows.len(), 1);
+    let restored_window = &restored.windows[0];
+
+    // Tabs come back in insertion order; pinned flag should match what we saved.
+    assert_eq!(restored_window.tabs.len(), 3);
+    assert!(restored_window.tabs[0].pinned);
+    assert!(!restored_window.tabs[1].pinned);
+    assert!(!restored_window.tabs[2].pinned);
+
+    // Both groups round-trip with their pinned state preserved. Group ids are
+    // minted fresh on restore, so we look them up by name.
+    assert_eq!(restored_window.tab_groups.len(), 2);
+    let restored_pinned_group = restored_window
+        .tab_groups
+        .iter()
+        .find(|group| group.name.as_deref() == Some("Pinned"))
+        .expect("pinned group should restore");
+    let restored_loose_group = restored_window
+        .tab_groups
+        .iter()
+        .find(|group| group.name.as_deref() == Some("Loose"))
+        .expect("unpinned group should restore");
+    assert!(restored_pinned_group.pinned);
+    assert!(!restored_loose_group.pinned);
 }
 
 fn assert_encode_then_decode_preserves_original_path(original_path: PathBuf) {

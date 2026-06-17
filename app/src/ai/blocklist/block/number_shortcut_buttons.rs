@@ -131,6 +131,15 @@ impl NumberShortcutButtonBuilder {
             on_click: Box::new(on_click),
         }
     }
+
+    /// Builds just this option's visual element, with no click or keyboard handling. The
+    /// ask-user-question card uses it to lay out off-screen measurement copies of every option, so
+    /// a multi-question card can size itself to its tallest question. Only the rendered size matters
+    /// there, so the button builder is invoked in its unselected state and the interactive
+    /// `on_click` half is dropped.
+    pub fn build_measurement_element(&self, app: &AppContext) -> Box<dyn Element> {
+        (self.button_builder)(false, app).build().finish()
+    }
 }
 
 pub fn numbered_shortcut_button<A: warpui::Action + Clone + 'static>(

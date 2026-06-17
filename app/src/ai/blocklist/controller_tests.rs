@@ -3,10 +3,11 @@ use std::collections::HashMap;
 use uuid::Uuid;
 use warpui::{App, SingletonEntity};
 
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAttachment, AIAgentContext, AIAgentInput, ImageContext, PassiveSuggestionTrigger,
-    UserQueryMode,
+    AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
+    PassiveSuggestionTrigger, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, PendingAttachment, PendingFile};
@@ -169,6 +170,36 @@ fn input_for_query_converts_prompt_attachments_and_ignores_live_staging() {
             assert!(referenced_attachments.contains_key("notes.txt"));
             assert!(referenced_attachments.contains_key("notes.txt (1)"));
             assert!(!referenced_attachments.contains_key("live.txt"));
+        });
+    });
+}
+
+#[test]
+fn cancelling_conversation_aborts_pending_auto_resume() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        // An ID with no backing conversation: if the scheduled wait ever
+        // completes, the resume is a harmless no-op.
+        let conversation_id = AIConversationId::new();
+
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                controller.schedule_auto_resume_after_error(conversation_id, ctx);
+                assert!(controller
+                    .pending_auto_resume_handles
+                    .contains_key(&conversation_id));
+
+                controller.cancel_conversation_progress(
+                    conversation_id,
+                    CancellationReason::ManuallyCancelled,
+                    ctx,
+                );
+                assert!(!controller
+                    .pending_auto_resume_handles
+                    .contains_key(&conversation_id));
+            });
         });
     });
 }

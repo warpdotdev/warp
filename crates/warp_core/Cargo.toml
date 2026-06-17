@@ -41,6 +41,7 @@ strum.workspace = true
 strum_macros.workspace = true
 sysinfo.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 concat-idents.workspace = true
 url.workspace = true
 regex.workspace = true

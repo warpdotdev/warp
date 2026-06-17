@@ -35,9 +35,10 @@ use crate::ai::blocklist::agent_view::{
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, InputTypeAutoDetectionSource, QueuedQuery, QueuedQueryModel,
-    QueuedQueryOrigin, SlashCommandRequest,
+    BlocklistAIHistoryModel, InputTypeAutoDetectionSource, PendingAttachment, QueuedQuery,
+    QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
 };
+use crate::ai::conversation_rename::rename_conversation;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
@@ -503,6 +504,20 @@ impl Input {
                 };
 
                 ctx.dispatch_typed_action(&WorkspaceAction::SetActiveTabName(name.to_owned()));
+            }
+            _ if command.name == commands::RENAME_CONVERSATION.name => {
+                let Some(conversation_id) = self
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx)
+                else {
+                    show_error_toast(
+                        "/rename-conversation requires an active conversation".to_owned(),
+                        ctx,
+                    );
+                    return true;
+                };
+                rename_conversation(conversation_id, argument.cloned().unwrap_or_default(), ctx);
             }
             set_tab_color if command.name == commands::SET_TAB_COLOR.name => {
                 let supported_options = || {
@@ -975,12 +990,20 @@ impl Input {
                     ForkedConversationDestination::SplitPane
                 };
 
+                // Move any pending attachments out of the source input so they travel with the
+                // initial prompt into the forked pane and no longer linger on the original input.
+                // Only drain them when a non-empty prompt will actually be sent; the fork drops
+                // attachments when there is no initial prompt, which would silently discard them.
+                let initial_attachments =
+                    self.maybe_take_attachments_for_initial_prompt(argument, ctx);
+
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
                     fork_from_exchange: None,
                     summarize_after_fork: false,
                     summarization_prompt: None,
                     initial_prompt: argument.cloned(),
+                    initial_attachments,
                     destination,
                 });
             }
@@ -1021,12 +1044,21 @@ impl Input {
                     ctx
                 );
 
+                // Move any pending attachments out of the source input so they travel with the
+                // initial prompt into the continued local pane and no longer linger on the
+                // original input. Only drain them when a non-empty prompt will actually be sent;
+                // the fork drops attachments when there is no initial prompt, which would
+                // silently discard them.
+                let initial_attachments =
+                    self.maybe_take_attachments_for_initial_prompt(argument, ctx);
+
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
                     fork_from_exchange: None,
                     summarize_after_fork: false,
                     summarization_prompt: None,
                     initial_prompt: argument.cloned(),
+                    initial_attachments,
                     destination,
                 });
             }
@@ -1055,6 +1087,7 @@ impl Input {
                     summarize_after_fork: true,
                     summarization_prompt: None,
                     initial_prompt: argument.cloned(),
+                    initial_attachments: vec![],
                     destination,
                 });
             }
@@ -1343,6 +1376,23 @@ impl Input {
             | SlashCommandEntryState::Composing { .. }
             | SlashCommandEntryState::DisabledUntilEmptyBuffer => false,
         }
+    }
+
+    /// Drains pending attachments from the input's context model, but only when `argument`
+    /// contains a non-empty prompt. Forked conversations drop attachments when there is no
+    /// initial prompt to send, so draining them unconditionally would silently discard them;
+    /// leaving them staged in the source input instead loses nothing.
+    fn maybe_take_attachments_for_initial_prompt(
+        &mut self,
+        argument: Option<&String>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Vec<PendingAttachment> {
+        if argument.is_none_or(|argument| argument.trim().is_empty()) {
+            return Vec::new();
+        }
+        self.ai_context_model.update(ctx, |context_model, ctx| {
+            context_model.take_pending_attachments(ctx)
+        })
     }
 }
 

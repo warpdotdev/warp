@@ -34,6 +34,7 @@ use referral::ReferralsClient;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use team::TeamClient;
+use tracing_futures::Instrument as _;
 use url::Url;
 use warp_core::context_flag::ContextFlag;
 use warp_core::errors::{register_error, AnyhowErrorExt, ErrorExt};
@@ -184,6 +185,12 @@ pub enum AIApiError {
         #[source]
         source: anyhow::Error,
     },
+
+    /// Synthesized client-side when a response stream ends without a stream-finished
+    /// event: the server always sends one, but the transport can truncate the response
+    /// between chunks, surfacing as a clean EOF.
+    #[error("Response stream ended unexpectedly before completion.")]
+    UnexpectedEof,
 }
 
 impl From<http_client::ResponseError> for AIApiError {
@@ -304,24 +311,25 @@ impl AIApiError {
         }
     }
 
-    /// Returns whether or not the error can be retried.
-    pub fn is_retryable(&self) -> bool {
-        // Don't retry client errors, except for timeouts and quota limits.
-        fn is_retryable_status(status: http::StatusCode) -> bool {
+    /// Whether the error is worth an automatic recovery attempt — a fresh request may
+    /// succeed. Gates both retry (pre-actions) and resume (post-actions).
+    pub fn is_recoverable(&self) -> bool {
+        // Don't recover from client errors, except timeouts and rate limits.
+        fn is_recoverable_status(status: http::StatusCode) -> bool {
             !status.is_client_error()
                 || status == http::StatusCode::REQUEST_TIMEOUT
                 || status == http::StatusCode::TOO_MANY_REQUESTS
         }
 
         match self {
-            AIApiError::ErrorStatus(status, _) => is_retryable_status(*status),
+            AIApiError::ErrorStatus(status, _) => is_recoverable_status(*status),
             AIApiError::Transport(e) => {
                 if let Some(status) = e.status() {
-                    return is_retryable_status(status);
+                    return is_recoverable_status(status);
                 }
                 true
             }
-            // By default, retry on error.
+            // By default, attempt recovery on error.
             _ => true,
         }
     }
@@ -334,7 +342,8 @@ impl ErrorExt for AIApiError {
             AIApiError::Transport(error) => error.is_actionable(),
             AIApiError::Other(error) => error.is_actionable(),
             AIApiError::Stream { source, .. } => source.is_actionable(),
-            AIApiError::ErrorStatus(_, _) => self.is_retryable(),
+            AIApiError::ErrorStatus(_, _) => self.is_recoverable(),
+            AIApiError::UnexpectedEof => true,
             AIApiError::QuotaLimit { .. }
             | AIApiError::ServerOverloaded
             | AIApiError::NoContextFound => false,
@@ -1378,6 +1387,33 @@ impl ServerApi {
             .map(|item| item.map_err(Arc::new));
             result
         });
+
+        // Once we get the init event, add some identifiers to the trace span.
+        let output_stream = output_stream.inspect(|event| {
+            if let Ok(event) = &event {
+                match &event.r#type {
+                    Some(warp_multi_agent_api::response_event::Type::Init(init)) => {
+                        tracing::info!("StreamInit");
+                        tracing::Span::current().record("conversation_id", &init.conversation_id);
+                        tracing::Span::current().record("request_id", &init.request_id);
+                        tracing::Span::current().record("run_id", &init.run_id);
+                    }
+                    Some(warp_multi_agent_api::response_event::Type::Finished(_finished)) => {
+                        tracing::info!("StreamFinished");
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        // Wrap the output stream with a trace span.
+        let output_stream = output_stream.instrument(tracing::info_span!(
+            "generate_multi_agent_output",
+            tags.cloud_agent = true,
+            conversation_id = tracing::field::Empty,
+            request_id = tracing::field::Empty,
+            run_id = tracing::field::Empty,
+        ));
 
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {

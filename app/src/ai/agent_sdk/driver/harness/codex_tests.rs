@@ -664,11 +664,6 @@ fn codex_command_with_session_id_invokes_resume_subcommand() {
 }
 
 #[test]
-fn codex_harness_requires_verified_platform_plugin() {
-    assert!(CodexHarness.requires_verified_platform_plugin());
-}
-
-#[test]
 fn codex_command_without_session_id_bypasses_hook_trust() {
     let cmd = codex_command("codex", None, "/tmp/prompt.txt");
     assert!(

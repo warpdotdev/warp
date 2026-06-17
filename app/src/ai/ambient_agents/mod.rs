@@ -76,39 +76,73 @@ pub enum AmbientConversationStatus {
 pub fn conversation_output_status_from_conversation(
     conversation: &AIConversation,
 ) -> Option<AmbientConversationStatus> {
-    if let ConversationStatus::Blocked { blocked_action } = conversation.status() {
-        return Some(AmbientConversationStatus::Blocked {
-            blocked_action: blocked_action.clone(),
-        });
-    }
-    if let ConversationStatus::Error = conversation.status() {
-        if let Some(error_message) = conversation.status_error_message() {
-            return Some(AmbientConversationStatus::Error {
-                error: RenderableAIError::Other {
-                    error_message: error_message.to_string(),
-                    will_attempt_resume: false,
-                    waiting_for_network: false,
-                },
-            });
-        }
-    }
+    match conversation.status() {
+        // A pending recovery is not a terminal outcome.
+        ConversationStatus::TransientError => None,
 
-    if let Some(last_exchange) = conversation.root_task_exchanges().last() {
-        if let AIAgentOutputStatus::Finished { finished_output } = &last_exchange.output_status {
-            let status = match finished_output {
-                FinishedAIAgentOutput::Cancelled { output: _, reason } => {
-                    AmbientConversationStatus::Cancelled { reason: *reason }
-                }
-                FinishedAIAgentOutput::Error { output: _, error } => {
-                    AmbientConversationStatus::Error {
-                        error: error.clone(),
-                    }
-                }
-                FinishedAIAgentOutput::Success { output: _ } => AmbientConversationStatus::Success,
-            };
-            return Some(status);
+        ConversationStatus::Blocked { blocked_action } => {
+            Some(AmbientConversationStatus::Blocked {
+                blocked_action: blocked_action.clone(),
+            })
         }
-    }
 
-    None
+        ConversationStatus::Error => {
+            // Prefer the structured error on the last exchange: it carries the precise
+            // error variant and rendering hints that the string-only `status_error_message`
+            // cannot.
+            if let Some(AIAgentOutputStatus::Finished {
+                finished_output: FinishedAIAgentOutput::Error { error, .. },
+            }) = conversation
+                .root_task_exchanges()
+                .last()
+                .map(|exchange| &exchange.output_status)
+            {
+                return Some(AmbientConversationStatus::Error {
+                    error: error.clone(),
+                });
+            }
+            if let Some(error_message) = conversation.status_error_message() {
+                return Some(AmbientConversationStatus::Error {
+                    error: RenderableAIError::Other {
+                        error_message: error_message.to_string(),
+                        will_attempt_resume: false,
+                        waiting_for_network: false,
+                        is_user_error: false,
+                    },
+                });
+            }
+            // Neither a structured exchange error nor a status message is available;
+            // fall back to whatever terminal outcome the last exchange carries.
+            terminal_status_from_last_exchange(conversation)
+        }
+
+        // `InProgress` and `WaitingForEvents` are not terminal, but we preserve the
+        // existing behavior of reporting a terminal outcome whenever the last exchange
+        // has already finished.
+        ConversationStatus::InProgress
+        | ConversationStatus::Success
+        | ConversationStatus::Cancelled
+        | ConversationStatus::WaitingForEvents => terminal_status_from_last_exchange(conversation),
+    }
+}
+
+/// Derive a terminal [`AmbientConversationStatus`] from the conversation's last
+/// exchange, if that exchange has finished.
+fn terminal_status_from_last_exchange(
+    conversation: &AIConversation,
+) -> Option<AmbientConversationStatus> {
+    let AIAgentOutputStatus::Finished { finished_output } =
+        &conversation.root_task_exchanges().last()?.output_status
+    else {
+        return None;
+    };
+    Some(match finished_output {
+        FinishedAIAgentOutput::Cancelled { reason, .. } => {
+            AmbientConversationStatus::Cancelled { reason: *reason }
+        }
+        FinishedAIAgentOutput::Error { error, .. } => AmbientConversationStatus::Error {
+            error: error.clone(),
+        },
+        FinishedAIAgentOutput::Success { .. } => AmbientConversationStatus::Success,
+    })
 }
