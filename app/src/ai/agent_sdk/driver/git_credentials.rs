@@ -27,6 +27,8 @@ const DEFAULT_GIT_NAME: &str = "Oz";
 const DEFAULT_GIT_EMAIL: &str = "oz-agent@warp.dev";
 const GITHUB_HOST: &str = "github.com";
 const GH_HOSTS_FILENAME: &str = "hosts.yml";
+const GLAB_HOST: &str = "gitlab.com";
+const GLAB_CONFIG_FILENAME: &str = "config.yml";
 
 fn home_dir() -> Result<PathBuf> {
     dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
@@ -149,6 +151,53 @@ fn write_gh_hosts_yml(credentials: &[GitCredential], home: &std::path::Path) -> 
     Ok(())
 }
 
+/// Write `~/.config/glab-cli/config.yml` so the `glab` CLI is authenticated.
+///
+/// The YAML format for glab is:
+/// ```yaml
+/// hosts:
+///     gitlab.com:
+///         token: TOKEN
+///         git_protocol: https
+///         api_protocol: https
+/// ```
+///
+/// The write is atomic: a temporary file is written then renamed.
+fn write_glab_config(credentials: &[GitCredential], home: &std::path::Path) -> Result<()> {
+    let gitlab_credentials = credentials
+        .iter()
+        .filter(|credential| credential.host == GLAB_HOST)
+        .collect::<Vec<_>>();
+    if gitlab_credentials.is_empty() {
+        return Ok(());
+    }
+    let glab_config_dir = home.join(".config").join("glab-cli");
+    std::fs::create_dir_all(&glab_config_dir)
+        .with_context(|| format!("Failed to create {}", glab_config_dir.display()))?;
+    let path = glab_config_dir.join(GLAB_CONFIG_FILENAME);
+    let tmp_path = glab_config_dir.join(format!("{GLAB_CONFIG_FILENAME}.tmp"));
+
+    let mut yaml = String::new();
+    yaml.push_str("hosts:\n");
+    for cred in gitlab_credentials {
+        yaml.push_str(&format!("    {}:\n", cred.host));
+        yaml.push_str(&format!("        token: {}\n", cred.token));
+        yaml.push_str("        git_protocol: https\n");
+        yaml.push_str("        api_protocol: https\n");
+    }
+
+    write_secret_file(&tmp_path, &yaml)?;
+    std::fs::rename(&tmp_path, &path).with_context(|| {
+        format!(
+            "Failed to rename {} to {}",
+            tmp_path.display(),
+            path.display()
+        )
+    })?;
+
+    Ok(())
+}
+
 /// Formats non-sensitive metadata for verifying local credential injection.
 pub(crate) fn credential_diagnostics(credentials: &[GitCredential]) -> String {
     credentials
@@ -172,6 +221,7 @@ pub(crate) fn write_git_credentials(credentials: &[GitCredential]) -> Result<()>
     write_git_credentials_file(credentials)?;
     let home = home_dir()?;
     write_gh_hosts_yml(credentials, &home)?;
+    write_glab_config(credentials, &home)?;
     log::info!(
         "Wrote {} git credential(s) to the local credential store: {}",
         credentials.len(),
