@@ -35,7 +35,7 @@ mod geometry;
 mod parent;
 mod text;
 
-pub use buffer::{Cell, TuiBuffer, TuiBufferExt, TuiStyle};
+pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiStyle};
 pub use child_view::TuiChildView;
 pub use column::TuiColumn;
 pub use container::TuiContainer;
@@ -130,8 +130,6 @@ pub struct TuiPresentationContext<'a> {
 }
 
 impl<'a> TuiPresentationContext<'a> {
-    // Constructed by the TUI presenter (slice 03c); dead until then.
-    #[allow(dead_code)]
     pub(crate) fn new(
         root_view_id: EntityId,
         parent_by_child: &'a mut HashMap<EntityId, EntityId>,
