@@ -14,7 +14,7 @@ use super::schema::{
     mcp_server_panes, notebook_panes, notebooks, pane_branches, pane_leaves, pane_nodes, panels,
     project_rules, projects, server_experiments, settings_panes, tabs, terminal_panes,
     welcome_panes, windows, workflow_panes, workflows, workspace_language_server,
-    workspace_metadata, workspaces,
+    workspace_metadata,
 };
 
 #[derive(Insertable)]
@@ -85,22 +85,6 @@ pub struct NewFolder {
     pub name: String,
     pub is_open: bool,
     pub is_warp_pack: bool,
-}
-
-#[derive(Identifiable, Insertable, Queryable)]
-pub struct Workspace {
-    pub id: i32,
-    pub name: String,
-    pub server_uid: String,
-    pub is_selected: bool,
-}
-
-#[derive(Insertable, AsChangeset)]
-#[diesel(table_name = workspaces)]
-pub struct NewWorkspace {
-    pub name: String,
-    pub server_uid: String,
-    pub is_selected: bool,
 }
 
 #[derive(Clone, Identifiable, Insertable, Queryable, AsChangeset)]

@@ -361,15 +361,6 @@ diesel::table! {
     }
 }
 
-diesel::table! {
-    workspaces (id) {
-        id -> Integer,
-        name -> Text,
-        server_uid -> Text,
-        is_selected -> Bool,
-    }
-}
-
 diesel::joinable!(app -> windows (active_window_id));
 diesel::joinable!(code_pane_tabs -> code_panes (code_pane_id));
 diesel::joinable!(pane_branches -> pane_nodes (pane_node_id));
