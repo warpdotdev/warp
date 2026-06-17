@@ -18,9 +18,9 @@ use warpui::{App, Presenter, ReadModel, WindowInvalidation};
 use super::*;
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent::task::TaskId;
-use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::{
-    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, UserQueryMode,
+    AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
+    UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
