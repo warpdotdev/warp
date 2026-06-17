@@ -164,7 +164,6 @@ impl Network {
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let heartbeat = ctx.add_model(|_| Heartbeat::default());
-        ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
 
         let model = Network {
             heartbeat,
@@ -225,7 +224,6 @@ impl Network {
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let heartbeat = ctx.add_model(|_| Heartbeat::default());
-        ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
 
         let session_id = SessionId::new();
         let viewer_id = ParticipantId::new();
@@ -336,18 +334,11 @@ impl Network {
         stream: impl Stream,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.heartbeat.update(ctx, |heartbeat, ctx| {
-            heartbeat.start(ctx);
-        });
-
         // Receive messages from the server.
         ctx.spawn_stream_local(
             stream,
             |network, item, ctx| match item {
                 Ok(message) => {
-                    network.heartbeat.update(ctx, |heartbeat, ctx| {
-                        heartbeat.reset_idle_timeout(ctx);
-                    });
                     network.process_websocket_message(message, ctx);
                 }
                 Err(e) => {

@@ -310,7 +310,6 @@ impl Network {
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let init_block_id = model.lock().block_list().active_block_id().clone();
         let heartbeat = ctx.add_model(|_| Heartbeat::default());
-        ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
 
         let network = Network {
             heartbeat,
@@ -387,7 +386,6 @@ impl Network {
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let init_block_id = model.lock().block_list().active_block_id().clone();
         let heartbeat = ctx.add_model(|_| Heartbeat::default());
-        ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
         let window_size = {
             let size_info = *model.lock().block_list().size();
             WindowSize {
@@ -967,9 +965,6 @@ impl Network {
 
     fn close_startup_transport(&mut self, ctx: &mut ModelContext<Self>) {
         self.ws_proxy_tx.close();
-        self.heartbeat.update(ctx, |heartbeat, _| {
-            heartbeat.stop();
-        });
     }
 
     fn handle_startup_failure(&mut self, failure: StartupFailure, ctx: &mut ModelContext<Self>) {
@@ -1168,10 +1163,6 @@ impl Network {
         stream: impl Stream,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.heartbeat.update(ctx, |heartbeat, ctx| {
-            heartbeat.start(ctx);
-        });
-
         // Handle any messages we receive over the websocket.
         ctx.spawn_stream_local(
             stream,
@@ -1182,9 +1173,6 @@ impl Network {
                     }) {
                         return;
                     }
-                    network.heartbeat.update(ctx, |heartbeat, ctx| {
-                        heartbeat.reset_idle_timeout(ctx);
-                    });
                     network.process_websocket_message(message, ctx);
                 }
                 Err(e) => {
