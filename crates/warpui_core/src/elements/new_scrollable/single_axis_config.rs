@@ -13,10 +13,13 @@ use crate::{
 
 use super::{
     util::{scroll_clipped_scrollable_handle_with_delta, scroll_delta_for_axis},
-    NewScrollableElement, ScrollableAxis,
+    NewScrollableElement,
 };
 
 use crate::elements::{ScrollTarget, ScrollToPositionMode};
+
+#[cfg(debug_assertions)]
+use super::ScrollableAxis;
 
 /// Holds state that depends on whether the scrolling axis should
 /// be managed automatically by the scrollable (clipped) or it should
@@ -43,6 +46,9 @@ pub enum SingleAxisConfig {
 impl SingleAxisConfig {
     /// At run-time, validate if the passed-in axis config is valid.
     pub(super) fn validate(&self, axis: Axis) {
+        #[cfg(not(debug_assertions))]
+        let _ = axis;
+
         #[cfg(debug_assertions)]
         {
             if let SingleAxisConfig::Manual { child, .. } = self {
