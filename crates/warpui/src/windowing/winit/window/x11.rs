@@ -7,6 +7,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::randr::{self, MonitorInfo};
 use x11rb::protocol::xproto::{self, AtomEnum, ConnectionExt};
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 
 pub(super) type PhysicalMonitorBounds = (PhysicalPosition<i16>, PhysicalSize<u16>);
 
@@ -260,7 +261,7 @@ fn set_net_wm_window_opacity(x11_window: xproto::Window, alpha: f32) -> anyhow::
     // `_NET_WM_WINDOW_OPACITY` is a CARDINAL in the range [0, u32::MAX].
     let opacity = (alpha.clamp(0.0, 1.0) * u32::MAX as f32) as u32;
     conn.change_property32(
-        xproto::PropMode::Replace,
+        xproto::PropMode::REPLACE,
         x11_window,
         opacity_atom,
         AtomEnum::CARDINAL,
