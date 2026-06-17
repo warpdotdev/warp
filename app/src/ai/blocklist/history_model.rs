@@ -250,11 +250,8 @@ pub struct BlocklistAIHistoryModel {
     /// history.
     persisted_queries: Vec<PersistedAIInput>,
 
-    /// Prompt-history candidates for NLD input classification, ordered oldest-first
-    /// (ascending by submission). Seeded once from `ai_queries` at startup via
+    /// Prompt-history candidates seeded once from `ai_queries` at startup via
     /// [`Self::with_prompt_history`] and appended to as new user-query prompts are submitted
-    /// during the session (see [`Self::append_session_prompt`]). The matcher reverses this to
-    /// iterate newest-first.
     prompt_history: Vec<(Arc<str>, DateTime<Local>)>,
 
     /// Metadata for both local and ambient agent conversations.

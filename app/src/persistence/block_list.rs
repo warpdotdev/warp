@@ -87,18 +87,16 @@ impl TryFrom<&PersistedAIInput> for NewAIQuery {
     }
 }
 
-pub(super) fn read_ai_queries(
+/// Reads the most recent `limit` AI queries from the `ai_queries` table, oldest-first
+/// (ascending by submission).
+pub(super) fn read_recent_ai_queries(
     conn: &mut SqliteConnection,
+    limit: i64,
 ) -> Result<Vec<PersistedAIInput>, diesel::result::Error> {
-    // Only load at most 100 AI queries; there's a very low chance that the user
-    // will ever try rerunning AI queries older than this duration and loading
-    // all AI queries in perpetuity has performance implications on app startup.
-    // TOOD(alokedesai): Consider loading all AI queries by paginating the SQL query.
-    const MAX_AI_QUERIES_TO_READ: i64 = 100;
     Ok(schema::ai_queries::table
         .select(AIQuery::as_select())
         .order_by(schema::ai_queries::columns::start_ts.desc())
-        .limit(MAX_AI_QUERIES_TO_READ)
+        .limit(limit)
         .load::<AIQuery>(conn)?
         .into_iter()
         .filter_map(|ai_query| PersistedAIInput::try_from(ai_query).ok())
@@ -106,56 +104,42 @@ pub(super) fn read_ai_queries(
         .collect_vec())
 }
 
-/// The maximum number of AI queries read for NLD prompt-history matching. Bounds the
-/// startup read and the per-keystroke fuzzy-match cost.
-const MAX_AI_QUERIES_TO_READ_FOR_NLD: i64 = 2000;
-
-/// Reads recent AI query prompts (text and submission time) for NLD prompt-history
-/// matching, oldest-first.
-///
-/// Rows with an empty serialized input (`[]`) are excluded in SQL before the limit is
-/// applied: rows written before empty inputs were skipped at write time remain in the
-/// table until FIFO eviction removes them. The newest `limit` rows are selected via
-/// `id DESC` and then reversed so the result is ascending by submission, matching
-/// [`read_ai_queries`]. The result is intentionally not deduped; deduplication happens
-/// after these rows are combined with in-memory conversation queries in
-/// [`crate::ai::blocklist::BlocklistAIHistoryModel::prompt_history_candidates`].
-pub(super) fn read_prompt_history(
+/// Reads the AI queries used to seed up-arrow prompt history, oldest-first.
+pub(super) fn read_ai_queries_for_uparrow_prompt_history(
     conn: &mut SqliteConnection,
-) -> Result<Vec<(String, DateTime<Local>)>, diesel::result::Error> {
-    read_prompt_history_with_limit(conn, MAX_AI_QUERIES_TO_READ_FOR_NLD)
+) -> Result<Vec<PersistedAIInput>, diesel::result::Error> {
+    // Only load at most 100 AI queries; there's a very low chance that the user
+    // will ever try rerunning AI queries older than this duration and loading
+    // all AI queries in perpetuity has performance implications on app startup.
+    // TOOD(alokedesai): Consider loading all AI queries by paginating the SQL query.
+    const MAX_AI_QUERIES_TO_READ: i64 = 100;
+    read_recent_ai_queries(conn, MAX_AI_QUERIES_TO_READ)
 }
 
-/// Split out from [`read_prompt_history`] so tests can exercise the read cap with a small
-/// limit instead of inserting thousands of rows.
-fn read_prompt_history_with_limit(
+
+
+/// Reads recent AI query prompts (text and submission time) for NLD prompt-history
+/// matching, oldest-first. Built on [`read_recent_ai_queries`]: the newest
+/// [`MAX_AI_QUERIES_TO_READ_FOR_NLD`] rows are read, then empty/whitespace-only prompts are
+/// filtered out after the limit (so this may return fewer query-bearing rows).
+pub(super) fn read_ai_queries_for_nld_history_match(
     conn: &mut SqliteConnection,
-    limit: i64,
 ) -> Result<Vec<(String, DateTime<Local>)>, diesel::result::Error> {
-    Ok(schema::ai_queries::table
-        .select((
-            schema::ai_queries::columns::input,
-            schema::ai_queries::columns::start_ts,
-        ))
-        .filter(schema::ai_queries::columns::input.ne("[]"))
-        .order_by(schema::ai_queries::columns::id.desc())
-        .limit(limit)
-        .load::<(String, NaiveDateTime)>(conn)?
-        .into_iter()
-        .filter_map(|(input, start_ts)| {
-            let inputs: Vec<PersistedAIInputType> = serde_json::from_str(&input).ok()?;
-            let text = inputs.into_iter().next().map(|input| match input {
-                PersistedAIInputType::Query { text, .. } => text,
-            })?;
-            if text.trim().is_empty() {
-                return None;
-            }
-            Some((text, Local.from_utc_datetime(&start_ts)))
-        })
-        // Selected newest-first (`id DESC`) to keep the newest `limit` rows; reverse to
-        // ascending by submission so callers can append session prompts and stay ordered.
-        .rev()
-        .collect_vec())
+    const MAX_AI_QUERIES_TO_READ_FOR_NLD: i64 = 2000;
+    Ok(
+        read_recent_ai_queries(conn, MAX_AI_QUERIES_TO_READ_FOR_NLD)?
+            .into_iter()
+            .filter_map(|query| {
+                let text = query.inputs.into_iter().next().map(|input| match input {
+                    PersistedAIInputType::Query { text, .. } => text,
+                })?;
+                if text.trim().is_empty() {
+                    return None;
+                }
+                Some((text, query.start_ts))
+            })
+            .collect_vec(),
+    )
 }
 
 const AI_QUERIES_COUNT_LIMIT: i64 = 10_000;

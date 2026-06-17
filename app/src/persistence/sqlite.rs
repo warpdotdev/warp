@@ -90,7 +90,8 @@ use crate::drive::OpenWarpDriveObjectSettings;
 use crate::notebooks::NotebookId;
 use crate::persistence::agent::read_agent_conversations;
 use crate::persistence::block_list::{
-    get_all_restored_blocks, read_ai_queries, read_prompt_history,
+    get_all_restored_blocks, read_ai_queries_for_nld_history_match,
+    read_ai_queries_for_uparrow_prompt_history,
 };
 use crate::persistence::model::{
     NewPersistedObjectAction, NewTeamSettings, ProjectRules, UserProfile, CODE_REVIEW_PANE_KIND,
@@ -2751,11 +2752,11 @@ fn read_sqlite_data(
 
     let time_of_next_force_object_refresh = read_time_of_next_force_object_refresh(conn)?;
 
-    let ai_queries = read_ai_queries(conn)?;
+    let ai_queries = read_ai_queries_for_uparrow_prompt_history(conn)?;
     // Only read NLD prompt-history candidates when the prompt-history match feature is enabled.
     let nld_prompts = FeatureFlag::NldPromptHistoryMatch
         .is_enabled()
-        .then(|| read_prompt_history(conn))
+        .then(|| read_ai_queries_for_nld_history_match(conn))
         .transpose()?
         .unwrap_or_default();
 
