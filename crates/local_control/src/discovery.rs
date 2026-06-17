@@ -274,23 +274,23 @@ pub fn discovery_dir() -> PathBuf {
     PathBuf::from(home).join(".warp").join("local-control")
 }
 
-/// Returns compatible live instances that pass an authenticated app ping.
+/// Returns compatible live instances from `channel` that pass an authenticated app ping.
 ///
 /// The ping follows the normal broker-to-HTTP flow and verifies the responding
 /// app's instance ID, so a live PID and parseable record alone are insufficient.
-pub fn list_instances() -> Vec<InstanceRecord> {
-    list_instances_from_dir(&discovery_dir())
+pub fn list_instances(channel: &str) -> Vec<InstanceRecord> {
+    list_instances_from_dir(&discovery_dir(), channel)
         .into_iter()
         .filter(|record| crate::client::probe_instance(record).is_ok())
         .collect()
 }
 
-/// Parses structurally valid candidate records and prunes records with dead PIDs.
+/// Parses structurally valid candidate records from `channel` and prunes records with dead PIDs.
 ///
 /// This lower-level scan does not contact the advertised endpoint; callers that
 /// need invokable instances should use [`list_instances`] so candidates also
 /// pass the authenticated probe.
-pub fn list_instances_from_dir(dir: &Path) -> Vec<InstanceRecord> {
+pub fn list_instances_from_dir(dir: &Path, channel: &str) -> Vec<InstanceRecord> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -306,6 +306,9 @@ pub fn list_instances_from_dir(dir: &Path) -> Vec<InstanceRecord> {
             Err(_) => continue,
         };
         if record.protocol_version != PROTOCOL_VERSION {
+            continue;
+        }
+        if record.channel != channel {
             continue;
         }
         if record.validate_local_control_authority().is_err() {

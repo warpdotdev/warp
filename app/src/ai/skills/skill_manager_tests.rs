@@ -392,6 +392,7 @@ description: Test skill with variables
 ---
 
 Run `{{warp_cli_binary_name}}` to connect to {{warp_server_url}}.
+Use `{{warpctrl_binary_name}}` from {{warpctrl_wrapper_path}}.
 "#,
     )
     .unwrap();
@@ -405,6 +406,12 @@ Run `{{warp_cli_binary_name}}` to connect to {{warp_server_url}}.
     let expected_url = ChannelState::server_root_url();
     assert!(skill.content.contains(&format!(
         "Run `{expected_cli}` to connect to {expected_url}."
+    )));
+    let expected_warpctrl = ChannelState::channel().warpctrl_command_name();
+    let expected_wrapper = resources_dir.join("bin").join(expected_warpctrl);
+    assert!(skill.content.contains(&format!(
+        "Use `{expected_warpctrl}` from {}.",
+        expected_wrapper.display()
     )));
 }
 
@@ -515,9 +522,11 @@ fn test_build_bundled_skill_context() {
     let skill_dir = resources_dir.join("bundled/skills/test-skill");
     let context = build_bundled_skill_context(resources_dir, &skill_dir);
 
-    assert_eq!(context.len(), 7);
+    assert_eq!(context.len(), 9);
     assert!(context.contains_key("warp_server_url"));
     assert!(context.contains_key("warp_cli_binary_name"));
+    assert!(context.contains_key("warpctrl_binary_name"));
+    assert!(context.contains_key("warpctrl_wrapper_path"));
     assert!(context.contains_key("warp_url_scheme"));
     assert!(context.contains_key("settings_file_path"));
     assert!(context.contains_key("keybindings_file_path"));
@@ -540,6 +549,18 @@ fn test_build_bundled_skill_context() {
     assert_eq!(
         context.get("warp_cli_binary_name").unwrap(),
         ChannelState::channel().cli_command_name()
+    );
+    assert_eq!(
+        context.get("warpctrl_binary_name").unwrap(),
+        ChannelState::channel().warpctrl_command_name()
+    );
+    assert_eq!(
+        context.get("warpctrl_wrapper_path").unwrap(),
+        &resources_dir
+            .join("bin")
+            .join(ChannelState::channel().warpctrl_command_name())
+            .display()
+            .to_string()
     );
     assert_eq!(
         context.get("warp_url_scheme").unwrap(),

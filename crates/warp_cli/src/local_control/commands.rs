@@ -9,6 +9,7 @@ use local_control::protocol::{
 };
 use local_control::selection::select_instance;
 use serde::Serialize;
+use warp_core::channel::ChannelState;
 
 use crate::agent::OutputFormat;
 use crate::local_control::output::{write_json, write_json_line};
@@ -189,9 +190,10 @@ pub(super) fn run_instance_command(
     output_format: OutputFormat,
 ) -> Result<(), ControlError> {
     match command {
-        InstanceCommand::List => {
-            render_instance_list(local_control::discovery::list_instances(), output_format)
-        }
+        InstanceCommand::List => render_instance_list(
+            local_control::discovery::list_instances(&ChannelState::channel().to_string()),
+            output_format,
+        ),
         InstanceCommand::Inspect(args) => run_action_with_params(
             args,
             ActionKind::InstanceInspect,
@@ -775,6 +777,7 @@ fn run_action_with_params<T: Serialize>(
     let selector = instance_selector(&args);
     let records = local_control::discovery::list_instances_from_dir(
         &local_control::discovery::discovery_dir(),
+        &ChannelState::channel().to_string(),
     );
     let target = target_selector(&args)?;
     let instance = select_instance(&records, &selector)?;

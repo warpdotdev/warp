@@ -44,7 +44,7 @@ fn registered_instance_round_trips_discovery_record() {
     );
     let _registered = RegisteredInstance::register_in_dir_for_test(record.clone(), dir.path())
         .expect("registered");
-    let records = list_instances_from_dir(dir.path());
+    let records = list_instances_from_dir(dir.path(), "local");
     assert_eq!(records, vec![record]);
 }
 
@@ -62,7 +62,7 @@ fn incompatible_protocol_record_is_ignored() {
     let _registered =
         RegisteredInstance::register_in_dir_for_test(record, dir.path()).expect("registered");
 
-    assert!(list_instances_from_dir(dir.path()).is_empty());
+    assert!(list_instances_from_dir(dir.path(), "local").is_empty());
 }
 #[cfg(unix)]
 #[test]
@@ -84,7 +84,7 @@ fn stale_process_record_is_pruned() {
     let registered =
         RegisteredInstance::register_in_dir_for_test(record, dir.path()).expect("registered");
 
-    assert!(list_instances_from_dir(dir.path()).is_empty());
+    assert!(list_instances_from_dir(dir.path(), "local").is_empty());
     assert!(!registered.path.exists());
 }
 #[cfg(unix)]
@@ -122,7 +122,7 @@ fn multiple_live_process_records_are_discovered() {
     let _second = RegisteredInstance::register_in_dir_for_test(second_record, dir.path())
         .expect("second registered");
 
-    let ids = list_instances_from_dir(dir.path())
+    let ids = list_instances_from_dir(dir.path(), "local")
         .into_iter()
         .map(|record| record.instance_id)
         .collect::<Vec<_>>();
@@ -136,6 +136,21 @@ fn multiple_live_process_records_are_discovered() {
     second_process.wait().expect("second process reaped");
 }
 
+#[test]
+fn records_from_other_channels_are_ignored() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let record = InstanceRecord::for_current_process(
+        Some(ControlEndpoint::localhost(4000)),
+        "dev",
+        "dev.warp.Warp-Dev",
+        Some("test".to_owned()),
+        crate::protocol::ActionKind::implemented_metadata(),
+    );
+    let _registered =
+        RegisteredInstance::register_in_dir_for_test(record, dir.path()).expect("registered");
+
+    assert!(list_instances_from_dir(dir.path(), "local").is_empty());
+}
 #[test]
 fn serialized_discovery_record_does_not_contain_raw_credential_material() {
     let raw_secret = "raw-secret-token-material";

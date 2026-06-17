@@ -37,6 +37,23 @@ fn warpctrl_bundle_source_path() -> Result<PathBuf> {
         .join("Contents/Resources/bin")
         .join(ChannelState::channel().warpctrl_command_name()))
 }
+fn path_resolves_to(path: &Path, expected_path: &Path) -> bool {
+    let Ok(path) = path.canonicalize() else {
+        return false;
+    };
+    let Ok(expected_path) = expected_path.canonicalize() else {
+        return false;
+    };
+    path == expected_path
+}
+
+/// Whether the installed Warp Control command resolves to this app bundle's wrapper.
+pub fn is_warpctrl_installed() -> bool {
+    let Ok(source) = warpctrl_bundle_source_path() else {
+        return false;
+    };
+    path_resolves_to(&warpctrl_install_target_path(), &source)
+}
 
 /// Create a symlink with elevated privileges using osascript
 ///
@@ -220,3 +237,7 @@ pub fn install_warpctrl() -> Result<()> {
 pub fn uninstall_warpctrl() -> Result<()> {
     uninstall_symlink(&warpctrl_install_target_path(), "Warp Control command")
 }
+
+#[cfg(test)]
+#[path = "cli_install_tests.rs"]
+mod tests;
