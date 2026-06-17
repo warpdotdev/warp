@@ -8,6 +8,34 @@ use serde::{Deserialize, Serialize};
 
 use crate::{JsonModel, JsonSerializer};
 
+/// Source-control provider hosting an environment's repositories.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CodeForge {
+    #[default]
+    #[serde(rename = "GITHUB")]
+    GitHub,
+    #[serde(rename = "GITLAB")]
+    GitLab,
+}
+
+impl CodeForge {
+    pub const fn host(self) -> &'static str {
+        match self {
+            CodeForge::GitHub => "github.com",
+            CodeForge::GitLab => "gitlab.com",
+        }
+    }
+}
+
+impl fmt::Display for CodeForge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CodeForge::GitHub => write!(f, "GitHub"),
+            CodeForge::GitLab => write!(f, "GitLab"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GithubRepo {
     /// Repository owner (e.g. "warpdotdev")
@@ -28,6 +56,58 @@ impl fmt::Display for GithubRepo {
     }
 }
 
+/// Identifies a repository and the source-control provider that hosts it.
+///
+/// For GitLab, `owner` contains the full, potentially nested namespace.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourceRepo {
+    /// The repository's explicit source-control provider.
+    ///
+    /// When absent, this inherits the associated environment's effective forge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_forge: Option<CodeForge>,
+    pub owner: String,
+    pub repo: String,
+}
+
+impl SourceRepo {
+    pub fn new(code_forge: CodeForge, owner: String, repo: String) -> Self {
+        Self {
+            code_forge: Some(code_forge),
+            owner,
+            repo,
+        }
+    }
+    pub fn with_default_code_forge(&self, code_forge: CodeForge) -> Self {
+        Self::new(
+            self.code_forge.unwrap_or(code_forge),
+            self.owner.clone(),
+            self.repo.clone(),
+        )
+    }
+
+    pub fn https_clone_url(&self) -> String {
+        format!(
+            "https://{}/{}/{}.git",
+            self.code_forge.unwrap_or_default().host(),
+            self.owner,
+            self.repo
+        )
+    }
+}
+
+/// Converts a legacy GitHub repository into the provider-neutral representation.
+impl From<&GithubRepo> for SourceRepo {
+    fn from(repo: &GithubRepo) -> Self {
+        Self::new(CodeForge::GitHub, repo.owner.clone(), repo.repo.clone())
+    }
+}
+/// Formats the forge-relative repository path.
+impl fmt::Display for SourceRepo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.owner, self.repo)
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum BaseImage {
@@ -87,9 +167,20 @@ pub struct AmbientAgentEnvironment {
     /// Optional description of the environment (max 240 characters)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Source-control provider hosting this environment's repositories.
+    ///
+    /// Absent means GitHub for legacy environments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_forge: Option<CodeForge>,
     /// List of GitHub repositories
     #[serde(default)]
     pub github_repos: Vec<GithubRepo>,
+    /// Provider-neutral repository list.
+    ///
+    /// When present, including when empty, this is authoritative over
+    /// `github_repos`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_repos: Option<Vec<SourceRepo>>,
     /// Base image specification
     #[serde(flatten)]
     pub base_image: BaseImage,
@@ -118,11 +209,35 @@ impl AmbientAgentEnvironment {
         Self {
             name,
             description,
+            code_forge: None,
             github_repos,
+            source_repos: None,
             base_image: BaseImage::DockerImage(docker_image),
             setup_commands,
             providers: ProvidersConfig::default(),
             secrets: None,
+        }
+    }
+
+    /// Returns the environment's source-control provider, defaulting to GitHub
+    /// for legacy environments.
+    pub fn effective_code_forge(&self) -> CodeForge {
+        self.code_forge.unwrap_or_default()
+    }
+
+    /// Returns the authoritative provider-neutral repository list.
+    pub fn effective_repos(&self) -> Vec<SourceRepo> {
+        let code_forge = self.effective_code_forge();
+        match &self.source_repos {
+            Some(source_repos) => source_repos
+                .iter()
+                .map(|repo| repo.with_default_code_forge(code_forge))
+                .collect(),
+            None => self
+                .github_repos
+                .iter()
+                .map(|repo| SourceRepo::new(code_forge, repo.owner.clone(), repo.repo.clone()))
+                .collect(),
         }
     }
 }

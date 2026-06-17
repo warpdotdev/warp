@@ -671,13 +671,13 @@ pub struct CreateFileArtifactUploadResponse {
 /// A single git credential entry returned by `taskGitCredentials`.
 #[derive(Clone)]
 pub struct GitCredential {
-    /// The GitHub token (OAuth user token or App installation token).
+    /// The provider's OAuth or installation access token.
     pub token: String,
-    /// The GitHub username. `None` for service-account (installation token) principals.
+    /// The provider-specific git username, when available.
     pub username: Option<String>,
-    /// The GitHub email. `None` for service-account principals.
+    /// The provider account's email, when available.
     pub email: Option<String>,
-    /// The host (always `"github.com"` in V1).
+    /// The managed git host, such as `"github.com"` or `"gitlab.com"`.
     pub host: String,
 }
 

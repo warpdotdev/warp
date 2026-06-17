@@ -58,7 +58,7 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions,
 };
 use crate::ai::cloud_environments::{
-    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, GithubRepo,
+    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, GithubRepo, SourceRepo,
 };
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEvent};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -1619,7 +1619,12 @@ impl AgentDriver {
             return Ok(());
         }
 
-        let global_skill_repos = global_skill_repos.to_vec();
+        // Global skill specs are still GitHub-only, while the shared environment clone
+        // helper accepts provider-neutral repositories. Adapt them only at the clone boundary.
+        let global_skill_repos = global_skill_repos
+            .iter()
+            .map(SourceRepo::from)
+            .collect::<Vec<_>>();
         let clone_future = foreground
             .spawn(move |me, ctx| {
                 let working_dir = me.working_dir.clone();
@@ -1644,7 +1649,7 @@ impl AgentDriver {
     /// It's assumed that `prepare_environment` registers all cloned repositories
     /// with the `DetectedRepositories` model, so that we can scan for skills
     // here.
-    async fn load_environment_skills(foreground: &ModelSpawner<Self>, repos: Vec<GithubRepo>) {
+    async fn load_environment_skills(foreground: &ModelSpawner<Self>, repos: Vec<SourceRepo>) {
         if repos.is_empty() {
             log::info!("No environment repositories for skill loading");
             return;
@@ -2002,8 +2007,8 @@ impl AgentDriver {
 
         if let Some(environment) = environment_opt {
             log::info!("Loading environment...");
-            let environment_github_repos = environment.github_repos.clone();
-            environment_skill_repos = environment_github_repos.clone();
+            let environment_source_repos = environment.effective_repos();
+            environment_skill_repos = environment_source_repos.clone();
 
             // Subscribe to file-based MCP discovery BEFORE prepare_environment triggers the
             // pipeline so no CloudEnvMcpScanComplete events are missed.
@@ -2012,11 +2017,11 @@ impl AgentDriver {
             // TODO(REMOTE-1345): handle MCP setup for third-party harnesses.
             let file_based_discovery_rx = match &task.harness {
                 HarnessKind::Oz => {
-                    let github_repos = environment_github_repos.clone();
+                    let source_repos = environment_source_repos.clone();
                     Some(
                         foreground
                             .spawn(move |me, ctx| {
-                                let expected_repo_paths: Vec<PathBuf> = github_repos
+                                let expected_repo_paths: Vec<PathBuf> = source_repos
                                     .iter()
                                     .map(|repo| me.working_dir.join(&repo.repo))
                                     .collect();
