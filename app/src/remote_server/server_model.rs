@@ -529,7 +529,7 @@ impl ServerModel {
                         );
                     }
                 }
-                GlobalBufferModelEvent::FileSaved { file_id } => {
+                GlobalBufferModelEvent::FileSaved { file_id, .. } => {
                     for req in me.buffers.take_pending_by_kind(
                         file_id,
                         PendingBufferRequestKind::SaveBuffer,
