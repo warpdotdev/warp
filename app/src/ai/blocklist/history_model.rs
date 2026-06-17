@@ -2876,7 +2876,7 @@ fn ai_exchange_to_query_history(
     value: &AIAgentExchange,
     history_order: HistoryOrder,
 ) -> Option<AIQueryHistory> {
-    let query = value.input.iter().find_map(AIAgentInput::user_query)?;
+    let query = value.input.iter().find_map(AIAgentInput::display_query)?;
 
     Some(AIQueryHistory {
         query_text: query,

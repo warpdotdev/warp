@@ -410,7 +410,9 @@ impl InputQuery {
     fn query(&self) -> String {
         match &self.input_query {
             InputQueryType::UserSubmittedQueryFromInput { query, .. } => query.clone(),
-            InputQueryType::AIInputType { ai_input } => ai_input.user_query().unwrap_or_default(),
+            InputQueryType::AIInputType { ai_input } => {
+                ai_input.display_query().unwrap_or_default()
+            }
         }
     }
 }

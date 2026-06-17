@@ -918,7 +918,7 @@ enum PendingSessionConfigTabConfigChipTutorial {
 }
 
 fn query_for_rewind_prefill(inputs: &[AIAgentInput]) -> Option<String> {
-    inputs.iter().find_map(AIAgentInput::user_query)
+    inputs.iter().find_map(AIAgentInput::display_query)
 }
 
 /// Snapshot of a tab used to move it between workspaces or into a new window.
