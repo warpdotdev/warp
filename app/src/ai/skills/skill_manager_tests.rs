@@ -649,7 +649,7 @@ fn get_skills_for_working_directory_respects_location() {
         (home_dir, local_home_skill),
         (local_project_dir.clone(), local_project_skill),
         (same_host_dir.clone(), same_host_skill),
-        (other_host_dir, other_host_skill),
+        (other_host_dir.clone(), other_host_skill),
     ] {
         directory_skills
             .entry(dir)
@@ -701,6 +701,15 @@ fn get_skills_for_working_directory_respects_location() {
         assert!(!remote_names.contains("local-home"));
         assert!(!remote_names.contains("local-project"));
         assert!(!remote_names.contains("other-host-project"));
+        let other_remote_skills = handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory(Some(&other_host_dir), ctx)
+        });
+        let other_remote_names: HashSet<_> = other_remote_skills
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect();
+        assert!(other_remote_names.contains("other-host-project"));
+        assert!(!other_remote_names.contains("bundled"));
 
         // Remote catalog descriptors are path-referenced, and that reference
         // resolves back to the remote host's catalog entry. A
@@ -720,10 +729,29 @@ fn get_skills_for_working_directory_respects_location() {
         assert_eq!(remote_bundled_descriptor.scope, SkillScope::Bundled);
         let resolved_content = handle.read(&app, |manager, ctx| {
             manager
-                .active_skill_by_reference(&remote_bundled_descriptor.reference, ctx)
+                .active_skill_by_reference_with_origin(
+                    &remote_bundled_descriptor.reference,
+                    &SkillPathOrigin::Remote {
+                        host_id: same_host_id.clone(),
+                    },
+                    ctx,
+                )
                 .map(|skill| skill.content.clone())
         });
-        assert_eq!(resolved_content, Some("# remote-bundled".to_string()));
+        assert_eq!(resolved_content, Ok("# remote-bundled".to_string()));
+        let wrong_origin_content = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(
+                    &remote_bundled_descriptor.reference,
+                    &SkillPathOrigin::Local,
+                    ctx,
+                )
+                .map(|skill| skill.content.clone())
+        });
+        assert!(matches!(
+            wrong_origin_content,
+            Err(ActiveSkillLookupError::NotFound { .. })
+        ));
 
         let disconnected_remote_skills = handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(None, ctx)
@@ -733,6 +761,17 @@ fn get_skills_for_working_directory_respects_location() {
             .map(|skill| skill.name.as_str())
             .collect();
         assert_eq!(disconnected_remote_names, HashSet::from(["bundled"]));
+        let unavailable_remote_skills = handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory_with_origin(
+                None,
+                &SkillPathOrigin::Unavailable,
+                ctx,
+            )
+        });
+        assert!(
+            unavailable_remote_skills.is_empty(),
+            "Unavailable remote sessions must not fall back to client-global bundles"
+        );
 
         let local_skills = handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(Some(&local_project_dir), ctx)
@@ -946,6 +985,45 @@ fn active_skill_by_reference_distinguishes_remote_hosts_with_the_same_display_pa
             )
         });
         assert_eq!(resolved, (Some(first_path), Some(second_path)));
+    });
+}
+
+// Origin-aware lookup reports why an active bundled skill could not be resolved.
+#[test]
+fn active_skill_by_reference_with_origin_returns_typed_lookup_errors() {
+    App::test((), |app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+        let reference = SkillReference::BundledSkillId("missing".to_string());
+
+        let unavailable_error = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(
+                    &reference,
+                    &SkillPathOrigin::Unavailable,
+                    ctx,
+                )
+                .unwrap_err()
+        });
+        assert_eq!(
+            unavailable_error,
+            ActiveSkillLookupError::BundledSkillsUnavailable
+        );
+
+        let not_found_error = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(&reference, &SkillPathOrigin::Local, ctx)
+                .unwrap_err()
+        });
+        assert_eq!(
+            not_found_error,
+            ActiveSkillLookupError::NotFound { reference }
+        );
     });
 }
 

@@ -3,7 +3,7 @@ mod file_watchers;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use ai::skills::{provider_rank, ParsedSkill, SkillProvider, SkillReference};
+use ai::skills::{provider_rank, ParsedSkill, SkillPathOrigin, SkillProvider, SkillReference};
 pub use file_watchers::{
     extract_skill_parent_directory, read_skills_from_directories, SkillWatcher, SkillWatcherEvent,
 };
@@ -18,7 +18,7 @@ use super::bundled::{
     BundledSkillActivation,
 };
 use super::bundled::{BundledSkill, BundledSkills};
-use super::{SkillDescriptor, SkillPathQuery};
+use super::{ActiveSkillLookupError, SkillDescriptor, SkillPathQuery};
 use crate::ai::skills::skill_utils::unique_skills;
 
 pub struct SkillManager {
@@ -90,6 +90,22 @@ impl SkillManager {
     pub fn get_skills_for_working_directory(
         &self,
         working_directory: Option<&LocalOrRemotePath>,
+        ctx: &AppContext,
+    ) -> Vec<SkillDescriptor> {
+        let path_origin = match working_directory {
+            Some(LocalOrRemotePath::Remote(path)) => SkillPathOrigin::Remote {
+                host_id: path.host_id.clone(),
+            },
+            Some(LocalOrRemotePath::Local(_)) | None => SkillPathOrigin::Local,
+        };
+        self.get_skills_for_working_directory_with_origin(working_directory, &path_origin, ctx)
+    }
+
+    /// Returns skills available for the given working directory and execution host.
+    pub fn get_skills_for_working_directory_with_origin(
+        &self,
+        working_directory: Option<&LocalOrRemotePath>,
+        path_origin: &SkillPathOrigin,
         ctx: &AppContext,
     ) -> Vec<SkillDescriptor> {
         // Collect skill paths as (dir_path, skill_path) tuples for later deduplication.
@@ -168,19 +184,10 @@ impl SkillManager {
         // catalog of the host that owns the working directory: SSH sessions
         // see the remote daemon's catalog (empty until its snapshot arrives),
         // never the local client's. Remote catalog descriptors are referenced
-        // by their remote paths so invocation resolves back to the same
-        // host's catalog; `BundledSkillId` references are local-only.
+        // by their remote paths so invocation resolves back to the same host's
+        // catalog, while direct `BundledSkillId` lookups use `path_origin`.
         if FeatureFlag::BundledSkills.is_enabled() {
-            match working_directory {
-                Some(LocalOrRemotePath::Remote(remote)) => {
-                    if let Some(bundled) = self.bundled_skills.remote(&remote.host_id) {
-                        skills.extend(bundled.active_path_referenced_descriptors(ctx));
-                    }
-                }
-                Some(LocalOrRemotePath::Local(_)) | None => {
-                    skills.extend(self.bundled_skills.local().active_descriptors(ctx));
-                }
-            }
+            skills.extend(self.bundled_skills.active_descriptors(path_origin, ctx));
         }
 
         skills
@@ -323,7 +330,7 @@ impl SkillManager {
     ) -> SkillReference {
         let skill_path = skill_path.to_skill_location();
         // Check if this path belongs to a bundled skill.
-        if let Some(reference) = self.bundled_skills.local().reference_for_path(&skill_path) {
+        if let Some(reference) = self.bundled_skills.reference_for_path(&skill_path) {
             return reference;
         }
         // Default to path-based reference.
@@ -337,7 +344,7 @@ impl SkillManager {
                 path.as_remote()
                     .and_then(|remote| self.bundled_skills.remote_skill_by_path(remote))
             }),
-            SkillReference::BundledSkillId(id) => self.bundled_skills.local().skill(id),
+            SkillReference::BundledSkillId(id) => self.bundled_skills.local_skill(id),
         }
     }
 
@@ -352,18 +359,39 @@ impl SkillManager {
         reference: &SkillReference,
         ctx: &AppContext,
     ) -> Option<&ParsedSkill> {
-        match reference {
-            SkillReference::Path(path) => self.skills_by_path.get(path).or_else(|| {
-                path.as_remote()
-                    .and_then(|remote| self.bundled_skills.remote_active_skill_by_path(remote, ctx))
-            }),
-            SkillReference::BundledSkillId(id) => self.active_bundled_skill(id, ctx),
-        }
+        self.active_skill_by_reference_with_origin(reference, &SkillPathOrigin::Local, ctx)
+            .ok()
     }
 
-    /// Returns a bundled skill by ID only if its activation condition is met.
-    pub fn active_bundled_skill(&self, id: &str, ctx: &AppContext) -> Option<&ParsedSkill> {
-        self.bundled_skills.local().active_skill(id, ctx)
+    /// Get the definition of a skill for the selected execution host only if it is active.
+    pub fn active_skill_by_reference_with_origin(
+        &self,
+        reference: &SkillReference,
+        path_origin: &SkillPathOrigin,
+        ctx: &AppContext,
+    ) -> Result<&ParsedSkill, ActiveSkillLookupError> {
+        let skill = match reference {
+            SkillReference::Path(path) => self.skills_by_path.get(path).or_else(|| {
+                let remote = path.as_remote()?;
+                let SkillPathOrigin::Remote { host_id } = path_origin else {
+                    return None;
+                };
+                if remote.host_id != *host_id {
+                    return None;
+                }
+                self.bundled_skills.remote_active_skill_by_path(remote, ctx)
+            }),
+            SkillReference::BundledSkillId(id) => {
+                self.bundled_skills.active_skill(id, path_origin, ctx)
+            }
+        };
+        skill.ok_or_else(|| ActiveSkillLookupError::for_reference(reference, path_origin))
+    }
+
+    /// Returns a local bundled skill by ID only if its activation condition is met.
+    pub fn active_local_bundled_skill(&self, id: &str, ctx: &AppContext) -> Option<&ParsedSkill> {
+        self.bundled_skills
+            .active_skill(id, &SkillPathOrigin::Local, ctx)
     }
 
     pub(super) fn set_remote_bundled_skill(
@@ -472,6 +500,18 @@ impl SkillManager {
     ) {
         self.bundled_skills
             .insert_local_for_testing(id, skill, activation);
+    }
+
+    #[cfg(test)]
+    pub fn add_remote_bundled_skill_for_testing(
+        &mut self,
+        host_id: HostId,
+        id: impl Into<String>,
+        skill: ParsedSkill,
+        activation: BundledSkillActivation,
+    ) {
+        self.bundled_skills
+            .insert_remote_for_testing(host_id, id, skill, activation);
     }
 }
 

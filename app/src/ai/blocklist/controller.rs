@@ -421,6 +421,11 @@ impl InputQuery {
 }
 
 impl BlocklistAIController {
+    /// Returns the bundled-skill catalog origin for this controller's active session.
+    pub fn skill_path_origin(&self, ctx: &AppContext) -> SkillPathOrigin {
+        SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         input_model: ModelHandle<BlocklistAIInputModel>,

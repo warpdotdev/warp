@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use ai::skills::SkillPathOrigin;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 mod telemetry;
@@ -23,6 +24,28 @@ cfg_if::cfg_if! {
 }
 
 pub use ai::skills::SkillReference;
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ActiveSkillLookupError {
+    #[error("Bundled skills are not available on this remote session")]
+    BundledSkillsUnavailable,
+    #[error("Skill not found: {reference}")]
+    NotFound { reference: SkillReference },
+}
+
+impl ActiveSkillLookupError {
+    pub(crate) fn for_reference(reference: &SkillReference, path_origin: &SkillPathOrigin) -> Self {
+        if matches!(path_origin, SkillPathOrigin::Unavailable)
+            && matches!(reference, SkillReference::BundledSkillId(_))
+        {
+            Self::BundledSkillsUnavailable
+        } else {
+            Self::NotFound {
+                reference: reference.clone(),
+            }
+        }
+    }
+}
 
 #[cfg(not(target_family = "wasm"))]
 mod global_skills;
