@@ -92,29 +92,38 @@ work to advertise whether it is still active, done, or waiting.
     completed, or blocked. Registering a listener from a setup-only
     `SessionStart` must leave the session in a neutral/idle state until Droid
     emits a status-bearing event such as `prompt_submit`, `permission_request`,
-    `question_asked`, `tool_complete`, or `stop`.
+    `question_asked`, `tool_complete` after an attention-needed state, or
+    `stop`.
 
-11. Event payloads that declare `agent: "droid"` and use Warp's existing
+11. If Warp has already created a Droid session from command detection before
+    the hook emits `SessionStart`, that setup-only `SessionStart` still clears
+    the false running state and leaves the session neutral/idle. The existing
+    state is preserved only after a status-bearing rich Droid event has already
+    updated the same non-empty Droid `session_id`.
+
+12. Event payloads that declare `agent: "droid"` and use Warp's existing
     `warp://cli-agent` OSC 777 payload format are parsed as Droid events, not as
     unknown-agent events.
 
-12. Unsupported or malformed Droid hook payloads are ignored rather than
+13. Unsupported or malformed Droid hook payloads are ignored rather than
     crashing the terminal session or changing the session status incorrectly.
 
-13. Existing rich-status behavior for other CLI agents is unchanged. In
+14. Existing rich-status behavior for other CLI agents is unchanged. In
     particular, Codex's OSC 9 fallback behavior and existing structured
     plugin-event handling continue to work as before.
 
-14. If Droid's hook configuration is present but the hook script cannot emit an
+15. If Droid's hook configuration is present but the hook script cannot emit an
     event, the failure is non-fatal to Droid and to Warp. The user may lose rich
     status updates, but the Droid session itself should continue.
 
-15. If Droid hook input contains prompt text, notification text, paths, tool
+16. If Droid hook input contains prompt text, notification text, paths, tool
     names, or any other Droid-controlled field, the hook encodes it safely before
     writing the OSC 777 notification. Untrusted text cannot inject additional
-    terminal control sequences or malformed JSON into Warp.
+    terminal control sequences or malformed JSON into Warp. The hook emits only
+    sanitized strings bounded by the technical spec and reduces tool input to a
+    bounded preview rather than forwarding Droid's raw tool input object.
 
-16. The integration applies to local Droid sessions running inside Warp. Remote,
+17. The integration applies to local Droid sessions running inside Warp. Remote,
     SSH, or tmux-specific notification forwarding behavior is not changed by
     this issue.
 
@@ -150,30 +159,38 @@ a safe attention-needed state rather than reporting completion.
 6. A `SessionStart` event with `agent: "droid"` activates the rich listener path
    but leaves the session neutral/idle and does not create a false
    running/completed/blocked status on its own.
-7. A valid structured OSC 777 `warp://cli-agent` payload with `agent: "droid"`
+7. If command detection created a Droid session as in-progress before the first
+   Droid `SessionStart`, that setup-only `SessionStart` changes the session to
+   neutral/idle and removes any running indicator.
+8. A valid structured OSC 777 `warp://cli-agent` payload with `agent: "droid"`
    is parsed as `CLIAgent::Droid`.
-8. Existing Claude Code, OpenCode, Codex, Gemini, Auggie, and Pi session-status
+9. Existing Claude Code, OpenCode, Codex, Gemini, Auggie, and Pi session-status
    tests continue to pass.
-9. Droid setup instructions are visible from the same plugin-instructions UI
+10. Droid setup instructions are visible from the same plugin-instructions UI
    used by other CLI-agent notification integrations when rich CLI-agent
    notifications are enabled.
-10. The setup instructions are manual-only; Warp does not claim to auto-install
+11. The setup instructions are manual-only; Warp does not claim to auto-install
     or auto-update the Droid hook integration.
-11. Droid listener registration and hook instructions are unavailable when the
+12. Droid listener registration and hook instructions are unavailable when the
     rich CLI-agent notification infrastructure is disabled.
-12. Droid-controlled prompt and notification text is JSON-encoded and stripped
-    or escaped for terminal control bytes before being emitted in OSC 777.
+13. Every Droid-controlled string emitted by the hook is sanitized, truncated to
+    the concrete per-field limits in the technical spec, JSON-encoded, and free
+    of raw terminal control bytes before being emitted in OSC 777.
+14. Droid tool input is not forwarded as an unbounded object; the hook emits only
+    a sanitized, bounded preview field that Warp can display.
 
 ## Validation
 
 - Unit tests cover Droid support in the rich session listener, including support
-  gating, neutral `session_start` registration, and default forwarding behavior
-  for `stop`, `permission_request`, and other status events.
+  gating, neutral `session_start` registration for new and command-detected
+  sessions, and default forwarding behavior for `stop`, `permission_request`,
+  and other status events.
 - Unit tests cover the Droid plugin manager or instructions provider, including
   rollout gating, manual-only install behavior, and presence of the required
   Droid hook events.
 - Unit tests cover safe hook payload construction for JSON encoding and terminal
-  control-byte sanitization.
+  control-byte sanitization, concrete per-field truncation limits, final payload
+  size enforcement, and bounded tool-input previews.
 - Unit or parser tests confirm a structured event with `agent: "droid"` resolves
   to `CLIAgent::Droid`.
 - Manual validation runs Droid in Warp with the documented hooks configured and
@@ -182,11 +199,10 @@ a safe attention-needed state rather than reporting completion.
 - Regression validation runs the existing listener and plugin-manager tests for
   other supported CLI agents.
 
-## Open questions
+## Follow-ups
 
-- Should Warp prefer a user-managed hook script in `~/.factory/hooks.json`, or a
-  Droid plugin-based hook package if Droid's plugin hook mechanism is considered
-  stable enough for this integration?
-- Does Droid expose a more reliable notification field for distinguishing
-  permission requests from generic input-needed notifications, beyond inspecting
-  the notification message?
+- Consider a Droid plugin-based hook package in a later version. V1 uses a
+  user-managed hook script registered in `~/.factory/hooks.json`.
+- Revisit permission-vs-question classification if Droid exposes a structured
+  notification type. V1 maps ambiguous notifications to an attention-needed
+  state.

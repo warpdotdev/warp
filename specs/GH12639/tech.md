@@ -72,6 +72,12 @@ session as `InProgress`, while `DefaultSessionListener` and
 `CLIAgentSession::apply_event` both treat `SessionStart` as setup metadata. Droid
 must not inherit a false running state from listener registration alone.
 
+Command detection can also create a Droid session before the hook emits its
+first structured notification. Those command-detected sessions are currently
+`InProgress`, have no listener, and have not received any status-bearing rich
+event. A setup-only Droid `SessionStart` must clear that false running state
+rather than preserve it.
+
 ## Proposed changes
 
 ### 1. Enable Droid in the session listener
@@ -102,22 +108,50 @@ status-bearing event for the current turn.
 
 Required behavior:
 
-- When `register_listener` is triggered by `SessionStart`, a new Droid session is
-  created with `CLIAgentSessionStatus::Idle` instead of `InProgress`.
-- When a `SessionStart` updates an existing Droid session, the update attaches
-  listener/plugin context but preserves the existing status. Only a newly
-  created setup-only session starts in `Idle`.
+- Track whether the current Droid session has already applied a status-bearing
+  rich event. This can be a new boolean such as
+  `has_received_status_bearing_rich_event`; it must be separate from the
+  existing `received_rich_notification` concept because `SessionStart` is a rich
+  notification but is not status-bearing.
+- Status-bearing rich events are the events that produce an
+  `InProgress`, `Blocked`, or `Success` session status after
+  `CLIAgentSession::apply_event`: `PromptSubmit`, `PermissionRequest`,
+  `QuestionAsked`, `PermissionReplied` after blocked, `ToolComplete` after
+  blocked, and `Stop`. `SessionStart`, `IdlePrompt`, malformed events, and
+  ignored unknown events do not set the status-bearing marker.
+- When `register_listener` is triggered by Droid `SessionStart`, a new Droid
+  session is created with `CLIAgentSessionStatus::Idle` instead of
+  `InProgress`.
+- When Droid `SessionStart` updates an existing command-detected Droid session,
+  it attaches listener/plugin context and changes the session to `Idle`, even if
+  the existing status is `InProgress`.
+- An existing status may be preserved on Droid `SessionStart` only when the
+  stored session already applied a status-bearing rich event for the same Droid
+  session. The same-session check requires both stored and incoming
+  `session_id` values to be present and equal. If either side lacks a
+  `session_id`, or if the ids differ, treat the `SessionStart` as setup for a
+  fresh session: reset the status-bearing marker and set the status to `Idle`.
+  No other existing status, including command-detected `InProgress`, may be
+  preserved across a setup-only `SessionStart`.
 - `SessionStart` continues to seed `cwd`, `project`, `session_id`, and
   `plugin_version`.
-- `SessionStart` does not emit `StatusChanged` and does not update agent
-  conversation history to `ConversationStatus::InProgress`.
-- Vertical tabs and other status surfaces render an idle listener registration
-  without the running spinner. If they need a conversation-status projection,
-  `Idle` should project to no status (`None`) rather than to
+- Droid `SessionStart` never emits an `InProgress`, `Blocked`, or `Success`
+  status and never updates agent conversation history to
   `ConversationStatus::InProgress`.
+- If a setup-only `SessionStart` changes an existing command-detected session
+  from `InProgress` to `Idle`, the model must notify status surfaces so the
+  running spinner is cleared. This can be done with `StatusChanged(Idle)` or an
+  equivalent `SessionUpdated` notification, but the UI projection for `Idle`
+  must be no conversation status (`None`), not
+  `ConversationStatus::InProgress`.
+- Update the projection used by status surfaces, such as
+  `CLIAgentSessionStatus::to_conversation_status` or a wrapper around it, so
+  `Idle` returns `None`. Do not map `Idle` to `InProgress`, `Blocked`, or
+  `Success`.
 - `PromptSubmit`, `ToolComplete` after blocked, `PermissionReplied` after
   blocked, `PermissionRequest`, `QuestionAsked`, and `Stop` remain
-  status-bearing and move the session out of `Idle`.
+  status-bearing and move the session out of `Idle`. The status-bearing marker
+  is set only after one of these events actually changes the session status.
 
 This is intentionally a model/UI change, not just a listener change. Dropping
 `SessionStart` inside `DefaultSessionListener` is not sufficient because the
@@ -148,7 +182,9 @@ rich CLI-agent notification rollout gate.
 
 Manual instructions should guide the user to:
 
-1. Create a local hook script that reads Droid's hook JSON from stdin.
+1. Create a local POSIX shell hook script that reads Droid's hook JSON from
+   stdin and uses `jq` for JSON parsing, sanitization, truncation, and payload
+   construction.
 2. Exit without emitting anything when Droid is not running inside Warp, such as
    when `WARP_CLI_AGENT_PROTOCOL_VERSION` is absent.
 3. Map supported Droid hook events to Warp CLI-agent events.
@@ -186,12 +222,13 @@ The emitted JSON payload should include:
 
 Event-specific fields should be populated conservatively:
 
-- `prompt_submit`: include a bounded `query` from Droid's `prompt`, when
-  present.
-- `permission_request` / `question_asked`: include a `summary` from Droid's
+- `prompt_submit`: include `query` from Droid's `prompt`, when present.
+- `permission_request` / `question_asked`: include `summary` from Droid's
   notification `message`, when present.
-- `tool_complete`: include `tool_name` and a tool-input preview when useful and
-  already supported by the parser.
+- `tool_complete`: include `tool_name` and a bounded tool-input preview when
+  useful. Do not forward Droid's raw `tool_input` object. If a preview is
+  available, emit a small `tool_input` object with only one parser-supported
+  string key, preferring `command` and falling back to `file_path`.
 - `stop`: no additional payload is required.
 
 For `Stop`, the hook should respect Droid's `stop_hook_active` field and avoid
@@ -201,15 +238,56 @@ part of a stop-hook flow.
 The hook bridge must treat all Droid-provided strings and JSON fields as
 untrusted input:
 
-- Build the OSC 777 payload with a JSON encoder such as `jq`, not with
+- Build the v1 manual hook's OSC 777 payload with `jq`, not with
   hand-concatenated JSON strings.
-- Bound long string fields such as `query` and `summary` before including them
-  in the payload.
-- Strip or escape terminal control bytes from every string that can reach the
-  OSC 777 output, including prompt text, notification messages, paths, project
+- Remove terminal control characters from every string that can reach the OSC
+  777 output, including prompt text, notification messages, paths, project
   names, tool names, and tool-input previews.
 - Ensure the final write to `/dev/tty` cannot emit extra BEL/ST terminators or
   nested escape sequences sourced from Droid-controlled fields.
+
+Use this exact sanitization and bounding policy for every string emitted by the
+hook:
+
+1. Convert only the known fields below to strings. Do not serialize arbitrary
+   Droid objects into the Warp payload.
+2. Remove Unicode control characters in `U+0000..U+001F` and `U+007F..U+009F`
+   before truncation. This specifically removes raw ESC, BEL, and C1 string
+   terminator characters from Droid-controlled data.
+3. Truncate at the last complete Unicode scalar value at or before the listed
+   limit. Do not append an ellipsis or other marker after truncation.
+4. JSON-encode the sanitized values with compact `jq -c` output, using
+   `jq --arg` and `jq --argjson` for value injection.
+5. After JSON encoding, the body portion of the OSC 777 notification must be at
+   most 8192 UTF-8 bytes. If the body is larger, drop optional fields in this
+   order and re-encode after each step: `tool_input`, `transcript_path`, then
+   event-specific text (`query` or `summary`). If the required fields still do
+   not fit, skip emitting that notification rather than writing an oversized
+   payload.
+
+Per-field limits:
+
+| Payload field | Source | Limit |
+| --- | --- | --- |
+| `session_id` | Droid `session_id` | 128 Unicode scalar values |
+| `cwd` | Droid `cwd` or `FACTORY_PROJECT_DIR` | 1024 Unicode scalar values |
+| `project` | basename derived from sanitized `cwd` | 128 Unicode scalar values |
+| `transcript_path` | Droid `transcript_path` | 1024 Unicode scalar values |
+| `plugin_version` | hook bridge constant | 32 Unicode scalar values |
+| `query` | Droid `prompt` | 2048 Unicode scalar values |
+| `summary` | Droid notification `message` | 2048 Unicode scalar values |
+| `tool_name` | Droid `tool_name` | 128 Unicode scalar values |
+| `tool_input.command` or `tool_input.file_path` | bounded preview extracted from Droid tool input | 2048 Unicode scalar values |
+
+`agent` and `event` are fixed hook-generated constants, not Droid-controlled
+strings. The hook should not emit `response` in v1.
+
+The final terminal write must contain raw ESC and BEL only as the OSC wrapper
+delimiters: `ESC ] 777 ; notify ; warp://cli-agent ; <json> BEL`. The encoded
+JSON body must not contain raw bytes in `0x00..0x1F` or `0x7F`. JSON escape
+sequences such as `\u001b` are not sufficient by themselves; Droid-controlled
+control characters must be removed before encoding so Warp never stores or
+renders those controls after JSON parsing.
 
 ### 5. Keep other agents unchanged
 
@@ -227,12 +305,13 @@ Do not change:
    instructions.
 2. User starts Droid inside Warp.
 3. Droid invokes `SessionStart`; the hook emits a safely encoded structured OSC
-   777
-   `session_start` payload with `agent: "droid"`.
+   777 `session_start` payload with `agent: "droid"`.
 4. Warp parses the event, recognizes `CLIAgent::Droid`, and creates a Droid
    default session listener.
 5. Warp registers the listener in `Idle` state, seeds context from
-   `SessionStart`, and does not show the running spinner.
+   `SessionStart`, and does not show the running spinner. If command detection
+   had already created an `InProgress` Droid session for the same terminal, this
+   step changes that session to `Idle` and clears the spinner.
 6. User submits a prompt. Droid invokes `UserPromptSubmit`; the hook emits
    `prompt_submit`.
 7. Warp forwards the event to `CLIAgentSessionsModel`, and the Droid session is
@@ -265,16 +344,29 @@ Implementation tests should include:
 2. `app/src/terminal/cli_agent_sessions/mod_tests.rs`
    - Registering a listener from a Droid `SessionStart` creates or upgrades a
      session in `Idle`, not `InProgress`.
+   - If command detection already created an `InProgress` Droid session with no
+     status-bearing rich event, registering from Droid `SessionStart` changes it
+     to `Idle` and notifies status surfaces so the running spinner clears.
+   - If the stored session has already applied a status-bearing rich event with
+     the same non-empty `session_id`, a later duplicate Droid `SessionStart`
+     keeps that status for that same session.
+   - If a Droid `SessionStart` has a different `session_id` from the stored
+     session, the status-bearing marker resets and the session becomes `Idle`.
    - Applying that same `SessionStart` seeds context/plugin version but emits no
-     `StatusChanged` and does not project to `ConversationStatus::InProgress`.
+     `InProgress`, `Blocked`, or `Success` status and does not project to
+     `ConversationStatus::InProgress`.
    - A later `PromptSubmit` moves the session from `Idle` to `InProgress`.
    - A later `PermissionRequest` or `QuestionAsked` moves the session from
      `Idle` or `InProgress` to `Blocked`.
+   - The status-bearing marker remains false for `SessionStart` and `IdlePrompt`
+     and becomes true only after an applied rich event changes status.
 
 3. `app/src/terminal/view_tests.rs`
    - A Droid `SessionStart` with rich notifications enabled creates the listener
      but leaves the vertical-tab status indicator without an in-progress
      spinner.
+   - A command-detected Droid session that was showing an in-progress spinner
+     clears that spinner when the first rich event is setup-only `SessionStart`.
    - A later Droid `prompt_submit` shows the in-progress spinner.
 
 4. `app/src/terminal/cli_agent_sessions/plugin_manager/mod_tests.rs`
@@ -293,10 +385,24 @@ Implementation tests should include:
      `PostToolUse`.
    - install instructions mention or encode the documented hooks configuration
      shape.
-   - install instructions mention required dependencies such as `jq`, if the
-     hook script uses them.
-   - hook payload construction uses a JSON encoder and sanitizes terminal
-     control bytes from Droid-controlled strings before writing OSC 777.
+   - install instructions mention the required `jq` dependency and the hook
+     script exits non-fatally when `jq` is unavailable.
+   - hook payload construction uses compact JSON encoder output and sanitizes
+     terminal control bytes from Droid-controlled strings before writing OSC 777.
+   - hook payload tests cover the exact per-field limits for `session_id`, `cwd`,
+     `project`, `transcript_path`, `query`, `summary`, `tool_name`, and
+     tool-input preview.
+   - hook payload tests verify truncation happens at a complete Unicode scalar
+     boundary and does not append an ellipsis.
+   - hook payload tests verify the final encoded JSON body is at most 8192 UTF-8
+     bytes or no notification is emitted.
+   - hook payload tests verify raw Droid `tool_input` objects are not forwarded;
+     only a sanitized bounded preview under `tool_input.command` or
+     `tool_input.file_path` is emitted.
+   - hook payload tests inject ESC, BEL, C1 controls, and embedded OSC
+     terminators into prompt text, notification text, paths, tool names, and
+     tool input, then assert the final bytes written to `/dev/tty` contain no raw
+     terminal control bytes except the required OSC wrapper delimiters.
 
 6. Parser coverage, if not already covered elsewhere:
    - A structured v1 payload with `agent: "droid"` resolves to
@@ -346,12 +452,15 @@ Manual validation:
 
 - Risk: Droid-controlled text could inject malformed JSON or terminal control
   sequences into OSC 777 output. Mitigation: build payloads with a JSON encoder,
-  bound long fields, and strip or escape terminal control bytes before writing
-  the notification.
+  apply the per-field limits above, remove terminal control characters before
+  encoding, avoid forwarding raw `tool_input`, enforce the 8192-byte JSON body
+  cap, and test the final bytes written to `/dev/tty`.
 
 - Risk: a setup-only `SessionStart` could make Warp display Droid as running.
-  Mitigation: add an explicit idle registration state and tests proving
-  `SessionStart` does not produce an in-progress conversation status.
+  Mitigation: add an explicit idle registration state, track whether a
+  status-bearing rich event has actually applied to the current Droid
+  `session_id`, and test both new sessions and command-detected `InProgress`
+  sessions being reset to `Idle` by setup-only `SessionStart`.
 
 - Risk: adding Droid to the default listener forwards unexpected event types.
   Mitigation: the event parser already normalizes known event names, and the
