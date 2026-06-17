@@ -125,9 +125,12 @@ work to advertise whether it is still active, done, or waiting.
     sanitized strings bounded by the technical spec and reduces tool input to a
     bounded preview rather than forwarding Droid's raw tool input object.
 
-17. The integration applies to local Droid sessions running inside Warp. Remote,
-    SSH, or tmux-specific notification forwarding behavior is not changed by
-    this issue.
+17. The v1 supported setup and validation target is local Droid sessions running
+    inside Warp. This issue does not add or change remote, SSH, or tmux-specific
+    notification forwarding behavior. If an existing Warp-managed remote shell
+    already exposes the same CLI-agent protocol environment, any Droid events
+    emitted through that path are treated as existing best-effort protocol
+    behavior rather than a new support guarantee.
 
 ## Event mapping
 

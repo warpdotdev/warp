@@ -197,16 +197,26 @@ rich CLI-agent notification rollout gate.
 
 Manual instructions should guide the user to:
 
-1. Create a local POSIX shell hook script that reads Droid's hook JSON from
-   stdin and uses `jq` for JSON parsing, sanitization, truncation, and payload
-   construction.
-2. Exit without emitting anything when Droid is not running inside Warp, such as
-   when `WARP_CLI_AGENT_PROTOCOL_VERSION` is absent.
+1. Create a user-managed POSIX shell hook script that reads Droid's hook JSON
+   from stdin and uses `jq` for JSON parsing, sanitization, truncation, and
+   payload construction.
+2. Exit without emitting anything when Warp has not advertised the rich
+   CLI-agent protocol, such as when `WARP_CLI_AGENT_PROTOCOL_VERSION` is absent.
 3. Map supported Droid hook events to Warp CLI-agent events.
-4. Write an OSC 777 notification to the terminal in Warp's existing
-   `warp://cli-agent` format.
+4. Write an OSC 777 notification to `/dev/tty` in Warp's existing
+   `warp://cli-agent` format, rather than writing the notification to hook
+   stdout.
 5. Register the hook command in Droid's documented hooks configuration.
 6. Restart Droid or start a new Droid session so the hooks are active.
+
+`WARP_CLI_AGENT_PROTOCOL_VERSION` is a protocol capability gate, not a
+local-session proof. The v1 instructions and manual validation target local
+Droid sessions. Do not add Droid-specific SSH or tmux forwarding logic, and do
+not claim first-class remote/tmux support in this issue. If an existing
+Warp-managed remote shell already forwards the CLI-agent protocol environment,
+the hook may emit through that existing path; Warp should treat that as
+best-effort existing protocol behavior, with `remote_host` derived by the
+terminal session model, not as a new support guarantee from this spec.
 
 The implementation should align the configuration snippet with Droid's current
 documented hooks schema. As of the referenced Factory docs, user hooks live in
@@ -231,8 +241,12 @@ The emitted JSON payload should include:
 - `agent`: `"droid"`
 - `event`: the mapped Warp event name
 - `session_id`: Droid `session_id`, when present
-- `cwd`: Droid `cwd`, when present
+- `cwd`: Droid `cwd`, or `FACTORY_PROJECT_DIR` when `cwd` is absent
 - `project`: best-effort project name derived from `cwd`, when present
+- `transcript_path`: Droid `transcript_path`, when present in the hook input
+  for any mapped event. This is optional payload metadata; v1 does not require
+  storing it in `CLIAgentSessionContext`, and it must not drive status
+  transitions.
 - `plugin_version`: the Droid hook bridge version
 
 Event-specific fields should be populated conservatively:
@@ -516,5 +530,5 @@ Manual validation:
   auto-installable or has a stable on-disk location.
 - Revisit permission-vs-question classification if Droid exposes a structured
   notification type.
-- Evaluate remote, SSH, and tmux behavior separately from this local Droid hook
-  integration.
+- Evaluate first-class remote, SSH, and tmux support separately from this v1
+  Droid hook integration.
