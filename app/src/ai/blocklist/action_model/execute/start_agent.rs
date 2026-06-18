@@ -4,7 +4,7 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use shell_words::split as split_shell_words;
 use warp_cli::agent::Harness;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
@@ -245,6 +245,7 @@ impl StartAgentExecutor {
 
     fn handle_history_event(
         &mut self,
+        _: ModelHandle<BlocklistAIHistoryModel>,
         event: &BlocklistAIHistoryEvent,
         ctx: &mut ModelContext<Self>,
     ) {

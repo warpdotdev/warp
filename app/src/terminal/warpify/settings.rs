@@ -277,13 +277,13 @@ impl WarpifySettings {
         }
     }
 
-    /// This is different from the typical register method, as it also ensures that
-    /// our parsed regexes stay in sync with the underlying data by having the
-    /// model subscribe to itself after it's registered.
+    /// This is different from the typical register method, as it also ensures
+    /// that our parsed regexes stay in sync with the underlying data by
+    /// subscribing to the model's change events at the app level.
     pub fn register(ctx: &mut AppContext) {
         let handle = ctx.add_singleton_model(Self::new_from_storage);
-        handle.clone().update(ctx, |_, ctx| {
-            ctx.subscribe_to_model(&handle, |me, event, _| match event {
+        ctx.subscribe_to_model(&handle, |settings, event, ctx| {
+            settings.update(ctx, |me, _| match event {
                 WarpifySettingsChangedEvent::AddedSubshellCommands { .. } => {
                     me.parsed_added_subshell_commands =
                         Self::parse_added_subshell_commands(&me.added_subshell_commands)
@@ -300,7 +300,7 @@ impl WarpifySettings {
                 WarpifySettingsChangedEvent::UseSshTmuxWrapper { .. } => {}
                 WarpifySettingsChangedEvent::SshTmuxDeprecationNoticePending { .. } => {}
                 WarpifySettingsChangedEvent::SshExtensionInstallModeSetting { .. } => {}
-            })
+            });
         });
 
         // One-time migration: the tmux-based SSH wrapper is deprecated in favor of the
@@ -308,7 +308,7 @@ impl WarpifySettings {
         // flag that we should show them a one-time deprecation notice on their next SSH, then
         // reset the opt-in. Because we only act when the value is still `true`, resetting it to
         // `false` ensures this migration does not run again.
-        handle.clone().update(ctx, |me, ctx| {
+        handle.update(ctx, |me, ctx| {
             if me.use_ssh_tmux_wrapper.is_value_explicitly_set() && *me.use_ssh_tmux_wrapper.value()
             {
                 if let Err(e) = me.ssh_tmux_deprecation_notice_pending.set_value(true, ctx) {

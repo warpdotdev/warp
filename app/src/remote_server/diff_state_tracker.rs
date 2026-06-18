@@ -289,7 +289,7 @@ impl RemoteDiffStateManager {
             self.add_pending_response(key.clone(), request_id.clone(), conn_id);
 
             let key_for_sub = key;
-            ctx.subscribe_to_model(&model, move |me, event, ctx| {
+            ctx.subscribe_to_model(&model, move |me, _, event, ctx| {
                 me.handle_model_event(&key_for_sub, event, ctx);
             });
 

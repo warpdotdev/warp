@@ -264,7 +264,12 @@ impl Searcher {
         self.buffer.as_ref(ctx).prepare_search(&config)
     }
 
-    fn handle_buffer_event(&mut self, event: &BufferEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_buffer_event(
+        &mut self,
+        _: ModelHandle<Buffer>,
+        event: &BufferEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if let BufferEvent::ContentChanged { .. } = event {
             self.run_search(ctx);
         }

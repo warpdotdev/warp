@@ -22,7 +22,7 @@ pub(crate) fn wire_remote_bundled_skills(ctx: &mut AppContext) {
 impl SkillManager {
     fn subscribe_to_remote_bundled_skills(&mut self, ctx: &mut ModelContext<Self>) {
         let remote_server_manager = RemoteServerManager::handle(ctx);
-        ctx.subscribe_to_model(&remote_server_manager, |me, event, _ctx| match event {
+        ctx.subscribe_to_model(&remote_server_manager, |me, _, event, _ctx| match event {
             RemoteServerManagerEvent::BundledSkillsSnapshot { host_id, skills } => {
                 if !FeatureFlag::BundledSkills.is_enabled() {
                     return;

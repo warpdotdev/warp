@@ -276,7 +276,7 @@ impl ProjectContextModel {
         let mut model = Self::default();
         #[cfg(feature = "local_fs")]
         {
-            ctx.subscribe_to_model(&RepoMetadataModel::handle(ctx), move |me, event, ctx| {
+            ctx.subscribe_to_model(&RepoMetadataModel::handle(ctx), move |me, _, event, ctx| {
                 match event {
                     RepoMetadataEvent::RepositoryUpdated { id } => {
                         me.refresh_project_rules_for_repo(

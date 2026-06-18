@@ -149,12 +149,12 @@ impl RemoteCodebaseIndexStatusTelemetryUpdate {
 impl RemoteCodebaseIndexModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let manager = RemoteServerManager::handle(ctx);
-        ctx.subscribe_to_model(&manager, |me, event, ctx| {
+        ctx.subscribe_to_model(&manager, |me, _, event, ctx| {
             me.handle_remote_server_manager_event(event, ctx);
         });
 
         let user_workspaces = UserWorkspaces::handle(ctx);
-        ctx.subscribe_to_model(&user_workspaces, |me, event, ctx| {
+        ctx.subscribe_to_model(&user_workspaces, |me, _, event, ctx| {
             if let UserWorkspacesEvent::CodebaseContextEnablementChanged = event {
                 me.handle_codebase_context_enablement_changed(ctx);
             }

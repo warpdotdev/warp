@@ -1409,7 +1409,7 @@ pub(crate) fn initialize_app(
         #[cfg(not(target_family = "wasm"))]
         if FeatureFlag::SuperGrok.is_enabled() {
             use crate::workspaces::user_workspaces::UserWorkspacesEvent;
-            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, event, ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, _, event, ctx| {
                 if matches!(event, UserWorkspacesEvent::TeamsChanged) {
                     let allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
                     manager.set_grok_refresh_allowed(allowed, ctx);
@@ -1654,7 +1654,7 @@ pub(crate) fn initialize_app(
             {
                 use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
                 let mgr = RemoteServerManager::handle(ctx);
-                ctx.subscribe_to_model(&mgr, |me, event, ctx| match event {
+                ctx.subscribe_to_model(&mgr, |me, _, event, ctx| match event {
                     RemoteServerManagerEvent::RepoMetadataSnapshot { host_id, update } => {
                         me.insert_remote_snapshot(host_id.clone(), update, ctx);
                     }

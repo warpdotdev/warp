@@ -74,7 +74,12 @@ impl ShellCommandExecutor {
         }
     }
 
-    fn handle_terminal_model_event(&mut self, event: &ModelEvent, _ctx: &mut ModelContext<Self>) {
+    fn handle_terminal_model_event(
+        &mut self,
+        _: ModelHandle<ModelEventDispatcher>,
+        event: &ModelEvent,
+        _ctx: &mut ModelContext<Self>,
+    ) {
         // We wait for precmd for the block _after_ the requested command's block so that
         // downstream checks for current working directory are fresh. The precmd hook is when
         // the shell relays current working directory to warp.

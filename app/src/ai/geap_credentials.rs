@@ -106,7 +106,7 @@ pub trait GeapCredentialRefresher {
 
 impl GeapCredentialRefresher for ApiKeyManager {
     fn subscribe_to_geap_settings_changes(&mut self, ctx: &mut ModelContext<Self>) {
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, event, ctx| {
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, _, event, ctx| {
             if matches!(
                 event,
                 UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
@@ -116,7 +116,7 @@ impl GeapCredentialRefresher for ApiKeyManager {
             }
         });
 
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |manager, event, ctx| {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |manager, _, event, ctx| {
             if matches!(
                 event,
                 AISettingsChangedEvent::GeminiEnterpriseCredentialsEnabled { .. }

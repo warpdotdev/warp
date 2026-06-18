@@ -710,7 +710,7 @@ impl AgentDriver {
         )?;
 
         // Subscribe to TerminalDriver events for task-specific handling.
-        ctx.subscribe_to_model(&terminal_driver, |me, event, ctx| {
+        ctx.subscribe_to_model(&terminal_driver, |me, _, event, ctx| {
             me.handle_terminal_driver_event(event, ctx);
         });
 
@@ -781,7 +781,7 @@ impl AgentDriver {
         terminal_driver: ModelHandle<terminal::TerminalDriver>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&terminal_driver, |me, event, ctx| {
+        ctx.subscribe_to_model(&terminal_driver, |me, _, event, ctx| {
             me.handle_terminal_driver_event(event, ctx);
         });
         Self {
@@ -1253,7 +1253,7 @@ impl AgentDriver {
         // Clear any stale subscription left behind by a previous wait that
         // timed out, so it can't tear down this wait's subscription.
         ctx.unsubscribe_from_model(&templatable_mcp_manager);
-        ctx.subscribe_to_model(&templatable_mcp_manager, move |_me, event, ctx| {
+        ctx.subscribe_to_model(&templatable_mcp_manager, move |_me, _, event, ctx| {
             let TemplatableMCPServerManagerEvent::StateChanged { uuid, state } = event else {
                 return;
             };
@@ -1535,7 +1535,7 @@ impl AgentDriver {
         let file_based_mcp_manager = FileBasedMCPManager::handle(ctx);
         let manager_clone = file_based_mcp_manager.clone();
 
-        ctx.subscribe_to_model(&file_based_mcp_manager, move |_me, event, ctx| {
+        ctx.subscribe_to_model(&file_based_mcp_manager, move |_me, _, event, ctx| {
             if let FileBasedMCPManagerEvent::CloudEnvMcpScanComplete {
                 repo_path,
                 wait_server_uuids,
@@ -1644,7 +1644,7 @@ impl AgentDriver {
         let manager_clone = templatable_manager_handle.clone();
         let pending_state_details_for_subscription = Arc::clone(&pending_state_details);
 
-        ctx.subscribe_to_model(&templatable_manager_handle, move |_me, event, ctx| {
+        ctx.subscribe_to_model(&templatable_manager_handle, move |_me, _, event, ctx| {
             if let TemplatableMCPServerManagerEvent::StateChanged { uuid, state } = event {
                 if !pending_uuids.contains(uuid) {
                     return;
@@ -2948,7 +2948,7 @@ impl AgentDriver {
         let terminal_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
         let mut written_conversation_id = false;
 
-        ctx.subscribe_to_model(&history_model_handle, move |me, event, ctx| {
+        ctx.subscribe_to_model(&history_model_handle, move |me, _, event, ctx| {
             if event.terminal_view_id().is_some_and(|id| id != terminal_id) {
                 return;
             }
@@ -3201,7 +3201,7 @@ impl AgentDriver {
         });
 
         // Subscribe to document model events to emit artifact_created when plans sync to Warp Drive.
-        ctx.subscribe_to_model(&AIDocumentModel::handle(ctx), move |me, event, ctx| {
+        ctx.subscribe_to_model(&AIDocumentModel::handle(ctx), move |me, _, event, ctx| {
             let AIDocumentModelEvent::DocumentSaveStatusUpdated(document_id) = event else {
                 return;
             };
@@ -3354,9 +3354,7 @@ impl AgentDriver {
             });
         }
 
-        ctx.subscribe_to_model(
-            &CLIAgentSessionsModel::handle(ctx),
-            move |me, event, ctx| match event {
+        ctx.subscribe_to_model(&CLIAgentSessionsModel::handle(ctx), move |me, _, event, ctx| match event {
                 CLIAgentSessionsModelEvent::StatusChanged {
                     terminal_view_id: event_tid,
                     status,
@@ -3424,8 +3422,7 @@ impl AgentDriver {
                 CLIAgentSessionsModelEvent::Started { .. }
                 | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
                 | CLIAgentSessionsModelEvent::Ended { .. } => {}
-            },
-        );
+            });
     }
 
     /// Handle events re-emitted by the `TerminalDriver`.

@@ -1200,7 +1200,7 @@ impl TerminalManager {
 
         // Whenever we get a BlockStarted, we want to start the terminal attribute poller.
         // Whenever the block is completed, we can stop the terminal attribute poller.
-        ctx.subscribe_to_view(terminal_view, move |_view, event, ctx| {
+        ctx.subscribe_to_view(terminal_view, move |_view, _, event, ctx| {
             let Some(poller) = poller_weak_handle.upgrade(ctx) else {
                 return;
             };
@@ -1253,7 +1253,7 @@ impl TerminalManager {
         // this logic can't live in TerminalView (because termios is a *nix thing).
         ctx.subscribe_to_model(
             terminal_attributes_poller,
-            move |terminal_manager, event, ctx| {
+            move |terminal_manager, _, event, ctx| {
                 let Some(view) = view_weak_handle.upgrade(ctx) else {
                     return;
                 };

@@ -68,7 +68,7 @@ impl OneTimeModalModel {
         // Subscribe to UserWorkspaces to detect when sunsetted_to_build_ts changes
         ctx.subscribe_to_model(
             &crate::workspaces::user_workspaces::UserWorkspaces::handle(ctx),
-            |me, event, ctx| {
+            |me, _, event, ctx| {
                 use crate::workspaces::user_workspaces::UserWorkspacesEvent;
                 match event {
                     UserWorkspacesEvent::SunsettedToBuildDataUpdated => {
@@ -93,7 +93,7 @@ impl OneTimeModalModel {
         });
 
         // Subscribe to auth manager events to automatically trigger modal when user becomes onboarded
-        ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, event, ctx| {
+        ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, _, event, ctx| {
             let AuthManagerEvent::AuthComplete = event else {
                 return;
             };
@@ -105,7 +105,7 @@ impl OneTimeModalModel {
                 // must all await initial load to be triggered, else we risk reading a stale triggered value.
                 ctx.subscribe_to_model(
                     &CloudPreferencesSyncer::handle(ctx),
-                    move |me, event, ctx| {
+                    move |me, _, event, ctx| {
                         if let CloudPreferencesSyncerEvent::InitialLoadCompleted = event {
                             ctx.unsubscribe_from_model(&CloudPreferencesSyncer::handle(ctx));
                             me.has_completed_initial_modal_checks = true;

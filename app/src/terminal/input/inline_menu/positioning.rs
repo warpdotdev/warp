@@ -65,7 +65,7 @@ impl InlineMenuPositioner {
             .inline_menu_custom_content_heights
             .value()
             .clone();
-        ctx.subscribe_to_model(suggestions_mode_model, |me, _, ctx| {
+        ctx.subscribe_to_model(suggestions_mode_model, |me, _, _, ctx| {
             let suggestions_mode_model = me.suggestions_mode_model.as_ref(ctx);
             if suggestions_mode_model.is_inline_menu_open() {
                 if me.agent_view_controller.as_ref(ctx).is_active() {

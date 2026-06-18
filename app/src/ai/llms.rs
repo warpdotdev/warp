@@ -579,7 +579,7 @@ impl LLMPreferences {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let models_by_feature = get_cached_models(ctx).unwrap_or_default();
 
-        ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, _, event, ctx| {
             if let NetworkStatusEvent::NetworkStatusChanged {
                 new_status: NetworkStatusKind::Online,
             } = event
@@ -592,13 +592,13 @@ impl LLMPreferences {
         // available LLMs query to the general workspace metadata query which is polled
         // and hooked up to workspace changes. For that to work, each user would need to
         // have a personal workspace. This is a stop-gap.
-        ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, _, event, ctx| {
             if let AuthManagerEvent::AuthComplete = event {
                 me.refresh_authed_models(ctx);
             }
         });
 
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
                 me.sanitize_disabled_custom_model_preferences(ctx);
                 me.refresh_authed_models(ctx);
@@ -611,7 +611,7 @@ impl LLMPreferences {
         // immediately flow through to the model picker.
         ctx.subscribe_to_model(
             &ApiKeyManager::handle(ctx),
-            |me, _event: &ApiKeyManagerEvent, ctx| {
+            |me, _, _event: &ApiKeyManagerEvent, ctx| {
                 me.rebuild_custom_llms(ctx);
                 me.reconcile_disabled_model_preferences(ctx);
                 ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);

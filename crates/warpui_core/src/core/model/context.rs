@@ -67,8 +67,17 @@ impl<'a, T: Entity> ModelContext<'a, T> {
     pub fn subscribe_to_model<S: Entity, F>(&mut self, handle: &ModelHandle<S>, mut callback: F)
     where
         S::Event: 'static,
-        F: 'static + FnMut(&mut T, &S::Event, &mut ModelContext<T>),
+        F: 'static + FnMut(&mut T, ModelHandle<S>, &S::Event, &mut ModelContext<T>),
     {
+        // Self-subscriptions are disallowed: `emit_event` temporarily removes the subscriber model
+        // from `app.models` before invoking callbacks, so `emitter_handle.upgrade` would return
+        // `None` and silently drop the callback.
+        debug_assert_ne!(
+            handle.id(),
+            self.model_id,
+            "a model must not subscribe to its own events"
+        );
+        let emitter_handle = handle.downgrade();
         self.app
             .subscriptions
             .entry(handle.id())
@@ -76,11 +85,13 @@ impl<'a, T: Entity> ModelContext<'a, T> {
             .push(Subscription::FromModel {
                 model_id: self.model_id,
                 callback: Box::new(move |model, payload, app, model_id| {
-                    let model = model.downcast_mut().expect("downcast is type safe");
-                    let payload: &<S as Entity>::Event =
-                        payload.downcast_ref().expect("downcast is type safe");
-                    let mut ctx = ModelContext::new(app, model_id);
-                    callback(model, payload, &mut ctx);
+                    if let Some(emitter_handle) = emitter_handle.upgrade(app) {
+                        let model = model.downcast_mut().expect("downcast is type safe");
+                        let payload: &<S as Entity>::Event =
+                            payload.downcast_ref().expect("downcast is type safe");
+                        let mut ctx = ModelContext::new(app, model_id);
+                        callback(model, emitter_handle, payload, &mut ctx);
+                    }
                 }),
             });
     }
@@ -130,8 +141,9 @@ impl<'a, T: Entity> ModelContext<'a, T> {
     where
         V: View,
         V::Event: 'static,
-        F: 'static + FnMut(&mut T, &V::Event, &mut ModelContext<T>),
+        F: 'static + FnMut(&mut T, ViewHandle<V>, &V::Event, &mut ModelContext<T>),
     {
+        let emitter_handle = handle.downgrade();
         self.app
             .subscriptions
             .entry(handle.id())
@@ -139,10 +151,12 @@ impl<'a, T: Entity> ModelContext<'a, T> {
             .push(Subscription::FromModel {
                 model_id: self.model_id,
                 callback: Box::new(move |model, payload, app, model_id| {
-                    let model = model.downcast_mut().expect("downcast is type safe");
-                    let payload = payload.downcast_ref().expect("downcast is type safe");
-                    let mut ctx = ModelContext::new(app, model_id);
-                    callback(model, payload, &mut ctx);
+                    if let Some(emitter_handle) = emitter_handle.upgrade(app) {
+                        let model = model.downcast_mut().expect("downcast is type safe");
+                        let payload = payload.downcast_ref().expect("downcast is type safe");
+                        let mut ctx = ModelContext::new(app, model_id);
+                        callback(model, emitter_handle, payload, &mut ctx);
+                    }
                 }),
             });
     }
