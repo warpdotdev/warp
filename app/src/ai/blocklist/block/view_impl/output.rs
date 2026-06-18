@@ -1144,8 +1144,9 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
             // While an automatic resume is still in flight, keep the failed exchange
             // quiet: skip the error banner, the "won't count towards usage" notice, and
             // the debug footer. The full failure UI is surfaced only once recovery has
-            // actually failed (`will_attempt_resume` is false).
-            if !error.will_attempt_resume() {
+            // actually failed. Dogfood builds (Local/Dev) opt out so developers still see
+            // every transport failure aggressively.
+            if !error.should_suppress_during_recovery() {
                 output_items.add_child(
                     render_failed_output(
                         FailedOutputProps {

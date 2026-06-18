@@ -1190,9 +1190,9 @@ impl View for CLISubagentView {
             // While an automatic resume is still in flight, keep the failed exchange
             // quiet: don't switch to the error border, and skip the banner, the "won't
             // count towards usage" notice, and the debug footer. The full failure UI is
-            // surfaced only once recovery has actually failed (`will_attempt_resume` is
-            // false).
-            if !error.will_attempt_resume() {
+            // surfaced only once recovery has actually failed. Dogfood builds (Local/Dev)
+            // opt out so developers still see every transport failure aggressively.
+            if !error.should_suppress_during_recovery() {
                 output_border = Border::all(1.).with_border_color(theme.ui_error_color());
                 output_items.add_child(render_failed_output(
                     FailedOutputProps {

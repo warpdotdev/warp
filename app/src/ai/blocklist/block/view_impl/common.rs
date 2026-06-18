@@ -3040,18 +3040,9 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
     // transport failure at all. These are typically transient and recover on their own,
     // so showing the alarming "Warp lost connection" banner (plus debug info) for every
     // blip is noisy and misleading. Render nothing during in-flight recovery; the full
-    // error banner is only shown once recovery has actually failed (i.e.
-    // `will_attempt_resume` is false).
-    if matches!(
-        props.error,
-        RenderableAIError::TransientNetworkError {
-            will_attempt_resume: true,
-            ..
-        } | RenderableAIError::Other {
-            will_attempt_resume: true,
-            ..
-        }
-    ) {
+    // error banner is only shown once recovery has actually failed. Dogfood builds
+    // (Local/Dev) opt out so developers still see every transport failure aggressively.
+    if props.error.should_suppress_during_recovery() {
         return Empty::new().finish();
     }
 
