@@ -934,7 +934,6 @@ web_search_ui = []
 web_fetch_ui = []
 fork_from_command = []
 context_window_usage_v2 = []
-# Dev-only: not added to `default`, enable via `cargo run --features context_window_usage_breakdown`.
 context_window_usage_breakdown = []
 global_search = []
 file_and_diff_set_comments = []
