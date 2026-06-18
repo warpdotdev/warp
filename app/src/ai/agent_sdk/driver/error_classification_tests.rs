@@ -117,6 +117,18 @@ fn mcp_server_not_found_is_failed_with_env_setup() {
 }
 
 #[test]
+fn managed_mcp_resolution_failed_is_failed_with_env_setup() {
+    assert_state_and_code(
+        AgentDriverError::ManagedMcpResolutionFailed {
+            uid: uuid::Uuid::nil(),
+            message: "not active".into(),
+        },
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::EnvironmentSetupFailed),
+    );
+}
+
+#[test]
 fn mcp_startup_failed_is_failed_with_env_setup_and_per_server_details() {
     let (state, update) = classify_driver_error(&AgentDriverError::MCPStartupFailed {
         details: vec![

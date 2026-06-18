@@ -160,7 +160,7 @@ use crate::ai::blocklist::agent_view::{
     is_in_cloud_context, AgentInputFooter, AgentInputFooterEvent, AgentViewController,
     AgentViewEntryOrigin, EphemeralMessageModel,
 };
-use crate::ai::blocklist::block::cli_controller::CLISubagentController;
+use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBar;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::touched_repos::{
@@ -3220,6 +3220,22 @@ impl Input {
             }
         });
 
+        // Refresh the ghost text when control of a long-running command changes hands —
+        // queue mode is auto-enabled while the agent holds control, so the steer/queue
+        // hint must track the control state.
+        ctx.subscribe_to_model(&cli_subagent_controller, |me, _, event, ctx| {
+            if matches!(
+                event,
+                CLISubagentEvent::SpawnedSubagent { .. }
+                    | CLISubagentEvent::UpdatedControl { .. }
+                    | CLISubagentEvent::FinishedSubagent { .. }
+                    | CLISubagentEvent::ControlHandedBackAfterTransfer
+            ) {
+                me.set_zero_state_hint_text(ctx);
+                ctx.notify();
+            }
+        });
+
         ctx.subscribe_to_model(&ai_context_model, |me, context_model, event, ctx| {
             match event {
                 BlocklistAIContextEvent::PendingQueryStateUpdated => {
@@ -6164,7 +6180,12 @@ impl Input {
             .selected_conversation_id(app);
         let is_queue_next_prompt_enabled = FeatureFlag::QueueSlashCommand.is_enabled()
             && selected_conversation_id.is_some_and(|conversation_id| {
-                QueuedQueryModel::as_ref(app).is_queue_next_prompt_enabled(conversation_id)
+                let terminal_model = self.model.lock();
+                QueuedQueryModel::as_ref(app).is_queue_next_prompt_enabled(
+                    conversation_id,
+                    terminal_model.block_list().active_block(),
+                    app,
+                )
             });
 
         match (
@@ -13780,12 +13801,9 @@ impl Input {
         self.submit_queued_prompt(prompt, conversation_id, query_id, ctx);
     }
 
-    /// Checks whether the current input should be queued instead of executed.
-    /// Returns true (and queues the prompt) when the active conversation is in progress
-    /// (or blocked) AND either the queue-next-prompt toggle is on or (under
-    /// `QueuedPromptsV2`) the conversation is summarizing.
-    /// Only queues when AI input is active — if the user is in shell mode the
-    /// input is not queued (so e.g. `ls` still runs in the terminal).
+    /// Queues the current input instead of submitting it when the active conversation is
+    /// busy and queueing is in effect for it. Returns true when the input was queued, in
+    /// which case the caller should skip normal submission.
     fn maybe_queue_input_for_in_progress_conversation(
         &mut self,
         ctx: &mut ViewContext<Self>,
@@ -13815,9 +13833,28 @@ impl Input {
         // Summarization only routes a prompt into the queued-prompts panel under QueuedPromptsV2;
         // with the flag off, only the auto-queue toggle queues (pre-V2 behavior).
         let queue_for_summarize = is_summarizing && FeatureFlag::QueuedPromptsV2.is_enabled();
-        if !QueuedQueryModel::as_ref(ctx).is_queue_next_prompt_enabled(conversation_id)
-            && !queue_for_summarize
-        {
+
+        let queue_model = QueuedQueryModel::as_ref(ctx);
+        let queue_head_allows_lrc = match queue_model.queue(conversation_id).first() {
+            Some(row) => row.origin() == QueuedQueryOrigin::LrcAutoQueue,
+            None => true,
+        };
+        let queue_enabled = {
+            let terminal_model = self.model.lock();
+            queue_model.is_queue_next_prompt_enabled(
+                conversation_id,
+                terminal_model.block_list().active_block(),
+                ctx,
+            )
+        };
+
+        // True when the LRC branch is the effective enabler (queueing would be off outside
+        // the command) and the current queue head can fire at command finish too.
+        let queued_for_lrc = queue_enabled
+            && !queue_model.is_queue_next_prompt_toggle_enabled(conversation_id)
+            && queue_head_allows_lrc;
+
+        if !queue_enabled && !queue_for_summarize {
             return false;
         }
 
@@ -13870,18 +13907,22 @@ impl Input {
             editor.clear_buffer(ctx);
         });
 
+        // Only prompt rows get the LrcAutoQueue origin (sent when the command finishes);
+        // command rows can't be delivered to the agent, so they keep the generic origin
+        // and the existing queued-command drain semantics.
+        let origin = if queued_for_lrc && !is_command {
+            QueuedQueryOrigin::LrcAutoQueue
+        } else {
+            QueuedQueryOrigin::AutoQueueToggle
+        };
         // Commands carry no attachments; only prompts consume the pending attachments.
         let query = if is_command {
-            QueuedQuery::new_command(prompt, QueuedQueryOrigin::AutoQueueToggle)
+            QueuedQuery::new_command(prompt, origin)
         } else {
             let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
                 context_model.take_pending_attachments(ctx)
             });
-            QueuedQuery::new_with_attachments(
-                prompt,
-                QueuedQueryOrigin::AutoQueueToggle,
-                attachments,
-            )
+            QueuedQuery::new_with_attachments(prompt, origin, attachments)
         };
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.append(conversation_id, query, ctx);

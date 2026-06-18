@@ -4,6 +4,7 @@ mod base_client;
 pub mod block;
 pub mod harness_support;
 pub mod integrations;
+pub mod managed_mcp;
 pub mod managed_secrets;
 pub mod object;
 pub(crate) mod presigned_upload;
@@ -27,6 +28,7 @@ use channel_versions::ChannelVersions;
 use chrono::{DateTime, FixedOffset};
 use futures::StreamExt;
 use instant::Instant;
+use managed_mcp::ManagedMcpClient;
 use object::ObjectClient;
 use parking_lot::{Mutex, RwLock};
 use prost::Message;
@@ -1666,6 +1668,11 @@ impl ServerApiProvider {
     }
 
     pub fn get_managed_secrets_client(&self) -> Arc<dyn ManagedSecretsClient> {
+        self.server_api.clone()
+    }
+
+    #[cfg_attr(target_family = "wasm", expect(dead_code))]
+    pub fn get_managed_mcp_client(&self) -> Arc<dyn ManagedMcpClient> {
         self.server_api.clone()
     }
 

@@ -216,6 +216,39 @@ fn has_custom_endpoints_true_when_present() {
     assert!(keys.has_custom_endpoints());
 }
 
+// ── provider_key_count ─────────────────────────────────────────
+
+#[test]
+fn provider_key_count_zero_when_empty() {
+    assert_eq!(ApiKeys::default().provider_key_count(), 0);
+}
+
+#[test]
+fn provider_key_count_counts_each_provider_key() {
+    let keys = ApiKeys {
+        openai: Some("sk-o".into()),
+        anthropic: Some("sk-a".into()),
+        google: Some("AIza".into()),
+        open_router: Some("sk-or".into()),
+        custom_endpoints: vec![],
+    };
+    assert_eq!(keys.provider_key_count(), 4);
+}
+
+#[test]
+fn provider_key_count_ignores_blank_keys_and_endpoints() {
+    let keys = ApiKeys {
+        openai: Some("sk-o".into()),
+        anthropic: Some("   ".into()),
+        google: None,
+        open_router: None,
+        custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
+    };
+    // Only the non-blank OpenAI key counts; the whitespace Anthropic key and the
+    // custom endpoint are excluded.
+    assert_eq!(keys.provider_key_count(), 1);
+}
+
 // ── custom_model_providers_for_request ──────────────────────────
 
 #[test]

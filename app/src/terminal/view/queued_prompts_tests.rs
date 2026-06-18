@@ -912,6 +912,133 @@ fn complete_drain_with_non_empty_input_preserves_edited_head_row() {
 }
 
 #[test]
+fn commit_edit_saves_current_editor_text_for_lrc_row() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(
+                    "stale committed".to_owned(),
+                    QueuedQueryOrigin::LrcAutoQueue,
+                ),
+                ctx,
+            )
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.enter_edit_mode(conversation_id, query_id, ctx);
+        });
+
+        let queued_prompts_panel = terminal.read(&app, |view, ctx| {
+            view.input()
+                .as_ref(ctx)
+                .queued_prompts_panel()
+                .cloned()
+                .expect("queue panel should exist")
+        });
+        queued_prompts_panel.update(&mut app, |panel, ctx| {
+            panel.set_edit_buffer_text_for_test("edited before finish", ctx);
+            panel.commit_edit(ctx);
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].id(), query_id);
+            assert_eq!(queue[0].text(), "edited before finish");
+            assert_eq!(model.editing_row(conversation_id), None);
+        });
+    });
+}
+
+#[test]
+fn lrc_finish_commits_edited_lrc_row_before_sending() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(
+                    "stale committed".to_owned(),
+                    QueuedQueryOrigin::LrcAutoQueue,
+                ),
+                ctx,
+            )
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.enter_edit_mode(conversation_id, query_id, ctx);
+        });
+
+        let queued_prompts_panel = terminal.read(&app, |view, ctx| {
+            view.input()
+                .as_ref(ctx)
+                .queued_prompts_panel()
+                .cloned()
+                .expect("queue panel should exist")
+        });
+        queued_prompts_panel.update(&mut app, |panel, ctx| {
+            panel.set_edit_buffer_text_for_test("edited before finish", ctx);
+        });
+
+        let edit_commit_count = Rc::new(RefCell::new(0));
+        let edit_commit_count_for_subscription = edit_commit_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(
+                &QueuedQueryModel::handle(ctx),
+                move |_, event: &crate::ai::blocklist::QueuedQueryEvent, _| {
+                    if matches!(
+                        event,
+                        crate::ai::blocklist::QueuedQueryEvent::EditCommitted { .. }
+                    ) {
+                        *edit_commit_count_for_subscription.borrow_mut() += 1;
+                    }
+                },
+            );
+        });
+
+        let ai_query_count = Rc::new(RefCell::new(0));
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let ai_query_count_for_subscription = ai_query_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &InputEvent, _| {
+                if matches!(event, InputEvent::ExecuteAIQuery) {
+                    *ai_query_count_for_subscription.borrow_mut() += 1;
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.send_lrc_queued_prompts(conversation_id, ctx);
+        });
+
+        assert_eq!(*edit_commit_count.borrow(), 1);
+        assert_eq!(*ai_query_count.borrow(), 1);
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
+
+#[test]
 fn complete_drain_with_empty_queue_returns_none() {
     with_singleton(|mut app, model, conv| {
         let action = drain_one(&model, &mut app, conv);

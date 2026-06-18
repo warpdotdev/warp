@@ -6,7 +6,7 @@ use onboarding::OnboardingAuthState;
 use warp_core::ui::icons::Icon;
 use warpui::{AppContext, SingletonEntity};
 
-use super::llms::{DisableReason, LLMInfo, LLMPreferences};
+use super::llms::{LLMInfo, LLMPreferences};
 use crate::auth::AuthStateProvider;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -16,7 +16,6 @@ impl From<&LLMInfo> for OnboardingModelInfo {
             id: llm.id.clone(),
             title: llm.display_name.clone(),
             icon: llm.provider.icon().unwrap_or(Icon::Oz),
-            requires_upgrade: matches!(llm.disable_reason, Some(DisableReason::RequiresUpgrade)),
             is_default: false,
         }
     }
