@@ -277,9 +277,9 @@ impl WarpifySettings {
         }
     }
 
-    /// This is different from the typical register method, as it also ensures that
-    /// our parsed regexes stay in sync with the underlying data by having the
-    /// model subscribe to itself after it's registered.
+    /// This is different from the typical register method, as it also ensures
+    /// that our parsed regexes stay in sync with the underlying data by
+    /// subscribing to the model's change events at the app level.
     pub fn register(ctx: &mut AppContext) {
         let handle = ctx.add_singleton_model(Self::new_from_storage);
         ctx.subscribe_to_model(&handle, |settings, event, ctx| {
