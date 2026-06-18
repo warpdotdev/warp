@@ -331,7 +331,7 @@ impl BlocklistAIStatusBar {
             ctx.notify();
         });
 
-        let agent_message_bar = ctx.add_view(|ctx| {
+        let agent_message_bar = ctx.add_typed_action_view(|ctx| {
             AgentMessageBar::new(
                 agent_view_controller.clone(),
                 ephemeral_message_model.clone(),

@@ -20,7 +20,7 @@ use warpui::prelude::{
     Align, ConstrainedBox, Cursor, Empty, Hoverable, MainAxisAlignment, SavePosition,
 };
 use warpui::scene::Border;
-use warpui::ui_components::components::UiComponent as _;
+use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
 use warpui::{
     Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext,
@@ -1227,8 +1227,6 @@ where
     let theme = appearance.theme();
     let font_family = appearance.ui_font_family();
     let font_size = styles::CREDITS_BANNER_FONT_SIZE;
-
-    // Use ANSI terminal colors for the pill styling.
     let text_color = theme.terminal_colors().normal.blue;
 
     let credits_text = format!("{credits} free cloud agent credits");
@@ -1240,6 +1238,10 @@ where
     let close_button = appearance
         .ui_builder()
         .close_button(12., close_button_mouse_state)
+        .with_style(UiComponentStyles {
+            font_color: Some(text_color.into()),
+            ..Default::default()
+        })
         .build()
         .on_click(move |ctx, _, _| {
             ctx.dispatch_typed_action(dismiss_action.clone());
