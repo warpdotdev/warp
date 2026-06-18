@@ -15536,6 +15536,7 @@ dependencies = [
  "tokio",
  "tracing",
  "trait-set",
+ "unicode-general-category",
  "vec1",
  "warp_util",
  "warpui_core",
