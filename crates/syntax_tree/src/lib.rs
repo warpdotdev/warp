@@ -23,6 +23,12 @@ use warpui_core::{AppContext, Entity, ModelContext, WeakModelHandle};
 
 const MAX_SYNTAX_TREES: usize = 3;
 
+/// Maximum buffer size (in bytes) for which tree-sitter parsing is performed.
+/// Files larger than this threshold skip syntax highlighting to avoid excessive
+/// memory usage — tree-sitter can allocate several GB of RAM when parsing very
+/// large files (see Sentry issue 7259255054).
+const MAX_SYNTAX_TREE_PARSE_BYTES: usize = 10 * 1024 * 1024; // 10 MB
+
 thread_local! {
     static PARSER: RefCell<Parser> = RefCell::new(Parser::new());
 }
@@ -306,6 +312,13 @@ impl DecorationLayer for SyntaxTreeState {
         content: BufferSnapshot,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Skip tree-sitter parsing for very large files to prevent excessive memory usage.
+        // Tree-sitter can allocate multiple GB when parsing large buffers.
+        if content.byte_len().as_usize() > MAX_SYNTAX_TREE_PARSE_BYTES {
+            self.buffer_version = version;
+            return;
+        }
+
         // If there is an active parsing in progress. Abort that first before starting another one.
         if let Some(handle) = self.parsing_handle.take() {
             handle.abort();
