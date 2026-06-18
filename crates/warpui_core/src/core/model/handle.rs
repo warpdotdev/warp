@@ -226,6 +226,18 @@ impl<T: Entity> WeakModelHandle<T> {
             None
         }
     }
+
+    /// Like [`Self::upgrade`] but does not require the model to be present in `app.models`.
+    pub(in crate::core) fn upgrade_unchecked(
+        &self,
+        app: &AppContext,
+    ) -> Option<ModelHandle<T>> {
+        if !app.ref_counts.lock().is_model_dropped(self.model_id) {
+            Some(ModelHandle::new(self.model_id, &app.ref_counts))
+        } else {
+            None
+        }
+    }
 }
 
 impl<T> Clone for WeakModelHandle<T> {

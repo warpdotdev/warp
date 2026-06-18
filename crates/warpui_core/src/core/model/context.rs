@@ -69,14 +69,6 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         S::Event: 'static,
         F: 'static + FnMut(&mut T, ModelHandle<S>, &S::Event, &mut ModelContext<T>),
     {
-        // Self-subscriptions are disallowed because `emit_event` temporarily removes the subscriber
-        // model from `app.models` before invoking callbacks, so `emitter_handle.upgrade` would
-        // return `None` and the callback would be silently skipped.
-        debug_assert_ne!(
-            handle.id(),
-            self.model_id,
-            "a model must not subscribe to its own events"
-        );
         let emitter_handle = handle.downgrade();
         self.app
             .subscriptions
@@ -85,7 +77,11 @@ impl<'a, T: Entity> ModelContext<'a, T> {
             .push(Subscription::FromModel {
                 model_id: self.model_id,
                 callback: Box::new(move |model, payload, app, model_id| {
-                    if let Some(emitter_handle) = emitter_handle.upgrade(app) {
+                    // Use `upgrade_unchecked` so that self-subscriptions work:
+                    // `emit_event` temporarily removes the subscriber model from
+                    // `app.models` before invoking callbacks, so the standard
+                    // `upgrade` would return `None` and silently drop the callback.
+                    if let Some(emitter_handle) = emitter_handle.upgrade_unchecked(app) {
                         let model = model.downcast_mut().expect("downcast is type safe");
                         let payload: &<S as Entity>::Event =
                             payload.downcast_ref().expect("downcast is type safe");
