@@ -99,6 +99,23 @@ fn set_tab_color_command_requires_argument() {
 }
 
 #[test]
+fn interrupt_command_mirrors_queue_availability_and_requires_argument() {
+    assert_eq!(INTERRUPT.name, "/interrupt");
+    assert_eq!(INTERRUPT.icon_path, "bundled/svg/lightning-02.svg");
+    assert!(INTERRUPT.auto_enter_ai_mode);
+    // /interrupt and /queue are complementary, so they share the same availability bits.
+    assert_eq!(INTERRUPT.availability, QUEUE.availability);
+
+    let argument = INTERRUPT
+        .argument
+        .as_ref()
+        .expect("expected /interrupt to require an argument");
+    assert!(!argument.is_optional);
+    assert!(!argument.should_execute_on_selection);
+    assert_eq!(argument.hint_text, Some("<prompt to send now>"));
+}
+
+#[test]
 fn strip_command_prefix_matches_orchestrate() {
     let result = strip_command_prefix("/orchestrate deploy services", "/orchestrate");
     assert_eq!(result, Some("deploy services".to_string()));

@@ -431,6 +431,18 @@ pub static QUEUE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     argument: Some(Argument::required().with_hint_text("<prompt to send when agent is done>")),
 });
 
+pub static INTERRUPT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: "/interrupt",
+    description: "Interrupt the agent and send a prompt right away",
+    icon_path: "bundled/svg/lightning-02.svg",
+    availability: Availability::AGENT_VIEW
+        | Availability::ACTIVE_CONVERSATION
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
+    auto_enter_ai_mode: true,
+    argument: Some(Argument::required().with_hint_text("<prompt to send now>")),
+});
+
 pub static FORK_AND_COMPACT: LazyLock<StaticCommand> = LazyLock::new(|| {
     let hint_text = "<optional prompt to send after compaction>";
     StaticCommand {
@@ -681,6 +693,7 @@ fn all_commands() -> Vec<StaticCommand> {
 
     if FeatureFlag::QueueSlashCommand.is_enabled() {
         commands.push(QUEUE.clone());
+        commands.push(INTERRUPT.clone());
     }
 
     if !cfg!(target_family = "wasm") {

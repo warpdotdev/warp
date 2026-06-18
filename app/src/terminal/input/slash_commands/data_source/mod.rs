@@ -21,7 +21,9 @@ use super::AcceptSlashCommandOrSavedPrompt;
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
-use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, QueuedQueryEvent, QueuedQueryModel,
+};
 use crate::ai::skills::{SkillDescriptor, SkillManager};
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
@@ -59,6 +61,9 @@ struct ActiveCommandsContext {
     active_conversation_is_cloud_oz: bool,
     has_default_host: bool,
     is_cli_agent_input: bool,
+    /// Whether the active conversation has queue-next-prompt (queue mode) on. Gates `/queue`
+    /// (shown only when on) and `/interrupt` (shown only when off).
+    is_queue_next_prompt_enabled: bool,
 }
 
 pub struct SlashCommandDataSource {
@@ -179,6 +184,16 @@ impl SlashCommandDataSource {
                 me.recompute_active_commands(ctx);
             }
         });
+        // Recompute when queue mode flips so /queue and /interrupt swap visibility.
+        ctx.subscribe_to_model(&QueuedQueryModel::handle(ctx), |me, event, ctx| {
+            if matches!(
+                event,
+                QueuedQueryEvent::QueueNextPromptToggled { .. }
+                    | QueuedQueryEvent::DefaultModeChanged
+            ) {
+                me.recompute_active_commands(ctx);
+            }
+        });
 
         let mut me = Self {
             active_session,
@@ -268,17 +283,22 @@ impl SlashCommandDataSource {
             session_context |= Availability::NO_LRC_CONTROL;
         }
 
+        let active_conversation_id =
+            BlocklistAIHistoryModel::as_ref(ctx).active_conversation_id(self.terminal_view_id);
         let has_active_conversation = if is_agent_view_active {
             // There is always an active conversation in the agent view.
             true
         } else {
-            BlocklistAIHistoryModel::as_ref(ctx)
-                .active_conversation(self.terminal_view_id)
-                .is_some()
+            active_conversation_id.is_some()
         };
         if has_active_conversation {
             session_context |= Availability::ACTIVE_CONVERSATION;
         }
+
+        // Queue mode is per-conversation. With no active conversation this is irrelevant since
+        // both /queue and /interrupt also require ACTIVE_CONVERSATION.
+        let is_queue_next_prompt_enabled = active_conversation_id
+            .is_some_and(|id| QueuedQueryModel::as_ref(ctx).is_queue_next_prompt_enabled(id));
 
         if UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx) {
             session_context |= Availability::CODEBASE_CONTEXT;
@@ -312,6 +332,7 @@ impl SlashCommandDataSource {
             active_conversation_is_cloud_oz: self.active_conversation_is_cloud_oz(ctx),
             has_default_host,
             is_cli_agent_input,
+            is_queue_next_prompt_enabled,
         }
     }
 
@@ -340,6 +361,14 @@ impl SlashCommandDataSource {
         }
         // /host is only useful when a default self-hosted host is configured.
         if command.name == commands::HOST.name && !context.has_default_host {
+            return false;
+        }
+        // /queue and /interrupt are complementary: /queue is only useful in queue mode (the
+        // queue chip is on), and /interrupt only when queue mode is off.
+        if command.name == commands::QUEUE.name && !context.is_queue_next_prompt_enabled {
+            return false;
+        }
+        if command.name == commands::INTERRUPT.name && context.is_queue_next_prompt_enabled {
             return false;
         }
         // When CLI agent input is open, restrict to the explicit allowlist.

@@ -1156,6 +1156,27 @@ impl Input {
                     self.submit_user_query_now(prompt, ctx);
                 }
             }
+            interrupt if command.name == commands::INTERRUPT.name => {
+                if self
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx)
+                    .is_none()
+                {
+                    show_error_toast("/interrupt requires an active conversation".to_owned(), ctx);
+                    return true;
+                };
+
+                let Some(prompt) = argument.filter(|a| !a.is_empty()).cloned() else {
+                    show_error_toast("/interrupt requires a prompt argument".to_owned(), ctx);
+                    return true;
+                };
+
+                // Submit immediately. The normal send path cancels any in-progress work on the
+                // active conversation before sending, so this interrupts the agent rather than
+                // queueing behind it.
+                self.submit_user_query_now(prompt, ctx);
+            }
             open_repo if command.name == commands::OPEN_REPO.name => {
                 if !FeatureFlag::InlineRepoMenu.is_enabled() {
                     return false;
