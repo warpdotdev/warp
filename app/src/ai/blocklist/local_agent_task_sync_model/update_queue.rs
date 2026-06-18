@@ -15,18 +15,10 @@ use crate::server::server_api::ai::TaskStatusUpdate;
 pub struct LocalTaskUpdateQueue {
     task_queues: HashMap<AmbientAgentTaskId, TaskQueue>,
 }
-struct QueuedUpdate {
-    generation: u64,
-    update: LocalTaskUpdate,
-}
 
 #[derive(Default)]
 struct TaskQueue {
-    /// Separates updates accepted before and after task cleanup. Older
-    /// generations still drain, but cannot coalesce with or update delivery
-    /// state for the new generation.
-    generation: u64,
-    pending_updates: VecDeque<QueuedUpdate>,
+    pending_updates: VecDeque<LocalTaskUpdate>,
     in_flight_update: Option<InFlightUpdate>,
     delivered_in_progress: bool,
     delivered_server_conversation_token: Option<String>,
@@ -34,15 +26,13 @@ struct TaskQueue {
 }
 
 struct InFlightUpdate {
-    generation: u64,
     task_state: Option<AgentTaskState>,
     server_conversation_token: Option<String>,
 }
 
 impl InFlightUpdate {
-    fn from_update(generation: u64, update: &LocalTaskUpdate) -> Self {
+    fn from_update(update: &LocalTaskUpdate) -> Self {
         Self {
-            generation,
             task_state: update.task_state,
             server_conversation_token: update.server_conversation_token.clone(),
         }
@@ -63,7 +53,10 @@ impl LocalTaskUpdateQueue {
         }
 
         let queue = self.task_queues.entry(task_id).or_default();
-        queue.remove_when_idle = false;
+        debug_assert!(
+            !queue.remove_when_idle,
+            "updates must not be enqueued while final task cleanup is pending"
+        );
         queue.enqueue(update);
         self.take_next_update(task_id)
     }
@@ -78,23 +71,17 @@ impl LocalTaskUpdateQueue {
         let queue = self.task_queues.get_mut(&task_id)?;
         let in_flight_update = queue.in_flight_update.take()?;
 
-        if in_flight_update.generation == queue.generation {
-            queue.record_result(in_flight_update, succeeded);
-        }
+        queue.record_result(in_flight_update, succeeded);
 
         self.take_next_update(task_id)
     }
 
-    /// Invalidates delivery state and removes the queue after updates already
-    /// accepted by the queue finish.
+    /// Marks a task for final cleanup and removes its queue after updates
+    /// already accepted by the queue finish.
     ///
-    /// A newly enqueued update for the same task cancels the pending removal and
-    /// waits behind any active request rather than racing it.
+    /// Callers must not enqueue another update for the same task after cleanup.
     pub fn remove_task(&mut self, task_id: &AmbientAgentTaskId) {
         let should_remove = if let Some(queue) = self.task_queues.get_mut(task_id) {
-            queue.generation = queue.generation.wrapping_add(1);
-            queue.delivered_in_progress = false;
-            queue.delivered_server_conversation_token = None;
             queue.remove_when_idle = true;
             queue.in_flight_update.is_none() && queue.pending_updates.is_empty()
         } else {
@@ -113,18 +100,13 @@ impl LocalTaskUpdateQueue {
                 return None;
             }
 
-            while let Some(mut queued_update) = queue.pending_updates.pop_front() {
-                if queued_update.generation == queue.generation {
-                    queue.apply_delivered_state(&mut queued_update.update);
-                }
-                if queued_update.update.is_empty() {
+            while let Some(mut update) = queue.pending_updates.pop_front() {
+                queue.apply_delivered_state(&mut update);
+                if update.is_empty() {
                     continue;
                 }
-                queue.in_flight_update = Some(InFlightUpdate::from_update(
-                    queued_update.generation,
-                    &queued_update.update,
-                ));
-                return Some(queued_update.update);
+                queue.in_flight_update = Some(InFlightUpdate::from_update(&update));
+                return Some(update);
             }
 
             queue.remove_when_idle || !queue.has_delivered_state()
@@ -139,28 +121,15 @@ impl LocalTaskUpdateQueue {
 
 impl TaskQueue {
     fn enqueue(&mut self, update: LocalTaskUpdate) {
-        let queued_update = if let Some(tail) = self.pending_updates.back_mut() {
-            if tail.generation == self.generation {
-                match tail.update.try_coalesce(update) {
-                    Ok(()) => return,
-                    Err(update) => QueuedUpdate {
-                        generation: self.generation,
-                        update,
-                    },
-                }
-            } else {
-                QueuedUpdate {
-                    generation: self.generation,
-                    update,
-                }
+        let update = if let Some(tail) = self.pending_updates.back_mut() {
+            match tail.try_coalesce(update) {
+                Ok(()) => return,
+                Err(update) => update,
             }
         } else {
-            QueuedUpdate {
-                generation: self.generation,
-                update,
-            }
+            update
         };
-        self.pending_updates.push_back(queued_update);
+        self.pending_updates.push_back(update);
     }
 
     fn apply_delivered_state(&self, update: &mut LocalTaskUpdate) {
