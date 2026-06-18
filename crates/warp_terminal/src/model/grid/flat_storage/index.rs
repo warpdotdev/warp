@@ -101,13 +101,13 @@ impl Index {
     pub fn rebuild(old_index: &Index, columns: usize) -> Self {
         let mut index = Self::new(columns, Some(old_index.len()));
         // Update the content length to be the start offset of the first row,
-        // to ensure we properly handle resizing after truncation.
+        // or preserve the old content offset if no rows remain, to ensure we
+        // properly handle resizing after truncation.
         index.content_len = old_index
             .rows
             .front()
-            .map(|entry| entry.content_offset)
-            .unwrap_or_default()
-            .as_usize();
+            .map(|entry| entry.content_offset.as_usize())
+            .unwrap_or(old_index.content_len);
 
         let mut entry_builder = EntryBuilder::new();
 
@@ -584,14 +584,19 @@ impl EntryBuilder {
 
     /// Builds an [`Entry`] and appends it to the provided index, or simply
     /// drops `self` if the [`Entry`] would be empty.
-    pub fn append_to_index_if_nonempty(mut self, index: &mut Index) {
+    pub fn append_to_index_if_nonempty(self, index: &mut Index) {
         #[cfg(debug_assertions)]
-        {
-            self.was_processed = true;
-        }
+        let builder = {
+            let mut this = self;
+            this.was_processed = true;
+            this
+        };
 
-        if !self.is_empty() {
-            self.append_to_index(index);
+        #[cfg(not(debug_assertions))]
+        let builder = self;
+
+        if !builder.is_empty() {
+            builder.append_to_index(index);
         }
     }
 

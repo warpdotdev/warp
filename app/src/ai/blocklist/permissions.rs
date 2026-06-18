@@ -23,7 +23,7 @@ use crate::ai::mcp::TemplatableMCPServerManager;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use warp_completer::parsers::simple::decompose_command;
+use warp_completer::parsers::simple::{command_without_leading_env_vars, decompose_command};
 use warp_core::user_preferences::GetUserPreferences;
 use warp_core::{features::FeatureFlag, settings::Setting};
 use warp_util::path::EscapeChar;
@@ -848,10 +848,14 @@ impl BlocklistAIPermissions {
         // The command string might be composed of multiple commands so let's
         // break it up first.
         let (commands, contains_redirection) = decompose_command(&normalized_command, escape_char);
+        let commands_for_denylist = commands
+            .iter()
+            .map(|command| command_for_execution_predicates(command, escape_char))
+            .collect::<Vec<_>>();
 
         // The denylist takes precedence over all other conditions.
         let denylist = self.get_execute_commands_denylist(ctx, terminal_view_id);
-        if commands
+        if commands_for_denylist
             .iter()
             .any(|c| denylist.iter().any(|d| d.matches(c)))
         {
@@ -1156,6 +1160,12 @@ impl BlocklistAIPermissions {
             AskUserQuestionPermission::AlwaysAsk => true,
         }
     }
+}
+
+fn command_for_execution_predicates(command: &str, escape_char: EscapeChar) -> String {
+    command_without_leading_env_vars(command, escape_char)
+        .filter(|command| !command.is_empty())
+        .unwrap_or_else(|| command.to_string())
 }
 
 /// Returns `Some(Denied(ProtectedPath))` if any of the given paths are system-protected

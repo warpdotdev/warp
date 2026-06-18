@@ -58,4 +58,14 @@ define_settings_group!(CodeSettings, settings: [
         toml_path: "code.editor.show_global_search",
         description: "Whether global file search is shown in the tools panel.",
     },
+    // Controls whether the language server reformats a file before saving it.
+    format_on_save: FormatOnSave {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "code.editor.format_on_save",
+        description: "Whether the language server automatically formats the file before save.",
+    },
 ]);

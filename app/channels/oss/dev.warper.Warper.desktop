@@ -7,7 +7,7 @@ Type=Application
 Name=Warper
 GenericName=TerminalEmulator
 
-Exec=warp-oss %U
+Exec=warp-terminal %U
 StartupWMClass=dev.warper.Warper
 
 Keywords=shell;prompt;command;commandline;cmd;

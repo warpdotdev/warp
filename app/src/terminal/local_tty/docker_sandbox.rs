@@ -15,6 +15,7 @@ use futures::FutureExt as _;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use warp_core::SessionId;
 use warpui::{AppContext, SingletonEntity as _};
 
 use super::shell::DirectShellStarter;
@@ -101,6 +102,8 @@ pub struct DockerSandboxShellStarter {
     /// Unique per-instance ID used to derive the container name and host mount
     /// paths. Generated at construction time; see [`Self::new`].
     pub sandbox_id: String,
+    /// The client-generated session ID injected into this sandbox's init script.
+    pub session_id: SessionId,
 }
 
 impl DockerSandboxShellStarter {
@@ -109,10 +112,12 @@ impl DockerSandboxShellStarter {
         // Short random ID — 8 hex chars (32 bits) is plenty for realistic
         // concurrent sandbox counts and keeps container names readable.
         let sandbox_id = format!("{:08x}", rand::random::<u32>());
+        let session_id = direct.session_id();
         Self {
             direct,
             base_image,
             sandbox_id,
+            session_id,
         }
     }
 
@@ -130,6 +135,10 @@ impl DockerSandboxShellStarter {
 
     pub fn base_image(&self) -> Option<&str> {
         self.base_image.as_deref()
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
     }
 
     /// Name passed to `sbx run --name`. Unique per instance.

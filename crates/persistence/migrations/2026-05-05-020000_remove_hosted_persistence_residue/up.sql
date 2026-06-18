@@ -8,6 +8,8 @@ DROP TABLE IF EXISTS team_settings;
 DROP TABLE IF EXISTS workspace_teams;
 DROP TABLE IF EXISTS teams;
 
+-- This migration is marked run_in_transaction=false so this pragma applies
+-- while windows is rebuilt with the same local IDs for app/tabs references.
 PRAGMA foreign_keys=off;
 
 CREATE TABLE windows_local (

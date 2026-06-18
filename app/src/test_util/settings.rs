@@ -2,6 +2,53 @@
 use warpui::App;
 
 #[cfg(test)]
+pub struct LocalAIEnabledTestGuard;
+
+#[cfg(test)]
+impl Drop for LocalAIEnabledTestGuard {
+    fn drop(&mut self) {
+        warp_core::channel::ChannelState::set(warp_core::channel::ChannelState::init());
+    }
+}
+
+#[cfg(test)]
+pub fn initialize_local_ai_enabled_for_tests(app: &mut App) -> LocalAIEnabledTestGuard {
+    use ai::api_keys::ApiKeyManager;
+    use warp_core::{
+        channel::{Channel, ChannelConfig, ChannelState},
+        AppId,
+    };
+    use warpui::SingletonEntity as _;
+
+    ChannelState::set(ChannelState::new(
+        Channel::Oss,
+        ChannelConfig {
+            app_id: AppId::new("dev", "warper", "Warper"),
+            logfile_name: "warper.log".into(),
+            mcp_static_config: None,
+        },
+    ));
+
+    app.update(|ctx| {
+        if !ctx.has_singleton_model::<warpui_extras::secure_storage::Model>() {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+        }
+        if !ctx.has_singleton_model::<crate::settings::AISettings>() {
+            crate::settings::AISettings::register_and_subscribe_to_events(ctx);
+        }
+        if !ctx.has_singleton_model::<ApiKeyManager>() {
+            ctx.add_singleton_model(ApiKeyManager::new);
+        }
+        ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.set_open_router_key(Some("sk-or-v1-test".to_owned()), ctx);
+        });
+        assert!(crate::settings::AISettings::as_ref(ctx).is_any_ai_enabled(ctx));
+    });
+
+    LocalAIEnabledTestGuard
+}
+
+#[cfg(test)]
 pub fn initialize_settings_for_tests(app: &mut App) {
     use warp_core::execution_mode::ExecutionMode;
     initialize_settings_for_tests_with_mode(app, ExecutionMode::App, false);

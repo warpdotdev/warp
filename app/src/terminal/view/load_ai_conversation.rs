@@ -268,8 +268,9 @@ impl TerminalView {
         match restore_context_state {
             RestorationDirState::NeedsCd { path } => {
                 let path_for_hint = path.clone();
+                let escaped = self.shell_family(ctx).shell_escape(&path);
                 let did_execute_cd = self.input.update(ctx, |input, ctx| {
-                    input.try_execute_command(&format!("cd \"{path}\""), ctx)
+                    input.try_execute_command(&format!("cd {escaped}"), ctx)
                 });
                 if did_execute_cd {
                     self.on_next_block_completed(move |me, ctx| {

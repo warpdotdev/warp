@@ -4,11 +4,13 @@ use crate::search::slash_command_menu::static_commands::commands;
 use crate::settings::AISettings;
 use crate::terminal::input::tests::{add_window_with_bootstrapped_terminal, initialize_app};
 use settings::Setting as _;
+use warp_core::features::FeatureFlag;
 use warpui::{App, SingletonEntity as _};
 
 #[test]
 fn test_parse_slash_command_handles_argument_rules() {
     App::test((), |mut app| async move {
+        let _docker_sandbox_flag = FeatureFlag::LocalDockerSandbox.override_enabled(true);
         initialize_app(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(
@@ -139,8 +141,54 @@ fn test_non_ai_commands_remain_active_when_ai_is_disabled() {
                 active_command_names.contains(&commands::RENAME_TAB.name),
                 "/rename-tab should remain active when AI is off, got: {active_command_names:?}"
             );
+            assert!(
+                active_command_names.contains(&commands::EDIT.name),
+                "/open-file should remain active when AI is off, got: {active_command_names:?}"
+            );
 
             // Commands that require AI should be filtered out.
+            assert!(
+                !active_command_names.contains(&commands::AGENT.name),
+                "/agent should NOT be active when AI is off, got: {active_command_names:?}"
+            );
+            assert!(
+                !active_command_names.contains(&commands::PLAN.name),
+                "/plan should NOT be active when AI is off, got: {active_command_names:?}"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_docker_sandbox_command_remains_active_when_ai_is_disabled() {
+    App::test((), |mut app| async move {
+        let _docker_sandbox_flag = FeatureFlag::LocalDockerSandbox.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let slash_command_data_source =
+            input.read(&app, |input, _| input.slash_command_data_source.clone());
+
+        // Disable AI globally.
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            report_if_error!(settings.is_any_ai_enabled.set_value(false, ctx));
+        });
+
+        slash_command_data_source.read(&app, |data_source, _| {
+            let active_command_names: Vec<&str> = data_source
+                .active_commands()
+                .map(|(_, command)| command.name)
+                .collect();
+
+            assert!(
+                active_command_names.contains(&commands::CREATE_DOCKER_SANDBOX.name),
+                "/docker-sandbox should remain active when AI is off, got: {active_command_names:?}"
+            );
             assert!(
                 !active_command_names.contains(&commands::AGENT.name),
                 "/agent should NOT be active when AI is off, got: {active_command_names:?}"

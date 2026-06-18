@@ -1,8 +1,13 @@
+use std::fs;
+
+use base64::engine::general_purpose::STANDARD as BASE64;
+
 use super::*;
 use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::block::{BlockId, SerializedBlock};
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::grid::Dimensions as _;
+use crate::terminal::model::image_map::StoredImageMetadata;
 use crate::terminal::model::index::Side;
 use crate::terminal::model::selection::ExpandedSelectionRange;
 use chrono::{DateTime, Local};
@@ -42,6 +47,96 @@ fn create_default_serialized_block() -> SerializedBlock {
     }
 }
 
+fn iterm_file_osc(name: &str, inline: bool, payload: &[u8]) -> String {
+    let inline = if inline { "1" } else { "0" };
+    format!(
+        "\x1b]1337;File=name={};inline={}:{}\x07",
+        base64::Engine::encode(&BASE64, name),
+        inline,
+        base64::Engine::encode(&BASE64, payload)
+    )
+}
+
+fn multipart_iterm_file_osc(name: &str, inline: bool, payload: &[u8]) -> Vec<String> {
+    let inline = if inline { "1" } else { "0" };
+    let encoded_payload = base64::Engine::encode(&BASE64, payload);
+    let midpoint = encoded_payload.len() / 2;
+    vec![
+        format!(
+            "\x1b]1337;MultipartFile=name={};inline={}\x07",
+            base64::Engine::encode(&BASE64, name),
+            inline,
+        ),
+        format!("\x1b]1337;FilePart={}\x07", &encoded_payload[..midpoint]),
+        format!("\x1b]1337;FilePart={}\x07", &encoded_payload[midpoint..]),
+        "\x1b]1337;FileEnd\x07".to_owned(),
+    ]
+}
+
+#[test]
+fn ignores_non_inline_iterm_file_payload_without_overwriting_cwd_file() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let target_path = temp_dir.path().join(".zshenv");
+    let original_bytes = b"ORIGINAL=1\n";
+    let attacker_bytes = b"touch /tmp/warp-pwned\n";
+    fs::write(&target_path, original_bytes).unwrap();
+
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.precmd(PrecmdValue {
+        pwd: Some(temp_dir.path().to_string_lossy().to_string()),
+        ..Default::default()
+    });
+
+    let osc = iterm_file_osc(".zshenv", false, attacker_bytes);
+    terminal.process_bytes(osc.as_str());
+
+    assert_eq!(fs::read(&target_path).unwrap(), original_bytes);
+    assert!(terminal.image_id_to_metadata.is_empty());
+}
+
+#[test]
+fn ignores_multipart_non_inline_iterm_file_payload_without_overwriting_cwd_file() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let target_path = temp_dir.path().join(".zshenv");
+    let original_bytes = b"ORIGINAL=1\n";
+    let attacker_bytes = b"touch /tmp/warp-pwned\n";
+    fs::write(&target_path, original_bytes).unwrap();
+
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.precmd(PrecmdValue {
+        pwd: Some(temp_dir.path().to_string_lossy().to_string()),
+        ..Default::default()
+    });
+
+    for osc in multipart_iterm_file_osc(".zshenv", false, attacker_bytes) {
+        terminal.process_bytes(osc.as_str());
+    }
+
+    assert_eq!(fs::read(&target_path).unwrap(), original_bytes);
+    assert!(terminal.image_id_to_metadata.is_empty());
+}
+
+#[test]
+fn handles_inline_iterm_image_payload() {
+    let mut terminal = TerminalModel::mock(None, None);
+    let svg_bytes =
+        br#"<svg width="1" height="1" viewBox="0 0 1 1" xmlns="http://www.w3.org/2000/svg"></svg>"#;
+
+    let osc = iterm_file_osc("pixel.svg", true, svg_bytes);
+    terminal.process_bytes(osc.as_str());
+
+    assert_eq!(terminal.image_id_to_metadata.len(), 1);
+    let StoredImageMetadata::ITerm(metadata) =
+        terminal.image_id_to_metadata.values().next().unwrap()
+    else {
+        panic!("Expected iTerm image metadata");
+    };
+    assert_eq!(metadata.name, "pixel.svg");
+    assert!(metadata.inline);
+    assert_eq!(metadata.image_size.x(), 1.0);
+    assert_eq!(metadata.image_size.y(), 1.0);
+}
+
 // Ensures that an ssh session successfully bootstraps even if the block list is empty.
 #[test]
 fn ssh_bootstraps_if_blocklist_empty() {
@@ -52,6 +147,7 @@ fn ssh_bootstraps_if_blocklist_empty() {
     terminal.precmd(Default::default());
 
     let bootstrapped_value = BootstrappedValue {
+        session_id: None,
         histfile: None,
         shell: String::from("bash"),
         home_dir: None,
@@ -673,6 +769,7 @@ fn test_exit_alt_screen_on_command_finished() {
     terminal.command_finished(CommandFinishedValue {
         exit_code: ExitCode::from(0),
         next_block_id: BlockId::new(),
+        session_id: None,
     });
 
     assert!(!terminal.alt_screen_active);
@@ -687,6 +784,7 @@ fn test_unset_bracketed_paste_mode_on_command_finished() {
     terminal.command_finished(CommandFinishedValue {
         exit_code: ExitCode::from(0),
         next_block_id: BlockId::new(),
+        session_id: None,
     });
 
     assert!(!terminal.is_term_mode_set(TermMode::BRACKETED_PASTE));

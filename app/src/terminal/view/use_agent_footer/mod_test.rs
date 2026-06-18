@@ -20,7 +20,10 @@ use crate::{
     features::FeatureFlag,
     settings::AISettings,
     terminal::model::ansi::{BootstrappedValue, Handler as _, InitShellValue},
-    test_util::{add_window_with_terminal, terminal::initialize_app_for_terminal_view},
+    test_util::{
+        add_window_with_terminal, settings::initialize_local_ai_enabled_for_tests,
+        terminal::initialize_app_for_terminal_view,
+    },
 };
 
 use super::super::{AIBlockMetadata, RichContentMetadata, RichContentType};
@@ -187,9 +190,11 @@ fn insert_pending_ai_block(
 }
 
 #[test]
+#[serial_test::serial]
 fn use_agent_footer_renders_for_manual_handoff_even_when_user_command_footer_setting_disabled() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         FeatureFlag::AgentView.set_enabled(true);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
@@ -229,9 +234,11 @@ fn use_agent_footer_renders_for_manual_handoff_even_when_user_command_footer_set
 }
 
 #[test]
+#[serial_test::serial]
 fn use_agent_footer_renders_for_manual_handoff_when_unfinished_ai_block_remains() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         FeatureFlag::AgentView.set_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);

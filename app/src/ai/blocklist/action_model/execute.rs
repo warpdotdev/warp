@@ -51,9 +51,15 @@ use use_computer::UseComputerExecutor;
 use warp_core::{execution_mode::AppExecutionMode, features::FeatureFlag};
 
 #[cfg(feature = "local_fs")]
+use crate::util::image::{
+    is_supported_image_mime_type, process_image_for_agent, ProcessImageResult,
+};
+#[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::is_binary_file;
 #[cfg(feature = "local_fs")]
 use futures::AsyncReadExt;
+#[cfg(feature = "local_fs")]
+use mime_guess::from_path;
 use std::{any::Any, path::PathBuf, pin::Pin, sync::Arc};
 #[cfg(feature = "local_fs")]
 use warp_files::{FileModel, TextFileReadResult};
@@ -65,13 +71,6 @@ use warpui::{
     r#async::{Spawnable, SpawnableOutput},
     AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
 };
-
-#[cfg(feature = "local_fs")]
-use crate::util::image::{
-    is_supported_image_mime_type, process_image_for_agent, ProcessImageResult,
-};
-#[cfg(feature = "local_fs")]
-use mime_guess::from_path;
 
 use self::search_codebase::SearchCodebaseExecutor;
 #[cfg(feature = "local_fs")]
@@ -86,7 +85,10 @@ use crate::{
         get_relevant_files::controller::GetRelevantFilesController,
     },
     terminal::{
-        model::session::{active_session::ActiveSession, ExecuteCommandOptions, Session},
+        model::session::{
+            active_session::ActiveSession, command_executor::shell_quote_arg,
+            ExecuteCommandOptions, Session,
+        },
         model_events::ModelEventDispatcher,
         shell::ShellType,
         ShellLaunchData, TerminalModel,
@@ -1136,14 +1138,26 @@ async fn read_binary_file_context(
     })
 }
 
+fn build_is_file_path_command(path: &str, shell_type: ShellType) -> String {
+    let escaped_path = shell_quote_arg(path, shell_type);
+    if shell_type == ShellType::PowerShell {
+        format!("if (Test-Path -PathType Leaf {escaped_path}) {{ exit 0 }} else {{ exit 1 }}")
+    } else {
+        format!("test -f {escaped_path}")
+    }
+}
+
+fn build_is_git_repository_command(absolute_path: &str, shell_type: ShellType) -> String {
+    format!(
+        "git -C {} rev-parse",
+        shell_quote_arg(absolute_path, shell_type)
+    )
+}
+
 /// Returns true if the given path is a regular file on the session's filesystem.
 /// Runs a shell command on the session so it works for both local and remote sessions.
 async fn is_file_path(path: &str, session: &Session) -> bool {
-    let command = if session.shell().shell_type() == ShellType::PowerShell {
-        format!("if (Test-Path -PathType Leaf \"{path}\") {{ exit 0 }} else {{ exit 1 }}")
-    } else {
-        format!("test -f \"{path}\"")
-    };
+    let command = build_is_file_path_command(path, session.shell().shell_type());
     session
         .execute_command(&command, None, None, ExecuteCommandOptions::default())
         .await
@@ -1153,7 +1167,7 @@ async fn is_file_path(path: &str, session: &Session) -> bool {
 
 /// Returns true if git is installed and the given path is in a git repository.
 async fn is_git_repository(absolute_path: &str, session: &Session) -> anyhow::Result<bool> {
-    let git_command = format!("git -C \"{absolute_path}\" rev-parse");
+    let git_command = build_is_git_repository_command(absolute_path, session.shell().shell_type());
     let command_output = session
         .execute_command(
             git_command.as_str(),

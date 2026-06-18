@@ -1,6 +1,5 @@
 use super::{EditorAction, EditorView, VoiceTranscriptionOptions};
 use crate::ai::api_errors::TranscribeError;
-use crate::ai::blocklist::InputType;
 use crate::appearance::Appearance;
 use crate::editor::EditorElement;
 use crate::settings::{AISettings, VoiceInputToggleKey};
@@ -287,16 +286,6 @@ impl EditorView {
                     // Immediately transition to Listening state
                     self.set_voice_input_state(VoiceInputState::Listening, ctx);
 
-                    // Send telemetry for start
-                    let is_udi_enabled = crate::settings::InputSettings::handle(ctx)
-                        .as_ref(ctx)
-                        .is_universal_developer_input_enabled(ctx);
-                    let current_input_mode = if self.is_ai_input {
-                        InputType::AI
-                    } else {
-                        InputType::Shell
-                    };
-
                     // Spawn future to await the session result
                     ctx.spawn(
                         async move { session.await_result().await },
@@ -396,19 +385,10 @@ impl EditorView {
             return;
         }
 
-        let is_udi_enabled = crate::settings::InputSettings::handle(ctx)
-            .as_ref(ctx)
-            .is_universal_developer_input_enabled(ctx);
-        let current_input_mode = if self.is_ai_input {
-            InputType::AI
-        } else {
-            InputType::Shell
-        };
-
         match result {
             VoiceSessionResult::Audio {
                 wav_base64,
-                session_duration_ms,
+                session_duration_ms: _,
             } => {
                 // Start transcription
                 let voice_transcriber = VoiceTranscriber::handle(ctx).as_ref(ctx);
@@ -432,9 +412,7 @@ impl EditorView {
                     self.set_voice_input_state(VoiceInputState::Stopped, ctx);
                 }
             }
-            VoiceSessionResult::Aborted {
-                session_duration_ms,
-            } => {
+            VoiceSessionResult::Aborted { .. } => {
                 log::info!("Aborted listening for voice input");
 
                 self.set_voice_input_state(VoiceInputState::Stopped, ctx);

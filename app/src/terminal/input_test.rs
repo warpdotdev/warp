@@ -48,7 +48,9 @@ use warpui::text::SelectionType;
 
 use crate::experiments;
 use crate::terminal::shell::ShellType;
-use crate::test_util::settings::initialize_settings_for_tests;
+use crate::test_util::settings::{
+    initialize_local_ai_enabled_for_tests, initialize_settings_for_tests,
+};
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::{ActiveSession, OneTimeModalModel, ToastStack, WorkspaceRegistry};
 use crate::{
@@ -80,6 +82,93 @@ use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
 use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
+
+#[test]
+fn renders_git_checkout_prompt_chip_command_as_single_shell_argument() {
+    let command = PromptChipShellCommand::GitCheckout {
+        branch_name: "poc;id>/tmp/proof $(whoami) `id` | cat 'tail'".to_string(),
+    };
+
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::Bash),
+        r#"git checkout 'poc;id>/tmp/proof $(whoami) `id` | cat '"'"'tail'"'"''"#
+    );
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::Zsh),
+        r#"git checkout 'poc;id>/tmp/proof $(whoami) `id` | cat '"'"'tail'"'"''"#
+    );
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::Fish),
+        r"git checkout 'poc;id>/tmp/proof $(whoami) `id` | cat \'tail\''"
+    );
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::PowerShell),
+        "git checkout 'poc;id>/tmp/proof $(whoami) `id` | cat ''tail'''"
+    );
+}
+
+#[test]
+fn renders_nvm_use_prompt_chip_command_as_single_shell_argument() {
+    let command = PromptChipShellCommand::NvmUse {
+        version: "v20.0.0;touch /tmp/pwn 'x'".to_string(),
+    };
+
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::Bash),
+        r#"nvm use 'v20.0.0;touch /tmp/pwn '"'"'x'"'"''"#
+    );
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::Fish),
+        r"nvm use 'v20.0.0;touch /tmp/pwn \'x\''"
+    );
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::PowerShell),
+        "nvm use 'v20.0.0;touch /tmp/pwn ''x'''"
+    );
+}
+
+#[test]
+fn renders_change_directory_prompt_chip_command_as_single_shell_argument() {
+    let command = PromptChipShellCommand::ChangeDirectory {
+        dir_name: "repo dir;rm -rf / 'x'".to_string(),
+    };
+
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::Bash),
+        r#"cd 'repo dir;rm -rf / '"'"'x'"'"''"#
+    );
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::PowerShell),
+        "cd 'repo dir;rm -rf / ''x'''"
+    );
+}
+
+#[test]
+fn renders_echo_prompt_chip_command_as_single_shell_argument() {
+    let command = PromptChipShellCommand::Echo {
+        message: "a message containing \"double\" and 'single' quotes",
+    };
+
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::Bash),
+        r#"echo 'a message containing "double" and '"'"'single'"'"' quotes'"#
+    );
+    assert_eq!(
+        render_prompt_chip_shell_command(&command, ShellType::PowerShell),
+        r#"echo 'a message containing "double" and ''single'' quotes'"#
+    );
+}
+
+#[test]
+fn renders_fixed_prompt_chip_command_without_interpolation() {
+    assert_eq!(
+        render_prompt_chip_shell_command(
+            &PromptChipShellCommand::NvmInstallLatestNode,
+            ShellType::Bash,
+        ),
+        "nvm install node"
+    );
+}
 
 pub fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -2213,6 +2302,7 @@ fn test_completions_while_typing_doesnt_hide_autosuggestion() {
 fn test_agent_mode_set_while_typing_slash_command() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(
             &mut app, None, /* history_file_commands */
@@ -2546,10 +2636,12 @@ fn test_shell_lock_respected_when_slash_command_typed() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_new_conversation_keybinding_requires_double_press_in_non_empty_agent_view() {
     App::test((), |mut app| async move {
         let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         initialize_app(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
@@ -2626,10 +2718,12 @@ fn test_new_conversation_keybinding_requires_double_press_in_non_empty_agent_vie
 }
 
 #[test]
+#[serial_test::serial]
 fn test_new_conversation_keybinding_does_not_require_confirmation_in_empty_agent_view() {
     App::test((), |mut app| async move {
         let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         initialize_app(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
@@ -2676,10 +2770,12 @@ fn test_new_conversation_keybinding_does_not_require_confirmation_in_empty_agent
 }
 
 #[test]
+#[serial_test::serial]
 fn test_new_conversation_input_trigger_remains_single_step_in_non_empty_agent_view() {
     App::test((), |mut app| async move {
         let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
         initialize_app(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
@@ -2766,9 +2862,11 @@ fn test_create_docker_sandbox_slash_command_executes_and_clears_buffer() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_agent_mode_set_when_block_attached() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(
             &mut app, None, /* history_file_commands */
@@ -5294,9 +5392,11 @@ fn test_input_type_button_explicit_lock() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_auto_detection_toggle() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(
             &mut app, None, /* history_file_commands */
@@ -5470,6 +5570,7 @@ fn run_input_mode_prefix_test(
         let _nld_flag = FeatureFlag::NldImprovements.override_enabled(nld_improvements_enabled);
 
         initialize_app(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
 
         // Ensure the AI autodetection is enabled.
         AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
@@ -5524,6 +5625,7 @@ macro_rules! input_mode_prefix_tests {
     ($($name:ident: ($nld_improvements_enabled:literal, $udi_enabled:literal, $input_mode:expr),)*) => {
         $(
             #[test]
+            #[serial_test::serial]
             fn $name() {
                 run_input_mode_prefix_test($nld_improvements_enabled, $udi_enabled, $input_mode);
             }
@@ -5978,12 +6080,14 @@ fn test_remove_ignored_suggestion_on_ai_query_execution() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_agent_view_terminal_only_initial_input_config_unlocked_when_autodetection_enabled() {
     App::test((), |mut app| async move {
         let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
         let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
 
         initialize_app(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
 
         // Ensure autodetection is enabled in terminal mode.
         // When AgentView is enabled, terminal-only mode uses nld_in_terminal_enabled_internal.
@@ -6012,6 +6116,7 @@ fn test_agent_view_terminal_only_initial_input_config_unlocked_when_autodetectio
 }
 
 #[test]
+#[serial_test::serial]
 fn test_terminal_only_ai_enter_enters_agent_view_and_clears_buffer() {
     use crate::ai::blocklist::agent_view::AgentViewState;
     use crate::ai::blocklist::InputConfig;
@@ -6021,6 +6126,7 @@ fn test_terminal_only_ai_enter_enters_agent_view_and_clears_buffer() {
         let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
 
         initialize_app(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
 
         AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
             let _ = ai_settings
@@ -6072,6 +6178,7 @@ fn test_terminal_only_ai_enter_enters_agent_view_and_clears_buffer() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_terminal_only_escape_locks_shell_mode() {
     use crate::ai::blocklist::InputConfig;
 
@@ -6080,6 +6187,7 @@ fn test_terminal_only_escape_locks_shell_mode() {
         let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
 
         initialize_app(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
 
         // Autodetection on; we still expect Esc to explicitly lock to shell.
         AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {

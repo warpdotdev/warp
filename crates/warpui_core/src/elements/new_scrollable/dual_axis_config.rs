@@ -5,9 +5,8 @@ use pathfinder_geometry::{
 
 use crate::{
     elements::{
-        new_scrollable::{util::child_constraint_for_axis, ScrollableAxis},
-        Axis, ClippedScrollStateHandle, ScrollData, ScrollStateHandle, SelectableElement,
-        Vector2FExt,
+        new_scrollable::util::child_constraint_for_axis, Axis, ClippedScrollStateHandle,
+        ScrollData, ScrollStateHandle, SelectableElement, Vector2FExt,
     },
     event::DispatchedEvent,
     units::{IntoPixels, Pixels},
@@ -21,6 +20,9 @@ use super::{
 };
 
 use crate::elements::ScrollTarget;
+
+#[cfg(debug_assertions)]
+use crate::elements::new_scrollable::ScrollableAxis;
 
 /// Holds different scroll state handle type that depends on
 /// whether the caller wants automatic or manual scrolling.

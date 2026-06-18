@@ -84,6 +84,66 @@ fn test_apply_diffs_succeeds_with_valid_diff() {
 }
 
 #[test]
+fn test_apply_diffs_preserves_suffix_after_multiline_partial_context() {
+    App::test((), |_| async move {
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+        let file_path = temp_file.path().to_string_lossy().to_string();
+        temp_file
+            .write_all(
+                b"\
+mod proxy;
+pub fn run_daemon() -> anyhow::Result<()> {
+    // Logging is now handled by init_common (log_destination: File).
+
+    // socket_path: ~/.warp[-channel]/remote-server/server.sock
+    //   The Unix domain socket the daemon binds on.
+}
+",
+            )
+            .unwrap();
+
+        let diff = ParsedDiff::StrReplaceEdit {
+            file: Some(file_path.clone()),
+            search: Some(
+                "\
+2|pub fn run_daemon() -> anyhow::Result<()> {
+3|    // Logging is now handled by init_common (log_destination: File).
+4|
+5|    // socket_path:"
+                    .to_string(),
+            ),
+            replace: Some(
+                "\
+pub fn run_daemon() -> anyhow::Result<()> {
+    // socket_path:"
+                    .to_string(),
+            ),
+        };
+
+        let session_context = SessionContext::new_for_test();
+        let result = apply_edits(
+            vec![FileEdit::Edit(diff)],
+            &session_context,
+            |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
+        )
+        .await;
+
+        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
+        let diffs = result.unwrap();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].file_name, file_path);
+
+        let deltas = update_deltas(&diffs[0]);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].replacement_line_range, 2..6);
+        assert_eq!(
+            deltas[0].insertion,
+            "pub fn run_daemon() -> anyhow::Result<()> {\n    // socket_path: ~/.warp[-channel]/remote-server/server.sock"
+        );
+    });
+}
+
+#[test]
 fn test_apply_diffs_with_partial_failures() {
     App::test((), |_| async move {
         let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");

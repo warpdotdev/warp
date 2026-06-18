@@ -2597,6 +2597,7 @@ impl BlockList {
         // Simulate preexec to transition to Executing state
         self.preexec(PreexecValue {
             command: command.to_string(),
+            session_id: None,
         });
 
         // Add the command output
@@ -2865,7 +2866,10 @@ impl BlockList {
 
         if block.did_execute {
             let command = self.active_block_mut().command_to_string();
-            self.preexec(PreexecValue { command });
+            self.preexec(PreexecValue {
+                command,
+                session_id: None,
+            });
         }
 
         if block.did_execute || block.is_background {

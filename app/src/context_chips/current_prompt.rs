@@ -1,3 +1,4 @@
+use crate::context_chips::git_branch_on_click;
 use crate::features::FeatureFlag;
 use crate::report_if_error;
 use crate::settings::{InputSettings, WarpPromptSeparator};
@@ -619,26 +620,7 @@ impl CurrentPrompt {
         &self,
         values_opt: Option<Vec<String>>,
     ) -> Option<Vec<String>> {
-        values_opt.map(|values| {
-            let mut trimmed: Vec<String> = values
-                .into_iter()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            // We want to sort the branches so the current branch is first (denoted by *).
-            // The rest of the branches maintain their relative order.
-            trimmed.sort_by(|a, b| {
-                let a_starts_with_star = a.starts_with('*');
-                let b_starts_with_star = b.starts_with('*');
-                b_starts_with_star.cmp(&a_starts_with_star)
-            });
-
-            trimmed
-                .into_iter()
-                .map(|s| s.trim_start_matches('*').trim().to_string())
-                .collect()
-        })
+        git_branch_on_click::filter_git_branch_on_click_values(values_opt)
     }
 
     /// Perform a single update of the given chip.
