@@ -51,19 +51,16 @@ fn test_weak_handle_fails_after_last_strong_handle_dropped_in_event_callback() {
                 // When the trigger fires, drop the only remaining strong
                 // handle to `target` and immediately try to upgrade the
                 // weak handle.
-                ctx.subscribe_to_model(
-                    &trigger,
-                    |sub: &mut Subscriber, _, _event, ctx| {
-                        sub.target.take();
+                ctx.subscribe_to_model(&trigger, |sub: &mut Subscriber, _, _event, ctx| {
+                    sub.target.take();
 
-                        let upgrade_result = sub.target_weak.as_ref().unwrap().upgrade(ctx);
-                        assert!(
-                            upgrade_result.is_none(),
-                            "weak upgrade should return None immediately after \
+                    let upgrade_result = sub.target_weak.as_ref().unwrap().upgrade(ctx);
+                    assert!(
+                        upgrade_result.is_none(),
+                        "weak upgrade should return None immediately after \
                              the last strong handle is dropped"
-                        );
-                    },
-                );
+                    );
+                });
             });
         }
 
