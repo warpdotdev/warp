@@ -29,11 +29,59 @@ const CORNER_RADIUS: f32 = 12.;
 const PANEL_PADDING: f32 = 24.;
 const CLOSE_BUTTON_DIAMETER: f32 = 20.;
 
-const TITLE_TEXT: &str = "Warp AI is no longer included on the Free plan";
-const BODY_TEXT: &str = "The Free plan no longer includes Warp-provided AI usage. Any remaining \
-     bonus credits keep working until they run out.";
-const CTA_PROMPT_TEXT: &str = "To keep using AI in Warp, bring your own API key or endpoint, or \
-     upgrade to a paid plan.";
+const NOTICE_TITLE_TEXT: &str = "Warp is no longer providing inference on the free plan.";
+const NOTICE_BODY_TEXT: &str = "To keep using Warp's AI features, please upgrade to a paid plan, \
+     bring your own API key or endpoint, or log in with your Grok subscription.";
+const NOTICE_BONUS_CREDITS_TEXT: &str = "If you have any unused bonus credits, AI will keep \
+     working until these run out.";
+
+const PROMPT_SUGGESTIONS_TITLE_TEXT: &str = "How to use AI features in Warp";
+const PROMPT_SUGGESTIONS_BODY_TEXT: &str = "To use AI features in Warp, subscribe to a paid plan, \
+     add an API key (OpenAI, Anthropic, or Google), add a custom inference endpoint (OpenRouter, \
+     LiteLLM), or log in using your SuperGrok subscription.";
+
+/// Which surface opened the modal. Selects the copy and disambiguates telemetry;
+/// the layout and CTAs are identical across variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreeAiRemovalModalVariant {
+    /// One-time notice shown to Free users when Warp-provided AI is removed from their plan.
+    Notice,
+    /// Shown on demand when a Free user activates Prompt Suggestions while out of credits.
+    PromptSuggestions,
+}
+
+impl FreeAiRemovalModalVariant {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Notice => NOTICE_TITLE_TEXT,
+            Self::PromptSuggestions => PROMPT_SUGGESTIONS_TITLE_TEXT,
+        }
+    }
+
+    fn body(self) -> &'static str {
+        match self {
+            Self::Notice => NOTICE_BODY_TEXT,
+            Self::PromptSuggestions => PROMPT_SUGGESTIONS_BODY_TEXT,
+        }
+    }
+
+    /// Secondary note rendered under the body. The on-demand Prompt Suggestions
+    /// variant only fires once the user is already out of credits, so the
+    /// bonus-credits note doesn't apply there.
+    fn secondary(self) -> Option<&'static str> {
+        match self {
+            Self::Notice => Some(NOTICE_BONUS_CREDITS_TEXT),
+            Self::PromptSuggestions => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Notice => "notice",
+            Self::PromptSuggestions => "prompt_suggestions",
+        }
+    }
+}
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -64,15 +112,18 @@ struct StateHandles {
     upgrade_button: MouseStateHandle,
 }
 
-/// One-time notice shown to Free-plan users when the FREE_AI_REMOVAL rollout
-/// removes Warp-provided AI from their plan.
+/// Notice shown to Free-plan users about the removal of Warp-provided AI. The
+/// `variant` selects the copy: a one-time rollout notice, or an on-demand prompt
+/// when a Free user activates a gated feature (e.g. Prompt Suggestions).
 pub struct FreeAiRemovalModal {
+    variant: FreeAiRemovalModalVariant,
     state_handles: StateHandles,
 }
 
 impl FreeAiRemovalModal {
-    pub fn new(_ctx: &mut ViewContext<Self>) -> Self {
+    pub fn new(variant: FreeAiRemovalModalVariant, _ctx: &mut ViewContext<Self>) -> Self {
         Self {
+            variant,
             state_handles: Default::default(),
         }
     }
@@ -101,7 +152,7 @@ impl FreeAiRemovalModal {
                 height: Some(32.),
                 ..Default::default()
             })
-            .with_centered_text_label("Use your own API key".to_string())
+            .with_centered_text_label("Bring your own AI".to_string())
             .build()
             .with_cursor(Cursor::PointingHand)
             .on_click(|ctx, _, _| {
@@ -120,7 +171,7 @@ impl FreeAiRemovalModal {
                 height: Some(32.),
                 ..Default::default()
             })
-            .with_centered_text_label("Upgrade plan".to_string())
+            .with_centered_text_label("View pricing".to_string())
             .build()
             .with_cursor(Cursor::PointingHand)
             .on_click(|ctx, _, _| {
@@ -166,26 +217,41 @@ impl View for FreeAiRemovalModal {
         let bg = blended_colors::neutral_1(theme);
         let font_family = appearance.ui_font_family();
 
-        let title = FormattedTextElement::from_str(TITLE_TEXT, font_family, 18.)
+        let title = FormattedTextElement::from_str(self.variant.title(), font_family, 18.)
             .with_color(blended_colors::text_main(theme, bg))
             .with_weight(Weight::Bold)
             .finish();
 
         let body_color = blended_colors::text_sub(theme, bg);
-        let body = FormattedTextElement::from_str(BODY_TEXT, font_family, 14.)
-            .with_color(body_color)
-            .finish();
-        let cta_prompt = FormattedTextElement::from_str(CTA_PROMPT_TEXT, font_family, 14.)
+        let body = FormattedTextElement::from_str(self.variant.body(), font_family, 14.)
             .with_color(body_color)
             .finish();
 
-        let content = Flex::column()
+        let mut content = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(Container::new(title).with_margin_bottom(12.).finish())
-            .with_child(Container::new(body).with_margin_bottom(8.).finish())
-            .with_child(Container::new(cta_prompt).with_margin_bottom(20.).finish())
-            .with_child(self.render_buttons(appearance))
-            .finish();
+            .with_child(Container::new(title).with_margin_bottom(12.).finish());
+
+        // Tighten the gap below the body when a secondary note follows; otherwise
+        // keep the full gap above the buttons.
+        let body_margin_bottom = if self.variant.secondary().is_some() {
+            8.
+        } else {
+            20.
+        };
+        content.add_child(
+            Container::new(body)
+                .with_margin_bottom(body_margin_bottom)
+                .finish(),
+        );
+
+        if let Some(secondary_text) = self.variant.secondary() {
+            let secondary = FormattedTextElement::from_str(secondary_text, font_family, 14.)
+                .with_color(body_color)
+                .finish();
+            content.add_child(Container::new(secondary).with_margin_bottom(20.).finish());
+        }
+
+        let content = content.with_child(self.render_buttons(appearance)).finish();
 
         let mut modal = Stack::new();
         modal.add_child(
@@ -234,12 +300,18 @@ impl TypedActionView for FreeAiRemovalModal {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             FreeAiRemovalModalAction::Close => {
-                send_telemetry_from_ctx!(FreeAiRemovalModalTelemetryEvent::Dismissed, ctx);
+                send_telemetry_from_ctx!(
+                    FreeAiRemovalModalTelemetryEvent::Dismissed {
+                        variant: self.variant,
+                    },
+                    ctx
+                );
                 ctx.emit(FreeAiRemovalModalEvent::Close);
             }
             FreeAiRemovalModalAction::SetUpByok => {
                 send_telemetry_from_ctx!(
                     FreeAiRemovalModalTelemetryEvent::CtaClicked {
+                        variant: self.variant,
                         cta: FreeAiRemovalModalCta::SetUpByok,
                     },
                     ctx
@@ -255,6 +327,7 @@ impl TypedActionView for FreeAiRemovalModal {
             FreeAiRemovalModalAction::Upgrade => {
                 send_telemetry_from_ctx!(
                     FreeAiRemovalModalTelemetryEvent::CtaClicked {
+                        variant: self.variant,
                         cta: FreeAiRemovalModalCta::Upgrade,
                     },
                     ctx
@@ -285,9 +358,16 @@ impl FreeAiRemovalModalCta {
 #[derive(Debug, EnumDiscriminants)]
 #[strum_discriminants(derive(EnumIter))]
 pub enum FreeAiRemovalModalTelemetryEvent {
-    Shown,
-    Dismissed,
-    CtaClicked { cta: FreeAiRemovalModalCta },
+    Shown {
+        variant: FreeAiRemovalModalVariant,
+    },
+    Dismissed {
+        variant: FreeAiRemovalModalVariant,
+    },
+    CtaClicked {
+        variant: FreeAiRemovalModalVariant,
+        cta: FreeAiRemovalModalCta,
+    },
 }
 
 impl TelemetryEvent for FreeAiRemovalModalTelemetryEvent {
@@ -297,8 +377,11 @@ impl TelemetryEvent for FreeAiRemovalModalTelemetryEvent {
 
     fn payload(&self) -> Option<Value> {
         match self {
-            Self::Shown | Self::Dismissed => None,
-            Self::CtaClicked { cta } => Some(json!({
+            Self::Shown { variant } | Self::Dismissed { variant } => Some(json!({
+                "variant": variant.as_str(),
+            })),
+            Self::CtaClicked { variant, cta } => Some(json!({
+                "variant": variant.as_str(),
                 "cta": cta.as_str(),
             })),
         }
@@ -314,7 +397,7 @@ impl TelemetryEvent for FreeAiRemovalModalTelemetryEvent {
 
     fn contains_ugc(&self) -> bool {
         match self {
-            Self::Shown | Self::Dismissed | Self::CtaClicked { .. } => false,
+            Self::Shown { .. } | Self::Dismissed { .. } | Self::CtaClicked { .. } => false,
         }
     }
 

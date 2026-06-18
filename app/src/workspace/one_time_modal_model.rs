@@ -1,5 +1,6 @@
 use std::future::Future;
 
+use ai::api_keys::ApiKeyManager;
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
@@ -7,11 +8,15 @@ use warp_util::sync::Condition;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 
 use super::hoa_onboarding;
-use super::view::free_ai_removal_modal::FreeAiRemovalModalTelemetryEvent;
+use super::view::free_ai_removal_modal::{
+    FreeAiRemovalModalTelemetryEvent, FreeAiRemovalModalVariant,
+};
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
+use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::auth::auth_manager::AuthManagerEvent;
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::channel::{Channel, ChannelState};
+use crate::root_view::has_completed_local_onboarding;
 use crate::settings::cloud_preferences_syncer::{
     CloudPreferencesSyncer, CloudPreferencesSyncerEvent,
 };
@@ -79,6 +84,14 @@ impl OneTimeModalModel {
             },
         );
 
+        // The base-credit allowance that gates the free-AI-removal notice loads
+        // asynchronously, so re-evaluate the notice whenever request usage updates.
+        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, event, ctx| {
+            if let AIRequestUsageModelEvent::RequestUsageUpdated = event {
+                me.maybe_recheck_free_ai_removal_modal(ctx);
+            }
+        });
+
         // Subscribe to auth manager events to automatically trigger modal when user becomes onboarded
         ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, event, ctx| {
             let AuthManagerEvent::AuthComplete = event else {
@@ -116,8 +129,8 @@ impl OneTimeModalModel {
                         log::warn!("Failed to mark orchestration launch modal as dismissed: {e}");
                     }
                 });
-                // Accounts created after the FREE_AI_REMOVAL rollout go through the new
-                // onboarding and are treated as already-noticed (no modal, no email).
+                // Accounts created after the removal of free AI go through the new
+                // onboarding and are treated as already-noticed (no modal).
                 mark_free_ai_removal_notice_seen(ctx);
                 GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
                     if let Err(e) = settings
@@ -429,10 +442,20 @@ impl OneTimeModalModel {
             .current_workspace()
             .map(|workspace| workspace.billing_metadata.customer_type);
         let is_warp_ai_enabled = *AISettings::as_ref(ctx).is_any_ai_enabled;
+        let has_byok_or_byoe = {
+            let manager = ApiKeyManager::as_ref(ctx);
+            let keys = manager.keys();
+            keys.has_any_key() || keys.has_custom_endpoints()
+        };
+        let completed_new_onboarding = has_completed_local_onboarding(ctx);
+        let has_zero_base_credits = AIRequestUsageModel::as_ref(ctx).request_limit() == 0;
 
         let decision = free_ai_removal_modal_decision(
             customer_type,
             is_warp_ai_enabled,
+            has_byok_or_byoe,
+            completed_new_onboarding,
+            has_zero_base_credits,
             self.has_fetched_workspaces,
         );
         if decision == FreeAiRemovalModalDecision::Defer {
@@ -454,7 +477,12 @@ impl OneTimeModalModel {
 
         let should_show = !matches!(ChannelState::channel(), Channel::Integration);
         if should_show {
-            send_telemetry_from_ctx!(FreeAiRemovalModalTelemetryEvent::Shown, ctx);
+            send_telemetry_from_ctx!(
+                FreeAiRemovalModalTelemetryEvent::Shown {
+                    variant: FreeAiRemovalModalVariant::Notice,
+                },
+                ctx
+            );
         }
         self.set_free_ai_removal_modal_open(should_show, ctx);
         should_show
@@ -705,10 +733,6 @@ fn maybe_ensure_handoff_chip_in_toolbar(ctx: &mut ModelContext<OneTimeModalModel
 }
 
 /// Marks the free-AI-removal notice as seen without showing it.
-///
-/// Accounts created after the FREE_AI_REMOVAL rollout are treated as already-noticed,
-/// so onboarding completion calls this in addition to the new-user pre-dismissal that
-/// runs at first auth.
 pub fn mark_free_ai_removal_notice_seen(app: &mut AppContext) {
     AISettings::handle(app).update(app, |settings, ctx| {
         if let Err(e) = settings
@@ -725,7 +749,7 @@ pub fn mark_free_ai_removal_notice_seen(app: &mut AppContext) {
 enum FreeAiRemovalModalDecision {
     /// Show the modal and write the seen marker.
     Show,
-    /// Write the seen marker without showing the modal (paid plan or AI off).
+    /// Write the seen marker without showing the modal.
     MarkSeenSilently,
     /// Not enough data to decide; re-evaluate on the next billing/experiments update.
     Defer,
@@ -734,19 +758,32 @@ enum FreeAiRemovalModalDecision {
 fn free_ai_removal_modal_decision(
     customer_type: Option<CustomerType>,
     is_warp_ai_enabled: bool,
+    has_byok_or_byoe: bool,
+    completed_new_onboarding: bool,
+    has_zero_base_credits: bool,
     workspaces_fetched: bool,
 ) -> FreeAiRemovalModalDecision {
-    if !is_warp_ai_enabled {
+    if !is_warp_ai_enabled || has_byok_or_byoe || completed_new_onboarding {
         return FreeAiRemovalModalDecision::MarkSeenSilently;
     }
+    // Restrict to a Free (or confirmed solo) user; anyone else is paid (silently
+    // marked) or not-yet-known (deferred).
     match customer_type {
-        Some(CustomerType::Free) => FreeAiRemovalModalDecision::Show,
+        Some(CustomerType::Free) => {}
         // A missing workspace usually means billing data hasn't loaded yet; only treat
         // it as a solo Free user once a server fetch has confirmed there is none, so a
         // paid user's modal decision never runs against absent data.
-        None if workspaces_fetched => FreeAiRemovalModalDecision::Show,
-        None | Some(CustomerType::Unknown) => FreeAiRemovalModalDecision::Defer,
-        Some(_) => FreeAiRemovalModalDecision::MarkSeenSilently,
+        None if workspaces_fetched => {}
+        None | Some(CustomerType::Unknown) => return FreeAiRemovalModalDecision::Defer,
+        Some(_) => return FreeAiRemovalModalDecision::MarkSeenSilently,
+    }
+    // Some ICPs still receive base AI credits on the Free plan; don't spook them with
+    // the notice. Only show once the base allowance is gone, and defer (rather than
+    // mark seen) otherwise so it re-evaluates if the allowance later drops to zero.
+    if has_zero_base_credits {
+        FreeAiRemovalModalDecision::Show
+    } else {
+        FreeAiRemovalModalDecision::Defer
     }
 }
 
