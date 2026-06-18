@@ -225,7 +225,7 @@ impl ResponseStream {
     }
 
     /// Cancels the stream. The conversation_id is preserved in the emitted event for async handling.
-    pub(super) fn cancel(
+    pub(crate) fn cancel(
         &mut self,
         reason: CancellationReason,
         conversation_id: AIConversationId,
@@ -528,7 +528,7 @@ impl<T> Consumable<T> {
         }
     }
 
-    pub(super) fn consume(&self) -> Option<T> {
+    pub(crate) fn consume(&self) -> Option<T> {
         self.value.borrow_mut().take()
     }
 }

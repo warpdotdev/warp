@@ -1,5 +1,6 @@
 //! This module contains model, controller, and view logic for Blocklist AI.
 mod action_model;
+mod agent_conversation_engine;
 pub mod agent_view;
 pub mod block;
 pub mod code_block;
@@ -38,6 +39,7 @@ pub(crate) use action_model::{
     ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
     StartAgentRequestId,
 };
+pub(crate) use agent_conversation_engine::AgentConversationEngine;
 #[cfg(any(test, feature = "integration_tests"))]
 pub(crate) use block::model::testing::FakeAIBlockModel;
 pub(crate) use block::{init, model, AIBlock, AIBlockEvent, RequestedEditResolution};
@@ -55,7 +57,7 @@ pub(crate) use controller::{
     SlashCommandRequest,
 };
 pub(crate) use history_model::{
-    AIQueryHistory, AIQueryHistoryOutputStatus, BeginConversationRenameError,
+    AIQueryHistory, AIQueryHistoryOutputStatus, AgentSessionOwnerId, BeginConversationRenameError,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FORK_PREFIX,
     PRE_REWIND_PREFIX,
 };

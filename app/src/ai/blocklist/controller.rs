@@ -24,15 +24,15 @@ use pending_response_streams::PendingResponseStreams;
 use session_sharing_protocol::common::ParticipantId;
 pub use slash_command::*;
 use warp_core::assertions::safe_assert;
-use warp_multi_agent_api::{message, Task, ToolType};
+use warp_multi_agent_api::{message, ResponseEvent, Task, ToolType};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use self::response_stream::{ResponseStream, ResponseStreamEvent};
 use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
+use super::agent_conversation_engine::{AgentConversationEngine, AgentConversationEngineDelegate};
 use super::agent_view::{AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin};
 use super::context_model::{BlocklistAIContextModel, PendingAttachment, PendingFile};
-use super::history_model::BlocklistAIHistoryModel;
+use super::history_model::{AgentSessionOwnerId, BlocklistAIHistoryModel};
 use super::input_model::InputConfig;
 use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
@@ -44,12 +44,11 @@ use crate::ai::agent::api::{self, ServerConversationToken};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    extract_user_query_mode, AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment,
-    AIAgentContext, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers,
-    CancellationReason, DocumentContentAttachmentSource, EntrypointType, FileContext,
-    FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
-    PassiveSuggestionTriggerType, RenderableAIError, RequestCost, RequestMetadata, RunningCommand,
-    StaticQueryType, TransientNetworkErrorKind, UserQueryMode,
+    extract_user_query_mode, AIAgentAction, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentAttachment, AIAgentContext, AIAgentExchangeId, AIAgentInput, CancellationReason,
+    DocumentContentAttachmentSource, EntrypointType, FileContext, PassiveSuggestionResultType,
+    PassiveSuggestionTrigger, PassiveSuggestionTriggerType, RequestMetadata, RunningCommand,
+    StaticQueryType, UserQueryMode,
 };
 use crate::ai::agent_events::AgentMessageEventMetadata;
 #[cfg(not(target_family = "wasm"))]
@@ -67,7 +66,6 @@ use crate::network::NetworkStatus;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::persistence::ModelEvent;
 use crate::send_telemetry_from_ctx;
-use crate::server::server_api::AIApiError;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::TelemetryEvent;
@@ -80,7 +78,6 @@ use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::terminal::ShellLaunchData;
 use crate::workspace::OneTimeModalModel;
-use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[derive(Debug, Clone)]
@@ -2448,38 +2445,9 @@ impl BlocklistAIController {
         request_params.parent_agent_id = parent_agent_id;
         request_params.agent_name = agent_name;
 
-        let server_conversation_token_for_identifiers =
-            conversation_data.server_conversation_token.clone();
-
-        let response_stream = ctx.add_model(|ctx| {
-            // Create AIIdentifiers for the response stream
-            let ai_identifiers = AIIdentifiers {
-                server_output_id: None, // Will be populated by the successful response
-                server_conversation_id: server_conversation_token_for_identifiers.map(Into::into),
-                client_conversation_id: Some(conversation_data.id),
-                client_exchange_id: None,
-                model_id: Some(request_params.model.clone()),
-            };
-            ResponseStream::new(
-                request_params.clone(),
-                ai_identifiers,
-                can_attempt_resume_on_error,
-                ctx,
-            )
-        });
-        let response_stream_id = response_stream.as_ref(ctx).id().clone();
-        let response_stream_clone = response_stream.clone();
         let input_contains_user_query = request_input
             .all_inputs()
             .any(|input| input.is_user_query());
-        ctx.subscribe_to_model(&response_stream, move |me, event, ctx| {
-            me.handle_response_stream_event(
-                input_contains_user_query,
-                event,
-                &response_stream_clone,
-                ctx,
-            );
-        });
 
         for input in request_input.all_inputs() {
             if let AIAgentInput::UserQuery {
@@ -2494,27 +2462,16 @@ impl BlocklistAIController {
                 );
             }
         }
+        let request_model_id = request_params.model.clone();
 
-        history_model.update(ctx, |history_model, ctx| {
-            match history_model.update_conversation_for_new_request_input(
-                request_input,
-                response_stream_id.clone(),
-                self.terminal_view_id,
-                ctx,
-            ) {
-                Ok(_) => {
-                    history_model.update_conversation_status(
-                        self.terminal_view_id,
-                        conversation_data.id,
-                        ConversationStatus::InProgress,
-                        ctx,
-                    );
-                }
-                Err(e) => {
-                    log::warn!("Failed to push new exchange to AI conversation: {e:?}");
-                }
-            }
-        });
+        let (response_stream, response_stream_id) = AgentConversationEngine::send_request(
+            AgentSessionOwnerId::new(self.terminal_view_id),
+            request_input,
+            request_params,
+            conversation_data.clone(),
+            can_attempt_resume_on_error,
+            ctx,
+        );
 
         self.in_flight_response_streams.register_new_stream(
             response_stream_id.clone(),
@@ -2549,7 +2506,7 @@ impl BlocklistAIController {
         ctx.emit(BlocklistAIControllerEvent::SentRequest {
             contains_user_query: input_contains_user_query,
             is_queued_prompt,
-            model_id: request_params.model.clone(),
+            model_id: request_model_id,
             stream_id: response_stream_id.clone(),
         });
         if !is_passive_request {
@@ -2693,354 +2650,6 @@ impl BlocklistAIController {
             .try_cancel_stream(response_stream_id, reason, ctx)
     }
 
-    fn handle_response_stream_event(
-        &mut self,
-        did_input_contain_user_query: bool,
-        event: &ResponseStreamEvent,
-        response_stream: &ModelHandle<ResponseStream>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let stream_id = response_stream.as_ref(ctx).id().clone();
-
-        match event {
-            ResponseStreamEvent::ReceivedEvent(event) => {
-                // Dynamic lookup handles conversation splits mid-stream.
-                let Some(conversation_id) = BlocklistAIHistoryModel::as_ref(ctx)
-                    .conversation_for_response_stream(&stream_id)
-                else {
-                    log::warn!("Could not find conversation for response stream: {stream_id:?}");
-                    return;
-                };
-                let Some(event) = event.consume() else {
-                    debug_assert!(
-                        false,
-                        "This model should only have a single subscriber that takes ownership over the event."
-                    );
-                    return;
-                };
-                let history_model = BlocklistAIHistoryModel::handle(ctx);
-                match event {
-                    Ok(event) => {
-                        // If this controller is part of a shared session, forward the entire response event to viewers first.
-                        if FeatureFlag::AgentSharedSessions.is_enabled() {
-                            let mut model = self.terminal_model.lock();
-                            if model.shared_session_status().is_sharer() {
-                                // Get the participant who initiated this response, falling back to the sharer if needed.
-                                let participant_id = self
-                                    .get_current_response_initiator()
-                                    .or_else(|| self.get_sharer_participant_id());
-
-                                // For forked conversations (e.g. when loading from cloud), include
-                                // the original conversation token so viewers can link the new
-                                // server-assigned token to their existing conversation.
-                                //
-                                // This token is cleared after the first Init event (see below),
-                                // so it's only sent once per forked conversation.
-                                let forked_from_token = history_model
-                                    .as_ref(ctx)
-                                    .conversation(&conversation_id)
-                                    .and_then(|conv| {
-                                        conv.forked_from_server_conversation_token()
-                                            .map(|t| t.as_str().to_string())
-                                    });
-
-                                model.send_agent_response_for_shared_session(
-                                    &event,
-                                    participant_id,
-                                    forked_from_token,
-                                );
-                            }
-                        }
-                        let Some(event) = event.r#type else {
-                            return;
-                        };
-                        match event {
-                            warp_multi_agent_api::response_event::Type::Init(init_event) => {
-                                history_model.update(ctx, |history_model, ctx| {
-                                    history_model.initialize_output_for_response_stream(
-                                        &stream_id,
-                                        conversation_id,
-                                        self.terminal_view_id,
-                                        init_event,
-                                        ctx,
-                                    );
-
-                                    // Clear the forked_from token after the first Init event.
-                                    // For forked conversations, we only need to send this once so
-                                    // viewers can update their conversation's server token. After
-                                    // that, the viewer's conversation uses the new token directly.
-                                    if let Some(conversation) =
-                                        history_model.conversation_mut(&conversation_id)
-                                    {
-                                        conversation.clear_forked_from_server_conversation_token();
-                                    }
-                                });
-                            }
-                            warp_multi_agent_api::response_event::Type::Finished(
-                                finished_event,
-                            ) => {
-                                self.handle_response_stream_finished(
-                                    &stream_id,
-                                    finished_event,
-                                    conversation_id,
-                                    did_input_contain_user_query,
-                                    ctx,
-                                );
-                            }
-                            warp_multi_agent_api::response_event::Type::ClientActions(actions) => {
-                                let client_actions = actions.actions;
-                                let skill_path_origin = SessionContext::from_session(
-                                    self.active_session.as_ref(ctx),
-                                    ctx,
-                                )
-                                .skill_path_origin();
-                                let apply_result =
-                                    history_model.update(ctx, |history_model, ctx| {
-                                        history_model.apply_client_actions(
-                                            &stream_id,
-                                            client_actions,
-                                            conversation_id,
-                                            self.terminal_view_id,
-                                            &skill_path_origin,
-                                            ctx,
-                                        )
-                                    });
-                                if let Err(e) = apply_result {
-                                    log::error!(
-                                        "Failed to apply client actions to conversation: {e:?}"
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        if matches!(e.as_ref(), AIApiError::QuotaLimit { .. }) {
-                            // If the error is a quota limit, we want to refresh workspace metadata
-                            // So the current state of AI overages is immediately up to date.
-                            TeamUpdateManager::handle(ctx).update(
-                                ctx,
-                                |team_update_manager, ctx| {
-                                    std::mem::drop(
-                                        team_update_manager.refresh_workspace_metadata(ctx),
-                                    );
-                                },
-                            );
-                            AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
-                                model.enable_buy_credits_banner(ctx);
-                            });
-                        }
-
-                        // A resume scheduled for this failure keeps the conversation in
-                        // the non-terminal TransientError status instead of Error.
-                        let recovery_pending = response_stream
-                            .as_ref(ctx)
-                            .should_resume_conversation_after_stream_finished();
-                        let mut renderable_error: RenderableAIError = (&e).into();
-                        if let RenderableAIError::Other {
-                            will_attempt_resume,
-                            waiting_for_network,
-                            ..
-                        }
-                        | RenderableAIError::TransientNetworkError {
-                            will_attempt_resume,
-                            waiting_for_network,
-                            ..
-                        } = &mut renderable_error
-                        {
-                            // Rendering-only hints; state machine consumers key off the
-                            // TransientError conversation status instead.
-                            *will_attempt_resume |= recovery_pending;
-                            if recovery_pending {
-                                let network_status = NetworkStatus::as_ref(ctx);
-                                *waiting_for_network = !network_status.is_online();
-                            }
-                        }
-
-                        history_model.update(ctx, |history_model, ctx| {
-                            history_model.mark_response_stream_completed_with_error(
-                                renderable_error,
-                                recovery_pending,
-                                &stream_id,
-                                conversation_id,
-                                self.terminal_view_id,
-                                ctx,
-                            );
-                        });
-                    }
-                }
-            }
-            ResponseStreamEvent::WaitingForNetwork { waiting } => {
-                let Some(conversation_id) = BlocklistAIHistoryModel::as_ref(ctx)
-                    .conversation_for_response_stream(&stream_id)
-                else {
-                    log::warn!("Could not find conversation for response stream: {stream_id:?}");
-                    return;
-                };
-                // Mirror the parked-retry state on the conversation: TransientError while
-                // waiting for connectivity, back to InProgress when the retry fires.
-                // This event is only emitted after a recoverable request failure parks a
-                // retry while offline (see `defer_retry_until_online`), so treating
-                // `waiting` as a transient-error state is always correct here.
-                let status = if *waiting {
-                    ConversationStatus::TransientError
-                } else {
-                    ConversationStatus::InProgress
-                };
-                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                    history_model.update_conversation_status(
-                        self.terminal_view_id,
-                        conversation_id,
-                        status,
-                        ctx,
-                    );
-                });
-            }
-            ResponseStreamEvent::AfterStreamFinished { cancellation } => {
-                // Cancellations provide conversation_id (survives truncation); otherwise use dynamic lookup.
-                let conversation_id = match &cancellation {
-                    Some(stream_cancellation) => stream_cancellation.conversation_id,
-                    None => {
-                        let Some(id) = BlocklistAIHistoryModel::as_ref(ctx)
-                            .conversation_for_response_stream(&stream_id)
-                        else {
-                            log::warn!(
-                                "Could not find conversation for response stream: {stream_id:?}"
-                            );
-                            return;
-                        };
-                        id
-                    }
-                };
-
-                let history_model = BlocklistAIHistoryModel::handle(ctx);
-                let Some(conversation) = history_model.as_ref(ctx).conversation(&conversation_id)
-                else {
-                    log::warn!("Conversation not found.");
-                    return;
-                };
-                let new_exchange_ids = conversation.new_exchange_ids_for_response(&stream_id);
-                let mut was_passive_request = false;
-                let mut is_any_exchange_unfinished = false;
-                let mut actions_to_queue = vec![];
-
-                for new_exchange_id in new_exchange_ids {
-                    let Some(exchange) = conversation.exchange_with_id(new_exchange_id) else {
-                        log::warn!("Exchange not found.");
-                        return;
-                    };
-                    was_passive_request |= exchange.has_passive_request();
-                    is_any_exchange_unfinished |= !exchange.output_status.is_finished();
-
-                    if let AIAgentOutputStatus::Finished {
-                        finished_output: FinishedAIAgentOutput::Success { output },
-                        ..
-                    } = &exchange.output_status
-                    {
-                        actions_to_queue.extend(output.get().actions().cloned());
-                    }
-                }
-
-                if let Some(stream_cancellation) = &cancellation {
-                    // If this is a shared session, send a synthetic StreamFinished event to notify viewers
-                    // of any user-initiated cancellation. We skip internal cancellations that preserve
-                    // the conversation's InProgress status, such as follow-ups and CLI subagent user
-                    // takeover, because those do not end the conversation.
-                    if FeatureFlag::AgentSharedSessions.is_enabled()
-                        && !stream_cancellation
-                            .reason
-                            .should_preserve_in_progress_status()
-                    {
-                        self.send_cancellation_to_viewers(ctx);
-                    }
-
-                    history_model.update(ctx, |history_model, ctx| {
-                        history_model.mark_response_stream_cancelled(
-                            &stream_id,
-                            conversation_id,
-                            self.terminal_view_id,
-                            stream_cancellation.reason,
-                            ctx,
-                        );
-                    });
-
-                    if !was_passive_request
-                        && !stream_cancellation
-                            .reason
-                            .should_preserve_in_progress_status()
-                    {
-                        self.set_input_mode_for_cancellation(ctx);
-                    }
-                } else if is_any_exchange_unfinished {
-                    // Defensive: truncated streams are detected inside `ResponseStream`,
-                    // so an unfinished exchange here means an unexpected completion path.
-                    log::warn!(
-                        "Response stream completed with an unfinished exchange and no error event."
-                    );
-
-                    history_model.update(ctx, |history_model, ctx| {
-                        history_model.mark_response_stream_completed_with_error(
-                            RenderableAIError::transient_network_error(
-                                false,
-                                false,
-                                TransientNetworkErrorKind::UnfinishedExchange,
-                            ),
-                            /*recovery_pending*/ false,
-                            &stream_id,
-                            conversation_id,
-                            self.terminal_view_id,
-                            ctx,
-                        );
-                    });
-                } else if !actions_to_queue.is_empty() {
-                    self.action_model.update(ctx, |action_model, ctx| {
-                        action_model.queue_actions(actions_to_queue, conversation_id, ctx);
-                    });
-                }
-
-                // Cancelled streams will handle pending_response_stream updates synchronously.
-                if cancellation.is_none() {
-                    self.in_flight_response_streams.cleanup_stream(&stream_id);
-
-                    // Now that the stream is cleaned up, re-check for pending
-                    // orchestration events that couldn't be drained earlier.
-                    self.handle_pending_events_ready(conversation_id, ctx);
-                }
-
-                // Before cleaning up the response stream, check if we should attempt to resume.
-                if response_stream
-                    .as_ref(ctx)
-                    .should_resume_conversation_after_stream_finished()
-                {
-                    self.schedule_auto_resume_after_error(conversation_id, ctx);
-                }
-
-                // Clean up the response stream tracking entry now that the stream is complete.
-                history_model.update(ctx, |history_model, _| {
-                    if let Some(conversation) = history_model.conversation_mut(&conversation_id) {
-                        conversation.cleanup_completed_response_stream(&stream_id);
-                    }
-                });
-                ctx.unsubscribe_from_model(response_stream);
-
-                if self.should_refresh_available_llms_on_stream_finish {
-                    self.should_refresh_available_llms_on_stream_finish = false;
-                    LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
-                        llm_preferences.refresh_authed_models(ctx);
-                    });
-                }
-                ctx.emit(BlocklistAIControllerEvent::FinishedReceivingOutput {
-                    stream_id,
-                    conversation_id,
-                });
-                AIRequestUsageModel::handle(ctx).update(ctx, |request_usage_model, ctx| {
-                    request_usage_model.refresh_request_usage_async(ctx);
-                });
-
-                self.maybe_refresh_ai_overages(ctx);
-            }
-        }
-    }
-
     /// Sets the terminal input state after an AI request is cancelled.
     /// From the user perspective, we downgrade the level of autonomy so:
     /// * Executing a task automatically -> interactive AI input
@@ -3090,187 +2699,103 @@ impl BlocklistAIController {
             );
         }
     }
+}
 
-    pub(super) fn handle_response_stream_finished(
+impl AgentConversationEngineDelegate for BlocklistAIController {
+    fn skill_path_origin(&self, ctx: &AppContext) -> SkillPathOrigin {
+        BlocklistAIController::skill_path_origin(self, ctx)
+    }
+
+    fn forward_response_event_to_shared_session(
         &mut self,
-        stream_id: &ResponseStreamId,
-        mut finished_event: warp_multi_agent_api::response_event::StreamFinished,
+        event: &ResponseEvent,
         conversation_id: AIConversationId,
-        did_request_contain_user_query: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        let history_model = BlocklistAIHistoryModel::handle(ctx);
-        history_model.update(ctx, |history_model, ctx| {
-            // Update conversation cost and usage information before updating and
-            // persisting the conversation.
-            history_model.update_conversation_cost_and_usage_for_request(
-                conversation_id,
-                finished_event.request_cost.map(|cost| {
-                    // Total credits charged for this request = inference (`exact`) + platform.
-                    RequestCost::new(f64::from(cost.exact) + f64::from(cost.platform_credits))
-                }),
-                finished_event.token_usage,
-                finished_event.conversation_usage_metadata.take(),
-                did_request_contain_user_query,
-                ctx,
-            );
-        });
-
-        let history_model = BlocklistAIHistoryModel::handle(ctx);
-        match finished_event.reason {
-            Some(warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)) | None => {
-                history_model.update(ctx, |history_model, ctx| {
-                    history_model.mark_response_stream_completed_successfully(
-                        stream_id,
-                        conversation_id,
-                        self.terminal_view_id,
-                        ctx,
-                    );
-                });
-            }
-            Some(warp_multi_agent_api::response_event::stream_finished::Reason::Other(_)) => {
-                let error_message = "Response stream finished unexpectedly (with finish reason `Other`).";
-                history_model.update(ctx, |history_model, ctx| {
-                    history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::Other {
-                            error_message: error_message.to_owned(),
-                            will_attempt_resume: false,
-                            waiting_for_network: false,
-                            is_user_error: false,
-                        },
-                        /*recovery_pending*/ false,
-                        stream_id,
-                        conversation_id,
-                        self.terminal_view_id,
-                        ctx,
-                    );
-                });
-            }
-            Some(warp_multi_agent_api::response_event::stream_finished::Reason::ContextWindowExceeded(_)) => {
-                let error_message = "Input exceeded context window limit.";
-                history_model.update(ctx, |history_model, ctx| {
-                    history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::ContextWindowExceeded(error_message.to_owned()),
-                        /*recovery_pending*/ false,
-                        stream_id,
-                        conversation_id,
-                        self.terminal_view_id,
-                        ctx,
-                    );
-                });
-            }
-            Some(warp_multi_agent_api::response_event::stream_finished::Reason::QuotaLimit(_)) => {
-                history_model.update(ctx, |history_model, ctx| {
-                    history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::QuotaLimit {
-                            user_display_message: None,
-                        },
-                        /*recovery_pending*/ false,
-                        stream_id,
-                        conversation_id,
-                        self.terminal_view_id,
-                        ctx,
-                    );
-                });
-            }
-            Some(warp_multi_agent_api::response_event::stream_finished::Reason::LlmUnavailable(_)) => {
-                let error_message = "The LLM is currently unavailable.";
-                history_model.update(ctx, |history_model, ctx| {
-                    history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::Other {
-                            error_message: error_message.to_owned(),
-                            will_attempt_resume: false,
-                            waiting_for_network: false,
-                            is_user_error: false,
-                        },
-                        /*recovery_pending*/ false,
-                        stream_id,
-                        conversation_id,
-                        self.terminal_view_id,
-                        ctx,
-                    );
-                });
-            }
-            Some(warp_multi_agent_api::response_event::stream_finished::Reason::InvalidApiKey(details)) => {
-                use warp_multi_agent_api::LlmProvider;
-                let is_aws_bedrock = details
-                    .provider
-                    .try_into()
-                    .ok()
-                    .is_some_and(|p: LlmProvider| p == LlmProvider::AwsBedrock);
-
-                let error = if is_aws_bedrock {
-                    RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid {
-                        model_name: details.model_name,
-                    }
-                } else {
-                    let provider = details.provider.try_into().ok().and_then(|p| match p {
-                        LlmProvider::Google => Some("Google"),
-                        LlmProvider::Anthropic => Some("Anthropic"),
-                        LlmProvider::Openai => Some("OpenAI"),
-                        LlmProvider::Xai => Some("xAI"),
-                        LlmProvider::Openrouter => Some("OpenRouter"),
-                        LlmProvider::AwsBedrock | LlmProvider::Unknown => None,
-                    });
-                    RenderableAIError::InvalidApiKey {
-                        provider: provider.unwrap_or("Unknown").to_string(),
-                        model_name: details.model_name,
-                    }
-                };
-
-                history_model.update(ctx, |history_model, ctx| {
-                    history_model.mark_response_stream_completed_with_error(
-                        error,
-                        /*recovery_pending*/ false,
-                        stream_id,
-                        conversation_id,
-                        self.terminal_view_id,
-                        ctx,
-                    );
-                });
-            }
-            Some(warp_multi_agent_api::response_event::stream_finished::Reason::InternalError(
-                warp_multi_agent_api::response_event::stream_finished::InternalError{ message})) => {
-                let error_message = format!(
-                    "Response stream finished unexpectedly with internal error: {message}",
-                );
-                history_model.update(ctx, |history_model, ctx| {
-                    history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::Other {
-                            error_message,
-                            will_attempt_resume: false,
-                            waiting_for_network: false,
-                            is_user_error: false,
-                        },
-                        /*recovery_pending*/ false,
-                        stream_id,
-                        conversation_id,
-                        self.terminal_view_id,
-                        ctx,
-                    );
-                });
-            }
-            Some(warp_multi_agent_api::response_event::stream_finished::Reason::MaxTokenLimit(_)) => {
-                let error_message = "Input exceeded context window limit.";
-                history_model.update(ctx, |history_model, ctx| {
-                    history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::ContextWindowExceeded(error_message.to_owned()),
-                        /*recovery_pending*/ false,
-                        stream_id,
-                        conversation_id,
-                        self.terminal_view_id,
-                        ctx,
-                    );
-                });
-            }
+        if !FeatureFlag::AgentSharedSessions.is_enabled() {
+            return;
         }
 
-        if finished_event.should_refresh_model_config {
-            LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
-                llm_preferences.refresh_authed_models(ctx);
+        let participant_id = self
+            .get_current_response_initiator()
+            .or_else(|| self.get_sharer_participant_id());
+        let forked_from_token = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .and_then(|conv| {
+                conv.forked_from_server_conversation_token()
+                    .map(|token| token.as_str().to_string())
             });
-            ctx.emit(BlocklistAIControllerEvent::FreeTierLimitCheckTriggered);
+
+        let mut model = self.terminal_model.lock();
+        if model.shared_session_status().is_sharer() {
+            model.send_agent_response_for_shared_session(event, participant_id, forked_from_token);
         }
+    }
+
+    fn send_cancellation_to_shared_session_viewers(&mut self, ctx: &mut ModelContext<Self>) {
+        self.send_cancellation_to_viewers(ctx);
+    }
+
+    fn queue_client_actions(
+        &mut self,
+        actions: Vec<AIAgentAction>,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.action_model.update(ctx, |action_model, ctx| {
+            action_model.queue_actions(actions, conversation_id, ctx);
+        });
+    }
+
+    fn response_stream_cancelled(
+        &mut self,
+        _conversation_id: AIConversationId,
+        _was_passive_request: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.set_input_mode_for_cancellation(ctx);
+    }
+
+    fn response_stream_completed(
+        &mut self,
+        stream_id: &ResponseStreamId,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.in_flight_response_streams.cleanup_stream(stream_id);
+        self.handle_pending_events_ready(conversation_id, ctx);
+    }
+
+    fn schedule_auto_resume_after_error(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        BlocklistAIController::schedule_auto_resume_after_error(self, conversation_id, ctx);
+    }
+
+    fn take_should_refresh_available_llms_on_stream_finish(&mut self) -> bool {
+        std::mem::take(&mut self.should_refresh_available_llms_on_stream_finish)
+    }
+
+    fn free_tier_limit_check_triggered(&mut self, ctx: &mut ModelContext<Self>) {
+        ctx.emit(BlocklistAIControllerEvent::FreeTierLimitCheckTriggered);
+    }
+
+    fn finished_receiving_output(
+        &mut self,
+        stream_id: ResponseStreamId,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(BlocklistAIControllerEvent::FinishedReceivingOutput {
+            stream_id,
+            conversation_id,
+        });
+    }
+
+    fn maybe_refresh_ai_overages(&mut self, ctx: &mut ModelContext<Self>) {
+        BlocklistAIController::maybe_refresh_ai_overages(self, ctx);
     }
 }
 
