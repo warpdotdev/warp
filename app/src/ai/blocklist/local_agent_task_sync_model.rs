@@ -1,10 +1,10 @@
-mod update_cache;
+mod update_queue;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use session_sharing_protocol::common::SessionId;
-use update_cache::LocalTaskUpdateCache;
+use update_queue::LocalTaskUpdateQueue;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 
@@ -41,8 +41,8 @@ pub struct LocalAgentTaskSyncModel {
     /// Maps terminal view IDs to task IDs for third-party harness sessions
     /// that don't have conversations in `BlocklistAIHistoryModel`.
     cli_session_task_ids: HashMap<EntityId, AmbientAgentTaskId>,
-    /// Filters redundant delivery fields and records completed update requests.
-    update_cache: LocalTaskUpdateCache,
+    /// Serializes and coalesces model-owned updates independently per task.
+    update_queue: LocalTaskUpdateQueue,
 }
 
 pub enum LocalAgentTaskSyncModelEvent {}
@@ -92,7 +92,7 @@ impl LocalAgentTaskSyncModel {
         Self {
             ai_client,
             cli_session_task_ids: HashMap::new(),
-            update_cache: LocalTaskUpdateCache::default(),
+            update_queue: LocalTaskUpdateQueue::default(),
         }
     }
 
@@ -120,7 +120,7 @@ impl LocalAgentTaskSyncModel {
         // Report IN_PROGRESS immediately because the initial
         // `register_listener` call on `CLIAgentSessionsModel` never emits a
         // `StatusChanged` event, so we must report it at registration time.
-        self.fire_update(
+        self.enqueue_update(
             task_id,
             LocalTaskUpdate {
                 task_state: Some(AgentTaskState::InProgress),
@@ -129,13 +129,13 @@ impl LocalAgentTaskSyncModel {
             ctx,
         );
     }
-    
-    fn remove_cached_update_state_for_run_id(&mut self, run_id: Option<&str>) {
+
+    fn remove_queued_update_state_for_run_id(&mut self, run_id: Option<&str>) {
         let Some(task_id) = run_id.and_then(|run_id| run_id.parse::<AmbientAgentTaskId>().ok())
         else {
             return;
         };
-        self.update_cache.remove_task(&task_id);
+        self.update_queue.remove_task(&task_id);
     }
 
     fn handle_history_event(
@@ -170,7 +170,7 @@ impl LocalAgentTaskSyncModel {
             }
             BlocklistAIHistoryEvent::RemoveConversation { run_id, .. }
             | BlocklistAIHistoryEvent::DeletedConversation { run_id, .. } => {
-                self.remove_cached_update_state_for_run_id(run_id.as_deref());
+                self.remove_queued_update_state_for_run_id(run_id.as_deref());
             }
             _ => {}
         }
@@ -193,7 +193,7 @@ impl LocalAgentTaskSyncModel {
                 terminal_view_id, ..
             } => {
                 if let Some(task_id) = self.cli_session_task_ids.remove(terminal_view_id) {
-                    self.update_cache.remove_task(&task_id);
+                    self.update_queue.remove_task(&task_id);
                 }
             }
             _ => {}
@@ -221,7 +221,7 @@ impl LocalAgentTaskSyncModel {
             return;
         };
 
-        self.fire_update(task_id, update, ctx);
+        self.enqueue_update(task_id, update, ctx);
     }
 
     fn on_local_shared_session_established(
@@ -239,7 +239,7 @@ impl LocalAgentTaskSyncModel {
             return;
         };
 
-        self.fire_update(task_id, update, ctx);
+        self.enqueue_update(task_id, update, ctx);
     }
 
     fn on_cli_session_status_changed(
@@ -253,7 +253,7 @@ impl LocalAgentTaskSyncModel {
         };
 
         let (task_state, status_message) = map_cli_session_status(status);
-        self.fire_update(
+        self.enqueue_update(
             task_id,
             LocalTaskUpdate {
                 task_state: Some(task_state),
@@ -264,18 +264,26 @@ impl LocalAgentTaskSyncModel {
         );
     }
 
-    /// Sends an `update_agent_task` request to the server (fire-and-forget).
-    fn fire_update(
+    /// Enqueues a model-owned update without blocking the event producer.
+    fn enqueue_update(
         &mut self,
         task_id: AmbientAgentTaskId,
-        mut update: LocalTaskUpdate,
+        update: LocalTaskUpdate,
         ctx: &mut ModelContext<Self>,
     ) {
-        let prepared_update = self.update_cache.apply_to_update(task_id, &mut update);
-        if update.is_empty() {
-            return;
+        if let Some(update) = self.update_queue.enqueue(task_id, update) {
+            self.send_update(task_id, update, ctx);
         }
-        
+    }
+
+    /// Sends the active update for a task and drains its next queued update
+    /// after completion.
+    fn send_update(
+        &mut self,
+        task_id: AmbientAgentTaskId,
+        update: LocalTaskUpdate,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let ai_client = self.ai_client.clone();
         let LocalTaskUpdate {
             task_state,
@@ -303,9 +311,10 @@ impl LocalAgentTaskSyncModel {
                 }
                 result
             },
-            move |me, result, _| {
-                me.update_cache
-                    .record_result(prepared_update, result.is_ok());
+            move |me, result, ctx| {
+                if let Some(update) = me.update_queue.record_result(task_id, result.is_ok()) {
+                    me.send_update(task_id, update, ctx);
+                }
             },
         );
     }
