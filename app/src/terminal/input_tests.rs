@@ -1489,7 +1489,7 @@ fn empty_buffer_enter_sends_top_queued_prompt_then_next_on_repeat() {
         assert_eq!(*ai_query_count.borrow(), 1);
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
             let queue = model.queue(conversation_id);
-            assert_eq!(queue.len(), 2);
+            assert_eq!(queue.len(), 1);
             assert_eq!(queue[0].text(), "second");
         });
         input.read(&app, |input, ctx| {
