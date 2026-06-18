@@ -340,7 +340,12 @@ impl GridStorage {
 
             loop {
                 // Remove all cells which require reflowing.
-                let mut wrapped = match row.shrink(columns) {
+                let shrunk = row.shrink(columns);
+                if !reflow {
+                    reset_discarded_wide_char_boundary(&mut row, shrunk.as_deref(), columns);
+                }
+
+                let mut wrapped = match shrunk {
                     Some(wrapped) if reflow => wrapped,
                     _ => {
                         let cursor_buffer_line =
@@ -474,5 +479,27 @@ impl GridStorage {
 
         // Clamp the saved cursor to the grid.
         self.saved_cursor.point.col = min(self.saved_cursor.point.col, columns - 1);
+    }
+}
+
+fn reset_discarded_wide_char_boundary(
+    row: &mut Row,
+    discarded_cells: Option<&[Cell]>,
+    columns: usize,
+) {
+    if columns == 0 {
+        return;
+    }
+
+    let Some(first_discarded_cell) = discarded_cells.and_then(|cells| cells.first()) else {
+        return;
+    };
+
+    if row[columns - 1].flags().contains(Flags::WIDE_CHAR)
+        && first_discarded_cell
+            .flags()
+            .contains(Flags::WIDE_CHAR_SPACER)
+    {
+        row[columns - 1] = Cell::default();
     }
 }
