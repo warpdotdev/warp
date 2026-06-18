@@ -2768,6 +2768,37 @@ fn test_vertical_tabs_panel_auto_shows_when_setting_enabled() {
 }
 
 #[test]
+fn test_active_tab_bar_position_id_tracks_layout() {
+    // Cross-window drag hit-testing (`tab_bar_rects_for_window`) targets only
+    // the active tab presentation. Regression guard for the bug where the
+    // inactive horizontal bar registered as a drop zone while vertical tabs
+    // were enabled, lighting up a spurious placeholder over the top bar.
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        // Horizontal tabs (setting off): the horizontal bar is the drop zone.
+        app.read(|ctx| {
+            assert_eq!(active_tab_bar_position_id(ctx), TAB_BAR_POSITION_ID);
+        });
+
+        // Vertical tabs (setting on): only the vertical panel is the drop zone,
+        // so the horizontal bar no longer registers as a cross-window target.
+        app.update(|ctx| {
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
+            });
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                active_tab_bar_position_id(ctx),
+                VERTICAL_TABS_PANEL_POSITION_ID
+            );
+        });
+    });
+}
+
+#[test]
 fn test_toggle_tab_configs_menu_opens_vertical_tabs_panel_and_menu() {
     let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
 

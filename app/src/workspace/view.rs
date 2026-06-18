@@ -26882,14 +26882,14 @@ impl Workspace {
             return self.tabs.len();
         };
 
-        // Pre-compute the bounding rects of the tab bar / vertical tabs panel
-        // so we can defensively reject `tab_position_<index>` / group cache
-        // entries that don't lie within either of them. This guards
-        // `tab_insertion_index_for_cursor` against any future overlay / chip /
-        // preview that accidentally shares a SavePosition key with a real tab
-        // — see the `for_drag_ghost` flag on `TabComponent` and
-        // `vertical_tabs::render_tab_group_internal` for the original offender
-        // (the cross-window drag ghost chip).
+        // Pre-compute the bounding rect of the active tab presentation
+        // (vertical tabs panel or horizontal tab bar) so we can defensively
+        // reject `tab_position_<index>` cache entries that don't lie within
+        // it. This guards `tab_insertion_index_for_cursor` against any future
+        // overlay / chip / preview that accidentally shares a SavePosition
+        // key with a real tab — see the `for_drag_ghost` flag on
+        // `TabComponent` and `vertical_tabs::render_tab_group_internal` for
+        // the original offender (the cross-window drag ghost chip).
         let tab_bar_rects = tab_bar_rects_for_window(window_id, ctx);
 
         let cursor_in_window = cursor_position_on_screen - window_bounds.origin();
@@ -27215,10 +27215,12 @@ impl Workspace {
         if current_index >= self.tabs.len() {
             return;
         }
-        // Only detach when the drag leaves every tab-bar presentation on its
-        // perpendicular axis. Windows with vertical tabs still render the
-        // horizontal bar, so checking only the horizontal rect would make
-        // vertical reorders (which move along Y) spuriously trip the detach.
+        // Only detach when the drag leaves the active tab presentation on its
+        // perpendicular axis. `tab_bar_rects_for_window` returns just the rect
+        // for the layout that actually holds the tabs (the vertical panel in
+        // vertical-tabs mode, otherwise the horizontal bar), so a vertical
+        // reorder — which moves along Y inside the vertical panel — is tested
+        // on the panel's X axis and won't spuriously trip the detach.
         let drag_center = position.center();
         let rects = tab_bar_rects_for_window(ctx.window_id(), ctx);
         let is_drag_outside_tab_bar = if rects.is_empty() {
@@ -27250,8 +27252,34 @@ impl Workspace {
                         tab.draggable_state.adjust_mouse_position(adjustment);
                     }
                 }
-                DragResult::HandoffNeeded { target } => {
-                    self.perform_handoff(target, ctx);
+                DragResult::ReorderInSource => {
+                    // The cursor is back over the source window's own tab bar.
+                    // Reorder the existing detached placeholder in place, just
+                    // like an in-window drag, and report its new index so the
+                    // eventual drop puts the real tab back at this position.
+                    // Deliberately skip the group-reassignment logic used by
+                    // the normal reorder path below: the placeholder is
+                    // detached mid cross-window drag and shouldn't churn group
+                    // membership.
+                    let use_vertical_tabs = FeatureFlag::VerticalTabs.is_enabled()
+                        && *TabSettings::as_ref(ctx).use_vertical_tabs;
+                    let new_index = if use_vertical_tabs {
+                        self.calculate_updated_tab_index_vertical(current_index, position, ctx)
+                    } else {
+                        self.calculate_updated_tab_index(current_index, position, ctx)
+                    };
+                    if new_index != current_index {
+                        self.tabs.swap(new_index, current_index);
+                        if current_index == self.active_tab_index {
+                            self.set_active_tab_index(new_index, ctx);
+                        } else if new_index == self.active_tab_index {
+                            self.set_active_tab_index(current_index, ctx);
+                        }
+                        ctx.notify();
+                    }
+                    CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                        drag.set_source_placeholder_index(new_index);
+                    });
                 }
             }
             return;
@@ -27974,20 +28002,36 @@ pub(super) fn group_has_single_member(tabs: &[TabData], group_id: TabGroupId) ->
     group_member_index_range(tabs, group_id).is_some_and(|(first, last)| first == last)
 }
 
-/// Returns every tab-bar-equivalent rect laid out in `window_id` (horizontal
-/// tab bar and/or vertical tabs panel). Both must be considered because a
-/// window with vertical tabs still renders the horizontal bar at the top.
+/// Returns the save-position id of the tab presentation laid out for the
+/// current tab layout: the vertical tabs panel when vertical tabs are in use,
+/// otherwise the horizontal tab bar.
+///
+/// Uses the shared `uses_vertical_tabs` predicate — the same
+/// `FeatureFlag::VerticalTabs` + `use_vertical_tabs` check the tab bar uses to
+/// decide what to render (see `render_tab_bar_contents`) — so the id always
+/// points at wherever the tab strip is actually shown.
+pub(crate) fn active_tab_bar_position_id(app: &AppContext) -> &'static str {
+    if uses_vertical_tabs(app) {
+        VERTICAL_TABS_PANEL_POSITION_ID
+    } else {
+        TAB_BAR_POSITION_ID
+    }
+}
+
+/// Returns the tab-bar rect for `window_id`'s **active** tab layout, or an
+/// empty `Vec` if that presentation isn't laid out this frame.
+///
+/// Only the active presentation is a valid cross-window drop zone. In
+/// vertical-tabs mode the tabs live in the vertical panel and the horizontal
+/// bar at the top renders only toolbar controls (no tab strip), so it must
+/// not register as a drop target; in horizontal-tabs mode the reverse holds.
+/// Returning the inactive presentation's rect would light up a spurious
+/// insertion placeholder when a tab is dragged over it. Returned as a `Vec`
+/// (at most one rect) so callers can iterate uniformly.
 pub(crate) fn tab_bar_rects_for_window(window_id: WindowId, app: &AppContext) -> Vec<RectF> {
-    let mut rects = Vec::with_capacity(2);
-    if let Some(rect) = app.element_position_by_id_at_last_frame(window_id, TAB_BAR_POSITION_ID) {
-        rects.push(rect);
-    }
-    if let Some(rect) =
-        app.element_position_by_id_at_last_frame(window_id, VERTICAL_TABS_PANEL_POSITION_ID)
-    {
-        rects.push(rect);
-    }
-    rects
+    app.element_position_by_id_at_last_frame(window_id, active_tab_bar_position_id(app))
+        .into_iter()
+        .collect()
 }
 
 // Checks that the tab/group rect is not clipped by overflow area

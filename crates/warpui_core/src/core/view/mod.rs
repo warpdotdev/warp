@@ -104,6 +104,27 @@ pub trait View: Entity {
     ) {
     }
 
+    /// Returns the ids of child views this view directly owns via
+    /// [`ViewHandle`]s (including views held indirectly through models the
+    /// view owns), regardless of whether they are currently being rendered.
+    ///
+    /// This is the authoritative ownership graph used when transferring a
+    /// view subtree between windows (see
+    /// [`AppContext::transfer_view_tree_to_window`]). The default render-time
+    /// parent/child graph only captures views that were laid out in the most
+    /// recent frame and explicit typed-action children; a view that owns
+    /// children through a model (e.g. a navigation stack) or that holds child
+    /// handles that are not always rendered must override this so those
+    /// children are not orphaned when the owning view moves to another
+    /// window.
+    ///
+    /// Returned ids only need to be the view's *direct* children — the
+    /// transfer walk recurses, so each child's own `child_view_ids` (and its
+    /// structural/rendered descendants) are collected automatically.
+    fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
+        Vec::new()
+    }
+
     /// Returns a representation of the current UI context for use in computing
     /// the set of valid actions/keyboard shortcuts.
     fn keymap_context(&self, _: &AppContext) -> keymap::Context {
