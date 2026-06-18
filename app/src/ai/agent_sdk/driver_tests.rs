@@ -282,6 +282,52 @@ fn managed_url_config_preserves_proxy_url_and_header() {
 }
 
 #[test]
+fn managed_url_config_preserves_header_despite_colliding_local_secret() {
+    // A server-rendered proxy header must not be overwritten by a local secret that
+    // happens to share the header's key name (`apply_secrets` implicit key-name match).
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(
+        installations,
+        HashMap::from([("Authorization".to_string(), raw_secret("local-secret"))]),
+    );
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::SSEServer { url, headers } => {
+            assert_eq!(url, "https://proxy.example/mcp");
+            assert_eq!(
+                headers.get("Authorization").map(String::as_str),
+                Some("Bearer proxy-token")
+            );
+        }
+        other => panic!("expected SSE server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_command_config_preserves_literal_env_despite_colliding_local_secret() {
+    // A literal env value rendered by the server must survive even when a local secret
+    // shares the env key name.
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"LOG_LEVEL":"info"}}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(
+        installations,
+        HashMap::from([("LOG_LEVEL".to_string(), raw_secret("debug"))]),
+    );
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::CLIServer { env, .. } => {
+            assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("info"));
+        }
+        other => panic!("expected CLI server, got {other:?}"),
+    }
+}
+
+#[test]
 fn managed_command_config_missing_secret_leaves_placeholder() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,

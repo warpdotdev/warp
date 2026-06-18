@@ -15,6 +15,7 @@ use anyhow::{anyhow, Context as _};
 use futures::channel::oneshot;
 use futures::future::{self, join_all, Either};
 use futures::FutureExt as _;
+use handlebars::get_arguments;
 use itertools::Itertools as _;
 use oneshot::{Canceled, Receiver};
 use repo_metadata::local_model::IndexedRepoState;
@@ -1119,12 +1120,32 @@ impl AgentDriver {
         parsed_results
             .into_iter()
             .map(|result| {
-                if let Some(installation) = result.templatable_mcp_server_installation {
-                    return Ok(installation);
-                }
+                let ParsedTemplatableMCPServerResult {
+                    mut templatable_mcp_server,
+                    mut variable_values,
+                    ..
+                } = result;
 
-                let mut variable_values = result.variable_values;
-                for variable in result.templatable_mcp_server.template.variables.iter() {
+                // Server-rendered literal values (no `{{...}}` ref) must be preserved verbatim.
+                // Drop them from the template's variable list so `apply_secrets` never sees them —
+                // its implicit key-name matching would otherwise let a colliding local secret
+                // (e.g. one named `Authorization`) overwrite a server-issued proxy header.
+                // They stay in `variable_values`, so `resolve_json` still renders them into the
+                // config.
+                templatable_mcp_server
+                    .template
+                    .variables
+                    .retain(|variable| {
+                        let is_literal = variable_values
+                            .get(&variable.key)
+                            .is_some_and(|v| get_arguments(&v.value).is_empty());
+                        !is_literal
+                    });
+
+                // Remaining variables are explicit `{{...}}` placeholders the client fills from
+                // local secrets via `apply_secrets`. Synthesize a placeholder value for any not
+                // captured from env/headers (e.g. command-arg refs like `--token={{API_TOKEN}}`).
+                for variable in templatable_mcp_server.template.variables.iter() {
                     variable_values
                         .entry(variable.key.clone())
                         .or_insert_with(|| VariableValue {
@@ -1135,7 +1156,7 @@ impl AgentDriver {
 
                 Ok(TemplatableMCPServerInstallation::new(
                     uuid::Uuid::new_v4(),
-                    result.templatable_mcp_server,
+                    templatable_mcp_server,
                     variable_values,
                 ))
             })
