@@ -86,6 +86,21 @@ impl ApiKeys {
     pub fn has_custom_endpoints(&self) -> bool {
         !self.custom_endpoints.is_empty()
     }
+
+    /// Number of single-provider API keys currently configured (OpenAI,
+    /// Anthropic, Google, OpenRouter). Custom endpoints are counted separately
+    /// via `custom_endpoints`.
+    pub fn provider_key_count(&self) -> usize {
+        [
+            &self.openai,
+            &self.anthropic,
+            &self.google,
+            &self.open_router,
+        ]
+        .into_iter()
+        .filter(|key| key.as_deref().is_some_and(|v| !v.trim().is_empty()))
+        .count()
+    }
 }
 
 /// OAuth tokens for a connected xAI / Grok subscription (e.g. SuperGrok).

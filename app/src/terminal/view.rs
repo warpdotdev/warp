@@ -254,16 +254,17 @@ use crate::ai::blocklist::usage::conversation_usage_view::{
 use crate::ai::blocklist::{
     ai_brand_color, block_context_from_terminal_model,
     get_ai_block_overflow_menu_element_position_id, get_attached_blocks_chip_element_position_id,
-    AIBlock, AIBlockEvent, AutofireAction, BlocklistAIActionEvent, BlocklistAIActionModel,
-    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    BlocklistAIInputEvent, BlocklistAIInputModel, ClientIdentifiers, ConversationStatusUpdate,
-    InputConfig, InputType, InputTypeAutoDetectionSource, LegacyPassiveSuggestionsEvent,
-    LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel,
-    PassiveSuggestionsModels, PendingAttachment, PendingQueryState, QueuedQuery, QueuedQueryId,
-    QueuedQueryModel, QueuedQueryOrigin, RequestFileEditsFormatKind, ShellCommandExecutor,
-    ShellCommandExecutorEvent, SlashCommandRequest, StartAgentExecutor, StartAgentExecutorEvent,
-    StartAgentRequest, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
+    is_lrc_auto_queue_active, AIBlock, AIBlockEvent, AutofireAction, BlocklistAIActionEvent,
+    BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
+    BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, ClientIdentifiers,
+    ConversationStatusUpdate, InputConfig, InputType, InputTypeAutoDetectionSource,
+    LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
+    MaaPassiveSuggestionsModel, PassiveSuggestionsModels, PendingAttachment, PendingQueryState,
+    QueuedQuery, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin, RequestFileEditsFormatKind,
+    ShellCommandExecutor, ShellCommandExecutorEvent, SlashCommandRequest, StartAgentExecutor,
+    StartAgentExecutorEvent, StartAgentRequest, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
+    PRE_REWIND_PREFIX,
 };
 use crate::ai::conversation_details_panel::ConversationDetailsPanelEvent;
 use crate::ai::conversation_utils;
@@ -1870,6 +1871,12 @@ pub enum Event {
     SessionBootstrapped,
     AnonymousUserSignup,
     ShellSpawned(ShellType),
+    /// Emitted when the PTY failed to spawn. Carries a human-readable reason
+    /// string (not secret values) so the terminal driver can surface a
+    /// specific error without waiting for the full bootstrap timeout.
+    PtySpawnFailed {
+        reason: String,
+    },
 
     /// This terminal pane has initiated a file upload to a remote host.
     CopyFileToRemote {
@@ -5567,6 +5574,51 @@ impl TerminalView {
         }
     }
 
+    /// Sends the leading prompts that were auto-queued during an agent-requested long-running
+    /// command ([`QueuedQueryOrigin::LrcAutoQueue`]) to the agent, in queue order. Invoked when the
+    /// command finishes — these rows were queued "until the command finishes", unlike other queued
+    /// rows, which wait for the end of the full response.
+    pub(crate) fn send_lrc_queued_prompts(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let editing_front_lrc_row = QueuedQueryModel::as_ref(ctx)
+            .editing_row(conversation_id)
+            .is_some_and(|query_id| {
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .first()
+                    .is_some_and(|row| {
+                        row.id() == query_id && row.origin() == QueuedQueryOrigin::LrcAutoQueue
+                    })
+            });
+        if editing_front_lrc_row {
+            let queued_prompts_panel = self.input.as_ref(ctx).queued_prompts_panel().cloned();
+            let Some(queued_prompts_panel) = queued_prompts_panel else {
+                return;
+            };
+            queued_prompts_panel.update(ctx, |panel, ctx| {
+                panel.commit_edit(ctx);
+            });
+        }
+
+        let rows: Vec<(QueuedQueryId, String)> = QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .iter()
+            .take_while(|row| row.origin() == QueuedQueryOrigin::LrcAutoQueue)
+            .map(|row| (row.id(), row.text().to_owned()))
+            .collect();
+        for (query_id, text) in rows {
+            self.input.update(ctx, |input, ctx| {
+                input.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx);
+            });
+            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.remove_fired_row(conversation_id, query_id, ctx);
+            });
+        }
+    }
+
     /// Drains one queued prompt when the cloud setup phase completes for a promptless handoff run
     /// (a prompt will not be auto-sent by the worker so there's no normal event to initiate a queued prompt sending).
     pub(crate) fn maybe_drain_queue_after_promptless_setup(&mut self, ctx: &mut ViewContext<Self>) {
@@ -6620,6 +6672,16 @@ impl TerminalView {
                 ..
             } => {
                 self.cli_subagent_views.remove(block_id);
+
+                // The command ended — drop any LRC-scoped auto-queue override so the
+                // conversation reverts to its pre-command queue state, then deliver the
+                // prompts that were queued "until the command finishes".
+                if let Some(conversation_id) = conversation_id {
+                    QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.clear_queue_next_lrc_prompt_override(*conversation_id, ctx);
+                    });
+                    self.send_lrc_queued_prompts(*conversation_id, ctx);
+                }
 
                 if FeatureFlag::AgentView.is_enabled() {
                     let Some(conversation_id) = conversation_id else {
@@ -15874,6 +15936,10 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.pty_spawn_failed = true;
+        // Emit before the banner so the terminal driver can cancel its
+        // bootstrap wait immediately, without waiting for the 60 s timeout.
+        let reason = format!("{pty_spawn_error:#}");
+        ctx.emit(Event::PtySpawnFailed { reason });
         self.insert_shell_process_terminated_banner(
             shell_terminated_banner::TerminationType::PtySpawnFailure { pty_spawn_error },
             ctx,
@@ -18665,31 +18731,72 @@ impl TerminalView {
             true
         } else {
             // Otherwise, there are some visible blocks and we need to clear stuff.
-            let active_block_is_long_running = self
-                .model
-                .lock()
-                .block_list()
-                .active_block()
-                .is_active_and_long_running();
-            let is_agent_monitoring = self
-                .model
-                .lock()
-                .block_list()
-                .active_block()
-                .is_agent_monitoring();
+            let (is_long_running, is_agent_monitoring, is_agent_driving_command) = {
+                let model = self.model.lock();
+                let active_block = model.block_list().active_block();
+                (
+                    active_block.is_active_and_long_running(),
+                    active_block.is_agent_monitoring(),
+                    active_block.is_agent_driving_command(),
+                )
+            };
 
             // If there isn't an active long running block, then "clear buffer" just starts a new convo.
-            if !active_block_is_long_running {
+            if !is_long_running {
+                // Cancel any in-progress work in the conversation being left.
+                if let Some(conversation_id) = self
+                    .agent_view_controller
+                    .as_ref(ctx)
+                    .agent_view_state()
+                    .active_conversation_id()
+                {
+                    let is_in_progress = BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(&conversation_id)
+                        .is_some_and(|conversation| conversation.status().is_in_progress());
+                    if is_in_progress {
+                        self.ai_controller.update(ctx, |controller, ctx| {
+                            controller.cancel_conversation_progress(
+                                conversation_id,
+                                CancellationReason::ManuallyCancelled,
+                                ctx,
+                            );
+                        });
+                    }
+                }
                 self.enter_agent_view_for_new_conversation(
                     None,
                     AgentViewEntryOrigin::ClearBuffer,
                     ctx,
                 );
                 true
-            } else if is_agent_monitoring {
+            } else if is_agent_monitoring || is_agent_driving_command {
                 // Otherwise, if the agent is monitoring this long-running block,
                 // then clear just that block and leave the rest of the blocklist in tact.
                 self.model.lock().clear_screen(ClearMode::ActiveBlock);
+                // In the agent-driving-but-not-monitoring state the terminal block is hidden. Make
+                // it visible and expand the header immediately so the user sees the cleared state
+                // right away, rather than waiting for the auto-expand timer (~3 s).
+                if is_agent_driving_command && !is_agent_monitoring {
+                    let requested_command_action_id = self
+                        .model
+                        .lock()
+                        .block_list()
+                        .active_block()
+                        .requested_command_action_id()
+                        .cloned();
+                    if let Some(action_id) = &requested_command_action_id {
+                        self.model
+                            .lock()
+                            .block_list_mut()
+                            .set_visibility_of_block_for_ai_action(action_id, true);
+                        if let Some(ai_block_handle) = self.active_ai_block(ctx).cloned() {
+                            ai_block_handle.update(ctx, |ai_block, ctx| {
+                                ai_block.expand_requested_command_view(action_id, ctx);
+                            });
+                        }
+                        self.redetermine_terminal_focus(ctx);
+                    }
+                }
                 self.find_model.update(ctx, |find_model, ctx| {
                     find_model.clear_matches(ctx);
                 });
@@ -18723,8 +18830,14 @@ impl TerminalView {
             .block_list()
             .active_block()
             .is_agent_monitoring();
+        let is_agent_driving_command = self
+            .model
+            .lock()
+            .block_list()
+            .active_block()
+            .is_agent_driving_command();
 
-        if is_agent_monitoring {
+        if is_agent_monitoring || is_agent_driving_command {
             return;
         }
 
@@ -26695,8 +26808,22 @@ impl TypedActionView for TerminalView {
                 else {
                     return;
                 };
+                // While LRC auto-queue is active, the toggle is scoped to that command so the
+                // conversation reverts to its pre-command queue state once the command ends.
+                let lrc_auto_queue_active = {
+                    let terminal_model = self.model.lock();
+                    is_lrc_auto_queue_active(
+                        terminal_model.block_list().active_block(),
+                        conversation_id,
+                        ctx,
+                    )
+                };
                 QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.toggle_queue_next_prompt(conversation_id, ctx);
+                    if lrc_auto_queue_active {
+                        model.toggle_queue_next_prompt_during_lrc(conversation_id, ctx);
+                    } else {
+                        model.toggle_queue_next_prompt(conversation_id, ctx);
+                    }
                 });
                 ctx.notify();
             }

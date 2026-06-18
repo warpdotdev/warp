@@ -530,7 +530,7 @@ fn test_invoke_skill_arguments_round_trip() {
                 Some("arg1 arg2")
             );
             assert_eq!(
-                exchanges[0].input[0].user_query().as_deref(),
+                exchanges[0].input[0].display_query().as_deref(),
                 Some("/test-skill arg1 arg2")
             );
         }
@@ -574,7 +574,7 @@ fn test_invoke_skill_missing_user_query_maps_to_none() {
             assert_eq!(skill.name, "test-skill");
             assert_eq!(user_query, &None);
             assert_eq!(
-                exchanges[0].input[0].user_query().as_deref(),
+                exchanges[0].input[0].display_query().as_deref(),
                 Some("/test-skill")
             );
         }

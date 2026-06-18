@@ -34,6 +34,7 @@ use session_sharing_protocol::common::ParticipantId;
 use task::TaskId;
 pub use telemetry::AIIdentifiers;
 use uuid::Uuid;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_editor::render::model::LineCount;
 use warp_multi_agent_api::{diff_hunk as diff_hunk_api, AgentEvent, AgentType};
@@ -669,6 +670,9 @@ pub enum RenderableAIError {
         /// When `will_attempt_resume` is true, this indicates whether we're waiting for network
         /// connectivity before attempting the resume.
         waiting_for_network: bool,
+        /// True when the error originates from a user-side issue (e.g., model not allowed,
+        /// blocked due to fraud, plan restriction). Maps the task to FAILED state instead of ERROR.
+        is_user_error: bool,
     },
 }
 
@@ -717,6 +721,14 @@ impl RenderableAIError {
             }
         )
     }
+
+    /// Whether the failed-output UI should be suppressed while an automatic resume is in
+    /// flight. Release builds stay quiet so transient blips that recover on their own
+    /// don't surface an alarming error; dogfood builds (Local/Dev) keep the old, more
+    /// aggressive behavior so developers still see every transport failure.
+    pub fn should_suppress_during_recovery(&self) -> bool {
+        self.will_attempt_resume() && !ChannelState::channel().is_dogfood()
+    }
 }
 
 /// The cause behind a [`RenderableAIError::TransientNetworkError`]. Kept structured (rather than
@@ -739,6 +751,10 @@ pub enum TransientNetworkErrorKind {
 
 impl From<&Arc<AIApiError>> for RenderableAIError {
     fn from(value: &Arc<AIApiError>) -> Self {
+        // Non-retryable 4xx errors (403 fraud block, 400 model/plan restriction, etc.)
+        // are user-originating — map them to a user error so the task reaches FAILED
+        // state rather than ERROR state.
+        let is_user_error = !value.is_recoverable();
         match value.as_ref() {
             AIApiError::QuotaLimit {
                 user_display_message,
@@ -761,6 +777,7 @@ impl From<&Arc<AIApiError>> for RenderableAIError {
                         error_message: format!("Request failed with error: {value:?}"),
                         will_attempt_resume: false,
                         waiting_for_network: false,
+                        is_user_error,
                     }
                 }
             }
@@ -777,6 +794,7 @@ impl From<&Arc<AIApiError>> for RenderableAIError {
                 error_message: format!("Request failed with error: {value:?}"),
                 will_attempt_resume: false,
                 waiting_for_network: false,
+                is_user_error,
             },
         }
     }
@@ -2751,7 +2769,7 @@ impl Display for AIAgentInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UserQuery { .. } => {
-                write!(f, "UserQuery: {}", self.user_query().unwrap_or_default())
+                write!(f, "UserQuery: {}", self.display_query().unwrap_or_default())
             }
             Self::AutoCodeDiffQuery { query, .. } => {
                 write!(f, "AutoCodeDiffQuery: {query}")
@@ -2793,7 +2811,11 @@ impl Display for AIAgentInput {
 }
 
 impl AIAgentInput {
-    pub fn user_query(&self) -> Option<String> {
+    /// Display text for any input that surfaces a prompt-like query in the UI
+    /// (typed queries, slash commands, skill invocations, etc.). Unlike
+    /// [`Self::is_user_query`], which strictly matches the `UserQuery` variant,
+    /// this returns `Some` for several input variants.
+    pub fn display_query(&self) -> Option<String> {
         match self {
             Self::UserQuery {
                 query,
@@ -2856,7 +2878,7 @@ impl AIAgentInput {
         &self,
         initial_conversation_query: Option<&String>,
     ) -> Option<String> {
-        let mut query = self.user_query()?;
+        let mut query = self.display_query()?;
         if self
             .user_query_mode()
             .is_none_or(|mode| matches!(mode, UserQueryMode::Normal))
@@ -3083,7 +3105,7 @@ impl AIAgentExchange {
         let user_queries: Vec<String> = self
             .input
             .iter()
-            .filter_map(|input| input.user_query())
+            .filter_map(|input| input.display_query())
             .collect();
         user_queries.join("\n")
     }
@@ -3133,7 +3155,9 @@ impl AIAgentExchange {
     }
 
     pub fn has_user_query(&self) -> bool {
-        self.input.iter().any(|input| input.user_query().is_some())
+        self.input
+            .iter()
+            .any(|input| input.display_query().is_some())
     }
 
     pub fn has_accepted_file_edit(&self) -> bool {

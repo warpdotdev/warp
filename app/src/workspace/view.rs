@@ -156,7 +156,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::agent::CancellationReason;
-use crate::ai::agent::EntrypointType;
+use crate::ai::agent::{AIAgentInput, EntrypointType};
 #[cfg(target_family = "wasm")]
 use crate::ai::agent_conversations_model::AgentConversationsModelEvent;
 use crate::ai::agent_conversations_model::{
@@ -345,7 +345,7 @@ use crate::shell_indicator::ShellIndicatorType;
 use crate::tab::{
     tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
     TabBarState, TabComponent, TabData, TabTelemetryAction, MOVE_TO_GROUP_LABEL,
-    TAB_BAR_BORDER_HEIGHT,
+    TAB_BAR_BORDER_HEIGHT, TAB_PIN_INDICATOR_ICON_SIZE,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
@@ -924,6 +924,10 @@ enum PendingSessionConfigTabConfigChipTutorial {
     AfterSetupCommands {
         intention: OnboardingIntention,
     },
+}
+
+fn query_for_rewind_prefill(inputs: &[AIAgentInput]) -> Option<String> {
+    inputs.iter().find_map(AIAgentInput::display_query)
 }
 
 /// Snapshot of a tab used to move it between workspaces or into a new window.
@@ -6191,7 +6195,7 @@ impl Workspace {
                         self.open_code(
                             code_source,
                             crate::util::openable_file_type::EditorLayout::SplitPane,
-                            None,
+                            *line_col,
                             false,
                             &[],
                             ctx,
@@ -19264,6 +19268,12 @@ impl Workspace {
             }
         }
 
+        // Pinned + expanded: trailing pin indicator after the last member.
+        let group_pinned = FeatureFlag::PinnedTabs.is_enabled() && group.pinned;
+        if group_pinned && !is_collapsed {
+            row.add_child(render_horizontal_group_pin_indicator(appearance));
+        }
+
         // Additional padding on expanded groups,
         // allowing tabs to be dropped into the last position of the group.
         const EXPANDED_GROUP_TRAILING_PADDING: f32 = 8.;
@@ -19365,12 +19375,18 @@ impl Workspace {
             .finish()
         };
 
-        let row = Flex::row()
+        let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.)
             .with_child(icon_circle)
-            .with_child(name_element)
-            .finish();
+            .with_child(name_element);
+        // Collapsed + pinned: pin indicator to the right of the name, where an
+        // ungrouped tab would show its close button. Expanded groups show the
+        // pin after their last member instead.
+        if FeatureFlag::PinnedTabs.is_enabled() && group.pinned && is_collapsed {
+            row.add_child(render_horizontal_group_pin_indicator(appearance));
+        }
+        let row = row.finish();
 
         let header_active_bg = internal_colors::fg_overlay_2(theme);
         let header_hover_bg = internal_colors::fg_overlay_1(theme);
@@ -20135,40 +20151,10 @@ impl Workspace {
             // Ghost state for cross-window drag hovering over this tab bar.
             let ghost = drag_model.ghost_state_for_window(self.window_id);
 
-            // Build a slot list: each ungrouped tab is a `Single`, and each
-            // contiguous run of same-group tabs collapses into one `Group`.
-            let grouped_tabs_enabled = FeatureFlag::GroupedTabs.is_enabled();
-            let mut slots: Vec<TabBarSlot> = Vec::with_capacity(self.tabs.len());
-            for (idx, tab) in self.tabs.iter().enumerate() {
-                let group_id = if grouped_tabs_enabled {
-                    tab.group_id.filter(|gid| self.tab_groups.contains_key(gid))
-                } else {
-                    None
-                };
-                match group_id {
-                    Some(group_id) => {
-                        if let Some(TabBarSlot::Group {
-                            group_id: last_gid,
-                            run_len,
-                            ..
-                        }) = slots.last_mut()
-                        {
-                            if *last_gid == group_id {
-                                *run_len += 1;
-                                continue;
-                                // Current tab is part of the last existing group,
-                                // continue building this groups 'slot'.
-                            }
-                        }
-                        slots.push(TabBarSlot::Group {
-                            group_id,
-                            first_index: idx,
-                            run_len: 1,
-                        });
-                    }
-                    None => slots.push(TabBarSlot::Single { index: idx }),
-                }
-            }
+            // Collapse tabs into render slots: each ungrouped tab is a
+            // `Single`, and each contiguous run of same-group tabs is one
+            // `Group`.
+            let slots = self.tab_bar_slots();
 
             // Render each slot in the tab bar, either an individual tab or tab group.
             for slot in &slots {
@@ -22611,6 +22597,17 @@ impl Workspace {
             }
             crate::settings::PromptSubmissionMode::Queue => {
                 context.set.insert(flags::PROMPT_SUBMISSION_QUEUE);
+            }
+        }
+
+        match ai_settings.long_running_command_submission_mode {
+            crate::settings::LongRunningCommandSubmissionMode::SendImmediately => {
+                context.set.insert(flags::LRC_SUBMISSION_SEND_IMMEDIATELY);
+            }
+            crate::settings::LongRunningCommandSubmissionMode::QueueUntilCommandCompletes => {
+                context
+                    .set
+                    .insert(flags::LRC_SUBMISSION_QUEUE_UNTIL_COMMAND_COMPLETES);
             }
         }
 
@@ -25073,12 +25070,7 @@ impl TypedActionView for Workspace {
                 let user_query = BlocklistAIHistoryModel::as_ref(ctx)
                     .conversation(conversation_id)
                     .and_then(|c| c.root_task_exchanges().find(|e| e.id == *exchange_id))
-                    .and_then(|e| {
-                        e.input
-                            .iter()
-                            .find(|i| i.is_user_query())
-                            .and_then(|i| i.user_query())
-                    });
+                    .and_then(|e| query_for_rewind_prefill(&e.input));
 
                 // Dispatch to the active terminal to execute the rewind
                 if let Some(terminal_view) = self
@@ -25307,6 +25299,9 @@ impl View for Workspace {
         }
         if *CodeSettings::as_ref(app).show_global_search {
             context.set.insert(flags::SHOW_GLOBAL_SEARCH);
+        }
+        if *CodeSettings::as_ref(app).show_hidden_files {
+            context.set.insert(flags::SHOW_HIDDEN_FILES);
         }
 
         if self.team_uid(app).is_some() {
@@ -26766,12 +26761,42 @@ impl Workspace {
         let index = insertion_index.min(self.tabs.len());
         // Safety net to ensure the tab lands after all pinned items.
         let index = self.clamp_to_unpinned_region(&self.tabs, index);
+        // Never split a group: a drop that resolves to the middle of a group's
+        // run is pushed past the group's last member instead.
+        let index = self.clamp_past_group(index);
         let mut tab_data = TabData::new(pane_group);
         tab_data.selected_color = color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
         tab_data.draggable_state = draggable_state;
         self.tabs.insert(index, tab_data);
         self.activate_tab_internal(index, ctx);
         ctx.notify();
+    }
+
+    /// If an insertion at `index` would land strictly inside a group's
+    /// contiguous run (i.e. between two members of the same group), pushes it
+    /// just past that group's last member so a cross-window drop can't split
+    /// the group. Mirrors `clamp_to_unpinned_region`'s "push past the
+    /// boundary" behavior; drops at a group's outer edges are left untouched.
+    fn clamp_past_group(&self, index: usize) -> usize {
+        // Record the group of the tab before our insertion.
+        let Some(before) = index
+            .checked_sub(1)
+            .and_then(|i| self.tabs.get(i))
+            .and_then(|tab| tab.group_id)
+        else {
+            return index;
+        };
+        // Record the group of the tab after our insertion.
+        let Some(after) = self.tabs.get(index).and_then(|tab| tab.group_id) else {
+            return index;
+        };
+        // If the group of the tabs before/after our insertion are the same
+        // we are landing in the middle of the group and must jump past this
+        // group.
+        if before != after {
+            return index;
+        }
+        group_member_index_range(&self.tabs, before).map_or(index, |(_, last)| last + 1)
     }
 
     /// Returns the tab-bar index where a dragged tab would be inserted for
@@ -26788,14 +26813,63 @@ impl Workspace {
     ) -> usize {
         let raw_index =
             self.raw_tab_insertion_index_for_cursor(window_id, cursor_position_on_screen, ctx);
-        self.clamp_to_unpinned_region(&self.tabs, raw_index)
+        let index = self.clamp_to_unpinned_region(&self.tabs, raw_index);
+        // Keep the ghost slot and the eventual drop out of the middle of a
+        // group so neither splits it.
+        self.clamp_past_group(index)
+    }
+
+    /// Collapses `self.tabs` into layout slots: each ungrouped tab is a `Single`,
+    /// and each contiguous run of same-group tabs becomes one `Group`. Shared by
+    /// tab/group rendering and insertion index calculations.
+    fn tab_bar_slots(&self) -> Vec<TabBarSlot> {
+        let grouped_tabs_enabled = FeatureFlag::GroupedTabs.is_enabled();
+        let mut slots: Vec<TabBarSlot> = Vec::with_capacity(self.tabs.len());
+        for (idx, tab) in self.tabs.iter().enumerate() {
+            let group_id = if grouped_tabs_enabled {
+                tab.group_id.filter(|gid| self.tab_groups.contains_key(gid))
+            } else {
+                None
+            };
+            match group_id {
+                Some(group_id) => {
+                    if let Some(TabBarSlot::Group {
+                        group_id: last_gid,
+                        run_len,
+                        ..
+                    }) = slots.last_mut()
+                    {
+                        if *last_gid == group_id {
+                            // Current tab continues the last group's run.
+                            *run_len += 1;
+                            continue;
+                        }
+                    }
+                    // We hav reached the last tab in a group.
+                    // Push this as a "Group" slot.
+                    slots.push(TabBarSlot::Group {
+                        group_id,
+                        first_index: idx,
+                        run_len: 1,
+                    });
+                }
+                // This tab is not part of a group. Push a "Single" slot.
+                None => slots.push(TabBarSlot::Single { index: idx }),
+            }
+        }
+        slots
     }
 
     /// Computes the tab-bar insertion index purely from cursor geometry,
-    /// independent of pinning. Skips tabs clipped by the overflow area
-    /// (width below `MIN_VISIBLE_TAB_WIDTH`), and picks between horizontal
-    /// and vertical layout by comparing the spread of tab centers on each
-    /// axis.
+    /// independent of pinning. Walks the same layout slots the tab bar renders
+    /// (`tab_bar_slots`): each ungrouped tab is one row, and each group —
+    /// collapsed or expanded — is a single row at its container rect, so a
+    /// drop can only target the slot before or after the whole group. Skips
+    /// tabs/groups clipped by the overflow area (width below `MIN_VISIBLE_TAB_WIDTH`)
+    /// and picks between horizontal and vertical layout by comparing the
+    /// spread of row centers on each axis. A result that still resolves into a
+    /// group's range (e.g. the fallback past a trailing group) is pushed clear
+    /// by `clamp_past_group` in `tab_insertion_index_for_cursor`.
     fn raw_tab_insertion_index_for_cursor(
         &self,
         window_id: WindowId,
@@ -26809,39 +26883,56 @@ impl Workspace {
         };
 
         // Pre-compute the bounding rects of the tab bar / vertical tabs panel
-        // so we can defensively reject `tab_position_<index>` cache entries
-        // that don't lie within either of them. This guards
-        // `tab_insertion_index_for_cursor` against any future overlay /
-        // chip / preview that accidentally shares a SavePosition key with
-        // a real tab — see the `for_drag_ghost` flag on `TabComponent` and
-        // `vertical_tabs::render_tab_group_internal` for the original
-        // offender (the cross-window drag ghost chip).
+        // so we can defensively reject `tab_position_<index>` / group cache
+        // entries that don't lie within either of them. This guards
+        // `tab_insertion_index_for_cursor` against any future overlay / chip /
+        // preview that accidentally shares a SavePosition key with a real tab
+        // — see the `for_drag_ghost` flag on `TabComponent` and
+        // `vertical_tabs::render_tab_group_internal` for the original offender
+        // (the cross-window drag ghost chip).
         let tab_bar_rects = tab_bar_rects_for_window(window_id, ctx);
 
         let cursor_in_window = cursor_position_on_screen - window_bounds.origin();
-        let mut visible_tabs = Vec::new();
-        for index in 0..self.tabs.len() {
-            if let Some(tab_position) =
-                ctx.element_position_by_id_at_last_frame(window_id, tab_position_id(index))
-            {
-                if tab_position.width() <= MIN_VISIBLE_TAB_WIDTH {
-                    continue;
+
+        // Resolve each layout slot to the (index, on-screen rect)
+        // it occupies. A group — collapsed or expanded — is one row at its
+        // container rect, so a drop can only land before or after the whole
+        // group, never inside; each ungrouped tab keeps its own row. Rects
+        // clipped by overflow or outside the tab bar are dropped.
+        let mut visible_tabs: Vec<(usize, RectF)> = Vec::with_capacity(self.tabs.len());
+        for slot in self.tab_bar_slots() {
+            match slot {
+                TabBarSlot::Single { index } => {
+                    if let Some(tab_position) =
+                        ctx.element_position_by_id_at_last_frame(window_id, tab_position_id(index))
+                    {
+                        // If we have at least one tab-bar-equivalent rect, require
+                        // that the candidate tab position be (mostly) inside one of
+                        // them. Use the rect center as the membership test — a tab
+                        // that's been rendered partway off-screen due to overflow
+                        // is fine to keep, but a rect that has nothing to do with
+                        // the tab bar (e.g. the floating chip that follows the
+                        // cursor anywhere in the window) gets rejected.
+                        if tab_position.width() > MIN_VISIBLE_TAB_WIDTH
+                            && rect_is_within_tab_bar(tab_position, &tab_bar_rects)
+                        {
+                            visible_tabs.push((index, tab_position));
+                        }
+                    }
                 }
-                // If we have at least one tab-bar-equivalent rect, require
-                // that the candidate tab position be (mostly) inside one of
-                // them. Use the rect center as the membership test — a tab
-                // that's been rendered partway off-screen due to overflow
-                // is fine to keep, but a rect that has nothing to do with
-                // the tab bar (e.g. the floating chip that follows the
-                // cursor anywhere in the window) gets rejected.
-                if !tab_bar_rects.is_empty()
-                    && !tab_bar_rects
-                        .iter()
-                        .any(|tb| tb.contains_point(tab_position.center()))
-                {
-                    continue;
+                TabBarSlot::Group {
+                    group_id,
+                    first_index,
+                    ..
+                } => {
+                    if let Some(container_rect) = group_container_rect(window_id, group_id, ctx) {
+                        if container_rect.width() > MIN_VISIBLE_TAB_WIDTH
+                            && rect_is_within_tab_bar(container_rect, &tab_bar_rects)
+                        {
+                            visible_tabs.push((first_index, container_rect));
+                        }
+                    }
                 }
-                visible_tabs.push((index, tab_position));
             }
         }
 
@@ -26849,10 +26940,10 @@ impl Workspace {
             return self.tabs.len();
         }
 
-        // Detect orientation from the axis with the larger spread between
-        // first and last tab centers (vertical panels stack along Y).
-        // With only one tab there is no spread to compare, so fall back to
-        // whether the vertical-tabs panel is open.
+        // Detect orientation from the axis with the larger spread between the
+        // first and last row centers (vertical panels stack along Y). With
+        // only one row there is no spread to compare, so fall back to whether
+        // the vertical-tabs panel is open.
         let is_vertical = if visible_tabs.len() >= 2 {
             let first = visible_tabs[0].1.center();
             let last = visible_tabs.last().expect("non-empty").1.center();
@@ -27713,6 +27804,21 @@ fn should_reserve_traffic_light_space_in_tab_bar(side: TrafficLightSide) -> bool
 /// Total width/height of the collage area in the group header.
 const GROUP_ICON_COLLAGE_SIZE: f32 = 22.0;
 
+/// Renders the diagonal pin indicator shown on a pinned horizontal tab group:
+/// trailing the members of an expanded group, or to the right of the name on a
+/// collapsed group's header.
+fn render_horizontal_group_pin_indicator(appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    ConstrainedBox::new(
+        Icon::PinFilledDiagonal
+            .to_warpui_icon(theme.main_text_color(theme.background()))
+            .finish(),
+    )
+    .with_width(TAB_PIN_INDICATOR_ICON_SIZE)
+    .with_height(TAB_PIN_INDICATOR_ICON_SIZE)
+    .finish()
+}
+
 /// Renders the icon block for a tab-group header from 0-4 deduped pane kinds.
 /// 1 or 2 icons reuse the vertical Summary `Single`/`Pair` layout so the
 /// group's icons read like a tab Summary view. 3 or 4 icons fall back to a
@@ -27882,6 +27988,31 @@ pub(crate) fn tab_bar_rects_for_window(window_id: WindowId, app: &AppContext) ->
         rects.push(rect);
     }
     rects
+}
+
+// Checks that the tab/group rect is not clipped by overflow area
+// (width below `MIN_VISIBLE_TAB_WIDTH`) and that the rect position
+// is inside at least one of the tab-bar-equivalent rects.
+fn rect_is_within_tab_bar(rect: RectF, tab_bar_rects: &[RectF]) -> bool {
+    tab_bar_rects.is_empty()
+        || tab_bar_rects
+            .iter()
+            .any(|tb| tb.contains_point(rect.center()))
+}
+
+/// Last-frame container rect for a tab group (collapsed or expanded). Reads the
+/// id for the current layout.
+fn group_container_rect(
+    window_id: WindowId,
+    group_id: TabGroupId,
+    app: &AppContext,
+) -> Option<RectF> {
+    let position_id = if uses_vertical_tabs(app) {
+        vtab_group_position_id(group_id)
+    } else {
+        htab_group_position_id(group_id)
+    };
+    app.element_position_by_id_at_last_frame(window_id, position_id)
 }
 
 /// Renders the floating chip shown in the target window during a cross-window

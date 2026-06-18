@@ -49,6 +49,8 @@ pub(crate) use context_model::{
 pub use controller::input_context::{
     BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
 };
+#[cfg(test)]
+pub(crate) use controller::response_stream::ResponseStream;
 pub(crate) use controller::response_stream::ResponseStreamId;
 pub(crate) use controller::{
     BlocklistAIController, BlocklistAIControllerEvent, ClientIdentifiers, SessionContext,
@@ -72,8 +74,8 @@ pub use permissions::{BlocklistAIPermissions, CommandExecutionPermissionAllowedR
 pub(crate) use persistence::PersistedAIInputType;
 pub(crate) use persistence::{PersistedAIInput, SerializedBlockListItem};
 pub(crate) use queued_query::{
-    AutofireAction, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
-    QueuedQueryOrigin,
+    is_lrc_auto_queue_active, AutofireAction, QueuedQuery, QueuedQueryEvent, QueuedQueryId,
+    QueuedQueryModel, QueuedQueryOrigin,
 };
 pub use suggestion_chip_view::*;
 pub use view_util::error_color;

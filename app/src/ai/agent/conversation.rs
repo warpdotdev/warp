@@ -1589,7 +1589,7 @@ impl AIConversation {
         self.root_task_exchanges()
             .flat_map(|exchange| exchange.input.iter())
             .find_map(|input| {
-                AIAgentInput::user_query(input)
+                AIAgentInput::display_query(input)
                     .or_else(|| AIAgentInput::auto_code_diff_query(input).map(|s| s.to_string()))
                     .or_else(|| AIAgentInput::prompt_suggestion_result(input).cloned())
             })
@@ -1598,7 +1598,7 @@ impl AIConversation {
     pub fn initial_user_query(&self) -> Option<String> {
         self.root_task_exchanges()
             .flat_map(|exchange| exchange.input.iter())
-            .find_map(AIAgentInput::user_query)
+            .find_map(AIAgentInput::display_query)
     }
 
     /// Export the conversation to markdown format.
@@ -1626,7 +1626,7 @@ impl AIConversation {
     pub fn latest_user_query(&self) -> Option<String> {
         self.exchanges_reversed().find_map(|exchange| {
             exchange.input.iter().rev().find_map(|input| {
-                AIAgentInput::user_query(input)
+                AIAgentInput::display_query(input)
                     .map(|query| query.trim().to_owned())
                     .filter(|query| !query.is_empty())
             })

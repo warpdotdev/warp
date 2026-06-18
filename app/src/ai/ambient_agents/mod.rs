@@ -107,6 +107,7 @@ pub fn conversation_output_status_from_conversation(
                         error_message: error_message.to_string(),
                         will_attempt_resume: false,
                         waiting_for_network: false,
+                        is_user_error: false,
                     },
                 });
             }

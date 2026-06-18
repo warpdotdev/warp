@@ -482,6 +482,11 @@ impl Workspace {
     /// either because its own `pinned` flag is set (ungrouped pinned tab) or
     /// because it belongs to a pinned group.
     pub(super) fn is_tab_effectively_pinned(&self, tab: &TabData) -> bool {
+        // Safety net, ensures no behavioral changes if feature flag
+        // is off and some tabs have a pinned state saved.
+        if !FeatureFlag::PinnedTabs.is_enabled() {
+            return false;
+        }
         tab.pinned
             || tab
                 .group_id
