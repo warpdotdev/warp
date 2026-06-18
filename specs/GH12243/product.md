@@ -17,12 +17,12 @@ Non-goals:
 ## Behavior
 1. When Warp receives a full-grid clear sequence and the terminal is resized before the command is finished, the active grid resizes without reflowing old terminal output into scrollback.
 2. If that no-reflow resize shrinks the terminal width and the first discarded cell is the spacer for a wide character retained at the new final column, the resulting row remains valid for later rendering, scrolling, and scrollback-like storage. Warp must not leave a final-column wide character that requires a spacer outside the row bounds.
-3. For that truncated boundary pair, Warp keeps the retained final cell's character, style, and other unrelated attributes, but removes its impossible double-width claim. Warp does not clear the retained final cell entirely, and the single-cell degradation applies only to the split boundary pair.
+3. For that truncated boundary pair, Warp resets the retained final cell to the resize-empty cell instead of preserving the leading glyph as a single-cell character. This matches existing clear/overwrite behavior for the spacer half of a wide-character pair and applies only to the split boundary pair.
 4. Valid wide-character pairs wholly inside the new width remain unchanged. A wide character whose spacer is still retained continues to occupy two cells and must still materialize with its matching spacer.
-5. Wide-character spacers wholly outside the new width are discarded with the rest of the overflow content. Discarding overflow content must not mutate unrelated retained cells.
+5. Wide-character spacers wholly outside the new width are discarded with the rest of the overflow content. If the first discarded spacer belongs to the retained final cell, that retained leading cell is reset; otherwise discarding overflow content must not mutate unrelated retained cells.
 6. Rows produced by this clear-driven no-reflow resize path must not contain:
    - a `WIDE_CHAR` marker without a following `WIDE_CHAR_SPACER` in the same row, or
    - a `WIDE_CHAR_SPACER` marker without a preceding `WIDE_CHAR` in the same row.
-7. Ordinary reflowing resize behavior is unchanged. When resize is allowed to reflow content, valid wide characters that cross a wrap boundary continue to use the existing leading-spacer semantics for wrapped rows rather than being flattened or silently narrowed.
+7. Ordinary reflowing resize behavior is unchanged. When resize is allowed to reflow content, valid wide characters that cross a wrap boundary continue to use the existing leading-spacer semantics for wrapped rows rather than being cleared, flattened, or silently narrowed.
 8. Screen-mode routing is unchanged. Unfinished primary grids with full-grid clear behavior continue to use the no-reflow clear path; finished primary grids continue to use normal scrollback behavior; alt-screen grids continue to resize without flat-storage scrollback.
 9. The existing clear-resize scrollback-width regression remains fixed. Resizing under full-grid clear behavior continues to keep active grid width and flat-storage width in sync.
