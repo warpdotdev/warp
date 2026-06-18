@@ -81,7 +81,7 @@ mod billing_and_usage_dispatch;
 mod billing_and_usage_page;
 mod billing_and_usage_page_v2;
 mod code_page;
-mod custom_inference_modal;
+pub(crate) mod custom_inference_modal;
 mod delete_environment_confirmation_dialog;
 mod directory_color_add_picker;
 pub(crate) mod environments_page;
