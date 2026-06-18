@@ -172,18 +172,6 @@ use terminal::local_shell::LocalShellState;
 pub use util::bindings::cmd_or_ctrl_shift;
 use voice::transcriber::VoiceTranscriber;
 use warp_cli::agent::AgentCommand;
-use warp_cli::api_key::ApiKeyCommand;
-use warp_cli::artifact::ArtifactCommand;
-use warp_cli::environment::EnvironmentCommand;
-use warp_cli::federate::FederateCommand;
-use warp_cli::harness_support::HarnessSupportCommand;
-use warp_cli::integration::IntegrationCommand;
-use warp_cli::mcp::MCPCommand;
-use warp_cli::model::ModelCommand;
-use warp_cli::provider::ProviderCommand;
-use warp_cli::schedule::ScheduleSubcommand;
-use warp_cli::secret::SecretCommand;
-use warp_cli::task::TaskCommand;
 use warp_cli::{CliCommand, GlobalOptions};
 #[cfg(feature = "local_fs")]
 use watcher::HomeDirectoryWatcher;
@@ -554,93 +542,7 @@ impl LaunchMode {
     fn as_str_for_tracing(&self) -> &'static str {
         match self {
             LaunchMode::App { .. } => "app",
-            LaunchMode::CommandLine { command, .. } => match command {
-                CliCommand::Agent(agent_command) => match agent_command {
-                    AgentCommand::Run(_) => "agent run",
-                    AgentCommand::RunCloud(_) => "agent run-cloud",
-                    AgentCommand::Profile(_) => "agent profile",
-                    AgentCommand::List(_) => "agent list",
-                    AgentCommand::Get(_) => "agent get",
-                    AgentCommand::Create(_) => "agent create",
-                    AgentCommand::Update(_) => "agent update",
-                    AgentCommand::Delete(_) => "agent delete",
-                    AgentCommand::Skills(_) => "agent skills",
-                },
-                CliCommand::Environment(environment_command) => match environment_command {
-                    EnvironmentCommand::List => "environment list",
-                    EnvironmentCommand::Image(_) => "environment image",
-                    EnvironmentCommand::Create { .. } => "environment create",
-                    EnvironmentCommand::Delete { .. } => "environment delete",
-                    EnvironmentCommand::Get { .. } => "environment get",
-                    EnvironmentCommand::Update { .. } => "environment update",
-                },
-                CliCommand::MCP(mcp_command) => match mcp_command {
-                    MCPCommand::List => "mcp list",
-                },
-                CliCommand::Run(task_command) => match task_command {
-                    TaskCommand::List(_) => "run list",
-                    TaskCommand::Get(_) => "run get",
-                    TaskCommand::Conversation(_) => "run conversation",
-                    TaskCommand::Message(_) => "run message",
-                },
-                CliCommand::Model(model_command) => match model_command {
-                    ModelCommand::List => "model list",
-                },
-                CliCommand::Login => "login",
-                CliCommand::Logout => "logout",
-                CliCommand::Whoami => "whoami",
-                CliCommand::Provider(provider_command) => match provider_command {
-                    ProviderCommand::Setup(_) => "provider setup",
-                    ProviderCommand::List => "provider list",
-                },
-                CliCommand::Integration(integration_command) => match integration_command {
-                    IntegrationCommand::Create(_) => "integration create",
-                    IntegrationCommand::Update(_) => "integration update",
-                    IntegrationCommand::List => "integration list",
-                },
-                CliCommand::Schedule(schedule_command) => match schedule_command.subcommand() {
-                    Some(ScheduleSubcommand::Create(_)) | None => "schedule create",
-                    Some(ScheduleSubcommand::List) => "schedule list",
-                    Some(ScheduleSubcommand::Get(_)) => "schedule get",
-                    Some(ScheduleSubcommand::Update(_)) => "schedule update",
-                    Some(ScheduleSubcommand::Pause(_)) => "schedule pause",
-                    Some(ScheduleSubcommand::Unpause(_)) => "schedule unpause",
-                    Some(ScheduleSubcommand::Delete(_)) => "schedule delete",
-                },
-                CliCommand::Secret(secret_command) => match secret_command {
-                    SecretCommand::Create(_) => "secret create",
-                    SecretCommand::Delete(_) => "secret delete",
-                    SecretCommand::Update(_) => "secret update",
-                    SecretCommand::List(_) => "secret list",
-                },
-                CliCommand::Federate(federate_command) => match federate_command {
-                    FederateCommand::IssueToken(_) => "federate issue-token",
-                    FederateCommand::IssueGcpToken(_) => "federate issue-gcp-token",
-                },
-                CliCommand::HarnessSupport(harness_support_args) => {
-                    match &harness_support_args.command {
-                        HarnessSupportCommand::Ping => "harness-support ping",
-                        HarnessSupportCommand::ReportArtifact(_) => {
-                            "harness-support report-artifact"
-                        }
-                        HarnessSupportCommand::NotifyUser(_) => "harness-support notify-user",
-                        HarnessSupportCommand::FinishTask(_) => "harness-support finish-task",
-                        HarnessSupportCommand::ReportShutdown(_) => {
-                            "harness-support report-shutdown"
-                        }
-                    }
-                }
-                CliCommand::Artifact(artifact_command) => match artifact_command {
-                    ArtifactCommand::Upload(_) => "artifact upload",
-                    ArtifactCommand::Get(_) => "artifact get",
-                    ArtifactCommand::Download(_) => "artifact download",
-                },
-                CliCommand::ApiKey(api_key_command) => match api_key_command {
-                    ApiKeyCommand::List(_) => "api-key list",
-                    ApiKeyCommand::Create(_) => "api-key create",
-                    ApiKeyCommand::Expire(_) => "api-key expire",
-                },
-            },
+            LaunchMode::CommandLine { command, .. } => command.as_str_for_tracing(),
             LaunchMode::Test { .. } => "test",
             LaunchMode::RemoteServerDaemon { .. } => "remote_server_daemon",
             LaunchMode::RemoteServerProxy => "remote_server_proxy",
