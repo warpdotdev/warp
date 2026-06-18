@@ -51,6 +51,9 @@ impl AppearanceManager {
                     AppIconSettingsChangedEvent::AppIconState { .. } => {
                         me.set_app_icon(ctx);
                     }
+                    AppIconSettingsChangedEvent::ShowDockIconState { .. } => {
+                        me.apply_dock_icon_visibility(ctx);
+                    }
                 },
             );
         }
@@ -153,6 +156,11 @@ impl AppearanceManager {
     #[cfg(target_os = "macos")]
     pub fn app_icon_at_startup(&self) -> AppIcon {
         self.app_icon_at_startup
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn apply_dock_icon_visibility(&self, app: &AppContext) {
+        app.set_dock_icon_visible(*AppIconSettings::as_ref(app).show_dock_icon.value());
     }
 
     pub fn clear_transient_theme(&mut self, ctx: &mut ModelContext<Self>) {

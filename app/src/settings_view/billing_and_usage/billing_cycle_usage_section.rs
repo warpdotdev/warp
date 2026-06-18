@@ -339,7 +339,6 @@ impl BillingCycleUsageSectionView {
         column.add_child(self.render_header(Some(workspace), &visibility, appearance, app));
         column.add_child(
             Container::new(render_own_usage_with_workspace_row(
-                workspace,
                 &entries,
                 &self.row_mouse_states,
                 appearance,

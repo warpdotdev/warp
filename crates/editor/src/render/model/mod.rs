@@ -121,7 +121,7 @@ pub const BROKEN_LINK_SPACING: BlockSpacing = BlockSpacing {
 };
 
 pub const HEADER_SPACING: BlockSpacing = BlockSpacing {
-    margin: Margin::uniform(4.)
+    margin: Margin::uniform(0.)
         .with_top(4.)
         .with_bottom(4.)
         .with_right(16.),

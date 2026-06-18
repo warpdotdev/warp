@@ -8,7 +8,7 @@ use futures::channel::oneshot;
 use ignore::gitignore::Gitignore;
 use itertools::Itertools;
 use rayon::prelude::*;
-use repo_metadata::entry::{is_file_parsable, IgnoredPathStrategy};
+use repo_metadata::entry::{is_file_parsable, BudgetExceededBehavior, IgnoredPathStrategy};
 use repo_metadata::RepositoryUpdate;
 use streaming_iterator::StreamingIterator;
 use syntax_tree::TextSlice;
@@ -55,6 +55,7 @@ pub async fn build_outline(
         MAX_DEPTH,
         0,
         &IgnoredPathStrategy::Exclude, // override_ignore_for_files
+        BudgetExceededBehavior::StopAndLazyLoad,
     )?;
 
     let (sender, receiver) = oneshot::channel();

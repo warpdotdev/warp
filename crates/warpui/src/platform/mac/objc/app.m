@@ -437,6 +437,11 @@ NSUInteger activeScreenId() {
     return self.dockMenu;
 }
 
+- (BOOL)setDockIconVisible:(BOOL)visible {
+    NSApplicationActivationPolicy policy =
+        visible ? NSApplicationActivationPolicyRegular : NSApplicationActivationPolicyAccessory;
+    return [NSApp setActivationPolicy:policy];
+}
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
     didReceiveNotificationResponse:(UNNotificationResponse *)response
              withCompletionHandler:(void (^)(void))completionHandler {

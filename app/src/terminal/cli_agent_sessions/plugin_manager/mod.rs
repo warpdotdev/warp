@@ -177,7 +177,6 @@ pub(crate) trait CliAgentPluginManager: Send + Sync {
     fn has_local_marketplace_override(&self) -> bool {
         false
     }
-
     /// Install the Warp notification plugin.
     /// Default returns an error — only agents with `can_auto_install() == true` should override.
     async fn install(&self) -> Result<(), PluginInstallError> {
@@ -225,6 +224,7 @@ pub(crate) trait CliAgentPluginManager: Send + Sync {
     async fn install_platform_plugin(&self) -> Result<(), PluginInstallError> {
         Ok(())
     }
+
     /// Update the Oz platform plugin for this CLI agent, if one exists.
     /// Default reuses the install path because most agents do not have a
     /// platform plugin or need distinct update behavior.
@@ -266,7 +266,11 @@ pub(crate) fn plugin_manager_for_with_shell(
             if FeatureFlag::CodexNotifications.is_enabled()
                 && FeatureFlag::HOANotifications.is_enabled() =>
         {
-            Some(Box::new(CodexPluginManager))
+            Some(Box::new(CodexPluginManager::new(
+                shell_path,
+                shell_type,
+                path_env_var,
+            )))
         }
         CLIAgent::Gemini
             if FeatureFlag::GeminiNotifications.is_enabled()

@@ -103,6 +103,30 @@ fn strip_prefix() {
 }
 
 #[test]
+fn strip_prefix_equal_path() {
+    let p = StandardizedPath::try_new("/home/user/project").unwrap();
+    let base = StandardizedPath::try_new("/home/user/project").unwrap();
+    assert_eq!(p.strip_prefix(&base), Some(""));
+}
+
+#[test]
+fn strip_prefix_matches_only_whole_components() {
+    // `/repository` is a string-prefix sibling of `/repo`, but it is NOT a
+    // path-component descendant of it. `strip_prefix` must behave like
+    // `starts_with` and refuse to strip, returning `None` rather than a
+    // bogus mid-component remainder like `Some("sitory/foo.rs")`.
+    let base = StandardizedPath::try_new("/repo").unwrap();
+    let sibling = StandardizedPath::try_new("/repository/foo.rs").unwrap();
+    assert!(!sibling.starts_with(&base));
+    assert_eq!(sibling.strip_prefix(&base), None);
+
+    let nested_base = StandardizedPath::try_new("/home/user").unwrap();
+    let nested_sibling = StandardizedPath::try_new("/home/username/x").unwrap();
+    assert!(!nested_sibling.starts_with(&nested_base));
+    assert_eq!(nested_sibling.strip_prefix(&nested_base), None);
+}
+
+#[test]
 fn join() {
     let p = StandardizedPath::try_new("/home/user").unwrap();
     let joined = p.join("project/src");

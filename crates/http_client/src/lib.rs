@@ -23,7 +23,7 @@ use warp_core::channel::{Channel, ChannelState};
 use warp_core::operating_system_info::OperatingSystemInfo;
 use warp_core::{execution_mode, report_error};
 
-use crate::iap::{IAP_PROXY_AUTH_HEADER, IapTokenProvider};
+use crate::iap::{IapTokenProvider, proxy_auth_header};
 
 pub mod headers {
     /// Custom Warp header indicating the version of the Warp app.
@@ -199,7 +199,8 @@ impl Client {
         }
 
         if let Some(token) = iap_token {
-            builder = builder.header(IAP_PROXY_AUTH_HEADER, format!("Bearer {token}"));
+            let (name, value) = proxy_auth_header(&token);
+            builder = builder.header(name, value);
         }
 
         builder
@@ -240,8 +241,7 @@ impl Client {
     fn iap_token_for<U: IntoUrl>(&self, url: U) -> Option<String> {
         let provider = self.iap_token_provider.as_ref()?;
         let url = url.into_url().ok()?;
-        let server_url = reqwest::Url::parse(ChannelState::server_root_url().as_ref()).ok()?;
-        if url.origin() != server_url.origin() {
+        if !is_warp_server_origin(&url) {
             return None;
         }
         provider.cached_token()
@@ -384,6 +384,16 @@ impl Client {
 
         Ok(Response(result))
     }
+}
+
+fn is_warp_server_origin(url: &reqwest::Url) -> bool {
+    [
+        ChannelState::server_root_url(),
+        ChannelState::rtc_http_url(),
+    ]
+    .iter()
+    .filter_map(|candidate| reqwest::Url::parse(candidate.as_ref()).ok())
+    .any(|candidate| candidate.origin() == url.origin())
 }
 
 impl<'a> RequestBuilder<'a> {
@@ -758,5 +768,29 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Client {
                 .body(response_body)
                 .map_err(oauth2::HttpClientError::Http)
         })
+    }
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+
+    #[test]
+    fn server_and_rtc_origins_match() {
+        // Derive the expected origins from `ChannelState` so the assertion holds
+        // regardless of which channel config the test build resolves to.
+        let server = reqwest::Url::parse(ChannelState::server_root_url().as_ref()).unwrap();
+        assert!(is_warp_server_origin(&server.join("/graphql/v2").unwrap()));
+
+        let rtc = reqwest::Url::parse(ChannelState::rtc_http_url().as_ref()).unwrap();
+        assert!(is_warp_server_origin(
+            &rtc.join("/api/v1/agent/events/stream").unwrap()
+        ));
+    }
+
+    #[test]
+    fn third_party_origin_does_not_match() {
+        let url = reqwest::Url::parse("https://evil.example.com/graphql/v2").unwrap();
+        assert!(!is_warp_server_origin(&url));
     }
 }

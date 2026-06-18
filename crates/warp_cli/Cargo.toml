@@ -13,6 +13,7 @@ cfg-if = { workspace = true }
 humantime.workspace = true
 jaq-all.workspace = true
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true }
 warp_core = { path = "../warp_core" }
@@ -20,6 +21,7 @@ color-print = "0.3"
 warp_util = { path = "../warp_util" }
 clap_complete = "4.5.58"
 anyhow.workspace = true
+local_control.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
@@ -33,6 +35,7 @@ cfg_aliases.workspace = true
 plugin_host = []
 integration_tests = []
 api_key_authentication = []
+
 
 [dev-dependencies]
 serial_test = "0.8.0"

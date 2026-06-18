@@ -151,16 +151,27 @@ impl StandardizedPath {
     }
 
     /// Strip a prefix from this path, returning the relative remainder.
+    ///
+    /// Matching is done at the component level (consistent with
+    /// [`starts_with`](Self::starts_with)), so `base = /repo` does **not**
+    /// match `self = /repository/foo.rs`; that returns `None` rather than a
+    /// bogus mid-component remainder.
     pub fn strip_prefix(&self, base: &StandardizedPath) -> Option<&str> {
-        let self_str = self.as_str();
-        let base_str = base.as_str();
-        self_str.strip_prefix(base_str).map(|remainder| {
-            // Remove leading separator if present.
+        // Gate on the component-aware `starts_with` so we never strip a base
+        // that is only a *string* prefix (e.g. `/repo` vs `/repository`). For
+        // two normalized paths, a component prefix is also a byte prefix, so
+        // slicing at `base` length lands exactly on a component boundary.
+        if !self.starts_with(base) {
+            return None;
+        }
+        let remainder = &self.as_str()[base.as_str().len()..];
+        Some(
+            // Remove the separator left between `base` and the remainder.
             remainder
                 .strip_prefix('/')
                 .or_else(|| remainder.strip_prefix('\\'))
-                .unwrap_or(remainder)
-        })
+                .unwrap_or(remainder),
+        )
     }
 
     /// Join a relative segment onto this path.

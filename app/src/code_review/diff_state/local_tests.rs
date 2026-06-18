@@ -278,3 +278,76 @@ fn test_parse_git_status_file_without_spaces_still_works() {
     assert_eq!(result[0].0, "simple.txt");
     assert_eq!(result[0].1, GitFileStatus::Modified);
 }
+
+#[tokio::test]
+async fn untracked_directory_diff_is_empty_and_non_binary() {
+    let repo_dir = tempfile::tempdir().expect("create temp repo dir");
+    std::fs::create_dir(repo_dir.path().join("nested-repo")).expect("create nested dir");
+
+    // `git status` reports a nested repo/worktree as a single untracked
+    // directory entry (with a trailing slash). It must short-circuit to an
+    // empty non-binary diff — the error fallback would otherwise mislabel it
+    // as binary and the view would render "Binary file - no diff available"
+    // instead of "New empty file".
+    let diff = LocalDiffStateModel::get_file_diff(
+        repo_dir.path(),
+        "nested-repo/",
+        &GitFileStatus::Untracked,
+        false,
+        None,
+    )
+    .await
+    .expect("get_file_diff should succeed for an untracked directory");
+
+    assert!(!diff.is_binary);
+    assert_eq!(diff.hunks.len(), 0);
+    assert_eq!(diff.status, GitFileStatus::Untracked);
+}
+
+#[tokio::test]
+async fn untracked_directory_has_no_baseline_content() {
+    let repo_dir = tempfile::tempdir().expect("create temp repo dir");
+    std::fs::create_dir(repo_dir.path().join("nested-repo")).expect("create nested dir");
+    std::fs::write(repo_dir.path().join("new-file.txt"), "hello\n").expect("write file");
+
+    // No baseline for a directory entry, so no editor is constructed for it.
+    let dir_content = LocalDiffStateModel::get_file_content_at_head(
+        repo_dir.path(),
+        "nested-repo/",
+        &GitFileStatus::Untracked,
+    )
+    .await;
+    assert_eq!(dir_content, None);
+
+    // Regular untracked files keep their empty baseline.
+    let file_content = LocalDiffStateModel::get_file_content_at_head(
+        repo_dir.path(),
+        "new-file.txt",
+        &GitFileStatus::Untracked,
+    )
+    .await;
+    assert_eq!(file_content, Some(String::new()));
+}
+
+#[tokio::test]
+async fn num_lines_in_file_if_non_binary_counts_lines_in_text_file() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let file_path = dir.path().join("file.txt");
+    std::fs::write(&file_path, "one\ntwo\nthree\n").expect("write file");
+
+    let num_lines = LocalDiffStateModel::num_lines_in_file_if_non_binary(&file_path)
+        .await
+        .expect("counting a regular file should succeed");
+    assert_eq!(num_lines, Some(3));
+}
+
+#[tokio::test]
+async fn num_lines_in_file_if_non_binary_errors_for_directory() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+
+    // Directories aren't countable. The metadata callers degrade this error
+    // to a 0-line contribution per entry instead of failing the whole
+    // metadata computation.
+    let result = LocalDiffStateModel::num_lines_in_file_if_non_binary(dir.path()).await;
+    assert!(result.is_err());
+}

@@ -8,6 +8,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 #[cfg(not(target_family = "wasm"))]
 use crc::{Crc, CRC_32_ISCSI};
 use thiserror::Error;
+use warp_core::errors::{register_error, ErrorExt};
 
 #[cfg(feature = "local_fs")]
 use super::ai::FileArtifactUploadTargetInfo;
@@ -25,6 +26,13 @@ pub struct HttpStatusError {
     pub status: u16,
     pub body: String,
 }
+
+impl ErrorExt for HttpStatusError {
+    fn is_actionable(&self) -> bool {
+        !matches!(self.status, 408 | 429)
+    }
+}
+register_error!(HttpStatusError);
 
 #[cfg(not(target_family = "wasm"))]
 pub(crate) static CRC32C: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);

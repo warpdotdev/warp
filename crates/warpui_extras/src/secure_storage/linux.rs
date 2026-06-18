@@ -2,6 +2,9 @@
 
 use std::cell::OnceCell;
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write as _;
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context};
@@ -227,8 +230,41 @@ impl SecureStorage {
         let fallback_file = self.fallback_file(key)?;
 
         let encrypted = self.fallback_encrypt(value)?;
-
         std::fs::write(fallback_file, encrypted).map_err(|err| Error::Unknown(err.into()))
+    }
+
+    fn write_owner_only_fallback_value(&self, key: &str, value: &str) -> Result<(), Error> {
+        let fallback_file = self.fallback_file(key)?;
+
+        let encrypted = self.fallback_encrypt(value)?;
+        let Some(fallback_dir) = fallback_file.parent() else {
+            return Err(Error::Unknown(anyhow!(
+                "Invalid fallback secure-storage directory"
+            )));
+        };
+        std::fs::create_dir_all(fallback_dir).map_err(|err| Error::Unknown(err.into()))?;
+        let mut dir_permissions = std::fs::metadata(fallback_dir)
+            .map_err(|err| Error::Unknown(err.into()))?
+            .permissions();
+        dir_permissions.set_mode(0o700);
+        std::fs::set_permissions(fallback_dir, dir_permissions)
+            .map_err(|err| Error::Unknown(err.into()))?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(&fallback_file)
+            .map_err(|err| Error::Unknown(err.into()))?;
+        file.write_all(&encrypted)
+            .map_err(|err| Error::Unknown(err.into()))?;
+        let mut file_permissions = file
+            .metadata()
+            .map_err(|err| Error::Unknown(err.into()))?
+            .permissions();
+        file_permissions.set_mode(0o600);
+        file.set_permissions(file_permissions)
+            .map_err(|err| Error::Unknown(err.into()))
     }
 
     fn read_fallback_value(&self, key: &str) -> Result<String, Error> {
@@ -258,6 +294,17 @@ impl super::SecureStorage for SecureStorage {
                 Ok(())
             }
             Err(_) => self.write_fallback_value(key, value),
+        }
+    }
+    fn write_value_with_owner_only_fallback(&self, key: &str, value: &str) -> Result<(), Error> {
+        let secret_result = self.write_secret_value(key, value);
+
+        match secret_result {
+            Ok(_) => {
+                let _ = self.delete_fallback_value(key);
+                Ok(())
+            }
+            Err(_) => self.write_owner_only_fallback_value(key, value),
         }
     }
 

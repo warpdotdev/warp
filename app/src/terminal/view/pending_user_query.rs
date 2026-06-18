@@ -167,7 +167,7 @@ impl TerminalView {
         }
 
         self.input.update(ctx, |input, ctx| {
-            input.submit_queued_prompt(prompt, ctx);
+            input.submit_user_query_now(prompt, ctx);
         });
     }
 
@@ -205,7 +205,7 @@ impl TerminalView {
             match reason {
                 FinishReason::Complete => {
                     terminal_view.input.update(ctx, |input, ctx| {
-                        input.submit_queued_prompt(prompt, ctx);
+                        input.submit_user_query_now(prompt, ctx);
                     });
                 }
                 FinishReason::Error

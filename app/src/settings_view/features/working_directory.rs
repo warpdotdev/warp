@@ -384,12 +384,11 @@ fn create_editor(
     editor.update(ctx, |editor, ctx| {
         editor.set_buffer_text(&initial_value, ctx);
     });
-    let editor_handle = editor.clone();
-    ctx.subscribe_to_view(&editor, move |me, _, event, ctx| match event {
+    ctx.subscribe_to_view(&editor, move |me, editor, event, ctx| match event {
         // If the user presses enter or focus moves out of the editor view,
         // update our configuration to match the current value.
         EditorEvent::Blurred | EditorEvent::Enter => {
-            let editor_contents = editor_handle.as_ref(ctx).buffer_text(ctx);
+            let editor_contents = editor.as_ref(ctx).buffer_text(ctx);
             me.handle_action(
                 &WorkingDirectoryAction::SetCustomWorkingDirectoryValue(source, editor_contents),
                 ctx,

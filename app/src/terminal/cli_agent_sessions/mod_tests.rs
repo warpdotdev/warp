@@ -1,4 +1,6 @@
-use super::event::{parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType};
+use super::event::{
+    parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType,
+};
 use super::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
     CLIAgentSessionStatus, CLIAgentSessionsModel,
@@ -257,9 +259,11 @@ fn apply_event_preserves_input_session() {
         plugin_version: None,
         draft_text: None,
         custom_command_prefix: None,
+        received_rich_notification: false,
     };
 
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Claude,
         event: CLIAgentEventType::PermissionRequest,
@@ -290,6 +294,7 @@ fn is_remote_returns_true_when_remote_host_is_set() {
         draft_text: None,
         remote_host: Some("user@devbox".to_owned()),
         custom_command_prefix: None,
+        received_rich_notification: false,
     };
     assert!(session.is_remote());
 }
@@ -307,6 +312,7 @@ fn is_remote_returns_false_when_remote_host_is_none() {
         plugin_version: None,
         draft_text: None,
         custom_command_prefix: None,
+        received_rich_notification: false,
     };
     assert!(!session.is_remote());
 }
@@ -375,9 +381,11 @@ fn session_start_sets_plugin_version() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        received_rich_notification: false,
     };
 
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Claude,
         event: CLIAgentEventType::SessionStart,
@@ -407,9 +415,11 @@ fn session_start_without_plugin_version_leaves_none() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        received_rich_notification: false,
     };
 
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Claude,
         event: CLIAgentEventType::SessionStart,
@@ -421,6 +431,52 @@ fn session_start_without_plugin_version_leaves_none() {
 
     session.apply_event(&event);
     assert_eq!(session.plugin_version, None);
+}
+
+#[test]
+fn codex_session_not_rich_until_rich_notification() {
+    // Codex's OSC 9 fallback never sets `received_rich_notification`, so the
+    // session must not claim rich status even when a fallback listener exists.
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Codex,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        received_rich_notification: false,
+    };
+    assert!(!session.supports_rich_status());
+
+    // A structured OSC 777 notification latches the flag -> rich status.
+    session.received_rich_notification = true;
+    assert!(session.supports_rich_status());
+}
+
+#[test]
+fn non_codex_session_rich_after_rich_notification() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        received_rich_notification: false,
+    };
+    // No listener and no rich notification yet.
+    assert!(!session.supports_rich_status());
+
+    session.received_rich_notification = true;
+    assert!(session.supports_rich_status());
 }
 
 /// Constructs a session with permission-scoped state already populated, as if
@@ -445,6 +501,7 @@ fn blocked_claude_session_with_permission_state() -> CLIAgentSession {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        received_rich_notification: false,
     }
 }
 
@@ -456,6 +513,7 @@ fn stop_clears_permission_scoped_state() {
     let mut session = blocked_claude_session_with_permission_state();
 
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Claude,
         event: CLIAgentEventType::Stop,
@@ -493,6 +551,7 @@ fn permission_replied_clears_permission_scoped_state() {
     let mut session = blocked_claude_session_with_permission_state();
 
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Claude,
         event: CLIAgentEventType::PermissionReplied,
@@ -520,6 +579,7 @@ fn prompt_submit_clears_permission_scoped_state() {
     session.session_context.response = Some("stale response".to_owned());
 
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Claude,
         event: CLIAgentEventType::PromptSubmit,
@@ -560,9 +620,11 @@ fn permission_request_still_populates_summary_and_tool_fields() {
         draft_text: None,
         remote_host: None,
         custom_command_prefix: None,
+        received_rich_notification: false,
     };
 
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Claude,
         event: CLIAgentEventType::PermissionRequest,

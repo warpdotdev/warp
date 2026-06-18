@@ -258,10 +258,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_bash_bootstraps_with_prompt_command_array);
     register_test!(test_bash_bootstraps_with_prompt_command_array_that_sets_ps1);
     register_test!(test_zsh_bootstraps_with_nounset_option);
-    register_test!(test_legacy_ssh_into_bash);
-    register_test!(test_legacy_ssh_into_zsh);
-    register_test!(test_tmux_ssh_into_bash);
-    register_test!(test_tmux_ssh_into_zsh);
+    register_test!(test_ssh_wrapper_into_bash);
+    register_test!(test_ssh_wrapper_into_zsh);
     register_test!(test_ssh_into_fish);
     register_test!(test_ssh_into_sh);
     register_test!(test_ssh_into_ash);
@@ -289,6 +287,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_open_input_context_menu);
     register_test!(test_copy_all_from_input_context_menu);
     register_test!(test_cut_paste_from_input_context_menu);
+    register_test!(test_inline_model_selector_restores_prompt_on_dismissal);
+    register_test!(test_inline_model_selector_restores_prompt_on_model_selection);
+    register_test!(test_inline_model_selector_restores_prompt_on_chip_toggle_close);
     register_test!(test_paste_and_type_characters_before_bootstrap);
     register_test!(test_code_review_scroll_anchor_preserved_when_inserting_above);
     register_test!(test_code_review_scroll_anchor_unchanged_when_inserting_below);
@@ -466,6 +467,12 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     // Video recording test (manual only)
     register_test!(test_video_recording);
+
+    // Rich Input Ctrl+Enter submit toggle (issue #11588)
+    // Full-stack wiring guard: toggle ON → Enter inserts newline, Ctrl+Enter submits.
+    register_test!(test_rich_input_toggle_on_enter_inserts_newline_and_ctrl_enter_submits);
+    // Regression: Enter must accept inline menus (not insert newline) when toggle=true (PR #11723)
+    register_test!(test_rich_input_enter_accepts_menu_item_when_toggle_is_true);
 
     tests
 }

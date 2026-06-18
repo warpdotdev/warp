@@ -37,6 +37,38 @@ fn repository_info_from_gh_output_parses_name_and_owner() {
     );
 }
 
+#[cfg(all(feature = "local_fs", unix))]
+#[tokio::test]
+async fn get_repository_info_returns_none_when_gh_cannot_resolve_github_repo() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    let (_dir, repo) = init_repo().await;
+
+    let fake_bin = tempfile::tempdir().expect("failed to create fake bin dir");
+    let gh_path = fake_bin.path().join("gh");
+    fs::write(
+        &gh_path,
+        "#!/bin/sh\nprintf 'none of the git remotes configured for this repository point to a known GitHub host\\n' >&2\nexit 1\n",
+    )
+    .expect("failed to write fake gh");
+    let mut permissions = fs::metadata(&gh_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&gh_path, permissions).unwrap();
+
+    let path_env = format!(
+        "{}:{}",
+        fake_bin.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    assert_eq!(
+        super::get_repository_info(&repo, Some(&path_env))
+            .await
+            .unwrap(),
+        None
+    );
+}
+
 #[cfg(feature = "local_fs")]
 #[test]
 fn repository_info_from_gh_output_rejects_missing_name() {
@@ -151,6 +183,26 @@ fn detects_no_pr_for_branch_errors() {
     assert!(!super::is_no_pr_for_branch_error("repository not found"));
 }
 
+#[cfg(feature = "local_fs")]
+#[test]
+fn detects_repository_lookup_not_applicable_errors() {
+    assert!(super::is_repository_lookup_not_applicable_error(
+        "gh command failed: none of the git remotes configured for this repository point to a known GitHub host"
+    ));
+    assert!(super::is_repository_lookup_not_applicable_error(
+        "gh command failed: no GitHub remotes"
+    ));
+    assert!(super::is_repository_lookup_not_applicable_error(
+        "gh command failed: not a GitHub repository"
+    ));
+    assert!(!super::is_repository_lookup_not_applicable_error(
+        "authentication required"
+    ));
+    assert!(!super::is_repository_lookup_not_applicable_error(
+        "repository not found"
+    ));
+}
+
 #[tokio::test]
 async fn on_normal_branch_returns_branch_name() {
     let (_dir, repo) = init_repo().await;
@@ -194,6 +246,45 @@ async fn get_pr_for_branch_returns_none_for_detached_head() {
     let (_dir, repo) = init_repo().await;
     git(&repo, &["checkout", "--detach", "HEAD"]).await;
     assert_eq!(get_pr_for_branch(&repo, None).await.unwrap(), None);
+}
+
+#[cfg(feature = "local_fs")]
+#[tokio::test]
+async fn committed_branch_files_excludes_uncommitted_and_untracked() {
+    let (_dir, repo) = init_repo().await;
+    // Branch off main; the merge base is main's initial commit.
+    git(&repo, &["checkout", "-b", "feature"]).await;
+
+    // Commit a new file on the feature branch — this SHOULD appear in the
+    // committed branch diff.
+    std::fs::write(repo.join("committed.txt"), "line1\nline2\n").expect("write committed.txt");
+    git(&repo, &["add", "committed.txt"]).await;
+    git(&repo, &["commit", "-m", "add committed.txt"]).await;
+
+    // Further-modify the committed file in the working tree (uncommitted) and
+    // add an untracked file. Neither is part of the PR's committed history, so
+    // neither should appear, and the committed file's counts must reflect only
+    // the committed change (2 added lines, not 3).
+    std::fs::write(repo.join("committed.txt"), "line1\nline2\nline3\n")
+        .expect("modify committed.txt");
+    std::fs::write(repo.join("untracked.txt"), "new\n").expect("write untracked.txt");
+
+    let entries = super::get_committed_branch_file_entries(&repo)
+        .await
+        .expect("committed branch files");
+
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected only the committed file: {entries:?}"
+    );
+    assert_eq!(entries[0].path, "committed.txt");
+    assert_eq!(entries[0].additions, 2);
+    assert_eq!(entries[0].deletions, 0);
+    assert!(
+        !entries.iter().any(|e| e.path == "untracked.txt"),
+        "untracked files must be excluded: {entries:?}"
+    );
 }
 
 #[cfg(unix)]

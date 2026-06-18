@@ -1,10 +1,15 @@
 ---
 name: triage-issue-local
 specializes: triage-issue
+specializes_source: warpdotdev/oz-for-oss:.agents/skills/triage-issue
 description: Repo-specific triage guidance for warp. Only the categories declared overridable by the core triage-issue skill may be specialized here.
 ---
 
 # Repo-specific triage guidance for `warp`
+
+## Prerequisite: install the parent skill
+
+This skill specializes the core `triage-issue` skill (named in the `specializes` frontmatter field) and is not functional on its own. Before applying its guidance, confirm the parent skill is installed and resolvable at `.agents/skills/triage-issue/SKILL.md`. If it is missing, install it first by copying the skill directory from the source declared in the `specializes_source` frontmatter field (`warpdotdev/oz-for-oss:.agents/skills/triage-issue`). Then continue with the guidance below.
 
 This file is a companion to the core `triage-issue` skill. It does not
 redefine the triage output schema, safety rules, or follow-up-question

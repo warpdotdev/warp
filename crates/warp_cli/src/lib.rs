@@ -29,6 +29,7 @@ pub mod federate;
 pub mod harness_support;
 pub mod integration;
 pub mod json_filter;
+pub mod local_control;
 pub mod mcp;
 pub mod model;
 pub mod provider;
@@ -348,12 +349,6 @@ impl Args {
                     .mut_subcommand("get", |get_cmd| {
                         get_cmd.mut_arg("conversation", |arg| arg.hide(true))
                     })
-            });
-        }
-        // Hide the message subcommand from help text.
-        if !FeatureFlag::OrchestrationV2.is_enabled() {
-            command = command.mut_subcommand("run", |run_cmd| {
-                run_cmd.mut_subcommand("message", |c| c.hide(true))
             });
         }
 
