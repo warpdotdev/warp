@@ -93,7 +93,11 @@ pub struct GlobalOptions {
     pub output_format: OutputFormat,
 }
 
-/// Command-line argument parser for the main Warp binary. This is used across all channels.
+/// Normal argument parser for the shared Warp executable across all channels.
+///
+/// Oz commands are subcommands of this parser, so invoking an `oz` symlink does
+/// not require a mode flag. Warp Control uses its separate [`local_control::ControlArgs`]
+/// parser, selected before this parser sees the arguments.
 #[derive(Debug, Default, Parser, Clone)]
 #[command(
     name = "oz",
