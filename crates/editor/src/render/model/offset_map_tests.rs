@@ -77,11 +77,11 @@ fn test_offset_map_placeholders() {
 fn test_end_to_end() {
     // Group imports here so they don't cause "unused import" warnings on other targets.
 
-    use warpui::App;
-    use warpui::color::ColorU;
-    use warpui::elements::Fill;
-    use warpui::fonts::Cache as FontCache;
-    use warpui::text_layout::LayoutCache;
+    use warpui_core::App;
+    use warpui_core::color::ColorU;
+    use warpui_core::elements::Fill;
+    use warpui_core::fonts::Cache as FontCache;
+    use warpui_core::text_layout::LayoutCache;
 
     use crate::content::buffer::{Buffer, BufferEditAction, EditOrigin};
     use crate::content::selection_model::BufferSelectionModel;

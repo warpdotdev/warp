@@ -227,9 +227,12 @@ impl From<GqlUgcCollectionEnablementSetting> for UgcCollectionEnablementSetting 
                 UgcCollectionEnablementSetting::RespectUserSetting
             }
             GqlUgcCollectionEnablementSetting::Other(value) => {
-                report_error!(anyhow!(
-                    "Invalid UgcCollectionEnablementSetting '{value}'. Make sure to update client GraphQL types!"
-                ));
+                report_error!(
+                    anyhow!(
+                        "Invalid UgcCollectionEnablementSetting '{value}'. Make sure to update client GraphQL types!"
+                    ),
+                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                );
                 UgcCollectionEnablementSetting::RespectUserSetting
             }
         }
@@ -240,6 +243,7 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
     fn from(gql: &gql_usage::ConversationUsage) -> Self {
         let persistence::model::ConversationUsageMetadata {
             credits_spent,
+            platform_credits_spent,
             token_usage: models,
             tool_usage_metadata: tool,
             context_window_usage,
@@ -247,6 +251,7 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
         } = (&gql.usage_metadata).into();
         ConversationUsageInfo {
             credits_spent,
+            platform_credits_spent,
             credits_spent_for_last_block: None,
             tool_calls: tool.total_tool_calls(),
             models,
@@ -268,9 +273,12 @@ impl From<GqlAdminEnablementSetting> for AdminEnablementSetting {
                 AdminEnablementSetting::RespectUserSetting
             }
             GqlAdminEnablementSetting::Other(value) => {
-                report_error!(anyhow!(
-                    "Invalid AdminEnablementSetting '{value}'. Make sure to update client GraphQL types!"
-                ));
+                report_error!(
+                    anyhow!(
+                        "Invalid AdminEnablementSetting '{value}'. Make sure to update client GraphQL types!"
+                    ),
+                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                );
                 AdminEnablementSetting::RespectUserSetting
             }
         }
@@ -285,9 +293,12 @@ impl From<GqlHostEnablementSetting> for HostEnablementSetting {
                 HostEnablementSetting::RespectUserSetting
             }
             GqlHostEnablementSetting::Other(value) => {
-                report_error!(anyhow!(
-                    "Invalid HostEnablementSetting '{value}'. Make sure to update client GraphQL types!"
-                ));
+                report_error!(
+                    anyhow!(
+                        "Invalid HostEnablementSetting '{value}'. Make sure to update client GraphQL types!"
+                    ),
+                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                );
                 HostEnablementSetting::RespectUserSetting
             }
         }
@@ -444,9 +455,12 @@ impl From<GqlUsageVisibilityGranularity> for UsageVisibilityGranularity {
                 UsageVisibilityGranularity::FullBreakdown
             }
             GqlUsageVisibilityGranularity::Other(value) => {
-                report_error!(anyhow!(
-                    "Invalid UsageVisibilityGranularity '{value}'. Make sure to update client GraphQL types!"
-                ));
+                report_error!(
+                    anyhow!(
+                        "Invalid UsageVisibilityGranularity '{value}'. Make sure to update client GraphQL types!"
+                    ),
+                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                );
                 // Fail closed to the most restrictive granularity.
                 UsageVisibilityGranularity::OwnOnly
             }
@@ -645,9 +659,12 @@ fn convert_gql_ai_autonomy_value_to_action_permission(
         GqlAiAutonomyValue::AlwaysAsk => Some(ActionPermission::AlwaysAsk),
         GqlAiAutonomyValue::RespectUserSetting => None,
         GqlAiAutonomyValue::Other(value) => {
-            report_error!(anyhow!(
-                "Invalid AiAutonomyValue '{value}'. Make sure to update client GraphQL types!"
-            ));
+            report_error!(
+                anyhow!(
+                    "Invalid AiAutonomyValue '{value}'. Make sure to update client GraphQL types!"
+                ),
+                warp_core::errors::ReportErrorLogMode::OncePerRun
+            );
             None
         }
     }
@@ -662,9 +679,12 @@ fn convert_gql_write_to_pty_autonomy_value_to_write_to_pty_permission(
         GqlWriteToPtyAutonomyValue::AskOnFirstWrite => Some(WriteToPtyPermission::AskOnFirstWrite),
         GqlWriteToPtyAutonomyValue::RespectUserSetting => None,
         GqlWriteToPtyAutonomyValue::Other(value) => {
-            report_error!(anyhow!(
-                "Invalid WriteToPtyAutonomyValue '{value}'. Make sure to update client GraphQL types!"
-            ));
+            report_error!(
+                anyhow!(
+                    "Invalid WriteToPtyAutonomyValue '{value}'. Make sure to update client GraphQL types!"
+                ),
+                warp_core::errors::ReportErrorLogMode::OncePerRun
+            );
             None
         }
     }
@@ -679,9 +699,12 @@ fn convert_gql_computer_use_autonomy_value_to_computer_use_permission(
         GqlComputerUseAutonomyValue::AlwaysAllow => Some(ComputerUsePermission::AlwaysAllow),
         GqlComputerUseAutonomyValue::RespectUserSetting => None,
         GqlComputerUseAutonomyValue::Other(value) => {
-            report_error!(anyhow!(
-                "Invalid ComputerUseAutonomyValue '{value}'. Make sure to update client GraphQL types!"
-            ));
+            report_error!(
+                anyhow!(
+                    "Invalid ComputerUseAutonomyValue '{value}'. Make sure to update client GraphQL types!"
+                ),
+                warp_core::errors::ReportErrorLogMode::OncePerRun
+            );
             None
         }
     }
@@ -725,10 +748,11 @@ impl From<warp_graphql::workspace::LlmModelHost> for crate::ai::llms::LLMModelHo
             GqlLlmModelHost::DirectApi => Self::DirectApi,
             GqlLlmModelHost::AwsBedrock => Self::AwsBedrock,
             GqlLlmModelHost::CustomEndpoint => Self::CustomEndpoint,
+            GqlLlmModelHost::GeminiEnterprise => Self::GeminiEnterprise,
             GqlLlmModelHost::Other(value) => {
-                report_error!(anyhow!(
+                log::warn!(
                     "Unknown LlmModelHost '{value}'. Make sure to update client GraphQL types!"
-                ));
+                );
                 Self::Unknown
             }
         }
@@ -743,6 +767,8 @@ impl From<warp_graphql::workspace::LlmHostSettings> for super::workspace::LlmHos
                 .enablement_setting
                 .map(Into::into)
                 .unwrap_or_default(),
+            gcp_audience: gql_settings.gcp_audience,
+            gcp_sa_email: gql_settings.gcp_sa_email,
         }
     }
 }

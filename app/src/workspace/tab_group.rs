@@ -1,6 +1,9 @@
 //! Tab group data model. Gated at runtime by `FeatureFlag::GroupedTabs`.
 
 use uuid::Uuid;
+use warpui::elements::DraggableState;
+
+use crate::tab::SelectedTabColor;
 
 /// Stable identity for a tab group.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -18,13 +21,17 @@ impl Default for TabGroupId {
     }
 }
 
-/// A group of tabs. Member tabs point to their
-/// group via `TabData::group_id`.
+/// A named group of tabs in the vertical tabs panel.
+/// Member tabs reference their group via `TabData::group_id`.
 #[derive(Clone)]
 pub struct TabGroup {
     pub id: TabGroupId,
     pub name: Option<String>,
+    pub color: SelectedTabColor,
     pub collapsed: bool,
+    pub draggable_state: DraggableState,
+    /// True when this whole group is pinned to the front of the tab list.
+    pub pinned: bool,
 }
 
 impl TabGroup {
@@ -33,7 +40,10 @@ impl TabGroup {
         Self {
             id: TabGroupId::new(),
             name: None,
+            color: SelectedTabColor::default(),
             collapsed: false,
+            draggable_state: Default::default(),
+            pinned: false,
         }
     }
 }

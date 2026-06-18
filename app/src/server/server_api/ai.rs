@@ -77,6 +77,9 @@ use warp_graphql::queries::free_available_models::{
 use warp_graphql::queries::get_available_harnesses::{
     GetAvailableHarnesses, GetAvailableHarnessesVariables,
 };
+use warp_graphql::queries::get_conversation_usage::{
+    ConversationUsage, GetConversationUsage, GetConversationUsageVariables, UserResult,
+};
 use warp_graphql::queries::get_feature_model_choices::{
     GetFeatureModelChoices, GetFeatureModelChoicesVariables,
 };
@@ -106,7 +109,6 @@ use warp_graphql::queries::task_git_credentials::{
 };
 use warp_multi_agent_api::ConversationData;
 
-use super::auth::AuthClient;
 use super::harness_support::{UploadField, UploadFieldValue, UploadTarget};
 use super::ServerApi;
 use crate::ai::agent::api::ServerConversationToken;
@@ -246,6 +248,12 @@ pub struct SpawnAgentRequest {
     /// Set by the client when cloud conversation storage is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snapshot_disabled: Option<bool>,
+    /// True when the source conversation was part of an orchestration tree at
+    /// handoff time. Only set on local-to-cloud handoff spawns from an
+    /// orchestrated source; absent otherwise. The server uses it to inject the
+    /// universal hidden first-turn orchestration handoff message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orchestration_handoff: Option<bool>,
 }
 
 /// Server-minted token returned by `POST /agent/handoff/upload-snapshot` that scopes a batch
@@ -300,6 +308,18 @@ pub(crate) struct ForkConversationRequest {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ForkConversationResponse {
     pub forked_conversation_id: String,
+}
+
+/// Request body for `POST /agent/conversations/{conversation_id}/rename`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RenameConversationRequest {
+    pub title: String,
+}
+
+/// Response body for `POST /agent/conversations/{conversation_id}/rename`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RenameConversationResponse {
+    pub title: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -651,13 +671,13 @@ pub struct CreateFileArtifactUploadResponse {
 /// A single git credential entry returned by `taskGitCredentials`.
 #[derive(Clone)]
 pub struct GitCredential {
-    /// The GitHub token (OAuth user token or App installation token).
+    /// The provider's OAuth or installation access token.
     pub token: String,
-    /// The GitHub username. `None` for service-account (installation token) principals.
+    /// The provider-specific git username, when available.
     pub username: Option<String>,
-    /// The GitHub email. `None` for service-account principals.
+    /// The provider account's email, when available.
     pub email: Option<String>,
-    /// The host (always `"github.com"` in V1).
+    /// The managed git host, such as `"github.com"` or `"gitlab.com"`.
     pub host: String,
 }
 
@@ -839,6 +859,13 @@ pub(crate) fn build_fork_conversation_url(conversation_id: &str) -> String {
     )
 }
 
+pub(crate) fn build_rename_conversation_url(conversation_id: &str) -> String {
+    format!(
+        "agent/conversations/{}/rename",
+        urlencoding::encode(conversation_id)
+    )
+}
+
 struct ListRunsResponse {
     runs: Vec<AmbientAgentTask>,
 }
@@ -1008,6 +1035,16 @@ pub trait AIClient: 'static + Send + Sync {
 
     async fn get_request_limit_info(&self) -> Result<RequestUsageInfo, anyhow::Error>;
 
+    /// Returns conversation usage history for the current user over the requested number of days.
+    ///
+    /// If `last_updated_end_timestamp` is provided, only conversations updated before that timestamp are returned.
+    async fn get_conversation_usage_history(
+        &self,
+        days: Option<i32>,
+        limit: Option<i32>,
+        last_updated_end_timestamp: Option<warp_graphql::scalars::Time>,
+    ) -> Result<Vec<ConversationUsage>, anyhow::Error>;
+
     async fn get_feature_model_choices(&self) -> Result<ModelsByFeature, anyhow::Error>;
 
     async fn get_available_harnesses(&self) -> Result<Vec<HarnessAvailability>, anyhow::Error>;
@@ -1078,6 +1115,13 @@ pub trait AIClient: 'static + Send + Sync {
         conversation_id: String,
         title: Option<String>,
     ) -> anyhow::Result<ForkConversationResponse, anyhow::Error>;
+
+    /// Rename a server-side conversation and return the normalized title.
+    async fn rename_conversation(
+        &self,
+        conversation_id: String,
+        title: String,
+    ) -> anyhow::Result<RenameConversationResponse, anyhow::Error>;
 
     async fn list_ambient_agent_tasks(
         &self,
@@ -1589,6 +1633,25 @@ impl AIClient for ServerApi {
         }
     }
 
+    async fn get_conversation_usage_history(
+        &self,
+        days: Option<i32>,
+        limit: Option<i32>,
+        last_updated_end_timestamp: Option<warp_graphql::scalars::Time>,
+    ) -> Result<Vec<ConversationUsage>, anyhow::Error> {
+        let operation = GetConversationUsage::build(GetConversationUsageVariables {
+            request_context: get_request_context(),
+            days,
+            limit,
+            last_updated_end_timestamp,
+        });
+        let response = self.send_graphql_request(operation, None).await?;
+        match response.user {
+            UserResult::UserOutput(output) => Ok(output.user.conversation_usage),
+            UserResult::Unknown => Err(anyhow!("Unable to fetch conversation usage")),
+        }
+    }
+
     async fn get_feature_model_choices(&self) -> Result<ModelsByFeature, anyhow::Error> {
         let variables = GetFeatureModelChoicesVariables {
             request_context: get_request_context(),
@@ -1791,6 +1854,11 @@ impl AIClient for ServerApi {
         }
     }
 
+    #[tracing::instrument(skip_all, err, fields(
+        tags.cloud_agent = true,
+        config.worker_host = tracing::field::Empty,
+        config.harness = tracing::field::Empty
+    ))]
     async fn create_agent_task(
         &self,
         prompt: String,
@@ -1798,6 +1866,19 @@ impl AIClient for ServerApi {
         parent_run_id: Option<String>,
         config: Option<AgentConfigSnapshot>,
     ) -> anyhow::Result<AmbientAgentTaskId, anyhow::Error> {
+        if let Some(config) = &config {
+            if let Some(worker_host) = &config.worker_host {
+                tracing::Span::current().record("config.worker_host", worker_host);
+            }
+            if let Some(harness) = &config.harness {
+                let harness: Option<serde_json::Value> =
+                    serde_json::to_value(harness.harness_type).ok();
+                if let Some(serde_json::Value::String(harness)) = harness {
+                    tracing::Span::current().record("config.harness", harness);
+                }
+            }
+        }
+
         // Serialize the config to JSON if provided
         let agent_config_snapshot = config
             .map(|c| serde_json::to_string(&c))
@@ -1830,6 +1911,13 @@ impl AIClient for ServerApi {
         }
     }
 
+    #[tracing::instrument(skip_all, err, fields(
+        tags.cloud_agent = true,
+        ?task_state,
+        ?session_id,
+        ?conversation_id,
+        error_code = ?status_message.as_ref().map(|m| m.error_code)
+    ))]
     async fn update_agent_task(
         &self,
         task_id: AmbientAgentTaskId,
@@ -1897,6 +1985,18 @@ impl AIClient for ServerApi {
         let request = ForkConversationRequest { title };
         let response: ForkConversationResponse = self
             .post_public_api(&build_fork_conversation_url(&conversation_id), &request)
+            .await?;
+        Ok(response)
+    }
+
+    async fn rename_conversation(
+        &self,
+        conversation_id: String,
+        title: String,
+    ) -> anyhow::Result<RenameConversationResponse, anyhow::Error> {
+        let request = RenameConversationRequest { title };
+        let response: RenameConversationResponse = self
+            .post_public_api(&build_rename_conversation_url(&conversation_id), &request)
             .await?;
         Ok(response)
     }
@@ -1975,6 +2075,7 @@ impl AIClient for ServerApi {
         }
     }
 
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
     async fn get_ai_conversation(
         &self,
         server_conversation_token: ServerConversationToken,
@@ -2731,10 +2832,13 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmModelHost> for LL
             warp_graphql::queries::get_feature_model_choices::LlmModelHost::CustomEndpoint => {
                 LLMModelHost::CustomEndpoint
             }
+            warp_graphql::queries::get_feature_model_choices::LlmModelHost::GeminiEnterprise => {
+                LLMModelHost::GeminiEnterprise
+            }
             warp_graphql::queries::get_feature_model_choices::LlmModelHost::Other(value) => {
-                report_error!(anyhow!(
+                log::warn!(
                     "Unknown LlmModelHost '{value}'. Make sure to update client GraphQL types!"
-                ));
+                );
                 LLMModelHost::Unknown
             }
         }
@@ -2758,9 +2862,12 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmProvider> for LLM
                 LLMProvider::Unknown
             }
             warp_graphql::queries::get_feature_model_choices::LlmProvider::Other(value) => {
-                report_error!(anyhow!(
-                    "Invalid LlmProvider '{value}'. Make sure to update client GraphQL types!"
-                ));
+                report_error!(
+                    anyhow!(
+                        "Invalid LlmProvider '{value}'. Make sure to update client GraphQL types!"
+                    ),
+                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                );
                 LLMProvider::Unknown
             }
         }
@@ -2776,9 +2883,12 @@ impl From<warp_graphql::workspace::LlmProvider> for LLMProvider {
             warp_graphql::workspace::LlmProvider::Xai => LLMProvider::Xai,
             warp_graphql::workspace::LlmProvider::Unknown => LLMProvider::Unknown,
             warp_graphql::workspace::LlmProvider::Other(value) => {
-                report_error!(anyhow!(
-                    "Invalid LlmProvider '{value}'. Make sure to update client GraphQL types!"
-                ));
+                report_error!(
+                    anyhow!(
+                        "Invalid LlmProvider '{value}'. Make sure to update client GraphQL types!"
+                    ),
+                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                );
                 LLMProvider::Unknown
             }
         }
@@ -2868,9 +2978,12 @@ fn convert_harness(harness: warp_graphql::ai::AgentHarness) -> AIAgentHarness {
         warp_graphql::ai::AgentHarness::Gemini => AIAgentHarness::Gemini,
         warp_graphql::ai::AgentHarness::Codex => AIAgentHarness::Codex,
         warp_graphql::ai::AgentHarness::Other(value) => {
-            report_error!(anyhow!(
-                "Invalid AgentHarness '{value}'. Make sure to update client GraphQL types!"
-            ));
+            report_error!(
+                anyhow!(
+                    "Invalid AgentHarness '{value}'. Make sure to update client GraphQL types!"
+                ),
+                warp_core::errors::ReportErrorLogMode::OncePerRun
+            );
             AIAgentHarness::Unknown
         }
     }
@@ -2898,11 +3011,13 @@ fn convert_usage_metadata(
     summarized: bool,
     context_window_usage: f64,
     credits_spent: f64,
+    platform_credits_spent: f64,
 ) -> ConversationUsageMetadata {
     ConversationUsageMetadata {
         was_summarized: summarized,
         context_window_usage: context_window_usage as f32,
         credits_spent: credits_spent as f32,
+        platform_credits_spent: platform_credits_spent as f32,
         credits_spent_for_last_block: None,
         token_usage: vec![],
         tool_usage_metadata: Default::default(),
@@ -2917,6 +3032,7 @@ impl TryFrom<warp_graphql::ai::AIConversation> for ServerAIConversationMetadata 
             value.usage.usage_metadata.summarized,
             value.usage.usage_metadata.context_window_usage,
             value.usage.usage_metadata.credits_spent,
+            value.usage.usage_metadata.platform_credits_spent,
         );
         let metadata = value.metadata.try_into()?;
         let permissions = value.permissions.try_into()?;
@@ -2941,6 +3057,7 @@ impl TryFrom<warp_graphql::ai::AIConversation> for ServerAIConversationMetadata 
             harness: convert_harness(value.harness),
             usage,
             metadata,
+            creator: value.creator.map(Into::into),
             permissions,
             ambient_agent_task_id,
             server_conversation_token,
@@ -2961,6 +3078,7 @@ impl TryFrom<warp_graphql::queries::list_ai_conversations::AIConversationMetadat
             value.usage.usage_metadata.summarized,
             value.usage.usage_metadata.context_window_usage,
             value.usage.usage_metadata.credits_spent,
+            value.usage.usage_metadata.platform_credits_spent,
         );
         let metadata = value.metadata.try_into()?;
         let permissions = value.permissions.try_into()?;
@@ -2984,6 +3102,7 @@ impl TryFrom<warp_graphql::queries::list_ai_conversations::AIConversationMetadat
             harness: convert_harness(value.harness),
             usage,
             metadata,
+            creator: value.creator.map(Into::into),
             permissions,
             ambient_agent_task_id,
             server_conversation_token,

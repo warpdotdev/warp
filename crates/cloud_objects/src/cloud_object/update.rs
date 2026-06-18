@@ -15,43 +15,10 @@ pub enum UpdateCloudObjectResult<T> {
 }
 
 /// Helper struct that contains all the info needed to fetch changed objects from the server.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ObjectsToUpdate {
     pub notebooks: Vec<UpdatedObjectInput>,
     pub workflows: Vec<UpdatedObjectInput>,
     pub folders: Vec<UpdatedObjectInput>,
     pub generic_string_objects: Vec<UpdatedObjectInput>,
-}
-
-impl Clone for ObjectsToUpdate {
-    fn clone(&self) -> Self {
-        Self {
-            notebooks: self
-                .notebooks
-                .iter()
-                .map(copy_updated_object_input)
-                .collect(),
-            workflows: self
-                .workflows
-                .iter()
-                .map(copy_updated_object_input)
-                .collect(),
-            folders: self.folders.iter().map(copy_updated_object_input).collect(),
-            generic_string_objects: self
-                .generic_string_objects
-                .iter()
-                .map(copy_updated_object_input)
-                .collect(),
-        }
-    }
-}
-
-fn copy_updated_object_input(input: &UpdatedObjectInput) -> UpdatedObjectInput {
-    UpdatedObjectInput {
-        uid: input.uid.clone(),
-        actions_ts: input.actions_ts,
-        metadata_ts: input.metadata_ts,
-        permissions_ts: input.permissions_ts,
-        revision_ts: input.revision_ts,
-    }
 }

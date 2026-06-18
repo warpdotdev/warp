@@ -3,14 +3,14 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
-use warpui::elements::{
+use warpui_core::elements::{
     Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
     Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Radius, Stack, Text,
 };
-use warpui::fonts::{Properties, Weight};
-use warpui::platform::Cursor;
-use warpui::Element;
+use warpui_core::fonts::{Properties, Weight};
+use warpui_core::platform::Cursor;
+use warpui_core::Element;
 
 use super::agent_slide::AgentSlideAction;
 

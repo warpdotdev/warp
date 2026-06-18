@@ -19,9 +19,9 @@ use warp::integration_testing::terminal::{
 use warp::integration_testing::view_getters::single_terminal_view_for_tab;
 use warp::settings::SelectionSettings;
 use warp_multi_agent_api as api;
-use warpui::integration::TestStep;
-use warpui::text::SelectionType;
-use warpui::{async_assert, Event, SingletonEntity};
+use warpui_core::integration::TestStep;
+use warpui_core::text::SelectionType;
+use warpui_core::{async_assert, Event, SingletonEntity};
 
 use super::new_builder;
 use crate::util::skip_if_powershell_core_2303;

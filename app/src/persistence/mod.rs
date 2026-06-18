@@ -4,7 +4,6 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         pub mod agent;
         mod block_list;
-        mod cloud_objects;
         mod sqlite;
         pub mod commands;
     }
@@ -71,6 +70,7 @@ pub enum PersistenceScope {
 /// Returns the previously-persisted data, if any, and handles for
 /// writing updated data to persist, if the persistence subsystem is
 /// available.
+#[tracing::instrument(name = "persistence::initialize", skip_all, fields(tags.cloud_agent = true))]
 #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
 pub fn initialize(
     ctx: &mut AppContext,

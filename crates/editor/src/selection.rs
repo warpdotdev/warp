@@ -3,11 +3,11 @@ use std::ops::Range;
 use num_traits::SaturatingSub;
 use string_offset::CharOffset;
 use vec1::Vec1;
-use warpui::text::TextBuffer;
-use warpui::text::point::Point;
-use warpui::text::word_boundaries::WordBoundariesPolicy;
-use warpui::units::Pixels;
-use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle};
+use warpui_core::text::TextBuffer;
+use warpui_core::text::point::Point;
+use warpui_core::text::word_boundaries::WordBoundariesPolicy;
+use warpui_core::units::Pixels;
+use warpui_core::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle};
 
 use crate::content::buffer::{
     AutoScrollBehavior, Buffer, BufferEvent, BufferSelectAction, SelectionOffsets,
@@ -1004,7 +1004,12 @@ impl SelectionModel {
         }
     }
 
-    fn handle_buffer_event(&mut self, event: &BufferEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_buffer_event(
+        &mut self,
+        _: ModelHandle<Buffer>,
+        event: &BufferEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             BufferEvent::ContentChanged { origin, .. } if origin.from_user() => self.goal_xs = None,
             BufferEvent::AnchorUpdated {

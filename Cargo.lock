@@ -321,6 +321,7 @@ dependencies = [
  "async-fs",
  "async-trait",
  "base16ct",
+ "base64 0.22.1",
  "bincode",
  "bytes",
  "cfg-if",
@@ -332,6 +333,7 @@ dependencies = [
  "filetime",
  "futures",
  "generic-array",
+ "http_client",
  "ignore",
  "instant",
  "itertools 0.14.0",
@@ -344,6 +346,7 @@ dependencies = [
  "persistence",
  "priority-queue",
  "prost-types",
+ "rand 0.8.6",
  "rayon",
  "regex",
  "repo_metadata",
@@ -351,6 +354,7 @@ dependencies = [
  "sentry",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "serde_yaml 0.8.26",
  "sha2 0.10.9",
  "shellexpand",
@@ -372,7 +376,7 @@ dependencies = [
  "warp_multi_agent_api",
  "warp_terminal",
  "warp_util",
- "warpui",
+ "warpui_core",
  "warpui_extras",
  "watcher",
 ]
@@ -421,6 +425,12 @@ name = "allocator-api2"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0942ffc6dcaadf03badf6e6a2d0228460359d5e34b57ccdc720b7382dfbd5ec5"
+
+[[package]]
+name = "alphanumeric-sort"
+version = "1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44ed2d38c0ddba387b4e25a9314fbce6a805f9988e66896e454fed1f8432e4e5"
 
 [[package]]
 name = "alsa"
@@ -599,7 +609,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -627,6 +637,7 @@ dependencies = [
  "arborium-json",
  "arborium-kotlin",
  "arborium-lua",
+ "arborium-nix",
  "arborium-objc",
  "arborium-php",
  "arborium-powershell",
@@ -832,6 +843,17 @@ name = "arborium-lua"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0132cce1b343560a26ae8a9af8da70bcec44432106c9670399ac9c59c61f2dee"
+dependencies = [
+ "arborium-sysroot",
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "arborium-nix"
+version = "2.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a08a703d5502526e68f7ad8dbffd303537d6828005bed0ef0fc7d37e45bf7078"
 dependencies = [
  "arborium-sysroot",
  "cc",
@@ -2561,7 +2583,7 @@ checksum = "3281776daed25d20f2a7846151561bac63091d41115ba9a5d8ac50891fb749d6"
 dependencies = [
  "candle-core",
  "candle-nn",
- "prost 0.14.3",
+ "prost",
  "prost-build",
 ]
 
@@ -2848,10 +2870,13 @@ dependencies = [
  "anyhow",
  "cfg-if",
  "chrono",
+ "cloud_object_persistence",
  "cloud_objects",
+ "diesel",
  "handlebars",
  "lazy_static",
  "log",
+ "persistence",
  "regex",
  "schemars",
  "serde",
@@ -2866,6 +2891,24 @@ dependencies = [
  "warp_core",
  "warp_graphql",
  "warp_util",
+]
+
+[[package]]
+name = "cloud_object_persistence"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "chrono",
+ "cloud_objects",
+ "diesel",
+ "lazy_static",
+ "log",
+ "persistence",
+ "serde",
+ "session-sharing-protocol",
+ "warp_core",
+ "warp_graphql",
 ]
 
 [[package]]
@@ -2887,6 +2930,7 @@ dependencies = [
  "uuid",
  "warp_core",
  "warp_graphql",
+ "warp_server_auth",
  "warpui_core",
 ]
 
@@ -3035,7 +3079,7 @@ version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fde0e0ec90c9dfb3b4b1a0891a7dcd0e2bffde2f7efed5fe7c9bb00e5bfb915e"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3138,7 +3182,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
- "warpui",
+ "warpui_core",
  "windows 0.62.2",
  "x11rb",
  "zbus",
@@ -3815,7 +3859,7 @@ dependencies = [
 [[package]]
 name = "dagre_rust"
 version = "0.0.5"
-source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=81551775746cd86bdeec29cb96ba278fd08c9074#81551775746cd86bdeec29cb96ba278fd08c9074"
+source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=79aecc74187c29a027e85e18d070ff0dd884a0a7#79aecc74187c29a027e85e18d070ff0dd884a0a7"
 dependencies = [
  "graphlib_rust",
  "ordered_hashmap",
@@ -4352,7 +4396,7 @@ checksum = "6738d2e996274e499bc7b0d693c858b7720b9cd2543a0643a3087e6cb0a4fa16"
 dependencies = [
  "cfg-if",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4657,7 +4701,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33d852cb9b869c2a9b3df2f71a3074817f01e1844f839a144f5fcef059a4eb5d"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4823,7 +4867,7 @@ name = "field_mask"
 version = "0.0.0"
 dependencies = [
  "itertools 0.14.0",
- "prost 0.14.3",
+ "prost",
  "prost-reflect",
  "prost-types",
  "thiserror 2.0.17",
@@ -4892,9 +4936,9 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "flate2"
-version = "1.1.1"
+version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ced92e76e966ca2fd84c8f7aa01a4aea65b0eb6648d72f7c8f3e2764a67fece"
+checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -6271,7 +6315,7 @@ dependencies = [
  "log",
  "oauth2",
  "prevent_sleep",
- "prost 0.14.3",
+ "prost",
  "reqwest",
  "serde",
  "serde_json",
@@ -6290,7 +6334,7 @@ dependencies = [
  "tower",
  "tower-http",
  "warp_core",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -6378,7 +6422,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -6733,7 +6777,7 @@ dependencies = [
  "ndarray",
  "ort",
  "parking_lot",
- "prost 0.14.3",
+ "prost",
  "rust-embed 8.7.2",
  "serde",
  "smol_str",
@@ -6809,6 +6853,7 @@ dependencies = [
  "warp_core",
  "warp_multi_agent_api",
  "warpui",
+ "warpui_core",
  "warpui_extras",
  "whoami",
 ]
@@ -6883,7 +6928,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.17",
  "uuid",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -6919,7 +6964,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi 0.5.2",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7086,9 +7131,9 @@ dependencies = [
 
 [[package]]
 name = "jemalloc_pprof"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74ff642505c7ce8d31c0d43ec0e235c6fd4585d9b8172d8f9dd04d36590200b5"
+checksum = "8a0d44c349cfe2654897fadcb9de4f0bfbf48288ec344f700b2bd59f152dd209"
 dependencies = [
  "anyhow",
  "libc",
@@ -7113,7 +7158,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7196,7 +7241,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -7522,6 +7567,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d873d7c67ce09b42110d801813efbc9364414e356be9935700d368351657487"
 
 [[package]]
+name = "local_control"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "command",
+ "libc",
+ "rand 0.8.6",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "uuid",
+]
+
+[[package]]
 name = "locale_config"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7654,7 +7716,7 @@ dependencies = [
  "url",
  "warp_core",
  "warp_util",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -7875,16 +7937,31 @@ dependencies = [
 name = "mcp"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-channel",
+ "async-trait",
+ "cfg-if",
+ "cloud_object_models",
  "futures",
  "http 1.4.0",
+ "log",
+ "oauth2",
  "pin-project-lite",
  "reqwest",
  "rmcp",
+ "serde",
  "serde_json",
+ "simple_logger",
  "sse-stream",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "url",
+ "uuid",
+ "warp_core",
+ "warpui",
+ "warpui_extras",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -7958,7 +8035,7 @@ dependencies = [
 [[package]]
 name = "mermaid_to_svg"
 version = "0.1.0"
-source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=81551775746cd86bdeec29cb96ba278fd08c9074#81551775746cd86bdeec29cb96ba278fd08c9074"
+source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=79aecc74187c29a027e85e18d070ff0dd884a0a7#79aecc74187c29a027e85e18d070ff0dd884a0a7"
 dependencies = [
  "dagre_rust",
  "graphlib_rust",
@@ -7967,21 +8044,6 @@ dependencies = [
  "serde_yaml 0.9.34+deprecated",
  "thiserror 1.0.63",
  "unicode-segmentation",
-]
-
-[[package]]
-name = "metal"
-version = "0.33.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7047791b5bc903b8cd963014b355f71dc9864a9a0b727057676c1dcae5cbc15"
-dependencies = [
- "bitflags 2.9.4",
- "block",
- "core-graphics-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "foreign-types 0.5.0",
- "log",
- "objc",
- "paste",
 ]
 
 [[package]]
@@ -8763,6 +8825,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
 ]
 
 [[package]]
@@ -8781,10 +8844,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "objc2-avf-audio"
-version = "0.3.0"
+name = "objc2-av-foundation"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2fe5d8f6b9904a2028e9168bbdc77d06f944a39a0aef7076857db09f1298c9a"
+checksum = "478ae33fcac9df0a18db8302387c666b8ef08a3e2d62b510ca4fc278a384b6c0"
+dependencies = [
+ "bitflags 2.9.4",
+ "objc2 0.6.3",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "objc2-avf-audio"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
 dependencies = [
  "objc2 0.6.3",
  "objc2-foundation 0.3.2",
@@ -8987,6 +9061,7 @@ checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
 dependencies = [
  "bitflags 2.9.4",
  "block2 0.6.2",
+ "dispatch2",
  "objc2 0.6.3",
  "objc2-foundation 0.3.2",
 ]
@@ -9111,6 +9186,7 @@ dependencies = [
  "warp_core",
  "warp_logging",
  "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -9199,9 +9275,9 @@ dependencies = [
 
 [[package]]
 name = "openssl"
-version = "0.10.79"
+version = "0.10.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf0b434746ee2832f4f0baf10137e1cabb18cbe6912c69e2e33263c45250f542"
+checksum = "a45fa2aa886c42762255da344f0a0d313e254066c46aad76f300c3d3da62d967"
 dependencies = [
  "bitflags 2.9.4",
  "cfg-if",
@@ -9230,14 +9306,84 @@ checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.115"
+version = "0.9.116"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "158fe5b292746440aa6e7a7e690e55aeb72d41505e2804c23c6973ad0e9c9781"
+checksum = "f28a22dc7140cda5f096e5e7724a6962ca81a7f8bfd2979f9b18c11af56318c4"
 dependencies = [
  "cc",
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "opentelemetry"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0142c63252a9e054e68a4c61a5778f7b14f576274d593f8ce883d191a099682"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror 2.0.17",
+ "tracing",
+]
+
+[[package]]
+name = "opentelemetry-http"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5683015d09e2df236ef005b17f6f196f0d5f6313c4fa43a7b6a53b52776e4331"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "http 1.4.0",
+ "opentelemetry",
+]
+
+[[package]]
+name = "opentelemetry-otlp"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9966929966d17620d7c316c643ba62631826e10021409357772d5eea84f62c35"
+dependencies = [
+ "flate2",
+ "http 1.4.0",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
+ "prost",
+ "thiserror 2.0.17",
+ "zstd",
+]
+
+[[package]]
+name = "opentelemetry-proto"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56d658ba1faf63f7b9c492cfbe6e0ec365440a16132d3270c1065f7b33f1b638"
+dependencies = [
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "prost",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b59f80e1ac4d5ff7a2db8fb6c80badb7f0f3f858211fba08dd9aaec750894f9"
+dependencies = [
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "opentelemetry",
+ "percent-encoding",
+ "portable-atomic",
+ "rand 0.9.4",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -9334,7 +9480,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -9827,16 +9973,15 @@ dependencies = [
 
 [[package]]
 name = "pprof_util"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4429d44e5e2c8a69399fc0070379201eed018e3df61e04eb7432811df073c224"
+checksum = "eea0cc524de808a6d98d192a3d99fe95617031ad4a52ec0a0f987ef4432e8fe1"
 dependencies = [
  "anyhow",
- "backtrace",
  "flate2",
  "num",
  "paste",
- "prost 0.13.5",
+ "prost",
 ]
 
 [[package]]
@@ -10055,22 +10200,12 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
-dependencies = [
- "bytes",
- "prost-derive 0.13.5",
-]
-
-[[package]]
-name = "prost"
 version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2ea70524a2f82d518bce41317d0fae74151505651af45faf1ffbd6fd33f0568"
 dependencies = [
  "bytes",
- "prost-derive 0.14.3",
+ "prost-derive",
 ]
 
 [[package]]
@@ -10079,30 +10214,17 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
- "heck 0.5.0",
- "itertools 0.14.0",
+ "heck 0.4.1",
+ "itertools 0.11.0",
  "log",
  "multimap",
  "petgraph",
  "prettyplease",
- "prost 0.14.3",
+ "prost",
  "prost-types",
  "regex",
  "syn 2.0.117",
  "tempfile",
-]
-
-[[package]]
-name = "prost-derive"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
-dependencies = [
- "anyhow",
- "itertools 0.14.0",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -10112,7 +10234,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.11.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -10124,7 +10246,7 @@ version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b89455ef41ed200cafc47c76c552ee7792370ac420497e551f16123a9135f76e"
 dependencies = [
- "prost 0.14.3",
+ "prost",
  "prost-reflect-derive",
  "prost-types",
 ]
@@ -10156,7 +10278,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8991c4cbdb8bc5b11f0b074ffe286c30e523de90fee5ba8132f1399f23cb3dd7"
 dependencies = [
- "prost 0.14.3",
+ "prost",
 ]
 
 [[package]]
@@ -10357,7 +10479,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10804,7 +10926,7 @@ dependencies = [
  "futures-lite 1.13.0",
  "getrandom 0.2.16",
  "log",
- "prost 0.14.3",
+ "prost",
  "prost-build",
  "repo_metadata",
  "serde",
@@ -10814,7 +10936,7 @@ dependencies = [
  "uuid",
  "warp_core",
  "warp_util",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -10860,6 +10982,7 @@ dependencies = [
  "warp_core",
  "warp_util",
  "warpui",
+ "warpui_core",
  "watcher",
 ]
 
@@ -11246,7 +11369,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -11259,7 +11382,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -11327,7 +11450,7 @@ dependencies = [
  "security-framework 3.5.1",
  "security-framework-sys",
  "webpki-root-certs 1.0.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -11829,15 +11952,15 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.145"
+version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
+checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
  "itoa",
  "memchr",
- "ryu",
  "serde",
  "serde_core",
+ "zmij",
 ]
 
 [[package]]
@@ -11997,7 +12120,7 @@ dependencies = [
 [[package]]
 name = "session-sharing-protocol"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=5a0ad6135809feee9da2e9efae8bd6b54b89172e#5a0ad6135809feee9da2e9efae8bd6b54b89172e"
+source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=b30fdd06379a3d073b398eabd106abed5b443aae#b30fdd06379a3d073b398eabd106abed5b443aae"
 dependencies = [
  "byte-unit",
  "serde",
@@ -12019,7 +12142,7 @@ dependencies = [
  "settings_value",
  "tempfile",
  "warp_features",
- "warpui",
+ "warpui_core",
  "warpui_extras",
 ]
 
@@ -12205,10 +12328,12 @@ dependencies = [
  "async-fs",
  "chrono",
  "futures",
+ "instant",
  "log",
  "thiserror 2.0.17",
+ "tokio",
  "warp_core",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -12673,6 +12798,7 @@ dependencies = [
  "warp_editor",
  "warp_util",
  "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -12938,9 +13064,9 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
 name = "tar"
-version = "0.4.45"
+version = "0.4.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
 dependencies = [
  "filetime",
  "libc",
@@ -12975,7 +13101,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -13163,7 +13289,7 @@ dependencies = [
 [[package]]
 name = "tink-core"
 version = "0.3.0"
-source = "git+https://github.com/warpdotdev/tink-rust?branch=warpdotdev%2Fmain#0141035f04a5e262b955c450857b689cff877469"
+source = "git+https://github.com/warpdotdev/tink-rust?rev=54b9ac9af93b0c08b446a7bc0582836c9403a71b#54b9ac9af93b0c08b446a7bc0582836c9403a71b"
 dependencies = [
  "digest 0.10.7",
  "hkdf",
@@ -13192,7 +13318,7 @@ dependencies = [
 [[package]]
 name = "tink-hybrid"
 version = "0.3.0"
-source = "git+https://github.com/warpdotdev/tink-rust?branch=warpdotdev%2Fmain#0141035f04a5e262b955c450857b689cff877469"
+source = "git+https://github.com/warpdotdev/tink-rust?rev=54b9ac9af93b0c08b446a7bc0582836c9403a71b#54b9ac9af93b0c08b446a7bc0582836c9403a71b"
 dependencies = [
  "p256",
  "tink-aead",
@@ -13232,10 +13358,10 @@ dependencies = [
 [[package]]
 name = "tink-proto"
 version = "0.3.0"
-source = "git+https://github.com/warpdotdev/tink-rust?branch=warpdotdev%2Fmain#0141035f04a5e262b955c450857b689cff877469"
+source = "git+https://github.com/warpdotdev/tink-rust?rev=54b9ac9af93b0c08b446a7bc0582836c9403a71b#54b9ac9af93b0c08b446a7bc0582836c9403a71b"
 dependencies = [
  "base64 0.22.1",
- "prost 0.14.3",
+ "prost",
  "prost-build",
  "serde",
 ]
@@ -13672,6 +13798,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-futures"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
+dependencies = [
+ "futures",
+ "futures-task",
+ "pin-project",
+ "tracing",
+]
+
+[[package]]
 name = "tracing-log"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13683,10 +13821,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "tracing-subscriber"
-version = "0.3.20"
+name = "tracing-opentelemetry"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2054a14f5307d601f88daf0553e1cbf472acc4f2c51afab632431cdcd72124d5"
+checksum = "adbc64cba7137545b8044cb1fe9814f7aacf3c6b5f9b45be8bb5db538befdb26"
+dependencies = [
+ "js-sys",
+ "opentelemetry",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+ "web-time",
+]
+
+[[package]]
+name = "tracing-subscriber"
+version = "0.3.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
 dependencies = [
  "matchers",
  "nu-ansi-term",
@@ -13865,6 +14017,7 @@ dependencies = [
  "rustls",
  "warp_core",
  "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -14258,7 +14411,7 @@ dependencies = [
  "string-offset",
  "unindent 0.2.4",
  "warp_core",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -14286,7 +14439,7 @@ dependencies = [
  "parking_lot",
  "rubato",
  "thiserror 2.0.17",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -14366,6 +14519,7 @@ dependencies = [
  "aha-reqwest-eventsource",
  "aho-corasick",
  "ai",
+ "alphanumeric-sort",
  "anyhow",
  "app-installation-detection",
  "arrayvec",
@@ -14406,6 +14560,7 @@ dependencies = [
  "clap",
  "cloud_object_client",
  "cloud_object_models",
+ "cloud_object_persistence",
  "cloud_objects",
  "cocoa 0.26.0",
  "comfy-table",
@@ -14485,6 +14640,7 @@ dependencies = [
  "libc",
  "libsqlite3-sys",
  "line-ending",
+ "local_control",
  "log",
  "log-panics",
  "lsp",
@@ -14514,6 +14670,10 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "onboarding",
  "once_cell",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
  "ordered-float 3.9.2",
  "os_info",
  "palette",
@@ -14525,7 +14685,7 @@ dependencies = [
  "pin-project",
  "plist",
  "pprof",
- "prost 0.14.3",
+ "prost",
  "prost-build",
  "prost-types",
  "qrcode",
@@ -14587,6 +14747,9 @@ dependencies = [
  "toml 0.8.23",
  "toml_edit 0.25.6+spec-1.1.0",
  "tracing",
+ "tracing-futures",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
  "typed-path 0.10.0",
  "ui_components",
  "unicase",
@@ -14622,11 +14785,13 @@ dependencies = [
  "warp_multi_agent_api",
  "warp_ripgrep",
  "warp_search_core",
+ "warp_server_auth",
  "warp_server_client",
  "warp_terminal",
  "warp_util",
  "warp_web_event_bus",
  "warpui",
+ "warpui_core",
  "warpui_extras",
  "wasm-bindgen",
  "watcher",
@@ -14645,7 +14810,7 @@ dependencies = [
 [[package]]
 name = "warp-command-signatures"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=b3061096d193bf4915eabb0d03b4e6b403c6ea45#b3061096d193bf4915eabb0d03b4e6b403c6ea45"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=a937ae35dfe20eaed030664ad52b36657390b162#a937ae35dfe20eaed030664ad52b36657390b162"
 dependencies = [
  "cfg-if",
  "itertools 0.10.5",
@@ -14663,7 +14828,7 @@ dependencies = [
 [[package]]
 name = "warp-completion-metadata"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=b3061096d193bf4915eabb0d03b4e6b403c6ea45#b3061096d193bf4915eabb0d03b4e6b403c6ea45"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=a937ae35dfe20eaed030664ad52b36657390b162#a937ae35dfe20eaed030664ad52b36657390b162"
 dependencies = [
  "html-escape",
  "itertools 0.10.5",
@@ -14717,7 +14882,9 @@ dependencies = [
  "color-print",
  "humantime",
  "jaq-all",
+ "local_control",
  "serde",
+ "serde_json",
  "serial_test",
  "url",
  "uuid",
@@ -14761,7 +14928,7 @@ dependencies = [
  "warp_core",
  "warp_js",
  "warp_util",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -14769,7 +14936,6 @@ name = "warp_core"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "asset_macro",
  "async-broadcast",
  "cfg-if",
  "chrono",
@@ -14813,10 +14979,11 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
+ "tracing",
  "url",
  "warp_features",
  "warp_util",
- "warpui",
+ "warpui_core",
  "warpui_extras",
  "websocket",
 ]
@@ -14868,6 +15035,7 @@ dependencies = [
  "warp_core",
  "warp_util",
  "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -14893,7 +15061,7 @@ dependencies = [
  "thiserror 2.0.17",
  "warp_core",
  "warp_util",
- "warpui",
+ "warpui_core",
  "watcher",
 ]
 
@@ -15005,16 +15173,16 @@ dependencies = [
  "warp_core",
  "warp_graphql",
  "warp_isolation_platform",
- "warpui",
+ "warpui_core",
  "zeroize",
 ]
 
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=c67de64fc4949f693a679552dc88cebc9f7d0180#c67de64fc4949f693a679552dc88cebc9f7d0180"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=97d1b367b955c562812e0a1315a6ec7ee6a5389e#97d1b367b955c562812e0a1315a6ec7ee6a5389e"
 dependencies = [
- "prost 0.14.3",
+ "prost",
  "prost-reflect",
  "prost-reflect-build",
  "prost-types",
@@ -15071,10 +15239,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "warp_server_auth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "cynic",
+ "lasso",
+ "log",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "uuid",
+ "warp_core",
+ "warp_graphql",
+ "warp_managed_secrets",
+ "warpui_core",
+ "warpui_extras",
+]
+
+[[package]]
 name = "warp_server_client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "async-trait",
  "bincode",
  "chrono",
  "cloud_object_client",
@@ -15083,19 +15274,27 @@ dependencies = [
  "cynic",
  "derivative",
  "diesel",
+ "firebase",
+ "futures",
+ "http 1.4.0",
+ "http_client",
+ "instant",
  "itertools 0.14.0",
  "lasso",
  "log",
+ "mockall",
+ "oauth2",
  "pathfinder_geometry",
- "persistence",
  "schemars",
  "serde",
  "session-sharing-protocol",
  "settings_value",
  "thiserror 2.0.17",
+ "url",
  "uuid",
  "warp_core",
  "warp_graphql",
+ "warp_server_auth",
  "warpui_core",
 ]
 
@@ -15131,7 +15330,7 @@ dependencies = [
  "warp_completer",
  "warp_core",
  "warp_util",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -15159,7 +15358,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "typed-path 0.10.0",
- "warpui",
+ "warpui_core",
  "windows 0.62.2",
 ]
 
@@ -15204,12 +15403,12 @@ dependencies = [
  "derive_more 0.99.17",
  "dirs 6.0.0",
  "dispatch",
+ "dispatch2",
  "dwrote",
  "env_logger",
  "font-kit",
  "fontconfig",
  "fontdb",
- "foreign-types 0.5.0",
  "futures",
  "futures-lite 1.13.0",
  "futures-timer",
@@ -15225,7 +15424,6 @@ dependencies = [
  "log",
  "markdown_parser",
  "memmap2 0.9.7",
- "metal",
  "native-dialog",
  "nix 0.26.4",
  "notify-rust",
@@ -15233,7 +15431,10 @@ dependencies = [
  "objc",
  "objc2 0.6.3",
  "objc2-app-kit 0.3.2",
+ "objc2-av-foundation",
  "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
+ "objc2-quartz-core 0.3.2",
  "open",
  "ordered-float 3.9.2",
  "owned_ttf_parser",
@@ -15249,6 +15450,7 @@ dependencies = [
  "tauri-winrt-notification",
  "thiserror 2.0.17",
  "tini",
+ "url",
  "urlencoding",
  "vec1",
  "version-compare",
@@ -15339,6 +15541,7 @@ dependencies = [
  "thiserror 2.0.17",
  "titlecase",
  "tokio",
+ "tracing",
  "trait-set",
  "vec1",
  "warp_util",
@@ -15368,7 +15571,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "toml_edit 0.25.6+spec-1.1.0",
- "warpui",
+ "warpui_core",
  "warpui_extras",
  "windows 0.62.2",
  "windows-registry 0.2.0",
@@ -15516,7 +15719,7 @@ dependencies = [
  "futures",
  "log",
  "notify-debouncer-full",
- "warpui",
+ "warpui_core",
 ]
 
 [[package]]
@@ -15984,7 +16187,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -17045,6 +17248,12 @@ dependencies = [
  "memchr",
  "typed-path 0.12.2",
 ]
+
+[[package]]
+name = "zmij"
+version = "1.0.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[package]]
 name = "zopfli"

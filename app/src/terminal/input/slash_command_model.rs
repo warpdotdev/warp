@@ -133,7 +133,7 @@ impl SlashCommandModel {
         data_source: ModelHandle<SlashCommandDataSource>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(buffer_model, |me, event, ctx| {
+        ctx.subscribe_to_model(buffer_model, |me, _, event, ctx| {
             me.handle_input_buffer_update(event, ctx);
         });
 
@@ -142,7 +142,7 @@ impl SlashCommandModel {
             //
             // In the new modality, slash commands _are_ accessible in the terminal view, which is
             // in locked shell mode if NLD is disabled.
-            ctx.subscribe_to_model(ai_input_model, |me, event, ctx| match event {
+            ctx.subscribe_to_model(ai_input_model, |me, _, event, ctx| match event {
                 BlocklistAIInputEvent::InputTypeChanged { config }
                 | BlocklistAIInputEvent::LockChanged { config } => {
                     if config.is_locked {
@@ -248,10 +248,8 @@ impl SlashCommandModel {
 
         let skill_name = possible_command.strip_prefix('/')?;
 
-        let cwd_path = self
-            .active_session
-            .as_ref(ctx)
-            .current_working_directory_location(ctx);
+        let active_session = self.active_session.as_ref(ctx);
+        let cwd_path = active_session.current_working_directory_location(ctx);
         let skills = SkillManager::handle(ctx)
             .as_ref(ctx)
             .get_skills_for_working_directory(cwd_path.as_ref(), ctx);

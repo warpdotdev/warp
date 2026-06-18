@@ -19,12 +19,14 @@ use lsp::LspEvent;
 use lsp::{LspManagerModel, LspServerConfig};
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
+#[cfg(feature = "local_fs")]
+use repo_metadata::RepoMetadataModel;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "local_fs")]
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
-use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::{local_or_remote_path::LocalOrRemotePath, standardized_path::StandardizedPath};
 #[cfg(feature = "local_fs")]
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
@@ -34,6 +36,7 @@ use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::codebase_auto_indexing::{
     auto_index_candidate_roots, should_auto_index_codebase, CodebaseAutoIndexingSurface,
 };
+use crate::ai::metadata_project_rules::read_project_rule_contents;
 use crate::ai::AIRequestUsageModel;
 #[cfg(feature = "local_fs")]
 use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager;
@@ -236,9 +239,8 @@ impl PersistedWorkspace {
             .collect();
 
         if FeatureFlag::FullSourceCodeEmbedding.is_enabled() {
-            ctx.subscribe_to_model(
-                &CodebaseIndexManager::handle(ctx),
-                |me, event, ctx| match event {
+            ctx.subscribe_to_model(&CodebaseIndexManager::handle(ctx), |me, _, event, ctx| {
+                match event {
                     CodebaseIndexManagerEvent::IndexMetadataUpdated { root_path, event } => {
                         me.handle_index_metadata_event(root_path, *event);
                     }
@@ -251,26 +253,30 @@ impl PersistedWorkspace {
                         send_active_indexed_repos_changed_telemetry(ctx);
                     }
                     _ => {}
-                },
-            );
-
-            // Subscribe to AI conversation events to trigger incremental sync
-            ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, event, ctx| {
-                if let BlocklistAIHistoryEvent::StartedNewConversation {
-                    terminal_view_id, ..
-                } = event
-                {
-                    #[cfg(feature = "local_fs")]
-                    me.clean_up_deleted_indices(ctx);
-
-                    me.trigger_incremental_sync_for_conversation(*terminal_view_id, ctx);
                 }
             });
+
+            // Subscribe to AI conversation events to trigger incremental sync
+            ctx.subscribe_to_model(
+                &BlocklistAIHistoryModel::handle(ctx),
+                |me, _, event, ctx| {
+                    if let BlocklistAIHistoryEvent::StartedNewConversation {
+                        terminal_view_id,
+                        ..
+                    } = event
+                    {
+                        #[cfg(feature = "local_fs")]
+                        me.clean_up_deleted_indices(ctx);
+
+                        me.trigger_incremental_sync_for_conversation(*terminal_view_id, ctx);
+                    }
+                },
+            );
 
             // Subscribe to changes in workspace settings.
             ctx.subscribe_to_model(
                 &UserWorkspaces::handle(ctx),
-                |me, user_workspaces_event, ctx| {
+                |me, _, user_workspaces_event, ctx| {
                     if let UserWorkspacesEvent::CodebaseContextEnablementChanged =
                         user_workspaces_event
                     {
@@ -280,7 +286,7 @@ impl PersistedWorkspace {
             );
 
             // Subscribe to ProjectContextModel events to persist rule changes
-            ctx.subscribe_to_model(&ProjectContextModel::handle(ctx), |me, event, _ctx| {
+            ctx.subscribe_to_model(&ProjectContextModel::handle(ctx), |me, _, event, _ctx| {
                 if let ProjectContextModelEvent::KnownRulesChanged(delta) = event {
                     let mut events = vec![];
 
@@ -310,7 +316,7 @@ impl PersistedWorkspace {
             feature = "integration_tests"
         )) && CodebaseIndexManager::as_ref(ctx).is_indexing_enabled()
         {
-            ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, event, ctx| {
+            ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, _, event, ctx| {
                 let DetectedRepositoriesEvent::DetectedGitRepo { repository, .. } = event;
                 let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();
 
@@ -670,7 +676,11 @@ impl PersistedWorkspace {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn index_repo(&self, directory_path: PathBuf, ctx: &mut ModelContext<Self>) {
         ProjectContextModel::handle(ctx).update(ctx, |model, ctx| {
-            let _ = model.index_and_store_rules(directory_path.clone(), ctx);
+            let _ = model.index_and_store_rules(
+                directory_path.clone(),
+                read_project_rule_contents,
+                ctx,
+            );
         });
         if FeatureFlag::FullSourceCodeEmbedding.is_enabled()
             && UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx)
@@ -685,7 +695,8 @@ impl PersistedWorkspace {
     /// Explicitly registers a directory as a workspace, as if the user had navigated there.
     ///
     /// Creates or updates the entry with `navigated_ts = now`, persists to SQLite,
-    /// triggers project-rules and codebase-index scanning, and emits
+    /// starts full repo-metadata indexing before triggering project-rules and codebase-index
+    /// scanning, and emits
     /// [`PersistedWorkspaceEvent::WorkspaceAdded`] so subscribers can refresh their UI.
     pub fn user_added_workspace(&mut self, path: PathBuf, ctx: &mut ModelContext<Self>) {
         let now = Utc::now();
@@ -711,6 +722,22 @@ impl PersistedWorkspace {
         }
 
         self.persist_metadata_for_index(&path);
+        #[cfg(feature = "local_fs")]
+        match StandardizedPath::from_local_canonicalized(&path) {
+            Ok(path) => {
+                if let Err(error) = RepoMetadataModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.index_local_directory_path(&path, ctx)
+                }) {
+                    log::warn!("Failed to start full repo metadata indexing for {path}: {error}");
+                }
+            }
+            Err(error) => {
+                log::warn!(
+                    "Failed to canonicalize user-added workspace {} for full repo metadata indexing: {error}",
+                    path.display()
+                );
+            }
+        }
         self.index_repo(path.clone(), ctx);
         ctx.emit(PersistedWorkspaceEvent::WorkspaceAdded { path });
     }
@@ -1087,7 +1114,7 @@ impl PersistedWorkspace {
         for server in servers {
             let workspace_root_display = workspace_root_display.clone();
             let server_type_name = server.as_ref(ctx).server_name();
-            ctx.subscribe_to_model(&server, move |_me, event, ctx| match event {
+            ctx.subscribe_to_model(&server, move |_me, _, event, ctx| match event {
                 LspEvent::Started => {
                     send_telemetry_from_ctx!(
                         LspTelemetryEvent::ServerStarted {

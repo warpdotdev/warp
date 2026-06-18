@@ -7,7 +7,7 @@ use serde_with::SerializeDisplay;
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
 
-use crate::code_review::diff_state::DiffMode;
+use crate::code_review::diff_state::{BackendOrigin, DiffMode, DiffOperation};
 use crate::features::FeatureFlag;
 use crate::server::telemetry::CLIAgentType;
 use crate::view_components::find::FindDirection;
@@ -214,13 +214,16 @@ pub enum CodeReviewTelemetryEvent {
     },
     /// Failure when we are calculating the diff metadata.
     LoadMetadataFailed {
-        is_local: Option<bool>,
+        backend_origin: BackendOrigin,
         mode: DiffMode,
         error: String,
     },
-    /// Failure when we are loading the actual diff content.
+    /// Failure when we are loading the actual diff content. Shared across
+    /// file-invalidation, full diff load, and remote diff paths; the
+    /// `operation` field distinguishes which one produced the failure.
     LoadDiffFailed {
-        is_local: Option<bool>,
+        backend_origin: BackendOrigin,
+        operation: DiffOperation,
         mode: DiffMode,
         error: String,
         /// Time elapsed between when the tracked diff load was requested and
@@ -382,17 +385,23 @@ impl TelemetryEvent for CodeReviewTelemetryEvent {
                 Some(json!({ "is_local": is_local, "mode": mode }))
             }
             CodeReviewTelemetryEvent::LoadMetadataFailed {
-                is_local,
+                backend_origin,
                 mode,
                 error,
-            } => Some(json!({ "is_local": is_local, "mode": mode, "error": error })),
+            } => Some(json!({
+                "backend_origin": backend_origin,
+                "mode": mode,
+                "error": error,
+            })),
             CodeReviewTelemetryEvent::LoadDiffFailed {
-                is_local,
+                backend_origin,
+                operation,
                 mode,
                 error,
                 load_duration,
             } => Some(json!({
-                "is_local": is_local,
+                "backend_origin": backend_origin,
+                "operation": operation,
                 "mode": mode,
                 "error": error,
                 "load_duration": load_duration,

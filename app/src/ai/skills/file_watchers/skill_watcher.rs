@@ -22,9 +22,9 @@ use super::subscribers::{
     HomeSkillSubscriber, ProjectSkillSubscriber, SkillRepositoryMessage, SymlinkSkillSubscriber,
 };
 use super::utils::{
-    find_skill_files_in_tree, find_symlinked_skill_files_in_tree, is_home_provider_path,
-    is_home_skill_directory, is_skill_file, read_local_project_skills_from_filesystem,
-    read_skills_from_directories, read_skills_from_files,
+    find_local_project_skill_files_on_filesystem, find_project_skill_files_in_tree,
+    is_home_provider_path, is_home_skill_directory, is_skill_file, read_skills_from_directories,
+    read_skills_from_files,
 };
 use crate::remote_server::manager::RemoteServerManager;
 use crate::warp_managed_paths_watcher::{
@@ -45,8 +45,8 @@ type ProjectSkillContentsFuture =
 pub struct SkillWatcher {
     // Channel for sending repository messages from subscribers.
     repository_message_tx: Sender<SkillRepositoryMessage>,
-    /// Last known project skill files by repository. Project skill counts are small,
-    /// so repo metadata changes trigger a full refresh instead of a subtree diff.
+    /// Last known project skill files by repository. Relevant repo metadata changes trigger a
+    /// full refresh; precise unrelated incremental deltas are ignored.
     project_skill_files_by_repo: HashMap<RepositoryIdentifier, HashSet<LocalOrRemotePath>>,
     /// Latest full project-skill refresh generation by repository. Repo metadata refreshes
     /// hydrate project skills asynchronously, so results from superseded tree snapshots
@@ -89,15 +89,7 @@ impl SkillWatcher {
         let skill_files: Vec<PathBuf> = repo_paths
             .iter()
             .filter_map(|repo_path| RepositoryIdentifier::try_local(repo_path))
-            .flat_map(|repo_id| {
-                let mut skill_files = find_skill_files_in_tree(&repo_id, repo_metadata, ctx);
-                skill_files.extend(
-                    find_symlinked_skill_files_in_tree(&repo_id, repo_metadata, ctx)
-                        .into_iter()
-                        .map(LocalOrRemotePath::Local),
-                );
-                skill_files
-            })
+            .flat_map(|repo_id| find_project_skill_files_in_tree(&repo_id, repo_metadata, ctx))
             .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
             .collect();
         read_skills_from_files(skill_files)
@@ -136,17 +128,19 @@ impl SkillWatcher {
         );
 
         if home_dir.is_some() {
-            ctx.subscribe_to_model(
-                &HomeDirectoryWatcher::handle(ctx),
-                |me, event, ctx| match event {
+            ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _, event, ctx| {
+                match event {
                     HomeDirectoryWatcherEvent::HomeFilesChanged(event) => {
                         me.handle_home_files_changed(event, ctx);
                     }
+                }
+            });
+            ctx.subscribe_to_model(
+                &WarpManagedPathsWatcher::handle(ctx),
+                |me, _, event, ctx| {
+                    me.handle_warp_managed_paths_event(event, ctx);
                 },
             );
-            ctx.subscribe_to_model(&WarpManagedPathsWatcher::handle(ctx), |me, event, ctx| {
-                me.handle_warp_managed_paths_event(event, ctx);
-            });
         }
 
         // Subscribe to home directory skills via DirectoryWatcher.
@@ -190,14 +184,16 @@ impl SkillWatcher {
         // RepoMetadataModel for both local and remote repos when available, while
         // local repos fall back to a direct project watcher only if metadata
         // indexing fails.
-        ctx.subscribe_to_model(&RepoMetadataModel::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&RepoMetadataModel::handle(ctx), |me, _, event, ctx| {
             use repo_metadata::wrapper_model::RepoMetadataEvent;
             match event {
                 RepoMetadataEvent::RepositoryUpdated { id } => {
                     me.refresh_project_skills_for_repo(id, ctx);
                 }
-                RepoMetadataEvent::FileTreeEntryUpdated { id } => {
-                    me.refresh_project_skills_for_repo(id, ctx);
+                RepoMetadataEvent::StandingQueryResultsUpdated { id, delta } => {
+                    if delta.project_skills_changed() {
+                        me.refresh_project_skills_for_repo(id, ctx);
+                    }
                 }
                 RepoMetadataEvent::RepositoryRemoved { id } => {
                     me.remove_project_skills_for_repo(id);
@@ -207,6 +203,7 @@ impl SkillWatcher {
                     me.fallback_to_local_project_watcher(id, ctx);
                 }
                 RepoMetadataEvent::FileTreeUpdated { .. }
+                | RepoMetadataEvent::FileTreeEntryUpdated { .. }
                 | RepoMetadataEvent::IncrementalUpdateReady { .. } => {}
             }
         });
@@ -232,13 +229,9 @@ impl SkillWatcher {
         let refresh_generation = self.advance_project_skill_refresh_generation(repo_id);
         let current_skill_files: HashSet<LocalOrRemotePath> = {
             let repo_metadata = RepoMetadataModel::as_ref(ctx);
-            let mut skill_files = find_skill_files_in_tree(repo_id, repo_metadata, ctx);
-            skill_files.extend(
-                find_symlinked_skill_files_in_tree(repo_id, repo_metadata, ctx)
-                    .into_iter()
-                    .map(LocalOrRemotePath::Local),
-            );
-            skill_files.into_iter().collect()
+            find_project_skill_files_in_tree(repo_id, repo_metadata, ctx)
+                .into_iter()
+                .collect()
         };
 
         let previous_skill_files = self
@@ -264,11 +257,9 @@ impl SkillWatcher {
                 });
         }
 
-        // Project skill counts are expected to be small, so repo metadata updates
-        // intentionally trigger a full refresh instead of attempting to diff the
-        // changed subtree. This keeps local and remote project-skill behavior on
-        // the same RepoMetadataModel path and avoids a separate FileWatcher update
-        // path for local repos.
+        // Project skill counts are expected to be small, so initial discovery and
+        // skill-relevant repo metadata updates trigger a full refresh rather than
+        // attempting to maintain project-skill state incrementally.
         self.spawn_read_project_skills_from_files(
             repo_id.clone(),
             refresh_generation,
@@ -355,14 +346,9 @@ impl SkillWatcher {
     ) {
         let repo_path = repo_path.to_path_buf();
         ctx.spawn(
-            async move { read_local_project_skills_from_filesystem(&repo_path) },
-            move |me, skills, ctx| {
-                if !skills.is_empty() {
-                    me.register_symlink_watches(&skills, ctx);
-                    let _ = me
-                        .watcher_event_tx
-                        .try_send(SkillWatcherEvent::SkillsAdded { skills });
-                }
+            async move { find_local_project_skill_files_on_filesystem(&repo_path) },
+            move |me, skill_paths, ctx| {
+                me.spawn_read_fallback_project_skills_from_files(skill_paths, ctx);
             },
         );
     }
@@ -382,10 +368,7 @@ impl SkillWatcher {
         };
 
         ctx.spawn(
-            async move {
-                let skill_contents = read_skill_contents.await?;
-                Ok::<Vec<ParsedSkill>, anyhow::Error>(parse_project_skill_contents(skill_contents))
-            },
+            async move { read_and_parse_project_skills(read_skill_contents).await },
             move |me, skills, ctx| match skills {
                 Ok(skills) => {
                     me.emit_project_skills_if_current(&repo_id, refresh_generation, skills, ctx);
@@ -405,13 +388,37 @@ impl SkillWatcher {
         if self.project_skill_refresh_generations.get(repo_id) != Some(&refresh_generation) {
             return;
         }
+        self.emit_project_skills(skills, ctx);
+    }
 
+    fn emit_project_skills(&mut self, skills: Vec<ParsedSkill>, ctx: &mut ModelContext<Self>) {
         if !skills.is_empty() {
             self.register_symlink_watches(&skills, ctx);
             let _ = self
                 .watcher_event_tx
                 .try_send(SkillWatcherEvent::SkillsAdded { skills });
         }
+    }
+
+    fn spawn_read_fallback_project_skills_from_files(
+        &mut self,
+        skill_paths: Vec<LocalOrRemotePath>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if skill_paths.is_empty() {
+            return;
+        }
+        let Some(read_skill_contents) = read_project_skill_contents(skill_paths, ctx) else {
+            return;
+        };
+
+        ctx.spawn(
+            async move { read_and_parse_project_skills(read_skill_contents).await },
+            |me, skills, ctx| match skills {
+                Ok(skills) => me.emit_project_skills(skills, ctx),
+                Err(err) => log::warn!("Failed to read fallback project skills: {err}"),
+            },
+        );
     }
 
     fn stop_failed_local_project_watcher(
@@ -547,35 +554,17 @@ impl SkillWatcher {
         path: &Path,
         ctx: &mut ModelContext<Self>,
     ) {
-        if is_skill_file(path) {
-            let skill_file_path = path.to_path_buf();
-            ctx.spawn(
-                async move { parse_skill(&skill_file_path) },
-                move |me, skill, ctx| {
-                    if let Ok(skill) = skill {
-                        me.register_symlink_watches(std::slice::from_ref(&skill), ctx);
-                        let _ = me
-                            .watcher_event_tx
-                            .try_send(SkillWatcherEvent::SkillsAdded {
-                                skills: vec![skill],
-                            });
-                    }
-                },
-            );
+        let skill_file_path = if is_skill_file(path) {
+            Some(path.to_path_buf())
         } else if path.is_symlink() && path.is_dir() && path.join("SKILL.md").exists() {
-            let skill_file_path = path.join("SKILL.md");
-            ctx.spawn(
-                async move { parse_skill(&skill_file_path) },
-                move |me, skill, ctx| {
-                    if let Ok(skill) = skill {
-                        me.register_symlink_watches(std::slice::from_ref(&skill), ctx);
-                        let _ = me
-                            .watcher_event_tx
-                            .try_send(SkillWatcherEvent::SkillsAdded {
-                                skills: vec![skill],
-                            });
-                    }
-                },
+            Some(path.join("SKILL.md"))
+        } else {
+            None
+        };
+        if let Some(skill_file_path) = skill_file_path {
+            self.spawn_read_fallback_project_skills_from_files(
+                vec![LocalOrRemotePath::Local(skill_file_path)],
+                ctx,
             );
         } else if path.is_dir() {
             // The original local watcher deferred added directories until RepoMetadataModel
@@ -1063,12 +1052,10 @@ fn read_project_skill_contents(
             Ok(read_local_project_skill_contents(skill_paths))
         })),
         LocalOrRemotePath::Remote(remote) => {
-            let client = RemoteServerManager::as_ref(ctx)
-                .client_for_host(&remote.host_id)?
-                .clone();
+            let handle = RemoteServerManager::as_ref(ctx).host_request_handle(&remote.host_id);
             Some(Box::pin(async move {
                 let request = remote_skill_read_request(&skill_paths);
-                let response = client.read_file_context(request).await?;
+                let response = handle.read_file_context(request).await?;
                 Ok(read_remote_project_skill_contents(
                     skill_paths,
                     response.file_contexts,
@@ -1076,6 +1063,12 @@ fn read_project_skill_contents(
             }))
         }
     }
+}
+
+async fn read_and_parse_project_skills(
+    read_skill_contents: ProjectSkillContentsFuture,
+) -> anyhow::Result<Vec<ParsedSkill>> {
+    Ok(parse_project_skill_contents(read_skill_contents.await?))
 }
 fn remote_skill_read_request(skill_paths: &[LocalOrRemotePath]) -> ReadFileContextRequest {
     ReadFileContextRequest {

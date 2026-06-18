@@ -17,6 +17,9 @@ if [[ $EXIT_CODE -ne 0 ]]; then
 fi
 
 echo "Rust formatting succeeded..."
+echo "Checking for inline Rust test modules..."
+./script/check_no_inline_test_modules
+echo "Inline Rust test module check succeeded..."
 
 echo "Running clippy..."
 # Exclude warp_completer because we run clippy on it with default features (rather than all features) below.

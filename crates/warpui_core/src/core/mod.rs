@@ -94,7 +94,7 @@ impl fmt::Display for DisplayIdx {
 }
 
 /// Information to display the IME editor near the active cursor.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct CursorInfo {
     /// Position of the active cursor.
     pub position: RectF,
@@ -264,6 +264,7 @@ pub trait AnyView {
         app: &mut AppContext,
         view_id: EntityId,
     );
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId>;
     fn self_or_child_interacted_with(
         &self,
         app: &mut AppContext,
@@ -354,6 +355,10 @@ where
         View::on_window_transferred(self, source_window_id, target_window_id, &mut ctx);
     }
 
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId> {
+        View::child_view_ids(self, app)
+    }
+
     fn keymap_context(&self, app: &AppContext) -> keymap::Context {
         View::keymap_context(self, app)
     }
@@ -430,6 +435,14 @@ impl RefCounts {
         } else {
             panic!("Expected ref count to be positive")
         }
+    }
+
+    fn is_model_dropped(&self, model_id: EntityId) -> bool {
+        self.dropped.models.contains(&model_id)
+    }
+
+    fn is_view_dropped(&self, view_id: EntityId) -> bool {
+        self.dropped.views.iter().any(|(_, id)| *id == view_id)
     }
 
     fn take_dropped(&mut self) -> DroppedItems {

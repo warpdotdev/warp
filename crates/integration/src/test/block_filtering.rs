@@ -10,7 +10,7 @@ use warp::terminal::model::index::Point;
 use warp::terminal::model::terminal_model::{BlockIndex, WithinBlock, WithinModel};
 use warp::terminal::shell::ShellType;
 use warp::terminal::GridType;
-use warpui::{async_assert, async_assert_eq};
+use warpui_core::{async_assert, async_assert_eq};
 
 use super::new_builder;
 use crate::test::integration_testing::block_filtering::{

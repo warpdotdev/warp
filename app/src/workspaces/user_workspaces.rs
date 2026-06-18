@@ -158,22 +158,23 @@ impl UserWorkspaces {
         current_workspace_uid: Option<WorkspaceUid>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&ServerExperiments::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&ServerExperiments::handle(ctx), |me, _, event, ctx| {
             let ServerExperimentsEvent::ExperimentsUpdated = event;
             me.update_session_sharing_enablement(ctx);
         });
 
-        ctx.subscribe_to_model(&CodeSettings::handle(ctx), |_, code_settings_event, ctx| {
-            match code_settings_event {
+        ctx.subscribe_to_model(
+            &CodeSettings::handle(ctx),
+            |_, _, code_settings_event, ctx| match code_settings_event {
                 CodeSettingsChangedEvent::CodebaseContextEnabled { .. }
                 | CodeSettingsChangedEvent::AutoIndexingEnabled { .. } => {
                     ctx.emit(UserWorkspacesEvent::CodebaseContextEnablementChanged);
                 }
                 _ => {}
-            }
-        });
+            },
+        );
 
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, ai_settings_event, ctx| {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, ai_settings_event, ctx| {
             if let AISettingsChangedEvent::IsAnyAIEnabled { .. } = ai_settings_event {
                 ctx.emit(UserWorkspacesEvent::CodebaseContextEnablementChanged);
             }
@@ -552,6 +553,63 @@ impl UserWorkspaces {
             HostEnablementSetting::Enforce => true,
             HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
                 .aws_bedrock_credentials_enabled
+                .value(),
+        }
+    }
+
+    pub fn gemini_enterprise_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
+        self.current_workspace().and_then(|workspace| {
+            workspace
+                .settings
+                .llm_settings
+                .host_configs
+                .get(&LLMModelHost::GeminiEnterprise)
+        })
+    }
+
+    /// Did the admin enable Gemini Enterprise (GEAP) for the current workspace?
+    pub fn is_gemini_enterprise_available_from_workspace(&self) -> bool {
+        self.current_workspace().is_some_and(|workspace| {
+            workspace.settings.llm_settings.enabled
+                && self
+                    .gemini_enterprise_host_settings()
+                    .is_some_and(|settings| settings.enabled)
+        })
+    }
+
+    pub fn gemini_enterprise_host_enablement_setting(&self) -> HostEnablementSetting {
+        self.gemini_enterprise_host_settings()
+            .map(|settings| settings.enablement_setting.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn is_gemini_enterprise_credentials_toggleable(&self) -> bool {
+        matches!(
+            self.gemini_enterprise_host_enablement_setting(),
+            HostEnablementSetting::RespectUserSetting
+        )
+    }
+
+    /// Whether Gemini Enterprise (GEAP) credentials should be minted and attached for the
+    /// current user. Anonymous/logged-out guard from [`Self::is_byo_api_key_enabled`]:
+    /// a GEAP credential mint is rooted in the user's Warp session, so without one
+    /// there is nothing to mint from.
+    pub fn is_gemini_enterprise_credentials_enabled(&self, app: &AppContext) -> bool {
+        if AuthStateProvider::as_ref(app)
+            .get()
+            .is_anonymous_or_logged_out()
+        {
+            return false;
+        }
+        // i.e. did the admin toggle on Gemini Enterprise in the admin panel?
+        if !self.is_gemini_enterprise_available_from_workspace() {
+            return false;
+        }
+
+        match self.gemini_enterprise_host_enablement_setting() {
+            HostEnablementSetting::Enforce => true,
+            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
+                .gemini_enterprise_credentials_enabled
                 .value(),
         }
     }

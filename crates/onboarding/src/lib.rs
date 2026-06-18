@@ -29,12 +29,12 @@ pub use callout::{OnboardingCalloutView, OnboardingKeybindings};
 /// skip-login confirmation dialog so the two always stay in sync.
 pub const AI_FEATURES: &[&str] = &[
     "Warp agents",
-    "Oz cloud agents platform",
-    "Next command predictions",
+    "Oz Cloud Agents Platform",
     "Prompt suggestions",
-    "Codebase context",
-    "Remote control with Claude Code, Codex, and other agents",
-    "Agents over SSH",
+    "Next command predictions",
+    "Full Terminal Use",
+    "Codebase Context",
+    "Remote Control with Claude Code, Codex, and other agents",
 ];
 
 /// User-facing names of the Warp Drive features enabled when the terminal
@@ -76,7 +76,7 @@ pub use model::{OnboardingAuthState, SelectedSettings, UICustomizationSettings};
 pub use slides::ProjectOnboardingSettings;
 pub use telemetry::OnboardingEvent;
 
-pub fn init(app: &mut warpui::AppContext) {
+pub fn init(app: &mut warpui_core::AppContext) {
     agent_onboarding_view::init(app);
     callout::init(app);
 }

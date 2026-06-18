@@ -23,11 +23,11 @@ use vec1::{Vec1, vec1};
 use warp_core::platform::SessionPlatform;
 use warp_core::safe_error;
 use warp_util::content_version::ContentVersion;
-use warpui::elements::ListIndentLevel;
-use warpui::fonts::Weight;
-use warpui::text::point::Point;
-use warpui::text::{TextBuffer, char_slice};
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
+use warpui_core::elements::ListIndentLevel;
+use warpui_core::fonts::Weight;
+use warpui_core::text::point::Point;
+use warpui_core::text::{TextBuffer, char_slice};
+use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
 use super::anchor::{Anchor, AnchorSide, Anchors};
 use super::cursor::BufferCursor;
@@ -534,6 +534,10 @@ impl BufferSnapshot {
     /// suitable for reuse across multiple seeks during tree-sitter parsing.
     pub fn bytes(&self) -> Bytes<'_> {
         Bytes::from_sum_tree(&self.content, ByteOffset::from(0), self.byte_len)
+    }
+
+    pub fn byte_len(&self) -> usize {
+        self.byte_len.as_usize()
     }
 }
 

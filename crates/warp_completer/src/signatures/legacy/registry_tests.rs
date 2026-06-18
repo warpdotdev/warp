@@ -191,11 +191,12 @@ fn test_alias_expansion_path_skips_flag_with_value_before_subcommand() {
     let registry = create_test_command_registry([kubectl]);
     let ctx = FakeCompletionContext::new(registry).with_case_sensitivity();
 
-    let result = warpui::r#async::block_on(ctx.command_registry().signature_with_alias_expansion(
-        &["kubectl", "-n", "default", "get"],
-        true,
-        &ctx,
-    ));
+    let result =
+        warpui_core::r#async::block_on(ctx.command_registry().signature_with_alias_expansion(
+            &["kubectl", "-n", "default", "get"],
+            true,
+            &ctx,
+        ));
     let SignatureResult::Success(found_signature) = result else {
         panic!("expected SignatureResult::Success");
     };
@@ -213,18 +214,19 @@ fn test_alias_expansion_path_skips_multiple_flags_before_subcommand() {
     let registry = create_test_command_registry([kubectl]);
     let ctx = FakeCompletionContext::new(registry).with_case_sensitivity();
 
-    let result = warpui::r#async::block_on(ctx.command_registry().signature_with_alias_expansion(
-        &[
-            "kubectl",
-            "--context",
-            "staging-cluster",
-            "-n",
-            "project1",
-            "get",
-        ],
-        true,
-        &ctx,
-    ));
+    let result =
+        warpui_core::r#async::block_on(ctx.command_registry().signature_with_alias_expansion(
+            &[
+                "kubectl",
+                "--context",
+                "staging-cluster",
+                "-n",
+                "project1",
+                "get",
+            ],
+            true,
+            &ctx,
+        ));
     let SignatureResult::Success(found_signature) = result else {
         panic!("expected SignatureResult::Success");
     };

@@ -232,7 +232,7 @@ impl BlocklistAIInputModel {
         // Reactively restore input config when CLI agent rich input closes.
         ctx.subscribe_to_model(
             &CLIAgentSessionsModel::handle(ctx),
-            move |me, event, ctx| {
+            move |me, _, event, ctx| {
                 let CLIAgentSessionsModelEvent::InputSessionChanged {
                     terminal_view_id: event_view_id,
                     previous_input_state,
@@ -259,7 +259,7 @@ impl BlocklistAIInputModel {
             },
         );
 
-        ctx.subscribe_to_model(&AISettings::handle(ctx), move |me, event, ctx| {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), move |me, _, event, ctx| {
             match event {
                 AISettingsChangedEvent::AIAutoDetectionEnabled { .. }
                     if FeatureFlag::AgentView.is_enabled() =>
@@ -314,7 +314,7 @@ impl BlocklistAIInputModel {
         });
 
         if FeatureFlag::AgentView.is_enabled() {
-            ctx.subscribe_to_model(&agent_view_controller, |me, event, ctx| match event {
+            ctx.subscribe_to_model(&agent_view_controller, |me, _, event, ctx| match event {
                 AgentViewControllerEvent::EnteredAgentView {
                     display_mode,
                     origin,

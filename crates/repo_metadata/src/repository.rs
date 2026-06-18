@@ -10,10 +10,10 @@ use futures::future::ready;
 #[cfg(feature = "local_fs")]
 use ignore::gitignore::Gitignore;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::r#async::{BoxFuture, SpawnedFutureHandle};
+use warpui_core::r#async::{BoxFuture, SpawnedFutureHandle};
 #[cfg(feature = "local_fs")]
-use warpui::SingletonEntity;
-use warpui::{Entity, ModelContext, ModelHandle};
+use warpui_core::SingletonEntity;
+use warpui_core::{Entity, ModelContext, ModelHandle};
 
 #[cfg(feature = "local_fs")]
 use crate::watcher::DirectoryWatcher;
@@ -127,13 +127,9 @@ impl Repository {
             gitignores_for_directory(&local_path)
         };
 
-        let common_git_directory = external_git_directory.as_ref().and_then(|ext| {
-            ext.to_local_path()
-                .and_then(|local| Self::derive_common_git_dir(&local))
-                .and_then(|p| StandardizedPath::try_from_local(&p).ok())
-                // Only store when it differs from external_git_directory.
-                .filter(|common| common != ext)
-        });
+        let common_git_directory = external_git_directory
+            .as_ref()
+            .and_then(Self::derive_common_git_directory);
 
         Self {
             root_dir,
@@ -161,6 +157,17 @@ impl Repository {
         None
     }
 
+    fn derive_common_git_directory(
+        external_git_directory: &StandardizedPath,
+    ) -> Option<StandardizedPath> {
+        external_git_directory
+            .to_local_path()
+            .and_then(|local| Self::derive_common_git_dir(&local))
+            .and_then(|path| StandardizedPath::try_from_local(&path).ok())
+            // Only store when it differs from external_git_directory.
+            .filter(|common| common != external_git_directory)
+    }
+
     /// The root directory of this repository.
     pub fn root_dir(&self) -> &StandardizedPath {
         &self.root_dir
@@ -170,6 +177,23 @@ impl Repository {
     /// This is used for worktrees where the .git directory is external to the working tree.
     pub fn external_git_directory(&self) -> Option<&StandardizedPath> {
         self.external_git_directory.as_ref()
+    }
+
+    /// Adds linked-worktree git metadata when it was not known at registration time.
+    ///
+    /// Directory registrations can be created from a raw path before git detection completes.
+    /// Preserve any metadata already associated with the repository, since later raw-path
+    /// registrations must not downgrade a known linked worktree.
+    pub(super) fn enrich_external_git_directory(
+        &mut self,
+        external_git_directory: StandardizedPath,
+    ) {
+        if self.external_git_directory.is_some() {
+            return;
+        }
+
+        self.common_git_directory = Self::derive_common_git_directory(&external_git_directory);
+        self.external_git_directory = Some(external_git_directory);
     }
 
     /// Returns the path to the actual `.git` directory for this repository.
@@ -328,10 +352,15 @@ impl Repository {
         let registration_future: BoxFuture<'static, Result<(), RepoMetadataError>> =
             if should_start_watching {
                 let directories_to_watch = self.watch_paths();
+                // Reuse the gitignores we already built at construction so the
+                // watch descend filter doesn't re-read `.gitignore` from disk.
+                let gitignores = self.gitignores.clone();
 
-                Box::pin(DirectoryWatcher::handle(ctx).update(ctx, |watcher, ctx| {
-                    watcher.start_watching_directories(directories_to_watch, ctx)
-                }))
+                Box::pin(
+                    DirectoryWatcher::handle(ctx).update(ctx, move |watcher, ctx| {
+                        watcher.start_watching_directories(directories_to_watch, gitignores, ctx)
+                    }),
+                )
             } else {
                 Box::pin(ready(Ok(())))
             };
@@ -570,7 +599,7 @@ where
                                 let st = state.lock().unwrap();
                                 st.version
                             };
-                            warpui::r#async::Timer::after(wait).await;
+                            warpui_core::r#async::Timer::after(wait).await;
 
                             // If version unchanged, we're quiet; flush pending and exit loop.
                             let maybe_merged = {

@@ -1311,7 +1311,7 @@ fn test_toolbar_renders_search_editor_view() {
             let env_page_id = env_page_handle.id();
             let search_editor_id = env_page.search_editor.id();
 
-            let chain = presenter.borrow().ancestors(search_editor_id);
+            let chain = ctx.view_ancestors(window_id, search_editor_id);
             assert!(
                 chain.len() >= 2,
                 "Expected search editor to be laid out as a child view; got ancestors={chain:?}"

@@ -464,11 +464,6 @@ impl<T: Action + Clone> QueryResult<T> {
         self.item.detail_data()
     }
 
-    /// Returns an optional deduplication key for this item from the [`SearchItem`].
-    pub fn dedup_key(&self) -> Option<String> {
-        self.item.dedup_key()
-    }
-
     /// Returns whether this item is a static separator,
     /// meaning it is a non-interactible item that should act as a simple UI element.
     pub fn is_static_separator(&self) -> bool {

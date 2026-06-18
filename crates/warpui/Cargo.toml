@@ -48,6 +48,7 @@ pathfinder_geometry.workspace = true
 sum_tree.workspace = true
 takecell = "0.1.1"
 thiserror.workspace = true
+url.workspace = true
 vec1.workspace = true
 version-compare = { workspace = true, optional = true }
 warpui_core.workspace = true
@@ -71,29 +72,64 @@ core-graphics = "0.25.0"
 core-text = "21.0.0"
 dispatch = "0.2.0"
 font-kit.workspace = true
-foreign-types = "0.5.0"
 libc.workspace = true
-metal = "0.33.0"
 objc.workspace = true
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = [
     "NSAlert",
     "NSApplication",
+    "NSButton",
     "NSCell",
+    "NSControl",
+    "NSCursor",
     "NSEvent",
+    "NSImage",
     "NSMenu",
     "NSMenuItem",
     "NSPasteboard",
     "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSView",
+    "NSWindow",
+    "objc2-quartz-core",
 ] }
+objc2-av-foundation = { workspace = true, features = ["AVCaptureDevice", "AVMediaFormat"] }
 objc2-foundation = { workspace = true, features = [
     "NSArray",
     "NSData",
     "NSGeometry",
     "NSString",
+    "NSURL",
     "NSValue",
     "objc2-core-foundation",
 ] }
+objc2-metal = { workspace = true, features = [
+    "MTLDevice",
+    "MTLCommandQueue",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLRenderCommandEncoder",
+    "MTLRenderPass",
+    "MTLRenderPipeline",
+    "MTLLibrary",
+    "MTLBuffer",
+    "MTLTexture",
+    "MTLResource",
+    "MTLAllocation",
+    "MTLArgument",
+    "MTLDrawable",
+    "MTLPixelFormat",
+    "MTLTypes",
+    "dispatch2",
+] }
+objc2-quartz-core = { workspace = true, features = [
+    "CALayer",
+    "CAMetalLayer",
+    "objc2-core-foundation",
+    "objc2-metal",
+] }
+dispatch2 = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 rand.workspace = true

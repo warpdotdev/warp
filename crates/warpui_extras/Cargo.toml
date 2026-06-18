@@ -23,7 +23,7 @@ serde_json = { workspace = true, optional = true }
 sha2.workspace = true
 toml_edit = { workspace = true, optional = true }
 thiserror.workspace = true
-warpui.workspace = true
+warpui_core.workspace = true
 
 [dev-dependencies]
 # Enable the `test-util` feature for our own package when running tests.

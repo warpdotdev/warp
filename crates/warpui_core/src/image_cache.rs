@@ -793,12 +793,13 @@ impl FitTo {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct RenderedImageCacheKey {
     bounds: Vector2I,
+    fit_type: FitType,
     animated_image_behavior: AnimatedImageBehavior,
 }
 
 #[derive(Default)]
 pub struct ImageCache {
-    /// Map of images of any ImageType already scaled to a certain size.
+    /// Map of rendered images of any ImageType already materialized for a certain size and fit.
     /// Uses the hashed AssetSource and rendered-image properties as a key.
     images: RwLock<HashMap<u64, HashMap<RenderedImageCacheKey, Rc<Image>>>>,
 }
@@ -818,16 +819,16 @@ impl ImageCache {
         cache.remove(&cache_key);
     }
 
-    /// Removes a single cached size entry for an asset.
+    /// Removes a single cached rendered entry for an asset.
     ///
     /// When the removed `Rc<Image>` is the last strong holder of the inner
     /// `Arc<StaticImage>`, that `Arc`'s strong count drops to zero. On the
     /// next call to `TextureCache::end_frame()`, the corresponding GPU texture
     /// will be evicted automatically via the `Weak<StaticImage>` it holds.
     ///
-    /// `bounds` must match the resolved bounds used as the cache key inside
-    /// `image()` (i.e., after any `max_dimension` adjustment), not the
-    /// originally requested bounds.
+    /// `bounds` and `fit_type` must match the resolved values used as the
+    /// cache key inside `image()` (i.e., after any `max_dimension`
+    /// adjustment), not only the originally requested bounds.
     // Called by the debounce eviction pass added in the main changeset.
     /// TODO(APP-3877): remove `#[allow(dead_code)]` once the debounce eviction pass wires this up.
     #[allow(dead_code)]
@@ -835,6 +836,7 @@ impl ImageCache {
         &self,
         asset_source: &AssetSource,
         bounds: Vector2I,
+        fit_type: FitType,
         animated_image_behavior: AnimatedImageBehavior,
     ) {
         let mut s = DefaultHasher::new();
@@ -843,6 +845,7 @@ impl ImageCache {
 
         let rendered_key = RenderedImageCacheKey {
             bounds,
+            fit_type,
             animated_image_behavior,
         };
 
@@ -870,16 +873,15 @@ impl ImageCache {
         asset_source.hash(&mut s);
         let cache_key = s.finish();
 
-        match asset_cache.load_asset::<ImageType>(asset_source) {
+        match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
             AssetState::Loading { handle } => AssetState::Loading { handle },
             AssetState::Evicted => AssetState::Evicted,
             AssetState::FailedToLoad(err) => AssetState::FailedToLoad(err),
             AssetState::Loaded { data } => {
                 let (mut needs_resize, mut bounds) = match cache_option {
                     CacheOption::BySize => {
-                        // Only store a resized copy of the source asset if a
-                        // specific size was requested and it doesn't match the
-                        // source asset's size.
+                        // Only resize the source asset if a specific size was requested and it
+                        // does not match the source asset's size.
                         let needs_resize = data.image_size() != Some(bounds);
                         (needs_resize, bounds)
                     }
@@ -919,19 +921,28 @@ impl ImageCache {
 
                 let rendered_image_cache_key = RenderedImageCacheKey {
                     bounds,
+                    fit_type,
                     animated_image_behavior,
                 };
+                // SVG sources always have to be rasterized, even when rendered at their
+                // intrinsic size. Cache those materialized pixels alongside resized images.
+                let should_cache_rendered_image =
+                    needs_resize || matches!(data.as_ref(), ImageType::Svg { .. });
 
-                // If it's already in the image cache at the target size,
-                // return it.
-                let cache = self.images.upgradable_read();
-                if let Some(inner_map) = cache.get(&cache_key) {
-                    if let Some(image) = inner_map.get(&rendered_image_cache_key) {
-                        return AssetState::Loaded {
-                            data: image.clone(),
-                        };
+                // If it is already in the image cache at the target size and fit, return it.
+                let cache = if should_cache_rendered_image {
+                    let cache = self.images.upgradable_read();
+                    if let Some(inner_map) = cache.get(&cache_key) {
+                        if let Some(image) = inner_map.get(&rendered_image_cache_key) {
+                            return AssetState::Loaded {
+                                data: image.clone(),
+                            };
+                        }
                     }
-                }
+                    Some(cache)
+                } else {
+                    None
+                };
 
                 // Otherwise, create the correctly-sized image struct and
                 // insert it into the cache (if necessary).
@@ -940,7 +951,7 @@ impl ImageCache {
                         Ok(image) => Rc::new(image),
                         Err(err) => return AssetState::FailedToLoad(Rc::new(err)),
                     };
-                if needs_resize {
+                if let Some(cache) = cache {
                     let mut images_cache = RwLockUpgradableReadGuard::upgrade(cache);
                     images_cache
                         .entry(cache_key)

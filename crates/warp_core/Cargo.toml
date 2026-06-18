@@ -41,6 +41,7 @@ strum.workspace = true
 strum_macros.workspace = true
 sysinfo.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 concat-idents.workspace = true
 url.workspace = true
 regex.workspace = true
@@ -52,10 +53,9 @@ warp_util.workspace = true
 async-broadcast.workspace = true
 futures.workspace = true
 line-ending.workspace = true
-warpui.workspace = true
+warpui_core.workspace = true
 warpui_extras = { workspace = true, features = ["default"] }
 mockito = { workspace = true, optional = true }
-asset_macro.workspace = true
 string-offset.workspace = true
 inventory = "0.3.20"
 chrono.workspace = true

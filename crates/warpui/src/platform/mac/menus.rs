@@ -391,24 +391,24 @@ unsafe fn make_top_level_menu_item(menu: Menu) -> id {
     Retained::autorelease_ptr(menuitem) as id
 }
 
-/// \return an autoreleased NSMenu representing the given menu bar.
-pub unsafe fn make_main_menu(menubar: MenuBar) -> id {
+/// \return an NSMenu representing the given menu bar.
+pub unsafe fn make_main_menu(menubar: MenuBar) -> Retained<NSMenu> {
     let mtm = MainThreadMarker::new_unchecked();
     let main_menu = NSMenu::new(mtm);
     for menu in menubar.menus {
         main_menu.addItem(&*make_top_level_menu_item(menu).cast::<NSMenuItem>());
     }
-    Retained::autorelease_ptr(main_menu) as id
+    main_menu
 }
 
-/// \return an autoreleased NSMenu representing the given dock menu.
-pub unsafe fn make_dock_menu(menu: Menu) -> id {
+/// \return an NSMenu representing the given dock menu.
+pub unsafe fn make_dock_menu(menu: Menu) -> Retained<NSMenu> {
     let mtm = MainThreadMarker::new_unchecked();
     let dock_menu = NSMenu::new(mtm);
     for item in menu.menu_items {
         dock_menu.addItem(&*make_menu_item(item).cast::<NSMenuItem>());
     }
-    Retained::autorelease_ptr(dock_menu) as id
+    dock_menu
 }
 
 #[cfg(test)]

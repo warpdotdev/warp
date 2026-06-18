@@ -9,8 +9,8 @@ use futures::channel::mpsc;
 use futures::{FutureExt as _, StreamExt as _};
 use virtual_fs::{Stub, VirtualFS};
 use warp_util::standardized_path::StandardizedPath;
-use warpui::r#async::Timer;
-use warpui::{App, ModelContext, ModelHandle};
+use warpui_core::r#async::Timer;
+use warpui_core::{App, ModelContext, ModelHandle};
 
 use crate::repositories::stub_git_repository;
 use crate::repository::{RepositorySubscriber, TrackedRemoteRef};
@@ -45,6 +45,63 @@ fn test_add_repository_success() {
             });
         });
     });
+}
+
+#[test]
+fn test_existing_directory_registration_is_enriched_with_external_git_directory() {
+    VirtualFS::test(
+        "enrich_existing_directory_with_external_git_directory",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/.git/worktrees/worktree").mkdir("worktree");
+
+            let worktree_path = dirs.tests().join("worktree");
+            let external_git_dir = dirs.tests().join("repo/.git/worktrees/worktree");
+            let common_git_dir = dirs.tests().join("repo/.git");
+
+            App::test((), |mut app| async move {
+                let watcher_handle = app.add_model(DirectoryWatcher::new_for_testing);
+                let worktree_path =
+                    StandardizedPath::from_local_canonicalized(&worktree_path).unwrap();
+                let external_git_dir =
+                    StandardizedPath::from_local_canonicalized(&external_git_dir).unwrap();
+
+                let raw_directory_handle = watcher_handle
+                    .update(&mut app, |watcher, ctx| {
+                        watcher.add_directory(worktree_path.clone(), ctx)
+                    })
+                    .unwrap();
+                raw_directory_handle.read(&app, |repository, _ctx| {
+                    assert!(repository.external_git_directory().is_none());
+                });
+
+                let enriched_directory_handle = watcher_handle
+                    .update(&mut app, |watcher, ctx| {
+                        watcher.add_directory_with_git_dir(
+                            worktree_path.clone(),
+                            Some(external_git_dir.clone()),
+                            ctx,
+                        )
+                    })
+                    .unwrap();
+
+                assert_eq!(raw_directory_handle, enriched_directory_handle);
+                enriched_directory_handle.read(&app, |repository, _ctx| {
+                    assert_eq!(repository.external_git_directory(), Some(&external_git_dir));
+                    assert_eq!(repository.common_git_dir(), common_git_dir);
+                });
+
+                let reused_directory_handle = watcher_handle
+                    .update(&mut app, |watcher, ctx| {
+                        watcher.add_directory(worktree_path, ctx)
+                    })
+                    .unwrap();
+                assert_eq!(enriched_directory_handle, reused_directory_handle);
+                reused_directory_handle.read(&app, |repository, _ctx| {
+                    assert_eq!(repository.external_git_directory(), Some(&external_git_dir));
+                });
+            });
+        },
+    );
 }
 
 #[test]

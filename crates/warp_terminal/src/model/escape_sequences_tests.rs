@@ -1,5 +1,5 @@
-use warpui::keymap::Keystroke;
-use warpui::platform::OperatingSystem;
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::OperatingSystem;
 
 use super::*;
 use crate::model::indexing::Point;
@@ -51,6 +51,19 @@ fn test_keystroke_to_c0_control_code() {
         (Keystroke::parse("ctrl-6").unwrap(), vec![C0::RS]),
         (Keystroke::parse("ctrl-7").unwrap(), vec![C0::US]),
         (Keystroke::parse("ctrl-8").unwrap(), vec![C0::DEL]),
+    ];
+
+    let terminal_model_mock = TerminalModelMock::new();
+    validate_keystroke_test_cases(test_cases, &terminal_model_mock);
+}
+
+#[test]
+fn test_shift_backspace_emits_del_sequence() {
+    // Regression test: Shift+Backspace must emit DEL (0x7f), not BS (0x08).
+    // 0x08 is Ctrl+H, which readline-style TUIs interpret as backward-kill-word.
+    let test_cases: &[(Keystroke, Vec<u8>)] = &[
+        (Keystroke::parse("backspace").unwrap(), vec![C0::DEL]),
+        (Keystroke::parse("shift-backspace").unwrap(), vec![C0::DEL]),
     ];
 
     let terminal_model_mock = TerminalModelMock::new();

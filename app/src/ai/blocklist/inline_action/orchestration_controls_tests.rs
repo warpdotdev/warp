@@ -1,7 +1,22 @@
 use ai::agent::action::RunAgentsExecutionMode;
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutionMode};
 
-use super::{should_show_harness_picker, OrchestrationEditState};
+use super::{
+    should_show_auth_secret_picker, should_show_harness_picker, AuthSecretSelection,
+    OrchestrationEditState,
+};
+
+fn remote_claude_state() -> OrchestrationEditState {
+    OrchestrationEditState::from_run_agents_fields(
+        "sonnet",
+        "claude",
+        &RunAgentsExecutionMode::Remote {
+            environment_id: "env-1".to_string(),
+            worker_host: "warp".to_string(),
+            computer_use_enabled: false,
+        },
+    )
+}
 
 fn local_config(harness_type: &str, model_id: &str) -> OrchestrationConfig {
     OrchestrationConfig {
@@ -151,5 +166,35 @@ fn resolve_from_config_sanitizes_disabled_local_codex() {
     assert!(matches!(
         state.execution_mode,
         RunAgentsExecutionMode::Local
+    ));
+}
+
+#[test]
+fn select_create_new_auth_secret_marks_creating_new_from_named() {
+    let mut state = remote_claude_state();
+    state.auth_secret_selection = AuthSecretSelection::Named("my-key".to_string());
+    assert_eq!(state.auth_secret_name(), Some("my-key"));
+
+    state.select_create_new_auth_secret();
+
+    // `CreatingNew` (distinct from `Unset`) blocks Accept and isn't re-seeded.
+    assert!(matches!(
+        state.auth_secret_selection,
+        AuthSecretSelection::CreatingNew
+    ));
+    assert_eq!(state.auth_secret_name(), None);
+    assert!(should_show_auth_secret_picker(&state));
+}
+
+#[test]
+fn select_create_new_auth_secret_marks_creating_new_from_inherit() {
+    let mut state = remote_claude_state();
+    state.auth_secret_selection = AuthSecretSelection::Inherit;
+
+    state.select_create_new_auth_secret();
+
+    assert!(matches!(
+        state.auth_secret_selection,
+        AuthSecretSelection::CreatingNew
     ));
 }

@@ -69,7 +69,7 @@ pub struct UpdatedCloudObjectsInput {
     pub workflows: Option<Vec<UpdatedObjectInput>>,
 }
 
-#[derive(cynic::InputObject, Debug)]
+#[derive(cynic::InputObject, Debug, Clone)]
 pub struct UpdatedObjectInput {
     pub actions_ts: Option<Time>,
     pub metadata_ts: Option<Time>,

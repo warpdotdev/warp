@@ -15,14 +15,14 @@ use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::{
     AnsiColor, AnsiColors, Details, Fill, Image, TerminalColors, WarpTheme,
 };
-use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{
+use warpui_core::assets::asset_cache::AssetSource;
+use warpui_core::elements::{
     Container, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize, ParentElement,
 };
-use warpui::fonts::{Cache, FamilyId, Weight};
-use warpui::presenter::ChildView;
-use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
-use warpui::{
+use warpui_core::fonts::{Cache, FamilyId, Weight};
+use warpui_core::presenter::ChildView;
+use warpui_core::ui_components::components::{UiComponent as _, UiComponentStyles};
+use warpui_core::{
     platform, AddWindowOptions, AppContext, AssetProvider, Element, Entity, SingletonEntity as _,
     TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -49,8 +49,11 @@ fn main() -> Result<()> {
         ..Default::default()
     })?;
 
-    let app_builder =
-        platform::AppBuilder::new(platform::AppCallbacks::default(), Box::new(ASSETS), None);
+    let app_builder = warpui::platform::AppBuilder::new(
+        platform::AppCallbacks::default(),
+        Box::new(ASSETS),
+        None,
+    );
     let _ = app_builder.run(move |ctx| {
         // Register Appearance singleton so views can access Appearance::handle(ctx).
         ctx.add_singleton_model(|ctx| build_appearance(phenomenon(), ctx));
@@ -87,26 +90,23 @@ impl OnboardingMainView {
                 id: LLMId::from("auto"),
                 title: "Auto".to_string(),
                 icon: Icon::Oz,
-                requires_upgrade: false,
                 is_default: true,
             },
             OnboardingModelInfo {
                 id: LLMId::from("claude-sonnet"),
                 title: "Claude Sonnet".to_string(),
                 icon: Icon::ClaudeLogo,
-                requires_upgrade: false,
                 is_default: false,
             },
             OnboardingModelInfo {
                 id: LLMId::from("gpt-4o"),
                 title: "GPT-4o".to_string(),
                 icon: Icon::OpenAILogo,
-                requires_upgrade: true,
                 is_default: false,
             },
         ];
         let onboarding_view = ctx.add_typed_action_view(move |ctx| {
-            // agent_modality_enabled and no_ai_experiment are false for demo purposes
+            // agent_modality_enabled is false for demo purposes
             AgentOnboardingView::new(
                 themes.clone(),
                 true,
@@ -114,8 +114,6 @@ impl OnboardingMainView {
                 default_model_id.clone(),
                 false,
                 false,
-                false,
-                None,
                 onboarding::OnboardingAuthState::LoggedOut,
                 ctx,
             )
@@ -170,6 +168,8 @@ impl OnboardingMainView {
             | AgentOnboardingEvent::UpgradePasteTokenFromClipboardRequested
             | AgentOnboardingEvent::LoginFromWelcomeRequested
             | AgentOnboardingEvent::PrivacySettingsFromTerminalThemeSlideRequested
+            | AgentOnboardingEvent::AddApiKeyRequested
+            | AgentOnboardingEvent::AddCustomEndpointRequested
             | AgentOnboardingEvent::AppBecameActive => {
                 // No-op in the standalone demo binary
             }
@@ -269,7 +269,7 @@ impl View for OnboardingMainView {
         }
     }
 
-    fn on_focus(&mut self, focus_ctx: &warpui::FocusContext, ctx: &mut ViewContext<Self>) {
+    fn on_focus(&mut self, focus_ctx: &warpui_core::FocusContext, ctx: &mut ViewContext<Self>) {
         if let OnboardingMainState::Onboarding(view) = &self.state {
             if focus_ctx.is_self_focused() {
                 ctx.focus(view);

@@ -21,7 +21,7 @@ use warp_graphql::scalars::time::ServerTimestamp;
 use warp_util::sync::Condition;
 use warpui::r#async::{FutureId, Timer};
 use warpui::{
-    duration_with_jitter, AppContext, Entity, ModelContext, RequestState, RetryOption,
+    duration_with_jitter, AppContext, Entity, ModelContext, ModelHandle, RequestState, RetryOption,
     SingletonEntity,
 };
 
@@ -58,6 +58,11 @@ use crate::cloud_object::{
     ServerEnvVarCollection, ServerMCPServer, ServerMetadata, ServerPermissions, ServerPreference,
     ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflowEnum, Space,
     UpdateCloudObjectResult,
+};
+use crate::drive::drive_helpers::{
+    is_feature_gated_anonymous_user_past_env_var_limit,
+    is_feature_gated_anonymous_user_past_notebook_limit,
+    is_feature_gated_anonymous_user_past_workflow_limit,
 };
 use crate::drive::folders::{CloudFolderModel, FolderId};
 use crate::drive::sharing::SharingAccessLevel;
@@ -203,7 +208,7 @@ impl UpdateManager {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let network_status = NetworkStatus::handle(ctx);
-        ctx.subscribe_to_model(&network_status, |me, event, ctx| {
+        ctx.subscribe_to_model(&network_status, |me, _, event, ctx| {
             me.handle_network_status_changed(event, ctx);
         });
 
@@ -211,7 +216,7 @@ impl UpdateManager {
         ctx.subscribe_to_model(&team_tester_status, Self::handle_team_tester_status_changed);
 
         let sync_queue = SyncQueue::handle(ctx);
-        ctx.subscribe_to_model(&sync_queue, |me, event, ctx| {
+        ctx.subscribe_to_model(&sync_queue, |me, _, event, ctx| {
             me.handle_model_event(event, ctx);
         });
 
@@ -301,6 +306,7 @@ impl UpdateManager {
 
     fn handle_team_tester_status_changed(
         &mut self,
+        _: ModelHandle<TeamTesterStatus>,
         event: &TeamTesterStatusEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -3338,10 +3344,10 @@ impl UpdateManager {
                 .count()
         });
         if AuthStateProvider::handle(ctx).read(ctx, |auth_state_provider, _ctx| {
-            auth_state_provider
-                .get()
-                .is_anonymous_user_past_object_limit(ObjectType::Notebook, count + 1)
-                .unwrap_or_default()
+            is_feature_gated_anonymous_user_past_notebook_limit(
+                auth_state_provider.get(),
+                count + 1,
+            )
         }) {
             AuthManager::handle(ctx).update(ctx, |auth_manager: &mut AuthManager, ctx| {
                 auth_manager.anonymous_user_hit_drive_object_limit(ctx);
@@ -3409,10 +3415,10 @@ impl UpdateManager {
                 .count()
         });
         if AuthStateProvider::handle(ctx).read(ctx, |auth_state_provider, _ctx| {
-            auth_state_provider
-                .get()
-                .is_anonymous_user_past_object_limit(ObjectType::Workflow, count + 1)
-                .unwrap_or_default()
+            is_feature_gated_anonymous_user_past_workflow_limit(
+                auth_state_provider.get(),
+                count + 1,
+            )
         }) {
             AuthManager::handle(ctx).update(ctx, |auth_manager: &mut AuthManager, ctx| {
                 auth_manager.anonymous_user_hit_drive_object_limit(ctx);
@@ -3474,14 +3480,8 @@ impl UpdateManager {
                 .active_non_welcome_env_var_collections_in_space(Space::Personal, ctx)
                 .count()
         });
-        let env_var_collection_type = ObjectType::GenericStringObject(
-            GenericStringObjectFormat::Json(JsonObjectType::EnvVarCollection),
-        );
         if AuthStateProvider::handle(ctx).read(ctx, |auth_state_provider, _ctx| {
-            auth_state_provider
-                .get()
-                .is_anonymous_user_past_object_limit(env_var_collection_type, count + 1)
-                .unwrap_or_default()
+            is_feature_gated_anonymous_user_past_env_var_limit(auth_state_provider.get(), count + 1)
         }) {
             AuthManager::handle(ctx).update(ctx, |auth_manager: &mut AuthManager, ctx| {
                 auth_manager.anonymous_user_hit_drive_object_limit(ctx);

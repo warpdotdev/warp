@@ -6,7 +6,7 @@ mod screenshot;
 
 use async_trait::async_trait;
 use pathfinder_geometry::vector::Vector2I;
-use warpui::r#async::Timer;
+use warpui_core::r#async::Timer;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{self, ConnectionExt as _};
 use x11rb::protocol::xtest::ConnectionExt as _;

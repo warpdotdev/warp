@@ -18,6 +18,7 @@ use warp_core::{safe_error, SessionId};
 use warp_files::{FileModel, FileModelEvent};
 use warp_util::content_version::ContentVersion;
 use warp_util::file::FileId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::platform::TerminationMode;
 use warpui::r#async::{Spawnable, SpawnableOutput, SpawnedFutureHandle};
@@ -28,15 +29,17 @@ use super::codebase_index_status::{
     not_enabled_codebase_index_status, queued_codebase_index_status,
     unavailable_codebase_index_status,
 };
-use super::diff_state_proto;
 use super::diff_state_tracker::{
     DiffModelKey, DiffStateUpdate, RemoteDiffStateManager, SubscribeOutcome,
 };
 use super::proto::{
     client_message, delete_file_response, discard_files_response, get_diff_state_response,
-    get_fragment_metadata_from_hash_response, resolve_conflict_response, run_command_response,
-    save_buffer_response, server_message, write_file_response, Abort, Authenticate, BranchInfo,
-    BufferEdit, BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexLimits,
+    get_fragment_metadata_from_hash_response, git_commit_chain_response, git_create_pr_response,
+    git_generate_commit_message_response, git_get_committed_branch_files_response,
+    git_push_response, host_scoped_request, notification, resolve_conflict_response,
+    run_command_response, save_buffer_response, server_message, session_scoped_request,
+    write_file_response, Abort, Authenticate, BranchInfo, BufferEdit, BufferUpdatedPush,
+    BundledSkillProto, BundledSkillsSnapshot, ClientMessage, CloseBuffer, CodebaseIndexLimits,
     CodebaseIndexStatus, CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot,
     CodebaseResyncMode, DeleteFile, DeleteFileResponse, DeleteFileSuccess, DiscardFilesError,
     DiscardFilesResponse, DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse,
@@ -45,17 +48,28 @@ use super::proto::{
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
-    GetFragmentMetadataFromHashSuccess, IndexCodebase, Initialize, InitializeResponse,
-    MissingFragmentMetadata, NavigatedToDirectory, NavigatedToDirectoryResponse, OpenBuffer,
-    OpenBufferResponse, ReadFileContextResponse, ResolveConflict, ResolveConflictResponse,
-    ResolveConflictSuccess, ResyncCodebase, RunCommandError, RunCommandErrorCode,
-    RunCommandRequest, RunCommandResponse, RunCommandSuccess, SaveBuffer, SaveBufferResponse,
-    SaveBufferSuccess, ServerMessage, SessionBootstrapped, TextEdit, UploadHandoffSnapshot,
-    WriteFile, WriteFileResponse, WriteFileSuccess,
+    GetFragmentMetadataFromHashSuccess, GitCommitChainMode, GitCommitChainRequest,
+    GitCommitChainResponse, GitCommitChainSuccess, GitCreatePrRequest, GitCreatePrResponse,
+    GitGenerateCommitMessageRequest, GitGenerateCommitMessageResponse,
+    GitGetCommittedBranchFilesRequest, GitGetCommittedBranchFilesResponse,
+    GitGetCommittedBranchFilesSuccess, GitHubPrInfoPush, GitHubRepositoryInfoPush, GitOpDelta,
+    GitOpError, GitPushRequest, GitPushResponse, GitStatusPush, IndexCodebase, Initialize,
+    InitializeResponse, MissingFragmentMetadata, NavigatedToDirectory,
+    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextResponse,
+    ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess, ResyncCodebase,
+    RipgrepSearchRequest, RunCommandError, RunCommandErrorCode, RunCommandRequest,
+    RunCommandResponse, RunCommandSuccess, SaveBuffer, SaveBufferResponse, SaveBufferSuccess,
+    ServerMessage, SessionBootstrapped, TextEdit, UpdateGitHubPrInfo, UpdateGitHubRepoInfo,
+    UpdateGitStatus, UploadHandoffSnapshot, WriteFile, WriteFileResponse, WriteFileSuccess,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
+use super::{diff_state_proto, ripgrep_search};
 use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
-use crate::code_review::diff_state::{DiffMode, FileStatusInfo};
+use crate::code_review::diff_state::{CommitChainMode, DiffMode, FileStatusInfo};
+use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusModel};
+use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
+#[cfg(feature = "local_tty")]
+use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::shell::ShellType;
 
 /// How long the daemon waits with no connections before exiting.
@@ -72,12 +86,30 @@ use super::protocol::RequestId;
 use crate::ai::agent::FileLocations;
 use crate::ai::blocklist::handoff::snapshot::upload_result_to_proto;
 use crate::ai::blocklist::{read_local_file_context, ReadFileContextResult};
+use crate::ai::skills::{bundled_skills_snapshot_protos, BundledSkill};
 use crate::auth::auth_state::{AuthState, AuthStateProvider};
+use crate::code_review::git_actions;
 use crate::features::FeatureFlag;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::session::command_executor::{
     ExecuteCommandOptions, LocalCommandExecutor,
 };
+use crate::util::git;
+
+/// Resolves the global bundled resources directory populated by the install
+/// script (see [`remote_server::setup::remote_server_bundled_resources_dir`]),
+/// expanding the shell-form `~/` prefix against this process's home directory.
+///
+/// This deliberately does not use `warp_core::paths::bundled_resources_dir`,
+/// whose macOS behavior resolves resources inside an app bundle. The global
+/// location is version-independent: the last install wins, and slight skew
+/// against this daemon's version is accepted.
+fn daemon_bundled_resources_dir() -> Option<PathBuf> {
+    let dir = remote_server::setup::remote_server_bundled_resources_dir();
+    let suffix = dir.strip_prefix("~/")?;
+    let dir = dirs::home_dir()?.join(suffix);
+    dir.is_dir().then_some(dir)
+}
 
 /// Outcome of dispatching a request-style `ClientMessage`.
 ///
@@ -219,6 +251,16 @@ pub struct ServerModel {
     /// Returned in every `InitializeResponse` so clients can deduplicate
     /// host-scoped models.
     host_id: String,
+    /// The bundled skill catalog, pre-parsed and serialized for the
+    /// `BundledSkillsSnapshot` push. `None` until startup parsing completes
+    /// (or forever, when the global resources directory is absent).
+    bundled_skills: Option<Vec<BundledSkillProto>>,
+    /// Connections that have already received the `BundledSkillsSnapshot`
+    /// push, either from the parse-completion broadcast or during their
+    /// `Initialize` handshake. Prevents a duplicate push when parsing
+    /// completes between a connection registering its sender and its
+    /// `Initialize` being handled.
+    bundled_skills_sent: HashSet<ConnectionId>,
     /// Per-session command executors created from `SessionBootstrapped` notifications.
     executors: HashMap<SessionId, Arc<LocalCommandExecutor>>,
     /// Tracks in-flight file write/delete operations and handles cleanup.
@@ -230,6 +272,29 @@ pub struct ServerModel {
     buffers: ServerBufferTracker,
     /// Manages per-(repo, mode) diff state models and per-connection subscriptions.
     diff_states: ModelHandle<RemoteDiffStateManager>,
+    /// In-flight host-scoped requests whose response may be delivered on
+    /// a different connection if the originating connection disconnects.
+    host_scoped_requests: HashMap<RequestId, ConnectionId>,
+    /// Per-repo local git status models tracked on the daemon, keyed by repo
+    /// path. Created when `NavigatedToDirectory` resolves a git root or a
+    /// client requests a snapshot; each is subscribed so watcher ticks
+    /// broadcast `GitStatusPush` to every connection.
+    git_status_models: HashMap<StandardizedPath, ModelHandle<GitRepoStatusModel>>,
+    /// Per-repo local GitHub-info models tracked on the daemon, keyed by repo
+    /// path. Created lazily on the first GitHub-info notification; each is
+    /// subscribed so `gh`-driven changes broadcast PR-info and repository-info
+    /// pushes to every connection.
+    github_repo_models: HashMap<StandardizedPath, ModelHandle<GitHubRepoModel>>,
+    /// Connections subscribed (via navigation) to each repo's git status,
+    /// keyed by repo path. A repo's git-status *and* GitHub-info models live
+    /// while this set is non-empty and are evicted once the last connection
+    /// unsubscribes (navigates away or disconnects). Mirrors
+    /// `RemoteDiffStateManager`'s per-key connection sets, keyed by repo only.
+    git_status_subscribers: HashMap<StandardizedPath, HashSet<ConnectionId>>,
+    /// Each connection's current git repo (a connection is in at most one repo
+    /// at a time), so a navigation can move its subscription and a disconnect
+    /// can drop it.
+    git_status_repo_by_conn: HashMap<ConnectionId, StandardizedPath>,
 }
 
 impl Entity for ServerModel {
@@ -252,18 +317,25 @@ impl ServerModel {
             grace_timer_cancel: None,
             in_progress: HashMap::new(),
             host_id,
+            bundled_skills: None,
+            bundled_skills_sent: HashSet::new(),
             executors: HashMap::new(),
             pending_file_ops: PendingFileOps::new(),
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
             buffers: ServerBufferTracker::new(),
             diff_states: ctx.add_model(|_| RemoteDiffStateManager::new()),
+            host_scoped_requests: HashMap::new(),
+            git_status_models: HashMap::new(),
+            github_repo_models: HashMap::new(),
+            git_status_subscribers: HashMap::new(),
+            git_status_repo_by_conn: HashMap::new(),
         };
         // Subscribe to FileModel and RepoMetadataModel events
         // file operation results and repo metadata pushes are forwarded to all
         // connected proxy sessions.
         {
             let file_model = FileModel::handle(ctx);
-            ctx.subscribe_to_model(&file_model, |me, event, ctx| {
+            ctx.subscribe_to_model(&file_model, |me, _, event, ctx| {
                 let file_id = event.file_id();
                 let Some(pending_kind) = me.pending_file_ops.get(&file_id).map(|op| &op.kind)
                 else {
@@ -314,7 +386,7 @@ impl ServerModel {
         }
         {
             let repo_model = RepoMetadataModel::handle(ctx);
-            ctx.subscribe_to_model(&repo_model, |me, event, ctx| match event {
+            ctx.subscribe_to_model(&repo_model, |me, _, event, ctx| match event {
                 RepoMetadataEvent::IncrementalUpdateReady { update } => {
                     me.send_server_message(
                         None,
@@ -332,6 +404,10 @@ impl ServerModel {
                         let entries = super::repo_metadata_proto::file_tree_entry_to_snapshot_proto(
                             &state.entry,
                         );
+                        let standing_results = repo_model
+                            .as_ref(ctx)
+                            .standing_query_results(&id, ctx)
+                            .map(|results| (&results.as_snapshot_delta()).into());
                         me.send_server_message(
                             None,
                             None,
@@ -340,6 +416,7 @@ impl ServerModel {
                                     repo_path: path.to_string(),
                                     entries,
                                     sync_complete: true,
+                                    standing_results,
                                 },
                             ),
                         );
@@ -353,6 +430,7 @@ impl ServerModel {
                 RepoMetadataEvent::RepositoryRemoved { .. }
                 | RepoMetadataEvent::FileTreeUpdated { .. }
                 | RepoMetadataEvent::FileTreeEntryUpdated { .. }
+                | RepoMetadataEvent::StandingQueryResultsUpdated { .. }
                 | RepoMetadataEvent::UpdatingRepositoryFailed { .. }
                 | RepoMetadataEvent::RepositoryUpdated {
                     id: RepositoryIdentifier::Remote(_),
@@ -360,13 +438,13 @@ impl ServerModel {
             });
         }
         let index_manager = CodebaseIndexManager::handle(ctx);
-        ctx.subscribe_to_model(&index_manager, |me, event, ctx| {
+        ctx.subscribe_to_model(&index_manager, |me, _, event, ctx| {
             me.handle_codebase_index_manager_event(event, ctx);
         });
         // Subscribe to GlobalBufferModel events for server-local buffers.
         {
             let gbm = GlobalBufferModel::handle(ctx);
-            ctx.subscribe_to_model(&gbm, |me, event, ctx| match event {
+            ctx.subscribe_to_model(&gbm, |me, _, event, ctx| match event {
                 GlobalBufferModelEvent::BufferLoaded { file_id, .. } => {
                     // Complete all pending OpenBuffer requests for this file.
                     let pending = me.buffers.take_pending_by_kind(
@@ -432,7 +510,10 @@ impl ServerModel {
                         })
                         .collect();
 
-                    for &conn_id in conns {
+                    // Collect to break the immutable borrow on `me.buffers`
+                    // before calling `me.send_server_message(&mut self)`.
+                    let conns: Vec<_> = conns.iter().copied().collect();
+                    for conn_id in conns {
                         if excluded.contains(&conn_id) {
                             continue;
                         }
@@ -448,7 +529,7 @@ impl ServerModel {
                         );
                     }
                 }
-                GlobalBufferModelEvent::FileSaved { file_id } => {
+                GlobalBufferModelEvent::FileSaved { file_id, .. } => {
                     for req in me.buffers.take_pending_by_kind(
                         file_id,
                         PendingBufferRequestKind::SaveBuffer,
@@ -544,8 +625,11 @@ impl ServerModel {
                     // to connected clients so they can show a resolution banner.
                     if !success {
                         if let Some(conns) = me.buffers.connections_for_buffer(file_id) {
+                            // Collect to break the immutable borrow on `me.buffers`
+                            // before calling `me.send_server_message(&mut self)`.
+                            let conns: Vec<_> = conns.iter().copied().collect();
                             let path = me.buffers.path_for_file_id(*file_id).unwrap_or_default();
-                            for &conn_id in conns {
+                            for conn_id in conns {
                                 me.send_server_message(
                                     Some(conn_id),
                                     None,
@@ -568,9 +652,32 @@ impl ServerModel {
         // to proto messages and send them to connected clients.
         {
             let diff_states = model.diff_states.clone();
-            ctx.subscribe_to_model(&diff_states, |me, dispatch, _ctx| {
+            ctx.subscribe_to_model(&diff_states, |me, _, dispatch, _ctx| {
                 me.handle_diff_state_update(dispatch);
             });
+        }
+        // Parse the bundled skill catalog from the global install location.
+        // Parsing never blocks the initialize handshake: connections that
+        // initialize before parsing completes receive the catalog via the
+        // completion broadcast instead. Deliberately not feature-flag gated:
+        // the flag controls exposure on the client (catalog storage and
+        // skill selection), where the connecting user's flag state actually
+        // lives — a headless daemon only sees its own channel defaults.
+        if let Some(resources_dir) = daemon_bundled_resources_dir() {
+            ctx.spawn(
+                BundledSkill::detect_in_resources_dir(resources_dir),
+                |me, catalog, _| {
+                    let skills = bundled_skills_snapshot_protos(&catalog);
+                    log::info!("Daemon parsed {} bundled skills", skills.len());
+                    me.bundled_skills = Some(skills);
+                    me.broadcast_bundled_skills_snapshot();
+                },
+            );
+        } else {
+            log::info!(
+                "Daemon found no global bundled resources directory; \
+                 bundled skills unavailable on this host"
+            );
         }
         // Start the grace timer immediately so the daemon exits if no proxy
         // connects within GRACE_PERIOD. In practice the spawning proxy connects
@@ -579,6 +686,40 @@ impl ServerModel {
         // arrives.
         model.start_grace_timer(ctx);
         model
+    }
+
+    /// Broadcasts the parsed bundled skill catalog to all connections.
+    /// No-op until startup parsing has completed.
+    fn broadcast_bundled_skills_snapshot(&mut self) {
+        let Some(skills) = self.bundled_skills.clone() else {
+            return;
+        };
+        self.send_server_message(
+            None,
+            None,
+            server_message::Message::BundledSkillsSnapshot(BundledSkillsSnapshot { skills }),
+        );
+        self.bundled_skills_sent
+            .extend(self.connection_senders.keys().copied());
+    }
+
+    /// Pushes the parsed bundled skill catalog to a single connection.
+    /// No-op until startup parsing has completed, or when the catalog was
+    /// already delivered to this connection (e.g. it registered before the
+    /// parse-completion broadcast fired).
+    fn send_bundled_skills_snapshot_to_connection(&mut self, conn_id: ConnectionId) {
+        if self.bundled_skills_sent.contains(&conn_id) {
+            return;
+        }
+        let Some(skills) = self.bundled_skills.clone() else {
+            return;
+        };
+        self.send_server_message(
+            Some(conn_id),
+            None,
+            server_message::Message::BundledSkillsSnapshot(BundledSkillsSnapshot { skills }),
+        );
+        self.bundled_skills_sent.insert(conn_id);
     }
 
     /// Called when a proxy connects.  Inserts `conn_tx` into the connection
@@ -608,10 +749,30 @@ impl ServerModel {
     /// and starts the grace timer if no connections remain.
     pub fn deregister_connection(&mut self, conn_id: ConnectionId, ctx: &mut ModelContext<Self>) {
         self.snapshot_sent_roots_by_connection.remove(&conn_id);
+        self.bundled_skills_sent.remove(&conn_id);
         // Guard against double-deregister (reader and writer tasks both call
         // this on connection close; the second call must be a safe no-op).
         if self.connection_senders.remove(&conn_id).is_none() {
             return;
+        }
+
+        // Host-scoped in-flight requests that were sent through the dead
+        // connection are NOT eagerly reassigned here. Instead,
+        // `send_server_message` handles failover at delivery time: when it
+        // finds the target connection is gone, it picks any other open
+        // connection. If no connections remain at delivery time, the
+        // response is dropped (logged). If no connections remain NOW and
+        // there are in-progress handlers, abort them so they don't run
+        // to completion pointlessly.
+        if self.connection_senders.is_empty() {
+            let orphaned: Vec<RequestId> = self.host_scoped_requests.keys().cloned().collect();
+            for rid in orphaned {
+                self.host_scoped_requests.remove(&rid);
+                if let Some(handle) = self.in_progress.remove(&rid) {
+                    log::warn!("Daemon: no connections remain, aborting host-scoped request {rid}");
+                    handle.abort();
+                }
+            }
         }
 
         // Remove this connection from all buffer connection sets.
@@ -622,6 +783,10 @@ impl ServerModel {
         // Orphaned models (no subscribers) are dropped automatically.
         self.diff_states
             .update(ctx, |mgr, _| mgr.remove_connection(conn_id));
+
+        // Drop this connection's git-status / GitHub-info subscription. The
+        // per-repo models are evicted once no connection remains in the repo.
+        self.unsubscribe_git_status(conn_id);
 
         let remaining = self.connection_senders.len();
         log::info!("Daemon: connection {conn_id} deregistered — {remaining} active remaining");
@@ -668,99 +833,171 @@ impl ServerModel {
     ) {
         let request_id = RequestId::from(msg.request_id);
 
-        let outcome = match msg.message {
-            Some(client_message::Message::Initialize(msg)) => {
-                self.handle_initialize(msg, &request_id, ctx)
+        let (outcome, is_host_scoped) = match msg.message {
+            // ── Host-scoped requests (daemon owns failover delivery) ───
+            Some(client_message::Message::HostScoped(wrapper)) => {
+                let outcome = match wrapper.message {
+                    Some(host_scoped_request::Message::WriteFile(m)) => {
+                        self.handle_write_file(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::DeleteFile(m)) => {
+                        self.handle_delete_file(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::ReadFileContext(m)) => {
+                        self.handle_read_file_context(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::SaveBuffer(m)) => {
+                        self.handle_save_buffer(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::ResolveConflict(m)) => {
+                        self.handle_resolve_conflict(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::DiscardFiles(m)) => {
+                        self.handle_discard_files(m, &request_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::IndexCodebase(m)) => {
+                        self.handle_index_codebase(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::DropCodebaseIndex(m)) => {
+                        self.handle_drop_codebase_index(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GetFragmentMetadataFromHash(m)) => {
+                        self.handle_get_fragment_metadata_from_hash(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GetBranches(m)) => {
+                        self.handle_get_branches(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::ResyncCodebase(m)) => {
+                        self.handle_resync_codebase(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::UploadHandoffSnapshot(m)) => {
+                        self.handle_upload_handoff_snapshot(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GitCommitChain(m)) => {
+                        self.handle_git_commit_chain(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GitPush(m)) => {
+                        self.handle_git_push(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GitCreatePr(m)) => {
+                        self.handle_create_pr(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GitGenerateCommitMessage(m)) => {
+                        self.handle_generate_git_commit_message(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GitGetCommittedBranchFiles(m)) => {
+                        self.handle_get_committed_branch_files(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::RipgrepSearch(m)) => {
+                        self.handle_ripgrep_search(m, &request_id, conn_id, ctx)
+                    }
+                    None => {
+                        log::warn!(
+                            "HostScopedRequest with no inner message (request_id={request_id})"
+                        );
+                        HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::InvalidRequest.into(),
+                            message: "HostScopedRequest had no message variant set".to_string(),
+                        }))
+                    }
+                };
+                (outcome, true)
             }
-            Some(client_message::Message::Authenticate(msg)) => {
-                self.handle_authenticate(msg);
-                return;
+            // ── Session-scoped requests (response tied to originating connection) ───
+            Some(client_message::Message::SessionScoped(wrapper)) => {
+                let outcome = match wrapper.message {
+                    Some(session_scoped_request::Message::Initialize(m)) => {
+                        self.handle_initialize(m, &request_id, conn_id, ctx)
+                    }
+                    Some(session_scoped_request::Message::NavigatedToDirectory(m)) => {
+                        self.handle_navigated_to_directory(m, &request_id, conn_id, ctx)
+                    }
+                    Some(session_scoped_request::Message::LoadRepoMetadataDirectory(m)) => {
+                        self.handle_load_repo_metadata_directory(m, &request_id, ctx)
+                    }
+                    Some(session_scoped_request::Message::RunCommand(m)) => {
+                        self.handle_run_command(m, &request_id, conn_id, ctx)
+                    }
+                    // Subscription-establishing ops: their per-connection
+                    // subscription state is bound to this connection, so the
+                    // response (and later pushes) must stay on it — never
+                    // failed over to a sibling.
+                    Some(session_scoped_request::Message::OpenBuffer(m)) => {
+                        self.handle_open_buffer(m, &request_id, conn_id, ctx)
+                    }
+                    Some(session_scoped_request::Message::GetDiffState(m)) => {
+                        self.handle_get_diff_state(m, &request_id, conn_id, ctx)
+                    }
+                    None => {
+                        log::warn!(
+                            "SessionScopedRequest with no inner message (request_id={request_id})"
+                        );
+                        HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::InvalidRequest.into(),
+                            message: "SessionScopedRequest had no message variant set".to_string(),
+                        }))
+                    }
+                };
+                (outcome, false)
             }
-            Some(client_message::Message::UpdatePreferences(msg)) => {
-                self.handle_update_preferences(msg, ctx);
-                return;
-            }
-            Some(client_message::Message::SessionBootstrapped(msg)) => {
-                self.handle_session_bootstrapped(msg);
-                return;
-            }
-            Some(client_message::Message::Abort(abort)) => {
-                self.handle_abort(abort, &request_id, ctx);
-                return;
-            }
-            Some(client_message::Message::RunCommand(req)) => {
-                self.handle_run_command(req, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::NavigatedToDirectory(msg)) => {
-                self.handle_navigated_to_directory(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::LoadRepoMetadataDirectory(msg)) => {
-                self.handle_load_repo_metadata_directory(msg, &request_id, ctx)
-            }
-            Some(client_message::Message::WriteFile(msg)) => {
-                self.handle_write_file(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::DeleteFile(msg)) => {
-                self.handle_delete_file(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::ReadFileContext(msg)) => {
-                self.handle_read_file_context(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::OpenBuffer(msg)) => {
-                self.handle_open_buffer(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::BufferEdit(msg)) => {
-                self.handle_buffer_edit(msg, ctx);
-                return; // fire-and-forget notification
-            }
-            Some(client_message::Message::CloseBuffer(msg)) => {
-                self.handle_close_buffer(msg, conn_id, ctx);
-                return; // fire-and-forget notification
-            }
-            Some(client_message::Message::SaveBuffer(msg)) => {
-                self.handle_save_buffer(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::ResolveConflict(msg)) => {
-                self.handle_resolve_conflict(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::GetDiffState(msg)) => {
-                self.handle_get_diff_state(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::UnsubscribeDiffState(msg)) => {
-                self.handle_unsubscribe_diff_state(msg, conn_id, ctx);
-                return; // fire-and-forget notification
-            }
-            Some(client_message::Message::GetBranches(msg)) => {
-                self.handle_get_branches(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::DiscardFiles(msg)) => {
-                self.handle_discard_files(msg, &request_id, ctx)
-            }
-            Some(client_message::Message::IndexCodebase(msg)) => {
-                self.handle_index_codebase(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::ResyncCodebase(msg)) => {
-                self.handle_resync_codebase(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::DropCodebaseIndex(msg)) => {
-                self.handle_drop_codebase_index(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::GetFragmentMetadataFromHash(msg)) => {
-                self.handle_get_fragment_metadata_from_hash(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::UploadHandoffSnapshot(msg)) => {
-                self.handle_upload_handoff_snapshot(msg, &request_id, conn_id, ctx)
+            // ── Notifications (fire-and-forget) ───
+            Some(client_message::Message::Notification(wrapper)) => {
+                match wrapper.message {
+                    Some(notification::Message::Abort(m)) => {
+                        self.handle_abort(m, &request_id, ctx);
+                    }
+                    Some(notification::Message::Authenticate(m)) => {
+                        self.handle_authenticate(m);
+                    }
+                    Some(notification::Message::UpdatePreferences(m)) => {
+                        self.handle_update_preferences(m, ctx);
+                    }
+                    Some(notification::Message::SessionBootstrapped(m)) => {
+                        self.handle_session_bootstrapped(m);
+                    }
+                    Some(notification::Message::BufferEdit(m)) => {
+                        self.handle_buffer_edit(m, ctx);
+                    }
+                    Some(notification::Message::CloseBuffer(m)) => {
+                        self.handle_close_buffer(m, conn_id, ctx);
+                    }
+                    Some(notification::Message::UnsubscribeDiffState(m)) => {
+                        self.handle_unsubscribe_diff_state(m, conn_id, ctx);
+                    }
+                    Some(notification::Message::UpdateGitStatus(m)) => {
+                        self.handle_update_git_status(m, conn_id, ctx);
+                    }
+                    Some(notification::Message::UpdateGithubPrInfo(m)) => {
+                        self.handle_update_github_pr_info(m, ctx);
+                    }
+                    Some(notification::Message::UpdateGithubRepoInfo(m)) => {
+                        self.handle_update_github_repo_info(m, ctx);
+                    }
+                    None => {
+                        log::warn!("Notification with no inner message (request_id={request_id})");
+                    }
+                }
+                return; // Notifications never produce a response.
             }
             None => {
                 log::warn!(
                     "Received ClientMessage with no message variant (request_id={request_id})"
                 );
-                HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                    code: ErrorCode::InvalidRequest.into(),
-                    message: "ClientMessage had no message variant set".to_string(),
-                }))
+                (
+                    HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: "ClientMessage had no message variant set".to_string(),
+                    })),
+                    false,
+                )
             }
         };
+
+        // Track host-scoped requests for failover delivery.
+        if is_host_scoped && !request_id.is_empty() {
+            self.host_scoped_requests
+                .insert(request_id.clone(), conn_id);
+        }
 
         match outcome {
             HandlerOutcome::Sync(server_message::Message::InitializeResponse(response)) => {
@@ -1208,21 +1445,46 @@ impl ServerModel {
     ///   the request (used for all request/response pairs).
     /// - `conn_id = None` — broadcasts to every connected proxy (used for
     ///   server-initiated push notifications such as repo metadata updates).
+    ///
+    /// For host-scoped requests: if the target connection is gone, the
+    /// response is delivered through any other open connection. This
+    /// handles the case where a session disconnects while a host-scoped
+    /// request is still in flight.
     fn send_server_message(
-        &self,
+        &mut self,
         conn_id: Option<ConnectionId>,
         request_id: Option<&RequestId>,
         message: server_message::Message,
     ) {
+        // Sending a response is the terminal step of a host-scoped request,
+        // so we drop its failover-tracking entry here. We snapshot whether
+        // the request was tracked *before* removing it, because that decides
+        // whether the message is eligible for failover delivery below (and
+        // the removal would otherwise erase that signal). Push notifications
+        // (empty/absent request_id) are never tracked, so this is a no-op for
+        // them.
+        let is_host_scoped_response = request_id
+            .is_some_and(|rid| !rid.is_empty() && self.host_scoped_requests.contains_key(rid));
+        if let Some(rid) = request_id {
+            self.host_scoped_requests.remove(rid);
+        }
+
         let msg = ServerMessage {
             request_id: request_id.map(|id| id.clone().into()).unwrap_or_default(),
             message: Some(message),
         };
         if let Some(target) = conn_id {
             if let Some(conn_tx) = self.connection_senders.get(&target) {
-                if let Err(e) = conn_tx.try_send(msg) {
+                if let Err(e) = conn_tx.try_send(msg.clone()) {
                     log::warn!("Daemon: failed to send to conn {target}: {e}");
+                    if is_host_scoped_response {
+                        self.send_host_scoped_response_via_alternate_connection(target, msg);
+                    }
                 }
+            } else if is_host_scoped_response {
+                // Target connection is gone. Deliver the host-scoped
+                // response through any other open connection.
+                self.send_host_scoped_response_via_alternate_connection(target, msg);
             } else {
                 log::debug!("Daemon: no sender for conn {target} (already disconnected)");
             }
@@ -1234,6 +1496,36 @@ impl ServerModel {
                 }
             }
         }
+    }
+
+    /// Delivers a host-scoped response through a connected proxy other than
+    /// `target`. Used when the original connection has disappeared or its
+    /// outbound channel rejects the response.
+    fn send_host_scoped_response_via_alternate_connection(
+        &self,
+        target: ConnectionId,
+        msg: ServerMessage,
+    ) {
+        for (&alt_id, alt_tx) in &self.connection_senders {
+            if alt_id == target {
+                continue;
+            }
+            log::info!(
+                "Daemon: failover delivery for request_id={} from conn {target} to conn {alt_id}",
+                msg.request_id
+            );
+            match alt_tx.try_send(msg.clone()) {
+                Ok(()) => return,
+                Err(e) => {
+                    log::warn!("Daemon: failover delivery failed to conn {alt_id}: {e}");
+                }
+            }
+        }
+        log::warn!(
+            "Daemon: cannot deliver host-scoped response for request_id={}, \
+             no alternate connections available",
+            msg.request_id
+        );
     }
 
     /// Spawns an abortable future tied to `request_id` and wires up automatic
@@ -1272,17 +1564,24 @@ impl ServerModel {
     /// Handles `Initialize` by returning the server version and host id.
     ///
     /// Also configures Sentry crash reporting based on the user's identity
-    /// and preferences supplied by the connecting client.
+    /// and preferences supplied by the connecting client, and sends the
+    /// bundled skill catalog to the initializing connection when startup
+    /// parsing has already completed (otherwise the parse-completion
+    /// broadcast delivers it).
     #[cfg_attr(not(feature = "crash_reporting"), allow(unused_variables))]
     fn handle_initialize(
         &mut self,
         msg: Initialize,
         request_id: &RequestId,
+        conn_id: ConnectionId,
         ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
         log::info!("Handling Initialize (request_id={request_id})");
         self.apply_initialize_auth(&msg);
         Self::apply_codebase_index_limits(msg.codebase_index_limits.as_ref(), ctx);
+        CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.start_persisted_index_restore(ctx);
+        });
 
         // Update crash reporting based on client-supplied preferences.
         #[cfg(feature = "crash_reporting")]
@@ -1293,6 +1592,14 @@ impl ServerModel {
                 crate::crash_reporting::uninit_sentry();
             }
         }
+
+        // Push the bundled skill catalog to this connection if it is already
+        // parsed and the parse-completion broadcast didn't already deliver it
+        // (parsing can complete between this connection registering its
+        // sender and its `Initialize` being handled). Enqueued on the same
+        // channel as the response below, so the client buffers it as a push
+        // event during the handshake.
+        self.send_bundled_skills_snapshot_to_connection(conn_id);
 
         let server_version = ChannelState::app_version().unwrap_or("").to_string();
         HandlerOutcome::Sync(server_message::Message::InitializeResponse(
@@ -1452,6 +1759,11 @@ impl ServerModel {
     /// This is a notification — no response is sent.
     fn handle_abort(&mut self, abort: Abort, request_id: &RequestId, ctx: &mut ModelContext<Self>) {
         let target_id = RequestId::from(abort.request_id_to_abort);
+        // Drop any failover-tracking entry for the aborted request so it
+        // doesn't leak in `host_scoped_requests` until all connections drop.
+        // (A manager-side timeout sends `Abort` while sibling connections may
+        // still be alive, so `deregister_connection` won't clean it up.)
+        self.host_scoped_requests.remove(&target_id);
         if let Some(handle) = self.in_progress.remove(&target_id) {
             log::info!(
                 "Aborting in-progress request (request_id={target_id}, \
@@ -1716,6 +2028,14 @@ impl ServerModel {
                     StandardizedPath::from_local_canonicalized(Path::new(&indexed_path))
                 {
                     if is_git {
+                        // Navigation is the interest signal: record this
+                        // connection as subscribed to the repo, ensure the
+                        // per-repo git-status model exists, and opportunistically
+                        // push its current value before relying on watcher ticks
+                        // or explicit get-status notifications.
+                        me.subscribe_git_status(conn_id_for_response, &root_path);
+                        me.subscribe_to_git_status_updates(&root_path, ctx);
+                        me.push_git_status(&root_path, ctx);
                         let already_sent = me
                             .snapshot_sent_roots_by_connection
                             .get(&conn_id_for_response)
@@ -1727,6 +2047,11 @@ impl ServerModel {
                             );
                             return;
                         }
+                    } else {
+                        // Navigated out of any git repo: drop this connection's
+                        // subscription so the previously-current repo's models
+                        // are evicted once no connection remains in it.
+                        me.unsubscribe_git_status(conn_id_for_response);
                     }
 
                     let id = RepositoryIdentifier::local(root_path.clone());
@@ -1735,6 +2060,10 @@ impl ServerModel {
                         let entries = super::repo_metadata_proto::file_tree_entry_to_snapshot_proto(
                             &state.entry,
                         );
+                        let standing_results = repo_model
+                            .as_ref(ctx)
+                            .standing_query_results(&id, ctx)
+                            .map(|results| (&results.as_snapshot_delta()).into());
                         // Git snapshots target the requesting connection;
                         // non-git snapshots broadcast to all.
                         let target = if is_git {
@@ -1750,6 +2079,7 @@ impl ServerModel {
                                     repo_path: indexed_path,
                                     entries,
                                     sync_complete: true,
+                                    standing_results,
                                 },
                             ),
                         );
@@ -2361,7 +2691,7 @@ impl ServerModel {
 
     /// Converts a domain-level diff state dispatch to proto messages
     /// and sends them to the appropriate connections.
-    fn handle_diff_state_update(&self, update: &DiffStateUpdate) {
+    fn handle_diff_state_update(&mut self, update: &DiffStateUpdate) {
         match update {
             DiffStateUpdate::Snapshot {
                 repo_path,
@@ -2537,38 +2867,86 @@ impl ServerModel {
         );
 
         let request_id_for_response = request_id.clone();
+        let handle =
+            self.spawn_request_handler(
+                request_id.clone(),
+                async move {
+                    git::get_all_branches(&repo_path, max_branch_count, include_remotes).await
+                },
+                move |me, branches_result, _ctx| {
+                    let message = match branches_result {
+                        Ok(branches) => {
+                            server_message::Message::GetBranchesResponse(GetBranchesResponse {
+                                result: Some(super::proto::get_branches_response::Result::Success(
+                                    GetBranchesSuccess {
+                                        branches: branches
+                                            .into_iter()
+                                            .map(|entry| BranchInfo {
+                                                name: entry.name,
+                                                is_main: entry.is_main,
+                                            })
+                                            .collect(),
+                                    },
+                                )),
+                            })
+                        }
+                        Err(e) => {
+                            server_message::Message::GetBranchesResponse(GetBranchesResponse {
+                                result: Some(super::proto::get_branches_response::Result::Error(
+                                    GetBranchesError {
+                                        message: format!("{e:#}"),
+                                    },
+                                )),
+                            })
+                        }
+                    };
+                    me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+                },
+                ctx,
+            );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Handles `RipgrepSearch` — request/response backing global search in
+    /// remote sessions.
+    ///
+    /// Runs the same ripgrep subprocess used by local global search (the
+    /// daemon binary includes the `ripgrep-search` worker subcommand) over
+    /// the requested roots and responds with all matches once the search
+    /// completes, capped to bound response size. Cancellable via `Abort`
+    /// like other async handlers.
+    fn handle_ripgrep_search(
+        &mut self,
+        msg: RipgrepSearchRequest,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        log::info!(
+            "Handling RipgrepSearch ({} roots, request_id={request_id})",
+            msg.roots.len()
+        );
+
+        let params = match ripgrep_search::validate_request(msg) {
+            Ok(params) => params,
+            Err(message) => {
+                return HandlerOutcome::Sync(server_message::Message::RipgrepSearchResponse(
+                    ripgrep_search::error_response(message),
+                ));
+            }
+        };
+
+        let request_id_for_response = request_id.clone();
         let handle = self.spawn_request_handler(
             request_id.clone(),
-            async move {
-                crate::util::git::get_all_branches(&repo_path, max_branch_count, include_remotes)
-                    .await
-            },
-            move |me, branches_result, _ctx| {
-                let message = match branches_result {
-                    Ok(branches) => {
-                        server_message::Message::GetBranchesResponse(GetBranchesResponse {
-                            result: Some(super::proto::get_branches_response::Result::Success(
-                                GetBranchesSuccess {
-                                    branches: branches
-                                        .into_iter()
-                                        .map(|entry| BranchInfo {
-                                            name: entry.name,
-                                            is_main: entry.is_main,
-                                        })
-                                        .collect(),
-                                },
-                            )),
-                        })
-                    }
-                    Err(e) => server_message::Message::GetBranchesResponse(GetBranchesResponse {
-                        result: Some(super::proto::get_branches_response::Result::Error(
-                            GetBranchesError {
-                                message: format!("{e:#}"),
-                            },
-                        )),
-                    }),
-                };
-                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+            async move { ripgrep_search::run_search(params).await },
+            move |me, result, _ctx| {
+                let response = ripgrep_search::search_result_to_response(result);
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::RipgrepSearchResponse(response),
+                );
             },
             ctx,
         );
@@ -2677,6 +3055,604 @@ impl ServerModel {
                 )),
             },
         ))
+    }
+
+    /// Handles `GitCommitChainRequest` — runs the commit chain (commit, then
+    /// optionally push, then optionally create-PR) on the remote filesystem in
+    /// a single round trip, returning the post-chain delta (refreshed unpushed
+    /// commits + upstream) and any created PR.
+    fn handle_git_commit_chain(
+        &mut self,
+        msg: GitCommitChainRequest,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let repo_path = match requested_repo_path(&msg.repo_path) {
+            Ok(p) => p,
+            Err(e) => return invalid_request_response(e),
+        };
+        let mode = msg.mode();
+        log::info!(
+            "Handling CommitChain repo={} mode={mode:?} (request_id={request_id})",
+            msg.repo_path
+        );
+        let message = msg.message;
+        let include_unstaged = msg.include_unstaged;
+        let branch = msg.branch;
+        // The create-PR stage AI-generates the title/body only when the client
+        // asked for it. Capture the client on the main thread (ctx isn't
+        // available inside the spawned future) and only for the PR mode, so
+        // commit-only / commit-and-push never touch the AI path.
+        let ai_client = (matches!(mode, GitCommitChainMode::CommitAndCreatePr)
+            && msg.autogenerate_pr_content)
+            .then(|| ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client());
+        let chain_mode = CommitChainMode::from(mode);
+        let path_future = Self::interactive_path_future(ctx);
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                let path_env = path_future.await;
+                let path_env = path_env.as_deref();
+                // Daemon-side execution-time guard (the local dialog guards
+                // pre-emptively via the blocked-state check); the shared
+                // `git_actions` orchestration itself is guard-free.
+                if git::git_operation_in_progress(&repo_path) {
+                    anyhow::bail!(
+                        "another git operation is in progress (merge, rebase, cherry-pick, or a lock file is present)"
+                    );
+                }
+
+                git_actions::run_commit_chain(
+                    &repo_path,
+                    chain_mode,
+                    &message,
+                    include_unstaged,
+                    &branch,
+                    ai_client.as_deref(),
+                    path_env,
+                )
+                .await
+            },
+            move |me, result, _ctx| {
+                let message = match result {
+                    Ok((commits, upstream_ref, pr_info)) => {
+                        server_message::Message::GitCommitChainResponse(GitCommitChainResponse {
+                            result: Some(git_commit_chain_response::Result::Success(
+                                GitCommitChainSuccess {
+                                    delta: Some(GitOpDelta {
+                                        unpushed_commits: commits
+                                            .iter()
+                                            .map(super::proto::Commit::from)
+                                            .collect(),
+                                        upstream_ref,
+                                    }),
+                                    pr_info: pr_info.as_ref().map(super::proto::PrInfo::from),
+                                },
+                            )),
+                        })
+                    }
+                    Err(e) => {
+                        server_message::Message::GitCommitChainResponse(GitCommitChainResponse {
+                            result: Some(git_commit_chain_response::Result::Error(GitOpError {
+                                message: format!("{e:#}"),
+                            })),
+                        })
+                    }
+                };
+                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Handles `GitPushRequest` — runs `git push --set-upstream` on the remote
+    /// filesystem, then returns the refreshed unpushed/upstream delta.
+    fn handle_git_push(
+        &mut self,
+        msg: GitPushRequest,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let repo_path = match requested_repo_path(&msg.repo_path) {
+            Ok(p) => p,
+            Err(e) => return invalid_request_response(e),
+        };
+        log::info!(
+            "Handling Push repo={} branch={} (request_id={request_id})",
+            msg.repo_path,
+            msg.branch,
+        );
+        let branch = msg.branch;
+        let path_future = Self::interactive_path_future(ctx);
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                let path_env = path_future.await;
+                // Daemon-side execution-time guard; see `handle_git_commit_chain`.
+                if git::git_operation_in_progress(&repo_path) {
+                    anyhow::bail!(
+                        "another git operation is in progress (merge, rebase, cherry-pick, or a lock file is present)"
+                    );
+                }
+                git_actions::run_push(&repo_path, &branch, path_env.as_deref()).await
+            },
+            move |me, result, _ctx| {
+                let message = match result {
+                    Ok((commits, upstream_ref)) => {
+                        server_message::Message::GitPushResponse(GitPushResponse {
+                            result: Some(git_push_response::Result::Success(GitOpDelta {
+                                unpushed_commits: commits
+                                    .iter()
+                                    .map(super::proto::Commit::from)
+                                    .collect(),
+                                upstream_ref,
+                            })),
+                        })
+                    }
+                    Err(e) => server_message::Message::GitPushResponse(GitPushResponse {
+                        result: Some(git_push_response::Result::Error(GitOpError {
+                            message: format!("{e:#}"),
+                        })),
+                    }),
+                };
+                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Handles `GitCreatePrRequest` — runs `gh pr create` on the remote
+    /// filesystem and returns the created PR info.
+    fn handle_create_pr(
+        &mut self,
+        msg: GitCreatePrRequest,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let repo_path = match requested_repo_path(&msg.repo_path) {
+            Ok(p) => p,
+            Err(e) => return invalid_request_response(e),
+        };
+        log::info!(
+            "Handling CreatePr repo={} (request_id={request_id})",
+            msg.repo_path
+        );
+        let branch = msg.branch;
+        // Generate the PR title/body via AI only when the client asked for it
+        // and didn't already supply them. Reuses the same helper the local
+        // dialog uses, so local and remote PRs are produced identically
+        // (AI-with-`--fill`-fallback). The daemon's `ServerApiProvider` is
+        // authenticated with the user's forwarded bearer token.
+        let ai_client = msg
+            .autogenerate_content
+            .then(|| ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client());
+        let path_future = Self::interactive_path_future(ctx);
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                let path_env = path_future.await;
+                if git::git_operation_in_progress(&repo_path) {
+                    anyhow::bail!(
+                        "another git operation is in progress (merge, rebase, cherry-pick, or a lock file is present)"
+                    );
+                }
+                git_actions::create_pr(&repo_path, &branch, ai_client.as_deref(), path_env.as_deref())
+                    .await
+            },
+            move |me, result, _ctx| {
+                let message = match result {
+                    Ok(pr) => server_message::Message::GitCreatePrResponse(GitCreatePrResponse {
+                        result: Some(git_create_pr_response::Result::Success(
+                            super::proto::PrInfo::from(&pr),
+                        )),
+                    }),
+                    Err(e) => server_message::Message::GitCreatePrResponse(GitCreatePrResponse {
+                        result: Some(git_create_pr_response::Result::Error(GitOpError {
+                            message: format!("{e:#}"),
+                        })),
+                    }),
+                };
+                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Handles `GitGetCommittedBranchFilesRequest` — computes the committed
+    /// branch diff (`merge_base(HEAD, main)..HEAD`) on the remote filesystem
+    /// and returns the per-file change entries for the Create PR dialog's
+    /// Changes box. Committed-only, so it excludes uncommitted/untracked files.
+    fn handle_get_committed_branch_files(
+        &mut self,
+        msg: GitGetCommittedBranchFilesRequest,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let repo_path = match requested_repo_path(&msg.repo_path) {
+            Ok(p) => p,
+            Err(e) => return invalid_request_response(e),
+        };
+        log::info!(
+            "Handling GetCommittedBranchFiles repo={} (request_id={request_id})",
+            msg.repo_path
+        );
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move { git::get_committed_branch_file_entries(&repo_path).await },
+            move |me, result, _ctx| {
+                let message = match result {
+                    Ok(files) => server_message::Message::GitGetCommittedBranchFilesResponse(
+                        GitGetCommittedBranchFilesResponse {
+                            result: Some(git_get_committed_branch_files_response::Result::Success(
+                                GitGetCommittedBranchFilesSuccess {
+                                    files: files
+                                        .iter()
+                                        .map(super::proto::FileChangeEntry::from)
+                                        .collect(),
+                                },
+                            )),
+                        },
+                    ),
+                    Err(e) => server_message::Message::GitGetCommittedBranchFilesResponse(
+                        GitGetCommittedBranchFilesResponse {
+                            result: Some(git_get_committed_branch_files_response::Result::Error(
+                                GitOpError {
+                                    message: format!("{e:#}"),
+                                },
+                            )),
+                        },
+                    ),
+                };
+                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Handles `GitGenerateCommitMessageRequest` — computes the working-tree
+    /// diff locally, then calls the Warp server's code-review content endpoint
+    /// via the daemon's authenticated `AIClient` and returns the generated
+    /// message.
+    fn handle_generate_git_commit_message(
+        &mut self,
+        msg: GitGenerateCommitMessageRequest,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let repo_path = match requested_repo_path(&msg.repo_path) {
+            Ok(p) => p,
+            Err(e) => return invalid_request_response(e),
+        };
+        log::info!(
+            "Handling GenerateCommitMessage repo={} (request_id={request_id})",
+            msg.repo_path
+        );
+        let include_unstaged = msg.include_unstaged;
+        let branch_name = msg.branch_name;
+        let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                git_actions::generate_commit_message(
+                    &repo_path,
+                    &branch_name,
+                    include_unstaged,
+                    ai_client.as_ref(),
+                )
+                .await
+            },
+            move |me, result, _ctx| {
+                let message = match result {
+                    Ok(message) => server_message::Message::GitGenerateCommitMessageResponse(
+                        GitGenerateCommitMessageResponse {
+                            result: Some(git_generate_commit_message_response::Result::Message(
+                                message,
+                            )),
+                        },
+                    ),
+                    Err(e) => server_message::Message::GitGenerateCommitMessageResponse(
+                        GitGenerateCommitMessageResponse {
+                            result: Some(git_generate_commit_message_response::Result::Error(
+                                GitOpError {
+                                    message: format!("{e:#}"),
+                                },
+                            )),
+                        },
+                    ),
+                };
+                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Subscribes the daemon to per-repo local git status updates. On first
+    /// creation it wires model events to broadcast a `GitStatusPush`. No-op if
+    /// already subscribed, or when the repo is not yet a watched repository;
+    /// the next navigation or explicit snapshot request will try again.
+    fn subscribe_to_git_status_updates(
+        &mut self,
+        repo_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.git_status_models.contains_key(repo_path) {
+            return;
+        }
+        let repo = LocalOrRemotePath::Local(repo_path.to_local_path_lossy());
+        let handle = match GitRepoModels::handle(ctx)
+            .update(ctx, |factory, ctx| factory.subscribe(&repo, ctx))
+        {
+            Ok(handle) => handle,
+            Err(e) => {
+                log::warn!("Daemon: git status subscribe failed for {repo_path}: {e}");
+                return;
+            }
+        };
+
+        let path_for_sub = repo_path.clone();
+        ctx.subscribe_to_model(&handle, move |me, _, _event, ctx| {
+            let proto_metadata = {
+                let Some(handle) = me.git_status_models.get(&path_for_sub) else {
+                    return;
+                };
+                let Some(metadata) = handle.as_ref(ctx).metadata(ctx) else {
+                    return;
+                };
+                metadata.into()
+            };
+            me.send_server_message(
+                None,
+                None,
+                server_message::Message::GitStatusPush(GitStatusPush {
+                    repo_path: path_for_sub.to_string(),
+                    metadata: Some(proto_metadata),
+                }),
+            );
+        });
+
+        self.git_status_models.insert(repo_path.clone(), handle);
+    }
+
+    /// Subscribe `conn` to `repo`'s git status (navigation in), moving it off
+    /// any repo it was previously in. Pure bookkeeping — the caller ensures the
+    /// per-repo git-status model exists via `subscribe_to_git_status_updates`.
+    fn subscribe_git_status(&mut self, conn: ConnectionId, repo: &StandardizedPath) {
+        match self.git_status_repo_by_conn.get(&conn) {
+            Some(prev) if prev == repo => return,
+            Some(prev) => {
+                let prev = prev.clone();
+                self.drop_subscription(&prev, conn);
+            }
+            None => {}
+        }
+        self.git_status_repo_by_conn.insert(conn, repo.clone());
+        self.git_status_subscribers
+            .entry(repo.clone())
+            .or_default()
+            .insert(conn);
+    }
+
+    /// Unsubscribe `conn` from its current repo (navigation out of git, or
+    /// disconnect). A connection is in at most one repo, so this single method
+    /// also serves as the disconnect sweep.
+    fn unsubscribe_git_status(&mut self, conn: ConnectionId) {
+        if let Some(repo) = self.git_status_repo_by_conn.remove(&conn) {
+            self.drop_subscription(&repo, conn);
+        }
+    }
+
+    /// Remove one `(repo, conn)` subscription, evicting the per-repo git-status
+    /// and GitHub-info models once the repo has no subscribers left. The local
+    /// models' `Drop` impls reclaim the filesystem watcher and the `gh` timer.
+    fn drop_subscription(&mut self, repo: &StandardizedPath, conn: ConnectionId) {
+        let Some(subscribers) = self.git_status_subscribers.get_mut(repo) else {
+            return;
+        };
+        subscribers.remove(&conn);
+        if subscribers.is_empty() {
+            self.git_status_subscribers.remove(repo);
+            // Drop the GitHub model first so it releases its strong handle to
+            // the sibling git-status model, then drop the git-status model.
+            self.github_repo_models.remove(repo);
+            self.git_status_models.remove(repo);
+        }
+    }
+
+    /// Handles `UpdateGitStatus` notification (fire-and-forget).
+    fn handle_update_git_status(
+        &mut self,
+        msg: UpdateGitStatus,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let std_path = match StandardizedPath::from_local_canonicalized(Path::new(&msg.repo_path)) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("Invalid repo_path for UpdateGitStatus: {e}");
+                return;
+            }
+        };
+
+        // This notification rides an arbitrary connection for the host, so it
+        // says nothing about which repo the connection's session is in.
+        // Register only when the connection is untracked, which keeps the requested repo's model
+        // alive across reconnect until `NavigatedToDirectory` lands.
+        if !self.git_status_repo_by_conn.contains_key(&conn_id) {
+            self.subscribe_git_status(conn_id, &std_path);
+            self.subscribe_to_git_status_updates(&std_path, ctx);
+        }
+        self.push_git_status(&std_path, ctx);
+    }
+
+    fn push_git_status(&mut self, repo_path: &StandardizedPath, ctx: &mut ModelContext<Self>) {
+        let Some(handle) = self.git_status_models.get(repo_path) else {
+            return;
+        };
+        let Some(metadata) = handle.as_ref(ctx).metadata(ctx) else {
+            return;
+        };
+        let proto_metadata = metadata.into();
+        self.send_server_message(
+            None,
+            None,
+            server_message::Message::GitStatusPush(GitStatusPush {
+                repo_path: repo_path.to_string(),
+                metadata: Some(proto_metadata),
+            }),
+        );
+    }
+
+    /// Handles the `UpdateGitHubPrInfo` notification (fire-and-forget).
+    ///
+    /// Ensures the per-repo `GitHubRepoModel` exists and refreshes PR info.
+    fn handle_update_github_pr_info(
+        &mut self,
+        msg: UpdateGitHubPrInfo,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let std_path = match StandardizedPath::from_local_canonicalized(Path::new(&msg.repo_path)) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("Invalid repo_path for UpdateGitHubPrInfo: {e}");
+                return;
+            }
+        };
+        let already_tracked = self.github_repo_models.contains_key(&std_path);
+        self.subscribe_to_github_info_updates(&std_path, ctx);
+        if already_tracked {
+            if let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
+                handle.update(ctx, |model, ctx| model.refresh_pr_info(ctx));
+            }
+        }
+    }
+
+    /// Handles the `UpdateGitHubRepoInfo` notification (fire-and-forget).
+    ///
+    /// Ensures the per-repo `GitRepoModel` exists and refreshes repo info.
+    fn handle_update_github_repo_info(
+        &mut self,
+        msg: UpdateGitHubRepoInfo,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let std_path = match StandardizedPath::from_local_canonicalized(Path::new(&msg.repo_path)) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("Invalid repo_path for UpdateGitHubRepoInfo: {e}");
+                return;
+            }
+        };
+        let already_tracked = self.github_repo_models.contains_key(&std_path);
+        self.subscribe_to_github_info_updates(&std_path, ctx);
+        if already_tracked {
+            if let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
+                handle.update(ctx, |model, ctx| model.refresh_repository_info(ctx));
+            }
+        }
+    }
+
+    fn push_github_pr_info(&mut self, repo_path: &StandardizedPath, ctx: &mut ModelContext<Self>) {
+        let Some(handle) = self.github_repo_models.get(repo_path) else {
+            return;
+        };
+        let pr_info = handle.as_ref(ctx).pr_info(ctx).map(Into::into);
+        self.send_server_message(
+            None,
+            None,
+            server_message::Message::GithubPrInfoPush(GitHubPrInfoPush {
+                repo_path: repo_path.to_string(),
+                pr_info,
+            }),
+        );
+    }
+
+    fn push_github_repository_info(
+        &mut self,
+        repo_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(handle) = self.github_repo_models.get(repo_path) else {
+            return;
+        };
+        let repository_info = handle.as_ref(ctx).repository_info(ctx).map(Into::into);
+        self.send_server_message(
+            None,
+            None,
+            server_message::Message::GithubRepositoryInfoPush(GitHubRepositoryInfoPush {
+                repo_path: repo_path.to_string(),
+                repository_info,
+            }),
+        );
+    }
+
+    /// Subscribes the daemon to per-repo local GitHub info updates. On first
+    /// creation it wires model events to broadcast separate PR-info and
+    /// repository-info pushes. No-op if already subscribed, or when the repo is
+    /// not yet a watched repository
+    /// (the client requests another snapshot on `HostConnected`).
+    fn subscribe_to_github_info_updates(
+        &mut self,
+        repo_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.github_repo_models.contains_key(repo_path) {
+            return;
+        }
+        let repo = LocalOrRemotePath::Local(repo_path.to_local_path_lossy());
+        let handle = match GitRepoModels::handle(ctx).update(ctx, |factory, ctx| {
+            factory.subscribe_github_repo(&repo, ctx)
+        }) {
+            Ok(handle) => handle,
+            Err(e) => {
+                log::warn!("Daemon: github repo subscribe failed for {repo_path}: {e}");
+                return;
+            }
+        };
+
+        let path_for_sub = repo_path.clone();
+        ctx.subscribe_to_model(&handle, move |me, _, event, ctx| match event {
+            GitHubRepoEvent::PrInfoChanged => me.push_github_pr_info(&path_for_sub, ctx),
+            GitHubRepoEvent::RepositoryInfoChanged => {
+                me.push_github_repository_info(&path_for_sub, ctx)
+            }
+        });
+
+        self.github_repo_models.insert(repo_path.clone(), handle);
+    }
+
+    /// Returns a future resolving to the host's interactive login-shell PATH
+    /// (or `None` → the daemon process PATH). Delegates to the singleton
+    /// `LocalShellState`, which captures lazily through the host's shell,
+    /// caches the result, and dedups concurrent callers — so daemon-run `gh` /
+    /// hooks / `git-lfs` resolve the same tooling the user has interactively.
+    /// Yields `None` on builds without a local tty.
+    fn interactive_path_future(
+        ctx: &mut ModelContext<Self>,
+    ) -> futures::future::BoxFuture<'static, Option<String>> {
+        #[cfg(feature = "local_tty")]
+        {
+            LocalShellState::handle(ctx).update(ctx, |s, ctx| s.get_interactive_path_env_var(ctx))
+        }
+        #[cfg(not(feature = "local_tty"))]
+        {
+            use futures::FutureExt;
+            let _ = ctx;
+            futures::future::ready(None).boxed()
+        }
     }
 }
 

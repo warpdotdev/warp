@@ -1,16 +1,16 @@
 use ui_components::{button, Component as _, Options as _};
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{
+use warpui_core::elements::{
     ClippedScrollStateHandle, Container, CrossAxisAlignment, Flex, FormattedTextElement,
     MainAxisSize, MouseStateHandle, ParentElement,
 };
-use warpui::fonts::Weight;
-use warpui::keymap::Keystroke;
-use warpui::prelude::Align;
-use warpui::text_layout::TextAlignment;
-use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
-use warpui::{
+use warpui_core::fonts::Weight;
+use warpui_core::keymap::Keystroke;
+use warpui_core::prelude::Align;
+use warpui_core::text_layout::TextAlignment;
+use warpui_core::ui_components::components::{UiComponent as _, UiComponentStyles};
+use warpui_core::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
     ViewContext,
 };
@@ -111,8 +111,9 @@ impl ThirdPartySlide {
         cli_toolbar_enabled: bool,
         show_agent_notifications: bool,
         intention: OnboardingIntention,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        let bottom_nav = Align::new(self.render_bottom_nav(appearance, intention)).finish();
+        let bottom_nav = Align::new(self.render_bottom_nav(appearance, app)).finish();
 
         let mut sections = vec![
             self.render_header(appearance),
@@ -263,11 +264,7 @@ impl ThirdPartySlide {
         .finish()
     }
 
-    fn render_bottom_nav(
-        &self,
-        appearance: &Appearance,
-        intention: OnboardingIntention,
-    ) -> Box<dyn Element> {
+    fn render_bottom_nav(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
@@ -298,8 +295,7 @@ impl ThirdPartySlide {
             },
         );
 
-        let is_terminal = matches!(intention, OnboardingIntention::Terminal);
-        let (step_index, step_count) = if is_terminal { (2, 4) } else { (3, 5) };
+        let (step_index, step_count) = self.onboarding_state.as_ref(app).progress();
         bottom_nav::onboarding_bottom_nav(
             appearance,
             step_index,
@@ -361,6 +357,7 @@ impl View for ThirdPartySlide {
                     cli_toolbar_enabled,
                     show_agent_notifications,
                     intention,
+                    app,
                 )
             },
             || self.render_visual(cli_toolbar_enabled, show_agent_notifications, vertical),

@@ -77,6 +77,8 @@ fn default_onnx_model() -> Option<OnnxModel> {
             Some(OnnxModel::BertTinyV1)
         } else if #[cfg(feature = "nld_classifier_v2")] {
             Some(OnnxModel::BertTinyV2)
+        } else if #[cfg(feature = "nld_classifier_v3")] {
+            Some(OnnxModel::BertTinyV3)
         } else {
             None
         }

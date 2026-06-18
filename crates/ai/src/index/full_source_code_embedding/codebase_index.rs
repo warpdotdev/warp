@@ -11,10 +11,10 @@ use futures::stream::AbortHandle;
 use ignore::gitignore::Gitignore;
 use instant::Instant;
 #[cfg(feature = "local_fs")]
-use repo_metadata::entry::IgnoredPathStrategy;
+use repo_metadata::entry::{BudgetExceededBehavior, IgnoredPathStrategy};
 use repo_metadata::Repository;
 use warp_core::safe_error;
-use warpui::{Entity, ModelContext, ModelHandle};
+use warpui_core::{Entity, ModelContext, ModelHandle};
 
 use super::fragment_metadata::{
     FragmentMetadata, LeafToFragmentMetadata, LeafToFragmentMetadataUpdates,
@@ -51,8 +51,8 @@ cfg_if::cfg_if! {
         };
         use warp_core::send_telemetry_from_ctx;
         use warp_core::interval_timer::IntervalTimer;
-        use warpui::r#async::Timer;
-        use warpui::SingletonEntity;
+        use warpui_core::r#async::Timer;
+        use warpui_core::SingletonEntity;
         use warp_core::sync_queue::SyncQueue;
         use sha2::Digest;
     }
@@ -936,6 +936,9 @@ impl CodebaseIndex {
         // First traverse the repo path to retrieve all files we want to parse.
         let mut files = Vec::new();
         let mut remaining_file_quotas = max_num_files_limit;
+        // Codebase embedding must not operate on a partial tree: the file limit
+        // is an intentional cost cap, so exceeding it fails the build rather
+        // than silently indexing a breadth-first subset of the repository.
         let entry = Entry::build_tree(
             &repo_path,
             &mut files,
@@ -944,6 +947,7 @@ impl CodebaseIndex {
             MAX_DEPTH,
             0,
             &IgnoredPathStrategy::Exclude, // override_ignore_for_files
+            BudgetExceededBehavior::FailFast,
         )?;
 
         Ok(BuildFileTreeResult {

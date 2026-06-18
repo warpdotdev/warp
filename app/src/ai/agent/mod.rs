@@ -34,6 +34,7 @@ use session_sharing_protocol::common::ParticipantId;
 use task::TaskId;
 pub use telemetry::AIIdentifiers;
 use uuid::Uuid;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_editor::render::model::LineCount;
 use warp_multi_agent_api::{diff_hunk as diff_hunk_api, AgentEvent, AgentType};
@@ -49,7 +50,7 @@ use crate::code_review::comments::{
     AttachedReviewComment as CodeReviewComment, ReviewCommentBatch,
 };
 use crate::search::slash_command_menu::static_commands::commands;
-use crate::server::server_api::AIApiError;
+use crate::server::server_api::{AIApiError, DeserializationError};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
@@ -102,6 +103,12 @@ pub enum CancellationReason {
     /// The long-running command completed while the agent was still streaming.
     /// This should be treated as a successful completion, not a cancellation.
     OptimisticCLISubagentCompletion,
+
+    /// The user manually took control of a long-running command away from the agent.
+    /// The agent conversation is still in progress — it will resume after the command
+    /// finishes or once the user hands control back. The stream is cancelled only to
+    /// stop the CLI subagent monitoring loop, not to end the conversation.
+    CLISubagentUserTakeover,
 }
 
 impl Display for CancellationReason {
@@ -115,6 +122,9 @@ impl Display for CancellationReason {
             CancellationReason::Deleted => write!(f, "deleted"),
             CancellationReason::OptimisticCLISubagentCompletion => {
                 write!(f, "LRC command completed")
+            }
+            CancellationReason::CLISubagentUserTakeover => {
+                write!(f, "CLI subagent user takeover")
             }
         }
     }
@@ -142,6 +152,19 @@ impl CancellationReason {
 
     pub fn is_lrc_command_completed(&self) -> bool {
         matches!(self, CancellationReason::OptimisticCLISubagentCompletion)
+    }
+
+    /// Returns true when the stream was cancelled because the user took manual
+    /// control of the long-running command. The conversation remains in progress
+    /// and the ambient agent task should not be reported as cancelled.
+    pub fn is_cli_subagent_user_takeover(&self) -> bool {
+        matches!(self, CancellationReason::CLISubagentUserTakeover)
+    }
+
+    /// Returns true when the stream cancellation should NOT transition the
+    /// conversation status away from InProgress.
+    pub fn should_preserve_in_progress_status(&self) -> bool {
+        self.is_follow_up_for_same_conversation() || self.is_cli_subagent_user_takeover()
     }
 }
 
@@ -616,10 +639,9 @@ impl AIAgentOutput {
 }
 
 /// Represents user visible errors.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 pub enum RenderableAIError {
     QuotaLimit {
-        #[serde(default)]
         user_display_message: Option<String>,
     },
     ServerOverloaded,
@@ -632,16 +654,52 @@ pub enum RenderableAIError {
     AwsBedrockCredentialsExpiredOrInvalid {
         model_name: String,
     },
+    /// A transient network failure (lost connection or truncated response stream). Carries its
+    /// own complete user-facing copy; `kind` preserves the structured cause (including the raw
+    /// API error) so user reports can disambiguate the different causes behind the shared message.
+    TransientNetworkError {
+        kind: TransientNetworkErrorKind,
+        will_attempt_resume: bool,
+        /// When `will_attempt_resume` is true, this indicates whether we're waiting for network
+        /// connectivity before attempting the resume.
+        waiting_for_network: bool,
+    },
     Other {
         error_message: String,
         will_attempt_resume: bool,
         /// When `will_attempt_resume` is true, this indicates whether we're waiting for network
         /// connectivity before attempting the resume.
         waiting_for_network: bool,
+        /// True when the error originates from a user-side issue (e.g., model not allowed,
+        /// blocked due to fraud, plan restriction). Maps the task to FAILED state instead of ERROR.
+        is_user_error: bool,
     },
 }
 
 impl RenderableAIError {
+    const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
+        "Warp lost connection while receiving the agent response. This is usually temporary.";
+    /// Creates a transient network error. `kind` is the structured cause (including the raw API
+    /// error where one exists), preserved so user reports can disambiguate the different causes
+    /// behind the shared user-facing copy.
+    pub fn transient_network_error(
+        will_attempt_resume: bool,
+        waiting_for_network: bool,
+        kind: TransientNetworkErrorKind,
+    ) -> Self {
+        Self::TransientNetworkError {
+            kind,
+            will_attempt_resume,
+            waiting_for_network,
+        }
+    }
+
+    fn is_transient_network_transport_error(error: &reqwest::Error) -> bool {
+        // If reqwest has an HTTP status, the server responded. Preserve the existing generic
+        // rendering for those failures rather than calling them lost connections.
+        error.status().is_none()
+    }
+
     pub fn is_invalid_api_key(&self) -> bool {
         matches!(self, Self::InvalidApiKey { .. })
     }
@@ -657,24 +715,86 @@ impl RenderableAIError {
             Self::Other {
                 will_attempt_resume: true,
                 ..
+            } | Self::TransientNetworkError {
+                will_attempt_resume: true,
+                ..
             }
         )
     }
+
+    /// Whether the failed-output UI should be suppressed while an automatic resume is in
+    /// flight. Release builds stay quiet so transient blips that recover on their own
+    /// don't surface an alarming error; dogfood builds (Local/Dev) keep the old, more
+    /// aggressive behavior so developers still see every transport failure.
+    pub fn should_suppress_during_recovery(&self) -> bool {
+        self.will_attempt_resume() && !ChannelState::channel().is_dogfood()
+    }
 }
 
-impl From<&AIApiError> for RenderableAIError {
-    fn from(value: &AIApiError) -> Self {
-        match value {
+/// The cause behind a [`RenderableAIError::TransientNetworkError`]. Kept structured (rather than
+/// collapsed to a free-form string) so user reports preserve the raw error; rendered to text only
+/// at display time.
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum TransientNetworkErrorKind {
+    /// A lost connection or truncated response stream — the raw underlying API error. Rendered via
+    /// `Debug` so reports preserve the full structured error rather than its terse `Display`.
+    #[error("{0:?}")]
+    Api(Arc<AIApiError>),
+    /// The response stream completed with an unfinished exchange and no error event.
+    #[error("stream completed with an unfinished exchange and no error event")]
+    UnfinishedExchange,
+    /// The conversation was left in a transient-error state but the last exchange carried no
+    /// structured error to surface.
+    #[error("no structured error on the last exchange")]
+    MissingExchangeError,
+}
+
+impl From<&Arc<AIApiError>> for RenderableAIError {
+    fn from(value: &Arc<AIApiError>) -> Self {
+        // Non-retryable 4xx errors (403 fraud block, 400 model/plan restriction, etc.)
+        // are user-originating — map them to a user error so the task reaches FAILED
+        // state rather than ERROR state.
+        let is_user_error = !value.is_recoverable();
+        match value.as_ref() {
             AIApiError::QuotaLimit {
                 user_display_message,
             } => Self::QuotaLimit {
                 user_display_message: user_display_message.clone(),
             },
             AIApiError::ServerOverloaded => Self::ServerOverloaded,
-            _ => Self::Other {
+            AIApiError::Transport(error)
+            | AIApiError::Deserialization(DeserializationError::Transport(error)) => {
+                // A transport error with no HTTP status is a lost-connection failure; one that
+                // carries a status means the server responded, so it gets generic rendering.
+                if Self::is_transient_network_transport_error(error) {
+                    Self::transient_network_error(
+                        false,
+                        false,
+                        TransientNetworkErrorKind::Api(value.clone()),
+                    )
+                } else {
+                    Self::Other {
+                        error_message: format!("Request failed with error: {value:?}"),
+                        will_attempt_resume: false,
+                        waiting_for_network: false,
+                        is_user_error,
+                    }
+                }
+            }
+            AIApiError::UnexpectedEof => Self::transient_network_error(
+                false,
+                false,
+                TransientNetworkErrorKind::Api(value.clone()),
+            ),
+            AIApiError::Deserialization(DeserializationError::Json(_))
+            | AIApiError::NoContextFound
+            | AIApiError::ErrorStatus(_, _)
+            | AIApiError::Other(_)
+            | AIApiError::Stream { .. } => Self::Other {
                 error_message: format!("Request failed with error: {value:?}"),
                 will_attempt_resume: false,
                 waiting_for_network: false,
+                is_user_error,
             },
         }
     }
@@ -706,6 +826,13 @@ impl Display for RenderableAIError {
                 write!(
                     f,
                     "AWS Bedrock credentials expired or invalid for {model_name}"
+                )
+            }
+            Self::TransientNetworkError { kind, .. } => {
+                write!(
+                    f,
+                    "{}\n\nDebug info: {kind}",
+                    Self::TRANSIENT_NETWORK_ERROR_MESSAGE
                 )
             }
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
@@ -2642,7 +2769,7 @@ impl Display for AIAgentInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UserQuery { .. } => {
-                write!(f, "UserQuery: {}", self.user_query().unwrap_or_default())
+                write!(f, "UserQuery: {}", self.display_query().unwrap_or_default())
             }
             Self::AutoCodeDiffQuery { query, .. } => {
                 write!(f, "AutoCodeDiffQuery: {query}")
@@ -2684,7 +2811,11 @@ impl Display for AIAgentInput {
 }
 
 impl AIAgentInput {
-    pub fn user_query(&self) -> Option<String> {
+    /// Display text for any input that surfaces a prompt-like query in the UI
+    /// (typed queries, slash commands, skill invocations, etc.). Unlike
+    /// [`Self::is_user_query`], which strictly matches the `UserQuery` variant,
+    /// this returns `Some` for several input variants.
+    pub fn display_query(&self) -> Option<String> {
         match self {
             Self::UserQuery {
                 query,
@@ -2747,7 +2878,7 @@ impl AIAgentInput {
         &self,
         initial_conversation_query: Option<&String>,
     ) -> Option<String> {
-        let mut query = self.user_query()?;
+        let mut query = self.display_query()?;
         if self
             .user_query_mode()
             .is_none_or(|mode| matches!(mode, UserQueryMode::Normal))
@@ -2974,7 +3105,7 @@ impl AIAgentExchange {
         let user_queries: Vec<String> = self
             .input
             .iter()
-            .filter_map(|input| input.user_query())
+            .filter_map(|input| input.display_query())
             .collect();
         user_queries.join("\n")
     }
@@ -3024,7 +3155,9 @@ impl AIAgentExchange {
     }
 
     pub fn has_user_query(&self) -> bool {
-        self.input.iter().any(|input| input.user_query().is_some())
+        self.input
+            .iter()
+            .any(|input| input.display_query().is_some())
     }
 
     pub fn has_accepted_file_edit(&self) -> bool {

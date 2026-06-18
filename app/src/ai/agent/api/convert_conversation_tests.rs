@@ -26,6 +26,7 @@ fn test_server_metadata(
             was_summarized: false,
             context_window_usage: 0.0,
             credits_spent: 0.0,
+            platform_credits_spent: 0.0,
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
@@ -42,6 +43,7 @@ fn test_server_metadata(
             current_editor_uid: None,
         },
         permissions: ServerPermissions::mock_personal(),
+        creator: None,
         ambient_agent_task_id,
         server_conversation_token: ServerConversationToken::new(server_token.to_string()),
         artifacts: vec![],
@@ -528,7 +530,7 @@ fn test_invoke_skill_arguments_round_trip() {
                 Some("arg1 arg2")
             );
             assert_eq!(
-                exchanges[0].input[0].user_query().as_deref(),
+                exchanges[0].input[0].display_query().as_deref(),
                 Some("/test-skill arg1 arg2")
             );
         }
@@ -572,7 +574,7 @@ fn test_invoke_skill_missing_user_query_maps_to_none() {
             assert_eq!(skill.name, "test-skill");
             assert_eq!(user_query, &None);
             assert_eq!(
-                exchanges[0].input[0].user_query().as_deref(),
+                exchanges[0].input[0].display_query().as_deref(),
                 Some("/test-skill")
             );
         }

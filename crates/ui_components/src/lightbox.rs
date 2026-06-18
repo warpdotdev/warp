@@ -3,13 +3,13 @@ use std::sync::Arc;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
-use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{
+use warpui_core::assets::asset_cache::AssetSource;
+use warpui_core::elements::{
     CacheOption, Dismiss, DispatchEventResult, EventHandler, Image, Shrinkable,
 };
-use warpui::keymap::Keystroke;
-use warpui::prelude::stack::*;
-use warpui::prelude::*;
+use warpui_core::keymap::Keystroke;
+use warpui_core::prelude::stack::*;
+use warpui_core::prelude::*;
 
 use crate::{Component, Options as _, button};
 

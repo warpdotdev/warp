@@ -653,13 +653,30 @@ fn codex_command_with_session_id_invokes_resume_subcommand() {
     let cmd = codex_command("codex", Some(&uuid), "/tmp/prompt.txt");
     assert!(
         cmd.contains(&format!(
-            "resume --dangerously-bypass-approvals-and-sandbox {uuid}"
+            "resume --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust {uuid}"
         )),
         "resume command should pass UUID to `resume`: {cmd}"
     );
     assert!(
         cmd.contains("\"$(cat '/tmp/prompt.txt')\""),
         "resume command should pipe prompt: {cmd}"
+    );
+}
+
+#[test]
+fn codex_command_without_session_id_bypasses_hook_trust() {
+    let cmd = codex_command("codex", None, "/tmp/prompt.txt");
+    assert!(
+        cmd.contains("--dangerously-bypass-approvals-and-sandbox"),
+        "command should bypass approvals and sandbox: {cmd}"
+    );
+    assert!(
+        cmd.contains("--dangerously-bypass-hook-trust"),
+        "command should bypass hook trust for driver-installed hooks: {cmd}"
+    );
+    assert!(
+        cmd.contains("\"$(cat '/tmp/prompt.txt')\""),
+        "command should pipe prompt: {cmd}"
     );
 }
 

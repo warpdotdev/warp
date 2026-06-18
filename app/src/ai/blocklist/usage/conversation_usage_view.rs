@@ -38,6 +38,7 @@ pub enum DisplayMode {
 
 pub struct ConversationUsageInfo {
     pub credits_spent: f32,
+    pub platform_credits_spent: f32,
     // Credits spent over the last block, where the block comprises
     // all agent outputs since the most recent user input.
     pub credits_spent_for_last_block: Option<f32>,
@@ -299,7 +300,7 @@ impl ConversationUsageView {
         let total_credits_value = rollup
             .as_ref()
             .map(|r| r.total_credits)
-            .unwrap_or(self.usage_info.credits_spent);
+            .unwrap_or(self.usage_info.credits_spent + self.usage_info.platform_credits_spent);
 
         if self.display_mode == DisplayMode::Footer
             && self.usage_info.credits_spent_for_last_block.is_some()

@@ -17,7 +17,7 @@ use warp::sqlite_testing::set_user_and_hostname_for_commands;
 use warp::terminal::input::Input;
 use warp::terminal::model::session::get_local_hostname;
 use warp::terminal::shell::ShellType;
-use warpui::{async_assert, ViewHandle};
+use warpui_core::{async_assert, ViewHandle};
 
 use super::{new_builder, TEST_ONLY_ASSETS};
 use crate::util::{get_local_user, write_histfiles_for_test};

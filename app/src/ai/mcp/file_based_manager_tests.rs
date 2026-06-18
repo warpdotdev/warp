@@ -64,7 +64,7 @@ fn subscribe_events(
 ) -> ModelHandle<ManagerEvents> {
     let events = app.add_model(|_| ManagerEvents::default());
     events.update(app, |_, ctx| {
-        ctx.subscribe_to_model(manager, |me, event, _| match event {
+        ctx.subscribe_to_model(manager, |me, _, event, _| match event {
             FileBasedMCPManagerEvent::SpawnServers { installations } => me
                 .spawned_uuids
                 .extend(installations.iter().map(|i| i.uuid())),

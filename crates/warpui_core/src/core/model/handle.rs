@@ -218,7 +218,9 @@ impl<T: Entity> WeakModelHandle<T> {
     }
 
     pub fn upgrade(&self, app: &AppContext) -> Option<ModelHandle<T>> {
-        if app.models.contains_key(&self.model_id) {
+        if app.models.contains_key(&self.model_id)
+            && !app.ref_counts.lock().is_model_dropped(self.model_id)
+        {
             Some(ModelHandle::new(self.model_id, &app.ref_counts))
         } else {
             None

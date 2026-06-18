@@ -579,6 +579,9 @@ pub struct AppContext {
     /// is the fastest commonly-used hasher for this type.
     singleton_models: FxHashMap<TypeId, AnyModelHandle>,
     last_frame_position_cache: HashMap<WindowId, crate::presenter::PositionCache>,
+    /// Last cursor position observed after scene layout, used to notify platform IME code only
+    /// when layout moves the active cursor.
+    last_observed_active_cursor_positions: HashMap<WindowId, Option<CursorInfo>>,
     pub(super) windows: HashMap<WindowId, Window>,
     pub(super) ref_counts: Arc<Mutex<RefCounts>>,
     pub(super) platform_delegate: Box<dyn platform::Delegate>,
@@ -697,6 +700,18 @@ pub struct AppContext {
     /// all views in the source window.
     structural_parent_to_children: HashMap<EntityId, HashSet<EntityId>>,
 
+    /// Backend-neutral child-view → parent-view map, per window. This is the view
+    /// hierarchy the shared core walks for [`Self::view_ancestors`], the responder
+    /// chain, and focus ancestor propagation — for any backend.
+    ///
+    /// Populated from two sources: creation-time structural parentage
+    /// ([`Self::record_view_parent`], called when a typed-action view is created
+    /// with a parent) and the active backend's render pass, which reports the
+    /// child-view embeddings it discovers while laying out a frame
+    /// ([`Self::report_view_embeddings`]). Entries are removed when views are
+    /// dropped or transferred out of the window, and when the window closes.
+    view_parents: HashMap<WindowId, HashMap<EntityId, EntityId>>,
+
     /// When set, all focus changes to this window are suppressed.
     /// Used during tab drag to prevent the new window from stealing focus.
     suppress_focus_for_window: Option<WindowId>,
@@ -752,6 +767,7 @@ impl AppContext {
             windows: Default::default(),
             ref_counts: Arc::new(Mutex::new(RefCounts::default())),
             last_frame_position_cache: Default::default(),
+            last_observed_active_cursor_positions: Default::default(),
             platform_delegate,
             // AppContext fields
             actions: Default::default(),
@@ -800,6 +816,7 @@ impl AppContext {
             view_to_window: Default::default(),
             structural_child_to_parent: Default::default(),
             structural_parent_to_children: Default::default(),
+            view_parents: Default::default(),
             suppress_focus_for_window: None,
             fallback_font_source_provider: None,
         };
@@ -919,6 +936,22 @@ impl AppContext {
         self.windows().active_cursor_position_updated();
     }
 
+    /// Notifies the platform when a scene rebuild changes the active cursor position.
+    pub fn report_active_cursor_position_update_if_changed(&mut self, window_id: WindowId) {
+        let active_cursor_position = self.active_cursor_position(window_id);
+        let did_change = match self.last_observed_active_cursor_positions.get(&window_id) {
+            Some(previous_position) => previous_position != &active_cursor_position,
+            None => active_cursor_position.is_some(),
+        };
+
+        self.last_observed_active_cursor_positions
+            .insert(window_id, active_cursor_position);
+
+        if did_change && self.windows().active_window() == Some(window_id) {
+            self.report_active_cursor_position_update();
+        }
+    }
+
     pub fn rendering_config(&self) -> rendering::Config {
         self.rendering_config
     }
@@ -943,6 +976,11 @@ impl AppContext {
         // after the window is closed (for example, if a fullscreen window is closed, a resize event
         // comes in after the window is closed.
         self.presenters.get(&window_id).cloned()
+    }
+
+    /// Drops the GUI presentation state for a closed window.
+    pub(super) fn drop_window_presentation(&mut self, window_id: WindowId) {
+        self.presenters.remove(&window_id);
     }
 
     fn invalidate_all_views_for_window(&mut self, window_id: WindowId) {
@@ -1121,6 +1159,11 @@ impl AppContext {
         );
 
         self.platform_delegate.register_global_shortcut(shortcut);
+    }
+
+    /// Show or hide the Dock icon (macOS only — no-op elsewhere).
+    pub fn set_dock_icon_visible(&self, visible: bool) {
+        self.platform_delegate.set_dock_icon_visible(visible);
     }
 
     fn dispatch_draw_frame_error_callback(&mut self, window_id: WindowId) {
@@ -1356,6 +1399,90 @@ impl AppContext {
         None
     }
 
+    /// Records that `parent_view_id` is the parent of `view_id` in `window_id`'s
+    /// view hierarchy. Called when a view is created with an explicit parent,
+    /// before the first render pass reports the embedding.
+    pub fn record_view_parent(
+        &mut self,
+        window_id: WindowId,
+        view_id: EntityId,
+        parent_view_id: EntityId,
+    ) {
+        self.view_parents
+            .entry(window_id)
+            .or_default()
+            .insert(view_id, parent_view_id);
+    }
+
+    /// Render-time hook: merges the child-view → parent-view embeddings the
+    /// active backend discovered while laying out a frame into the window's
+    /// neutral view hierarchy.
+    ///
+    /// Reported embeddings overwrite previously recorded parentage for the same
+    /// child view; entries for dropped or transferred views are removed by the
+    /// view lifecycle rather than by this hook. This accumulate-and-remove
+    /// semantic matches the GUI presenter's historical layout-time parent map,
+    /// so views that are alive but not embedded in the current frame keep their
+    /// last known ancestry.
+    pub fn report_view_embeddings(
+        &mut self,
+        window_id: WindowId,
+        embeddings: HashMap<EntityId, EntityId>,
+    ) {
+        self.view_parents
+            .entry(window_id)
+            .or_default()
+            .extend(embeddings);
+    }
+
+    /// Returns the ancestor chain of `view_id` in `window_id`, ordered from the
+    /// root down to (and including) `view_id` itself, by walking the neutral
+    /// view hierarchy.
+    pub fn view_ancestors(&self, window_id: WindowId, mut view_id: EntityId) -> Vec<EntityId> {
+        let mut chain = vec![view_id];
+        if let Some(parents) = self.view_parents.get(&window_id) {
+            while let Some(parent_id) = parents.get(&view_id) {
+                if chain.contains(parent_id) {
+                    log::error!("Cycle detected in the view hierarchy at view {parent_id}");
+                    break;
+                }
+                view_id = *parent_id;
+                chain.push(view_id);
+            }
+        }
+        chain.reverse();
+        chain
+    }
+
+    /// Returns all descendant view IDs of `root_view_id` in `window_id`,
+    /// computed by finding all views in the neutral view hierarchy whose
+    /// ancestor chain includes the root.
+    pub fn view_descendants(&self, window_id: WindowId, root_view_id: EntityId) -> Vec<EntityId> {
+        let Some(parents) = self.view_parents.get(&window_id) else {
+            return Vec::new();
+        };
+        parents
+            .keys()
+            .filter(|&&view_id| {
+                let mut current = view_id;
+                let mut steps = 0;
+                while let Some(&parent_id) = parents.get(&current) {
+                    if parent_id == root_view_id {
+                        return true;
+                    }
+                    current = parent_id;
+                    // Defend against a (should-be-impossible) cycle.
+                    steps += 1;
+                    if steps > parents.len() {
+                        break;
+                    }
+                }
+                false
+            })
+            .copied()
+            .collect()
+    }
+
     pub fn dispatch_action_for_view(
         &mut self,
         window_id: WindowId,
@@ -1363,8 +1490,8 @@ impl AppContext {
         name: &str,
         arg: &dyn Any,
     ) -> bool {
-        if let Some(presenter) = self.presenter(window_id) {
-            let responder_chain = presenter.borrow().ancestors(view_id);
+        if self.is_window_open(window_id) {
+            let responder_chain = self.view_ancestors(window_id, view_id);
             self.dispatch_action(window_id, &responder_chain, name, arg, log::Level::Info)
         } else {
             false
@@ -1378,8 +1505,8 @@ impl AppContext {
         view_id: EntityId,
         action: &dyn Action,
     ) {
-        if let Some(presenter) = self.presenter(window_id) {
-            let responder_chain = presenter.borrow().ancestors(view_id);
+        if self.is_window_open(window_id) {
+            let responder_chain = self.view_ancestors(window_id, view_id);
             self.dispatch_typed_action(window_id, &responder_chain, action, log::Level::Info);
         }
     }
@@ -1745,11 +1872,7 @@ impl AppContext {
     }
 
     fn contexts_for_window_and_view(&self, window_id: WindowId, view_id: EntityId) -> Vec<Context> {
-        let responder_chain = self
-            .presenter(window_id)
-            .expect("Invalid window id")
-            .borrow()
-            .ancestors(view_id);
+        let responder_chain = self.view_ancestors(window_id, view_id);
         match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
@@ -1796,11 +1919,7 @@ impl AppContext {
         window_id: WindowId,
         view_id: EntityId,
     ) -> Vec<EditableBindingLens<'_>> {
-        let responder_chain = self
-            .presenter(window_id)
-            .expect("Invalid window id")
-            .borrow()
-            .ancestors(view_id);
+        let responder_chain = self.view_ancestors(window_id, view_id);
         let contexts = match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
@@ -1876,11 +1995,7 @@ impl AppContext {
     /// dispatches to the root view.
     fn get_responder_chain(&self, window_id: WindowId) -> Vec<EntityId> {
         if let Some(focused) = self.focused_view_id(window_id) {
-            if let Some(presenter) = self.presenter(window_id) {
-                presenter.borrow().ancestors(focused)
-            } else {
-                vec![]
-            }
+            self.view_ancestors(window_id, focused)
         } else if let Some(root) = self.root_view_id(window_id) {
             vec![root]
         } else {
@@ -1892,6 +2007,14 @@ impl AppContext {
         self.keystroke_matcher.custom_action_bindings()
     }
 
+    /// Dispatches a custom action through the focused view's responder chain,
+    /// falling back to replaying the bound keystroke when key-binding dispatch
+    /// is disabled (i.e. while the user is editing their keybindings).
+    ///
+    /// Custom actions themselves are backend-neutral (the matcher/registry
+    /// machinery lives in `app.rs`); this entry point is GUI-only solely
+    /// because the keystroke-replay fallback drives the presenter-backed event
+    /// loop, which doesn't exist under the `tui` backend.
     pub fn dispatch_custom_action<Action>(&mut self, action: Action, window_id: WindowId)
     where
         Action: Into<CustomTag> + Debug + Copy,
@@ -2550,9 +2673,12 @@ impl AppContext {
         WindowManager::handle(self).update(self, |windowing_state, ctx| {
             windowing_state.remove_window(window_id, ctx);
         });
-        self.presenters.remove(&window_id);
+        self.drop_window_presentation(window_id);
         self.invalidation_callbacks.remove(&window_id);
         self.window_invalidations.remove(&window_id);
+        self.last_observed_active_cursor_positions
+            .remove(&window_id);
+        self.view_parents.remove(&window_id);
         autotracking::close_window(window_id);
 
         let mut subscriptions = HashMap::new();
@@ -2765,6 +2891,8 @@ impl AppContext {
             }
         }
 
+        self.report_active_cursor_position_update_if_changed(window_id);
+
         scene
     }
 
@@ -2884,9 +3012,7 @@ impl AppContext {
 
         // If a parent view ID was provided, add the view as a child of the parent
         if let Some(parent_view_id) = parent_view_id {
-            if let Some(presenter) = self.presenter(window_id) {
-                presenter.borrow_mut().set_parent(view_id, parent_view_id);
-            }
+            self.record_view_parent(window_id, view_id, parent_view_id);
             self.structural_child_to_parent
                 .insert(view_id, parent_view_id);
             self.structural_parent_to_children
@@ -2935,14 +3061,6 @@ impl AppContext {
             return false;
         };
 
-        // Mark the view as removed from the source window's invalidation set.
-        // This tells the renderer to stop tracking this view in the source window.
-        self.window_invalidations
-            .entry(source_window_id)
-            .or_default()
-            .removed
-            .insert(view_id);
-
         let Some(target_window) = self.windows.get_mut(&target_window_id) else {
             // Target window doesn't exist - roll back by putting the view back in source window
             if let Some(source_window) = self.windows.get_mut(&source_window_id) {
@@ -2953,6 +3071,20 @@ impl AppContext {
 
         target_window.views.insert(view_id, view);
         self.view_to_window.insert(view_id, target_window_id);
+
+        // Mark the view as removed from the source window's invalidation set.
+        // This tells the renderer to stop tracking this view in the source window.
+        self.window_invalidations
+            .entry(source_window_id)
+            .or_default()
+            .removed
+            .insert(view_id);
+
+        // The view's parentage in the source window no longer applies; the
+        // target window's render pass will report its new embedding.
+        if let Some(parents) = self.view_parents.get_mut(&source_window_id) {
+            parents.remove(&view_id);
+        }
 
         self.window_invalidations
             .entry(target_window_id)
@@ -2982,8 +3114,13 @@ impl AppContext {
     /// Transfers a view and all its descendant views from one window to another.
     ///
     /// This is useful when transferring a component like a tab that contains
-    /// multiple nested views. The view tree is determined by the presenter's
-    /// parent-child relationships.
+    /// multiple nested views. The view subtree is determined by
+    /// [`Self::collect_transferable_subtree`], which unions the render-time
+    /// parent/child graph, the structural (typed-action) parent/child graph,
+    /// and each view's explicitly-declared [`View::child_view_ids`]. The last
+    /// of these is what keeps views that are owned through a model or are not
+    /// currently rendered (e.g. inactive panes in a navigation stack) from
+    /// being orphaned in the source window.
     ///
     /// Returns the list of view IDs that were transferred.
     pub fn transfer_view_tree_to_window(
@@ -2996,26 +3133,124 @@ impl AppContext {
             return vec![root_view_id];
         }
 
-        let descendants = self
-            .presenter(source_window_id)
-            .map(|presenter| presenter.borrow().descendants(root_view_id))
-            .unwrap_or_default();
+        // Collect the complete subtree up-front, while every view still lives
+        // in the source window, so the ownership walk doesn't have to chase
+        // views as they move.
+        let subtree = self.collect_transferable_subtree(root_view_id, source_window_id);
 
-        let mut transferred = Vec::with_capacity(descendants.len() + 1);
-
-        if self.transfer_view_to_window(root_view_id, source_window_id, target_window_id) {
-            transferred.push(root_view_id);
-        }
-
-        for view_id in descendants {
+        let mut transferred = Vec::with_capacity(subtree.len());
+        for view_id in subtree {
             if self.transfer_view_to_window(view_id, source_window_id, target_window_id) {
                 transferred.push(view_id);
             }
         }
 
+        // Safety net: re-walk the structural graph in case any structural
+        // child became reachable only after the parent moved. This is a no-op
+        // for anything already transferred above.
         self.transfer_structural_children(source_window_id, target_window_id, &mut transferred);
 
+        // Reconcile any descendants that only become reachable from the target
+        // window. The forward pass seeds its walk from the *source* window's
+        // presenter, so render-time descendants that were never laid out there
+        // (e.g. when the source is a freshly created preview window that only
+        // rendered the active pane) are missing from that parent map and get
+        // left behind. When the subtree moves back to a window it previously
+        // lived in, that window's presenter still references those views, so
+        // re-walking from the target surfaces the stragglers. Pull them over
+        // until nothing owned by the subtree remains mapped to the source
+        // window -- a leftover here is exactly what previously desynced
+        // `view_to_window` from the windows' `views` maps and triggered the
+        // "circular view reference" panic.
+        // Each iteration transfers at least one view (shrinking the stranded set),
+        // so this while loop always terminates. The only `break` handles the
+        // degenerate case where a view appears stranded but cannot be moved
+        // (absent from the source window's `views` map despite being in
+        // `view_to_window`) — logging a warning instead of spinning forever.
+        let mut stranded: Vec<EntityId> = self
+            .collect_transferable_subtree(root_view_id, target_window_id)
+            .into_iter()
+            .filter(|id| self.view_to_window.get(id).copied() == Some(source_window_id))
+            .collect();
+        while !stranded.is_empty() {
+            let mut progressed = false;
+            for view_id in stranded {
+                if self.transfer_view_to_window(view_id, source_window_id, target_window_id) {
+                    transferred.push(view_id);
+                    progressed = true;
+                }
+            }
+
+            // Guard against an unmovable straggler (mapped to the source window
+            // but no longer present in its `views` map) so the loop can't spin
+            // forever. This desync shouldn't happen; warn rather than panic so
+            // a stray mapping can't take down the whole app.
+            if !progressed {
+                log::warn!(
+                    "transfer_view_tree_to_window: descendant of {root_view_id:?} stranded in \
+                     source window {source_window_id:?}; could not transfer to \
+                     {target_window_id:?}"
+                );
+                break;
+            }
+
+            stranded = self
+                .collect_transferable_subtree(root_view_id, target_window_id)
+                .into_iter()
+                .filter(|id| self.view_to_window.get(id).copied() == Some(source_window_id))
+                .collect();
+        }
+
         transferred
+    }
+
+    /// Collects the complete set of view ids that make up the subtree rooted
+    /// at `root_view_id`, treating ownership as authoritative.
+    ///
+    /// The frontier is seeded with the root plus its render-time descendants
+    /// (from the presenter's parent map) and expanded through both the
+    /// structural parent/child graph and each view's [`View::child_view_ids`].
+    /// Walking `child_view_ids` is what captures views that the render-time
+    /// graph misses: model-held views and child handles that aren't laid out
+    /// in the current frame (e.g. a hidden window that never rendered).
+    ///
+    /// `window_id` is the window the subtree is expected to live in; views are
+    /// read from whichever window currently holds them so this works both
+    /// before a transfer (source window) and as a post-transfer assertion
+    /// (target window).
+    fn collect_transferable_subtree(
+        &self,
+        root_view_id: EntityId,
+        window_id: WindowId,
+    ) -> Vec<EntityId> {
+        let mut seen: HashSet<EntityId> = HashSet::new();
+        let mut order: Vec<EntityId> = Vec::new();
+        let mut stack: Vec<EntityId> = vec![root_view_id];
+
+        stack.extend(self.view_descendants(window_id, root_view_id));
+
+        while let Some(view_id) = stack.pop() {
+            if !seen.insert(view_id) {
+                continue;
+            }
+            order.push(view_id);
+
+            if let Some(children) = self.structural_parent_to_children.get(&view_id) {
+                stack.extend(children.iter().copied());
+            }
+
+            if let Some(current_window_id) = self.view_to_window.get(&view_id).copied() {
+                if let Some(view) = self
+                    .windows
+                    .get(&current_window_id)
+                    .and_then(|window| window.views.get(&view_id))
+                {
+                    stack.extend(view.child_view_ids(self));
+                }
+            }
+        }
+
+        order
     }
 
     /// Transfers structural children of already-transferred views.
@@ -3105,6 +3340,9 @@ impl AppContext {
                         .removed
                         .insert(view_id);
                     window.views.remove(&view_id);
+                }
+                if let Some(parents) = self.view_parents.get_mut(&current_window_id) {
+                    parents.remove(&view_id);
                 }
 
                 autotracking::remove_view(current_window_id, view_id);
@@ -3224,7 +3462,7 @@ impl AppContext {
             } = &event
             {
                 if let Some(focused_view_id) = self.focused_view_id(window_id) {
-                    let responder_chain = presenter.borrow().ancestors(focused_view_id);
+                    let responder_chain = self.view_ancestors(window_id, focused_view_id);
                     match self.dispatch_keystroke(
                         window_id,
                         &responder_chain,
@@ -3254,7 +3492,7 @@ impl AppContext {
         // (2) the event is a valid interaction (we exclude mouse and scroll movements to reduce noise)
         if handled && !matches!(event, Event::MouseMoved { .. } | Event::ScrollWheel { .. }) {
             if let Some(focused_view_id) = self.focused_view_id(window_id) {
-                let responder_chain = presenter.borrow().ancestors(focused_view_id);
+                let responder_chain = self.view_ancestors(window_id, focused_view_id);
                 self.dispatch_self_or_child_interacted_with(window_id, &responder_chain);
             }
         }
@@ -3571,7 +3809,7 @@ impl AppContext {
         }
 
         for action in dispatch_result.actions.into_iter().rev() {
-            let responder_chain = presenter.borrow().ancestors(action.view_id);
+            let responder_chain = self.view_ancestors(window_id, action.view_id);
             match action.kind {
                 DispatchedActionKind::Legacy { name, arg } => {
                     self.dispatch_action(
@@ -3801,26 +4039,23 @@ impl AppContext {
                 .views
                 .insert(blurred_id, blurred);
 
-            if let Some(presenter) = self.presenter(window_id) {
-                let blur_ctx = BlurContext::DescendentBlurred(blurred_id);
-                // Skip the last entry, it is the blurred view itself.
-                for view_id in presenter
-                    .borrow()
-                    .ancestors(blurred_id)
-                    .into_iter()
-                    .rev()
-                    .skip(1)
+            let blur_ctx = BlurContext::DescendentBlurred(blurred_id);
+            // Skip the last entry, it is the blurred view itself.
+            for view_id in self
+                .view_ancestors(window_id, blurred_id)
+                .into_iter()
+                .rev()
+                .skip(1)
+            {
+                if let Some(mut view) = self
+                    .windows
+                    .get_mut(&window_id)
+                    .and_then(|w| w.views.remove(&view_id))
                 {
-                    if let Some(mut view) = self
-                        .windows
+                    view.on_blur(&blur_ctx, self, window_id, view_id);
+                    self.windows
                         .get_mut(&window_id)
-                        .and_then(|w| w.views.remove(&view_id))
-                    {
-                        view.on_blur(&blur_ctx, self, window_id, view_id);
-                        self.windows
-                            .get_mut(&window_id)
-                            .and_then(|w| w.views.insert(view_id, view));
-                    }
+                        .and_then(|w| w.views.insert(view_id, view));
                 }
             }
         }
@@ -3844,26 +4079,23 @@ impl AppContext {
                 .views
                 .insert(focused_id, focused);
 
-            if let Some(presenter) = self.presenter(window_id) {
-                let focus_ctx = FocusContext::DescendentFocused(focused_id);
-                // Skip the last entry, it is the focused view itself.
-                for view_id in presenter
-                    .borrow()
-                    .ancestors(focused_id)
-                    .into_iter()
-                    .rev()
-                    .skip(1)
+            let focus_ctx = FocusContext::DescendentFocused(focused_id);
+            // Skip the last entry, it is the focused view itself.
+            for view_id in self
+                .view_ancestors(window_id, focused_id)
+                .into_iter()
+                .rev()
+                .skip(1)
+            {
+                if let Some(mut view) = self
+                    .windows
+                    .get_mut(&window_id)
+                    .and_then(|w| w.views.remove(&view_id))
                 {
-                    if let Some(mut view) = self
-                        .windows
+                    view.on_focus(&focus_ctx, self, window_id, view_id);
+                    self.windows
                         .get_mut(&window_id)
-                        .and_then(|w| w.views.remove(&view_id))
-                    {
-                        view.on_focus(&focus_ctx, self, window_id, view_id);
-                        self.windows
-                            .get_mut(&window_id)
-                            .and_then(|w| w.views.insert(view_id, view));
-                    }
+                        .and_then(|w| w.views.insert(view_id, view));
                 }
             }
         }
@@ -4032,14 +4264,7 @@ impl AppContext {
             Some(id) => id,
             None => return false,
         };
-        let presenter = match self.presenter(window_id) {
-            Some(p) => p,
-            None => return false,
-        };
-
-        let borrowed_presenter = presenter.borrow();
-        borrowed_presenter
-            .ancestors(focused_view_id)
+        self.view_ancestors(window_id, focused_view_id)
             .contains(view_id)
     }
 
@@ -4212,10 +4437,15 @@ impl AppContext {
         }
     }
 
+    /// Snapshot of the window's child-view → parent-view map (for debug tooling).
+    fn view_parent_map(&self, window_id: WindowId) -> HashMap<EntityId, EntityId> {
+        self.view_parents
+            .get(&window_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub fn open_view_tree_debug_window(&mut self, target_window_id: WindowId) {
-        let Some(presenter) = self.presenter(target_window_id) else {
-            return;
-        };
         let Some(root_view_id) = self.root_view_id(target_window_id) else {
             return;
         };
@@ -4237,13 +4467,9 @@ impl AppContext {
             title: Some("View Tree Debugger".to_owned()),
             ..Default::default()
         };
+        let view_parents = self.view_parent_map(target_window_id);
         self.add_window(options, |ctx| {
-            crate::debug::DebugRootView::new(
-                target_window_id,
-                presenter.borrow().parents(),
-                root_view_id,
-                ctx,
-            )
+            crate::debug::DebugRootView::new(target_window_id, view_parents, root_view_id, ctx)
         });
     }
 
@@ -4484,7 +4710,6 @@ impl AppContext {
             })
             .ok_or_else(|| anyhow!("window not found"))
     }
-
     /// Returns the cached element position from the last rendered frame, if there is one.
     pub fn element_position_by_id_at_last_frame<S>(
         &self,

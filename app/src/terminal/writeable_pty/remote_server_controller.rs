@@ -18,7 +18,7 @@ use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEven
 use crate::remote_server::ssh_transport::SshTransport;
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::PrivacySettings;
-use crate::terminal::model::session::{IsLegacySSHSession, SessionInfo};
+use crate::terminal::model::session::{IsSSHWrapperSession, SessionInfo};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
@@ -91,7 +91,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         model_event_dispatcher: ModelHandle<ModelEventDispatcher>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&model_event_dispatcher, |me, event, ctx| {
+        ctx.subscribe_to_model(&model_event_dispatcher, |me, _, event, ctx| {
             if let ModelEvent::SshInitShell {
                 pending_session_info,
             } = event
@@ -101,7 +101,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         });
 
         let mgr = RemoteServerManager::handle(ctx);
-        ctx.subscribe_to_model(&mgr, |me, event, ctx| match event {
+        ctx.subscribe_to_model(&mgr, |me, _, event, ctx| match event {
             RemoteServerManagerEvent::BinaryCheckComplete {
                 session_id,
                 result,
@@ -138,6 +138,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             | RemoteServerManagerEvent::SessionDeregistered { .. }
             | RemoteServerManagerEvent::HostConnected { .. }
             | RemoteServerManagerEvent::HostDisconnected { .. }
+            | RemoteServerManagerEvent::BundledSkillsSnapshot { .. }
             | RemoteServerManagerEvent::NavigatedToDirectory { .. }
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
@@ -153,7 +154,15 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
             | RemoteServerManagerEvent::DiffStateMetadataUpdateReceived { .. }
             | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. }
-            | RemoteServerManagerEvent::GetBranchesResponse { .. } => {}
+            | RemoteServerManagerEvent::GetBranchesResponse { .. }
+            | RemoteServerManagerEvent::CommitChainResponse { .. }
+            | RemoteServerManagerEvent::GitPushResponse { .. }
+            | RemoteServerManagerEvent::CreatePrResponse { .. }
+            | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
+            | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. }
+            | RemoteServerManagerEvent::GitStatusPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubPrInfoPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived { .. } => {}
         });
 
         Self {
@@ -180,11 +189,16 @@ impl<T: EventLoopSender> RemoteServerController<T> {
 
     /// Idle -> AwaitingCheck
     fn on_ssh_init_shell_requested(&mut self, info: SessionInfo, ctx: &mut ModelContext<Self>) {
-        let IsLegacySSHSession::Yes { socket_path } = &info.is_legacy_ssh_session else {
+        let IsSSHWrapperSession::Yes {
+            socket_path,
+            external_control_master,
+        } = &info.is_ssh_wrapper_session
+        else {
             return;
         };
         let session_id = info.session_id;
         let socket_path = socket_path.clone();
+        let warp_owns_control_master = !external_control_master;
         debug_assert!(matches!(self.state, SshInitState::Idle));
         match std::mem::replace(&mut self.state, SshInitState::Idle) {
             SshInitState::Idle => {}
@@ -207,7 +221,11 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                 self.flush_stashed_bootstrap(old_info, ctx);
             }
         }
-        let transport = SshTransport::new(socket_path, self.build_auth_context(ctx));
+        let transport = SshTransport::new(
+            socket_path,
+            self.build_auth_context(ctx),
+            warp_owns_control_master,
+        );
         self.did_install = false;
         self.remote_platform = None;
         self.preinstall_check = None;
@@ -261,6 +279,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         match result {
             Ok(true) => {
                 let socket_path = transport.socket_path().clone();
+                let warp_owns_control_master = transport.warp_owns_control_master();
                 let connection_label = connection_label_for_session_info(&session_info);
                 self.state = SshInitState::AwaitingConnect {
                     session_id,
@@ -270,6 +289,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                 self.connect_session_for_current_identity(
                     session_id,
                     socket_path,
+                    warp_owns_control_master,
                     connection_label,
                     ctx,
                 );
@@ -494,6 +514,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         match result {
             Ok(()) => {
                 let socket_path = transport.socket_path().clone();
+                let warp_owns_control_master = transport.warp_owns_control_master();
                 let connection_label = connection_label_for_session_info(&session_info);
                 self.state = SshInitState::AwaitingConnect {
                     session_id,
@@ -503,6 +524,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                 self.connect_session_for_current_identity(
                     session_id,
                     socket_path,
+                    warp_owns_control_master,
                     connection_label,
                     ctx,
                 );
@@ -537,11 +559,13 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         &mut self,
         session_id: SessionId,
         socket_path: PathBuf,
+        warp_owns_control_master: bool,
         connection_label: String,
         ctx: &mut ModelContext<Self>,
     ) {
         let auth_context = self.build_auth_context(ctx);
-        let transport = SshTransport::new(socket_path, auth_context.clone());
+        let transport =
+            SshTransport::new(socket_path, auth_context.clone(), warp_owns_control_master);
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
             mgr.connect_session(
                 session_id,
@@ -629,54 +653,5 @@ fn send_unsupported_telemetry<T: EventLoopSender>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        connection_label_from_session_hosts, connection_label_from_ssh_host,
-        connection_label_from_user_and_host,
-    };
-
-    #[test]
-    fn connection_label_prefers_ssh_host_over_reported_hostname() {
-        assert_eq!(
-            connection_label_from_session_hosts(
-                "moira",
-                "remote-reported-hostname",
-                Some("ssh-user@devbox.namespace"),
-            ),
-            "moira@devbox.namespace"
-        );
-        assert_eq!(
-            connection_label_from_session_hosts("moira", "remote-reported-hostname", None),
-            "moira@remote-reported-hostname"
-        );
-    }
-
-    #[test]
-    fn connection_label_from_ssh_host_strips_user_prefix() {
-        assert_eq!(
-            connection_label_from_ssh_host("moira@moira.devbox.namespace"),
-            "moira.devbox.namespace"
-        );
-        assert_eq!(
-            connection_label_from_ssh_host("moira.devbox.namespace"),
-            "moira.devbox.namespace"
-        );
-    }
-
-    #[test]
-    fn connection_label_from_user_and_host_matches_udi_format() {
-        assert_eq!(
-            connection_label_from_user_and_host("kevinyang", Some("ssh-testing")),
-            "kevinyang@ssh-testing"
-        );
-        assert_eq!(
-            connection_label_from_user_and_host("kevinyang", None),
-            "kevinyang"
-        );
-        assert_eq!(
-            connection_label_from_user_and_host("", Some("ssh-testing")),
-            "ssh-testing"
-        );
-        assert_eq!(connection_label_from_user_and_host("", None), "Remote host");
-    }
-}
+#[path = "remote_server_controller_tests.rs"]
+mod tests;
