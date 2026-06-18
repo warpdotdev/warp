@@ -531,7 +531,7 @@ impl CodeView {
                 );
             }
             LocalCodeEditorEvent::FileSaved => {
-                me.sync_active_tab_path(ctx);
+                me.sync_active_tab_location(ctx);
                 me.set_title_after_content_update(ctx);
                 CodeView::display_save_success(ctx.window_id(), ctx);
                 ctx.notify();
@@ -990,16 +990,11 @@ impl CodeView {
         self.set_title(self.contains_unsaved_changes(ctx), ctx);
     }
 
-    /// Update the TabData path for the active tab to match the LocalCodeEditor metadata.
-    /// This is needed after save_as operations to keep the paths in sync.
-    fn sync_active_tab_path(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Update the TabData location for the active tab to match the LocalCodeEditor metadata.
+    /// This is needed after save operations to keep local and remote locations in sync.
+    fn sync_active_tab_location(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(tab) = self.tab_group.get_mut(self.active_tab_index) {
-            let new_path = tab
-                .editor_view
-                .as_ref(ctx)
-                .file_path()
-                .map(|p| LocalOrRemotePath::Local(p.to_path_buf()));
-            tab.location = new_path;
+            tab.location = tab.editor_view.as_ref(ctx).file_location().cloned();
         }
     }
 

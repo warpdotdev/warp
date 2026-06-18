@@ -17,10 +17,10 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::InternalError,
             ),
         ),
-        AgentDriverError::BootstrapFailed => (
+        AgentDriverError::BootstrapFailed { error } => (
             AgentTaskState::Error,
             TaskStatusUpdate::with_error_code(
-                "Terminal session failed to start. Please try running your task again.",
+                format!("Terminal session failed to start: {error}"),
                 PlatformErrorCode::InternalError,
             ),
         ),

@@ -61,6 +61,9 @@ pub trait AppExt {
 
     /// Sets the macOS dock menu constructor function.
     fn set_dock_menu_builder(&mut self, value: impl FnOnce(&mut AppContext) -> Menu + 'static);
+
+    /// Sets whether the application should show its Dock icon on launch.
+    fn set_show_dock_icon_on_launch(&mut self, value: bool);
 }
 
 type MenuBarBuilderFn = Box<dyn FnOnce(&mut AppContext) -> MenuBar>;
@@ -72,6 +75,7 @@ pub struct App {
     callbacks: AppCallbackDispatcher,
     activate_on_launch: bool,
     dev_icon: Option<Cow<'static, [u8]>>,
+    show_dock_icon_on_launch: bool,
     menu_bar_builder: Option<MenuBarBuilderFn>,
     dock_menu_builder: Option<DockMenuBuilderFn>,
     init_fn: Option<platform::app::AppInitCallbackFn>,
@@ -113,6 +117,7 @@ impl App {
             callbacks: AppCallbackDispatcher::new(callbacks, ui_app),
             activate_on_launch: true,
             dev_icon: None,
+            show_dock_icon_on_launch: true,
             menu_bar_builder: None,
             dock_menu_builder: None,
             init_fn: None,
@@ -197,6 +202,13 @@ impl AppExt for AppBuilder {
             AppBackend::Headless(_) => (),
         }
     }
+
+    fn set_show_dock_icon_on_launch(&mut self, value: bool) {
+        match self.as_inner_mut() {
+            AppBackend::CurrentPlatform(app) => app.show_dock_icon_on_launch = value,
+            AppBackend::Headless(_) => (),
+        }
+    }
 }
 
 unsafe fn get_app(object: &mut Object) -> &mut App {
@@ -278,6 +290,14 @@ pub unsafe extern "C-unwind" fn warp_app_will_finish_launching(this: &mut Object
         // `setDockMenu:` is a custom warp app-delegate selector.
         let _: () = msg_send![&*app_delegate, setDockMenu: &*nsmenu];
     }
+
+    let show_dock_icon = if app.show_dock_icon_on_launch {
+        YES
+    } else {
+        NO
+    };
+    // `setDockIconVisible:` is a custom warp app-delegate selector.
+    let _: BOOL = msg_send![&*app_delegate, setDockIconVisible: show_dock_icon];
 }
 
 #[no_mangle]

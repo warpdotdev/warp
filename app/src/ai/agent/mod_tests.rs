@@ -122,6 +122,7 @@ fn transient_network_error_reports_pending_resume() {
 
     assert!(error.will_attempt_resume());
 }
+
 #[test]
 fn test_convert_files() {
     let a = FileContext::new(

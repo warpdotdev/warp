@@ -14,9 +14,9 @@ use crate::model::{
     SelectedSettings,
 };
 use crate::slides::{
-    AgentSlide, AgentSlideEvent, CustomizeUISlide, FreeUserNoAiSlide, IntentionSlide, IntroSlide,
-    IntroSlideEvent, OnboardingModelInfo, OnboardingSlide, ProjectSlide, ThemePickerSlide,
-    ThemePickerSlideEvent, ThirdPartySlide,
+    AgentSlide, AgentSlideEvent, CustomizeUISlide, IntentionSlide, IntroSlide, IntroSlideEvent,
+    OnboardingModelInfo, OnboardingSlide, ProjectSlide, ThemePickerSlide, ThemePickerSlideEvent,
+    ThirdPartySlide,
 };
 use crate::telemetry::OnboardingEvent;
 
@@ -69,7 +69,6 @@ pub struct AgentOnboardingView {
     theme_picker_slide: ViewHandle<ThemePickerSlide>,
     intention_slide: ViewHandle<IntentionSlide>,
     customize_slide: ViewHandle<CustomizeUISlide>,
-    free_user_no_ai_slide: ViewHandle<FreeUserNoAiSlide>,
     agent_slide: ViewHandle<AgentSlide>,
     third_party_slide: ViewHandle<ThirdPartySlide>,
     project_slide: ViewHandle<ProjectSlide>,
@@ -117,8 +116,6 @@ impl AgentOnboardingView {
         default_model_id: LLMId,
         workspace_enforces_autonomy: bool,
         agent_modality_enabled: bool,
-        free_user_no_ai_experiment: bool,
-        agent_price_cents: Option<i32>,
         auth_state: OnboardingAuthState,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -128,8 +125,6 @@ impl AgentOnboardingView {
                 default_model_id,
                 workspace_enforces_autonomy,
                 agent_modality_enabled,
-                free_user_no_ai_experiment,
-                agent_price_cents,
                 auth_state,
             )
         });
@@ -178,10 +173,6 @@ impl AgentOnboardingView {
         let customize_slide = {
             let onboarding_state = onboarding_state.clone();
             ctx.add_typed_action_view(move |ctx| CustomizeUISlide::new(onboarding_state, ctx))
-        };
-        let free_user_no_ai_slide = {
-            let onboarding_state = onboarding_state.clone();
-            ctx.add_typed_action_view(move |_| FreeUserNoAiSlide::new(onboarding_state))
         };
 
         ctx.subscribe_to_view(&theme_picker_slide, |me, _view, event, ctx| {
@@ -237,7 +228,6 @@ impl AgentOnboardingView {
             theme_picker_slide,
             intention_slide,
             customize_slide,
-            free_user_no_ai_slide,
             agent_slide,
             third_party_slide,
             project_slide,
@@ -274,12 +264,6 @@ impl AgentOnboardingView {
         ctx.notify();
     }
 
-    pub fn free_user_no_ai_experiment(&self, ctx: &AppContext) -> bool {
-        self.onboarding_state
-            .as_ref(ctx)
-            .free_user_no_ai_experiment()
-    }
-
     /// The current `use_vertical_tabs` value on the onboarding UI customization.
     /// This reflects the intention's default (agent = vertical, terminal = horizontal)
     /// and any change the user made on the customize slide, and is what the
@@ -289,32 +273,6 @@ impl AgentOnboardingView {
             .as_ref(ctx)
             .ui_customization()
             .use_vertical_tabs
-    }
-
-    pub fn set_agent_price_cents(&mut self, cents: Option<i32>, ctx: &mut ViewContext<Self>) {
-        self.onboarding_state.update(ctx, |state, ctx| {
-            state.set_agent_price_cents(cents, ctx);
-        });
-        ctx.notify();
-    }
-
-    pub fn set_free_user_no_ai_experiment(&mut self, value: bool, ctx: &mut ViewContext<Self>) {
-        self.onboarding_state.update(ctx, |state, ctx| {
-            state.set_free_user_no_ai_experiment(value, ctx);
-        });
-        ctx.notify();
-    }
-
-    /// When the user upgrades during the FreeUserNoAi experiment, advance directly
-    /// to the Agent setup step (skipping the intention slide — they've already chosen).
-    pub fn advance_to_agent_step(&mut self, ctx: &mut ViewContext<Self>) {
-        let step = self.onboarding_state.as_ref(ctx).step();
-        if matches!(step, OnboardingStep::Intention) {
-            self.onboarding_state.update(ctx, |model, ctx| {
-                model.set_intention_agent_driven_development(ctx);
-                model.next(ctx); // Intention → Agent
-            });
-        }
     }
 
     pub fn start_onboarding(&self, ctx: &mut ViewContext<Self>) {
@@ -432,17 +390,7 @@ impl View for AgentOnboardingView {
         let slide = match selected_slide {
             OnboardingStep::Intro => ChildView::new(&self.intro_slide).finish(),
             OnboardingStep::ThemePicker => ChildView::new(&self.theme_picker_slide).finish(),
-            OnboardingStep::Intention => {
-                if self
-                    .onboarding_state
-                    .as_ref(app)
-                    .free_user_no_ai_experiment()
-                {
-                    ChildView::new(&self.free_user_no_ai_slide).finish()
-                } else {
-                    ChildView::new(&self.intention_slide).finish()
-                }
-            }
+            OnboardingStep::Intention => ChildView::new(&self.intention_slide).finish(),
             OnboardingStep::Customize => ChildView::new(&self.customize_slide).finish(),
             OnboardingStep::Agent => ChildView::new(&self.agent_slide).finish(),
             OnboardingStep::ThirdParty => ChildView::new(&self.third_party_slide).finish(),
@@ -503,21 +451,9 @@ impl TypedActionView for AgentOnboardingView {
             OnboardingStep::ThemePicker => self.theme_picker_slide.update(ctx, |slide, ctx| {
                 dispatch_onboarding_action_to_slide(slide, *action, ctx)
             }),
-            OnboardingStep::Intention => {
-                if self
-                    .onboarding_state
-                    .as_ref(ctx)
-                    .free_user_no_ai_experiment()
-                {
-                    self.free_user_no_ai_slide.update(ctx, |slide, ctx| {
-                        dispatch_onboarding_action_to_slide(slide, *action, ctx)
-                    })
-                } else {
-                    self.intention_slide.update(ctx, |slide, ctx| {
-                        dispatch_onboarding_action_to_slide(slide, *action, ctx)
-                    })
-                }
-            }
+            OnboardingStep::Intention => self.intention_slide.update(ctx, |slide, ctx| {
+                dispatch_onboarding_action_to_slide(slide, *action, ctx)
+            }),
             OnboardingStep::Customize => self.customize_slide.update(ctx, |slide, ctx| {
                 dispatch_onboarding_action_to_slide(slide, *action, ctx)
             }),

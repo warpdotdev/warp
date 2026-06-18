@@ -1,9 +1,10 @@
 use futures::channel::oneshot;
 use warp_core::SessionId;
+use warp_util::standardized_path::StandardizedPath;
 use warpui_core::App;
 
-use super::{HostRequestError, PendingHostRequest, RemoteServerManager};
-use crate::proto::{host_scoped_request, ClientMessage, RipgrepSearchRequest, WriteFile};
+use super::{HostRequestError, PendingHostRequest, RemoteServerManager, RipgrepSearchParams};
+use crate::proto::{host_scoped_request, ClientMessage, WriteFile};
 use crate::protocol::RequestId;
 use crate::HostId;
 
@@ -52,9 +53,9 @@ fn start_ripgrep_search_without_connected_host_resolves_immediately() {
         let pending = manager.update(&mut app, |manager, _ctx| {
             manager.start_ripgrep_search(
                 &host_id,
-                RipgrepSearchRequest {
+                RipgrepSearchParams {
                     pattern: "needle".to_string(),
-                    roots: vec!["/repo".to_string()],
+                    roots: vec![StandardizedPath::try_new("/repo").unwrap()],
                     ignore_case: false,
                     multiline: false,
                     max_matches: 100,

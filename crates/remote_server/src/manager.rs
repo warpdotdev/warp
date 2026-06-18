@@ -813,6 +813,20 @@ impl PendingHostRequest {
     }
 }
 
+/// Parameters for a host-scoped remote ripgrep search.
+pub struct RipgrepSearchParams {
+    /// Effective ripgrep pattern after applying the caller's regex settings.
+    pub pattern: String,
+    /// Absolute roots to search on the remote host.
+    pub roots: Vec<StandardizedPath>,
+    /// Whether matching should ignore case.
+    pub ignore_case: bool,
+    /// Whether matching should span multiple lines.
+    pub multiline: bool,
+    /// Maximum number of matches requested from the remote host.
+    pub max_matches: u32,
+}
+
 /// A host-scoped remote ripgrep search registered synchronously with
 /// [`RemoteServerManager`], whose typed result can be awaited off-thread.
 ///
@@ -1600,12 +1614,24 @@ impl RemoteServerManager {
     pub fn start_ripgrep_search(
         &mut self,
         host_id: &HostId,
-        request: crate::proto::RipgrepSearchRequest,
+        params: RipgrepSearchParams,
     ) -> PendingRipgrepSearch {
         let request_id = crate::protocol::RequestId::new();
         let msg = crate::proto::ClientMessage::host_scoped(
             request_id.to_string(),
-            crate::proto::host_scoped_request::Message::RipgrepSearch(request),
+            crate::proto::host_scoped_request::Message::RipgrepSearch(
+                crate::proto::RipgrepSearchRequest {
+                    pattern: params.pattern,
+                    roots: params
+                        .roots
+                        .into_iter()
+                        .map(|path| path.to_string())
+                        .collect(),
+                    ignore_case: params.ignore_case,
+                    multiline: params.multiline,
+                    max_matches: params.max_matches,
+                },
+            ),
         );
         let response = self.send_host_request(host_id, msg);
         PendingRipgrepSearch {

@@ -1141,62 +1141,69 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
 
     if request_type.is_active() {
         if let AIBlockOutputStatus::Failed { error, .. } = &status {
-            output_items.add_child(
-                render_failed_output(
-                    FailedOutputProps {
-                        error,
-                        is_ai_input_enabled: props.is_ai_input_enabled,
-                        invalid_api_key_button_handle: &props
-                            .state_handles
-                            .invalid_api_key_button_handle,
-                        aws_bedrock_credentials_error_view: props
-                            .aws_bedrock_credentials_error_view,
-                        icon_right_margin: 16.,
-                    },
-                    app,
-                )
-                .with_content_item_spacing()
-                .finish(),
-            );
-
-            if props.model.is_latest_visible_exchange_in_root_task(app)
-                && !has_expanded_last_requested_command
-                && !props.model.is_restored()
-                && !error.is_invalid_api_key()
-            {
+            // While an automatic resume is still in flight, keep the failed exchange
+            // quiet: skip the error banner, the "won't count towards usage" notice, and
+            // the debug footer. The full failure UI is surfaced only once recovery has
+            // actually failed. Dogfood builds (Local/Dev) opt out so developers still see
+            // every transport failure aggressively.
+            if !error.should_suppress_during_recovery() {
                 output_items.add_child(
-                    render_informational_footer(
+                    render_failed_output(
+                        FailedOutputProps {
+                            error,
+                            is_ai_input_enabled: props.is_ai_input_enabled,
+                            invalid_api_key_button_handle: &props
+                                .state_handles
+                                .invalid_api_key_button_handle,
+                            aws_bedrock_credentials_error_view: props
+                                .aws_bedrock_credentials_error_view,
+                            icon_right_margin: 16.,
+                        },
                         app,
-                        "This response won't count towards your usage.".to_string(),
                     )
-                    .with_agent_output_item_spacing(app)
+                    .with_content_item_spacing()
                     .finish(),
                 );
 
-                output_items.add_child(
-                    render_debug_footer(
-                        DebugFooterProps {
-                            conversation: props.model.conversation(app),
-                            model: props.model,
-                            debug_copy_button_handle: props
-                                .state_handles
-                                .debug_copy_button_handle
-                                .clone(),
-                            submit_issue_button_handle: props
-                                .state_handles
-                                .submit_issue_button_handle
-                                .clone(),
-                            should_render_feedback_below: false,
-                        },
-                        |debug_id, ctx| {
-                            ctx.dispatch_typed_action(AIBlockAction::CopyDebugId(debug_id))
-                        },
-                        |ctx| ctx.dispatch_typed_action(AIBlockAction::OpenFeedbackDocs),
-                        app,
-                    )
-                    .with_agent_output_item_spacing(app)
-                    .finish(),
-                );
+                if props.model.is_latest_visible_exchange_in_root_task(app)
+                    && !has_expanded_last_requested_command
+                    && !props.model.is_restored()
+                    && !error.is_invalid_api_key()
+                {
+                    output_items.add_child(
+                        render_informational_footer(
+                            app,
+                            "This response won't count towards your usage.".to_string(),
+                        )
+                        .with_agent_output_item_spacing(app)
+                        .finish(),
+                    );
+
+                    output_items.add_child(
+                        render_debug_footer(
+                            DebugFooterProps {
+                                conversation: props.model.conversation(app),
+                                model: props.model,
+                                debug_copy_button_handle: props
+                                    .state_handles
+                                    .debug_copy_button_handle
+                                    .clone(),
+                                submit_issue_button_handle: props
+                                    .state_handles
+                                    .submit_issue_button_handle
+                                    .clone(),
+                                should_render_feedback_below: false,
+                            },
+                            |debug_id, ctx| {
+                                ctx.dispatch_typed_action(AIBlockAction::CopyDebugId(debug_id))
+                            },
+                            |ctx| ctx.dispatch_typed_action(AIBlockAction::OpenFeedbackDocs),
+                            app,
+                        )
+                        .with_agent_output_item_spacing(app)
+                        .finish(),
+                    );
+                }
             }
         }
     }

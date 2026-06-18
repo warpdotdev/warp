@@ -116,7 +116,7 @@ impl SyncDataSource for RewindDataSource {
             let query_text = exchange
                 .input
                 .iter()
-                .find_map(AIAgentInput::user_query)
+                .find_map(AIAgentInput::display_query)
                 .unwrap_or_default();
 
             // Find the end of this "block" - either the next user query or end of exchanges

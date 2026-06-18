@@ -428,13 +428,29 @@ pub(crate) fn classify_renderable_error(
                 PlatformErrorCode::InternalError,
             )),
         ),
-        RenderableAIError::Other { error_message, .. } => (
-            AgentTaskState::Error,
-            Some(TaskStatusUpdate::with_error_code(
-                error_message,
-                PlatformErrorCode::InternalError,
-            )),
-        ),
+        RenderableAIError::Other {
+            error_message,
+            is_user_error,
+            ..
+        } => {
+            if *is_user_error {
+                (
+                    AgentTaskState::Failed,
+                    Some(TaskStatusUpdate::with_error_code(
+                        error_message,
+                        PlatformErrorCode::InvalidRequest,
+                    )),
+                )
+            } else {
+                (
+                    AgentTaskState::Error,
+                    Some(TaskStatusUpdate::with_error_code(
+                        error_message,
+                        PlatformErrorCode::InternalError,
+                    )),
+                )
+            }
+        }
     }
 }
 
