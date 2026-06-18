@@ -86,7 +86,7 @@ impl OneTimeModalModel {
 
         // The base-credit allowance that gates the free-AI-removal notice loads
         // asynchronously, so re-evaluate the notice whenever request usage updates.
-        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, _, event, ctx| {
             if let AIRequestUsageModelEvent::RequestUsageUpdated = event {
                 me.maybe_recheck_free_ai_removal_modal(ctx);
             }
