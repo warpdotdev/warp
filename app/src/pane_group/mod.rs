@@ -2553,8 +2553,9 @@ impl PaneGroup {
         _source: SharedSessionActionSource,
         ctx: &mut ViewContext<Self>,
     ) {
-        use crate::view_components::DismissibleToast;
         use warpui::clipboard::ClipboardContent;
+
+        use crate::view_components::DismissibleToast;
 
         let pane_id: PaneId = terminal_pane_id.into();
         let Some(uuid) = self
