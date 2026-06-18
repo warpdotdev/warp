@@ -152,7 +152,7 @@ fn test_subscribe_to_model_from_app() {
         let model = app.add_model(|_| Model::default());
 
         app.update(|ctx| {
-            ctx.subscribe_to_model(&model, move |model, _, event, ctx| {
+            ctx.subscribe_to_model(&model, move |model, event, ctx| {
                 model.update(ctx, |model, _ctx| {
                     model.val = *event;
                 })
@@ -199,7 +199,7 @@ fn test_subscribe_to_view_from_app() {
         let (_, view) = app.add_window(WindowStyle::NotStealFocus, |_ctx| View::default());
 
         app.update(|ctx| {
-            ctx.subscribe_to_view(&view, move |view, _, event, ctx| {
+            ctx.subscribe_to_view(&view, move |view, event, ctx| {
                 view.update(ctx, |view, _ctx| {
                     view.val = *event;
                 })

@@ -212,7 +212,7 @@ fn test_transfer_view_app_subscriptions_continue_working() {
         let received_events_clone = received_events.clone();
 
         app.update(|ctx| {
-            ctx.subscribe_to_view(&emitter, move |_view, _, event, _ctx| {
+            ctx.subscribe_to_view(&emitter, move |_view, event, _ctx| {
                 received_events_clone.borrow_mut().push(*event);
             });
         });
