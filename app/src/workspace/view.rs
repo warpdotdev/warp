@@ -341,9 +341,9 @@ use crate::settings_view::{flags, SettingsSection, SettingsView, SettingsViewEve
 #[cfg(all(target_os = "windows", feature = "local_tty"))]
 use crate::shell_indicator::ShellIndicatorType;
 use crate::tab::{
-    tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
-    TabBarState, TabComponent, TabData, TabTelemetryAction, MOVE_TO_GROUP_LABEL,
-    TAB_BAR_BORDER_HEIGHT,
+    color_picker_menu_item, tab_position_id, uses_vertical_tabs, ColorPickerTarget,
+    NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor, TabBarState, TabComponent, TabData,
+    TabTelemetryAction, MOVE_TO_GROUP_LABEL, TAB_BAR_BORDER_HEIGHT,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
@@ -5048,6 +5048,18 @@ impl Workspace {
         self.tabs.get(index).and_then(|tab| tab.color())
     }
 
+    /// Returns the effective render color for a tab. A tab in a group is fully
+    /// colored by that group: the group's color applies, and a group with no
+    /// color (the default for a fresh group) renders the member with no color,
+    /// ignoring the tab's own selected/directory color. Ungrouped tabs use their
+    /// own color.
+    fn effective_tab_color(&self, tab: &TabData) -> Option<AnsiColorIdentifier> {
+        if let Some(group) = tab.group_id.and_then(|gid| self.tab_groups.get(&gid)) {
+            return group.color.resolve(None);
+        }
+        tab.color()
+    }
+
     /// Finds the pane containing a terminal viewing the given ambient agent conversation,
     /// returning None if the ambient conversation is not open in any tab.
     fn find_pane_with_ambient_agent_conversation(
@@ -5430,6 +5442,48 @@ impl Workspace {
             SelectedTabColor::Color(color)
         };
         self.set_tab_color(index, next, ctx);
+    }
+
+    /// Sets a tab group's color. The group fully owns its members' color, so:
+    /// - `Color(c)` — every member renders with `c`.
+    /// - `Cleared` / `Unset` — every member renders with no color (a fresh group
+    ///   is `Unset`; the picker sets `Cleared` when you toggle the current color
+    ///   off). A member's own tab/directory color is ignored while it's grouped.
+    fn set_tab_group_color(
+        &mut self,
+        group_id: TabGroupId,
+        color: SelectedTabColor,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(group) = self.tab_groups.get_mut(&group_id) else {
+            return;
+        };
+        if group.color == color {
+            return;
+        }
+        group.color = color;
+        ctx.dispatch_global_action("workspace:save_app", ());
+        ctx.notify();
+    }
+
+    /// Toggles the color for a tab group: applies `color` if not already set to it,
+    /// otherwise clears it.
+    fn toggle_tab_group_color(
+        &mut self,
+        group_id: TabGroupId,
+        color: AnsiColorIdentifier,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let current = self
+            .tab_groups
+            .get(&group_id)
+            .and_then(|g| g.color.resolve(None));
+        let next = if current == Some(color) {
+            SelectedTabColor::Cleared
+        } else {
+            SelectedTabColor::Color(color)
+        };
+        self.set_tab_group_color(group_id, next, ctx);
     }
 
     /// Syncs the tab color for the given tab based on the active terminal's CWD.
@@ -9491,6 +9545,19 @@ impl Workspace {
             items
         };
 
+        // Color picker: same dot-based selector as individual tabs.
+        let color_section = {
+            // Resolve the group's currently selected color for highlighting the active dot.
+            let effective_color = self
+                .tab_groups
+                .get(&group_id)
+                .and_then(|g| g.color.resolve(None));
+            vec![color_picker_menu_item(
+                effective_color,
+                ColorPickerTarget::Group { group_id },
+            )]
+        };
+
         let mut menu_items = vec![];
         for section_items in [
             vec![
@@ -9506,6 +9573,7 @@ impl Workspace {
                 .with_on_select_action(WorkspaceAction::RenameTabGroup(group_id))
                 .into_item()],
             close_section,
+            color_section,
         ] {
             if section_items.is_empty() {
                 continue;
@@ -19038,15 +19106,29 @@ impl Workspace {
         let any_member_active = !self.current_workspace_state.is_agent_management_view_open
             && member_range.contains(&self.active_tab_index);
 
+        const EXPANDED_GROUP_MEMBER_INSET: f32 = 8.;
+
         let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-        row.add_child(self.render_horizontal_tab_group_header(
+
+        let header = self.render_horizontal_tab_group_header(
             group,
             &mouse_states,
             is_collapsed,
             any_member_active,
             appearance,
             ctx,
-        ));
+        );
+        if is_collapsed {
+            row.add_child(header);
+        } else {
+            // Space between the header and the first member tab.
+            // Matches the spacing at the end of the expanded group.
+            row.add_child(
+                Container::new(header)
+                    .with_padding_right(EXPANDED_GROUP_MEMBER_INSET)
+                    .finish(),
+            );
+        }
 
         if !is_collapsed {
             let close_button_position = if FeatureFlag::TabCloseButtonOnLeft.is_enabled() {
@@ -19060,6 +19142,7 @@ impl Workspace {
             let is_sole_member = group_has_single_member(&self.tabs, group.id);
             for idx in member_range {
                 let tab = &self.tabs[idx];
+                let effective_color = self.effective_tab_color(tab);
                 let member = TabComponent::new(
                     idx,
                     tab_bar_state,
@@ -19069,6 +19152,7 @@ impl Workspace {
                     false,
                     ctx,
                 )
+                .with_effective_color(effective_color)
                 .for_grouped_member(is_sole_member)
                 .with_multi_tab_selection(self.is_tab_in_multi_tab_selection(idx))
                 .build()
@@ -19077,9 +19161,6 @@ impl Workspace {
             }
         }
 
-        // Additional padding on expanded groups,
-        // allowing tabs to be dropped into the last position of the group.
-        const EXPANDED_GROUP_TRAILING_PADDING: f32 = 8.;
         let mut container = Container::new(row.finish()).with_border(
             Border::all(1.)
                 // Left border only on the first slot to avoid double borders.
@@ -19087,7 +19168,8 @@ impl Workspace {
                 .with_border_fill(internal_colors::fg_overlay_1(theme)),
         );
         if !is_collapsed {
-            container = container.with_padding_right(EXPANDED_GROUP_TRAILING_PADDING);
+            // Trailing drop area after the last member.
+            container = container.with_padding_right(EXPANDED_GROUP_MEMBER_INSET);
         }
         let container = container.finish();
 
@@ -19185,10 +19267,26 @@ impl Workspace {
             .with_child(name_element)
             .finish();
 
+        // Resolve the group's color so the header tints to match its member
+        // tabs in the tab bar.
+        let group_color: Option<ColorU> = group
+            .color
+            .resolve(None)
+            .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into());
         let header_active_bg = internal_colors::fg_overlay_2(theme);
         let header_hover_bg = internal_colors::fg_overlay_1(theme);
         let mut header = Hoverable::new(mouse_states.header.clone(), move |state| {
-            let bg: ElementFill = if header_selected {
+            let bg: ElementFill = if let Some(color) = group_color {
+                // Member tabs render with a vertical gradient from the theme
+                // background to the group color; use the same opacity scheme
+                // so the header reads as the start of that visual run.
+                let opacity = if header_selected || state.is_hovered() {
+                    50
+                } else {
+                    25
+                };
+                coloru_with_opacity(color, opacity).into()
+            } else if header_selected {
                 header_active_bg.into()
             } else if state.is_hovered() {
                 header_hover_bg.into()
@@ -19295,6 +19393,7 @@ impl Workspace {
             // outer `SavePosition`, `Draggable`, and `DropTarget` wrappers
             // so the chip overlay doesn't pollute the target window's
             // position cache (see `TabComponent::for_drag_ghost`).
+            let effective_color = self.effective_tab_color(tab);
             TabComponent::new(
                 tab_index,
                 tab_bar_state,
@@ -19304,6 +19403,7 @@ impl Workspace {
                 false,
                 ctx,
             )
+            .with_effective_color(effective_color)
             .for_drag_ghost()
             .build()
             .finish()
@@ -22819,7 +22919,20 @@ impl TypedActionView for Workspace {
                 );
             }
             SetActiveTabName(name) => self.set_active_tab_name(name, ctx),
-            SetActiveTabColor(color) => self.set_tab_color(self.active_tab_index, *color, ctx),
+            SetActiveTabColor(color) => {
+                // When the active tab is in a group, redirect to the group's color.
+                // The tab color selection menu is hidden when a tab is part of a group
+                // this handles the case where a tab color is set via a slash command.
+                let active_group_id = self
+                    .tabs
+                    .get(self.active_tab_index)
+                    .and_then(|t| t.group_id);
+                if let Some(group_id) = active_group_id {
+                    self.set_tab_group_color(group_id, *color, ctx);
+                } else {
+                    self.set_tab_color(self.active_tab_index, *color, ctx);
+                }
+            }
             ToggleTabRightClickMenu { tab_index, anchor } => {
                 self.toggle_tab_right_click_menu(*tab_index, *anchor, ctx)
             }
@@ -23250,6 +23363,9 @@ impl TypedActionView for Workspace {
             SetA11yVerbosityLevel(verbosity) => self.set_a11y_verbosity(*verbosity, ctx),
             ToggleNotifications => self.toggle_notifications(ctx),
             ToggleTabColor { color, tab_index } => self.toggle_tab_color(*tab_index, *color, ctx),
+            ToggleTabGroupColor { color, group_id } => {
+                self.toggle_tab_group_color(*group_id, *color, ctx)
+            }
             DispatchToSettingsTab(action) => {
                 let window_id = ctx.window_id();
                 ctx.dispatch_typed_action_for_view(window_id, self.settings_pane.id(), action)

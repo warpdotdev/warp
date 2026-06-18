@@ -2024,7 +2024,15 @@ fn render_tab_group_internal(
     // Captured into row/group right-click closures so they can pick between
     // the single-pane menu and the multi-tab selection menu.
     let is_in_multi_tab_selection = workspace.is_tab_in_multi_tab_selection(tab_index);
-    let color_mode = compute_tab_group_color_mode(tab, pane_group, &visible_pane_ids, theme, app);
+    let tab_group_for_color = tab.group_id.and_then(|gid| workspace.tab_groups.get(&gid));
+    let color_mode = compute_tab_group_color_mode(
+        tab,
+        pane_group,
+        &visible_pane_ids,
+        theme,
+        tab_group_for_color,
+        app,
+    );
     let per_pane_colors = color_mode.into_per_pane_colors(&visible_pane_ids);
     let is_being_renamed = is_active && workspace.current_workspace_state.is_tab_being_renamed();
     let rename_editor = workspace.tab_rename_editor.clone();
@@ -2729,6 +2737,12 @@ fn render_grouped_tabs_header(
         .with_child(action_buttons)
         .finish();
 
+    // Resolve the group's color so the header tints to match its member tabs.
+    let group_color_fill: Option<ThemeFill> = group
+        .color
+        .resolve(None)
+        .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into());
+
     let mut hoverable = Hoverable::new(mouse_states.header.clone(), move |state| {
         let border_fill = if is_header_selected {
             internal_colors::fg_overlay_3(theme)
@@ -2739,7 +2753,16 @@ fn render_grouped_tabs_header(
             .with_padding(Padding::uniform(GROUP_HORIZONTAL_PADDING))
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)))
             .with_border(Border::all(1.).with_border_fill(border_fill));
-        if is_header_selected || state.is_hovered() {
+        if let Some(color) = group_color_fill {
+            // Match the per-row color opacity scheme so the header reads as
+            // part of the same group as the colored member rows.
+            let opacity = if is_header_selected || state.is_hovered() {
+                TAB_COLOR_HOVER_OPACITY
+            } else {
+                TAB_COLOR_OPACITY
+            };
+            container = container.with_background(color.with_opacity(opacity));
+        } else if is_header_selected || state.is_hovered() {
             container = container.with_background(internal_colors::fg_overlay_2(theme));
         }
         container.finish()
@@ -5169,16 +5192,33 @@ fn render_pull_request_badge_content(label: &str, appearance: &Appearance) -> Bo
         .finish()
 }
 
+/// Resolves the rendered color mode for a tab's panes. A tab in a `tab_group`
+/// is fully colored by that group: the group's color applies uniformly, and a
+/// group with no color (the default for a fresh group) renders its members with
+/// no color, ignoring each member's own selected/directory color. An ungrouped
+/// tab uses its own `selected_color`, falling through to per-pane directory
+/// colors when unset.
 fn compute_tab_group_color_mode(
     tab: &TabData,
     pane_group: &PaneGroup,
     visible_pane_ids: &[PaneId],
     theme: &WarpTheme,
+    tab_group: Option<&TabGroup>,
     app: &AppContext,
 ) -> TabGroupColorMode {
-    // Manual override applies to the whole group.
+    // A grouped tab's color is fully owned by its group.
+    if let Some(group) = tab_group {
+        return match group.color.resolve(None) {
+            Some(color) => TabGroupColorMode::Uniform(
+                color.to_ansi_color(&theme.terminal_colors().normal).into(),
+            ),
+            None => TabGroupColorMode::None,
+        };
+    }
+
+    // Ungrouped tab: a manual color override applies to the whole tab.
     if !matches!(tab.selected_color, SelectedTabColor::Unset) {
-        return match tab.color() {
+        return match tab.selected_color.resolve(tab.default_directory_color) {
             Some(color) => TabGroupColorMode::Uniform(
                 color.to_ansi_color(&theme.terminal_colors().normal).into(),
             ),

@@ -219,6 +219,11 @@ impl TabData {
             Self::save_config_menu_items(index),
             self.color_option_menu_items(index, terminal_colors),
         ] {
+            // Skip empty sections so we don't emit a trailing separator (e.g.
+            // when a grouped tab hides the color picker).
+            if section_items.is_empty() {
+                continue;
+            }
             if menu_items
                 .last()
                 .is_some_and(|item| !matches!(item, MenuItem::Separator))
@@ -585,8 +590,12 @@ impl TabData {
         index: usize,
         terminal_colors: AnsiColors,
     ) -> Vec<MenuItem<WorkspaceAction>> {
+        // Tabs inside a group have their color controlled by the group.
+        if self.group_id.is_some() {
+            return vec![];
+        }
         if FeatureFlag::DirectoryTabColors.is_enabled() {
-            self.dot_color_option_menu_items(index, terminal_colors)
+            self.dot_color_option_menu_items(index)
         } else {
             self.legacy_color_option_menu_items(index, terminal_colors)
         }
@@ -594,78 +603,10 @@ impl TabData {
 
     /// New dot-based color picker: default (no-color) + color options.
     /// Rendered as a single custom menu item with individually clickable dots.
-    fn dot_color_option_menu_items(
-        &self,
-        index: usize,
-        terminal_colors: AnsiColors,
-    ) -> Vec<MenuItem<WorkspaceAction>> {
-        let effective_color = self.color();
-        let mouse_states: Vec<MouseStateHandle> = (0..TAB_COLOR_OPTIONS.len() + 1)
-            .map(|_| MouseStateHandle::default())
-            .collect();
-
-        vec![MenuItem::Item(
-            MenuItemFields::new_with_custom_label(
-                Arc::new(move |_is_selected, _is_hovered, appearance, _app| {
-                    let theme = appearance.theme();
-                    let ring_color: ColorU = theme.accent().into();
-
-                    let mut row = Flex::row()
-                        .with_main_axis_alignment(MainAxisAlignment::SpaceEvenly)
-                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                        .with_main_axis_size(MainAxisSize::Max);
-
-                    for (ansi_id, mouse_state) in std::iter::once(None)
-                        .chain(TAB_COLOR_OPTIONS.iter().copied().map(Some))
-                        .zip(mouse_states.iter().cloned())
-                    {
-                        let is_selected = match ansi_id {
-                            None => effective_color.is_none(),
-                            Some(id) => effective_color == Some(id),
-                        };
-                        let dot_color: ColorU = match ansi_id {
-                            None => ColorU::transparent_black(),
-                            Some(id) => id.to_ansi_color(&terminal_colors).into(),
-                        };
-                        let tooltip = match ansi_id {
-                            None => "Default (no color)".to_string(),
-                            Some(id) => id.to_string(),
-                        };
-
-                        let dot = render_color_dot(
-                            mouse_state,
-                            dot_color,
-                            is_selected,
-                            ring_color,
-                            ansi_id.is_none(),
-                            theme.foreground(),
-                            tooltip,
-                            appearance,
-                        )
-                        .on_click(move |ctx, _, _| {
-                            if let Some(color) = ansi_id {
-                                ctx.dispatch_typed_action(WorkspaceAction::ToggleTabColor {
-                                    color,
-                                    tab_index: index,
-                                });
-                            } else if let Some(color) = effective_color {
-                                ctx.dispatch_typed_action(WorkspaceAction::ToggleTabColor {
-                                    color,
-                                    tab_index: index,
-                                });
-                            }
-                            ctx.dispatch_typed_action(MenuAction::Close(true));
-                        });
-
-                        row.add_child(dot.finish());
-                    }
-
-                    row.finish()
-                }),
-                None,
-            )
-            .no_highlight_on_hover()
-            .with_no_interaction_on_hover(),
+    fn dot_color_option_menu_items(&self, index: usize) -> Vec<MenuItem<WorkspaceAction>> {
+        vec![color_picker_menu_item(
+            self.color(),
+            ColorPickerTarget::Tab { tab_index: index },
         )]
     }
 
@@ -698,6 +639,99 @@ impl TabData {
                 .collect(),
         }]
     }
+}
+
+/// Identifies what a color-picker selection recolors: a single tab or a whole
+/// tab group. Used by [`color_picker_menu_item`] to choose the toggle action
+/// dispatched when a dot is clicked.
+#[derive(Clone, Copy)]
+pub(crate) enum ColorPickerTarget {
+    Tab { tab_index: usize },
+    Group { group_id: TabGroupId },
+}
+
+impl ColorPickerTarget {
+    fn toggle_action(self, color: AnsiColorIdentifier) -> WorkspaceAction {
+        match self {
+            ColorPickerTarget::Tab { tab_index } => {
+                WorkspaceAction::ToggleTabColor { color, tab_index }
+            }
+            ColorPickerTarget::Group { group_id } => {
+                WorkspaceAction::ToggleTabGroupColor { color, group_id }
+            }
+        }
+    }
+}
+
+/// Builds the shared dot-based color picker menu row used by both the per-tab
+/// and per-group color selectors. The leading dot clears the color; the rest are
+/// the `TAB_COLOR_OPTIONS`. `current_color` drives the selected-dot ring and the
+/// clear dot's toggle-off; `target` selects which toggle action is dispatched on
+/// click.
+pub(crate) fn color_picker_menu_item(
+    current_color: Option<AnsiColorIdentifier>,
+    target: ColorPickerTarget,
+) -> MenuItem<WorkspaceAction> {
+    let mouse_states: Vec<MouseStateHandle> = (0..TAB_COLOR_OPTIONS.len() + 1)
+        .map(|_| MouseStateHandle::default())
+        .collect();
+
+    MenuItem::Item(
+        MenuItemFields::new_with_custom_label(
+            Arc::new(move |_is_selected, _is_hovered, appearance, _app| {
+                let theme = appearance.theme();
+                let terminal_colors = theme.terminal_colors().normal;
+                let ring_color: ColorU = theme.accent().into();
+
+                let mut row = Flex::row()
+                    .with_main_axis_alignment(MainAxisAlignment::SpaceEvenly)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_size(MainAxisSize::Max);
+
+                for (ansi_id, mouse_state) in std::iter::once(None)
+                    .chain(TAB_COLOR_OPTIONS.iter().copied().map(Some))
+                    .zip(mouse_states.iter().cloned())
+                {
+                    let is_selected = match ansi_id {
+                        None => current_color.is_none(),
+                        Some(id) => current_color == Some(id),
+                    };
+                    let dot_color: ColorU = match ansi_id {
+                        None => ColorU::transparent_black(),
+                        Some(id) => id.to_ansi_color(&terminal_colors).into(),
+                    };
+                    let tooltip = match ansi_id {
+                        None => "Default (no color)".to_string(),
+                        Some(id) => id.to_string(),
+                    };
+
+                    let dot = render_color_dot(
+                        mouse_state,
+                        dot_color,
+                        is_selected,
+                        ring_color,
+                        ansi_id.is_none(),
+                        theme.foreground(),
+                        tooltip,
+                        appearance,
+                    )
+                    .on_click(move |ctx, _, _| {
+                        if let Some(color) = ansi_id.or(current_color) {
+                            ctx.dispatch_typed_action(target.toggle_action(color));
+                        }
+                        ctx.dispatch_typed_action(MenuAction::Close(true));
+                    });
+
+                    row.add_child(dot.finish());
+                }
+
+                row.finish()
+            }),
+            None,
+        )
+        .no_highlight_on_hover()
+        .with_no_interaction_on_hover(),
+    )
 }
 
 /// Stores the state of the tab bar—info related to the entire list of tabs rather than any one
@@ -968,6 +1002,13 @@ impl<'a> TabComponent<'a> {
     pub fn for_grouped_member(mut self, is_sole_member: bool) -> Self {
         self.grouped_member = true;
         self.sole_grouped_member = is_sole_member;
+        self
+    }
+
+    /// Overrides the effective color used to build tab styles. Used when the
+    /// tab's color should be driven by its group rather than its own data.
+    pub fn with_effective_color(mut self, color: Option<AnsiColorIdentifier>) -> Self {
+        self.styles = TabStyles::default(self.appearance, color);
         self
     }
 
