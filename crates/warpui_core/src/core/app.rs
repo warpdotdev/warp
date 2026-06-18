@@ -73,6 +73,20 @@ lazy_static! {
 #[derive(Clone)]
 pub struct App(Rc<RefCell<AppContext>>);
 
+/// A weak handle to the [`App`], obtainable from an [`AppContext`] via
+/// [`AppContext::weak_app`]. Upgrade it to a strong [`App`] to re-enter the
+/// shared core from a spawned task (for example, the TUI runtime's input loop)
+/// without keeping the app alive past termination.
+#[derive(Clone)]
+pub struct WeakApp(rc::Weak<RefCell<AppContext>>);
+
+impl WeakApp {
+    /// Upgrades to a strong [`App`] handle if the app is still alive.
+    pub fn upgrade(&self) -> Option<App> {
+        self.0.upgrade().map(App)
+    }
+}
+
 impl App {
     pub fn test<A: assets::AssetProvider, T: 'static, F: Future<Output = T> + 'static>(
         asset_provider: A,
@@ -865,6 +879,12 @@ impl AppContext {
 
     pub fn background_executor(&self) -> &Arc<executor::Background> {
         &self.background
+    }
+
+    /// Returns a weak handle to the owning [`App`], for spawned tasks that need
+    /// to re-enter the shared core later (see [`WeakApp`]).
+    pub fn weak_app(&self) -> WeakApp {
+        WeakApp(self.weak_self.clone())
     }
 
     pub fn window_bounds(&self, window_id: &WindowId) -> Option<RectF> {

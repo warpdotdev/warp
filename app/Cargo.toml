@@ -53,6 +53,14 @@ name = "generate_settings_schema"
 path = "src/bin/generate_settings_schema.rs"
 test = false
 
+# Headless terminal-UI front-end. Gated on the `tui` feature so the default
+# workspace build (and CI) is unaffected, like the `preview` bin above.
+[[bin]]
+name = "warp-tui"
+path = "src/bin/tui.rs"
+required-features = ["tui"]
+test = false
+
 [dependencies]
 addr = "0.15.6"
 ai.workspace = true
@@ -461,6 +469,9 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
+# Headless terminal-UI front-end (the `warp-tui` binary); enables the TUI
+# backend in warpui_core.
+tui = ["warpui_core/tui"]
 ai_resume_button = []
 autoupdate = []
 figma_detection = []

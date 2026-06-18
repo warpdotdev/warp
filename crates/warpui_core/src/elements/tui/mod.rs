@@ -14,7 +14,7 @@
 //!   [`TuiElement::dispatch_event`]. (The crossterm → warp event *conversion*
 //!   lives with the runtime, in `crate::runtime`.)
 //! - The concrete elements: [`TuiText`], [`TuiColumn`], [`TuiContainer`],
-//!   [`TuiChildView`], and [`TuiEventHandler`].
+//!   [`TuiCenter`], [`TuiChildView`], and [`TuiEventHandler`].
 //! - [`TuiParentElement`]: a trait for multi-child elements, providing
 //!   [`with_child`](TuiParentElement::with_child) /
 //!   [`with_children`](TuiParentElement::with_children) /
@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use crate::{AppContext, EntityId, Event};
 
 mod buffer;
+mod center;
 mod child_view;
 mod column;
 mod container;
@@ -36,6 +37,7 @@ mod parent;
 mod text;
 
 pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiStyle};
+pub use center::TuiCenter;
 pub use child_view::TuiChildView;
 pub use column::TuiColumn;
 pub use container::TuiContainer;
