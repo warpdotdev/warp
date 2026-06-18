@@ -539,6 +539,16 @@ impl LaunchMode {
         }
     }
 
+    fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            LaunchMode::App { .. } => "app",
+            LaunchMode::CommandLine { command, .. } => command.as_str_for_tracing(),
+            LaunchMode::Test { .. } => "test",
+            LaunchMode::RemoteServerDaemon { .. } => "remote_server_daemon",
+            LaunchMode::RemoteServerProxy => "remote_server_proxy",
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn new_for_unit_test() -> Self {
         LaunchMode::Test {
@@ -805,7 +815,11 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
     // Start the `run_internal` span here - we can't do it before this point
     // because we need the tracing initialization to be complete first.
-    let span = ::tracing::info_span!("run_internal", tags.cloud_agent = true);
+    let span = ::tracing::info_span!(
+        "run_internal",
+        tags.cloud_agent = true,
+        launch_mode = launch_mode.as_str_for_tracing()
+    );
     let _enter = span.enter();
 
     let log_destination = launch_mode.log_destination();
