@@ -539,6 +539,43 @@ impl LaunchMode {
         }
     }
 
+    fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            LaunchMode::App { .. } => "app",
+            LaunchMode::CommandLine { command, .. } => match command {
+                CliCommand::Agent(agent_command) => match agent_command {
+                    AgentCommand::Run(_) => "agent run",
+                    AgentCommand::RunCloud(_) => "agent run-cloud",
+                    AgentCommand::Profile(_) => "agent profile",
+                    AgentCommand::List(_) => "agent list",
+                    AgentCommand::Get(_) => "agent get",
+                    AgentCommand::Create(_) => "agent create",
+                    AgentCommand::Update(_) => "agent update",
+                    AgentCommand::Delete(_) => "agent delete",
+                    AgentCommand::Skills(_) => "agent skills",
+                },
+                CliCommand::Environment(environment_command) => "environment",
+                CliCommand::MCP(mcpcommand) => "mcp",
+                CliCommand::Run(task_command) => "run",
+                CliCommand::Model(model_command) => "model",
+                CliCommand::Login => "login",
+                CliCommand::Logout => "logout",
+                CliCommand::Whoami => "whoami",
+                CliCommand::Provider(provider_command) => "provider",
+                CliCommand::Integration(integration_command) => "integration",
+                CliCommand::Schedule(schedule_command) => "schedule",
+                CliCommand::Secret(secret_command) => "secret",
+                CliCommand::Federate(federate_command) => "federate",
+                CliCommand::HarnessSupport(harness_support_args) => "harness_support",
+                CliCommand::Artifact(artifact_command) => "artifact",
+                CliCommand::ApiKey(api_key_command) => "api_key",
+            },
+            LaunchMode::Test { .. } => "test",
+            LaunchMode::RemoteServerDaemon { .. } => "remote_server_daemon",
+            LaunchMode::RemoteServerProxy => "remote_server_proxy",
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn new_for_unit_test() -> Self {
         LaunchMode::Test {
@@ -801,7 +838,11 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
     // Start the `run_internal` span here - we can't do it before this point
     // because we need the tracing initialization to be complete first.
-    let span = ::tracing::info_span!("run_internal", tags.cloud_agent = true);
+    let span = ::tracing::info_span!(
+        "run_internal",
+        tags.cloud_agent = true,
+        launch_mode = launch_mode.as_str_for_tracing()
+    );
     let _enter = span.enter();
 
     let log_destination = launch_mode.log_destination();
