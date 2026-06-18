@@ -13,6 +13,10 @@ pub(crate) struct LongContextWarningState {
     /// The active model's long-context pricing threshold, in input tokens.
     /// `None` when the model has no long-context pricing tier.
     effective_model_threshold: Option<u32>,
+    /// Whether the active model is a user-configured custom endpoint. The
+    /// warning communicates Warp-priced OpenAI long-context tiers, which don't
+    /// apply to custom endpoints, so it is never surfaced for them.
+    is_custom_endpoint: bool,
     /// Input tokens of the latest primary-agent LLM call in the latest
     /// successfully persisted request, as reported by the server.
     total_input_tokens: u32,
@@ -22,11 +26,13 @@ impl LongContextWarningState {
     pub fn new(
         effective_model_provider: LLMProvider,
         effective_model_threshold: Option<u32>,
+        is_custom_endpoint: bool,
         total_input_tokens: u32,
     ) -> Self {
         Self {
             effective_model_provider,
             effective_model_threshold,
+            is_custom_endpoint,
             total_input_tokens,
         }
     }
@@ -39,18 +45,22 @@ impl LongContextWarningState {
         &mut self,
         effective_model_provider: LLMProvider,
         effective_model_threshold: Option<u32>,
+        is_custom_endpoint: bool,
     ) {
         self.effective_model_provider = effective_model_provider;
         self.effective_model_threshold = effective_model_threshold;
+        self.is_custom_endpoint = is_custom_endpoint;
     }
 
     /// Visible when the latest reported input tokens exceed the active model's
     /// long-context pricing threshold (strictly greater, matching the server's
     /// pricing predicate). The warning communicates OpenAI's long-context
     /// pricing tiers, so it is only surfaced for OpenAI models — even though
-    /// other providers (e.g. Gemini) also expose a threshold.
+    /// other providers (e.g. Gemini) also expose a threshold — and never for
+    /// custom endpoints, whose pricing Warp does not control.
     pub fn is_visible(&self) -> bool {
-        self.effective_model_provider == LLMProvider::OpenAI
+        !self.is_custom_endpoint
+            && self.effective_model_provider == LLMProvider::OpenAI
             && self
                 .effective_model_threshold
                 .is_some_and(|threshold| self.total_input_tokens > threshold)
