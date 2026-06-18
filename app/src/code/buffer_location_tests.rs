@@ -324,7 +324,7 @@ fn handle_buffer_updated_push_conflict_when_client_version_stale() {
         let (event_tx, event_rx) = async_channel::unbounded::<bool>();
         let gbm_handle = gbm(&app);
         app.update(|ctx| {
-            ctx.subscribe_to_model(&gbm_handle, move |_, event, _| {
+            ctx.subscribe_to_model(&gbm_handle, move |_, _, event, _| {
                 if matches!(event, GlobalBufferModelEvent::RemoteBufferConflict { .. }) {
                     let _ = event_tx.try_send(true);
                 }
@@ -641,7 +641,7 @@ fn server_push_does_not_echo_back_as_client_edit() {
             // If a user-originated ContentChanged fires, it means the echo loop
             // guard (origin.from_user()) failed.
             let tx = user_edit_tx.clone();
-            ctx.subscribe_to_model(&state.buffer, move |_me, event, _ctx| {
+            ctx.subscribe_to_model(&state.buffer, move |_me, _, event, _ctx| {
                 use warp_editor::content::buffer::BufferEvent;
                 if let BufferEvent::ContentChanged { origin, .. } = event {
                     if origin.from_user() {

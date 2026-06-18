@@ -40,7 +40,7 @@ impl History {
                 let (tx, rx) = async_channel::unbounded();
                 let history_handle_clone = history_handle.clone();
                 history_handle.update(app, move |_, ctx| {
-                    ctx.subscribe_to_model(&history_handle_clone, move |_, event, _| {
+                    ctx.subscribe_to_model(&history_handle_clone, move |_, _, event, _| {
                         let HistoryEvent::Initialized(event_id) = event;
                         if session_id == *event_id {
                             let _ = tx.try_send(());

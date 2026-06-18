@@ -284,15 +284,18 @@ pub struct AmbientAgentViewModel {
 
 impl AmbientAgentViewModel {
     pub fn new(terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, event, ctx| {
             me.handle_cloud_model_event(event, ctx);
         });
 
-        ctx.subscribe_to_model(&HarnessAvailabilityModel::handle(ctx), |me, _event, ctx| {
-            me.validate_selected_harness(ctx);
-        });
+        ctx.subscribe_to_model(
+            &HarnessAvailabilityModel::handle(ctx),
+            |me, _, _event, ctx| {
+                me.validate_selected_harness(ctx);
+            },
+        );
 
-        ctx.subscribe_to_model(&GitHubAuthNotifier::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&GitHubAuthNotifier::handle(ctx), |me, _, event, ctx| {
             if matches!(event, GitHubAuthEvent::AuthCompleted) {
                 me.handle_github_auth_completed(ctx);
             }

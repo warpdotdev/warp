@@ -44,7 +44,7 @@ fn test_weak_handle_fails_after_last_strong_handle_dropped_in_event_callback() {
                 // handle and immediately try to upgrade the weak handle.
                 ctx.subscribe_to_model(
                     &emitter_for_subscribe,
-                    |sub: &mut Subscriber, _event, ctx| {
+                    |sub: &mut Subscriber, _, _event, ctx| {
                         sub.emitter.take();
 
                         // The weak upgrade should fail because the last
@@ -150,16 +150,19 @@ fn test_weak_view_handle_fails_after_last_strong_handle_dropped_in_event_callbac
 
                 // When the trigger fires, drop the last strong ViewHandle
                 // and immediately try to upgrade the weak handle.
-                ctx.subscribe_to_model(&trigger_clone, |orch: &mut Orchestrator, _event, ctx| {
-                    orch.target_view.take();
+                ctx.subscribe_to_model(
+                    &trigger_clone,
+                    |orch: &mut Orchestrator, _, _event, ctx| {
+                        orch.target_view.take();
 
-                    let upgrade_result = orch.target_weak.as_ref().unwrap().upgrade(ctx);
-                    assert!(
-                        upgrade_result.is_none(),
-                        "weak view upgrade should return None immediately \
+                        let upgrade_result = orch.target_weak.as_ref().unwrap().upgrade(ctx);
+                        assert!(
+                            upgrade_result.is_none(),
+                            "weak view upgrade should return None immediately \
                              after the last strong handle is dropped"
-                    );
-                });
+                        );
+                    },
+                );
             });
         }
 

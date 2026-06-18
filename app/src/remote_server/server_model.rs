@@ -335,7 +335,7 @@ impl ServerModel {
         // connected proxy sessions.
         {
             let file_model = FileModel::handle(ctx);
-            ctx.subscribe_to_model(&file_model, |me, event, ctx| {
+            ctx.subscribe_to_model(&file_model, |me, _, event, ctx| {
                 let file_id = event.file_id();
                 let Some(pending_kind) = me.pending_file_ops.get(&file_id).map(|op| &op.kind)
                 else {
@@ -386,7 +386,7 @@ impl ServerModel {
         }
         {
             let repo_model = RepoMetadataModel::handle(ctx);
-            ctx.subscribe_to_model(&repo_model, |me, event, ctx| match event {
+            ctx.subscribe_to_model(&repo_model, |me, _, event, ctx| match event {
                 RepoMetadataEvent::IncrementalUpdateReady { update } => {
                     me.send_server_message(
                         None,
@@ -438,13 +438,13 @@ impl ServerModel {
             });
         }
         let index_manager = CodebaseIndexManager::handle(ctx);
-        ctx.subscribe_to_model(&index_manager, |me, event, ctx| {
+        ctx.subscribe_to_model(&index_manager, |me, _, event, ctx| {
             me.handle_codebase_index_manager_event(event, ctx);
         });
         // Subscribe to GlobalBufferModel events for server-local buffers.
         {
             let gbm = GlobalBufferModel::handle(ctx);
-            ctx.subscribe_to_model(&gbm, |me, event, ctx| match event {
+            ctx.subscribe_to_model(&gbm, |me, _, event, ctx| match event {
                 GlobalBufferModelEvent::BufferLoaded { file_id, .. } => {
                     // Complete all pending OpenBuffer requests for this file.
                     let pending = me.buffers.take_pending_by_kind(
@@ -652,7 +652,7 @@ impl ServerModel {
         // to proto messages and send them to connected clients.
         {
             let diff_states = model.diff_states.clone();
-            ctx.subscribe_to_model(&diff_states, |me, dispatch, _ctx| {
+            ctx.subscribe_to_model(&diff_states, |me, _, dispatch, _ctx| {
                 me.handle_diff_state_update(dispatch);
             });
         }
@@ -3405,7 +3405,7 @@ impl ServerModel {
         };
 
         let path_for_sub = repo_path.clone();
-        ctx.subscribe_to_model(&handle, move |me, _event, ctx| {
+        ctx.subscribe_to_model(&handle, move |me, _, _event, ctx| {
             let proto_metadata = {
                 let Some(handle) = me.git_status_models.get(&path_for_sub) else {
                     return;
@@ -3624,7 +3624,7 @@ impl ServerModel {
         };
 
         let path_for_sub = repo_path.clone();
-        ctx.subscribe_to_model(&handle, move |me, event, ctx| match event {
+        ctx.subscribe_to_model(&handle, move |me, _, event, ctx| match event {
             GitHubRepoEvent::PrInfoChanged => me.push_github_pr_info(&path_for_sub, ctx),
             GitHubRepoEvent::RepositoryInfoChanged => {
                 me.push_github_repository_info(&path_for_sub, ctx)

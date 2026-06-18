@@ -197,7 +197,7 @@ impl CurrentPrompt {
             &SessionSettings::handle(ctx),
             Self::handle_session_settings_changed,
         );
-        ctx.subscribe_to_model(&sessions, |me, event, ctx| {
+        ctx.subscribe_to_model(&sessions, |me, _, event, ctx| {
             if let SessionsEvent::EnvironmentVariablesUpdated { .. } = event {
                 me.update_states_with_new_context(ctx);
             }
@@ -246,7 +246,7 @@ impl CurrentPrompt {
     ) {
         // A WeakViewHandle is used here to avoid leaking the terminal model
         let weak_editor_handle = editor.downgrade();
-        ctx.subscribe_to_view(&editor, move |me, _, ctx| {
+        ctx.subscribe_to_view(&editor, move |me, _, _, ctx| {
             // CurrentPrompt exists and this fn is called even if we're not using warp prompt.
             // We don't need to do anything if we're honoring PS1 unless universal developer input
             // or AgentView is enabled (agent view needs chips regardless of PS1 setting).
@@ -1107,6 +1107,7 @@ impl CurrentPrompt {
     /// spot, and changing Prompt configuration most likely doesn't mean updating the context.
     fn handle_prompt_changed(
         &mut self,
+        _: ModelHandle<Prompt>,
         _prompt_event: &<Prompt as Entity>::Event,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1123,6 +1124,7 @@ impl CurrentPrompt {
 
     fn handle_session_settings_changed(
         &mut self,
+        _: ModelHandle<SessionSettings>,
         event: &SessionSettingsChangedEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1223,7 +1225,12 @@ impl CurrentPrompt {
             .any(|handle| !handle.abort_handle().is_aborted())
     }
 
-    fn handle_model_event(&mut self, event: &ModelEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_model_event(
+        &mut self,
+        _: ModelHandle<ModelEventDispatcher>,
+        event: &ModelEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if let ModelEvent::AfterBlockCompleted(after_block_completed) = event {
             if let BlockType::User(UserBlockCompleted { command, .. }) =
                 &after_block_completed.block_type
@@ -1400,7 +1407,7 @@ impl CurrentPrompt {
         if let Some(weak) = handle {
             if let Some(strong) = weak.upgrade(ctx) {
                 self.git_repo_status = Some(weak);
-                ctx.subscribe_to_model(&strong, |me, event, ctx| match event {
+                ctx.subscribe_to_model(&strong, |me, _, event, ctx| match event {
                     GitRepoStatusEvent::MetadataChanged => {
                         me.apply_git_repo_metadata(ctx);
                     }
@@ -1447,7 +1454,7 @@ impl CurrentPrompt {
                 self.github_repo_model = Some(weak);
                 // Only PR info drives the chip value; repository name/owner
                 // changes don't affect it.
-                ctx.subscribe_to_model(&strong, |me, event, ctx| match event {
+                ctx.subscribe_to_model(&strong, |me, _, event, ctx| match event {
                     GitHubRepoEvent::PrInfoChanged => {
                         me.sync_pr_chip_from_model(ctx);
                     }

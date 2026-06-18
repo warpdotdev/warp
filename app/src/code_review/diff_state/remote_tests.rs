@@ -174,7 +174,7 @@ fn get_committed_branch_files_response_emits_domain_files() {
         {
             let emitted = emitted.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                ctx.subscribe_to_model(&handle, move |_, _, event, _| {
                     if let DiffStateModelEvent::BranchCommittedFilesReceived(files) = event {
                         emitted
                             .lock()
@@ -227,7 +227,7 @@ fn apply_snapshot_loaded_preserves_content_at_base_in_event() {
         {
             let emitted_content = emitted_content.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                ctx.subscribe_to_model(&handle, move |_, _, event, _| {
                     if let DiffStateModelEvent::NewDiffsComputed {
                         diffs: Some(diffs), ..
                     } = event
@@ -343,7 +343,7 @@ fn mark_disconnected_transitions_state_and_emits_connection_lost() {
         {
             let connection_lost_count = connection_lost_count.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                ctx.subscribe_to_model(&handle, move |_, _, event, _| {
                     if matches!(event, DiffStateModelEvent::ConnectionLost) {
                         *connection_lost_count
                             .lock()
@@ -511,7 +511,7 @@ fn apply_snapshot_emits_event_with_repo_relative_paths() {
         {
             let emitted_paths = emitted_paths.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                ctx.subscribe_to_model(&handle, move |_, _, event, _| {
                     if let DiffStateModelEvent::NewDiffsComputed {
                         diffs: Some(diffs), ..
                     } = event
@@ -600,7 +600,7 @@ fn apply_file_delta_emits_event_with_repo_relative_path() {
         {
             let emitted_paths = emitted_paths.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                ctx.subscribe_to_model(&handle, move |_, _, event, _| {
                     if let DiffStateModelEvent::SingleFileUpdated { path, .. } = event {
                         emitted_paths
                             .lock()
@@ -646,7 +646,7 @@ fn apply_file_delta_preserves_content_at_base_in_event() {
         {
             let emitted_content = emitted_content.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                ctx.subscribe_to_model(&handle, move |_, _, event, _| {
                     if let DiffStateModelEvent::SingleFileUpdated {
                         diff: Some(diff), ..
                     } = event
@@ -839,7 +839,7 @@ fn host_disconnected_for_matching_host_transitions_to_disconnected() {
         {
             let connection_lost_count = connection_lost_count.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                ctx.subscribe_to_model(&handle, move |_, _, event, _| {
                     if matches!(event, DiffStateModelEvent::ConnectionLost) {
                         *connection_lost_count
                             .lock()

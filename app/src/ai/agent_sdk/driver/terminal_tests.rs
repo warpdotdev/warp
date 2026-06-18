@@ -22,7 +22,7 @@ fn extend_shared_session_retention_emits_event_for_active_sharer() {
 
         app.update(|ctx| {
             let emitted_reasons = emitted_reasons.clone();
-            ctx.subscribe_to_view(&terminal_view, move |_, event, _| {
+            ctx.subscribe_to_view(&terminal_view, move |_, _, event, _| {
                 if let Event::ExtendSessionRetention { reason } = event {
                     emitted_reasons.borrow_mut().push(*reason);
                 }

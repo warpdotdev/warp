@@ -415,7 +415,7 @@ impl TestState {
         let (layout_tx, layout_rx) = async_channel::unbounded();
         app.update(|ctx| {
             let render2 = render.clone();
-            ctx.subscribe_to_model(&content, move |_, event, ctx| match event {
+            ctx.subscribe_to_model(&content, move |_, _, event, ctx| match event {
                 BufferEvent::SelectionChanged { .. } => (),
                 BufferEvent::ContentChanged {
                     delta,
@@ -431,7 +431,7 @@ impl TestState {
             });
 
             let content2 = content.clone();
-            ctx.subscribe_to_model(&render, move |render_state, event, ctx| match event {
+            ctx.subscribe_to_model(&render, move |render_state, _, event, ctx| match event {
                 RenderEvent::NeedsResize => {
                     let delta = content2.as_ref(ctx).invalidate_layout();
                     render_state.update(ctx, |render_state, _| {

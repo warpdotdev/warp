@@ -34,7 +34,7 @@ where
         let events: Rc<RefCell<Vec<QueuedQueryEvent>>> = Rc::new(RefCell::new(Vec::new()));
         let events_clone = events.clone();
         app.update(|ctx| {
-            ctx.subscribe_to_model(&model, move |_, event: &QueuedQueryEvent, _| {
+            ctx.subscribe_to_model(&model, move |_, _, event: &QueuedQueryEvent, _| {
                 events_clone.borrow_mut().push(event.clone());
             });
         });

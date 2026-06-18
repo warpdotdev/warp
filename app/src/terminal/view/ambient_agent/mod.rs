@@ -88,7 +88,7 @@ pub fn create_cloud_mode_view(
     };
     let view_model_for_subscription = view_model.clone();
     terminal_manager.update(ctx, |_, ctx| {
-        ctx.subscribe_to_model(&view_model, move |manager, event, ctx| {
+        ctx.subscribe_to_model(&view_model, move |manager, _, event, ctx| {
             let Some(manager) = manager
                 .as_any_mut()
                 .downcast_mut::<shared_session::viewer::TerminalManager>()

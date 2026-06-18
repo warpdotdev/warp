@@ -124,7 +124,9 @@ impl GitRepoModels {
                     let inner =
                         ctx.add_model(|ctx| LocalGitHubRepoModel::new(repo_path, git_status, ctx));
                     ctx.add_model(|ctx| {
-                        ctx.subscribe_to_model(&inner, GitHubRepoModel::forward_event);
+                        ctx.subscribe_to_model(&inner, |me, _, event, ctx| {
+                            GitHubRepoModel::forward_event(me, event, ctx)
+                        });
                         GitHubRepoModel::Local(inner)
                     })
                 }
@@ -140,7 +142,9 @@ impl GitRepoModels {
                 let inner =
                     ctx.add_model(|ctx| RemoteGitHubRepoModel::new(remote_path.clone(), ctx));
                 ctx.add_model(|ctx| {
-                    ctx.subscribe_to_model(&inner, GitHubRepoModel::forward_event);
+                    ctx.subscribe_to_model(&inner, |me, _, event, ctx| {
+                        GitHubRepoModel::forward_event(me, event, ctx)
+                    });
                     GitHubRepoModel::Remote(inner)
                 })
             }

@@ -80,12 +80,12 @@ impl LocalAgentTaskSyncModel {
 
     fn new_with_ai_client(ai_client: Arc<dyn AIClient>, ctx: &mut ModelContext<Self>) -> Self {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
-        ctx.subscribe_to_model(&history_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&history_model, |me, _, event, ctx| {
             me.handle_history_event(event, ctx);
         });
 
         let cli_sessions_model = CLIAgentSessionsModel::handle(ctx);
-        ctx.subscribe_to_model(&cli_sessions_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&cli_sessions_model, |me, _, event, ctx| {
             me.handle_cli_session_event(event, ctx);
         });
 

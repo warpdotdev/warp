@@ -551,7 +551,7 @@ fn terminal_cloud_status_transition_drains_once_through_cloud_followup_input_eve
         let input = terminal.read(&app, |view, _| view.input.clone());
         let followup_events_for_subscription = followup_events.clone();
         app.update(|ctx| {
-            ctx.subscribe_to_view(&input, move |_, event: &InputEvent, _| {
+            ctx.subscribe_to_view(&input, move |_, _, event: &InputEvent, _| {
                 if let InputEvent::SubmitCloudFollowup { prompt } = event {
                     followup_events_for_subscription
                         .borrow_mut()
@@ -634,7 +634,7 @@ fn promptless_setup_complete_auto_sends_queued_prompt_to_viewer() {
         let input = terminal.read(&app, |view, _| view.input.clone());
         let sent_prompts_for_subscription = sent_prompts.clone();
         app.update(|ctx| {
-            ctx.subscribe_to_view(&input, move |_, event: &InputEvent, _| {
+            ctx.subscribe_to_view(&input, move |_, _, event: &InputEvent, _| {
                 if let InputEvent::SendAgentPrompt { prompt, .. } = event {
                     sent_prompts_for_subscription
                         .borrow_mut()
@@ -1315,7 +1315,7 @@ fn send_now_action_emits_row_kind_and_leaves_rows_for_host_to_fire() {
         )>::new()));
         let send_now_events_for_subscription = send_now_events.clone();
         app.update(|ctx| {
-            ctx.subscribe_to_view(&panel, move |_, event: &QueuedPromptsPanelEvent, _| {
+            ctx.subscribe_to_view(&panel, move |_, _, event: &QueuedPromptsPanelEvent, _| {
                 if let QueuedPromptsPanelEvent::SendNow {
                     conversation_id,
                     query_id,

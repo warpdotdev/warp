@@ -15,7 +15,7 @@ use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use warp_core::{send_telemetry_from_ctx, HostId, SessionId};
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::{ModelContext, SingletonEntity};
+use warpui::{ModelContext, ModelHandle, SingletonEntity};
 
 use super::{
     BackendOrigin, CommitChainMode, DiffMetadata, DiffMode, DiffOperation, DiffState,
@@ -119,6 +119,7 @@ impl RemoteDiffStateModel {
 
     fn handle_manager_event(
         &mut self,
+        _: ModelHandle<RemoteServerManager>,
         event: &RemoteServerManagerEvent,
         ctx: &mut ModelContext<Self>,
     ) {

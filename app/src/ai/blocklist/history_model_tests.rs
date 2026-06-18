@@ -3296,7 +3296,7 @@ fn test_fork_then_bind_handoff_token_updates_cached_metadata_and_emits_refresh_e
 
         app.update(|ctx| {
             let captured_events = captured_events.clone();
-            ctx.subscribe_to_model(&history_model, move |_, event, _| {
+            ctx.subscribe_to_model(&history_model, move |_, _, event, _| {
                 captured_events.lock().unwrap().push(event.clone());
             });
         });

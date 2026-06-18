@@ -329,7 +329,12 @@ impl DisplayMap {
         self.fold_map.apply_edits(edits, ctx)
     }
 
-    fn handle_buffer_event(&mut self, event: &buffer::Event, ctx: &mut ModelContext<Self>) {
+    fn handle_buffer_event(
+        &mut self,
+        _: ModelHandle<Buffer>,
+        event: &buffer::Event,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             buffer::Event::Edited { edits, .. } => self.apply_edits(edits, ctx).unwrap(),
             buffer::Event::StylesUpdated

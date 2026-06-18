@@ -121,7 +121,7 @@ impl GlobalRules {
         );
 
         // React to creation/deletion of home subdirs at runtime.
-        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _, event, ctx| {
             me.global_rules
                 .handle_home_dir_event_for_global_rules(event, ctx);
         });

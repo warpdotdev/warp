@@ -113,7 +113,7 @@ fn focus_reporting_writes_focus_events_in_normal_screen() {
         let writes = pty_writes.clone();
 
         app.update(|ctx| {
-            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+            ctx.subscribe_to_view(&terminal, move |_, _, event, _| {
                 if let Event::WriteBytesToPty { bytes } = event {
                     writes.borrow_mut().push(bytes.to_vec());
                 }
@@ -5131,7 +5131,7 @@ fn test_scroll_position_doesnt_change_when_block_finished() {
 
         let (tx, rx) = async_channel::bounded(1);
         app.update(|ctx| {
-            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+            ctx.subscribe_to_view(&terminal, move |_, _, event, _| {
                 if let Event::BlockCompleted { block, .. } = event {
                     let output = std::str::from_utf8(&block.stylized_output).unwrap();
                     if output.trim() == "lr" {
@@ -5252,7 +5252,7 @@ fn ctrl_c_after_stop_takeover_cancels_conversation() {
         let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
         let writes = pty_writes.clone();
         app.update(|ctx| {
-            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+            ctx.subscribe_to_view(&terminal, move |_, _, event, _| {
                 if let Event::WriteBytesToPty { bytes } = event {
                     writes.borrow_mut().push(bytes.to_vec());
                 }
@@ -5307,7 +5307,7 @@ fn ctrl_c_after_transfer_takeover_does_not_cancel_conversation() {
         let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
         let writes = pty_writes.clone();
         app.update(|ctx| {
-            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+            ctx.subscribe_to_view(&terminal, move |_, _, event, _| {
                 if let Event::WriteBytesToPty { bytes } = event {
                     writes.borrow_mut().push(bytes.to_vec());
                 }
@@ -5746,7 +5746,7 @@ fn submit_rich_input_and_collect_pty_writes(
     let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
     let writes = pty_writes.clone();
     app.update(|ctx| {
-        ctx.subscribe_to_view(&terminal, move |_, event, _| {
+        ctx.subscribe_to_view(&terminal, move |_, _, event, _| {
             if let Event::WriteBytesToPty { bytes } = event {
                 writes.borrow_mut().push(bytes.to_vec());
             }
@@ -6094,7 +6094,7 @@ fn attach_path_as_context_routes_to_open_cli_agent_rich_input() {
         let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
         let writes = pty_writes.clone();
         app.update(|ctx| {
-            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+            ctx.subscribe_to_view(&terminal, move |_, _, event, _| {
                 if let Event::WriteBytesToPty { bytes } = event {
                     writes.borrow_mut().push(bytes.to_vec());
                 }
@@ -6140,7 +6140,7 @@ fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
         let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
         let writes = pty_writes.clone();
         app.update(|ctx| {
-            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+            ctx.subscribe_to_view(&terminal, move |_, _, event, _| {
                 if let Event::WriteBytesToPty { bytes } = event {
                     writes.borrow_mut().push(bytes.to_vec());
                 }
@@ -6216,7 +6216,7 @@ fn paste_raw_image_clipboard_in_cli_agent_sends_correct_bytes() {
             let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
             let writes = pty_writes.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                ctx.subscribe_to_view(&terminal, move |_, _, event, _| {
                     if let Event::WriteBytesToPty { bytes } = event {
                         writes.borrow_mut().push(bytes.to_vec());
                     }

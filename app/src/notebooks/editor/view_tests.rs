@@ -314,7 +314,7 @@ fn test_appearance_changes() {
         let layouts = {
             let (tx, rx) = async_channel::unbounded();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&render_model, move |_, event, _| {
+                ctx.subscribe_to_model(&render_model, move |_, _, event, _| {
                     if let RenderEvent::LayoutUpdated = event {
                         block_on(tx.send(*event)).unwrap();
                     }
@@ -752,7 +752,7 @@ fn test_cmd_click_missing_markdown_anchor_falls_back_to_link_resolution() {
         {
             let events = events.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&links, move |_, event, _| {
+                ctx.subscribe_to_model(&links, move |_, _, event, _| {
                     events.lock().push(event.clone());
                 })
             });
@@ -796,7 +796,7 @@ fn test_run_command_from_text_selection() {
                 .as_ref(ctx)
                 .render_state()
                 .clone();
-            ctx.subscribe_to_model(&render_state, move |_, event, _ctx| {
+            ctx.subscribe_to_model(&render_state, move |_, _, event, _ctx| {
                 if let RenderEvent::LayoutUpdated = event {
                     if let Some(tx) = tx.take() {
                         tx.send(()).unwrap();

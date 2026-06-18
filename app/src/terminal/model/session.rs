@@ -140,7 +140,7 @@ impl Sessions {
         #[cfg(feature = "local_tty")]
         if FeatureFlag::SshRemoteServer.is_enabled() {
             let mgr = RemoteServerManager::handle(ctx);
-            ctx.subscribe_to_model(&mgr, |sessions, event, ctx| match event {
+            ctx.subscribe_to_model(&mgr, |sessions, _, event, ctx| match event {
                 RemoteServerManagerEvent::SessionConnected {
                     session_id: sid,
                     host_id,

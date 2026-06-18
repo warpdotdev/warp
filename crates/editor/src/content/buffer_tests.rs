@@ -13504,7 +13504,7 @@ fn test_update_selection_same_range() {
         let selection_changes = Arc::new(AtomicU8::new(0));
         app.update(|ctx| {
             let selection_changes = selection_changes.clone();
-            ctx.subscribe_to_model(&buffer, move |_, event, _| {
+            ctx.subscribe_to_model(&buffer, move |_, _, event, _| {
                 if let BufferEvent::SelectionChanged { .. } = event {
                     selection_changes.fetch_add(1, Ordering::Relaxed);
                 }

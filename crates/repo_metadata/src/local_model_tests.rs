@@ -554,7 +554,7 @@ fn test_lazy_loaded_path_discovers_force_included_skills_and_emits_watcher_delta
             let workspace_path_for_event = workspace_path.clone();
             let skill_path_for_event = skill_path.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, _, event, _ctx| {
                     if let RepositoryMetadataEvent::StandingQueryResultsUpdated { path, delta } =
                         event
                     {
@@ -635,7 +635,7 @@ fn test_index_directory_path_upgrades_lazy_loaded_non_git_path() {
             let upgrade_completed = Rc::new(RefCell::new(Some(tx)));
             let upgrade_completed_for_event = upgrade_completed.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, _, event, _ctx| {
                     if matches!(
                         event,
                         RepositoryMetadataEvent::RepositoryUpdated { path }
@@ -1546,7 +1546,7 @@ fn added_external_target_skill_symlink_routes_to_lexical_repository() {
                 let repo_path_for_event = repo_path.clone();
                 let provider_path_for_event = provider_path.clone();
                 app.update(|ctx| {
-                    ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    ctx.subscribe_to_model(&model_handle, move |_, _, event, _ctx| {
                         if let RepositoryMetadataEvent::StandingQueryResultsUpdated {
                             path,
                             delta,
@@ -1642,7 +1642,7 @@ fn modified_external_symlink_target_upserts_lexical_project_skill() {
                 let received_delta_for_event = received_delta.clone();
                 let logical_skill_path_for_event = logical_skill_path.clone();
                 app.update(|ctx| {
-                    ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    ctx.subscribe_to_model(&model_handle, move |_, _, event, _ctx| {
                         if let RepositoryMetadataEvent::IncrementalUpdateReady { update } = event {
                             if update
                                 .standing_results_delta
@@ -1730,7 +1730,7 @@ fn removed_then_recreated_external_symlink_target_refreshes_lexical_project_skil
                 let received_delta_for_event = received_delta.clone();
                 let logical_skill_path_for_event = logical_skill_path.clone();
                 app.update(|ctx| {
-                    ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    ctx.subscribe_to_model(&model_handle, move |_, _, event, _ctx| {
                         if let RepositoryMetadataEvent::StandingQueryResultsUpdated {
                             delta, ..
                         } = event
@@ -1778,7 +1778,7 @@ fn removed_then_recreated_external_symlink_target_refreshes_lexical_project_skil
                 let received_delta_for_event = received_delta.clone();
                 let logical_skill_path_for_event = logical_skill_path.clone();
                 app.update(|ctx| {
-                    ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    ctx.subscribe_to_model(&model_handle, move |_, _, event, _ctx| {
                         if let RepositoryMetadataEvent::StandingQueryResultsUpdated {
                             delta, ..
                         } = event
@@ -2470,7 +2470,7 @@ fn deleted_subdir_drops_its_tracked_watch() {
             let sender = Rc::new(RefCell::new(Some(tx)));
             let root_for_event = root.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, _, event, _ctx| {
                     if let RepositoryMetadataEvent::FileTreeEntryUpdated { path, .. } = event {
                         if path == &root_for_event {
                             if let Some(tx) = sender.borrow_mut().take() {

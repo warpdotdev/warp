@@ -103,7 +103,7 @@ fn subscribe_to_conversation_updated(
     let captured = Arc::new(Mutex::new(None));
     let captured_clone = captured.clone();
     app.update(|ctx| {
-        ctx.subscribe_to_model(model, move |_, event, _| {
+        ctx.subscribe_to_model(model, move |_, _, event, _| {
             handle_agent_conversation_model_event(&captured_clone, event);
         });
     });
@@ -1494,7 +1494,7 @@ fn test_server_token_assignment_updates_copy_link_resolution() {
 
         app.update(|ctx| {
             let saw_conversation_updated = saw_conversation_updated.clone();
-            ctx.subscribe_to_model(&agent_model, move |_, event, _| {
+            ctx.subscribe_to_model(&agent_model, move |_, _, event, _| {
                 if matches!(
                     event,
                     AgentConversationsModelEvent::ConversationUpdated { .. }

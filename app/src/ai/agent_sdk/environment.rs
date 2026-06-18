@@ -754,7 +754,7 @@ impl EnvironmentCommandRunner {
         // We should subscribe to the UpdateManager here because we want to wait
         // for our environment to be assigned a ServerId. Environments are not
         // usable without first being synced.
-        ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, event, ctx| {
+        ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
             if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
                 if matches!(result.operation, ObjectOperation::Create { .. })
                     && matches!(result.success_type, OperationSuccessType::Success)
@@ -999,7 +999,7 @@ impl EnvironmentCommandRunner {
         });
 
         // Subscribe to UpdateManager to wait for the update to complete
-        ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, event, ctx| {
+        ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
             if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
                 if matches!(result.operation, ObjectOperation::Update)
                     && result.server_id == Some(server_id)
@@ -1085,7 +1085,7 @@ impl EnvironmentCommandRunner {
         });
 
         // Listen to the UpdateManager for a completed object deletion
-        ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, event, ctx| {
+        ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
             if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
                 if matches!(result.operation, ObjectOperation::Delete { .. }) {
                     match result.success_type {

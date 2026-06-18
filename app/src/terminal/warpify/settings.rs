@@ -283,7 +283,7 @@ impl WarpifySettings {
     pub fn register(ctx: &mut AppContext) {
         let handle = ctx.add_singleton_model(Self::new_from_storage);
         handle.clone().update(ctx, |_, ctx| {
-            ctx.subscribe_to_model(&handle, |me, event, _| match event {
+            ctx.subscribe_to_model(&handle, |me, _, event, _| match event {
                 WarpifySettingsChangedEvent::AddedSubshellCommands { .. } => {
                     me.parsed_added_subshell_commands =
                         Self::parse_added_subshell_commands(&me.added_subshell_commands)
