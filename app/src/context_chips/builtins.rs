@@ -223,6 +223,62 @@ pub fn svn_dirty_items() -> ShellCommandGenerator {
     ShellCommandGenerator::new(command, Some(vec!["svn".to_owned()]))
 }
 
+/// Generator function that shows the current jj bookmark or change ID.
+pub fn jj_bookmark() -> ShellCommandGenerator {
+    const SH_BOOKMARK_CMD: &str = "bookmarks=$(jj log -r '@' --no-graph --ignore-working-copy -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1) \
+        && if [ -n \"$bookmarks\" ]; then echo \"$bookmarks\"; \
+        else cid=$(jj log -r '@' --no-graph --ignore-working-copy -T 'change_id.short(8)' 2>/dev/null); \
+        ancestor_bookmarks=$(jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
+        --ignore-working-copy -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1); \
+        if [ -n \"$ancestor_bookmarks\" ]; then echo \"${cid} on ${ancestor_bookmarks}\"; \
+        else echo \"$cid\"; fi; fi";
+    const FISH_BOOKMARK_CMD: &str = "set bookmarks (jj log -r '@' --no-graph --ignore-working-copy -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1) \
+        && if test -n \"$bookmarks\"; echo $bookmarks; \
+        else; set cid (jj log -r '@' --no-graph --ignore-working-copy -T 'change_id.short(8)' 2>/dev/null); \
+        set ancestor_bookmarks (jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
+        --ignore-working-copy -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1); \
+        if test -n \"$ancestor_bookmarks\"; echo \"${cid} on ${ancestor_bookmarks}\"; \
+        else; echo $cid; end; end";
+    const PWSH_BOOKMARK_CMD: &str = "$bookmarks = jj log -r '@' --no-graph --ignore-working-copy -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>$null; \
+        if ($bookmarks) { $bookmarks } \
+        else { $cid = jj log -r '@' --no-graph --ignore-working-copy -T 'change_id.short(8)' 2>$null; \
+        $ancestorBookmarks = jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
+        --ignore-working-copy -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>$null; \
+        if ($ancestorBookmarks) { \"${cid} on ${ancestorBookmarks}\" } else { $cid } }";
+    let command = ShellCommand::shell_specific([
+        (ShellType::Bash, SH_BOOKMARK_CMD.to_string()),
+        (ShellType::Zsh, SH_BOOKMARK_CMD.to_string()),
+        (ShellType::Fish, FISH_BOOKMARK_CMD.to_string()),
+        (ShellType::PowerShell, PWSH_BOOKMARK_CMD.to_string()),
+    ]);
+
+    ShellCommandGenerator::new(command, Some(vec!["jj".to_owned()]))
+}
+
+/// Generator function that shows the number of uncommitted jj files.
+///
+/// Note: unlike `jj_bookmark`, this command intentionally omits `--ignore-working-copy`
+/// so that `jj diff` snapshots the current filesystem state before computing the diff.
+/// Without the snapshot, the dirty count would reflect only what was committed at the
+/// last `jj` invocation and would miss edits made since. Snapshotting on prompt render
+/// is acceptable because jj is designed for frequent snapshots and the operation log
+/// entries are cheap.
+pub fn jj_dirty_items() -> ShellCommandGenerator {
+    const SH_DIRTY_CMD: &str =
+        "count=$(jj diff --summary 2>/dev/null | grep -cE '^[AMD] ') && [ \"$count\" -gt 0 ] && echo \"$count\"";
+    const FISH_DIRTY_CMD: &str = "set count (jj diff --summary 2>/dev/null | grep -cE '^[AMD] ') \
+        && test $count -gt 0 && string trim $count";
+    const PWSH_DIRTY_CMD: &str = "$count = (jj diff --summary 2>$null | Select-String -Pattern '^[AMD] ').Count; if ($count -gt 0) { $count }";
+    let command = ShellCommand::shell_specific([
+        (ShellType::Bash, SH_DIRTY_CMD.to_string()),
+        (ShellType::Zsh, SH_DIRTY_CMD.to_string()),
+        (ShellType::Fish, FISH_DIRTY_CMD.to_string()),
+        (ShellType::PowerShell, PWSH_DIRTY_CMD.to_string()),
+    ]);
+
+    ShellCommandGenerator::new(command, Some(vec!["jj".to_owned()]))
+}
+
 fn safe_git_powershell(cmd: &str) -> String {
     format!(
         "\

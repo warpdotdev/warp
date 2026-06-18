@@ -182,6 +182,8 @@ pub enum ContextChipKind {
     KubernetesContext,
     SvnBranch,
     SvnDirtyItems,
+    JjBookmark,
+    JjDirtyItems,
     // This is for backwards compatibility with the old "RemoteLogin" chip.
     // We originally had two different chips for different input types, this has since been consolidated.
     #[serde(alias = "RemoteLogin")]
@@ -330,6 +332,18 @@ impl ContextChipKind {
                 None,
                 RefreshConfig::OnDemandOnly,
             )),
+            Self::JjBookmark => Some(ContextChip::shell_builtin(
+                "Jj Bookmark",
+                builtins::jj_bookmark(),
+                None,
+                RefreshConfig::OnDemandOnly,
+            )),
+            Self::JjDirtyItems => Some(ContextChip::shell_builtin(
+                "Jj Uncommitted File Count",
+                builtins::jj_dirty_items(),
+                None,
+                RefreshConfig::OnDemandOnly,
+            )),
             Self::Ssh => Some(ContextChip::builtin(
                 "Remote Login",
                 builtins::ssh_session,
@@ -390,6 +404,8 @@ impl ContextChipKind {
             Self::KubernetesContext => ChipValue::Text("kube-context".to_string()),
             Self::SvnBranch => ChipValue::Text("svn-feature-branch".to_string()),
             Self::SvnDirtyItems => ChipValue::Text("3".to_string()),
+            Self::JjBookmark => ChipValue::Text("jj-feature-bookmark".to_string()),
+            Self::JjDirtyItems => ChipValue::Text("3".to_string()),
             Self::Ssh => ChipValue::Text("alice@127.0.0.1".to_string()),
             Self::Subshell => ChipValue::Text("bash".to_string()),
             Self::AgentPlanAndTodoList => ChipValue::Text("Plan and Todo List".to_string()),
@@ -422,6 +438,8 @@ impl ContextChipKind {
             Self::KubernetesContext => prompt_colors.input_prompt_kubernetes,
             Self::SvnBranch => prompt_colors.input_prompt_branch,
             Self::SvnDirtyItems => prompt_colors.input_prompt_svn,
+            Self::JjBookmark => prompt_colors.input_prompt_branch,
+            Self::JjDirtyItems => prompt_colors.input_prompt_svn,
             Self::Ssh => prompt_colors.input_prompt_ssh,
             Self::Subshell => prompt_colors.input_prompt_subshell,
             Self::AgentPlanAndTodoList => prompt_colors.input_prompt_agent_mode_hint,
@@ -457,6 +475,8 @@ impl ContextChipKind {
             Self::KubernetesContext => format!("⎈ {text}"),
             Self::SvnBranch => format!("svn:({text})"),
             Self::SvnDirtyItems => format!("±{text}"),
+            Self::JjBookmark => format!("jj:({text})"),
+            Self::JjDirtyItems => format!("±{text}"),
             _ => text,
         }
     }
@@ -513,8 +533,8 @@ impl ContextChipKind {
                 Some(Icon::Terminal)
             }
             Self::NodeVersion => Some(Icon::NodeJS),
-            Self::ShellGitBranch | Self::SvnBranch => Some(Icon::GitBranch),
-            Self::GitDiffStats | Self::SvnDirtyItems => Some(Icon::File),
+            Self::ShellGitBranch | Self::SvnBranch | Self::JjBookmark => Some(Icon::GitBranch),
+            Self::GitDiffStats | Self::SvnDirtyItems | Self::JjDirtyItems => Some(Icon::File),
             Self::GithubPullRequest => Some(Icon::Github),
             Self::KubernetesContext => Some(Icon::Globe),
             Self::AgentPlanAndTodoList => Some(Icon::CheckSkinny),
@@ -553,6 +573,8 @@ pub fn available_chips() -> Vec<ContextChipKind> {
         ContextChipKind::KubernetesContext,
         ContextChipKind::SvnBranch,
         ContextChipKind::SvnDirtyItems,
+        ContextChipKind::JjBookmark,
+        ContextChipKind::JjDirtyItems,
     ]);
     chips
 }
@@ -598,6 +620,9 @@ pub fn chips_to_string(chips: impl Iterator<Item = ChipResult>) -> String {
         match (chip_kind, next_chip_kind) {
             // Omit the space between adjacent Svn chips.
             (ContextChipKind::SvnBranch, Some(ContextChipKind::SvnDirtyItems)) => (),
+            // Omit the space between adjacent Jj chips.
+            (ContextChipKind::JjBookmark, Some(ContextChipKind::JjDirtyItems)) => (),
+            (ContextChipKind::JjDirtyItems, Some(ContextChipKind::JjBookmark)) => (),
             (_, Some(_)) => {
                 // Add padding after non-empty chips.
                 if !chip_display_value.is_empty() {
@@ -665,6 +690,28 @@ pub fn render_text_from_kind(
                 styles.font_properties,
             );
         }
+        ContextChipKind::JjBookmark => {
+            text.add_text_with_highlights(
+                "jj:(",
+                if is_in_agent_view {
+                    styles.value_color
+                } else {
+                    prompt_colors.input_prompt_branch
+                },
+                styles.font_properties,
+            );
+        }
+        ContextChipKind::JjDirtyItems => {
+            text.add_text_with_highlights(
+                "±",
+                if is_in_agent_view {
+                    styles.value_color
+                } else {
+                    prompt_colors.input_prompt_svn
+                },
+                styles.font_properties,
+            );
+        }
         ContextChipKind::KubernetesContext => {
             text.add_text_with_highlights(
                 "⎈ ",
@@ -704,6 +751,17 @@ pub fn render_text_from_kind(
                     styles.value_color
                 } else {
                     prompt_colors.input_prompt_svn
+                },
+                styles.font_properties,
+            );
+        }
+        ContextChipKind::JjBookmark => {
+            text.add_text_with_highlights(
+                ")",
+                if is_in_agent_view {
+                    styles.value_color
+                } else {
+                    prompt_colors.input_prompt_branch
                 },
                 styles.font_properties,
             );
