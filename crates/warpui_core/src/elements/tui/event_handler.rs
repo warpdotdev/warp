@@ -13,8 +13,11 @@
 //! child first. If the child consumes it, dispatch stops. Otherwise, for a
 //! `KeyDown` event, the first registered binding whose key matches is invoked
 //! (with the event, the [`TuiEventContext`], and the [`AppContext`]) and the
-//! event is reported handled. Events matching no binding are left unhandled so
-//! ancestors can react.
+//! event is reported handled. If no exact binding matches, a key-down fallback
+//! (registered with [`on_key_fallback`](TuiEventHandler::on_key_fallback)) is
+//! offered the event and decides whether to consume it — this lets a view
+//! consume arbitrary printable input (inspecting the keystroke's modifiers)
+//! without enumerating every key. Events left unconsumed propagate to ancestors.
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiPresentationContext, TuiRect, TuiSize,
@@ -22,6 +25,10 @@ use super::{
 use crate::{AppContext, Event};
 
 type KeyCallback = Box<dyn FnMut(&Event, &mut TuiEventContext, &AppContext)>;
+
+/// A fallback invoked for `KeyDown` events that matched no exact binding.
+/// Returns `true` to consume the event, `false` to let it propagate.
+type FallbackCallback = Box<dyn FnMut(&Event, &mut TuiEventContext, &AppContext) -> bool>;
 
 struct KeyBinding {
     key: String,
@@ -31,6 +38,7 @@ struct KeyBinding {
 pub struct TuiEventHandler {
     child: Box<dyn TuiElement>,
     bindings: Vec<KeyBinding>,
+    fallback: Option<FallbackCallback>,
 }
 
 impl TuiEventHandler {
@@ -38,6 +46,7 @@ impl TuiEventHandler {
         Self {
             child: Box::new(child),
             bindings: Vec::new(),
+            fallback: None,
         }
     }
 
@@ -52,6 +61,17 @@ impl TuiEventHandler {
             key: key.into(),
             callback: Box::new(callback),
         });
+        self
+    }
+
+    /// Registers a fallback for `KeyDown` events that matched no exact binding.
+    /// The callback inspects the event (including modifier state and produced
+    /// `chars`) and returns whether it consumed the event.
+    pub fn on_key_fallback(
+        mut self,
+        callback: impl FnMut(&Event, &mut TuiEventContext, &AppContext) -> bool + 'static,
+    ) -> Self {
+        self.fallback = Some(Box::new(callback));
         self
     }
 }
@@ -94,6 +114,9 @@ impl TuiElement for TuiEventHandler {
                     (binding.callback)(event, ctx, app);
                     return true;
                 }
+            }
+            if let Some(fallback) = &mut self.fallback {
+                return fallback(event, ctx, app);
             }
         }
 

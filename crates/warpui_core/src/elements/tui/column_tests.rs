@@ -5,7 +5,7 @@ use std::rc::Rc;
 use super::TuiColumn;
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEventContext,
-    TuiEventHandler, TuiPresentationContext, TuiRect, TuiSize, TuiText,
+    TuiEventHandler, TuiInputLine, TuiPresentationContext, TuiRect, TuiSize, TuiText,
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
@@ -137,6 +137,19 @@ fn dispatch_event_offers_children_in_order_and_stops_when_handled() {
             );
         });
     });
+}
+
+#[test]
+fn forwards_cursor_position_offset_by_slot() {
+    // A two-row header sits above an input line; the column lifts the input's
+    // cursor down by the header's height.
+    let column = TuiColumn::new()
+        .child(TuiText::new("a\nb").truncate())
+        .child(TuiInputLine::new("hi", 2));
+    assert_eq!(
+        column.cursor_position(TuiRect::new(0, 0, 10, 5)),
+        Some((2, 2)),
+    );
 }
 
 #[test]

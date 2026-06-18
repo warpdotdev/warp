@@ -1,93 +1,89 @@
 //! The headless `warp-tui` front-end: a real (headless) Warp app whose root
-//! window is a [`WarpTuiView`] rendered through the `tui`-gated WarpUI backend.
+//! window is a [`RootTuiView`] rendered through the `tui`-gated WarpUI backend.
 //!
-//! For v0.0.1 this renders a centered Warp logo + version and quits on
-//! `q` / `Esc` / `Ctrl-C`; no agent harness is wired up yet. [`init`] is called
-//! from `run_internal` once the headless app is up (see [`crate::run_tui`]).
+//! `RootTuiView` composes two child views — a [`TuiTranscriptView`] filling the
+//! space above a bottom-anchored single-row [`TuiInputView`] — and routes the
+//! input's submission events into the transcript. No agent harness is wired up
+//! yet; submitting a prompt only appends it to the local transcript. [`init`] is
+//! called from `run_internal` once the headless app is up (see
+//! [`crate::run_tui`]). Ctrl-C quit is handled by the runtime's input loop.
 
-use warpui_core::elements::tui::{
-    Modifier, TuiCenter, TuiColumn, TuiElement, TuiEventContext, TuiEventHandler, TuiStyle, TuiText,
-};
+mod input_view;
+mod transcript_view;
+
+use input_view::{InputEvent, TuiInputView};
+use transcript_view::TuiTranscriptView;
+use warpui_core::elements::tui::{TuiChildView, TuiColumn, TuiConstrainedBox, TuiElement};
 use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};
 use warpui_core::{
-    AddWindowOptions, AppContext, Entity, SingletonEntity, TuiView, TypedActionView,
+    AddWindowOptions, AppContext, Entity, SingletonEntity, TuiView, TypedActionView, ViewContext,
+    ViewHandle,
 };
 
-/// The Warp wordmark, one entry per row. Rows are padded to a common width at
-/// render time so center-aligning each row keeps the block aligned. (Placeholder
-/// art; refine later.)
-const WARP_LOGO_ROWS: &[&str] = &[
-    "██     ██  █████  ██████  ██████",
-    "██     ██ ██   ██ ██   ██ ██   ██",
-    "██  █  ██ ███████ ██████  ██████",
-    "██ ███ ██ ██   ██ ██   ██ ██",
-    " ███ ███  ██   ██ ██   ██ ██",
-];
+/// The bottom input frame's height: one text row inside a single-cell rounded
+/// border (top + bottom), i.e. three rows total.
+const INPUT_ROWS: u16 = 3;
 
-const VERSION: &str = "v0.0.1";
-
-/// Joins [`WARP_LOGO_ROWS`] into one string, padding every row (with trailing
-/// spaces) to the widest row so center alignment offsets each row identically.
-fn logo_text() -> String {
-    let width = WARP_LOGO_ROWS
-        .iter()
-        .map(|row| row.chars().count())
-        .max()
-        .unwrap_or(0);
-    WARP_LOGO_ROWS
-        .iter()
-        .map(|row| {
-            let padding = width - row.chars().count();
-            format!("{row}{:padding$}", "")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+/// The root TUI view: a transcript that grows upward above a fixed,
+/// bottom-anchored input. It owns both child views and forwards the input's
+/// submissions into the transcript.
+struct RootTuiView {
+    transcript: ViewHandle<TuiTranscriptView>,
+    input: ViewHandle<TuiInputView>,
 }
 
-/// The root TUI view: a centered Warp logo above the version string.
-struct WarpTuiView;
+impl RootTuiView {
+    fn new(ctx: &mut ViewContext<Self>) -> Self {
+        // The transcript has no typed actions, so a plain TUI view suffices; the
+        // input dispatches editing actions, so it must be a typed-action view.
+        let transcript = ctx.add_tui_view(|_| TuiTranscriptView::default());
+        let input = ctx.add_typed_action_tui_view(|_| TuiInputView::default());
 
-impl Entity for WarpTuiView {
+        // On submission, append the text to the transcript. Routing through the
+        // root (rather than wiring the transcript directly to the input) keeps
+        // the view-ownership boundaries explicit and proves child-view
+        // communication.
+        ctx.subscribe_to_view(&input, |root, _input, event, ctx| match event {
+            InputEvent::Submitted(text) => {
+                let text = text.clone();
+                root.transcript
+                    .update(ctx, |transcript, ctx| transcript.append(text, ctx));
+            }
+        });
+
+        ctx.focus(&input);
+
+        Self { transcript, input }
+    }
+}
+
+impl Entity for RootTuiView {
     type Event = ();
 }
 
-impl TuiView for WarpTuiView {
+impl TuiView for RootTuiView {
     fn ui_name() -> &'static str {
-        "WarpTuiView"
+        "RootTuiView"
     }
 
-    fn render(&self, _ctx: &AppContext) -> Box<dyn TuiElement> {
-        let logo = TuiText::new(logo_text())
-            .with_style(TuiStyle::default().add_modifier(Modifier::BOLD))
-            .centered()
-            .truncate();
-        let version = TuiText::new(VERSION)
-            .with_style(TuiStyle::default().add_modifier(Modifier::DIM))
-            .centered();
+    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        let transcript = TuiChildView::new(&self.transcript, ctx);
+        let input = TuiChildView::new(&self.input, ctx);
 
+        // The transcript fills the space above the fixed-height input row.
         let column = TuiColumn::new()
-            .child(logo)
-            .child(TuiText::new(" "))
-            .child(version);
+            .flex_child(transcript)
+            .child(TuiConstrainedBox::new(input).with_max_rows(INPUT_ROWS));
 
-        Box::new(
-            TuiEventHandler::new(TuiCenter::new(column))
-                .on_key("q", |_, ctx, _| request_quit(ctx))
-                .on_key("escape", |_, ctx, _| request_quit(ctx)),
-        )
+        Box::new(column)
     }
 }
 
-impl TypedActionView for WarpTuiView {
-    // No typed actions yet; quitting is requested directly via the event context.
+impl TypedActionView for RootTuiView {
+    // The root handles no typed actions itself: editing actions are handled by
+    // the input view, and Ctrl-C quit is handled by the runtime input loop.
     type Action = ();
-}
-
-/// Queues app termination from a TUI event handler, which only has shared access
-/// to the [`AppContext`] during dispatch.
-fn request_quit(ctx: &mut TuiEventContext) {
-    ctx.dispatch_app_update(|ctx| ctx.terminate_app(TerminationMode::ForceTerminate, None));
 }
 
 /// Holds the live TUI session for the app's lifetime; dropping it on app
@@ -110,7 +106,7 @@ pub fn init(ctx: &mut AppContext) {
             window_style: WindowStyle::NotStealFocus,
             ..Default::default()
         },
-        |_| WarpTuiView,
+        RootTuiView::new,
     );
 
     match spawn_tui_driver(ctx, window_id, root) {
@@ -130,3 +126,7 @@ pub fn init(ctx: &mut AppContext) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tui_tests.rs"]
+mod tests;

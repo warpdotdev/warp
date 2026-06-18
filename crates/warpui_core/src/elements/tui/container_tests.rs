@@ -7,7 +7,7 @@ use ratatui::style::Color;
 use super::TuiContainer;
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEventContext,
-    TuiEventHandler, TuiPresentationContext, TuiRect, TuiSize, TuiText,
+    TuiEventHandler, TuiInputLine, TuiPresentationContext, TuiRect, TuiSize, TuiText,
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
@@ -67,6 +67,26 @@ fn background_fills_the_padding_area() {
     assert_eq!(buffer[(0, 0)].bg, Color::Blue);
     // ...and the child glyph lands in the center.
     assert_eq!(buffer[(1, 1)].symbol(), "X");
+}
+
+#[test]
+fn forwards_cursor_position_offset_by_inset() {
+    // The border insets the child by one cell, so the child's cursor is lifted
+    // by (1, 1) into the container's own coordinate space.
+    let container = TuiContainer::new(TuiInputLine::new("hi", 2)).with_border();
+    assert_eq!(
+        container.cursor_position(TuiRect::new(0, 0, 10, 3)),
+        Some((3, 1)),
+    );
+}
+
+#[test]
+fn rounded_border_uses_rounded_corners() {
+    let container = TuiContainer::new(TuiText::new("X")).with_rounded_border();
+    assert_eq!(
+        render_to_lines(&container, TuiSize::new(3, 3)),
+        vec!["╭─╮", "│X│", "╰─╯"],
+    );
 }
 
 #[test]

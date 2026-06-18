@@ -157,6 +157,24 @@ impl TuiElement for TuiColumn {
         })
     }
 
+    fn cursor_position(&self, area: TuiRect) -> Option<(u16, u16)> {
+        // Mirror `render`'s slot walk: ask each child for the cursor within its
+        // rendered slot, then lift the slot's vertical offset back into `area`.
+        let slot_heights = self.slot_heights(area.width, area.height);
+        let mut remaining = area;
+        for (child, &slot) in self.children.iter().zip(&slot_heights) {
+            if remaining.is_empty() {
+                break;
+            }
+            let (rect, rest) = remaining.split_top(slot);
+            if let Some((x, y)) = child.element.cursor_position(rect) {
+                return Some((x, y.saturating_add(rect.y - area.y)));
+            }
+            remaining = rest;
+        }
+        None
+    }
+
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
         for child in &mut self.children {
             child.element.present(ctx);
