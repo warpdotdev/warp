@@ -62,6 +62,7 @@ struct LocalTaskUpdate {
     server_conversation_token: Option<String>,
     status_message: Option<TaskStatusUpdate>,
 }
+
 impl LocalTaskUpdate {
     fn is_empty(&self) -> bool {
         self.task_state.is_none()
@@ -128,6 +129,7 @@ impl LocalAgentTaskSyncModel {
             ctx,
         );
     }
+    
     fn remove_cached_update_state_for_run_id(&mut self, run_id: Option<&str>) {
         let Some(task_id) = run_id.and_then(|run_id| run_id.parse::<AmbientAgentTaskId>().ok())
         else {
@@ -270,10 +272,10 @@ impl LocalAgentTaskSyncModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let prepared_update = self.update_cache.apply_to_update(task_id, &mut update);
-
         if update.is_empty() {
             return;
         }
+        
         let ai_client = self.ai_client.clone();
         let LocalTaskUpdate {
             task_state,
