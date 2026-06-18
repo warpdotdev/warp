@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
@@ -177,7 +178,13 @@ pub struct EditDelta {
     /// the first character after it.
     pub old_offset: Range<CharOffset>,
     /// Content of the lines that have been changed.
-    pub new_lines: Vec<StyledBufferBlock>,
+    ///
+    /// Wrapped in `Arc` so that cloning an `EditDelta` is O(1) rather than
+    /// O(n) in the number of styled blocks.  This matters when a large file is
+    /// loaded: `replace_all` emits a `ContentChanged` event whose delta covers
+    /// the entire file, and that delta is cloned at least once on its way to
+    /// the render state.
+    pub new_lines: Arc<Vec<StyledBufferBlock>>,
 }
 
 /// Render Delta that has its content laid out into TextFrames.
@@ -507,9 +514,12 @@ impl EditDelta {
         // old_offset is in the same 1-indexed coordinate system as hidden ranges.
         let mut current_offset = (self.old_offset.start).max(CharOffset::from(1));
 
+        // Unwrap the Arc: if this is the only reference we get the Vec for free;
+        // otherwise we clone once here (which is rare in practice).
+        let new_lines = Arc::unwrap_or_clone(self.new_lines);
+
         // First, build a Vec of layout tasks with information about whether they're hidden
-        let layout_tasks: Vec<_> = self
-            .new_lines
+        let layout_tasks: Vec<_> = new_lines
             .into_iter()
             .filter_map(|block| {
                 let content_length = block.content_length();
