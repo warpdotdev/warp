@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use session_sharing_protocol::common::SessionId;
@@ -38,10 +38,37 @@ pub struct LocalAgentTaskSyncModel {
     /// Maps terminal view IDs to task IDs for third-party harness sessions
     /// that don't have conversations in `BlocklistAIHistoryModel`.
     cli_session_task_ids: HashMap<EntityId, AmbientAgentTaskId>,
+    /// Tracks model-owned `InProgress` delivery so redundant state transitions
+    /// can be omitted without suppressing other fields in the same update.
+    in_progress_delivery_states: HashMap<AmbientAgentTaskId, InProgressDeliveryState>,
+    next_in_progress_delivery_generation: u64,
+    /// Tracks the last successfully delivered server conversation token for
+    /// each task. Unlike task state, the token is durable across executions.
+    server_conversation_token_delivery_states:
+        HashMap<AmbientAgentTaskId, ServerConversationTokenDeliveryState>,
+    next_server_conversation_token_delivery_generation: u64,
+    /// Disables token dedupe for tasks where different tokens overlapped in
+    /// flight. Without per-task FIFO ordering, failing open is safest.
+    server_conversation_token_dedupe_disabled: HashSet<AmbientAgentTaskId>,
 }
 
 pub enum LocalAgentTaskSyncModelEvent {}
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InProgressDeliveryState {
+    InFlight(u64),
+    Delivered,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ServerConversationTokenDeliveryState {
+    InFlight {
+        generation: u64,
+        token: String,
+        previously_delivered: Option<String>,
+    },
+    Delivered(String),
+}
 /// Aggregated update to send via `AIClient::update_agent_task`. Field names
 /// match the server input shape so it is unambiguous which value flows to
 /// which server field.
@@ -57,6 +84,14 @@ struct LocalTaskUpdate {
     session_id: Option<SessionId>,
     server_conversation_token: Option<String>,
     status_message: Option<TaskStatusUpdate>,
+}
+impl LocalTaskUpdate {
+    fn is_empty(&self) -> bool {
+        self.task_state.is_none()
+            && self.session_id.is_none()
+            && self.server_conversation_token.is_none()
+            && self.status_message.is_none()
+    }
 }
 
 impl LocalAgentTaskSyncModel {
@@ -79,6 +114,11 @@ impl LocalAgentTaskSyncModel {
         Self {
             ai_client,
             cli_session_task_ids: HashMap::new(),
+            in_progress_delivery_states: HashMap::new(),
+            next_in_progress_delivery_generation: 0,
+            server_conversation_token_delivery_states: HashMap::new(),
+            next_server_conversation_token_delivery_generation: 0,
+            server_conversation_token_dedupe_disabled: HashSet::new(),
         }
     }
 
@@ -115,6 +155,21 @@ impl LocalAgentTaskSyncModel {
             ctx,
         );
     }
+    fn remove_delivery_state(&mut self, task_id: &AmbientAgentTaskId) {
+        self.in_progress_delivery_states.remove(task_id);
+        self.server_conversation_token_delivery_states
+            .remove(task_id);
+        self.server_conversation_token_dedupe_disabled
+            .remove(task_id);
+    }
+
+    fn remove_delivery_state_for_run_id(&mut self, run_id: Option<&str>) {
+        let Some(task_id) = run_id.and_then(|run_id| run_id.parse::<AmbientAgentTaskId>().ok())
+        else {
+            return;
+        };
+        self.remove_delivery_state(&task_id);
+    }
 
     fn handle_history_event(
         &mut self,
@@ -146,6 +201,10 @@ impl LocalAgentTaskSyncModel {
             } => {
                 self.on_local_shared_session_established(*conversation_id, *session_id, ctx);
             }
+            BlocklistAIHistoryEvent::RemoveConversation { run_id, .. }
+            | BlocklistAIHistoryEvent::DeletedConversation { run_id, .. } => {
+                self.remove_delivery_state_for_run_id(run_id.as_deref());
+            }
             _ => {}
         }
     }
@@ -166,14 +225,16 @@ impl LocalAgentTaskSyncModel {
             CLIAgentSessionsModelEvent::Ended {
                 terminal_view_id, ..
             } => {
-                self.cli_session_task_ids.remove(terminal_view_id);
+                if let Some(task_id) = self.cli_session_task_ids.remove(terminal_view_id) {
+                    self.remove_delivery_state(&task_id);
+                }
             }
             _ => {}
         }
     }
 
     fn on_conversation_status_updated(
-        &self,
+        &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -197,7 +258,7 @@ impl LocalAgentTaskSyncModel {
     }
 
     fn on_local_shared_session_established(
-        &self,
+        &mut self,
         conversation_id: AIConversationId,
         session_id: SessionId,
         ctx: &mut ModelContext<Self>,
@@ -215,7 +276,7 @@ impl LocalAgentTaskSyncModel {
     }
 
     fn on_cli_session_status_changed(
-        &self,
+        &mut self,
         terminal_view_id: EntityId,
         status: &CLIAgentSessionStatus,
         ctx: &mut ModelContext<Self>,
@@ -238,11 +299,100 @@ impl LocalAgentTaskSyncModel {
 
     /// Sends an `update_agent_task` request to the server (fire-and-forget).
     fn fire_update(
-        &self,
+        &mut self,
         task_id: AmbientAgentTaskId,
-        update: LocalTaskUpdate,
+        mut update: LocalTaskUpdate,
         ctx: &mut ModelContext<Self>,
     ) {
+        let mut server_conversation_token_delivery_generation = None;
+        if let Some(token) = update.server_conversation_token.clone() {
+            if !self
+                .server_conversation_token_dedupe_disabled
+                .contains(&task_id)
+            {
+                let delivery_state = self
+                    .server_conversation_token_delivery_states
+                    .get(&task_id)
+                    .cloned();
+                match delivery_state {
+                    Some(ServerConversationTokenDeliveryState::Delivered(delivered_token))
+                        if delivered_token == token =>
+                    {
+                        update.server_conversation_token = None;
+                    }
+                    Some(ServerConversationTokenDeliveryState::InFlight {
+                        token: in_flight_token,
+                        ..
+                    }) if in_flight_token != token => {
+                        // Different tokens cannot be safely ordered by the current
+                        // fire-and-forget transport, so stop deduping this task.
+                        self.server_conversation_token_delivery_states
+                            .remove(&task_id);
+                        self.server_conversation_token_dedupe_disabled
+                            .insert(task_id);
+                    }
+                    delivery_state => {
+                        let previously_delivered = match delivery_state {
+                            Some(ServerConversationTokenDeliveryState::Delivered(token)) => {
+                                Some(token)
+                            }
+                            Some(ServerConversationTokenDeliveryState::InFlight {
+                                previously_delivered,
+                                ..
+                            }) => previously_delivered,
+                            None => None,
+                        };
+                        self.next_server_conversation_token_delivery_generation = self
+                            .next_server_conversation_token_delivery_generation
+                            .wrapping_add(1);
+                        let generation = self.next_server_conversation_token_delivery_generation;
+                        self.server_conversation_token_delivery_states.insert(
+                            task_id,
+                            ServerConversationTokenDeliveryState::InFlight {
+                                generation,
+                                token,
+                                previously_delivered,
+                            },
+                        );
+                        server_conversation_token_delivery_generation = Some(generation);
+                    }
+                }
+            }
+        }
+        let mut in_progress_delivery_generation = None;
+        match update.task_state {
+            // Status messages are only applied by the server together with a
+            // task state, so an update carrying one must retain its state.
+            Some(AgentTaskState::InProgress) if update.status_message.is_none() => {
+                match self.in_progress_delivery_states.get(&task_id).copied() {
+                    Some(InProgressDeliveryState::Delivered) => {
+                        update.task_state = None;
+                    }
+                    Some(InProgressDeliveryState::InFlight(_))
+                        if update.session_id.is_none()
+                            && update.server_conversation_token.is_none() =>
+                    {
+                        return;
+                    }
+                    Some(InProgressDeliveryState::InFlight(_)) | None => {
+                        self.next_in_progress_delivery_generation =
+                            self.next_in_progress_delivery_generation.wrapping_add(1);
+                        let generation = self.next_in_progress_delivery_generation;
+                        self.in_progress_delivery_states
+                            .insert(task_id, InProgressDeliveryState::InFlight(generation));
+                        in_progress_delivery_generation = Some(generation);
+                    }
+                }
+            }
+            Some(_) => {
+                self.in_progress_delivery_states.remove(&task_id);
+            }
+            None => {}
+        }
+
+        if update.is_empty() {
+            return;
+        }
         let ai_client = self.ai_client.clone();
         let LocalTaskUpdate {
             task_state,
@@ -252,7 +402,7 @@ impl LocalAgentTaskSyncModel {
         } = update;
         ctx.spawn(
             async move {
-                if let Err(err) = ai_client
+                let result = ai_client
                     .update_agent_task(
                         task_id,
                         task_state,
@@ -260,16 +410,68 @@ impl LocalAgentTaskSyncModel {
                         server_conversation_token.clone(),
                         status_message,
                     )
-                    .await
-                {
+                    .await;
+                if let Err(err) = &result {
                     log::warn!(
                         "LocalAgentTaskSyncModel: failed to update task {task_id} \
                          (state={task_state:?}, session_id={session_id:?}, \
                          server_conversation_token={server_conversation_token:?}): {err:#}"
                     );
                 }
+                result
             },
-            |_, _, _| {},
+            move |me, result, _| {
+                if let Some(generation) = in_progress_delivery_generation {
+                    if me.in_progress_delivery_states.get(&task_id)
+                        == Some(&InProgressDeliveryState::InFlight(generation))
+                    {
+                        if result.is_ok() {
+                            me.in_progress_delivery_states
+                                .insert(task_id, InProgressDeliveryState::Delivered);
+                        } else {
+                            me.in_progress_delivery_states.remove(&task_id);
+                        }
+                    }
+                }
+
+                if let Some(generation) = server_conversation_token_delivery_generation {
+                    if me
+                        .server_conversation_token_dedupe_disabled
+                        .contains(&task_id)
+                    {
+                        return;
+                    }
+                    let Some(ServerConversationTokenDeliveryState::InFlight {
+                        generation: current_generation,
+                        token,
+                        previously_delivered,
+                    }) = me
+                        .server_conversation_token_delivery_states
+                        .get(&task_id)
+                        .cloned()
+                    else {
+                        return;
+                    };
+                    if current_generation != generation {
+                        return;
+                    }
+
+                    if result.is_ok() {
+                        me.server_conversation_token_delivery_states.insert(
+                            task_id,
+                            ServerConversationTokenDeliveryState::Delivered(token),
+                        );
+                    } else if let Some(previously_delivered) = previously_delivered {
+                        me.server_conversation_token_delivery_states.insert(
+                            task_id,
+                            ServerConversationTokenDeliveryState::Delivered(previously_delivered),
+                        );
+                    } else {
+                        me.server_conversation_token_delivery_states
+                            .remove(&task_id);
+                    }
+                }
+            },
         );
     }
 }

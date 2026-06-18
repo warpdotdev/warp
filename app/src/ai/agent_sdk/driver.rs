@@ -2831,11 +2831,6 @@ impl AgentDriver {
         let conversation_id_cell = Arc::new(Mutex::new(Option::<String>::None));
         let conversation_id_cell_for_handler = Arc::clone(&conversation_id_cell);
 
-        // Get the server API from context
-        let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let server_api_for_conversation_update = server_api.clone();
-        let task_id_for_conversation_update = self.task_id;
-
         ctx.subscribe_to_model(&history_model_handle, move |me, event, ctx| {
             if event.terminal_view_id().is_some_and(|id| id != terminal_id) {
                 return;
@@ -2929,8 +2924,6 @@ impl AgentDriver {
                         return;
                     };
 
-                    // Track whether we should spawn an async task to update the server.
-                    let mut pending_conversation_update: Option<String> = None;
 
                     if !written_conversation_id {
                         if let Some(token) = token_opt {
@@ -2940,13 +2933,9 @@ impl AgentDriver {
                             }).context("Failed to write conversation ID"));
                             written_conversation_id = true;
 
-                            // Store the server conversation token and record that we should update the task
+                            // Store the server conversation token for this run.
                             if let Ok(mut guard) = conversation_id_cell_for_handler.lock() {
-                                *guard = Some(token.clone());
-
-                                if task_id_for_conversation_update.is_some() {
-                                    pending_conversation_update = Some(token);
-                                }
+                                *guard = Some(token);
                             }
                         }
                     }
@@ -2958,30 +2947,6 @@ impl AgentDriver {
                             .context("Failed to write exchange output"));
                     }
 
-                    // Perform task update after all immutable borrows end
-                    if let (Some(task_id), Some(conversation_id_str)) = (
-                        task_id_for_conversation_update,
-                        pending_conversation_update,
-                    ) {
-                        let server_api = server_api_for_conversation_update.clone();
-                        ctx.spawn(
-                            async move {
-                                if let Err(e) = server_api
-                                    .update_agent_task(
-                                        task_id,
-                                        None, // Don't change state, just update conversation ID
-                                        None, // Don't update session_id from CLI context
-                                        Some(conversation_id_str),
-                                        None,
-                                    )
-                                    .await
-                                {
-                                    log::error!("Failed to update agent task with conversation ID: {e}");
-                                }
-                            },
-                            |_, _, _| {},
-                        );
-                    }
                 }
 
                 BlocklistAIHistoryEvent::UpdatedConversationStatus { terminal_view_id: conversation_terminal_id, conversation_id, .. } => {
