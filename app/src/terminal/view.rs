@@ -5574,26 +5574,26 @@ impl TerminalView {
         }
     }
 
-    /// Sends every prompt that was auto-queued during an agent-requested long-running command
-    /// ([`QueuedQueryOrigin::LrcAutoQueue`]) to the agent, in queue order. Invoked when the
-    /// command finishes — these rows were queued "until the command finishes", unlike other
-    /// queued rows, which wait for the end of the full response.
+    /// Sends the leading prompts that were auto-queued during an agent-requested long-running
+    /// command ([`QueuedQueryOrigin::LrcAutoQueue`]) to the agent, in queue order. Invoked when the
+    /// command finishes — these rows were queued "until the command finishes", unlike other queued
+    /// rows, which wait for the end of the full response.
     pub(crate) fn send_lrc_queued_prompts(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
-        let editing_lrc_row = QueuedQueryModel::as_ref(ctx)
+        let editing_front_lrc_row = QueuedQueryModel::as_ref(ctx)
             .editing_row(conversation_id)
             .is_some_and(|query_id| {
                 QueuedQueryModel::as_ref(ctx)
                     .queue(conversation_id)
-                    .iter()
-                    .any(|row| {
+                    .first()
+                    .is_some_and(|row| {
                         row.id() == query_id && row.origin() == QueuedQueryOrigin::LrcAutoQueue
                     })
             });
-        if editing_lrc_row {
+        if editing_front_lrc_row {
             let queued_prompts_panel = self.input.as_ref(ctx).queued_prompts_panel().cloned();
             let Some(queued_prompts_panel) = queued_prompts_panel else {
                 return;
@@ -5606,7 +5606,7 @@ impl TerminalView {
         let rows: Vec<(QueuedQueryId, String)> = QueuedQueryModel::as_ref(ctx)
             .queue(conversation_id)
             .iter()
-            .filter(|row| row.origin() == QueuedQueryOrigin::LrcAutoQueue)
+            .take_while(|row| row.origin() == QueuedQueryOrigin::LrcAutoQueue)
             .map(|row| (row.id(), row.text().to_owned()))
             .collect();
         for (query_id, text) in rows {

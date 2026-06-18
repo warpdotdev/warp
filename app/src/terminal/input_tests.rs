@@ -1489,7 +1489,7 @@ fn empty_buffer_enter_sends_top_queued_prompt_then_next_on_repeat() {
         assert_eq!(*ai_query_count.borrow(), 1);
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
             let queue = model.queue(conversation_id);
-            assert_eq!(queue.len(), 1);
+            assert_eq!(queue.len(), 2);
             assert_eq!(queue[0].text(), "second");
         });
         input.read(&app, |input, ctx| {
@@ -1766,6 +1766,116 @@ fn prompt_submission_auto_queues_during_agent_requested_lrc() {
     });
 }
 
+/// If the conversation already has queued rows, LRC submissions append as regular queued rows
+/// when the current queue head is not LRC-queued, so command-finish delivery never jumps it.
+#[test]
+fn prompt_submission_during_lrc_with_non_lrc_queue_head_uses_generic_origin() {
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let conversation_id = simulate_agent_requested_lrc(&mut app, &terminal);
+        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(
+                    "already queued".to_owned(),
+                    QueuedQueryOrigin::QueueSlashCommand,
+                ),
+                ctx,
+            );
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_agent(/* ensure_input_is_focused */ false, ctx);
+            input.replace_buffer_content("queue behind it", ctx);
+            input.input_enter(ctx);
+        });
+
+        let ai_query_count = Rc::new(RefCell::new(0));
+        let ai_query_count_for_subscription = ai_query_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &super::Event, _| {
+                if matches!(event, super::Event::ExecuteAIQuery) {
+                    *ai_query_count_for_subscription.borrow_mut() += 1;
+                }
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.send_lrc_queued_prompts(conversation_id, ctx);
+        });
+
+        assert_eq!(*ai_query_count.borrow(), 0);
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].text(), "already queued");
+            assert_eq!(queue[0].origin(), QueuedQueryOrigin::QueueSlashCommand);
+            assert_eq!(queue[1].text(), "queue behind it");
+            assert_eq!(queue[1].origin(), QueuedQueryOrigin::AutoQueueToggle);
+        });
+    });
+}
+
+/// If the current queue head is LRC-queued, later LRC submissions join that same
+/// command-finish batch and fire in FIFO order.
+#[test]
+fn prompt_submission_during_lrc_with_lrc_queue_head_uses_lrc_origin() {
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let conversation_id = simulate_agent_requested_lrc(&mut app, &terminal);
+        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new("first lrc".to_owned(), QueuedQueryOrigin::LrcAutoQueue),
+                ctx,
+            );
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_agent(/* ensure_input_is_focused */ false, ctx);
+            input.replace_buffer_content("second lrc", ctx);
+            input.input_enter(ctx);
+        });
+
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].text(), "first lrc");
+            assert_eq!(queue[0].origin(), QueuedQueryOrigin::LrcAutoQueue);
+            assert_eq!(queue[1].text(), "second lrc");
+            assert_eq!(queue[1].origin(), QueuedQueryOrigin::LrcAutoQueue);
+        });
+
+        let ai_query_count = Rc::new(RefCell::new(0));
+        let ai_query_count_for_subscription = ai_query_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &super::Event, _| {
+                if matches!(event, super::Event::ExecuteAIQuery) {
+                    *ai_query_count_for_subscription.borrow_mut() += 1;
+                }
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.send_lrc_queued_prompts(conversation_id, ctx);
+        });
+
+        assert_eq!(*ai_query_count.borrow(), 2);
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
 /// Explicitly tagging the agent into a user-started long-running command preserves steering:
 /// prompts submit immediately instead of using the LRC auto-queue path.
 #[test]
@@ -1856,10 +1966,10 @@ fn prompt_submission_during_lrc_with_queue_default_uses_generic_origin() {
     });
 }
 
-/// When the long-running command finishes, every `LrcAutoQueue` row fires to the agent in
-/// queue order; rows with other origins stay queued for the normal end-of-response drain.
+/// When the long-running command finishes, leading `LrcAutoQueue` rows fire to the agent in
+/// queue order; rows behind other origins stay queued for the normal end-of-response drain.
 #[test]
-fn lrc_queued_prompts_fire_when_command_finishes() {
+fn lrc_queued_prompts_fire_from_queue_head_when_command_finishes() {
     App::test((), |mut app| async move {
         let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
@@ -1900,12 +2010,12 @@ fn lrc_queued_prompts_fire_when_command_finishes() {
         terminal.update(&mut app, |view, ctx| {
             view.send_lrc_queued_prompts(conversation_id, ctx);
         });
-
-        assert_eq!(*ai_query_count.borrow(), 2);
+        assert_eq!(*ai_query_count.borrow(), 1);
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
             let queue = model.queue(conversation_id);
-            assert_eq!(queue.len(), 1);
+            assert_eq!(queue.len(), 2);
             assert_eq!(queue[0].text(), "keep me");
+            assert_eq!(queue[1].text(), "second");
         });
     });
 }

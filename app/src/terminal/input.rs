@@ -13835,6 +13835,10 @@ impl Input {
         let queue_for_summarize = is_summarizing && FeatureFlag::QueuedPromptsV2.is_enabled();
 
         let queue_model = QueuedQueryModel::as_ref(ctx);
+        let queue_head_allows_lrc = match queue_model.queue(conversation_id).first() {
+            Some(row) => row.origin() == QueuedQueryOrigin::LrcAutoQueue,
+            None => true,
+        };
         let queue_enabled = {
             let terminal_model = self.model.lock();
             queue_model.is_queue_next_prompt_enabled(
@@ -13845,9 +13849,10 @@ impl Input {
         };
 
         // True when the LRC branch is the effective enabler (queueing would be off outside
-        // the command); those rows are tagged with the LrcAutoQueue origin.
-        let queued_for_lrc =
-            queue_enabled && !queue_model.is_queue_next_prompt_toggle_enabled(conversation_id);
+        // the command) and the current queue head can fire at command finish too.
+        let queued_for_lrc = queue_enabled
+            && !queue_model.is_queue_next_prompt_toggle_enabled(conversation_id)
+            && queue_head_allows_lrc;
 
         if !queue_enabled && !queue_for_summarize {
             return false;
