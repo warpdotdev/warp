@@ -183,7 +183,7 @@ impl AIExecutionProfilesModel {
                     // initialize_app, but handle exhaustively.
                     LaunchMode::RemoteServerProxy
                     | LaunchMode::RemoteServerDaemon { .. }
-                    | LaunchMode::Tui => DefaultProfileState::Unsynced {
+                    | LaunchMode::Tui { .. } => DefaultProfileState::Unsynced {
                         id: ClientProfileId::new(),
                         profile: super::create_default_from_legacy_settings(ctx),
                     },

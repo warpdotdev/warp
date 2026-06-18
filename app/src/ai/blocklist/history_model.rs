@@ -175,6 +175,24 @@ impl AIConversationMetadata {
     }
 }
 
+/// Identifies the local owner of agent conversation state.
+///
+/// Backed by the `EntityId` of the owning view. Shared agent infrastructure uses this as the
+/// owner key and converts to the existing history-model `EntityId` key via [`Self::entity_id`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct AgentSessionOwnerId(EntityId);
+
+impl AgentSessionOwnerId {
+    /// Creates an owner id from an owning view id.
+    pub fn new(view_id: EntityId) -> Self {
+        Self(view_id)
+    }
+
+    /// Returns the backing entity id used by existing history APIs.
+    pub fn entity_id(self) -> EntityId {
+        self.0
+    }
+}
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateHistoryError {
     #[error("Failed to update conversation: {0:?}")]

@@ -20,6 +20,7 @@ use crate::ai::attachment_utils::{
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::ai::blocklist::{AgentConversationEngine, AgentSessionOwnerId};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
 
@@ -457,7 +458,8 @@ impl BlocklistAIController {
             });
         }
 
-        self.handle_response_stream_finished(
+        AgentConversationEngine::fold_response_stream_finished(
+            AgentSessionOwnerId::new(self.terminal_view_id),
             &stream_id,
             finished,
             conversation_id,

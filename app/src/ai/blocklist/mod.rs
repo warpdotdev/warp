@@ -1,5 +1,6 @@
 //! This module contains model, controller, and view logic for Blocklist AI.
 mod action_model;
+mod agent_conversation_engine;
 pub mod agent_view;
 pub mod block;
 pub mod code_block;
@@ -13,7 +14,7 @@ pub(crate) mod orchestration_events;
 pub(crate) mod orchestration_topology;
 mod passive_suggestions;
 pub(crate) mod queued_query;
-pub(super) use controller::RequestInput;
+pub(crate) use controller::RequestInput;
 pub mod history_model;
 pub mod inline_action;
 mod input_model;
@@ -38,6 +39,9 @@ pub(crate) use action_model::{
     ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
     StartAgentRequestId,
 };
+pub(crate) use agent_conversation_engine::AgentConversationEngine;
+#[cfg(feature = "tui")]
+pub(crate) use agent_conversation_engine::AgentConversationEngineDelegate;
 #[cfg(any(test, feature = "integration_tests"))]
 pub(crate) use block::model::testing::FakeAIBlockModel;
 pub(crate) use block::{init, model, AIBlock, AIBlockEvent, RequestedEditResolution};
@@ -49,13 +53,15 @@ pub(crate) use context_model::{
 pub use controller::input_context::{
     BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
 };
+#[cfg(feature = "tui")]
+pub(crate) use controller::response_stream::ResponseStream;
 pub(crate) use controller::response_stream::ResponseStreamId;
 pub(crate) use controller::{
     BlocklistAIController, BlocklistAIControllerEvent, ClientIdentifiers, SessionContext,
     SlashCommandRequest,
 };
 pub(crate) use history_model::{
-    AIQueryHistory, AIQueryHistoryOutputStatus, BeginConversationRenameError,
+    AIQueryHistory, AIQueryHistoryOutputStatus, AgentSessionOwnerId, BeginConversationRenameError,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FORK_PREFIX,
     PRE_REWIND_PREFIX,
 };
