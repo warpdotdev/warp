@@ -173,116 +173,312 @@ impl Entity for CallMCPToolExecutor {
 /// MCP tool args round-trip through `google.protobuf.Struct` on the wire, whose
 /// `NumberValue` stores everything as `f64`. Without this fix, serde_json emits
 /// whole-number floats as `"5.0"`, which strict MCP servers reject for integer fields.
-///
-/// Walks the schema recursively so integer fields nested inside objects, arrays,
-/// or `oneOf`/`anyOf`/`allOf` branches are all coerced. `$ref` is not resolved
-/// (the root schema would be required) and is skipped.
 pub(crate) fn coerce_integer_args(
     args: &mut serde_json::Map<String, serde_json::Value>,
     input_schema: &serde_json::Map<String, serde_json::Value>,
 ) {
-    // Delegate to the recursive walker by wrapping `args` in a borrowed `Value`.
-    // This keeps the root-level traversal consistent with nested levels, so
-    // top-level `oneOf`/`anyOf`/`allOf` and `additionalProperties` are honored
-    // the same way they are deeper in the schema.
-    let mut wrapped = serde_json::Value::Object(std::mem::take(args));
-    let schema_value = serde_json::Value::Object(input_schema.clone());
-    coerce_value_against_schema(&mut wrapped, &schema_value);
-    if let serde_json::Value::Object(restored) = wrapped {
-        *args = restored;
+    let schema = serde_json::Value::Object(input_schema.clone());
+    let mut value = serde_json::Value::Object(std::mem::take(args));
+    coerce_integer_value(&mut value, &schema, &schema, &mut Vec::new());
+
+    if let serde_json::Value::Object(coerced_args) = value {
+        *args = coerced_args;
     }
 }
 
-/// Returns true if the schema's `type` declares `"integer"`, including the
-/// nullable form `"type": ["integer", "null"]`.
-fn schema_declares_integer(schema: &serde_json::Value) -> bool {
-    match schema.get("type") {
-        Some(serde_json::Value::String(s)) => s == "integer",
-        Some(serde_json::Value::Array(types)) => {
-            types.iter().any(|t| t.as_str() == Some("integer"))
-        }
-        _ => false,
-    }
-}
-
-/// In-place coerces a whole-number `f64` `Number` to `i64`.
-fn coerce_number_to_int(n: &mut serde_json::Number) {
-    let Some(f) = n.as_f64() else { return };
-    if n.is_i64() || n.is_u64() {
-        return;
-    }
-    if f.fract() != 0.0 {
-        return;
-    }
-    if let Ok(i) = i64::try_from(f as i128) {
-        *n = serde_json::Number::from(i);
-    }
-}
-
-/// Recursively walks `value` against `schema`, coercing whole-number f64s to
-/// i64 wherever the schema declares `"type": "integer"`. Safe to call against
-/// multiple `oneOf`/`anyOf`/`allOf` branches: coercion is a no-op on values
-/// the schema does not match.
-fn coerce_value_against_schema(value: &mut serde_json::Value, schema: &serde_json::Value) {
-    if schema_declares_integer(schema) {
-        if let serde_json::Value::Number(n) = value {
-            coerce_number_to_int(n);
+fn coerce_integer_value(
+    value: &mut serde_json::Value,
+    schema: &serde_json::Value,
+    root_schema: &serde_json::Value,
+    ref_stack: &mut Vec<String>,
+) {
+    if let Some(ref_path) = schema.get("$ref").and_then(|ref_path| ref_path.as_str()) {
+        if ref_path.starts_with('#') && !ref_stack.iter().any(|seen| seen == ref_path) {
+            ref_stack.push(ref_path.to_string());
+            if let Some(resolved_schema) =
+                root_schema.pointer(ref_path.strip_prefix('#').unwrap_or_default())
+            {
+                coerce_integer_value(value, resolved_schema, root_schema, ref_stack);
+            }
+            ref_stack.pop();
         }
     }
 
-    // Visit every combinator key independently — a schema may declare more than
-    // one of {oneOf, anyOf, allOf} at the same level, and we need to walk every
-    // branch in every present combinator. Coercion is monotonic, so visiting
-    // branches whose constraints don't match `value` is a safe no-op.
-    for combinator in ["oneOf", "anyOf", "allOf"] {
-        if let Some(branches) = schema.get(combinator).and_then(|b| b.as_array()) {
-            for branch in branches {
-                coerce_value_against_schema(value, branch);
+    if let Some(schemas) = schema.get("allOf").and_then(|schemas| schemas.as_array()) {
+        for nested_schema in schemas {
+            coerce_integer_value(value, nested_schema, root_schema, ref_stack);
+        }
+    }
+
+    if let Some(schemas) = schema.get("anyOf").and_then(|schemas| schemas.as_array()) {
+        if let Some(nested_schema) = schemas.iter().find(|nested_schema| {
+            schema_matches_value(value, nested_schema, root_schema, ref_stack)
+        }) {
+            coerce_integer_value(value, nested_schema, root_schema, ref_stack);
+        }
+    }
+
+    if let Some(schemas) = schema.get("oneOf").and_then(|schemas| schemas.as_array()) {
+        // `oneOf` is satisfied by exactly one branch. When matching is ambiguous (zero or more
+        // than one branch matches) we cannot tell which schema the value was meant for, so we
+        // skip coercion rather than risk applying the wrong branch's `integer` declaration.
+        let mut matching = schemas.iter().filter(|nested_schema| {
+            schema_matches_value(value, nested_schema, root_schema, ref_stack)
+        });
+        if let Some(nested_schema) = matching.next() {
+            if matching.next().is_none() {
+                coerce_integer_value(value, nested_schema, root_schema, ref_stack);
             }
         }
     }
 
+    if schema_declares_integer(schema) {
+        coerce_number_to_integer(value);
+    }
+
     match value {
-        serde_json::Value::Object(map) => {
-            let properties = schema.get("properties").and_then(|p| p.as_object());
-            let additional = schema.get("additionalProperties");
-            // Per-key handling for the outer schema only. Per-branch handling
-            // for keys covered by `oneOf`/`anyOf`/`allOf` is reached through
-            // the top-level combinator recursion above: each branch is invoked
-            // with the full `value`, so the branch's own object handling runs
-            // and walks its `properties[k]`. Coercion is monotonic so the two
-            // passes stack safely.
-            for (k, v) in map.iter_mut() {
-                if let Some(prop_schema) = properties.and_then(|p| p.get(k)) {
-                    coerce_value_against_schema(v, prop_schema);
-                } else if let Some(extra_schema) = additional {
-                    if extra_schema.is_object() {
-                        coerce_value_against_schema(v, extra_schema);
+        serde_json::Value::Object(object) => {
+            let declared_properties = schema.get("properties").and_then(|p| p.as_object());
+            if let Some(properties) = declared_properties {
+                for (key, property_schema) in properties {
+                    if let Some(property_value) = object.get_mut(key) {
+                        coerce_integer_value(
+                            property_value,
+                            property_schema,
+                            root_schema,
+                            ref_stack,
+                        );
+                    }
+                }
+            }
+
+            if let Some(additional_properties) = schema.get("additionalProperties") {
+                if additional_properties.is_object() {
+                    for (key, property_value) in object.iter_mut() {
+                        if declared_properties
+                            .is_some_and(|properties| properties.contains_key(key))
+                        {
+                            continue;
+                        }
+                        coerce_integer_value(
+                            property_value,
+                            additional_properties,
+                            root_schema,
+                            ref_stack,
+                        );
                     }
                 }
             }
         }
         serde_json::Value::Array(items) => {
-            if let Some(item_schema) = schema.get("items") {
-                match item_schema {
-                    // `items` as an object schema: applies to every element.
-                    serde_json::Value::Object(_) => {
-                        for elem in items.iter_mut() {
-                            coerce_value_against_schema(elem, item_schema);
-                        }
-                    }
-                    // `items` as an array (tuple validation): positional schemas.
-                    serde_json::Value::Array(schemas) => {
-                        for (elem, elem_schema) in items.iter_mut().zip(schemas.iter()) {
-                            coerce_value_against_schema(elem, elem_schema);
-                        }
-                    }
-                    _ => {}
+            if let Some(items_schema) = schema.get("items") {
+                for item in items {
+                    coerce_integer_value(item, items_schema, root_schema, ref_stack);
                 }
             }
         }
         _ => {}
     }
+}
+
+fn schema_matches_value(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+    root_schema: &serde_json::Value,
+    ref_stack: &[String],
+) -> bool {
+    if let Some(ref_path) = schema.get("$ref").and_then(|ref_path| ref_path.as_str()) {
+        if !ref_path.starts_with('#') || ref_stack.iter().any(|seen| seen == ref_path) {
+            return true;
+        }
+
+        let mut next_ref_stack = ref_stack.to_owned();
+        next_ref_stack.push(ref_path.to_string());
+        if let Some(resolved_schema) =
+            root_schema.pointer(ref_path.strip_prefix('#').unwrap_or_default())
+        {
+            return schema_matches_value(value, resolved_schema, root_schema, &next_ref_stack);
+        }
+    }
+
+    if let Some(schemas) = schema.get("allOf").and_then(|schemas| schemas.as_array()) {
+        if !schemas
+            .iter()
+            .all(|schema| schema_matches_value(value, schema, root_schema, ref_stack))
+        {
+            return false;
+        }
+    }
+
+    if let Some(schemas) = schema.get("anyOf").and_then(|schemas| schemas.as_array()) {
+        if !schemas
+            .iter()
+            .any(|schema| schema_matches_value(value, schema, root_schema, ref_stack))
+        {
+            return false;
+        }
+    }
+
+    if let Some(schemas) = schema.get("oneOf").and_then(|schemas| schemas.as_array()) {
+        if !schemas
+            .iter()
+            .any(|schema| schema_matches_value(value, schema, root_schema, ref_stack))
+        {
+            return false;
+        }
+    }
+
+    if let Some(schema_type) = schema.get("type") {
+        let type_matches = match schema_type {
+            serde_json::Value::String(schema_type) => value_matches_schema_type(value, schema_type),
+            serde_json::Value::Array(schema_types) => schema_types.iter().any(|schema_type| {
+                schema_type
+                    .as_str()
+                    .is_some_and(|schema_type| value_matches_schema_type(value, schema_type))
+            }),
+            _ => true,
+        };
+        if !type_matches {
+            return false;
+        }
+    }
+
+    // `const` and `enum` pin the value to specific literals. A branch only matches when the
+    // value is one of them, so honoring these keeps `find` from selecting a branch whose
+    // optional properties merely type-check.
+    if let Some(const_value) = schema.get("const") {
+        if value != const_value {
+            return false;
+        }
+    }
+
+    if let Some(enum_values) = schema.get("enum").and_then(|values| values.as_array()) {
+        if !enum_values.iter().any(|enum_value| enum_value == value) {
+            return false;
+        }
+    }
+
+    match value {
+        serde_json::Value::Object(object) => {
+            // `required` lists keys that must be present for the value to satisfy the branch.
+            if let Some(required) = schema
+                .get("required")
+                .and_then(|required| required.as_array())
+            {
+                for required_key in required {
+                    if let Some(required_key) = required_key.as_str() {
+                        if !object.contains_key(required_key) {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            let declared_properties = schema.get("properties").and_then(|p| p.as_object());
+
+            // `additionalProperties: false` forbids keys not declared in `properties`; a value
+            // carrying an undeclared key does not match such a branch.
+            if schema.get("additionalProperties") == Some(&serde_json::Value::Bool(false)) {
+                for key in object.keys() {
+                    let declared =
+                        declared_properties.is_some_and(|properties| properties.contains_key(key));
+                    if !declared {
+                        return false;
+                    }
+                }
+            }
+
+            if let Some(properties) = declared_properties {
+                for (key, property_schema) in properties {
+                    if let Some(property_value) = object.get(key) {
+                        if !schema_matches_value(
+                            property_value,
+                            property_schema,
+                            root_schema,
+                            ref_stack,
+                        ) {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            if let Some(additional_properties) = schema.get("additionalProperties") {
+                if additional_properties.is_object() {
+                    for (key, property_value) in object {
+                        if declared_properties
+                            .is_some_and(|properties| properties.contains_key(key))
+                        {
+                            continue;
+                        }
+                        if !schema_matches_value(
+                            property_value,
+                            additional_properties,
+                            root_schema,
+                            ref_stack,
+                        ) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            if let Some(items_schema) = schema.get("items") {
+                if !items
+                    .iter()
+                    .all(|item| schema_matches_value(item, items_schema, root_schema, ref_stack))
+                {
+                    return false;
+                }
+            }
+        }
+        _ => {}
+    }
+
+    true
+}
+
+fn value_matches_schema_type(value: &serde_json::Value, schema_type: &str) -> bool {
+    match schema_type {
+        "array" => value.is_array(),
+        "boolean" => value.is_boolean(),
+        "integer" => value.as_f64().is_some_and(|number| number.fract() == 0.0),
+        "null" => value.is_null(),
+        "number" => value.is_number(),
+        "object" => value.is_object(),
+        "string" => value.is_string(),
+        _ => true,
+    }
+}
+
+fn schema_declares_integer(schema: &serde_json::Value) -> bool {
+    match schema.get("type") {
+        Some(serde_json::Value::String(schema_type)) => schema_type == "integer",
+        Some(serde_json::Value::Array(schema_types)) => schema_types
+            .iter()
+            .any(|schema_type| schema_type.as_str() == Some("integer")),
+        _ => false,
+    }
+}
+
+fn coerce_number_to_integer(value: &mut serde_json::Value) {
+    let serde_json::Value::Number(number) = value else {
+        return;
+    };
+    let Some(float) = number.as_f64() else {
+        return;
+    };
+    if !float.is_finite() || float.fract() != 0.0 {
+        return;
+    }
+    const I64_MIN_F64: f64 = -9_223_372_036_854_775_808.0;
+    const I64_MAX_PLUS_ONE_F64: f64 = 9_223_372_036_854_775_808.0;
+    if !(I64_MIN_F64..I64_MAX_PLUS_ONE_F64).contains(&float) {
+        return;
+    }
+
+    *number = serde_json::Number::from(float as i64);
 }
 
 #[cfg(test)]
