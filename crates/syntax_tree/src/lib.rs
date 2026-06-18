@@ -23,6 +23,12 @@ use warpui_core::{AppContext, Entity, ModelContext, WeakModelHandle};
 
 const MAX_SYNTAX_TREES: usize = 3;
 
+/// Maximum byte size for tree-sitter parsing. Files larger than this threshold
+/// are skipped to prevent excessive memory usage during tree-sitter error recovery.
+/// The tree-sitter parser (especially with grammars like SQL that have external scanners)
+/// can allocate several GB of memory during error recovery on large files.
+const MAX_PARSE_BYTE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
+
 thread_local! {
     static PARSER: RefCell<Parser> = RefCell::new(Parser::new());
 }
@@ -215,12 +221,23 @@ impl SyntaxTreeState {
     }
 
     /// Re-parse the tree based on the updated tree and source content.
+    /// Returns `None` if the content exceeds the maximum parse size threshold,
+    /// which prevents tree-sitter from consuming excessive memory on large files.
     async fn parse_text(
         content: BufferSnapshot,
         old_tree: Option<Tree>,
         language: &Language,
-    ) -> Tree {
-        PARSER.with(|parser| {
+    ) -> Option<Tree> {
+        if content.byte_len().as_usize() > MAX_PARSE_BYTE_SIZE {
+            log::warn!(
+                "Skipping tree-sitter parse: content size {} bytes exceeds {} byte limit",
+                content.byte_len().as_usize(),
+                MAX_PARSE_BYTE_SIZE
+            );
+            return None;
+        }
+
+        Some(PARSER.with(|parser| {
             let mut parser = parser.borrow_mut();
             parser
                 .set_language(&language.grammar)
@@ -234,7 +251,7 @@ impl SyntaxTreeState {
             parser
                 .parse_with_options(&mut callback, old_tree.as_ref(), None)
                 .expect("Should succeed")
-        })
+        }))
     }
 
     /// Translate an incoming edit delta into an InputEdit for incrementally updating the syntax
@@ -345,6 +362,10 @@ impl DecorationLayer for SyntaxTreeState {
                     new_tree
                 },
                 move |model, new_tree, ctx| {
+                    let Some(new_tree) = new_tree else {
+                        // Content was too large to parse; skip updating the syntax tree.
+                        return;
+                    };
                     let mut syntax_tree_lock = model.syntax_tree.lock();
                     model.invalidate_highlight_cache_for_version(version);
                     if let Some(old_tree) = syntax_tree_lock.get_mut(&version) {
