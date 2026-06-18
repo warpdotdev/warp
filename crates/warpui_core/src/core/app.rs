@@ -3162,16 +3162,17 @@ impl AppContext {
         // window -- a leftover here is exactly what previously desynced
         // `view_to_window` from the windows' `views` maps and triggered the
         // "circular view reference" panic.
-        loop {
-            let stranded: Vec<EntityId> = self
-                .collect_transferable_subtree(root_view_id, target_window_id)
-                .into_iter()
-                .filter(|id| self.view_to_window.get(id).copied() == Some(source_window_id))
-                .collect();
-            if stranded.is_empty() {
-                break;
-            }
-
+        // Each iteration transfers at least one view (shrinking the stranded set),
+        // so this while loop always terminates. The only `break` handles the
+        // degenerate case where a view appears stranded but cannot be moved
+        // (absent from the source window's `views` map despite being in
+        // `view_to_window`) — logging a warning instead of spinning forever.
+        let mut stranded: Vec<EntityId> = self
+            .collect_transferable_subtree(root_view_id, target_window_id)
+            .into_iter()
+            .filter(|id| self.view_to_window.get(id).copied() == Some(source_window_id))
+            .collect();
+        while !stranded.is_empty() {
             let mut progressed = false;
             for view_id in stranded {
                 if self.transfer_view_to_window(view_id, source_window_id, target_window_id) {
@@ -3192,6 +3193,12 @@ impl AppContext {
                 );
                 break;
             }
+
+            stranded = self
+                .collect_transferable_subtree(root_view_id, target_window_id)
+                .into_iter()
+                .filter(|id| self.view_to_window.get(id).copied() == Some(source_window_id))
+                .collect();
         }
 
         transferred
