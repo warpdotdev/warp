@@ -12,8 +12,10 @@ mod transcript_view;
 
 use std::collections::HashMap;
 use std::env;
+use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ai::skills::SkillPathOrigin;
 use anyhow::{anyhow, Result};
@@ -21,20 +23,21 @@ use chrono::Local;
 use input_view::{InputEvent, TuiInputView};
 use transcript_view::TuiTranscriptView;
 use warp_multi_agent_api::{AgentType, ToolType};
-use warpui::{ModelContext, ModelHandle};
+use warpui::r#async::Timer;
+use warpui::{ModelContext, ModelHandle, SingletonEntity};
 use warpui_core::elements::tui::{TuiChildView, TuiColumn, TuiConstrainedBox, TuiElement};
 use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};
 use warpui_core::{
-    AddWindowOptions, AppContext, Entity, SingletonEntity, TuiView, TypedActionView, ViewContext,
-    ViewHandle,
+    AddWindowOptions, AppContext, Entity, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
 use crate::ai::agent::api::{self, RequestParams};
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, UserQueryMode,
+    AIAgentAttachment, AIAgentContext, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
+    CancellationReason, UserQueryMode,
 };
 use crate::ai::blocklist::{
     AgentConversationEngine, AgentConversationEngineDelegate, AgentSessionOwnerId,
@@ -288,6 +291,11 @@ impl CoreTuiModel {
     }
 }
 
+/// Sends a prompt through the TUI core model, prints the response, and exits.
+pub fn run_prompt(prompt: String, ctx: &mut AppContext) {
+    ctx.add_singleton_model(|ctx| TuiPromptRunner::new(prompt, ctx));
+}
+
 impl AgentConversationEngineDelegate for CoreTuiModel {
     fn skill_path_origin(&self, _ctx: &AppContext) -> SkillPathOrigin {
         SkillPathOrigin::Local
@@ -324,6 +332,183 @@ pub enum CoreTuiModelEvent {
     ConversationUpdated { conversation_id: AIConversationId },
     /// The active request reached a terminal state.
     RequestFinished { conversation_id: AIConversationId },
+}
+
+struct TuiPromptRunner {
+    conversation_id: AIConversationId,
+    finished: bool,
+    printed_output: String,
+}
+
+impl TuiPromptRunner {
+    /// Sends a prompt through `CoreTuiModel` and exits after printing the final response.
+    fn new(prompt: String, ctx: &mut ModelContext<Self>) -> Self {
+        let owner = AgentSessionOwnerId::new(ctx.model_id());
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |runner, event, ctx| {
+                let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                    conversation_id,
+                    new_status,
+                    ..
+                } = event
+                else {
+                    return;
+                };
+                if *conversation_id == runner.conversation_id && !new_status.is_in_progress() {
+                    runner.print_response_and_exit(ctx);
+                }
+            },
+        );
+        ctx.subscribe_to_model(
+            &CoreTuiModel::handle(ctx),
+            |runner, event, ctx| match event {
+                CoreTuiModelEvent::ConversationUpdated { conversation_id }
+                    if *conversation_id == runner.conversation_id =>
+                {
+                    if let Err(error) = runner.print_incremental_response(ctx) {
+                        eprintln!("{error:#}");
+                    }
+                }
+                CoreTuiModelEvent::RequestFinished { conversation_id }
+                    if *conversation_id == runner.conversation_id =>
+                {
+                    runner.print_response_and_exit(ctx);
+                }
+                CoreTuiModelEvent::PromptSubmitted { .. }
+                | CoreTuiModelEvent::ConversationUpdated { .. }
+                | CoreTuiModelEvent::RequestFinished { .. } => {}
+            },
+        );
+
+        let conversation_id = match CoreTuiModel::handle(ctx).update(ctx, |model, ctx| {
+            model.register_session(owner, ctx);
+            model.send_prompt(prompt, ctx)
+        }) {
+            Ok((conversation_id, _)) => conversation_id,
+            Err(error) => {
+                eprintln!("{error:#}");
+                ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
+                AIConversationId::new()
+            }
+        };
+
+        ctx.spawn(
+            async move { Timer::after(Duration::from_secs(120)).await },
+            |runner, _, ctx| {
+                if !runner.finished {
+                    let error = anyhow!("timed out waiting for TUI prompt response");
+                    eprintln!("{error:#}");
+                    ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
+                    runner.finished = true;
+                }
+            },
+        );
+
+        Self {
+            conversation_id,
+            finished: false,
+            printed_output: String::new(),
+        }
+    }
+
+    fn print_incremental_response(&mut self, ctx: &AppContext) -> Result<()> {
+        let Some(current_output) = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&self.conversation_id)
+            .and_then(current_response_text)
+        else {
+            return Ok(());
+        };
+
+        if current_output == self.printed_output {
+            return Ok(());
+        }
+
+        if let Some(delta) = current_output.strip_prefix(&self.printed_output) {
+            print!("{delta}");
+        } else {
+            if !self.printed_output.is_empty() && !self.printed_output.ends_with('\n') {
+                println!();
+            }
+            print!("{current_output}");
+        }
+        io::stdout().flush()?;
+        self.printed_output = current_output;
+        Ok(())
+    }
+
+    fn print_response_and_exit(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        let result = self.print_incremental_response(ctx).and_then(|()| {
+            BlocklistAIHistoryModel::handle(ctx).read(ctx, |history_model, _| {
+                let conversation = history_model
+                    .conversation(&self.conversation_id)
+                    .ok_or_else(|| {
+                        anyhow!("TUI conversation {:?} was not found", self.conversation_id)
+                    })?;
+                final_response_text(conversation)
+            })
+        });
+
+        match result {
+            Ok(_) => {
+                if !self.printed_output.is_empty() && !self.printed_output.ends_with('\n') {
+                    println!();
+                }
+                ctx.terminate_app(TerminationMode::ForceTerminate, None);
+            }
+            Err(error) => {
+                eprintln!("{error:#}");
+                ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
+            }
+        }
+    }
+}
+
+impl Entity for TuiPromptRunner {
+    type Event = ();
+}
+
+impl SingletonEntity for TuiPromptRunner {}
+
+fn current_response_text(conversation: &AIConversation) -> Option<String> {
+    let exchange = conversation.root_task_exchanges().last()?;
+    let output = exchange.output_status.output()?.get();
+    let text = output.format_for_copy(None);
+    Some(if text.trim().is_empty() {
+        output.to_string()
+    } else {
+        text
+    })
+}
+fn final_response_text(conversation: &AIConversation) -> Result<String> {
+    let exchange = conversation
+        .root_task_exchanges()
+        .last()
+        .ok_or_else(|| anyhow!("TUI conversation finished without any exchanges"))?;
+
+    match &exchange.output_status {
+        AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success { output },
+        } => {
+            let output = output.get();
+            let text = output.format_for_copy(None);
+            if text.trim().is_empty() {
+                Ok(output.to_string())
+            } else {
+                Ok(text)
+            }
+        }
+        output_status => Err(anyhow!(
+            "TUI prompt did not finish successfully: status={:?}, conversation_status={:?}, output={}",
+            output_status,
+            conversation.status(),
+            output_status,
+        )),
+    }
 }
 
 /// Builds request context for a TUI agent query.

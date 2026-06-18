@@ -65,7 +65,7 @@ fn initialize_tui_app(app: &mut App) {
     register_pre_initialize_singletons(app);
     app.update(|ctx| {
         let _ = initialize_app(
-            &LaunchMode::Tui,
+            &LaunchMode::Tui { prompt: None },
             IntervalTimer::new(),
             None,
             ctx,
