@@ -1,13 +1,50 @@
 use settings::Setting as _;
 use warpui::{App, SingletonEntity as _};
 
-use super::SlashCommandEntryState;
+use super::{split_command_token, SlashCommandEntryState};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{QueuedQuery, QueuedQueryModel, QueuedQueryOrigin};
 use crate::report_if_error;
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::settings::AISettings;
 use crate::terminal::input::tests::{add_window_with_bootstrapped_terminal, initialize_app};
+
+#[test]
+fn test_split_command_token_splits_on_first_whitespace() {
+    // No whitespace: the whole buffer is the command token, no argument.
+    assert_eq!(split_command_token("/plan"), ("/plan", None));
+
+    // Space-delimited argument: the remainder of the line is one argument.
+    assert_eq!(
+        split_command_token("/rename-tab Backend API"),
+        ("/rename-tab", Some("Backend API".to_owned()))
+    );
+
+    // Whitespace-only suffix is preserved as an (empty-ish) argument, matching
+    // the prior literal-space behavior.
+    assert_eq!(
+        split_command_token("/rename-tab "),
+        ("/rename-tab", Some("".to_owned()))
+    );
+
+    // A newline acts as the command/argument boundary so a command on its own
+    // line above a multi-line prompt is still isolated. This is the shared path
+    // exercised by both slash-command and skill-command detection.
+    assert_eq!(
+        split_command_token("/write-product-spec\nfirst line\nsecond line"),
+        (
+            "/write-product-spec",
+            Some("first line\nsecond line".to_owned())
+        )
+    );
+
+    // A leading newline (command immediately followed by a blank line) still
+    // splits at the newline rather than folding it into the token.
+    assert_eq!(
+        split_command_token("/plan\nbody"),
+        ("/plan", Some("body".to_owned()))
+    );
+}
 
 #[test]
 fn test_parse_slash_command_handles_argument_rules() {

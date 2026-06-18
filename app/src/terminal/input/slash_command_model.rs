@@ -239,14 +239,7 @@ impl SlashCommandModel {
     /// Detects whether `buffer` matches a known skill command.
     /// Accepts `&AppContext` so it can be called outside a model update.
     fn detect_skill_command(&self, buffer: &str, ctx: &AppContext) -> Option<DetectedSkillCommand> {
-        // Split on the first whitespace character so the skill token is isolated even
-        // when the argument spans multiple lines (see `parse_slash_command`).
-        let (possible_command, possible_argument) =
-            if let Some((command, argument)) = buffer.split_once(char::is_whitespace) {
-                (command, Some(argument.to_owned()))
-            } else {
-                (buffer, None)
-            };
+        let (possible_command, possible_argument) = split_command_token(buffer);
 
         let skill_name = possible_command.strip_prefix('/')?;
 
@@ -434,18 +427,7 @@ impl SlashCommandDataSource {
     // If the slash command has an argument, it matches only if its an exact match, or if the argument
     // is space-delimited.
     fn parse_slash_command(&self, buffer: &str) -> Option<DetectedCommand> {
-        // Split on the first whitespace character (space, tab, or newline) so the
-        // command token is isolated even when the argument is a multi-line prompt
-        // (e.g. `/plan\nfirst line\nsecond line`). Splitting on a literal space only
-        // would fold the newline and following text into the command token, so a
-        // command placed on its own line — including after editing the leading line
-        // of a multi-line input — would fail to be detected.
-        let (possible_command, possible_argument) =
-            if let Some((command, argument)) = buffer.split_once(char::is_whitespace) {
-                (command, Some(argument.to_owned()))
-            } else {
-                (buffer, None)
-            };
+        let (possible_command, possible_argument) = split_command_token(buffer);
 
         let is_matching_command = |command: &StaticCommand| -> bool {
             if command.name != possible_command {
@@ -472,6 +454,24 @@ impl SlashCommandDataSource {
             command: matched_command,
             argument: possible_argument,
         })
+    }
+}
+
+/// Splits a slash/skill command buffer into the command token and its optional
+/// argument on the first whitespace character (space, tab, or newline).
+///
+/// Splitting on whitespace rather than a literal space keeps the command token
+/// isolated even when the argument is a multi-line prompt
+/// (e.g. `/plan\nfirst line\nsecond line`): the newline acts as the
+/// command/argument boundary. Splitting on a space only would fold the newline
+/// and the following text into the command token, so a command placed on its
+/// own line — including after editing the leading line of a multi-line input —
+/// would fail to be detected. Both the static slash-command and the skill-command
+/// detection paths share this helper so they cannot diverge.
+fn split_command_token(buffer: &str) -> (&str, Option<String>) {
+    match buffer.split_once(char::is_whitespace) {
+        Some((command, argument)) => (command, Some(argument.to_owned())),
+        None => (buffer, None),
     }
 }
 
