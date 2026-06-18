@@ -3863,6 +3863,13 @@ impl Input {
         self.queued_prompts_panel.as_ref()
     }
 
+    /// Returns whether this input's queued-prompt inline editor is currently focused.
+    pub(crate) fn is_queued_prompt_inline_editor_focused(&self, ctx: &AppContext) -> bool {
+        self.queued_prompts_panel
+            .as_ref()
+            .is_some_and(|panel| panel.as_ref(ctx).is_inline_edit_editor_focused(ctx))
+    }
+
     /// Returns whether the active queued prompt is being edited inline.
     fn is_editing_queued_prompt(&self, ctx: &AppContext) -> bool {
         let Some(conversation_id) =
