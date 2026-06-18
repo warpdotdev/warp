@@ -69,6 +69,14 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         S::Event: 'static,
         F: 'static + FnMut(&mut T, ModelHandle<S>, &S::Event, &mut ModelContext<T>),
     {
+        // Self-subscriptions are disallowed because `emit_event` temporarily removes the subscriber
+        // model from `app.models` before invoking callbacks, so `emitter_handle.upgrade` would
+        // return `None` and the callback would be silently skipped.
+        debug_assert_ne!(
+            handle.id(),
+            self.model_id,
+            "a model must not subscribe to its own events"
+        );
         let emitter_handle = handle.downgrade();
         self.app
             .subscriptions
