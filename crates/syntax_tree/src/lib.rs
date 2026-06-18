@@ -2,8 +2,11 @@ mod queries;
 use std::cell::{Ref, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
-use arborium::tree_sitter::{InputEdit, Parser, Tree};
+use instant::Instant;
+
+use arborium::tree_sitter::{InputEdit, ParseOptions, Parser, Tree};
 use futures::stream::AbortHandle;
 use languages::Language;
 use parking_lot::Mutex;
@@ -22,6 +25,13 @@ use warpui_core::text::point::Point;
 use warpui_core::{AppContext, Entity, ModelContext, WeakModelHandle};
 
 const MAX_SYNTAX_TREES: usize = 3;
+
+/// Maximum duration allowed for a single tree-sitter parse operation.
+/// Tree-sitter's error recovery (`ts_parser__recover`) can allocate unbounded
+/// memory when processing pathological inputs. This timeout causes the parser to
+/// bail out early, returning the best partial tree it has so far, and prevents
+/// multi-GB memory spikes that trigger Sentry "Excessive memory usage" alerts.
+const PARSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 thread_local! {
     static PARSER: RefCell<Parser> = RefCell::new(Parser::new());
@@ -215,11 +225,16 @@ impl SyntaxTreeState {
     }
 
     /// Re-parse the tree based on the updated tree and source content.
+    ///
+    /// A timeout ([`PARSE_TIMEOUT`]) is applied via a progress callback so that
+    /// tree-sitter's error recovery cannot allocate unbounded memory on
+    /// pathological inputs. If the timeout fires, we fall back to the previous
+    /// `old_tree` (or return an empty parse if none exists).
     async fn parse_text(
         content: BufferSnapshot,
         old_tree: Option<Tree>,
         language: &Language,
-    ) -> Tree {
+    ) -> Option<Tree> {
         PARSER.with(|parser| {
             let mut parser = parser.borrow_mut();
             parser
@@ -231,9 +246,15 @@ impl SyntaxTreeState {
                 bytes.seek(ByteOffset::from(byte_offset + 1));
                 bytes.next().unwrap_or_default()
             };
-            parser
-                .parse_with_options(&mut callback, old_tree.as_ref(), None)
-                .expect("Should succeed")
+
+            let deadline = Instant::now() + PARSE_TIMEOUT;
+            let mut progress = |_state: &arborium::tree_sitter::ParseState| -> bool {
+                // Return `false` to cancel parsing when the deadline is exceeded.
+                Instant::now() < deadline
+            };
+            let options = ParseOptions::new().progress_callback(&mut progress);
+
+            parser.parse_with_options(&mut callback, old_tree.as_ref(), Some(options))
         })
     }
 
@@ -345,6 +366,13 @@ impl DecorationLayer for SyntaxTreeState {
                     new_tree
                 },
                 move |model, new_tree, ctx| {
+                    // If parsing was cancelled (e.g. timeout), `new_tree` is `None`.
+                    // In that case we keep the existing (edited but un-reparsed) tree
+                    // that was already inserted above, so highlighting stays roughly
+                    // correct until the next successful parse.
+                    let Some(new_tree) = new_tree else {
+                        return;
+                    };
                     let mut syntax_tree_lock = model.syntax_tree.lock();
                     model.invalidate_highlight_cache_for_version(version);
                     if let Some(old_tree) = syntax_tree_lock.get_mut(&version) {

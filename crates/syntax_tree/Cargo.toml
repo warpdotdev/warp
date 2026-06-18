@@ -7,6 +7,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+instant.workspace = true
 rangemap.workspace = true
 arborium.workspace = true
 warpui_core.workspace = true
