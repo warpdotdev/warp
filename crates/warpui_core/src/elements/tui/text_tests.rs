@@ -84,6 +84,13 @@ fn applies_its_style_to_painted_cells() {
 }
 
 #[test]
+fn centered_alignment_pads_both_sides() {
+    let text = TuiText::new("hi").centered();
+    // Centered within 6 columns: one leading pad column, then the trailing pad.
+    assert_eq!(render_to_lines(&text, TuiSize::new(6, 1)), vec!["  hi  "]);
+}
+
+#[test]
 fn truncation_keeps_one_row_per_hard_line() {
     let text = TuiText::new("a\nb\nc").truncate();
     assert_eq!(text.desired_height(10), 3);

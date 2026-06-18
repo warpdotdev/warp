@@ -177,11 +177,13 @@ impl AIExecutionProfilesModel {
                             id: ClientProfileId::new()
                         }
                     }
-                    // RemoteServerProxy and RemoteServerDaemon don't use AI
-                    // execution profiles. They never reach this code path
-                    // since they don't go through initialize_app, but handle
-                    // exhaustively.
-                    LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon { .. } => DefaultProfileState::Unsynced {
+                    // RemoteServerProxy, RemoteServerDaemon, and the TUI
+                    // front-end don't use AI execution profiles. They never
+                    // reach this code path since they don't go through
+                    // initialize_app, but handle exhaustively.
+                    LaunchMode::RemoteServerProxy
+                    | LaunchMode::RemoteServerDaemon { .. }
+                    | LaunchMode::Tui => DefaultProfileState::Unsynced {
                         id: ClientProfileId::new(),
                         profile: super::create_default_from_legacy_settings(ctx),
                     },

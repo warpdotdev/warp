@@ -21,6 +21,7 @@
 //! wide glyph occupies two columns and is never split across rows. An empty
 //! string occupies no rows.
 
+use ratatui::layout::Alignment;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use super::{TuiBuffer, TuiConstraint, TuiElement, TuiRect, TuiSize, TuiStyle};
@@ -29,6 +30,7 @@ pub struct TuiText {
     text: String,
     style: TuiStyle,
     wrap: bool,
+    alignment: Alignment,
 }
 
 impl TuiText {
@@ -38,6 +40,7 @@ impl TuiText {
             text: text.into(),
             style: TuiStyle::default(),
             wrap: true,
+            alignment: Alignment::Left,
         }
     }
 
@@ -52,9 +55,19 @@ impl TuiText {
         self
     }
 
+    /// Center-aligns each rendered row within the width it is given. Pair with a
+    /// full-width parent (e.g. [`TuiColumn`](super::TuiColumn)) so the text is
+    /// horizontally centered on screen.
+    pub fn centered(mut self) -> Self {
+        self.alignment = Alignment::Center;
+        self
+    }
+
     /// The ratatui `Paragraph` backing this element's measure and paint.
     fn paragraph(&self) -> Paragraph<'_> {
-        let paragraph = Paragraph::new(self.text.as_str()).style(self.style);
+        let paragraph = Paragraph::new(self.text.as_str())
+            .style(self.style)
+            .alignment(self.alignment);
         if self.wrap {
             paragraph.wrap(Wrap { trim: false })
         } else {

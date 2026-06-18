@@ -82,6 +82,8 @@ mod test_util;
 mod throttle;
 mod tips;
 mod tracing;
+#[cfg(feature = "tui")]
+mod tui;
 mod ui_components;
 mod undo_close;
 mod uri;
@@ -334,8 +336,11 @@ fn determine_agent_source(
             Some(crate::ai::ambient_agents::AgentSource::CloudMode)
         }
         // RemoteServerProxy and RemoteServerDaemon are headless server
-        // processes that don't use the agent subsystem.
-        LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon { .. } => None,
+        // processes that don't use the agent subsystem; the TUI front-end has
+        // no agent harness wired up yet.
+        LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon { .. } | LaunchMode::Tui => {
+            None
+        }
     }
 }
 
@@ -352,7 +357,8 @@ fn daemon_codebase_index_snapshot_storage(launch_mode: &LaunchMode) -> Option<Sn
         LaunchMode::App { .. }
         | LaunchMode::CommandLine { .. }
         | LaunchMode::RemoteServerProxy
-        | LaunchMode::Test { .. } => None,
+        | LaunchMode::Test { .. }
+        | LaunchMode::Tui => None,
     }
 }
 
@@ -394,6 +400,10 @@ pub enum LaunchMode {
         /// directory on the remote host.
         identity_key: String,
     },
+
+    /// Run the headless TUI front-end (the `warp-tui` binary). Renders through
+    /// the `tui`-gated WarpUI backend instead of opening a GUI window.
+    Tui,
 }
 
 impl LaunchMode {
@@ -403,7 +413,8 @@ impl LaunchMode {
             LaunchMode::CommandLine { .. }
             | LaunchMode::Test { .. }
             | LaunchMode::RemoteServerProxy
-            | LaunchMode::RemoteServerDaemon { .. } => Cow::Owned(warp_cli::AppArgs::default()),
+            | LaunchMode::RemoteServerDaemon { .. }
+            | LaunchMode::Tui => Cow::Owned(warp_cli::AppArgs::default()),
         }
     }
 
@@ -417,7 +428,8 @@ impl LaunchMode {
             LaunchMode::App { .. }
             | LaunchMode::CommandLine { .. }
             | LaunchMode::RemoteServerProxy
-            | LaunchMode::RemoteServerDaemon { .. } => false,
+            | LaunchMode::RemoteServerDaemon { .. }
+            | LaunchMode::Tui => false,
         }
     }
 
@@ -427,7 +439,8 @@ impl LaunchMode {
             LaunchMode::App { .. }
             | LaunchMode::CommandLine { .. }
             | LaunchMode::RemoteServerProxy
-            | LaunchMode::RemoteServerDaemon { .. } => None,
+            | LaunchMode::RemoteServerDaemon { .. }
+            | LaunchMode::Tui => None,
         }
     }
 
@@ -444,6 +457,8 @@ impl LaunchMode {
             LaunchMode::App { .. } => ExecutionMode::App,
             LaunchMode::CommandLine { .. } => ExecutionMode::Sdk,
             LaunchMode::Test { .. } => ExecutionMode::App,
+            // The TUI front-end is an app-style client, not the SDK.
+            LaunchMode::Tui => ExecutionMode::App,
             // RemoteServerProxy is a thin byte bridge; Sdk is the closest match.
             LaunchMode::RemoteServerProxy => ExecutionMode::Sdk,
             // RemoteServerDaemon gets its own mode for distinct Sentry tagging.
@@ -457,7 +472,8 @@ impl LaunchMode {
             LaunchMode::App { .. }
             | LaunchMode::Test { .. }
             | LaunchMode::RemoteServerProxy
-            | LaunchMode::RemoteServerDaemon { .. } => false,
+            | LaunchMode::RemoteServerDaemon { .. }
+            | LaunchMode::Tui => false,
         }
     }
 
@@ -469,6 +485,8 @@ impl LaunchMode {
                 _ => true,
             },
             LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon { .. } => true,
+            // The TUI front-end renders to the terminal, with no GUI window.
+            LaunchMode::Tui => true,
             LaunchMode::App { .. } | LaunchMode::Test { .. } => false,
         }
     }
@@ -484,6 +502,8 @@ impl LaunchMode {
             }
             LaunchMode::App { .. } | LaunchMode::Test { .. } => true,
             LaunchMode::RemoteServerProxy => false,
+            // No agent harness is wired up for the TUI front-end yet.
+            LaunchMode::Tui => false,
         }
     }
 
@@ -495,7 +515,8 @@ impl LaunchMode {
             LaunchMode::CommandLine { .. }
             | LaunchMode::Test { .. }
             | LaunchMode::RemoteServerProxy
-            | LaunchMode::RemoteServerDaemon { .. } => false,
+            | LaunchMode::RemoteServerDaemon { .. }
+            | LaunchMode::Tui => false,
         }
     }
 
@@ -507,7 +528,8 @@ impl LaunchMode {
             | LaunchMode::CommandLine { .. }
             | LaunchMode::Test { .. }
             | LaunchMode::RemoteServerDaemon { .. }
-            | LaunchMode::RemoteServerProxy => true,
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::Tui => true,
         }
     }
 
@@ -518,7 +540,8 @@ impl LaunchMode {
             | LaunchMode::CommandLine { .. }
             | LaunchMode::Test { .. }
             | LaunchMode::RemoteServerDaemon { .. }
-            | LaunchMode::RemoteServerProxy => true,
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::Tui => true,
         }
     }
 
@@ -535,6 +558,9 @@ impl LaunchMode {
             // Proxy must log to stderr because stdout is the protocol channel.
             LaunchMode::RemoteServerProxy => Some(LogDestination::Stderr),
             LaunchMode::RemoteServerDaemon { .. } => Some(LogDestination::File),
+            // A TUI owns the terminal, so logs must go to a file, never the
+            // screen (stdout/stderr would corrupt the rendered output).
+            LaunchMode::Tui => Some(LogDestination::File),
             LaunchMode::App { .. } | LaunchMode::Test { .. } => None,
         }
     }
@@ -778,6 +804,13 @@ pub fn run_integration_test(driver: TestDriver) -> Result<()> {
         is_integration_test,
     };
     run_internal(launch)
+}
+
+/// Runs the headless TUI front-end (the `warp-tui` binary). Bootstraps the real
+/// (headless) app and renders through the `tui`-gated WarpUI backend.
+#[cfg(feature = "tui")]
+pub fn run_tui() -> Result<()> {
+    run_internal(LaunchMode::Tui)
 }
 
 /// Runs the app (or CLI / daemon).
@@ -1058,6 +1091,16 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         crate::util::bindings::custom_tag_to_keystroke,
     );
 
+    // The TUI front-end bootstraps the real (headless) app but renders through
+    // the WarpUI TUI backend instead of the GUI workspace, so it skips the full
+    // GUI/agent model graph (`initialize_app`/`launch`).
+    #[cfg(feature = "tui")]
+    if matches!(launch_mode, LaunchMode::Tui) {
+        return app_builder.run(move |ctx| {
+            crate::tui::init(ctx);
+        });
+    }
+
     app_builder.run(move |ctx| {
         #[cfg(not(target_family = "wasm"))]
         // Rotate the log files in the background.
@@ -1247,7 +1290,8 @@ pub(crate) fn initialize_app(
         LaunchMode::App { .. }
         | LaunchMode::CommandLine { .. }
         | LaunchMode::RemoteServerProxy
-        | LaunchMode::Test { .. } => persistence::PersistenceScope::App,
+        | LaunchMode::Test { .. }
+        | LaunchMode::Tui => persistence::PersistenceScope::App,
     };
     let (sqlite_data, writer_handles) = persistence::initialize(ctx, persistence_scope);
     timer.mark_interval_end("SQLITE_INITIALIZED");
@@ -2616,6 +2660,9 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
     ctx.set_fallback_font_fn(font_fallback::fallback_font_fn);
 
     match launch_mode {
+        // The TUI front-end is handled in `run_internal` before `launch()`, so
+        // it never reaches this dispatch.
+        LaunchMode::Tui => unreachable!("LaunchMode::Tui is handled before launch()"),
         LaunchMode::App { .. } | LaunchMode::Test { .. } => {
             let should_skip_restore = launch_mode
                 .args()

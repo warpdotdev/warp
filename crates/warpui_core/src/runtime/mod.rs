@@ -24,18 +24,22 @@
 use std::cell::Cell;
 use std::io::{self, stdout, Stdout, Write};
 use std::rc::Rc;
+use std::thread;
 use std::time::Duration;
 
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent,
+    self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyModifiers,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 
 use crate::elements::tui::{TuiConstraint, TuiEventContext, TuiRect, TuiSize};
+use crate::platform::TerminationMode;
 use crate::presenter::tui::TuiPresenter;
-use crate::{App, Event, TuiView, ViewHandle, WindowId};
+use crate::r#async::block_on;
+use crate::r#async::executor::ForegroundTask;
+use crate::{App, AppContext, Event, TuiView, ViewHandle, WindowId};
 
 mod event_conversion;
 mod renderer;
@@ -70,6 +74,11 @@ where
     terminal: R,
     dirty: Rc<Cell<bool>>,
     last_size: Option<TuiSize>,
+    /// Restores the terminal when the runtime is dropped, for the
+    /// [`enter`](TuiRuntime::enter)/[`run_until`](TuiRuntime::run_until) path.
+    /// `None` when the terminal mode is owned elsewhere (the headless driver
+    /// keeps it in its [`TuiDriverHandle`]). Held only for its `Drop`.
+    _terminal_guard: Option<TuiTerminalGuard>,
 }
 
 impl<T> TuiRuntime<T, CrosstermTerminal>
@@ -79,8 +88,10 @@ where
     /// Enters the alternate screen + raw mode and prepares to drive `root_view`.
     /// The terminal is restored when the returned runtime is dropped.
     pub fn enter(app: &App, window_id: WindowId, root_view: ViewHandle<T>) -> io::Result<Self> {
-        let terminal = CrosstermTerminal::enter()?;
-        Ok(Self::with_terminal(app, window_id, root_view, terminal))
+        let guard = TuiTerminalGuard::enter()?;
+        let mut runtime = Self::with_terminal(app, window_id, root_view, CrosstermTerminal::new());
+        runtime._terminal_guard = Some(guard);
+        Ok(runtime)
     }
 }
 
@@ -109,6 +120,7 @@ where
             terminal,
             dirty,
             last_size: None,
+            _terminal_guard: None,
         }
     }
 
@@ -132,31 +144,23 @@ where
         &self.terminal
     }
 
-    fn draw_if_dirty(&mut self, app: &mut App) -> io::Result<()> {
+    /// Lays out and paints the root view through the presenter and flushes the
+    /// frame diff to the terminal.
+    ///
+    /// This is the stepwise draw entry: it takes a `&mut AppContext` so it can
+    /// be driven directly from a real (headless) app — e.g. from a foreground
+    /// task that redraws after handling input — without an [`App`] wrapper.
+    /// [`run_until`](Self::run_until) calls it via [`App::update`].
+    pub fn draw(&mut self, ctx: &mut AppContext) -> io::Result<()> {
         let size = self.terminal.size()?;
-        if self.last_size != Some(size) {
-            self.dirty.set(true);
-        }
-        if !self.dirty.replace(false) {
-            return Ok(());
-        }
-
-        // Lay out and paint the view through the dedicated presenter, which
-        // resolves the root (and any embedded child views) through the app,
-        // reports the discovered view embeddings into the shared hierarchy,
-        // and returns a composited frame (buffer + cursor).
         let area = TuiRect::new(0, 0, size.width, size.height);
-        let window_id = self.window_id;
-        let presenter = &mut self.presenter;
-        let root_view = &self.root_view;
-        let frame = app.update(|ctx| {
-            // Drain this window's invalidations each draw. The runtime repaints
-            // the full frame, but the manual + autotracking invalidation sets
-            // must still be consumed so they don't accumulate forever (and so
-            // per-view caching can use them later).
-            let _invalidation = ctx.take_all_invalidations_for_window(window_id);
-            presenter.present(ctx, root_view, area)
-        });
+
+        // Drain this window's invalidations each draw. The runtime repaints the
+        // full frame, but the manual + autotracking invalidation sets must still
+        // be consumed so they don't accumulate forever (and so per-view caching
+        // can use them later).
+        let _invalidation = ctx.take_all_invalidations_for_window(self.window_id);
+        let frame = self.presenter.present(ctx, &self.root_view, area);
 
         let mut writer = self.terminal.writer();
         self.renderer
@@ -165,25 +169,51 @@ where
         Ok(())
     }
 
+    /// Routes a raw crossterm event into the shared core, returning whether the
+    /// caller should redraw afterwards (a resize, or an event a view handled).
+    ///
+    /// Like [`draw`](Self::draw), this takes a `&mut AppContext` so a headless
+    /// app can feed input events (read on a background thread) straight into the
+    /// shared dispatch path.
+    pub fn dispatch_crossterm_event(
+        &mut self,
+        ctx: &mut AppContext,
+        event: CrosstermEvent,
+    ) -> bool {
+        match event {
+            CrosstermEvent::Resize(_, _) => true,
+            event => match crossterm_event_to_warp_event(event) {
+                Some(warp_event) => self.dispatch_event(ctx, &warp_event),
+                None => false,
+            },
+        }
+    }
+
+    fn draw_if_dirty(&mut self, app: &mut App) -> io::Result<()> {
+        let size = self.terminal.size()?;
+        if self.last_size != Some(size) {
+            self.dirty.set(true);
+        }
+        if !self.dirty.replace(false) {
+            return Ok(());
+        }
+        let this = &mut *self;
+        app.update(|ctx| this.draw(ctx))
+    }
+
     fn poll_and_dispatch(&mut self, app: &mut App, timeout: Duration) -> io::Result<()> {
         let Some(event) = self.terminal.poll_event(timeout)? else {
             return Ok(());
         };
-
-        match event {
-            CrosstermEvent::Resize(_, _) => self.dirty.set(true),
-            event => {
-                if let Some(warp_event) = crossterm_event_to_warp_event(event) {
-                    if self.dispatch_event(app, &warp_event) {
-                        self.dirty.set(true);
-                    }
-                }
-            }
+        let this = &mut *self;
+        let redraw = app.update(|ctx| this.dispatch_crossterm_event(ctx, event));
+        if redraw {
+            self.dirty.set(true);
         }
         Ok(())
     }
 
-    fn dispatch_event(&self, app: &mut App, event: &Event) -> bool {
+    fn dispatch_event(&mut self, ctx: &mut AppContext, event: &Event) -> bool {
         // Keymap pass (GUI parity): offer a keystroke to the focused view's
         // responder chain first, exactly like the GUI window event path.
         if let Event::KeyDown {
@@ -192,11 +222,9 @@ where
             ..
         } = event
         {
-            let window_id = self.window_id;
-            match app.update(|ctx| {
-                let responder_chain = ctx.get_responder_chain(window_id);
-                ctx.dispatch_keystroke(window_id, &responder_chain, keystroke, *is_composing)
-            }) {
+            let responder_chain = ctx.get_responder_chain(self.window_id);
+            match ctx.dispatch_keystroke(self.window_id, &responder_chain, keystroke, *is_composing)
+            {
                 Ok(true) => return true,
                 Ok(false) => {}
                 Err(error) => log::error!("error dispatching keystroke: {error}"),
@@ -213,7 +241,7 @@ where
         let area = TuiRect::new(0, 0, size.width, size.height);
 
         let root_view_id = self.root_view.id();
-        let mut element = match app.read(|ctx| ctx.render_tui_view(self.window_id, root_view_id)) {
+        let mut element = match ctx.render_tui_view(self.window_id, root_view_id) {
             Ok(element) => element,
             Err(error) => {
                 log::error!("failed to render the TUI root view for event dispatch: {error}");
@@ -224,43 +252,46 @@ where
 
         let mut event_ctx = TuiEventContext::default();
         event_ctx.set_origin_view(Some(root_view_id));
-        let handled = app.read(|ctx| element.dispatch_event(event, area, &mut event_ctx, ctx));
+        let handled = element.dispatch_event(event, area, &mut event_ctx, ctx);
 
         for update in event_ctx.take_updates() {
-            update(app);
+            update(ctx);
         }
         for action in event_ctx.take_typed_actions() {
             // Dispatch through the shared responder chain (the origin view's
             // ancestors in the neutral view hierarchy), so an action raised
             // inside an embedded child view bubbles to ancestor handlers.
-            app.update(|ctx| {
-                ctx.dispatch_typed_action_for_view(
-                    self.window_id,
-                    action.origin_view_id,
-                    action.action.as_ref(),
-                )
-            });
+            ctx.dispatch_typed_action_for_view(
+                self.window_id,
+                action.origin_view_id,
+                action.action.as_ref(),
+            );
         }
         handled
     }
 }
 
-/// The production [`TuiTerminal`]: reads from / writes to the real terminal and
-/// keeps it in the alternate screen + raw mode for the runtime's lifetime.
+/// The production [`TuiTerminal`]: writes to the process stdout and reports the
+/// terminal size. Raw mode + the alternate screen are managed separately by a
+/// [`TuiTerminalGuard`], so the terminal-mode lifetime can be detached from the
+/// writer (the headless driver keeps the guard in its [`TuiDriverHandle`] for
+/// deterministic restore, independent of when the async draw loop is dropped).
 pub struct CrosstermTerminal {
     stdout: Stdout,
-    _mode_guard: RawModeGuard<CrosstermModeControl>,
 }
 
 impl CrosstermTerminal {
-    /// Enables raw mode and switches to the alternate screen, restoring the
-    /// terminal when the returned value is dropped.
-    pub fn enter() -> io::Result<Self> {
-        let mode_guard = RawModeGuard::enter(CrosstermModeControl)?;
-        Ok(Self {
-            stdout: stdout(),
-            _mode_guard: mode_guard,
-        })
+    /// Builds a terminal over the process stdout. Does not change terminal
+    /// modes; pair it with a [`TuiTerminalGuard`] to enter raw mode + the
+    /// alternate screen.
+    pub fn new() -> Self {
+        Self { stdout: stdout() }
+    }
+}
+
+impl Default for CrosstermTerminal {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -281,6 +312,135 @@ impl TuiTerminal for CrosstermTerminal {
     fn writer(&mut self) -> &mut dyn Write {
         &mut self.stdout
     }
+}
+
+/// Owns the terminal's raw mode + alternate screen for as long as it is alive,
+/// restoring the terminal on drop. Held by [`TuiRuntime::enter`] (so the
+/// `run_until` path restores when the runtime drops) or by a [`TuiDriverHandle`]
+/// (so a headless app restores deterministically when its session is dropped,
+/// regardless of when the async draw loop is torn down).
+pub struct TuiTerminalGuard(RawModeGuard<CrosstermModeControl>);
+
+impl TuiTerminalGuard {
+    /// Enables raw mode and switches to the alternate screen, restoring both
+    /// when the guard is dropped.
+    pub fn enter() -> io::Result<Self> {
+        Ok(Self(RawModeGuard::enter(CrosstermModeControl)?))
+    }
+}
+
+/// Keeps a headless TUI session alive. Dropping it tears the session down:
+/// it restores the terminal (via the guard) and ends the draw loop + input
+/// reader. Store it for the lifetime of the app (e.g. in a singleton model) so
+/// the session lives as long as the app does.
+pub struct TuiDriverHandle {
+    _task: ForegroundTask,
+    _reader: thread::JoinHandle<()>,
+    _guard: TuiTerminalGuard,
+}
+
+/// Starts a headless TUI session that draws `root_view` and feeds terminal
+/// input back into the shared core.
+///
+/// This is the headless counterpart to [`TuiRuntime::run_until`]: rather than
+/// owning the main thread with a blocking loop, it cooperates with a real app's
+/// event loop. It enters the alternate screen, reads terminal input on a
+/// background thread, and runs the draw + dispatch steps on the foreground
+/// executor (redrawing after each handled event). `Ctrl-C` terminates the app.
+///
+/// The returned [`TuiDriverHandle`] owns the session: keep it alive for as long
+/// as the session should run, and drop it (e.g. on app teardown) to restore the
+/// terminal.
+pub fn spawn_tui_driver<T: TuiView>(
+    ctx: &mut AppContext,
+    window_id: WindowId,
+    root_view: ViewHandle<T>,
+) -> io::Result<TuiDriverHandle> {
+    let guard = TuiTerminalGuard::enter()?;
+
+    // Built without an invalidation subscription: the headless driver redraws
+    // explicitly after each input event rather than via the dirty flag that
+    // `run_until` uses.
+    let mut runtime: TuiRuntime<T, CrosstermTerminal> = TuiRuntime {
+        window_id,
+        root_view,
+        presenter: TuiPresenter::new(),
+        renderer: TuiFrameRenderer::new(),
+        terminal: CrosstermTerminal::new(),
+        dirty: Rc::new(Cell::new(true)),
+        last_size: None,
+        _terminal_guard: None,
+    };
+
+    let weak_app = ctx.weak_app();
+    let (sender, receiver) = async_channel::unbounded::<CrosstermEvent>();
+
+    // Blocking terminal reads run off the main thread and are forwarded to the
+    // foreground executor through the channel, so the main thread's event loop
+    // is never blocked waiting for input.
+    let reader = thread::Builder::new()
+        .name("warp-tui-input".to_owned())
+        .spawn(move || loop {
+            match event::read() {
+                Ok(event) => {
+                    // The reader runs on a dedicated thread, so blocking on the
+                    // send is fine; an error means the receiver was dropped.
+                    if block_on(sender.send(event)).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    log::error!("failed to read a terminal event: {error}");
+                    break;
+                }
+            }
+        })?;
+
+    let task = ctx.foreground_executor().spawn(async move {
+        // Paint the first frame.
+        if let Some(mut app) = weak_app.upgrade() {
+            app.update(|ctx| {
+                if let Err(error) = runtime.draw(ctx) {
+                    log::error!("failed to draw the initial TUI frame: {error}");
+                }
+            });
+        }
+
+        while let Ok(event) = receiver.recv().await {
+            let Some(mut app) = weak_app.upgrade() else {
+                break;
+            };
+            let quit = is_ctrl_c(&event);
+            let runtime = &mut runtime;
+            app.update(move |ctx| {
+                if quit {
+                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                    return;
+                }
+                if runtime.dispatch_crossterm_event(ctx, event) {
+                    if let Err(error) = runtime.draw(ctx) {
+                        log::error!("failed to draw a TUI frame: {error}");
+                    }
+                }
+            });
+        }
+    });
+
+    Ok(TuiDriverHandle {
+        _task: task,
+        _reader: reader,
+        _guard: guard,
+    })
+}
+
+/// Whether a crossterm event is `Ctrl-C`, the headless session's quit chord
+/// (raw mode delivers it as a key event rather than a `SIGINT`).
+fn is_ctrl_c(event: &CrosstermEvent) -> bool {
+    matches!(
+        event,
+        CrosstermEvent::Key(key)
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
+    )
 }
 
 /// The alternate-screen + raw-mode operations a [`RawModeGuard`] toggles.
