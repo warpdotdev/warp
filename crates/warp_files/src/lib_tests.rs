@@ -59,7 +59,7 @@ fn setup_event_channel(
 ) -> Receiver<TestFileModelEvent> {
     let (sender, receiver) = unbounded();
     app.update(|ctx| {
-        ctx.subscribe_to_model(files, move |_model, _, event, _ctx| {
+        ctx.subscribe_to_model(files, move |_model, event, _ctx| {
             block_on(sender.send(TestFileModelEvent::from(event)))
                 .expect("Could not send the result");
         });

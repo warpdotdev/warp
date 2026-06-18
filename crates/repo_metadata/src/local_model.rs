@@ -355,7 +355,7 @@ impl LocalRepoMetadataModel {
                         ctx,
                     )
                 });
-                ctx.subscribe_to_model(&watcher, Self::handle_watcher_event);
+                ctx.subscribe_to_model(&watcher, |me, _, event, ctx| me.handle_watcher_event(event, ctx));
                 model.watcher = Some(watcher);
 
                 ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, _, event, ctx| {
@@ -539,7 +539,6 @@ impl LocalRepoMetadataModel {
     #[cfg(feature = "local_fs")]
     fn handle_watcher_event(
         &mut self,
-        _: ModelHandle<BulkFilesystemWatcher>,
         event: &BulkFilesystemWatcherEvent,
         ctx: &mut ModelContext<Self>,
     ) {
