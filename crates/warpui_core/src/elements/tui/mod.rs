@@ -103,8 +103,11 @@ pub trait TuiElement {
     }
 }
 
-/// A no-op leaf element: occupies no space and paints nothing. Used by tests
-/// as a placeholder child where the element's own rendering is irrelevant.
+/// The boxed, type-erased element a [`TuiView`](crate::TuiView) renders to.
+pub type TuiRenderOutput = Box<dyn TuiElement>;
+
+/// A no-op leaf element: occupies no space and paints nothing. Used by tests as
+/// a placeholder child where the element's own rendering is irrelevant.
 #[cfg(test)]
 impl TuiElement for () {
     fn layout(&mut self, _constraint: TuiConstraint) -> TuiSize {

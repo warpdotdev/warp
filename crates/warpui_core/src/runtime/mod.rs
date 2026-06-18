@@ -21,7 +21,7 @@
 //! without a real tty. The concrete [`CrosstermTerminal`] is the production
 //! implementation.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::io::{self, stdout, Stdout, Write};
 use std::rc::Rc;
 use std::thread;
@@ -39,7 +39,7 @@ use crate::platform::TerminationMode;
 use crate::presenter::tui::TuiPresenter;
 use crate::r#async::block_on;
 use crate::r#async::executor::ForegroundTask;
-use crate::{App, AppContext, Event, TuiView, ViewHandle, WindowId};
+use crate::{App, AppContext, EntityId, Event, TuiView, ViewHandle, WindowId};
 
 mod event_conversion;
 mod renderer;
@@ -61,23 +61,123 @@ pub trait TuiTerminal {
     fn writer(&mut self) -> &mut dyn Write;
 }
 
-/// Drives a single [`TuiView`] window: redraws it when invalidated and routes
-/// input events back through the shared core.
-pub struct TuiRuntime<T, R = CrosstermTerminal>
-where
-    R: TuiTerminal,
-{
+/// The rendering half of the TUI: owns the presenter, renderer, and host
+/// terminal for one window and paints that window's view tree. Kept separate
+/// from input dispatch so the invalidation-driven redraw (which paints inside
+/// `flush_effects`) never collides with a borrow the input path holds.
+struct TuiScreen<T, R: TuiTerminal> {
     window_id: WindowId,
     root_view: ViewHandle<T>,
     presenter: TuiPresenter,
     renderer: TuiFrameRenderer,
     terminal: R,
+}
+
+impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
+    fn new(window_id: WindowId, root_view: ViewHandle<T>, terminal: R) -> Self {
+        Self {
+            window_id,
+            root_view,
+            presenter: TuiPresenter::new(),
+            renderer: TuiFrameRenderer::new(),
+            terminal,
+        }
+    }
+
+    fn size(&self) -> io::Result<TuiSize> {
+        self.terminal.size()
+    }
+
+    fn root_view_id(&self) -> EntityId {
+        self.root_view.id()
+    }
+
+    /// Lays out and paints the root view through the presenter, then flushes the
+    /// frame diff to the terminal. Draining this window's invalidations keeps
+    /// the manual + autotracking sets from accumulating (the frame is repainted
+    /// in full regardless).
+    fn draw(&mut self, ctx: &mut AppContext) -> io::Result<()> {
+        let size = self.terminal.size()?;
+        let area = TuiRect::new(0, 0, size.width, size.height);
+        let _invalidation = ctx.take_all_invalidations_for_window(self.window_id);
+        let frame = self.presenter.present(ctx, &self.root_view, area);
+        let mut writer = self.terminal.writer();
+        self.renderer.draw(&mut writer, &frame.buffer, frame.cursor)
+    }
+}
+
+/// Dispatches a converted input [`Event`] into the shared core for `window_id`'s
+/// view tree, returning whether it was handled.
+///
+/// Screen-independent on purpose: it takes the laid-out `size` rather than a
+/// terminal, so the input path can dispatch without borrowing the
+/// [`TuiScreen`]. It runs the GUI-parity keymap pass (the focused view's
+/// responder chain) first, then walks the rendered element tree, finally
+/// draining the app updates and typed actions queued during dispatch.
+fn dispatch_event(
+    ctx: &mut AppContext,
+    window_id: WindowId,
+    root_view_id: EntityId,
+    size: TuiSize,
+    event: &Event,
+) -> bool {
+    if let Event::KeyDown {
+        keystroke,
+        is_composing,
+        ..
+    } = event
+    {
+        let responder_chain = ctx.get_responder_chain(window_id);
+        match ctx.dispatch_keystroke(window_id, &responder_chain, keystroke, *is_composing) {
+            Ok(true) => return true,
+            Ok(false) => {}
+            Err(error) => log::error!("error dispatching keystroke: {error}"),
+        }
+    }
+
+    let area = TuiRect::new(0, 0, size.width, size.height);
+    let mut element = match ctx.render_tui_view(window_id, root_view_id) {
+        Ok(element) => element,
+        Err(error) => {
+            log::error!("failed to render the TUI root view for event dispatch: {error}");
+            return false;
+        }
+    };
+    element.layout(TuiConstraint::tight(size));
+
+    let mut event_ctx = TuiEventContext::default();
+    event_ctx.set_origin_view(Some(root_view_id));
+    let handled = element.dispatch_event(event, area, &mut event_ctx, ctx);
+
+    for update in event_ctx.take_updates() {
+        update(ctx);
+    }
+    for action in event_ctx.take_typed_actions() {
+        // Dispatch through the shared responder chain (the origin view's
+        // ancestors in the neutral view hierarchy), so an action raised inside
+        // an embedded child view bubbles to ancestor handlers.
+        ctx.dispatch_typed_action_for_view(
+            window_id,
+            action.origin_view_id,
+            action.action.as_ref(),
+        );
+    }
+    handled
+}
+
+/// Drives a single [`TuiView`] window with a blocking loop: it redraws when
+/// dirty and polls the terminal for input. Used by the example and tests via
+/// [`run_until`](Self::run_until). A real app uses [`spawn_tui_driver`] instead,
+/// which is invalidation-driven and cooperates with the app's own event loop.
+pub struct TuiRuntime<T, R = CrosstermTerminal>
+where
+    R: TuiTerminal,
+{
+    screen: TuiScreen<T, R>,
     dirty: Rc<Cell<bool>>,
     last_size: Option<TuiSize>,
-    /// Restores the terminal when the runtime is dropped, for the
-    /// [`enter`](TuiRuntime::enter)/[`run_until`](TuiRuntime::run_until) path.
-    /// `None` when the terminal mode is owned elsewhere (the headless driver
-    /// keeps it in its [`TuiDriverHandle`]). Held only for its `Drop`.
+    /// Restores the terminal when the runtime is dropped (the `enter` path).
+    /// Held only for its `Drop`.
     _terminal_guard: Option<TuiTerminalGuard>,
 }
 
@@ -113,11 +213,7 @@ where
         let dirty_for_callback = dirty.clone();
         app.on_window_invalidated(window_id, move |_, _| dirty_for_callback.set(true));
         Self {
-            window_id,
-            root_view,
-            presenter: TuiPresenter::new(),
-            renderer: TuiFrameRenderer::new(),
-            terminal,
+            screen: TuiScreen::new(window_id, root_view, terminal),
             dirty,
             last_size: None,
             _terminal_guard: None,
@@ -141,133 +237,44 @@ where
     /// The terminal this runtime draws to. Primarily useful for inspecting an
     /// in-memory terminal's captured output in tests.
     pub fn terminal(&self) -> &R {
-        &self.terminal
-    }
-
-    /// Lays out and paints the root view through the presenter and flushes the
-    /// frame diff to the terminal.
-    ///
-    /// This is the stepwise draw entry: it takes a `&mut AppContext` so it can
-    /// be driven directly from a real (headless) app — e.g. from a foreground
-    /// task that redraws after handling input — without an [`App`] wrapper.
-    /// [`run_until`](Self::run_until) calls it via [`App::update`].
-    pub fn draw(&mut self, ctx: &mut AppContext) -> io::Result<()> {
-        let size = self.terminal.size()?;
-        let area = TuiRect::new(0, 0, size.width, size.height);
-
-        // Drain this window's invalidations each draw. The runtime repaints the
-        // full frame, but the manual + autotracking invalidation sets must still
-        // be consumed so they don't accumulate forever (and so per-view caching
-        // can use them later).
-        let _invalidation = ctx.take_all_invalidations_for_window(self.window_id);
-        let frame = self.presenter.present(ctx, &self.root_view, area);
-
-        let mut writer = self.terminal.writer();
-        self.renderer
-            .draw(&mut writer, &frame.buffer, frame.cursor)?;
-        self.last_size = Some(size);
-        Ok(())
-    }
-
-    /// Routes a raw crossterm event into the shared core, returning whether the
-    /// caller should redraw afterwards (a resize, or an event a view handled).
-    ///
-    /// Like [`draw`](Self::draw), this takes a `&mut AppContext` so a headless
-    /// app can feed input events (read on a background thread) straight into the
-    /// shared dispatch path.
-    pub fn dispatch_crossterm_event(
-        &mut self,
-        ctx: &mut AppContext,
-        event: CrosstermEvent,
-    ) -> bool {
-        match event {
-            CrosstermEvent::Resize(_, _) => true,
-            event => match crossterm_event_to_warp_event(event) {
-                Some(warp_event) => self.dispatch_event(ctx, &warp_event),
-                None => false,
-            },
-        }
+        &self.screen.terminal
     }
 
     fn draw_if_dirty(&mut self, app: &mut App) -> io::Result<()> {
-        let size = self.terminal.size()?;
+        let size = self.screen.size()?;
         if self.last_size != Some(size) {
             self.dirty.set(true);
         }
         if !self.dirty.replace(false) {
             return Ok(());
         }
-        let this = &mut *self;
-        app.update(|ctx| this.draw(ctx))
-    }
-
-    fn poll_and_dispatch(&mut self, app: &mut App, timeout: Duration) -> io::Result<()> {
-        let Some(event) = self.terminal.poll_event(timeout)? else {
-            return Ok(());
-        };
-        let this = &mut *self;
-        let redraw = app.update(|ctx| this.dispatch_crossterm_event(ctx, event));
-        if redraw {
-            self.dirty.set(true);
-        }
+        let screen = &mut self.screen;
+        app.update(|ctx| screen.draw(ctx))?;
+        self.last_size = Some(size);
         Ok(())
     }
 
-    fn dispatch_event(&mut self, ctx: &mut AppContext, event: &Event) -> bool {
-        // Keymap pass (GUI parity): offer a keystroke to the focused view's
-        // responder chain first, exactly like the GUI window event path.
-        if let Event::KeyDown {
-            keystroke,
-            is_composing,
-            ..
-        } = event
-        {
-            let responder_chain = ctx.get_responder_chain(self.window_id);
-            match ctx.dispatch_keystroke(self.window_id, &responder_chain, keystroke, *is_composing)
-            {
-                Ok(true) => return true,
-                Ok(false) => {}
-                Err(error) => log::error!("error dispatching keystroke: {error}"),
-            }
-        }
-
-        // Element-tree pass: walk the rendered tree, offering the event to
-        // each element (child-view elements re-scope the action origin while
-        // descending into their subtree).
-        let size = self
-            .last_size
-            .or_else(|| self.terminal.size().ok())
-            .unwrap_or_default();
-        let area = TuiRect::new(0, 0, size.width, size.height);
-
-        let root_view_id = self.root_view.id();
-        let mut element = match ctx.render_tui_view(self.window_id, root_view_id) {
-            Ok(element) => element,
-            Err(error) => {
-                log::error!("failed to render the TUI root view for event dispatch: {error}");
-                return false;
-            }
+    fn poll_and_dispatch(&mut self, app: &mut App, timeout: Duration) -> io::Result<()> {
+        let Some(event) = self.screen.terminal.poll_event(timeout)? else {
+            return Ok(());
         };
-        element.layout(TuiConstraint::tight(size));
-
-        let mut event_ctx = TuiEventContext::default();
-        event_ctx.set_origin_view(Some(root_view_id));
-        let handled = element.dispatch_event(event, area, &mut event_ctx, ctx);
-
-        for update in event_ctx.take_updates() {
-            update(ctx);
+        match event {
+            CrosstermEvent::Resize(_, _) => self.dirty.set(true),
+            event => {
+                if let Some(warp_event) = crossterm_event_to_warp_event(event) {
+                    let size = self.screen.size().unwrap_or_default();
+                    let window_id = self.screen.window_id;
+                    let root_view_id = self.screen.root_view_id();
+                    let handled = app.update(|ctx| {
+                        dispatch_event(ctx, window_id, root_view_id, size, &warp_event)
+                    });
+                    if handled {
+                        self.dirty.set(true);
+                    }
+                }
+            }
         }
-        for action in event_ctx.take_typed_actions() {
-            // Dispatch through the shared responder chain (the origin view's
-            // ancestors in the neutral view hierarchy), so an action raised
-            // inside an embedded child view bubbles to ancestor handlers.
-            ctx.dispatch_typed_action_for_view(
-                self.window_id,
-                action.origin_view_id,
-                action.action.as_ref(),
-            );
-        }
-        handled
+        Ok(())
     }
 }
 
@@ -342,11 +349,14 @@ pub struct TuiDriverHandle {
 /// Starts a headless TUI session that draws `root_view` and feeds terminal
 /// input back into the shared core.
 ///
-/// This is the headless counterpart to [`TuiRuntime::run_until`]: rather than
+/// This is the headless counterpart to [`TuiRuntime::run_until`]: instead of
 /// owning the main thread with a blocking loop, it cooperates with a real app's
-/// event loop. It enters the alternate screen, reads terminal input on a
-/// background thread, and runs the draw + dispatch steps on the foreground
-/// executor (redrawing after each handled event). `Ctrl-C` terminates the app.
+/// event loop. Rendering is **invalidation-driven**: a `on_window_invalidated`
+/// callback repaints the window, so any `notify()` (an input handler, a model or
+/// async update, or the resize handling below) schedules a redraw via the core's
+/// normal `flush_effects` pass — the frame reacts to state changes rather than
+/// being sequenced after input. Input is read on a background thread and only
+/// *dispatched* on the foreground executor; `Ctrl-C` terminates the app.
 ///
 /// The returned [`TuiDriverHandle`] owns the session: keep it alive for as long
 /// as the session should run, and drop it (e.g. on app teardown) to restore the
@@ -357,20 +367,36 @@ pub fn spawn_tui_driver<T: TuiView>(
     root_view: ViewHandle<T>,
 ) -> io::Result<TuiDriverHandle> {
     let guard = TuiTerminalGuard::enter()?;
+    let root_view_id = root_view.id();
 
-    // Built without an invalidation subscription: the headless driver redraws
-    // explicitly after each input event rather than via the dirty flag that
-    // `run_until` uses.
-    let mut runtime: TuiRuntime<T, CrosstermTerminal> = TuiRuntime {
+    // The renderer + terminal live behind an `Rc<RefCell<_>>` owned by the
+    // invalidation callback. The input path never borrows it, so painting inside
+    // `flush_effects` can't collide with dispatch.
+    let screen = Rc::new(RefCell::new(TuiScreen::new(
         window_id,
         root_view,
-        presenter: TuiPresenter::new(),
-        renderer: TuiFrameRenderer::new(),
-        terminal: CrosstermTerminal::new(),
-        dirty: Rc::new(Cell::new(true)),
-        last_size: None,
-        _terminal_guard: None,
-    };
+        CrosstermTerminal::new(),
+    )));
+
+    // Redraw whenever the window is invalidated. `update_windows` invokes this at
+    // the end of every `flush_effects`, so any `notify()` repaints. (The
+    // callback is removed from the registry while it runs, so a draw that itself
+    // invalidates can't re-enter it.)
+    {
+        let screen = screen.clone();
+        ctx.on_window_invalidated(window_id, move |_, ctx| {
+            if let Err(error) = screen.borrow_mut().draw(ctx) {
+                log::error!("failed to draw a TUI frame: {error}");
+            }
+        });
+    }
+
+    // Paint the first frame now, which also consumes the window's initial
+    // invalidation so the callback doesn't redundantly repaint it on the next
+    // flush.
+    if let Err(error) = screen.borrow_mut().draw(ctx) {
+        log::error!("failed to draw the initial TUI frame: {error}");
+    }
 
     let weak_app = ctx.weak_app();
     let (sender, receiver) = async_channel::unbounded::<CrosstermEvent>();
@@ -397,31 +423,20 @@ pub fn spawn_tui_driver<T: TuiView>(
         })?;
 
     let task = ctx.foreground_executor().spawn(async move {
-        // Paint the first frame.
-        if let Some(mut app) = weak_app.upgrade() {
-            app.update(|ctx| {
-                if let Err(error) = runtime.draw(ctx) {
-                    log::error!("failed to draw the initial TUI frame: {error}");
-                }
-            });
-        }
-
         while let Ok(event) = receiver.recv().await {
             let Some(mut app) = weak_app.upgrade() else {
                 break;
             };
             let quit = is_ctrl_c(&event);
-            let runtime = &mut runtime;
+            // Only dispatch here; the redraw happens reactively in the
+            // invalidation callback when dispatch (or a resize) invalidates the
+            // window.
             app.update(move |ctx| {
                 if quit {
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
                     return;
                 }
-                if runtime.dispatch_crossterm_event(ctx, event) {
-                    if let Err(error) = runtime.draw(ctx) {
-                        log::error!("failed to draw a TUI frame: {error}");
-                    }
-                }
+                handle_input_event(ctx, window_id, root_view_id, event);
             });
         }
     });
@@ -431,6 +446,40 @@ pub fn spawn_tui_driver<T: TuiView>(
         _reader: reader,
         _guard: guard,
     })
+}
+
+/// Routes one raw terminal event into the shared core. A resize invalidates the
+/// window so the next flush repaints at the new size; other events dispatch
+/// (which may invalidate the window via a handler's `notify`).
+fn handle_input_event(
+    ctx: &mut AppContext,
+    window_id: WindowId,
+    root_view_id: EntityId,
+    event: CrosstermEvent,
+) {
+    match event {
+        CrosstermEvent::Resize(_, _) => ctx.invalidate_all_views(),
+        event => {
+            if let Some(warp_event) = crossterm_event_to_warp_event(event) {
+                dispatch_event(
+                    ctx,
+                    window_id,
+                    root_view_id,
+                    current_terminal_size(),
+                    &warp_event,
+                );
+            }
+        }
+    }
+}
+
+/// The current terminal size in cells (each axis at least 1), falling back to a
+/// sane default if the size can't be queried.
+fn current_terminal_size() -> TuiSize {
+    match terminal::size() {
+        Ok((width, height)) => TuiSize::new(width.max(1), height.max(1)),
+        Err(_) => TuiSize::new(80, 24),
+    }
 }
 
 /// Whether a crossterm event is `Ctrl-C`, the headless session's quit chord
