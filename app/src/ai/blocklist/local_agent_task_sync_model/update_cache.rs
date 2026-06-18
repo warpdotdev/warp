@@ -7,19 +7,29 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 
 /// Applies model-owned delivery state to outgoing updates and records the
 /// results of requests sent by `LocalAgentTaskSyncModel`.
+///
+/// The cache records a field as delivered only after the corresponding request
+/// succeeds. Generations identify the newest in-flight attempt so that an older
+/// async completion cannot overwrite state established by a newer request.
 #[derive(Default)]
 pub struct LocalTaskUpdateCache {
     in_progress_delivery_states: HashMap<AmbientAgentTaskId, InProgressDeliveryState>,
+    /// Assigns each prepared `InProgress` delivery attempt a distinct identity.
     next_in_progress_delivery_generation: u64,
     server_conversation_token_delivery_states:
         HashMap<AmbientAgentTaskId, ServerConversationTokenDeliveryState>,
+    /// Assigns each prepared server conversation token delivery attempt a
+    /// distinct identity.
     next_server_conversation_token_delivery_generation: u64,
     /// Different tokens cannot be safely ordered by the current fire-and-forget
-    /// transport, so fail open after observing an overlap.
+    /// transport. After observing an overlap, dedupe remains disabled until task
+    /// cleanup so future writes fail open rather than relying on uncertain state.
     server_conversation_token_dedupe_disabled: HashSet<AmbientAgentTaskId>,
 }
 
-/// Identifies the delivery attempts represented by one prepared update.
+/// Connects the delivery attempts represented by one prepared update to its
+/// eventual async result. A result may update only the cache entries still owned
+/// by the generations in this receipt.
 #[derive(Clone, Copy)]
 pub struct PreparedLocalTaskUpdate {
     task_id: AmbientAgentTaskId,
@@ -72,6 +82,8 @@ impl LocalTaskUpdateCache {
             .server_conversation_token_dedupe_disabled
             .contains(&task_id)
         {
+            // Leaving the token on the update while returning no generation
+            // deliberately opts out of both dedupe and result tracking.
             return None;
         }
 
@@ -90,6 +102,10 @@ impl LocalTaskUpdateCache {
                 token: in_flight_token,
                 ..
             }) if in_flight_token != token => {
+                // Different tokens are now racing through a transport that does
+                // not guarantee their application order. No individual
+                // completion can establish which token the server retained, so
+                // stop deduping this task until its cache state is removed.
                 self.server_conversation_token_delivery_states
                     .remove(&task_id);
                 self.server_conversation_token_dedupe_disabled
@@ -97,6 +113,12 @@ impl LocalTaskUpdateCache {
                 None
             }
             delivery_state => {
+                // Start a tracked attempt even when the same token is already in
+                // flight because the repeated request may be the only one that
+                // succeeds. Its newer generation makes the older completion stale
+                // if the requests finish out of order.
+                // Carry the last confirmed token forward so a failed attempt
+                // can restore the only value known to have reached the server.
                 let previously_delivered = match delivery_state {
                     Some(ServerConversationTokenDeliveryState::Delivered(token)) => Some(token),
                     Some(ServerConversationTokenDeliveryState::InFlight {
@@ -140,10 +162,17 @@ impl LocalTaskUpdateCache {
                         if update.session_id.is_none()
                             && update.server_conversation_token.is_none() =>
                     {
+                        // A pure duplicate can be dropped while another
+                        // `InProgress` delivery is in flight because it carries
+                        // no other fields that need to reach the server.
                         update.task_state = None;
                         None
                     }
                     Some(InProgressDeliveryState::InFlight(_)) | None => {
+                        // A mixed update is already needed to send its other
+                        // fields, so retaining `InProgress` gives it another
+                        // delivery attempt. Assigning it a newer generation
+                        // prevents the older completion from changing its state.
                         self.next_in_progress_delivery_generation =
                             self.next_in_progress_delivery_generation.wrapping_add(1);
                         let generation = self.next_in_progress_delivery_generation;
@@ -184,6 +213,9 @@ impl LocalTaskUpdateCache {
         generation: u64,
         succeeded: bool,
     ) {
+        // Only the newest in-flight attempt may change the cache. A completion
+        // from an older generation is stale because a later request has already
+        // replaced the state it represented.
         if self.in_progress_delivery_states.get(&task_id)
             != Some(&InProgressDeliveryState::InFlight(generation))
         {
@@ -204,6 +236,9 @@ impl LocalTaskUpdateCache {
         generation: u64,
         succeeded: bool,
     ) {
+        // An overlap makes each individual token completion insufficient to
+        // establish the server's final value, so no completion can re-enable
+        // dedupe.
         if self
             .server_conversation_token_dedupe_disabled
             .contains(&task_id)
@@ -221,6 +256,7 @@ impl LocalTaskUpdateCache {
         else {
             return;
         };
+        // Ignore a completion from an attempt superseded by a newer generation.
         if current_generation != generation {
             return;
         }
@@ -231,6 +267,8 @@ impl LocalTaskUpdateCache {
                 ServerConversationTokenDeliveryState::Delivered(token),
             );
         } else if let Some(previously_delivered) = previously_delivered {
+            // A failed attempt does not invalidate the last token whose delivery
+            // was confirmed, so restore that token as the dedupe baseline.
             self.server_conversation_token_delivery_states.insert(
                 task_id,
                 ServerConversationTokenDeliveryState::Delivered(previously_delivered),
@@ -241,6 +279,7 @@ impl LocalTaskUpdateCache {
         }
     }
 
+    /// Clears confirmed, in-flight, and fail-open state when task ownership ends.
     pub fn remove_task(&mut self, task_id: &AmbientAgentTaskId) {
         self.in_progress_delivery_states.remove(task_id);
         self.server_conversation_token_delivery_states
