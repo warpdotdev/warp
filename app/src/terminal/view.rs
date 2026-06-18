@@ -18632,27 +18632,18 @@ impl TerminalView {
             true
         } else {
             // Otherwise, there are some visible blocks and we need to clear stuff.
-            let active_block_is_long_running = self
-                .model
-                .lock()
-                .block_list()
-                .active_block()
-                .is_active_and_long_running();
-            let is_agent_monitoring = self
-                .model
-                .lock()
-                .block_list()
-                .active_block()
-                .is_agent_monitoring();
-            let is_agent_driving_command = self
-                .model
-                .lock()
-                .block_list()
-                .active_block()
-                .is_agent_driving_command();
+            let (is_long_running, is_agent_monitoring, is_agent_driving_command) = {
+                let model = self.model.lock();
+                let active_block = model.block_list().active_block();
+                (
+                    active_block.is_active_and_long_running(),
+                    active_block.is_agent_monitoring(),
+                    active_block.is_agent_driving_command(),
+                )
+            };
 
             // If there isn't an active long running block, then "clear buffer" just starts a new convo.
-            if !active_block_is_long_running {
+            if !is_long_running {
                 // Cancel any in-progress work in the conversation being left.
                 if let Some(conversation_id) = self
                     .agent_view_controller
