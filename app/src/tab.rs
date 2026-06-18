@@ -1229,7 +1229,10 @@ impl<'a> TabComponent<'a> {
         }
     }
 
-    fn render_close_tab_button(
+    /// Renders the close-button slot for the tab: the close button when
+    /// hovered, a pin indicator when the tab is pinned, or an empty
+    /// width-reserving placeholder otherwise.
+    fn render_close_button_or_pin_icon(
         &self,
         background: Option<Fill>,
         is_hovered: bool,
@@ -1657,12 +1660,10 @@ impl<'a> TabComponent<'a> {
                 )
             };
 
-        // `render_close_tab_button` renders the close button or a pin icon
-        // when the tab is pinned.
         let build_close_button_overlay = |is_hovered: bool| {
             Container::new(
                 ConstrainedBox::new(
-                    self.render_close_tab_button(Some(close_button_background), is_hovered),
+                    self.render_close_button_or_pin_icon(Some(close_button_background), is_hovered),
                 )
                 .with_width(TAB_CLOSE_BUTTON_WIDTH)
                 .with_height(TAB_CLOSE_BUTTON_WIDTH)
