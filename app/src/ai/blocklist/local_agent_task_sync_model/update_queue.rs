@@ -20,9 +20,18 @@ pub struct LocalTaskUpdateQueue {
 struct TaskQueue {
     pending_updates: VecDeque<LocalTaskUpdate>,
     in_flight_update: Option<InFlightUpdate>,
-    delivered_in_progress: bool,
-    delivered_server_conversation_token: Option<String>,
+    delivered_state: DeliveredTaskState,
     remove_when_idle: bool,
+}
+
+/// Tracks confirmed server field values used to deduplicate future updates.
+///
+/// The queue currently deduplicates only bare `InProgress` states and repeated
+/// server conversation tokens.
+#[derive(Default)]
+struct DeliveredTaskState {
+    task_state: Option<AgentTaskState>,
+    server_conversation_token: Option<String>,
 }
 
 struct InFlightUpdate {
@@ -70,8 +79,9 @@ impl LocalTaskUpdateQueue {
     ) -> Option<LocalTaskUpdate> {
         let queue = self.task_queues.get_mut(&task_id)?;
         let in_flight_update = queue.in_flight_update.take()?;
-
-        queue.record_result(in_flight_update, succeeded);
+        queue
+            .delivered_state
+            .record_result(in_flight_update, succeeded);
 
         self.take_next_update(task_id)
     }
@@ -101,7 +111,7 @@ impl LocalTaskUpdateQueue {
             }
 
             while let Some(mut update) = queue.pending_updates.pop_front() {
-                queue.apply_delivered_state(&mut update);
+                queue.delivered_state.apply_to(&mut update);
                 if update.is_empty() {
                     continue;
                 }
@@ -109,7 +119,7 @@ impl LocalTaskUpdateQueue {
                 return Some(update);
             }
 
-            queue.remove_when_idle || !queue.has_delivered_state()
+            queue.remove_when_idle || !queue.delivered_state.has_dedupe_state()
         };
 
         if should_remove {
@@ -131,11 +141,13 @@ impl TaskQueue {
         };
         self.pending_updates.push_back(update);
     }
+}
 
-    fn apply_delivered_state(&self, update: &mut LocalTaskUpdate) {
+impl DeliveredTaskState {
+    fn apply_to(&self, update: &mut LocalTaskUpdate) {
         if update.status_message.is_none()
             && update.task_state == Some(AgentTaskState::InProgress)
-            && self.delivered_in_progress
+            && self.task_state == update.task_state
         {
             update.task_state = None;
         }
@@ -143,39 +155,41 @@ impl TaskQueue {
         if update
             .server_conversation_token
             .as_ref()
-            .is_some_and(|token| self.delivered_server_conversation_token.as_ref() == Some(token))
+            .is_some_and(|token| self.server_conversation_token.as_ref() == Some(token))
         {
             update.server_conversation_token = None;
         }
     }
 
     fn record_result(&mut self, update: InFlightUpdate, succeeded: bool) {
-        match update.task_state {
-            Some(AgentTaskState::InProgress) if succeeded => {
-                self.delivered_in_progress = true;
-            }
-            Some(AgentTaskState::InProgress) | None => {}
-            Some(_) => {
-                // A non-`InProgress` request may have reached the server even
-                // when its response failed, so a later `InProgress` must fail
-                // open.
-                self.delivered_in_progress = false;
-            }
-        }
-
-        if let Some(token) = update.server_conversation_token {
-            if succeeded {
-                self.delivered_server_conversation_token = Some(token);
-            } else {
-                // A failed response does not prove that the server rejected the
-                // token, so later token updates must fail open.
-                self.delivered_server_conversation_token = None;
-            }
-        }
+        record_field_result(&mut self.task_state, update.task_state, succeeded);
+        record_field_result(
+            &mut self.server_conversation_token,
+            update.server_conversation_token,
+            succeeded,
+        );
     }
 
-    fn has_delivered_state(&self) -> bool {
-        self.delivered_in_progress || self.delivered_server_conversation_token.is_some()
+    fn has_dedupe_state(&self) -> bool {
+        self.task_state == Some(AgentTaskState::InProgress)
+            || self.server_conversation_token.is_some()
+    }
+}
+
+/// Updates a confirmed field value or invalidates it when a failed request may
+/// have changed the server to a different value.
+fn record_field_result<T: PartialEq>(
+    delivered: &mut Option<T>,
+    attempted: Option<T>,
+    succeeded: bool,
+) {
+    let Some(attempted) = attempted else {
+        return;
+    };
+    if succeeded {
+        *delivered = Some(attempted);
+    } else if delivered.as_ref() != Some(&attempted) {
+        *delivered = None;
     }
 }
 
