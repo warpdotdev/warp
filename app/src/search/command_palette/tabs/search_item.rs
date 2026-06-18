@@ -36,7 +36,15 @@ impl SearchItemTrait for SearchItem {
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let color = highlight_state.icon_fill(appearance).into_solid();
+        // Tint the icon with the tab's color-coding so colored tabs are
+        // distinguishable in the switcher; fall back to the default icon fill
+        // for uncolored tabs. Contrast against the row is handled downstream.
+        let color = match self.tab.color {
+            Some(id) => id
+                .to_ansi_color(&appearance.theme().terminal_colors().normal)
+                .into(),
+            None => highlight_state.icon_fill(appearance).into_solid(),
+        };
         render_search_item_icon(appearance, Icon::Navigation, color, highlight_state)
     }
 
@@ -54,7 +62,7 @@ impl SearchItemTrait for SearchItem {
         let appearance = Appearance::as_ref(app);
 
         let title_text = Text::new_inline(
-            format!("[Tab {}] {}", self.tab.tab_index, self.tab.title),
+            format!("{}  ·  Tab {}", self.tab.title, self.tab.tab_index),
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
         )
