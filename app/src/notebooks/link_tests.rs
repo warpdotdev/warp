@@ -185,7 +185,7 @@ fn test_open_local_image_uses_system_generic_target() {
         {
             let events = events.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&links, move |_, _, event, _| {
+                ctx.subscribe_to_model(&links, move |_, event, _| {
                     events.lock().push(event.clone());
                 })
             });
@@ -228,7 +228,7 @@ fn test_open_extensionless_non_text_file_does_not_emit_open_event() {
         {
             let events = events.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&links, move |_, _, event, _| {
+                ctx.subscribe_to_model(&links, move |_, event, _| {
                     events.lock().push(event.clone());
                 })
             });
@@ -411,7 +411,7 @@ fn test_open_markdown_file_uses_viewer_when_preferred() {
         {
             let events = events.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&links, move |_, _, event, _| {
+                ctx.subscribe_to_model(&links, move |_, event, _| {
                     events.lock().push(event.clone());
                 })
             });
@@ -464,7 +464,7 @@ fn test_open_markdown_file_respects_disabled_viewer_preference() {
         {
             let events = events.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&links, move |_, _, event, _| {
+                ctx.subscribe_to_model(&links, move |_, event, _| {
                     events.lock().push(event.clone());
                 })
             });

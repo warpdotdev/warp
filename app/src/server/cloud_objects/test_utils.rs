@@ -73,7 +73,7 @@ pub fn create_update_manager_struct(
 
     let cloud_model_events = app.update(|ctx| {
         let (tx, rx) = async_channel::unbounded();
-        ctx.subscribe_to_model(&CloudModel::handle(ctx), move |_, _, event, _| {
+        ctx.subscribe_to_model(&CloudModel::handle(ctx), move |_, event, _| {
             let _ = tx.try_send(event.clone());
         });
         rx

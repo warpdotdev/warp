@@ -36,7 +36,7 @@ impl ExportTest {
         {
             let pending_exports = pending_exports.clone();
             app.update(|ctx| {
-                ctx.subscribe_to_model(&ExportManager::handle(ctx), move |_, _, event, _| {
+                ctx.subscribe_to_model(&ExportManager::handle(ctx), move |_, event, _| {
                     let mut pending_exports = pending_exports.lock();
                     let id = match event {
                         ExportEvent::Canceled(id) => id,

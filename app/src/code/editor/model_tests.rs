@@ -535,7 +535,7 @@ fn test_retrieve_unified_diff_windows_line_endings() {
         let (diff_tx, diff_rx) = oneshot::channel();
         app.update(|ctx| {
             let mut diff_tx = Some(diff_tx);
-            ctx.subscribe_to_model(&editor, move |_, _, event, _| {
+            ctx.subscribe_to_model(&editor, move |_, event, _| {
                 if let CodeEditorModelEvent::UnifiedDiffComputed(diff) = event {
                     diff_tx
                         .take()
@@ -588,7 +588,7 @@ fn test_retrieve_unified_diff_mixed_line_endings() {
         let (diff_tx, diff_rx) = oneshot::channel();
         app.update(|ctx| {
             let mut diff_tx = Some(diff_tx);
-            ctx.subscribe_to_model(&editor, move |_, _, event, _| {
+            ctx.subscribe_to_model(&editor, move |_, event, _| {
                 if let CodeEditorModelEvent::UnifiedDiffComputed(diff) = event {
                     diff_tx
                         .take()
@@ -822,7 +822,7 @@ fn test_update_comment_location_removed_line() {
         let (diff_tx, diff_rx) = oneshot::channel();
         app.update(|ctx| {
             let mut diff_tx = Some(diff_tx);
-            ctx.subscribe_to_model(&editor, move |_, _, event, _| {
+            ctx.subscribe_to_model(&editor, move |_, event, _| {
                 if let CodeEditorModelEvent::DiffUpdated = event {
                     diff_tx
                         .take()
@@ -869,7 +869,7 @@ async fn compute_diff_and_expand(app: &mut App, editor: &ModelHandle<CodeEditorM
     let (diff_tx, diff_rx) = oneshot::channel();
     app.update(|ctx| {
         let mut diff_tx = Some(diff_tx);
-        ctx.subscribe_to_model(editor, move |_, _, event, _| {
+        ctx.subscribe_to_model(editor, move |_, event, _| {
             if let CodeEditorModelEvent::DiffUpdated = event {
                 if let Some(tx) = diff_tx.take() {
                     let _ = tx.send(());

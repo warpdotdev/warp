@@ -2624,7 +2624,7 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) {
         let stream_clone = stream.clone();
-        ctx.subscribe_to_model(&stream, move |me, event, ctx| {
+        ctx.subscribe_to_model(&stream, move |me, _, event, ctx| {
             me.handle_response_stream_event(false, event, &stream_clone, ctx);
         });
         self.in_flight_response_streams.register_new_stream(

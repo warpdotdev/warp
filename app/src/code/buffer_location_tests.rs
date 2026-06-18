@@ -324,7 +324,7 @@ fn handle_buffer_updated_push_conflict_when_client_version_stale() {
         let (event_tx, event_rx) = async_channel::unbounded::<bool>();
         let gbm_handle = gbm(&app);
         app.update(|ctx| {
-            ctx.subscribe_to_model(&gbm_handle, move |_, _, event, _| {
+            ctx.subscribe_to_model(&gbm_handle, move |_, event, _| {
                 if matches!(event, GlobalBufferModelEvent::RemoteBufferConflict { .. }) {
                     let _ = event_tx.try_send(true);
                 }

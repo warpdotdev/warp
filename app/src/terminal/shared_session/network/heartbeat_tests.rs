@@ -14,7 +14,7 @@ fn test_periodic_ping() {
         let (tx, rx) = async_channel::unbounded();
         let tx_clone = tx.clone();
         app.update(|ctx| {
-            ctx.subscribe_to_model(&heartbeat, move |_, _, event, _| {
+            ctx.subscribe_to_model(&heartbeat, move |_, event, _| {
                 if matches!(event, Event::Ping) {
                     tx_clone.try_send(()).expect("can send over channel");
                 }
@@ -50,7 +50,7 @@ fn test_idle_timeout() {
             app.add_model(|_| Heartbeat::default().with_idle_timeout(Duration::from_millis(100)));
         let (tx, rx) = async_channel::unbounded();
         app.update(|ctx| {
-            ctx.subscribe_to_model(&heartbeat, move |_, _, event, _| {
+            ctx.subscribe_to_model(&heartbeat, move |_, event, _| {
                 if matches!(event, Event::Idle) {
                     tx.try_send(()).expect("can send over channel");
                 }

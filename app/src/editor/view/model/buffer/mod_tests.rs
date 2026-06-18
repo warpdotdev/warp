@@ -45,7 +45,7 @@ fn new_buffer_with_ops_receiver(
     let (tx, rx) = async_channel::unbounded();
 
     app.update(|ctx| {
-        ctx.subscribe_to_model(&model, move |_, _, event, _| {
+        ctx.subscribe_to_model(&model, move |_, event, _| {
             if let Event::UpdatePeers { operations } = event {
                 tx.try_send(operations.clone()).expect("can send message");
             }
@@ -1569,13 +1569,13 @@ fn test_edit_events() {
         let buffer2 = app.add_model(|_| Buffer::new_with_replica_id(ReplicaId::new(2), base_text));
 
         app.update(|ctx| {
-            ctx.subscribe_to_model(&buffer1, move |_, _, event, _| {
+            ctx.subscribe_to_model(&buffer1, move |_, event, _| {
                 buffer_1_tx
                     .try_send(event.to_owned())
                     .expect("Can send over buffer_2_tx")
             });
 
-            ctx.subscribe_to_model(&buffer2, move |_, _, event, _| {
+            ctx.subscribe_to_model(&buffer2, move |_, event, _| {
                 buffer_2_tx
                     .try_send(event.to_owned())
                     .expect("Can send over buffer_2_tx")

@@ -920,7 +920,7 @@ fn split_loading_env_loads_all_global_loads_subset() {
             let tx_cell = tx_cell.clone();
             ctx.subscribe_to_model(
                 &RepoMetadataModel::handle(ctx),
-                move |_, _, event: &RepoMetadataEvent, _ctx| {
+                move |_, event: &RepoMetadataEvent, _ctx| {
                     if let RepoMetadataEvent::RepositoryUpdated {
                         id: RepositoryIdentifier::Local(path),
                     } = event
@@ -1043,7 +1043,7 @@ fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
             let tx_cell = tx_cell.clone();
             ctx.subscribe_to_model(
                 &RepoMetadataModel::handle(ctx),
-                move |_, _, event: &RepoMetadataEvent, _ctx| {
+                move |_, event: &RepoMetadataEvent, _ctx| {
                     if let RepoMetadataEvent::RepositoryUpdated {
                         id: RepositoryIdentifier::Local(path),
                     } = event

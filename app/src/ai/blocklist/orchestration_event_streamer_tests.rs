@@ -1758,7 +1758,7 @@ fn capture_child_spawns(
         std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
     let captured_for_closure = captured.clone();
     app.update(|ctx| {
-        ctx.subscribe_to_model(streamer, move |_, _, event, _| {
+        ctx.subscribe_to_model(streamer, move |_, event, _| {
             if let OrchestrationEventStreamerEvent::ChildSpawned {
                 parent_task_id,
                 run_id,

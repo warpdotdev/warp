@@ -23,7 +23,7 @@ fn track_invalid_state_failures(app: &mut App) -> Arc<AtomicBool> {
     let saw_invalid_state = Arc::new(AtomicBool::new(false));
     let saw_invalid_state_for_closure = saw_invalid_state.clone();
     app.update(|ctx| {
-        ctx.subscribe_to_model(&AuthManager::handle(ctx), move |_, _, event, _| {
+        ctx.subscribe_to_model(&AuthManager::handle(ctx), move |_, event, _| {
             if matches!(
                 event,
                 AuthManagerEvent::AuthFailed(UserAuthenticationError::InvalidStateParameter)
@@ -45,7 +45,7 @@ fn test_duplicate_redirect_for_logged_in_user_is_silently_ignored() {
 
         // Fail immediately if we see InvalidStateParameter at any point.
         app.update(|ctx| {
-            ctx.subscribe_to_model(&AuthManager::handle(ctx), move |_, _, event, _| {
+            ctx.subscribe_to_model(&AuthManager::handle(ctx), move |_, event, _| {
                 if matches!(
                     event,
                     AuthManagerEvent::AuthFailed(UserAuthenticationError::InvalidStateParameter)
