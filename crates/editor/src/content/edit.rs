@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
@@ -177,7 +178,9 @@ pub struct EditDelta {
     /// the first character after it.
     pub old_offset: Range<CharOffset>,
     /// Content of the lines that have been changed.
-    pub new_lines: Vec<StyledBufferBlock>,
+    /// Wrapped in `Arc` to avoid expensive deep clones when the delta is propagated
+    /// through the event system to multiple subscribers (render state, delay rendering, etc.).
+    pub new_lines: Arc<Vec<StyledBufferBlock>>,
 }
 
 /// Render Delta that has its content laid out into TextFrames.
@@ -508,8 +511,10 @@ impl EditDelta {
         let mut current_offset = (self.old_offset.start).max(CharOffset::from(1));
 
         // First, build a Vec of layout tasks with information about whether they're hidden
-        let layout_tasks: Vec<_> = self
-            .new_lines
+        // Unwrap the Arc if we're the sole owner; otherwise clone the inner vec.
+        let new_lines = Arc::try_unwrap(self.new_lines)
+            .unwrap_or_else(|arc| (*arc).clone());
+        let layout_tasks: Vec<_> = new_lines
             .into_iter()
             .filter_map(|block| {
                 let content_length = block.content_length();
