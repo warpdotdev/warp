@@ -1831,6 +1831,8 @@ pub mod testing {
                 load_external_commands_future: Default::default(),
                 command_case_sensitivity: TopLevelCommandCaseSensitivity::CaseSensitive,
                 session_type: Mutex::new(session_type),
+                additional_function_names: Default::default(),
+                load_all_function_names_future: Default::default(),
             }
         }
 
@@ -1846,6 +1848,8 @@ pub mod testing {
                 load_external_commands_future: Default::default(),
                 command_case_sensitivity: TopLevelCommandCaseSensitivity::CaseSensitive,
                 session_type: Mutex::new(session_type),
+                additional_function_names: Default::default(),
+                load_all_function_names_future: Default::default(),
             }
         }
 

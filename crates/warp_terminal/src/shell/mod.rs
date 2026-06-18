@@ -743,11 +743,11 @@ impl ShellType {
     pub fn shell_command_to_get_all_functions(&self) -> Option<&'static str> {
         match self {
             ShellType::PowerShell => Some(
-                r#"$names = Get-Command -CommandType Function | Where-Object { \
+                "$names = Get-Command -CommandType Function | Where-Object { \
                 -not $_.Name.StartsWith('Warp') } | Select-Object -ExpandProperty Name; \
                 $text = [string]::Join([Environment]::NewLine, $names); \
                 $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($text); \
-                [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)"#,
+                [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)",
             ),
             _ => None,
         }
