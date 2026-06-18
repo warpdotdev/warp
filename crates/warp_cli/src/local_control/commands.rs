@@ -775,10 +775,7 @@ fn run_action_with_params<T: Serialize>(
     output_format: OutputFormat,
 ) -> Result<(), ControlError> {
     let selector = instance_selector(&args);
-    let records = local_control::discovery::list_instances_from_dir(
-        &local_control::discovery::discovery_dir(),
-        &ChannelState::channel().to_string(),
-    );
+    let records = local_control::discovery::list_instances(&ChannelState::channel().to_string());
     let target = target_selector(&args)?;
     let instance = select_instance(&records, &selector)?;
     let mut request = RequestEnvelope::new(Action::with_params(action, params)?);

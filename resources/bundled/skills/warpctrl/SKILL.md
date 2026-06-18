@@ -34,7 +34,15 @@ The Warp UI also exposes **Install Warp Control CLI command** and **Uninstall Wa
 
 ## Workflow
 
-Always prefer discovering commands from `{{warpctrl_binary_name}}` itself rather than guessing or inventing them. The CLI provides full help and an action catalog that is the source of truth for what the installed build supports.
+Always prefer discovering commands from `{{warpctrl_binary_name}}` itself rather than guessing or inventing them. The CLI provides full help and an action catalog that is the authoritative source of truth for what the installed build supports.
+
+### Execute serially and validate results
+
+Run Warp Control commands serially. Never dispatch multiple `{{warpctrl_binary_name}}` commands through parallel shell-tool calls, even when the commands appear independent. They act on the same running app and may change the active target or the terminal context used to execute and observe later commands. For multi-step requests, prefer one shell-tool call that chains commands sequentially, or issue separate shell-tool calls one at a time.
+
+After an action that creates, activates, navigates, or focuses a window, tab, pane, session, or surface, do not assume the active target is unchanged. Use explicit selectors for later commands when exact targeting matters, or rerun `{{warpctrl_binary_name}} app active` before continuing.
+
+Validate that each result corresponds to the command that was invoked. If output describes a different action, reports an unexpected instance or channel, or otherwise conflicts with the request, stop and rerun `{{warpctrl_binary_name}} instance list` serially before retrying. Do not report success until the requested final state has been verified when a corresponding `list`, `inspect`, or `get` command is available.
 
 ### Route by intent
 
