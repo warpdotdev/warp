@@ -1061,6 +1061,7 @@ impl View for AIBlock {
         );
         drop(terminal_model);
 
+        #[cfg(not(target_family = "wasm"))]
         let is_cloud_agent_context = FeatureFlag::CloudMode.is_enabled()
             && self
                 .ambient_agent_view_model
@@ -1120,6 +1121,7 @@ impl View for AIBlock {
                 shared_session_status: &shared_session_status,
                 terminal_view_id: self.terminal_view_id,
                 is_conversation_transcript_viewer,
+                #[cfg(not(target_family = "wasm"))]
                 is_cloud_agent_context,
                 aws_bedrock_credentials_error_view: self
                     .aws_bedrock_credentials_error_view
