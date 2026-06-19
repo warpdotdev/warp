@@ -333,7 +333,7 @@ impl QueuedPromptsPanelView {
     /// Returns whether the reusable inline edit editor is currently holding focus for an active
     /// queued prompt row. Parent views use this to avoid stealing focus during async AI/tool
     /// updates.
-    pub fn is_inline_edit_editor_focused(&self, ctx: &AppContext) -> bool {
+    pub(in crate::terminal) fn is_inline_edit_editor_focused(&self, ctx: &AppContext) -> bool {
         self.editing_row_id(ctx).is_some() && self.edit_editor.is_focused(ctx)
     }
 
@@ -702,11 +702,6 @@ impl QueuedPromptsPanelView {
         self.edit_editor.update(ctx, |editor, ctx| {
             editor.set_buffer_text(text, ctx);
         });
-    }
-
-    /// Test accessor: whether the inline edit editor currently owns focus.
-    pub(super) fn inline_edit_editor_focused_for_test(&self, ctx: &AppContext) -> bool {
-        self.is_inline_edit_editor_focused(ctx)
     }
 }
 

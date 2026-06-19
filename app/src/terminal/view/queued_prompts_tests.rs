@@ -1460,13 +1460,7 @@ fn redetermine_terminal_focus_preserves_focused_queued_prompt_editor() {
         let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
         let conversation_id =
             BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
-                let id = history.start_new_conversation(
-                    terminal_view_id,
-                    false,
-                    false,
-                    false,
-                    ctx,
-                );
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
                 history.set_active_conversation_id(id, terminal_view_id, ctx);
                 id
             });
@@ -1482,7 +1476,7 @@ fn redetermine_terminal_focus_preserves_focused_queued_prompt_editor() {
             panel.handle_action(&QueuedPromptsPanelAction::StartEditingRow(row_id), ctx);
         });
         panel.read(&app, |panel, ctx| {
-            assert!(panel.inline_edit_editor_focused_for_test(ctx));
+            assert!(panel.is_inline_edit_editor_focused(ctx));
         });
 
         terminal.update(&mut app, |view, ctx| {
@@ -1493,7 +1487,7 @@ fn redetermine_terminal_focus_preserves_focused_queued_prompt_editor() {
         });
 
         panel.read(&app, |panel, ctx| {
-            assert!(panel.inline_edit_editor_focused_for_test(ctx));
+            assert!(panel.is_inline_edit_editor_focused(ctx));
         });
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
             assert_eq!(model.editing_row(conversation_id), Some(row_id));
