@@ -56,7 +56,9 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         // (https://github.com/augmentmoogi/auggie-warp,
         // https://github.com/badlogic/pi-mono), which emit the same
         // structured OSC 777 events as the first-party Claude/OpenCode/Gemini
-        // plugins. Droid can emit the same events through its hooks config.
+        // plugins. Droid can be supported by user-configured hooks or future
+        // integrations that emit the same structured OSC 777 events. We don't
+        // ship install flows for these agents here — we just listen.
         CLIAgent::Claude
         | CLIAgent::OpenCode
         | CLIAgent::Gemini

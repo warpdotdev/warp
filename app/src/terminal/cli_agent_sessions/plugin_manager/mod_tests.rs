@@ -30,13 +30,9 @@ fn returns_manager_for_gemini() {
 }
 
 #[test]
-fn returns_manager_for_droid() {
-    assert!(plugin_manager_for(CLIAgent::Droid).is_some());
-}
-
-#[test]
 fn returns_none_for_unsupported_agents() {
     assert!(plugin_manager_for(CLIAgent::Amp).is_none());
+    assert!(plugin_manager_for(CLIAgent::Droid).is_none());
     assert!(plugin_manager_for(CLIAgent::Copilot).is_none());
     assert!(plugin_manager_for(CLIAgent::Unknown).is_none());
 }

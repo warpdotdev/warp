@@ -1,6 +1,5 @@
 pub(crate) mod claude;
 pub(crate) mod codex;
-pub(crate) mod droid;
 pub(crate) mod gemini;
 pub(crate) mod opencode;
 
@@ -12,7 +11,6 @@ use std::{fmt, io};
 use async_trait::async_trait;
 use claude::ClaudeCodePluginManager;
 use codex::CodexPluginManager;
-use droid::DroidPluginManager;
 use gemini::GeminiPluginManager;
 use opencode::OpenCodePluginManager;
 
@@ -284,11 +282,11 @@ pub(crate) fn plugin_manager_for_with_shell(
                 path_env_var,
             )))
         }
-        CLIAgent::Droid => Some(Box::new(DroidPluginManager)),
         CLIAgent::OpenCode
         | CLIAgent::Codex
         | CLIAgent::Gemini
         | CLIAgent::Amp
+        | CLIAgent::Droid
         | CLIAgent::Copilot
         | CLIAgent::Pi
         | CLIAgent::Auggie
