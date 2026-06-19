@@ -2502,22 +2502,20 @@ impl AppContext {
                         // of the actual work later.
                         window.request_redraw();
 
-                        // Unit tests and integration UI tests don't have an event loop that
-                        // drives rendering synchronously with their assertions, so we build
-                        // the scene eagerly here. This is also what dispatches the synthetic
-                        // MouseMoved that keeps `Hoverable` state correct after layout changes,
-                        // which hover- and focus-driven UI tests rely on.
+                        // In tests there's typically no host event loop pumping redraws in
+                        // step with assertions, so build the scene eagerly here. This also
+                        // dispatches the synthetic MouseMoved that keeps `Hoverable` state
+                        // correct after layout changes, which hover- and focus-driven tests
+                        // depend on.
                         //
-                        // Agent-mode evals are the exception. They run under a continuous
-                        // stream of invalidations from streaming output, where building eagerly
-                        // here forms an invalidation → build_scene → synthetic MouseMoved →
-                        // invalidation loop that pins the main thread and starves the async
-                        // executor, so RunTask callbacks (e.g. ReadFiles completions) never fire
-                        // and conversations hang. Evals rely on the winit RedrawRequested path
-                        // instead.
+                        // `defer_scene_build` opts out of this: when a build drives a
+                        // continuous stream of invalidations, eager building here forms an
+                        // invalidation → build_scene → synthetic MouseMoved → invalidation
+                        // loop that pins the main thread and starves the async executor. Those
+                        // builds rely on the normal platform redraw path instead.
                         if ctx.is_unit_test
                             || (cfg!(feature = "integration_tests")
-                                && !cfg!(feature = "agent_mode_evals"))
+                                && !cfg!(feature = "defer_scene_build"))
                         {
                             ctx.build_scene(window_id, window.as_ctx());
                         }
