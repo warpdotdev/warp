@@ -265,7 +265,7 @@ async fn download_attachment(
 
         Ok(())
     }
-    
+
     with_bounded_retry(&operation, || async {
         attempt(http_client, download_url, file_path).await
     })

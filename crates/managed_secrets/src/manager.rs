@@ -163,7 +163,10 @@ impl ManagedSecretManager {
     ) -> impl Future<Output = anyhow::Result<HashMap<String, ManagedSecretValue>>> + use<> {
         // Define and invoke an inner async function to simplify tracing instrumentation.
         #[tracing::instrument(name = "get_task_secrets", skip_all, err, fields(tags.cloud_agent = true))]
-        async fn inner(client: Arc<dyn ManagedSecretsClient>, task_id: String) -> anyhow::Result<HashMap<String, ManagedSecretValue>> {
+        async fn inner(
+            client: Arc<dyn ManagedSecretsClient>,
+            task_id: String,
+        ) -> anyhow::Result<HashMap<String, ManagedSecretValue>> {
             // We only need the workload token for the duration of the request.
             let workload_token =
                 warp_isolation_platform::issue_workload_token(Some(Duration::from_mins(5))).await?;
