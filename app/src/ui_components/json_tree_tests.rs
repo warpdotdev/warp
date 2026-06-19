@@ -259,6 +259,94 @@ fn multi_key_object_all_entries_preserved() {
 }
 
 // -----------------------------------------------------------------------
+// mcp_result_to_renderable
+// -----------------------------------------------------------------------
+
+#[test]
+fn mcp_result_success_with_structured_content_returns_tree() {
+    use crate::ai::agent::CallMCPToolResult;
+    use crate::ai::blocklist::inline_action::requested_command::{
+        mcp_result_to_renderable, McpRenderable,
+    };
+
+    let value = serde_json::json!({"count": 42, "files": ["a.rs", "b.rs"]});
+    let result = rmcp::model::CallToolResult::structured(value.clone());
+    let renderable = mcp_result_to_renderable(&CallMCPToolResult::Success { result });
+
+    match renderable {
+        McpRenderable::Tree(v) => assert_eq!(v, value),
+        _ => panic!("expected Tree variant"),
+    }
+}
+
+#[test]
+fn mcp_result_success_with_json_text_content_returns_parsed_tree() {
+    use crate::ai::agent::CallMCPToolResult;
+    use crate::ai::blocklist::inline_action::requested_command::{
+        mcp_result_to_renderable, McpRenderable,
+    };
+
+    let json_str = r#"{"status": "ok", "value": 7}"#;
+    let content = vec![rmcp::model::Content::text(json_str)];
+    let result = rmcp::model::CallToolResult::success(content);
+    let renderable = mcp_result_to_renderable(&CallMCPToolResult::Success { result });
+
+    let expected: serde_json::Value = serde_json::from_str(json_str).unwrap();
+    match renderable {
+        McpRenderable::Tree(v) => assert_eq!(v, expected),
+        _ => panic!("expected Tree variant with parsed JSON"),
+    }
+}
+
+#[test]
+fn mcp_result_success_with_non_json_text_returns_string_tree() {
+    use crate::ai::agent::CallMCPToolResult;
+    use crate::ai::blocklist::inline_action::requested_command::{
+        mcp_result_to_renderable, McpRenderable,
+    };
+
+    let plain_text = "just some plain text output";
+    let content = vec![rmcp::model::Content::text(plain_text)];
+    let result = rmcp::model::CallToolResult::success(content);
+    let renderable = mcp_result_to_renderable(&CallMCPToolResult::Success { result });
+
+    match renderable {
+        McpRenderable::Tree(serde_json::Value::String(s)) => {
+            assert_eq!(s, plain_text);
+        }
+        _ => panic!("expected Tree(String) variant"),
+    }
+}
+
+#[test]
+fn mcp_result_error_returns_error_variant() {
+    use crate::ai::agent::CallMCPToolResult;
+    use crate::ai::blocklist::inline_action::requested_command::{
+        mcp_result_to_renderable, McpRenderable,
+    };
+
+    let msg = "tool not found".to_string();
+    let renderable = mcp_result_to_renderable(&CallMCPToolResult::Error(msg.clone()));
+
+    match renderable {
+        McpRenderable::Error(e) => assert_eq!(e, msg),
+        _ => panic!("expected Error variant"),
+    }
+}
+
+#[test]
+fn mcp_result_cancelled_returns_cancelled_variant() {
+    use crate::ai::agent::CallMCPToolResult;
+    use crate::ai::blocklist::inline_action::requested_command::{
+        mcp_result_to_renderable, McpRenderable,
+    };
+
+    let renderable = mcp_result_to_renderable(&CallMCPToolResult::Cancelled);
+
+    assert!(matches!(renderable, McpRenderable::Cancelled));
+}
+
+// -----------------------------------------------------------------------
 // Path segment equality (required for HashMap key correctness)
 // -----------------------------------------------------------------------
 
