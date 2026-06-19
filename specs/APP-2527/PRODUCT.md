@@ -1,5 +1,5 @@
 # MCP Tool Call JSON Tree Rendering — Product Spec
-Linear: none provided
+Linear: APP-2527
 Figma: none provided (reference screenshot supplied in the originating request showing a generic collapsible JSON tree with chevron expanders and typed value colors; the visual treatment must follow Warp UI conventions, not the screenshot's exact styling)
 
 ## Summary

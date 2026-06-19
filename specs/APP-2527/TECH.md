@@ -1,6 +1,6 @@
 # MCP Tool Call JSON Tree Rendering — Tech Spec
-Linear: none provided
-Companion product spec: [`specs/mcp-json-tree-view/PRODUCT.md`](./PRODUCT.md)
+Linear: APP-2527
+Companion product spec: [`specs/APP-2527/PRODUCT.md`](./PRODUCT.md)
 
 ## Context
 Today an expanded MCP tool-call detail is rendered as a single selectable, monospace, pretty-printed JSON string. Both the request arguments and the response are concatenated into one `String` and shown in one `Text` element. We are replacing that body with an interactive, collapsible, theme-colored JSON tree. The collapsed header row, accept/reject flow, and all non-MCP action rendering are unchanged.
