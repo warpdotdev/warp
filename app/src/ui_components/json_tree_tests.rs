@@ -96,7 +96,7 @@ fn toggle_one_path_leaves_other_paths_unchanged() {
     assert!(state.is_expanded(&path_b, 0));
 
     // Toggle path A.
-    state.toggle(path_a.clone(), 0);
+    state.toggle(&path_a, 0);
 
     // A is now collapsed.
     assert!(!state.is_expanded(&path_a, 0));
@@ -113,11 +113,11 @@ fn toggle_is_idempotent_across_two_calls() {
     assert!(!state.is_expanded(&path, 1));
 
     // First toggle: collapsed → expanded.
-    state.toggle(path.clone(), 1);
+    state.toggle(&path, 1);
     assert!(state.is_expanded(&path, 1));
 
     // Second toggle: expanded → collapsed again.
-    state.toggle(path.clone(), 1);
+    state.toggle(&path, 1);
     assert!(!state.is_expanded(&path, 1));
 }
 
@@ -135,7 +135,7 @@ fn toggle_nested_path_independent_of_parent() {
     assert!(!state.is_expanded(&child, 1));
 
     // Toggle parent only.
-    state.toggle(parent.clone(), 1);
+    state.toggle(&parent, 1);
 
     assert!(state.is_expanded(&parent, 1));
     assert!(!state.is_expanded(&child, 1));
@@ -161,11 +161,11 @@ fn toggle_string_expands_then_collapses() {
     assert!(!state.is_string_expanded(&path));
 
     // First toggle: collapsed → expanded.
-    state.toggle_string(path.clone());
+    state.toggle_string(&path);
     assert!(state.is_string_expanded(&path));
 
     // Second toggle: expanded → collapsed.
-    state.toggle_string(path.clone());
+    state.toggle_string(&path);
     assert!(!state.is_string_expanded(&path));
 }
 
@@ -175,7 +175,7 @@ fn toggle_string_is_independent_of_node_expansion() {
     let mut state = JsonTreeState::default();
 
     // Toggling a string does not affect node expansion state for the same path.
-    state.toggle_string(path.clone());
+    state.toggle_string(&path);
     assert!(state.is_string_expanded(&path));
     // Node expansion at depth 0 is still the default (expanded).
     assert!(state.is_expanded(&path, 0));

@@ -93,15 +93,15 @@ impl JsonTreeState {
     /// If no explicit state exists, the new state is the inverse of the
     /// default (derived from depth). Callers must pass `depth` so we know
     /// what the default would have been.
-    pub fn toggle(&mut self, path: Vec<PathSegment>, depth: usize) {
-        let current = self.is_expanded(&path, depth);
-        self.node_expansion.insert(path, !current);
+    pub fn toggle(&mut self, path: &[PathSegment], depth: usize) {
+        let current = self.is_expanded(path, depth);
+        self.node_expansion.insert(path.to_vec(), !current);
     }
 
     /// Toggles the expansion state of the long string at `path`.
-    pub fn toggle_string(&mut self, path: Vec<PathSegment>) {
-        let current = self.is_string_expanded(&path);
-        self.string_expansion.insert(path, !current);
+    pub fn toggle_string(&mut self, path: &[PathSegment]) {
+        let current = self.is_string_expanded(path);
+        self.string_expansion.insert(path.to_vec(), !current);
     }
 }
 
