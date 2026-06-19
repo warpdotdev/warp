@@ -958,6 +958,17 @@ impl LocalCodeEditorView {
                     }
                     ctx.notify();
                 }
+                LspManagerModelEvent::ServerFailed(path) if file_path.starts_with(path) => {
+                    // A failed server never emits ServerStarted, so connect here too.
+                    // try_connect_lsp_server wires the footer to the failed server
+                    // (it explicitly handles the Failed state) so its status menu —
+                    // Restart server / Remove server — becomes reachable without
+                    // needing to reopen the file.
+                    if me.lsp_server.is_none() && me.base_content_version.is_some() {
+                        me.try_connect_lsp_server(ctx);
+                    }
+                    ctx.notify();
+                }
                 LspManagerModelEvent::ServerStopped(path) if file_path.starts_with(path) => {
                     ctx.notify();
                 }

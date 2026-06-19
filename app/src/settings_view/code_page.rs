@@ -254,6 +254,7 @@ impl CodeSettingsPageView {
             |me, _, event, ctx| match event {
                 LspManagerModelEvent::ServerStarted(_)
                 | LspManagerModelEvent::ServerStopped(_)
+                | LspManagerModelEvent::ServerFailed(_)
                 | LspManagerModelEvent::ServerRemoved { .. } => {
                     // Recalculate LSP server count and resize mouse states if needed
                     let new_count = PersistedWorkspace::as_ref(ctx).total_lsp_server_count(true);

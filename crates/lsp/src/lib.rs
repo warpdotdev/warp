@@ -6,6 +6,7 @@ pub mod descriptor;
 mod language_server_candidate;
 pub use language_server_candidate::LanguageServerCandidate;
 pub mod install;
+pub mod log_redaction;
 mod manager;
 mod model;
 
@@ -24,6 +25,7 @@ pub use config::{
     default_init_params, CustomLspServerConfig, LanguageId, LspServerConfig, LspServerConfigKind,
 };
 pub use jsonrpc::{JsonRpcService, ServerNotificationEvent, Transport};
+pub use log_redaction::{LogRedactor, NoopLogRedactor};
 pub use lsp_types::notification::{self};
 pub use lsp_types::{Position, Range};
 pub use manager::{LspManagerModel, LspManagerModelEvent, ServerKey};

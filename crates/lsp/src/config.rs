@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,6 +15,7 @@ use lsp_types::{
 
 use crate::command_builder::CommandBuilder;
 use crate::descriptor::{placeholder, LspServerDescriptor};
+use crate::log_redaction::LogRedactor;
 use crate::manager::ServerKey;
 use crate::supported_servers::LSPServerType;
 
@@ -239,6 +241,9 @@ pub struct CustomLspServerConfig {
     client_name: String,
     /// Optional path relative to the LSP log namespace for server stderr output.
     log_relative_path: Option<PathBuf>,
+    /// Masks secret-shaped substrings of the substituted `command`/`args`
+    /// before they are logged.
+    redactor: Arc<dyn LogRedactor>,
 }
 
 impl fmt::Debug for CustomLspServerConfig {
@@ -263,6 +268,7 @@ impl CustomLspServerConfig {
         cache_dir: PathBuf,
         path_env_var: Option<String>,
         client_name: String,
+        redactor: Arc<dyn LogRedactor>,
     ) -> Self {
         Self {
             descriptor,
@@ -272,6 +278,7 @@ impl CustomLspServerConfig {
             path_env_var,
             client_name,
             log_relative_path: None,
+            redactor,
         }
     }
 
@@ -359,11 +366,18 @@ impl CustomLspServerConfig {
                 Some(placeholder::expand_json(init_options, &placeholder_ctx));
         }
 
+        // Redact the substituted command/args before logging. `name` is logged
+        // verbatim; `env` values and `initialization_options` are not logged.
+        let logged_command = self.redactor.redact_for_log(&resolved_command);
+        let logged_args: Vec<Cow<'_, str>> = resolved_args
+            .iter()
+            .map(|arg| self.redactor.redact_for_log(arg))
+            .collect();
         log::info!(
             "Custom LSP \"{}\" starting with command: {} {:?}",
             self.descriptor.name,
-            resolved_command,
-            resolved_args
+            logged_command,
+            logged_args
         );
 
         Ok(ResolvedLspCommand { command, params })

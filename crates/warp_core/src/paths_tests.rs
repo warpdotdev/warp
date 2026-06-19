@@ -131,21 +131,28 @@ fn test_project_path_for_warp_dev_app_id() {
 }
 
 #[test]
-fn lsp_server_cache_dir_namespaces_by_name() {
-    // Platform-specific cache_dir() is tested elsewhere; here we only verify
-    // that lsp_server_cache_dir appends "lsp/<name>" to whatever it returns.
-    let dir = lsp_server_cache_dir("rust-analyzer").expect("valid name");
-    assert_eq!(dir, cache_dir().join("lsp").join("rust-analyzer"));
+fn lsp_server_cache_dir_hashes_name_into_segment() {
+    let dir = lsp_server_cache_dir("rust-analyzer");
+    assert_eq!(
+        dir,
+        cache_dir().join("lsp").join(short_hash("rust-analyzer"))
+    );
+    // The raw name is never used as the path segment.
+    assert_ne!(dir.file_name().unwrap(), "rust-analyzer");
 }
 
 #[test]
-fn lsp_server_cache_dir_rejects_unsafe_names() {
-    assert_eq!(lsp_server_cache_dir(""), None);
-    assert_eq!(lsp_server_cache_dir("."), None);
-    assert_eq!(lsp_server_cache_dir(".."), None);
-    assert_eq!(lsp_server_cache_dir("foo/bar"), None);
-    assert_eq!(lsp_server_cache_dir("foo\\bar"), None);
-    assert_eq!(lsp_server_cache_dir("foo\0bar"), None);
+fn lsp_server_cache_dir_is_safe_for_any_name() {
+    // Hashing the segment makes even names that aren't valid filesystem
+    // components resolve to a safe path.
+    for name in ["", ".", "..", "foo/bar", "foo\\bar", "with space"] {
+        let dir = lsp_server_cache_dir(name);
+        let segment = dir.file_name().and_then(|s| s.to_str()).unwrap();
+        assert_eq!(segment.len(), 16, "name {name:?} produced {segment:?}");
+        assert!(segment
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+    }
 }
 
 #[test]

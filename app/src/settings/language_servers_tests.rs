@@ -1,6 +1,7 @@
-use super::*;
 use serde_json::json;
 use settings_value::SettingsValue;
+
+use super::*;
 
 #[test]
 fn from_file_value_non_array_returns_none() {

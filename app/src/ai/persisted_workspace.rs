@@ -568,6 +568,24 @@ impl PersistedWorkspace {
     /// map and the SQLite `workspace_language_server` table with
     /// `kind = 'Custom'`.
     fn set_custom_lsp_server_for_path(&mut self, path: &Path, name: &str, state: EnablementState) {
+        // Check if the workspace needs to be persisted before we take a
+        // mutable borrow, so we can call save_to_db without conflicting borrows.
+        let needs_persist = self
+            .workspaces
+            .get(path)
+            .is_some_and(|ws| !ws.is_persisted());
+
+        if needs_persist {
+            // Materialize the workspace: set a timestamp and persist metadata
+            // so the FK-dependent workspace_language_server row can be written.
+            let workspace = self.workspaces.get_mut(path).unwrap();
+            workspace.metadata.modified_ts = Some(Utc::now());
+            let metadata = workspace.metadata.clone();
+            self.save_to_db(vec![ModelEvent::UpsertCodebaseIndexMetadata {
+                index_metadata: Box::new(metadata),
+            }]);
+        }
+
         match self.workspaces.get_mut(path) {
             Some(workspace) => {
                 workspace
@@ -581,6 +599,11 @@ impl PersistedWorkspace {
                     modified_ts: Some(Utc::now()),
                     queried_ts: None,
                 };
+
+                self.save_to_db(vec![ModelEvent::UpsertCodebaseIndexMetadata {
+                    index_metadata: Box::new(metadata.clone()),
+                }]);
+
                 self.workspaces.insert(
                     path.to_path_buf(),
                     Workspace {
@@ -1078,6 +1101,7 @@ impl PersistedWorkspace {
             let has_persisted_servers = ws
                 .language_servers
                 .values()
+                .chain(ws.custom_language_servers.values())
                 .any(|s| *s != EnablementState::Suggested);
             if has_persisted_servers {
                 return None;
@@ -1308,13 +1332,7 @@ impl PersistedWorkspace {
                 continue;
             };
 
-            let Some(cache_dir) = warp_core::paths::lsp_server_cache_dir(&descriptor.name) else {
-                log::warn!(
-                    "Custom LSP \"{}\" has an unsafe name for a cache directory; skipping",
-                    descriptor.name
-                );
-                continue;
-            };
+            let cache_dir = warp_core::paths::lsp_server_cache_dir(&descriptor.name);
             let workspace_slug = warp_util::path::workspace_hash(&workspace_root);
             let log_relative_path = custom_relative_log_path(&descriptor.name, &workspace_root);
             log::info!(
@@ -1330,6 +1348,7 @@ impl PersistedWorkspace {
                 cache_dir,
                 path_env_var.clone(),
                 ChannelState::app_id().application_name().to_string(),
+                Arc::new(crate::code::lsp_log_redactor::AppSecretRedactor),
             )
             .with_log_relative_path(log_relative_path);
 
@@ -1383,7 +1402,7 @@ impl PersistedWorkspace {
                     {
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             let toast = DismissibleToast::error(format!(
-                                "Failed to start LSP server for {workspace_root_display} with error {e}",
+                                "Failed to start LSP server \"{server_type_name}\" for {workspace_root_display} with error {e}",
                             ));
                             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                         });

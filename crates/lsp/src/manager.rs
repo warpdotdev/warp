@@ -21,9 +21,13 @@ pub enum ServerKey {
 pub enum LspManagerModelEvent {
     /// ServerStarted is fired when the server is successfully started and reports ready status.
     /// ServerStopped is fired when the server has completed its shutdown.
-    /// Both are routed from individual LspServerModel events.
+    /// ServerFailed is fired when the server fails to launch. Subscribers (e.g.
+    /// the code editor) use it to connect to a server that will never emit
+    /// ServerStarted, so the footer still reflects the failed state.
+    /// All are routed from individual LspServerModel events.
     ServerStarted(PathBuf),
     ServerStopped(PathBuf),
+    ServerFailed(PathBuf),
     /// ServerRemoved is fired when a server is removed from the manager.
     /// This happens when the user explicitly removes the server (e.g., from settings or footer menu).
     /// Subscribers should drop their references to the server model.
@@ -185,6 +189,9 @@ impl LspManagerModel {
             }
             LspEvent::Stopped => {
                 ctx.emit(LspManagerModelEvent::ServerStopped(path_clone.clone()));
+            }
+            LspEvent::Failed(_) => {
+                ctx.emit(LspManagerModelEvent::ServerFailed(path_clone.clone()));
             }
             _ => {}
         });

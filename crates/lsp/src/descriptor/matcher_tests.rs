@@ -1,7 +1,8 @@
-use super::*;
-use crate::descriptor::{LspFiletypePattern, LspServerDescriptor};
 use std::collections::BTreeMap;
 use std::path::Path;
+
+use super::*;
+use crate::descriptor::{LspFiletypePattern, LspServerDescriptor};
 
 /// Builds an `LspFiletypePattern` the same way `parse::compile_pattern` does:
 /// patterns with glob metacharacters compile case-insensitively, literal

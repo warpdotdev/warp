@@ -6,15 +6,13 @@
 
 use std::path::Path;
 
-use lsp::descriptor::{
-    self,
-    matcher::{match_descriptor, LspMatchedDescriptor},
-    LspServerDescriptor,
-};
+use lsp::descriptor::matcher::{match_descriptor, LspMatchedDescriptor};
+use lsp::descriptor::{self, LspServerDescriptor};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use settings::{macros::define_settings_group, Setting, SupportedPlatforms, SyncToCloud};
+use settings::macros::define_settings_group;
+use settings::{Setting, SupportedPlatforms, SyncToCloud};
 use settings_value::SettingsValue;
 
 // Hand-rolls `SettingsValue::from_file_value` so deserialization routes

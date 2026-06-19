@@ -1,5 +1,6 @@
-use super::*;
 use serde_json::json;
+
+use super::*;
 
 #[test]
 fn parses_minimal_entry() {
@@ -268,6 +269,20 @@ fn unknown_fields_are_ignored() {
 }
 
 #[test]
+fn raw_descriptor_captures_unknown_fields() {
+    let raw: RawDescriptor = serde_json::from_value(json!({
+        "name": "ruby-lsp",
+        "command": "ruby-lsp",
+        "totally_made_up": 42,
+        "future_field": true,
+    }))
+    .expect("known fields still deserialize");
+    let mut keys: Vec<&str> = raw.unknown_fields.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, vec!["future_field", "totally_made_up"]);
+}
+
+#[test]
 fn parses_initialization_options_verbatim() {
     let entries = vec![json!({
         "name": "jdtls",
@@ -336,4 +351,73 @@ fn one_bad_entry_does_not_drop_others() {
     let names: Vec<&str> = result.descriptors.iter().map(|d| d.name.as_str()).collect();
     assert_eq!(names, vec!["good", "also-good"]);
     assert_eq!(result.errors.len(), 1);
+}
+
+#[test]
+fn invalid_name_rejects_entry() {
+    let entries = vec![json!({
+        "name": "has space",
+        "command": "ruby-lsp",
+        "filetypes": [{ "pattern": "*.rb" }],
+    })];
+    let result = parse_entries(&entries);
+    assert!(result.descriptors.is_empty());
+    assert!(result
+        .errors
+        .iter()
+        .any(|e| matches!(e.kind, LspDescriptorErrorKind::InvalidName { .. })));
+}
+
+#[test]
+fn reserved_name_rejects_entry_case_insensitively() {
+    let entries = vec![json!({
+        "name": "Rust-Analyzer",
+        "command": "rust-analyzer",
+        "filetypes": [{ "pattern": "*.rs" }],
+    })];
+    let result = parse_entries(&entries);
+    assert!(result.descriptors.is_empty());
+    assert!(result
+        .errors
+        .iter()
+        .any(|e| matches!(e.kind, LspDescriptorErrorKind::ReservedName)));
+}
+
+#[test]
+fn unsafe_command_rejects_entry() {
+    let entries = vec![json!({
+        "name": "ruby-lsp",
+        "command": "./server",
+        "filetypes": [{ "pattern": "*.rb" }],
+    })];
+    let result = parse_entries(&entries);
+    assert!(result.descriptors.is_empty());
+    assert!(result
+        .errors
+        .iter()
+        .any(|e| matches!(e.kind, LspDescriptorErrorKind::UnsafeCommandPath { .. })));
+}
+
+#[test]
+fn duplicate_name_is_case_insensitive() {
+    let entries = vec![
+        json!({
+            "name": "ruby-lsp",
+            "command": "ruby-lsp",
+            "filetypes": [{ "pattern": "*.rb" }],
+        }),
+        json!({
+            "name": "Ruby-LSP",
+            "command": "ruby-lsp",
+            "filetypes": [{ "pattern": "*.rake" }],
+        }),
+    ];
+    let result = parse_entries(&entries);
+    // First in source order wins; the case-variant is a duplicate.
+    assert_eq!(result.descriptors.len(), 1);
+    assert_eq!(result.descriptors[0].name, "ruby-lsp");
+    assert!(result
+        .errors
+        .iter()
+        .any(|e| matches!(e.kind, LspDescriptorErrorKind::DuplicateName)));
 }

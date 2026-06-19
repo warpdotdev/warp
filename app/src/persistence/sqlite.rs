@@ -1500,7 +1500,7 @@ pub(super) struct WorkspaceLanguageServers {
     pub custom: HashMap<PathBuf, HashMap<String, EnablementState>>,
 }
 
-fn get_all_workspace_language_servers_by_workspace(
+pub(super) fn get_all_workspace_language_servers_by_workspace(
     conn: &mut SqliteConnection,
 ) -> Result<WorkspaceLanguageServers, diesel::result::Error> {
     use schema::workspace_language_server::dsl::*;

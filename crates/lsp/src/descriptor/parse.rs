@@ -11,7 +11,10 @@ use std::collections::{BTreeMap, HashSet};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::validate::{check_supported_glob_features, LspDescriptorError, LspDescriptorErrorKind};
+use super::validate::{
+    check_command, check_name, check_supported_glob_features, is_reserved_name, LspDescriptorError,
+    LspDescriptorErrorKind,
+};
 use super::{LspFiletypePattern, LspServerDescriptor};
 
 /// Result of parsing the `[[editor.language_servers]]` array.
@@ -39,12 +42,13 @@ pub fn parse_entries(entries: &[Value]) -> LspParseResult {
         }
     }
 
-    // Dedupe by `name`, preserving the first-seen entry and reporting later
-    // ones as errors.
+    // Dedupe by `name`, case-insensitively, preserving the first-seen entry
+    // and reporting later ones as errors. Case folding mirrors the reserved-
+    // name and footer-label rules so `ruby-lsp` and `Ruby-LSP` collide.
     let mut seen_names: HashSet<String> = HashSet::new();
     let mut deduped: Vec<LspServerDescriptor> = Vec::with_capacity(descriptors.len());
     for descriptor in descriptors {
-        if seen_names.insert(descriptor.name.clone()) {
+        if seen_names.insert(descriptor.name.to_ascii_lowercase()) {
             deduped.push(descriptor);
         } else {
             errors.push(LspDescriptorError {
@@ -93,6 +97,24 @@ fn parse_single(value: &Value) -> Result<LspServerDescriptor, Vec<LspDescriptorE
         }
     };
 
+    // Unknown fields are captured by serde but logged so the ignore is visible.
+    warn_unknown_fields(&raw.unknown_fields, &name);
+
+    // Name constraints and reserved-name check (invariants 1, 2, 23). The name
+    // is present, so record any violation and keep collecting so every problem
+    // with the entry surfaces at once.
+    if let Some(kind) = check_name(&name) {
+        errors.push(LspDescriptorError {
+            entry_name: Some(name.clone()),
+            kind,
+        });
+    } else if is_reserved_name(&name) {
+        errors.push(LspDescriptorError {
+            entry_name: Some(name.clone()),
+            kind: LspDescriptorErrorKind::ReservedName,
+        });
+    }
+
     let command = match raw.command.as_deref() {
         Some(c) if !c.trim().is_empty() => c.to_string(),
         _ => {
@@ -103,6 +125,16 @@ fn parse_single(value: &Value) -> Result<LspServerDescriptor, Vec<LspDescriptorE
             return Err(errors);
         }
     };
+
+    // Command trust boundary (invariants 1, 23): the literal command must be
+    // absolute or a bare PATH-resolved name; relative-with-separators forms are
+    // cwd-dependent and rejected.
+    if let Some(kind) = check_command(&command) {
+        errors.push(LspDescriptorError {
+            entry_name: Some(name.clone()),
+            kind,
+        });
+    }
 
     let mut filetypes: Vec<LspFiletypePattern> = Vec::new();
     for raw_pattern in &raw.filetypes {
@@ -152,6 +184,21 @@ fn anonymous_name_hint(value: &Value) -> Option<String> {
         .get("name")
         .and_then(|n| n.as_str())
         .map(|s| s.to_string())
+}
+
+/// Logs one "ignored" warning per unknown top-level key (the ones serde routed
+/// into `RawDescriptor::unknown_fields`), so the silent drop of
+/// forward-compatible fields stays visible in the log. Only the entry `name`
+/// (when valid) and the structural key are logged — never a field value.
+fn warn_unknown_fields(unknown_fields: &BTreeMap<String, Value>, name: &str) {
+    let entry = if check_name(name).is_none() {
+        name
+    } else {
+        "anonymous"
+    };
+    for key in unknown_fields.keys() {
+        log::warn!("editor.language_servers: entry `{entry}` has unknown field `{key}` (ignored)");
+    }
 }
 
 /// Converts one raw `filetypes` entry into a compiled `LspFiletypePattern`.
@@ -250,6 +297,11 @@ struct RawDescriptor {
     env: BTreeMap<String, String>,
     #[serde(default)]
     initialization_options: Option<Value>,
+    /// Unrecognized top-level keys, captured so they can be logged as ignored
+    /// rather than silently dropped (unknown fields stay forward-compatible —
+    /// we deliberately do not use `deny_unknown_fields`).
+    #[serde(flatten)]
+    unknown_fields: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]

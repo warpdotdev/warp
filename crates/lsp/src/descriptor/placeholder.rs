@@ -117,10 +117,13 @@ fn resolve_placeholder(name: &str, ctx: &LspPlaceholderContext) -> Option<String
         "workspace_root" => Some(path_to_string(&ctx.workspace_root)),
         "workspace_slug" => Some(ctx.workspace_slug.clone()),
         "cache_dir" => Some(path_to_string(&ctx.cache_dir)),
-        other => other
-            .strip_prefix(ENV_PREFIX)
-            // Undefined variable expands to the empty string.
-            .map(|env_name| std::env::var(env_name).unwrap_or_default()),
+        // Undefined variable expands to the empty string and is logged once.
+        other => other.strip_prefix(ENV_PREFIX).map(|env_name| {
+            std::env::var(env_name).unwrap_or_else(|_| {
+                warn_undefined_env(name, ctx);
+                String::new()
+            })
+        }),
     }
 }
 
@@ -135,7 +138,20 @@ fn warn_unknown(name: &str, ctx: &LspPlaceholderContext) {
         .expect("warned set lock poisoned")
         .insert(name.to_string());
     if is_new {
-        log::warn!("unknown LSP descriptor placeholder {{{{{name}}}}} (passed through verbatim)",);
+        log::warn!("unknown LSP descriptor placeholder `{name}` (passed through verbatim)");
+    }
+}
+
+fn warn_undefined_env(placeholder: &str, ctx: &LspPlaceholderContext) {
+    let is_new = ctx
+        .warned
+        .lock()
+        .expect("warned set lock poisoned")
+        .insert(placeholder.to_string());
+    if is_new {
+        log::warn!(
+            "LSP descriptor placeholder `{placeholder}` references an unset environment variable (expands to empty)"
+        );
     }
 }
 

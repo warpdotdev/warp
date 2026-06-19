@@ -5,6 +5,7 @@ use ai::workspace::WorkspaceMetadata;
 use chrono::Utc;
 use cloud_object_persistence::to_cloud_object_permissions;
 use diesel::connection::SimpleConnection;
+use lsp::supported_servers::LSPServerType;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
@@ -16,8 +17,6 @@ use super::{
     read_sqlite_data, save_app_state, save_codebase_index_metadata, setup_database, start_writer,
     upsert_workspace_custom_language_server, upsert_workspace_language_server,
 };
-use lsp::supported_servers::LSPServerType;
-
 use crate::ai::persisted_workspace::EnablementState;
 use crate::app_state::{
     AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,

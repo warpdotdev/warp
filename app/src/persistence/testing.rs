@@ -1,9 +1,12 @@
 //! Module with integration test-only util methods setting up sqlite.
 
+use std::path::Path;
+
 use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl};
 
-use super::sqlite::init_db;
+use super::sqlite::{get_all_workspace_language_servers_by_workspace, init_db};
 use super::{schema, PersistenceScope};
+use crate::ai::persisted_workspace::EnablementState;
 
 /// Updates the 'user' and 'host' columns for stored blocks to the given values.
 ///
@@ -46,4 +49,25 @@ pub fn set_user_and_hostname_for_commands(user: String, hostname: String) {
     ))
     .execute(&mut conn)
     .expect("Failed to update user and hostname for persisted commands.");
+}
+
+/// Reads the persisted enablement of a custom LSP server (`kind = 'Custom'`)
+/// the way a fresh app launch does: through the same loader, which inner-joins
+/// `workspace_language_server` against `workspace_metadata`. An orphaned custom
+/// row — one whose `workspace_metadata` parent was never written, or was
+/// deleted by metadata cleanup — is invisible to that join, exactly as it would
+/// be on the next launch.
+///
+/// Returns `Some(state)` when a surviving row exists for `(repo_path, name)`,
+/// or `None` when nothing survives the reload.
+pub fn persisted_custom_lsp_enablement(repo_path: &Path, name: &str) -> Option<EnablementState> {
+    let mut conn =
+        init_db(&PersistenceScope::App).expect("Should be able to establish sqlite connection.");
+    let servers = get_all_workspace_language_servers_by_workspace(&mut conn)
+        .expect("reading persisted workspace language servers should succeed");
+    servers
+        .custom
+        .get(repo_path)
+        .and_then(|by_name| by_name.get(name))
+        .cloned()
 }

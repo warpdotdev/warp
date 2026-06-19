@@ -404,69 +404,70 @@ impl CodeFooterView {
             })
         });
 
-        // Built-in install-status detection would re-label the button to the
-        // built-in's `binary_name()`, stomping the custom descriptor's name.
-        // For customs, `lsp_repo_status` stays `None` and rendering goes
-        // through `compute_custom_status_message`.
+        // Custom-vs-built-in status rule lives in `initial_repo_status_for_path`.
+        // For customs it yields `None` (no install state) and rendering goes
+        // through `compute_custom_status_message`; for built-ins it yields the
+        // detected install status.
         #[cfg(feature = "local_fs")]
-        let initial_status: Option<LspRepoStatus> =
-            if matches!(lsp_server, Some(ResolvedLspServer::Custom(_))) {
-                None
-            } else {
-                let status = Self::detect_installation_status(&path, ctx);
+        let initial_status = Self::initial_repo_status_for_path(&path, ctx);
 
-                // Update button label based on initial status (handles cached results)
-                if let Some(enable_button) = &enable_lsp_button {
-                    if let Some(label) = Self::button_label_for_status(&status) {
-                        enable_button.update(ctx, |button, ctx| {
-                            button.set_label(label, ctx);
-                        });
-                    }
+        // Built-ins have an install flow (customs yield `None` above and have
+        // none): seed the button label from the detected status and subscribe
+        // to install-status updates for them only. Built-in install-status
+        // detection would otherwise re-label the button to the built-in's
+        // `binary_name()`, stomping a custom descriptor's name.
+        #[cfg(feature = "local_fs")]
+        if let Some(status) = &initial_status {
+            // Update button label based on initial status (handles cached results)
+            if let Some(enable_button) = &enable_lsp_button {
+                if let Some(label) = Self::button_label_for_status(status) {
+                    enable_button.update(ctx, |button, ctx| {
+                        button.set_label(label, ctx);
+                    });
+                }
+            }
+
+            // Subscribe to InstallStatusUpdate events from PersistedWorkspace
+            let persisted = PersistedWorkspace::handle(ctx);
+            ctx.subscribe_to_model(&persisted, move |me, _model_handle, event, ctx| {
+                // Only handle InstallStatusUpdate events for our server type
+                let PersistedWorkspaceEvent::InstallStatusUpdate {
+                    server_type: event_server_type,
+                    status,
+                } = event
+                else {
+                    return;
+                };
+
+                let FooterMode::SingleFile { path, .. } = &me.mode else {
+                    return;
+                };
+
+                let Some(current_server_type) =
+                    LanguageId::from_path(path).map(|id| id.server_type())
+                else {
+                    return;
+                };
+
+                // Only update if the event is for the server type we're tracking
+                if *event_server_type != current_server_type {
+                    return;
                 }
 
-                // Subscribe to InstallStatusUpdate events from PersistedWorkspace
-                let persisted = PersistedWorkspace::handle(ctx);
-                ctx.subscribe_to_model(&persisted, move |me, _model_handle, event, ctx| {
-                    // Only handle InstallStatusUpdate events for our server type
-                    let PersistedWorkspaceEvent::InstallStatusUpdate {
-                        server_type: event_server_type,
-                        status,
-                    } = event
-                    else {
-                        return;
-                    };
+                // Convert LSPInstallationStatus to LspRepoStatus
+                let new_status =
+                    LspRepoStatus::from_installation_status(status, *event_server_type);
 
-                    let FooterMode::SingleFile { path, .. } = &me.mode else {
-                        return;
-                    };
-
-                    let Some(current_server_type) =
-                        LanguageId::from_path(path).map(|id| id.server_type())
-                    else {
-                        return;
-                    };
-
-                    // Only update if the event is for the server type we're tracking
-                    if *event_server_type != current_server_type {
-                        return;
-                    }
-
-                    // Convert LSPInstallationStatus to LspRepoStatus
-                    let new_status =
-                        LspRepoStatus::from_installation_status(status, *event_server_type);
-
-                    if let FooterMode::SingleFile {
-                        lsp_repo_status, ..
-                    } = &mut me.mode
-                    {
-                        *lsp_repo_status = Some(new_status);
-                    }
-                    me.update_enable_button_label(ctx);
-                    ctx.notify();
-                });
-
-                Some(status)
-            };
+                if let FooterMode::SingleFile {
+                    lsp_repo_status, ..
+                } = &mut me.mode
+                {
+                    *lsp_repo_status = Some(new_status);
+                }
+                me.update_enable_button_label(ctx);
+                ctx.notify();
+            });
+        }
         #[cfg(not(feature = "local_fs"))]
         let initial_status: Option<LspRepoStatus> = None;
 
@@ -749,6 +750,26 @@ impl CodeFooterView {
         })
     }
 
+    /// Initial `lsp_repo_status` for a SingleFile `path`. The single source of
+    /// the custom-vs-built-in rule: custom-resolved paths have no install state
+    /// (customs have no install flow), so they get `None`; built-ins get their
+    /// detected install status. Shared by footer construction and
+    /// `clear_server_subscription` so the two cannot drift.
+    #[cfg(feature = "local_fs")]
+    fn initial_repo_status_for_path(
+        path: &std::path::Path,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<LspRepoStatus> {
+        if matches!(
+            resolve_server_for_path(path, ctx),
+            Some(ResolvedLspServer::Custom(_))
+        ) {
+            None
+        } else {
+            Some(Self::detect_installation_status(path, ctx))
+        }
+    }
+
     /// Updates the enable button label based on the current CTA-worthy repo statuses.
     /// Hides the button when no CTAs remain.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -814,7 +835,9 @@ impl CodeFooterView {
             button.set_disabled(true, ctx);
         });
 
-        // Set initial status and kick off installation status detection
+        // Recompute the repo status using the same custom-vs-built-in rule as
+        // construction: custom-resolved paths have no install state and get
+        // `None`, built-ins get their detected install status.
         #[cfg(feature = "local_fs")]
         if let FooterMode::SingleFile {
             path,
@@ -822,7 +845,7 @@ impl CodeFooterView {
             ..
         } = &mut self.mode
         {
-            *lsp_repo_status = Some(Self::detect_installation_status(path, ctx));
+            *lsp_repo_status = Self::initial_repo_status_for_path(path, ctx);
             self.update_enable_button_label(ctx);
         }
         #[cfg(not(feature = "local_fs"))]

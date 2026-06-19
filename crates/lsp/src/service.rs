@@ -21,7 +21,7 @@ use serde_json::Value;
 use simple_logger::SimpleLogger;
 use warp_util::on_cancel::OnCancelFutureExt;
 
-use crate::config::{lsp_uri_to_path, path_to_lsp_uri, LanguageId};
+use crate::config::{lsp_uri_to_path, path_to_lsp_uri};
 use crate::types::{
     HoverResult, LspDefinitionLocation, ReferenceLocation, TextDocumentContentChangeEvent,
     TextEdit, WatchedFileChangeEvent,
@@ -487,6 +487,7 @@ impl<'a> TextDocumentService<'a> {
         path: &Path,
         content: String,
         initial_version: usize,
+        language_id: String,
     ) -> Result<()> {
         {
             // Drop the guard before await
@@ -513,17 +514,6 @@ impl<'a> TextDocumentService<'a> {
                 path.display()
             ),
         );
-
-        // Determine language ID from the file path
-        let language_id = LanguageId::from_path(path)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Could not determine language ID for file: {}",
-                    path.display()
-                )
-            })?
-            .lsp_language_identifier()
-            .to_owned();
 
         let did_open_params = DidOpenTextDocumentParams {
             text_document: TextDocumentItem {
