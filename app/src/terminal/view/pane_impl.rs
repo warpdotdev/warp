@@ -38,7 +38,7 @@ use crate::pane_group::pane::view::header::components::{
 use crate::pane_group::pane::view::header::{render_pane_header_draggable, PANE_HEADER_HEIGHT};
 use crate::pane_group::pane::view::PaneHeaderAction;
 use crate::pane_group::pane::{view, PaneStack};
-use crate::pane_group::{BackingView, SplitPaneState};
+use crate::pane_group::{BackingView, SplitPaneState, TOGGLE_MAXIMIZE_PANE_BINDING_NAME};
 use crate::settings::app_installation_detection::{
     UserAppInstallDetectionSettings, UserAppInstallStatus,
 };
@@ -701,7 +701,7 @@ impl BackingView for TerminalView {
                 MenuItemFields::toggle_pane_action(is_maximized)
                     .with_on_select_action(TerminalAction::ToggleMaximizePane)
                     .with_key_shortcut_label(keybinding_name_to_display_string(
-                        "pane_group:toggle_maximize_pane",
+                        TOGGLE_MAXIMIZE_PANE_BINDING_NAME,
                         ctx,
                     ))
                     .into_item(),

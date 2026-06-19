@@ -100,19 +100,21 @@ fn test_toggle_maximize_pane_binding_is_editable() {
         app.update(crate::pane_group::init);
 
         app.update(|ctx| {
-            // The maximize / minimize pane action is registered as an editable binding so
+            use crate::pane_group::TOGGLE_MAXIMIZE_PANE_BINDING_NAME;
+
+            // The toggle-maximize-pane action is registered as an editable binding so
             // it can be assigned a shortcut in Settings → Keyboard shortcuts.
             assert!(
                 ctx.editable_bindings()
-                    .any(|binding| binding.name == "pane_group:toggle_maximize_pane"),
-                "pane_group:toggle_maximize_pane should be registered as an editable binding"
+                    .any(|binding| binding.name == TOGGLE_MAXIMIZE_PANE_BINDING_NAME),
+                "{TOGGLE_MAXIMIZE_PANE_BINDING_NAME} should be registered as an editable binding"
             );
 
             // It ships with a mac-only default shortcut (cmd-shift-enter) via its custom
             // action; other platforms have no default until the user assigns one. Either
             // way, whatever resolves here is what the pane header menu item surfaces.
             let default =
-                keybinding_name_to_display_string("pane_group:toggle_maximize_pane", ctx);
+                keybinding_name_to_display_string(TOGGLE_MAXIMIZE_PANE_BINDING_NAME, ctx);
             if OperatingSystem::get().is_mac() {
                 assert_eq!(Some("⇧⌘⏎"), default.as_deref());
             } else {
@@ -121,7 +123,7 @@ fn test_toggle_maximize_pane_binding_is_editable() {
 
             // A reassigned shortcut resolves to its display string on every platform.
             ctx.set_custom_trigger(
-                "pane_group:toggle_maximize_pane".to_owned(),
+                TOGGLE_MAXIMIZE_PANE_BINDING_NAME.to_owned(),
                 Trigger::Keystrokes(vec![Keystroke::parse("cmd-shift-M").unwrap()]),
             );
 
@@ -132,7 +134,7 @@ fn test_toggle_maximize_pane_binding_is_editable() {
             };
             assert_eq!(
                 Some(displayed_keybinding),
-                keybinding_name_to_display_string("pane_group:toggle_maximize_pane", ctx)
+                keybinding_name_to_display_string(TOGGLE_MAXIMIZE_PANE_BINDING_NAME, ctx)
                     .as_deref()
             );
         });
