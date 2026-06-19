@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 use std::fs::read;
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 use std::path::Path;
 use std::time::Duration;
 
+use command::blocking::Command;
 use prost::Message;
 use warpui::integration::{AssertionOutcome, TestStep};
 use warpui::{async_assert, SingletonEntity};
@@ -245,9 +246,6 @@ pub fn capture_impl_artifacts() -> TestStep {
                 // Persist the impl `git diff` to a dedicated file so `on_finish`'s
                 // CODE_DIFF_OUTPUT_FILE still works for whichever conversation
                 // happens to be active at finish time.
-                use std::io::Write;
-
-                use command::blocking::Command;
                 let impl_diff_path = std::env::var(IMPL_CODE_DIFF_OUTPUT_FILE_ENV_VAR)
                     .unwrap_or_else(|_| "/tmp/impl_code_diff.txt".to_owned());
                 let edited_files = collect_edited_files(conversation);

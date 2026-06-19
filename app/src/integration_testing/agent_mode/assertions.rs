@@ -5,7 +5,7 @@
 
 use warp_multi_agent_api as api;
 use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
-use warpui::{integration_assert, EntityId, SingletonEntity};
+use warpui::{integration_assert, EntityId, SingletonEntity as _};
 
 use super::llm_judge::{LLMJudge, LLMJudgeConfig};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
@@ -776,7 +776,9 @@ pub fn assert_llm_judge_whole_conversation_passes(
 /// or the output cannot be retrieved. Intended for eval assertion callbacks
 /// that need to inspect the agent's last message without accessing the
 /// conversation model directly.
-pub fn on_final_exchange_text(f: impl Fn(&str) -> AssertionOutcome + 'static) -> AssertionCallback {
+pub fn assert_on_final_exchange_text(
+    f: impl Fn(&str) -> AssertionOutcome + 'static,
+) -> AssertionCallback {
     Box::new(move |app, window_id| {
         let terminal_view = terminal_view(app, window_id, 0, 0);
         BlocklistAIHistoryModel::handle(app).update(app, |history_model, _| {
