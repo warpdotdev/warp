@@ -108,18 +108,21 @@ fn test_toggle_maximize_pane_binding_is_editable() {
                 "pane_group:toggle_maximize_pane should be registered as an editable binding"
             );
 
-            // It ships without a default keystroke, so nothing is shown next to the menu
-            // item until the user assigns one.
-            assert_eq!(
-                None,
-                keybinding_name_to_display_string("pane_group:toggle_maximize_pane", ctx)
-            );
+            // It ships with a mac-only default shortcut (cmd-shift-enter) via its custom
+            // action; other platforms have no default until the user assigns one. Either
+            // way, whatever resolves here is what the pane header menu item surfaces.
+            let default =
+                keybinding_name_to_display_string("pane_group:toggle_maximize_pane", ctx);
+            if OperatingSystem::get().is_mac() {
+                assert_eq!(Some("⇧⌘⏎"), default.as_deref());
+            } else {
+                assert_eq!(None, default);
+            }
 
-            // Once a shortcut is assigned, it resolves to a display string that the pane
-            // header menu item surfaces.
+            // A reassigned shortcut resolves to its display string on every platform.
             ctx.set_custom_trigger(
                 "pane_group:toggle_maximize_pane".to_owned(),
-                Trigger::Keystrokes(vec![Keystroke::parse("cmd-shift-m").unwrap()]),
+                Trigger::Keystrokes(vec![Keystroke::parse("cmd-shift-M").unwrap()]),
             );
 
             let displayed_keybinding = if OperatingSystem::get().is_mac() {
