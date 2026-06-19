@@ -1,4 +1,4 @@
-//! Pure-logic unit tests for the `json_tree` component (Phase 1, APP-2527).
+//! Pure-logic unit tests for the `json_tree` component.
 //!
 //! These tests cover only the data-layer functions and types: annotation
 //! formatting, long-string detection, state management, and value rendering.
@@ -139,6 +139,48 @@ fn toggle_nested_path_independent_of_parent() {
 
     assert!(state.is_expanded(&parent, 1));
     assert!(!state.is_expanded(&child, 1));
+}
+
+// -----------------------------------------------------------------------
+// JsonTreeState — long-string expansion (toggle_string / is_string_expanded)
+// -----------------------------------------------------------------------
+
+#[test]
+fn string_collapsed_by_default() {
+    let state = JsonTreeState::default();
+    let path = vec![PathSegment::Key("summary".to_string())];
+    assert!(!state.is_string_expanded(&path));
+}
+
+#[test]
+fn toggle_string_expands_then_collapses() {
+    let path = vec![PathSegment::Key("body".to_string())];
+    let mut state = JsonTreeState::default();
+
+    // Default: collapsed.
+    assert!(!state.is_string_expanded(&path));
+
+    // First toggle: collapsed → expanded.
+    state.toggle_string(path.clone());
+    assert!(state.is_string_expanded(&path));
+
+    // Second toggle: expanded → collapsed.
+    state.toggle_string(path.clone());
+    assert!(!state.is_string_expanded(&path));
+}
+
+#[test]
+fn toggle_string_is_independent_of_node_expansion() {
+    let path = vec![PathSegment::Key("note".to_string())];
+    let mut state = JsonTreeState::default();
+
+    // Toggling a string does not affect node expansion state for the same path.
+    state.toggle_string(path.clone());
+    assert!(state.is_string_expanded(&path));
+    // Node expansion at depth 0 is still the default (expanded).
+    assert!(state.is_expanded(&path, 0));
+    // Node expansion at depth 1 is still the default (collapsed).
+    assert!(!state.is_expanded(&path, 1));
 }
 
 // -----------------------------------------------------------------------

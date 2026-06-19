@@ -225,6 +225,13 @@ pub(crate) fn mcp_result_to_renderable(result: &CallMCPToolResult) -> McpRendera
     }
 }
 
+/// Identifies which of the two JSON trees (request or response) an action targets.
+#[derive(Debug, Clone)]
+pub enum McpTree {
+    Request,
+    Response,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestedActionViewType {
     Command,
@@ -266,14 +273,16 @@ pub enum RequestedCommandViewAction {
     OpenActiveAgentProfileEditor,
     SelectText,
     /// Toggle the expanded/collapsed state of an object or array node in the
-    /// MCP request/response JSON tree.
+    /// MCP request or response JSON tree.
     ToggleJsonNode {
         path: Vec<PathSegment>,
+        tree: McpTree,
     },
     /// Toggle the expanded/collapsed state of a long string value in the MCP
-    /// request/response JSON tree.
+    /// request or response JSON tree.
     ToggleJsonString {
         path: Vec<PathSegment>,
+        tree: McpTree,
     },
 }
 
@@ -321,11 +330,13 @@ pub struct RequestedCommandView {
     mcp_content_selection_handle: SelectionHandle,
     mcp_content_selected_text: Arc<std::sync::RwLock<Option<String>>>,
 
-    // Structured request data and expansion state for JSON tree rendering.
+    // Structured request data and per-tree expansion state for JSON tree rendering.
     // `mcp_request` is populated from the stream as soon as the tool name
-    // and arguments are known.
+    // and arguments are known. Separate states ensure request-tree paths start
+    // at depth 0 and are not confused with response-tree paths.
     mcp_request: Option<McpRequest>,
-    mcp_tree_state: JsonTreeState,
+    mcp_request_tree_state: JsonTreeState,
+    mcp_response_tree_state: JsonTreeState,
 }
 
 impl RequestedCommandView {
@@ -561,7 +572,8 @@ impl RequestedCommandView {
             mcp_content_selection_handle: SelectionHandle::default(),
             mcp_content_selected_text: Arc::new(std::sync::RwLock::new(None)),
             mcp_request: None,
-            mcp_tree_state: Default::default(),
+            mcp_request_tree_state: Default::default(),
+            mcp_response_tree_state: Default::default(),
         }
     }
 
@@ -1731,13 +1743,21 @@ impl TypedActionView for RequestedCommandView {
             RequestedCommandViewAction::SelectText => {
                 ctx.emit(RequestedCommandViewEvent::TextSelected);
             }
-            RequestedCommandViewAction::ToggleJsonNode { path } => {
+            RequestedCommandViewAction::ToggleJsonNode { path, tree } => {
                 let depth = path.len();
-                self.mcp_tree_state.toggle(path.clone(), depth);
+                let path = path.clone();
+                match tree {
+                    McpTree::Request => self.mcp_request_tree_state.toggle(path, depth),
+                    McpTree::Response => self.mcp_response_tree_state.toggle(path, depth),
+                }
                 ctx.notify();
             }
-            RequestedCommandViewAction::ToggleJsonString { path } => {
-                self.mcp_tree_state.toggle_string(path.clone());
+            RequestedCommandViewAction::ToggleJsonString { path, tree } => {
+                let path = path.clone();
+                match tree {
+                    McpTree::Request => self.mcp_request_tree_state.toggle_string(path),
+                    McpTree::Response => self.mcp_response_tree_state.toggle_string(path),
+                }
                 ctx.notify();
             }
         }
