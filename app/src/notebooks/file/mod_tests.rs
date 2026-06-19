@@ -13,9 +13,9 @@ use warp_editor::render::model::BlockItem;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
 use warpui::platform::WindowStyle;
-use warpui::{App, SingletonEntity, View};
+use warpui::{App, SingletonEntity, TypedActionView, View};
 
-use super::{FileNotebookView, FileState, MarkdownDisplayMode, SourceFile};
+use super::{FileNotebookAction, FileNotebookView, FileState, MarkdownDisplayMode, SourceFile};
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -375,6 +375,75 @@ fn test_markdown_file_detection() {
     assert!(!is_markdown_file("README.txt"));
     assert!(!is_markdown_file("main.rs"));
     assert!(!is_markdown_file("notes"));
+}
+
+#[test]
+fn test_markdown_toggle_is_noop_for_non_markdown_pane() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+
+        // A static pane has no backing file path, so `is_markdown_file()` is false.
+        // The toggle keybinding is registered view-wide, so firing it here must not
+        // switch display modes (only markdown panes expose the rendered/raw toggle).
+        handle.update(&mut app, |file_notebook, ctx| {
+            file_notebook.open_static("Plain pane", "just some text", ctx);
+            file_notebook.handle_action(
+                &FileNotebookAction::ToggleMarkdownDisplayMode(MarkdownDisplayMode::Raw),
+                ctx,
+            );
+        });
+
+        let mode = handle.read(&app, |view, _ctx| view.markdown_display_mode);
+        assert_eq!(
+            mode,
+            MarkdownDisplayMode::Rendered,
+            "toggling display mode must be a no-op when the pane is not a markdown file"
+        );
+    });
+}
+
+#[test]
+fn test_markdown_toggle_switches_markdown_pane_to_raw() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+        let session = Arc::new(Session::test());
+        handle
+            .update(&mut app, |file_notebook, ctx| {
+                file_notebook.open_local("../README.md", Some(session), ctx);
+
+                let file_id = file_notebook
+                    .file_id
+                    .expect("File should be opened and have a file_id");
+
+                let future_handle = FileModel::as_ref(ctx)
+                    .get_future_handle(file_id)
+                    .expect("Loading future should be present");
+
+                ctx.await_spawned_future(future_handle.future_id())
+            })
+            .await;
+
+        // A markdown pane honors the toggle keybinding and switches to raw mode.
+        handle.update(&mut app, |file_notebook, ctx| {
+            assert!(
+                file_notebook.is_markdown_file(),
+                "README.md should be detected as a markdown file"
+            );
+            file_notebook.handle_action(
+                &FileNotebookAction::ToggleMarkdownDisplayMode(MarkdownDisplayMode::Raw),
+                ctx,
+            );
+        });
+
+        let mode = handle.read(&app, |view, _ctx| view.markdown_display_mode);
+        assert_eq!(
+            mode,
+            MarkdownDisplayMode::Raw,
+            "toggling a markdown pane should switch it to raw mode"
+        );
+    });
 }
 
 #[test]
