@@ -123,10 +123,14 @@ eval set -- "$PARAMS"
 # Statically compile the CLI and warpctrl artifacts so they can run on older Linux distros.
 if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
   TARGET_TRIPLE="${BUILD_ARCH}-unknown-linux-musl"
+  source "$WORKSPACE_ROOT_DIR/script/linux/configure_musl_toolchain" "$TARGET_TRIPLE"
+  # Make sure we have the rust musl target available.
+  rustup target add "$TARGET_TRIPLE"
 fi
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT_DIR/target${TARGET_TRIPLE:+/$TARGET_TRIPLE}}"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT_DIR/target}"
+CARGO_TARGET_OUTPUT_ROOT="$CARGO_TARGET_DIR${TARGET_TRIPLE:+/$TARGET_TRIPLE}"
 
-DIST_DIR="$CARGO_TARGET_DIR/dist"
+DIST_DIR="$CARGO_TARGET_OUTPUT_ROOT/dist"
 
 if [[ $DEBUG = true ]]; then
   CARGO_PROFILE="dev"
@@ -148,9 +152,9 @@ else
 fi
 
 if [[ "$CARGO_PROFILE" == "dev" ]]; then
-  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_DIR/debug"
+  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_OUTPUT_ROOT/debug"
 else
-  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_DIR/$CARGO_PROFILE"
+  CARGO_TARGET_OUTPUT_DIR="$CARGO_TARGET_OUTPUT_ROOT/$CARGO_PROFILE"
 fi
 # NOTE: if you change this path, update the "Clean stale bundle output"
 # steps in .github/workflows/create_release.yml so they continue to wipe
@@ -239,14 +243,17 @@ export APPIMAGE_NAME="$APP_NAME-$BUILD_ARCH.AppImage"
 # then exit.  We use this script to invoke `cargo check` to ensure that we are
 # using the same feature flags and profile that we would be using in production.
 if [[ "$CHECK_ONLY" == "true" ]]; then
-  cargo check -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES"
+  cargo check -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" ${TARGET_TRIPLE:+--target $TARGET_TRIPLE}
   exit 0
 fi
 
 # Build the binary.
 if [[ "$BUILD" == "true" ]]; then
   echo "Building and bundling Warp for channel $RELEASE_CHANNEL and bundle id $BUNDLE_ID"
-  cargo build -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES"
+  cargo build -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" ${TARGET_TRIPLE:+--target $TARGET_TRIPLE}
+
+  exit 0
+
   echo "Making debug copy of '$EXECUTABLE_PATH' at '$DEBUG_EXECUTABLE_PATH'"
   cp "$EXECUTABLE_PATH" "$DEBUG_EXECUTABLE_PATH"
 

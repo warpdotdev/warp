@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+#
+# This script configures a complete musl C and C++ toolchain for a Rust target.
+# Source this script so it can update the caller's environment.
+
+configure_musl_toolchain() {
+  local target="${1:-$(uname -m)-unknown-linux-musl}"
+  local musl_cross_tag="20250929"
+  local musl_cross_sha256
+
+  case "$target" in
+    aarch64-unknown-linux-musl)
+      musl_cross_sha256="28a1d26f14f8ddc3aed31f20705fe696777400eb5952d90470a7e6e2dd1175bb"
+      ;;
+    x86_64-unknown-linux-musl)
+      musl_cross_sha256="6534870abd7dc327fd2e14cc53972d0552b21f47db5769505534f788537e3544"
+      ;;
+    *)
+      echo "Error: unsupported musl target '$target'." >&2
+      return 1
+      ;;
+  esac
+
+  local compiler_prefix
+  local musl_cc=""
+  local musl_cxx=""
+  for compiler_prefix in "$target" "${target/unknown-/}"; do
+    if command -v "$compiler_prefix-gcc" &>/dev/null \
+      && command -v "$compiler_prefix-g++" &>/dev/null; then
+      musl_cc="$(command -v "$compiler_prefix-gcc")"
+      musl_cxx="$(command -v "$compiler_prefix-g++")"
+      break
+    fi
+  done
+
+  if [[ -z "$musl_cc" && "$target" == "$(uname -m)-unknown-linux-musl" ]] \
+    && command -v musl-gcc &>/dev/null \
+    && command -v musl-g++ &>/dev/null; then
+    musl_cc="$(command -v musl-gcc)"
+    musl_cxx="$(command -v musl-g++)"
+  fi
+
+  local musl_cross_root="${WARP_MUSL_CROSS_ROOT:-/tmp/warp-musl-cross}"
+  local install_root="$musl_cross_root/$musl_cross_tag"
+  local toolchain_dir="$install_root/$target"
+  local toolchain_bin="$toolchain_dir/bin"
+
+  if [[ -z "$musl_cc" && -x "$toolchain_bin/$target-gcc" && -x "$toolchain_bin/$target-g++" ]]; then
+    case ":$PATH:" in
+      *":$toolchain_bin:"*) ;;
+      *) export PATH="$toolchain_bin:$PATH" ;;
+    esac
+    musl_cc="$(command -v "$target-gcc")"
+    musl_cxx="$(command -v "$target-g++")"
+  fi
+
+  if [[ -z "$musl_cc" ]]; then
+    if [[ "$(uname -s)" != "Linux" ]]; then
+      echo "Error: no complete C and C++ toolchain for '$target' was found on PATH." >&2
+      echo "Automatic musl-cross installation is only supported on Linux." >&2
+      return 1
+    fi
+
+    local required_command
+    for required_command in curl sha256sum tar; do
+      if ! command -v "$required_command" &>/dev/null; then
+        echo "Error: '$required_command' is required to install the musl toolchain." >&2
+        return 1
+      fi
+    done
+
+    local archive_name="$target.tar.xz"
+    local archive_url="https://github.com/cross-tools/musl-cross/releases/download/$musl_cross_tag/$archive_name"
+    if ! (
+      download_dir=""
+      cleanup_download() {
+        if [[ -n "$download_dir" && -d "$download_dir" ]]; then
+          chmod -R u+w "$download_dir" 2>/dev/null || true
+          rm -rf "$download_dir"
+        fi
+      }
+      trap cleanup_download EXIT
+
+      mkdir -p "$musl_cross_root" || exit 1
+      download_dir="$(mktemp -d "$musl_cross_root/.download-$target.XXXXXX")" || exit 1
+
+      echo "Downloading the $target C and C++ toolchain to $toolchain_dir"
+      curl -fsSL --retry 3 "$archive_url" -o "$download_dir/$archive_name" || exit 1
+      printf '%s  %s\n' "$musl_cross_sha256" "$download_dir/$archive_name" | sha256sum -c - || exit 1
+      tar -xf "$download_dir/$archive_name" -C "$download_dir" || exit 1
+      if [[ ! -x "$download_dir/$target/bin/$target-gcc" \
+        || ! -x "$download_dir/$target/bin/$target-g++" ]]; then
+        echo "Error: the downloaded archive does not contain the expected C and C++ compilers." >&2
+        exit 1
+      fi
+
+      chmod u+w "$download_dir/$target" || exit 1
+      mkdir -p "$install_root" || exit 1
+      if [[ -x "$toolchain_bin/$target-gcc" && -x "$toolchain_bin/$target-g++" ]]; then
+        exit 0
+      fi
+      if [[ -e "$toolchain_dir" ]]; then
+        chmod -R u+w "$toolchain_dir" || exit 1
+        rm -rf "$toolchain_dir" || exit 1
+      fi
+      mv "$download_dir/$target" "$toolchain_dir" || exit 1
+    ); then
+      return 1
+    fi
+
+    case ":$PATH:" in
+      *":$toolchain_bin:"*) ;;
+      *) export PATH="$toolchain_bin:$PATH" ;;
+    esac
+    musl_cc="$(command -v "$target-gcc")"
+    musl_cxx="$(command -v "$target-g++")"
+  fi
+
+  local target_env="${target//-/_}"
+  local cargo_target_env
+  cargo_target_env="$(printf '%s' "$target" | tr '[:lower:]-' '[:upper:]_')"
+
+  export "CC_$target_env=$musl_cc"
+  export "CXX_$target_env=$musl_cxx"
+  export "CARGO_TARGET_${cargo_target_env}_LINKER=$musl_cc"
+  export WARP_MUSL_TARGET="$target"
+  export WARP_MUSL_CC="$musl_cc"
+  export WARP_MUSL_CXX="$musl_cxx"
+
+  echo "Configured the $target toolchain with $musl_cc and $musl_cxx"
+}
+
+if [[ -n "${BASH_VERSION:-}" && "${BASH_SOURCE[0]}" == "$0" ]]; then
+  echo "Error: source this script so it can configure the caller's environment." >&2
+  exit 1
+fi
+if [[ -n "${ZSH_VERSION:-}" && "${ZSH_EVAL_CONTEXT:-}" != *:file ]]; then
+  echo "Error: source this script so it can configure the caller's environment." >&2
+  exit 1
+fi
+
+configure_musl_toolchain "$@"
