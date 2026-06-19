@@ -110,6 +110,17 @@ impl TuiInputView {
         self.cursor = 0;
         Some(std::mem::take(&mut self.draft))
     }
+
+    /// Restores a rejected submission unless the user has already started a
+    /// new draft.
+    pub fn restore_submission(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        if !self.draft.is_empty() {
+            return;
+        }
+        self.draft = text;
+        self.cursor = self.char_count();
+        ctx.notify();
+    }
 }
 
 impl Entity for TuiInputView {

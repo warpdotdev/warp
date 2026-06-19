@@ -4,7 +4,7 @@ use settings::{PrivatePreferences, PublicPreferences};
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_multi_agent_api::client_action::Action;
 use warp_multi_agent_api::response_event::{self, stream_finished};
-use warpui::{App, EntityId, SingletonEntity, WindowId};
+use warpui::{App, EntityId, SingletonEntity, ViewHandle, WindowId};
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::platform::WindowStyle;
 use warpui_core::presenter::tui::TuiPresenter;
@@ -74,6 +74,33 @@ fn initialize_tui_app(app: &mut App) {
     });
 }
 
+/// Creates a root view backed by the initialized TUI agent singleton graph.
+fn add_registered_root(app: &mut App) -> (WindowId, ViewHandle<RootTuiView>, AgentSessionOwnerId) {
+    initialize_tui_app(app);
+    let (window_id, root) =
+        app.update(|ctx| ctx.add_tui_window(window_options(), RootTuiView::new));
+    let owner = AgentSessionOwnerId::new(root.id());
+    CoreTuiModel::handle(app).update(app, |model, ctx| {
+        model.register_session(owner, ctx);
+    });
+    (window_id, root, owner)
+}
+
+/// Returns the active conversation and response stream IDs.
+fn active_request(app: &App) -> (AIConversationId, ResponseStreamId) {
+    let (conversation_id, stream) = CoreTuiModel::handle(app).read(app, |model, _| {
+        (
+            model
+                .active_conversation_id()
+                .expect("request should have an active conversation"),
+            model
+                .in_flight_response_stream_for_test()
+                .expect("request should be in flight"),
+        )
+    });
+    let stream_id = stream.read(app, |stream, _| stream.id().clone());
+    (conversation_id, stream_id)
+}
 /// Returns a clone of the in-flight request params for assertions.
 fn in_flight_request_params(app: &App) -> crate::ai::agent::api::RequestParams {
     let stream = CoreTuiModel::handle(app).read(app, |model, _| {
@@ -300,10 +327,9 @@ fn fold_finished_event(
 }
 
 #[test]
-fn submitting_moves_text_into_the_transcript_and_clears_the_focused_input() {
+fn submitting_sends_prompt_and_streamed_response_into_transcript() {
     App::test((), |mut app| async move {
-        let (window_id, root) =
-            app.update(|ctx| ctx.add_tui_window(window_options(), RootTuiView::new));
+        let (window_id, root, owner) = add_registered_root(&mut app);
         let input_id = app.read(|ctx| root.read(ctx, |view, _| view.input.id()));
 
         // The input is focused at construction, so the cursor is owned by it.
@@ -334,17 +360,26 @@ fn submitting_moves_text_into_the_transcript_and_clears_the_focused_input() {
         assert_eq!(frame.cursor, Some((12, input_text_row)));
 
         submit(&app, window_id, input_id);
+        let (conversation_id, stream_id) = active_request(&app);
+        complete_initial_fake_stream(&mut app, owner, conversation_id, &stream_id);
 
         let frame = app.update(|ctx| presenter.present(ctx, &root, area));
         let lines = frame.buffer.to_lines();
 
-        // The submitted text moved into the transcript, which sits above the
-        // input frame.
-        let transcript_row =
-            row_with(&lines, "hello world").expect("the transcript should show the submitted text");
+        // The shared-history transcript shows both the submitted prompt and the
+        // response folded from the fake MAA stream.
+        let transcript_row = row_with(&lines, "hello world")
+            .expect("the transcript should show the submitted prompt");
+        let response_row = row_with(&lines, "first response")
+            .expect("the transcript should show the streamed response");
         assert!(
             transcript_row < first_input_row as usize,
-            "the submitted text should render above the input frame (row {transcript_row}):\n{}",
+            "the submitted prompt should render above the input frame (row {transcript_row}):\n{}",
+            lines.join("\n")
+        );
+        assert!(
+            response_row < first_input_row as usize,
+            "the streamed response should render above the input frame (row {response_row}):\n{}",
             lines.join("\n")
         );
 
@@ -385,42 +420,90 @@ fn tui_initialize_app_registers_agent_singletons_without_terminal_session() {
 }
 
 #[test]
-fn transcript_anchors_newest_entry_to_the_bottom_and_clips_the_top() {
+fn transcript_follows_streamed_output_and_can_scroll_to_older_exchanges() {
     App::test((), |mut app| async move {
-        let (window_id, root) =
-            app.update(|ctx| ctx.add_tui_window(window_options(), RootTuiView::new));
+        let (window_id, root, owner) = add_registered_root(&mut app);
         let input_id = app.read(|ctx| root.read(ctx, |view, _| view.input.id()));
+        type_text(&app, window_id, input_id, "first");
+        submit(&app, window_id, input_id);
+        let (conversation_id, first_stream_id) = active_request(&app);
+        complete_initial_fake_stream(&mut app, owner, conversation_id, &first_stream_id);
 
-        for entry in ["one", "two", "three", "four", "five"] {
-            type_text(&app, window_id, input_id, entry);
-            submit(&app, window_id, input_id);
-        }
+        type_text(&app, window_id, input_id, "second");
+        submit(&app, window_id, input_id);
+        let (follow_up_conversation_id, second_stream_id) = active_request(&app);
+        assert_eq!(follow_up_conversation_id, conversation_id);
+        complete_follow_up_fake_stream(&mut app, owner, conversation_id, &second_stream_id);
 
-        // 7 rows tall leaves only 4 transcript rows above the 3-row input
-        // frame, too few to show all five entries (each entry takes a text row
-        // plus a spacer), so the oldest are clipped off the top.
+        // 7 rows tall leaves a four-row transcript viewport, shorter than the
+        // two complete exchanges and their spacer rows.
         let mut presenter = TuiPresenter::new();
         let area = TuiRect::new(0, 0, 40, 7);
         let frame = app.update(|ctx| presenter.present(ctx, &root, area));
         let lines = frame.buffer.to_lines();
         let rendered = lines.join("\n");
-
-        // The two newest entries are visible, oldest-above-newest (the newest
-        // sits closest to the input).
-        let four_row = row_with(&lines, "four").expect("the second-newest entry should be visible");
-        let five_row = row_with(&lines, "five").expect("the newest entry should be visible");
         assert!(
-            four_row < five_row,
-            "newer entries should sit below older ones:\n{rendered}"
+            rendered.contains("second response"),
+            "new streamed output should be visible after following the bottom:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("first response"),
+            "older output should be above the bottom-following viewport:\n{rendered}"
+        );
+        assert!(
+            root.read(&app, |root, _| root.scroll.offset()) > 0,
+            "the transcript should be scrolled away from the top"
         );
 
-        // The entries that overflow the top are clipped.
-        for clipped in ["one", "two", "three"] {
-            assert!(
-                row_with(&lines, clipped).is_none(),
-                "{clipped:?} should be clipped off the top:\n{rendered}"
+        root.update(&mut app, |root, ctx| {
+            root.scroll.set_offset(0);
+            ctx.notify();
+        });
+        let frame = app.update(|ctx| presenter.present(ctx, &root, area));
+        let rendered = frame.buffer.to_lines().join("\n");
+        assert!(
+            rendered.contains("first response"),
+            "scrolling to the top should reveal older output:\n{rendered}"
+        );
+    });
+}
+
+#[test]
+fn rejected_submission_is_restored_to_the_input() {
+    App::test((), |mut app| async move {
+        let (window_id, root, _owner) = add_registered_root(&mut app);
+        let input_id = app.read(|ctx| root.read(ctx, |view, _| view.input.id()));
+
+        type_text(&app, window_id, input_id, "first");
+        submit(&app, window_id, input_id);
+        type_text(&app, window_id, input_id, "retry this");
+        submit(&app, window_id, input_id);
+
+        let mut presenter = TuiPresenter::new();
+        let area = TuiRect::new(0, 0, 40, 8);
+        let frame = app.update(|ctx| presenter.present(ctx, &root, area));
+        let lines = frame.buffer.to_lines();
+        let input_region = lines[(8 - INPUT_ROWS) as usize..].join("\n");
+        assert!(
+            input_region.contains("retry this"),
+            "a prompt rejected while another request is in flight should be restored:\n{input_region}"
+        );
+
+        let conversation_id = CoreTuiModel::handle(&app).read(&app, |model, _| {
+            model
+                .active_conversation_id()
+                .expect("first prompt should start a conversation")
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history_model, _| {
+            let conversation = history_model
+                .conversation(&conversation_id)
+                .expect("active conversation should exist");
+            assert_eq!(
+                conversation.root_task_exchanges().count(),
+                1,
+                "the rejected prompt should not create another exchange"
             );
-        }
+        });
     });
 }
 

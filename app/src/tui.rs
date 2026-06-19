@@ -25,7 +25,9 @@ use transcript_view::TuiTranscriptView;
 use warp_multi_agent_api::{AgentType, ToolType};
 use warpui::r#async::Timer;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
-use warpui_core::elements::tui::{TuiChildView, TuiColumn, TuiConstrainedBox, TuiElement};
+use warpui_core::elements::tui::{
+    TuiChildView, TuiColumn, TuiConstrainedBox, TuiElement, TuiScrollHandle, TuiScrollable,
+};
 use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};
 use warpui_core::{
@@ -657,12 +659,13 @@ fn tui_request_input(
     }
 }
 
-/// The root TUI view: a transcript that grows upward above a fixed,
-/// bottom-anchored input. It owns both child views and forwards the input's
-/// submissions into the transcript.
+/// The root TUI view: a scrollable transcript above a fixed, bottom-anchored
+/// input. It owns both child views and routes submitted input through the TUI
+/// agent model.
 struct RootTuiView {
     transcript: ViewHandle<TuiTranscriptView>,
     input: ViewHandle<TuiInputView>,
+    scroll: TuiScrollHandle,
 }
 
 impl RootTuiView {
@@ -671,22 +674,54 @@ impl RootTuiView {
         // input dispatches editing actions, so it must be a typed-action view.
         let transcript = ctx.add_tui_view(|_| TuiTranscriptView::default());
         let input = ctx.add_typed_action_tui_view(|_| TuiInputView::default());
+        let scroll = TuiScrollHandle::new();
 
-        // On submission, append the text to the transcript. Routing through the
-        // root (rather than wiring the transcript directly to the input) keeps
-        // the view-ownership boundaries explicit and proves child-view
-        // communication.
-        ctx.subscribe_to_view(&input, |root, _input, event, ctx| match event {
+        // Route submissions through the core model. If a request is rejected,
+        // restore the submitted text so the user can retry it.
+        ctx.subscribe_to_view(&input, |_root, input, event, ctx| match event {
             InputEvent::Submitted(text) => {
                 let text = text.clone();
-                root.transcript
-                    .update(ctx, |transcript, ctx| transcript.append(text, ctx));
+                if let Err(error) = Self::send_prompt(text.clone(), ctx) {
+                    log::error!("failed to send TUI prompt: {error:#}");
+                    input.update(ctx, |input, ctx| input.restore_submission(text, ctx));
+                }
             }
         });
+        // Streamed responses mutate shared history. Follow the bottom and
+        // redraw whenever the core model reports a relevant change.
+        ctx.subscribe_to_model(
+            &CoreTuiModel::handle(ctx),
+            |root, _model, event, ctx| match event {
+                CoreTuiModelEvent::PromptSubmitted { .. }
+                | CoreTuiModelEvent::ConversationUpdated { .. }
+                | CoreTuiModelEvent::RequestFinished { .. } => {
+                    root.scroll.set_offset(u16::MAX);
+                    ctx.notify();
+                }
+            },
+        );
 
         ctx.focus(&input);
+        Self {
+            transcript,
+            input,
+            scroll,
+        }
+    }
 
-        Self { transcript, input }
+    fn send_prompt(prompt: String, ctx: &mut ViewContext<Self>) -> Result<()> {
+        CoreTuiModel::handle(ctx)
+            .update(ctx, |model, ctx| {
+                #[cfg(test)]
+                {
+                    model.send_prompt_for_test(prompt, ctx)
+                }
+                #[cfg(not(test))]
+                {
+                    model.send_prompt(prompt, ctx)
+                }
+            })
+            .map(|_| ())
     }
 }
 
@@ -702,10 +737,10 @@ impl TuiView for RootTuiView {
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         let transcript = TuiChildView::new(&self.transcript, ctx);
         let input = TuiChildView::new(&self.input, ctx);
-
-        // The transcript fills the space above the fixed-height input row.
+        // The scrollable transcript fills the space above the fixed-height
+        // input row. The persistent handle preserves its offset across redraws.
         let column = TuiColumn::new()
-            .flex_child(transcript)
+            .flex_child(TuiScrollable::new(self.scroll.clone(), transcript))
             .child(TuiConstrainedBox::new(input).with_max_rows(INPUT_ROWS));
 
         Box::new(column)
