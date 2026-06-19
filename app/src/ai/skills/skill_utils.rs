@@ -29,6 +29,7 @@ lazy_static! {
 /// Tries to insert or update a skill descriptor in the deduplication map.
 /// If a skill with the same (directory, content) key already exists, keeps the one
 /// from the higher-priority provider based on [`SKILL_PROVIDER_DEFINITIONS`].
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 fn try_insert_skill(
     dedup_map: &mut HashMap<u64, SkillDescriptor>,
     descriptor: SkillDescriptor,
@@ -56,10 +57,12 @@ fn try_insert_skill(
 /// Accumulates file-backed skills from one or more catalogs and keeps the best
 /// representative for each owning-directory-and-content pair.
 #[derive(Default)]
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub(crate) struct SkillDeduplicator {
     dedup_map: HashMap<u64, SkillDescriptor>,
 }
 
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 impl SkillDeduplicator {
     pub(crate) fn insert(&mut self, dir_path: &LocalOrRemotePath, skill: &ParsedSkill) {
         try_insert_skill(
