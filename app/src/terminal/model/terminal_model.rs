@@ -57,9 +57,9 @@ use crate::terminal::event_listener::ChannelEventListener;
 pub use crate::terminal::history::HistoryEntry;
 use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
-    ClearValue, CommandFinishedValue, ExitShellValue, Handler, InitShellValue, InitSubshellValue,
-    PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, PromptMetadata, SSHValue,
-    SourcedRcFileForWarpValue,
+    ClearValue, CommandFinishedValue, CompletionMetadata, ExitShellValue, Handler, InitShellValue,
+    InitSubshellValue, PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, PromptMetadata,
+    SSHValue, SourcedRcFileForWarpValue,
 };
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::completions::{
@@ -2158,6 +2158,73 @@ impl TerminalModel {
     fn emit_handler_event(&mut self, event: HandlerEvent) {
         self.event_proxy.send_handler_event(event);
     }
+    /// Applies the normal command-completion pipeline and its once-per-command side effects.
+    fn complete_command(&mut self, data: CompletionMetadata) {
+        // If we ssh from a doesn't-understand-bracketed-paste shell into one
+        // that enables it, then get disconnected, we'll be stuck in a state
+        // of bracketed paste being enabled, but the local shell doesn't know
+        // how to turn it off (and will never do so).  We forcibly unset the
+        // mode to avoid getting stuck in this state.
+        self.unset_mode(Mode::BracketedPaste);
+
+        // Similar to bracketed paste, above, make sure we quit out of the
+        // alt screen if we're currently in it.  This prevents issues where we
+        // remain in the alt screen after disconnect when we should return to
+        // the blocklist (for the local shell).
+        self.exit_alt_screen(true);
+
+        let block_id = data.next_block_id.to_string();
+        let is_for_in_band_command = self.block_list().active_block().is_in_band_command_block();
+        let finished_block_bootstrap_stage = self.block_list().active_block().bootstrap_stage();
+        self.block_list.complete_active_block_and_advance(data);
+
+        if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
+            if let Err(e) = tx.try_send(OrderedTerminalEventType::CommandExecutionFinished {
+                next_block_id: block_id.into(),
+            }) {
+                log::warn!("Failed to send OrderedTerminalEventType::CommandFinished: {e}");
+            }
+        }
+
+        self.emit_handler_event(HandlerEvent::CommandFinished {
+            command_type: if is_for_in_band_command {
+                CommandType::InBandCommand
+            } else if finished_block_bootstrap_stage == BootstrapStage::PostBootstrapPrecmd {
+                CommandType::User
+            } else {
+                CommandType::Bootstrap
+            },
+        });
+    }
+
+    /// Applies prompt metadata through the normal once-per-block path.
+    fn apply_precmd_to_fresh_block(&mut self, data: PromptMetadata) {
+        self.ignore_bootstrapping_messages = false;
+        let session_id = data.session_id;
+        let mut env_vars = HashMap::new();
+        if let Some(kube_config) = data.kube_config.clone() {
+            env_vars.insert("KUBECONFIG".to_string(), kube_config);
+        }
+        let handled_after_inband = data.was_sent_after_in_band_command();
+        // Preserve the existing alternate-screen no-op until lifecycle acceptance is centralized.
+        if !self.alt_screen_active {
+            self.block_list.apply_precmd_to_active(data);
+        }
+
+        self.emit_handler_event(HandlerEvent::Precmd {
+            session_id: session_id.map(|id| id.into()),
+            handled_after_inband,
+            env_vars,
+        });
+    }
+
+    fn apply_preexec(&mut self, data: PreexecValue) {
+        // Preserve the existing alternate-screen no-op until lifecycle acceptance is centralized.
+        if !self.alt_screen_active {
+            self.block_list.apply_preexec_to_active(data);
+        }
+        self.emit_handler_event(HandlerEvent::Preexec);
+    }
 
     pub fn set_env_var_collection_name(&mut self, value: Option<String>) {
         self.env_var_collection_name = value;
@@ -2699,41 +2766,7 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn command_finished(&mut self, data: CommandFinishedValue) {
-        // If we ssh from a doesn't-understand-bracketed-paste shell into one
-        // that enables it, then get disconnected, we'll be stuck in a state
-        // of bracketed paste being enabled, but the local shell doesn't know
-        // how to turn it off (and will never do so).  We forcibly unset the
-        // mode to avoid getting stuck in this state.
-        self.unset_mode(Mode::BracketedPaste);
-
-        // Similar to bracketed paste, above, make sure we quit out of the
-        // alt screen if we're currently in it.  This prevents issues where we
-        // remain in the alt screen after disconnect when we should return to
-        // the blocklist (for the local shell).
-        self.exit_alt_screen(true);
-
-        let block_id = data.completion_metadata.next_block_id.to_string();
-        let is_for_in_band_command = self.block_list().active_block().is_in_band_command_block();
-        let finished_block_bootstrap_stage = self.block_list().active_block().bootstrap_stage();
-        delegate!(self.command_finished(data));
-
-        if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
-            if let Err(e) = tx.try_send(OrderedTerminalEventType::CommandExecutionFinished {
-                next_block_id: block_id.into(),
-            }) {
-                log::warn!("Failed to send OrderedTerminalEventType::CommandFinished: {e}");
-            }
-        }
-
-        self.emit_handler_event(HandlerEvent::CommandFinished {
-            command_type: if is_for_in_band_command {
-                CommandType::InBandCommand
-            } else if finished_block_bootstrap_stage == BootstrapStage::PostBootstrapPrecmd {
-                CommandType::User
-            } else {
-                CommandType::Bootstrap
-            },
-        });
+        self.complete_command(data.completion_metadata);
     }
 
     fn set_current_working_directory(&mut self, path: String) {
@@ -2756,29 +2789,15 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {
-        self.prompt_only_precmd(data.prompt_metadata);
+        self.apply_precmd_to_fresh_block(data.prompt_metadata);
     }
 
     fn prompt_only_precmd(&mut self, data: PromptMetadata) {
-        self.ignore_bootstrapping_messages = false;
-        let session_id = data.session_id;
-        let mut env_vars = HashMap::new();
-        if let Some(kube_config) = data.kube_config.clone() {
-            env_vars.insert("KUBECONFIG".to_string(), kube_config);
-        }
-        let handled_after_inband = data.was_sent_after_in_band_command();
-        delegate!(self.prompt_only_precmd(data));
-
-        self.emit_handler_event(HandlerEvent::Precmd {
-            session_id: session_id.map(|id| id.into()),
-            handled_after_inband,
-            env_vars,
-        });
+        self.apply_precmd_to_fresh_block(data);
     }
 
     fn preexec(&mut self, data: PreexecValue) {
-        delegate!(self.preexec(data));
-        self.emit_handler_event(HandlerEvent::Preexec);
+        self.apply_preexec(data);
     }
 
     fn bootstrapped(&mut self, value: BootstrappedValue) {
