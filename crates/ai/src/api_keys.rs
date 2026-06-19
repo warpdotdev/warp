@@ -218,6 +218,15 @@ impl ApiKeyManager {
         self.grok_tokens.as_ref()
     }
 
+    /// Returns `true` when a Grok subscription is connected with a usable OAuth
+    /// access token.
+    pub fn has_grok_subscription(&self) -> bool {
+        self.grok_tokens
+            .as_ref()
+            .and_then(GrokTokens::access_token_for_request)
+            .is_some()
+    }
+
     /// Stores (or clears, with `None`) the xAI/Grok OAuth tokens and persists
     /// them to secure storage. No-op when the value is unchanged so we don't
     /// emit spurious events or schedule redundant keychain writes.

@@ -503,6 +503,36 @@ fn api_keys_for_request_includes_expired_grok_token() {
     assert_eq!(result.grok_oauth_access_token, "grok-abc");
 }
 
+#[test]
+fn has_grok_subscription_false_when_not_connected() {
+    let mgr = make_manager(ApiKeys::default());
+    assert!(!mgr.has_grok_subscription());
+}
+
+#[test]
+fn has_grok_subscription_true_when_connected() {
+    let mgr = make_manager_with_grok(
+        ApiKeys::default(),
+        Some(grok_tokens("grok-abc", Some(3600))),
+    );
+    assert!(mgr.has_grok_subscription());
+}
+
+#[test]
+fn has_grok_subscription_true_for_expired_token() {
+    // A connected subscription still counts even when its token is past expiry:
+    // the token is sent anyway and the server is the authority on validity.
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("grok-abc", Some(0))));
+    assert!(mgr.has_grok_subscription());
+}
+
+#[test]
+fn has_grok_subscription_false_when_token_blank() {
+    // A blank token can't be sent, so it does not count as a usable credential.
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("   ", None)));
+    assert!(!mgr.has_grok_subscription());
+}
+
 // ── geap credentials ────────────────────────────────────────────
 
 #[test]

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ai::api_keys::ApiKeyManager;
+use ai::api_keys::{ApiKeyManager, GrokTokens};
 use chrono::Duration;
 use warp_core::features::FeatureFlag;
 use warp_graphql::billing::{AddonCreditsOption, OveragesPricing, PricingInfo};
@@ -680,6 +680,74 @@ fn test_has_any_ai_remaining_false_with_byok_enabled_but_no_key() {
             assert!(
                 !model.has_any_ai_remaining(ctx),
                 "expected has_any_ai_remaining to be false when BYOK is enabled but no key is provided",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_true_with_grok_subscription_connected() {
+    App::test((), |mut app| async move {
+        // Workspace with BYO enabled — the policy a connected Grok
+        // subscription's OAuth token rides on.
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace.billing_metadata.tier.byo_api_key_policy =
+            Some(ByoApiKeyPolicy { enabled: true });
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        // Connect a Grok subscription but provide no pasted API key.
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_grok_tokens(
+                Some(GrokTokens {
+                    access_token: "grok-test-token".to_string(),
+                    ..Default::default()
+                }),
+                ctx,
+            );
+        });
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            // No standard requests remaining, no bonus credits.
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be true when a Grok subscription is connected and BYO is enabled",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_false_with_grok_subscription_but_byo_disabled() {
+    App::test((), |mut app| async move {
+        // No BYO policy: the Grok token can't be sent, so it must not count as
+        // available AI.
+        let (_uid, workspace) = create_test_workspace();
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_grok_tokens(
+                Some(GrokTokens {
+                    access_token: "grok-test-token".to_string(),
+                    ..Default::default()
+                }),
+                ctx,
+            );
+        });
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be false when a Grok subscription is connected but BYO is disabled",
             );
         });
     });
