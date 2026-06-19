@@ -4,14 +4,10 @@
 #![deny(clippy::assertions_on_constants)]
 
 use warp_multi_agent_api as api;
-use warpui::integration::{AssertionCallback, AssertionOutcome};
+use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
 use warpui::{integration_assert, EntityId, SingletonEntity};
 
-use super::llm_judge::agent_judge::{
-    evaluate_rubric_result, parse_agent_judge_result, RubricExpectations, RubricSpec,
-};
 use super::llm_judge::{LLMJudge, LLMJudgeConfig};
-use super::record_pending_runtime_tag;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
@@ -19,6 +15,7 @@ use crate::ai::agent::{
     AIAgentOutputMessageType, AIAgentOutputStatus, AIAgentTextSection, FileEdit,
     FinishedAIAgentOutput, ReadFilesRequest, TodoOperation,
 };
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::integration_testing::view_getters::terminal_view;
 use crate::BlocklistAIHistoryModel;
 
@@ -774,31 +771,19 @@ pub fn assert_llm_judge_whole_conversation_passes(
     })
 }
 
-/// Parses the agentic judge's rubric JSON from the latest exchange of the
-/// active conversation and gates on the default policy: `overall_pass` iff
-/// every rubric item is scored `pass`. See
-/// `assert_rubric_from_final_message_with_expectations` for details.
-pub fn assert_rubric_from_final_message(rubric: &'static RubricSpec) -> AssertionCallback {
-    assert_rubric_from_final_message_with_expectations(rubric, RubricExpectations::all_pass())
-}
-
-/// Extracts the fenced JSON payload from the judge's final message,
-/// deserializes it, validates that every rubric ID appears exactly once (a
-/// hard failure otherwise), records `rubric.{id}` / `abstract.{name}` /
-/// `rubric.overall_pass` runtime tags, and computes `overall_pass` in the
-/// harness from `expectations`. A missing or unparseable JSON payload is a
-/// hard failure, not a silent pass.
-pub fn assert_rubric_from_final_message_with_expectations(
-    rubric: &'static RubricSpec,
-    expectations: RubricExpectations,
-) -> AssertionCallback {
+/// Passes the text of the final exchange in the active conversation to `f` and
+/// returns `f`'s result. Returns an immediate failure if no exchanges are found
+/// or the output cannot be retrieved. Intended for eval assertion callbacks
+/// that need to inspect the agent's last message without accessing the
+/// conversation model directly.
+pub fn on_final_exchange_text(f: impl Fn(&str) -> AssertionOutcome + 'static) -> AssertionCallback {
     Box::new(move |app, window_id| {
         let terminal_view = terminal_view(app, window_id, 0, 0);
         BlocklistAIHistoryModel::handle(app).update(app, |history_model, _| {
             let exchange_count = get_exchange_count(terminal_view.id(), history_model);
             if exchange_count == 0 {
                 return AssertionOutcome::immediate_failure(
-                    "No exchanges found in judge conversation".to_owned(),
+                    "No exchanges found in conversation".to_owned(),
                 );
             }
             let (text, _) = match get_exchange_output(
@@ -810,52 +795,33 @@ pub fn assert_rubric_from_final_message_with_expectations(
                 Ok(output) => output,
                 Err(outcome) => return outcome,
             };
+            f(&text)
+        })
+    })
+}
 
-            let result = match parse_agent_judge_result(&text) {
-                Ok(result) => result,
-                Err(err) => {
-                    return AssertionOutcome::immediate_failure(format!(
-                        "Failed to parse rubric JSON from the judge's final message: {err}"
-                    ))
-                }
-            };
-            let gate = match evaluate_rubric_result(rubric, expectations, &result) {
-                Ok(gate) => gate,
-                Err(err) => return AssertionOutcome::immediate_failure(err),
-            };
-
-            // Per-item scores and abstract dimensions are recorded regardless
-            // of the gate so multi-run aggregation can see noisy items.
-            for item in &result.items {
-                record_pending_runtime_tag(format!("rubric.{}", item.id), item.score.as_str());
-            }
-            let dimensions = &result.abstract_dimensions;
-            record_pending_runtime_tag(
-                "abstract.completeness",
-                dimensions.completeness.to_string(),
-            );
-            record_pending_runtime_tag("abstract.correctness", dimensions.correctness.to_string());
-            record_pending_runtime_tag(
-                "abstract.scope_discipline",
-                dimensions.scope_discipline.to_string(),
-            );
-            record_pending_runtime_tag("rubric.overall_pass", gate.overall_pass.to_string());
-
-            println!(
-                "Judge ({}) overall critique: {}",
-                rubric.name, result.overall_critique
-            );
-            if gate.overall_pass {
+/// Returns a test step that asserts `model` is a valid agent-mode LLM ID.
+/// Using a step rather than panicking inside `set_preferred_agent_mode_llm`
+/// keeps a misconfigured judge run inspectable (the harness can still export
+/// debug output) rather than aborting with a panic.
+pub fn validate_agent_mode_llm_step(model: &'static str) -> TestStep {
+    let llm_id = LLMId::from(model);
+    TestStep::new(&format!("Validate judge model '{model}'")).add_named_assertion(
+        "Judge model is an available agent-mode LLM",
+        move |app, _window_id| {
+            let llm_id = llm_id.clone();
+            let is_available = LLMPreferences::handle(app).read(app, |llm_preferences, _| {
+                llm_preferences.is_available_agent_mode_llm(&llm_id)
+            });
+            if is_available {
                 AssertionOutcome::Success
             } else {
                 AssertionOutcome::immediate_failure(format!(
-                    "Rubric gate failed: {}. Judge critique: {}",
-                    gate.failures.join("; "),
-                    result.overall_critique
+                    "Judge model '{llm_id}' is not a valid agent mode LLM"
                 ))
             }
-        })
-    })
+        },
+    )
 }
 
 /// Assert that the target conversation contains no actions.
