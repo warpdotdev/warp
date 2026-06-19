@@ -124,8 +124,12 @@ where
         })
 }
 
-/// The searchable string format is: [prompt] [command] [hint text],
-/// where [command] may or may not be present.
+/// The searchable string format is: [prompt] [command] [hint text] [tab name]
+/// [pane name], where every part except the prompt may be absent. The custom
+/// tab and pane names are appended (when set) so sessions can be found by the
+/// name the user assigned them, not just their directory/command. Only the
+/// command and hint-text ranges are tracked for highlighting; the trailing
+/// names are matchable but not range-highlighted.
 fn searchable_session_string_and_ranges(
     session: &SessionNavigationData,
 ) -> (String, SearchableSessionStringRanges) {
@@ -181,6 +185,17 @@ fn searchable_session_string_and_ranges(
             start..end
         }
     };
+
+    // Append the custom tab name (if any) so sessions can be found by the tab
+    // the user assigned them, e.g. searching "meetings" surfaces the "Meetings"
+    // tab. The tab name is not highlighted in the row, so no range is tracked.
+    for name in [session.tab_name(), session.pane_title()]
+        .into_iter()
+        .flatten()
+    {
+        searchable_string.push(' ');
+        searchable_string.push_str(name);
+    }
 
     (
         searchable_string,

@@ -65,6 +65,29 @@ fn render_session_label(
 ) -> Flex {
     let mut navigation_palette_item = Flex::column();
 
+    // Surface the user-assigned tab/pane name as the top line of the row, so a
+    // session matched by its custom name is recognizable (the prompt below only
+    // shows the working directory).
+    if let Some(name) = session.display_name() {
+        let name_color = item_highlight_state.main_text_fill(appearance).into_solid();
+        let name_label = appearance
+            .ui_builder()
+            .span(name.to_string())
+            .with_style(UiComponentStyles {
+                font_family_id: Some(appearance.monospace_font_family()),
+                font_size: Some(appearance.monospace_font_size() - 2.),
+                font_color: Some(name_color),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+        navigation_palette_item.add_child(
+            Container::new(name_label)
+                .with_margin_right(styles::NAVIGATION_PALETTE_ROW_HORIZONTAL_SPACING)
+                .finish(),
+        );
+    }
+
     let prompt = if let Some(ps1_grid) = &session.prompt_elements().ps1_prompt_grid {
         render_prompt_ps1(ps1_grid, appearance, app)
     } else if let Some(snapshot) = &session.prompt_elements().prompt_chip_snapshot {

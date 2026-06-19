@@ -28,6 +28,15 @@ pub struct SessionNavigationData {
     is_read_only: bool,
     /// The sharing status of the session.
     shared_session_status: SharedSessionStatus,
+    /// The custom name of the tab (pane group) that owns this session, if the
+    /// user has renamed it. Stamped in by `PaneGroup::pane_sessions` so the
+    /// session navigation palette can match against the tab name.
+    tab_name: Option<String>,
+    /// The pane's own title (`pane_configuration().title()`), which is what the
+    /// tab strip / vertical tabs panel actually displays when no tab-level
+    /// custom title is set. Stamped in by `TerminalPane::session_navigation_data`
+    /// so the palette can match against the visible pane name.
+    pane_title: Option<String>,
 }
 
 impl SessionNavigationData {
@@ -110,11 +119,43 @@ impl SessionNavigationData {
             is_read_only,
             window_id,
             shared_session_status,
+            tab_name: None,
+            pane_title: None,
         }
     }
 
     pub fn prompt(&self) -> &str {
         &self.prompt
+    }
+
+    /// Returns the custom tab name owning this session, if one is set.
+    pub fn tab_name(&self) -> Option<&str> {
+        self.tab_name.as_deref()
+    }
+
+    /// Sets the custom tab name owning this session. Called by
+    /// `PaneGroup::pane_sessions`, which is the level that has access to the
+    /// owning pane group's custom title.
+    pub fn set_tab_name(&mut self, tab_name: Option<String>) {
+        self.tab_name = tab_name.filter(|name| !name.is_empty());
+    }
+
+    /// Returns the pane's own displayed title, if one is set.
+    pub fn pane_title(&self) -> Option<&str> {
+        self.pane_title.as_deref()
+    }
+
+    /// Sets the pane's displayed title. Called by
+    /// `TerminalPane::session_navigation_data`.
+    pub fn set_pane_title(&mut self, pane_title: Option<String>) {
+        self.pane_title = pane_title.filter(|name| !name.is_empty());
+    }
+
+    /// The user-assigned name to surface in the palette row, if any. Prefers the
+    /// custom pane name, falling back to the custom tab name. Returns `None` when
+    /// the session has no custom name (only its directory/command identify it).
+    pub fn display_name(&self) -> Option<&str> {
+        self.pane_title().or_else(|| self.tab_name())
     }
 
     pub fn prompt_elements(&self) -> &SessionNavigationPromptElements {
