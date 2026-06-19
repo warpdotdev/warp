@@ -3,7 +3,9 @@ mod file_watchers;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use ai::skills::{provider_rank, ParsedSkill, SkillPathOrigin, SkillProvider, SkillReference};
+use ai::skills::{
+    provider_rank, ParsedSkill, SkillPathOrigin, SkillProvider, SkillReference, SkillScope,
+};
 pub use file_watchers::{
     extract_skill_parent_directory, read_skills_from_directories, SkillWatcher, SkillWatcherEvent,
 };
@@ -18,7 +20,7 @@ use super::bundled::{
     BundledSkillActivation,
 };
 use super::bundled::{BundledSkill, BundledSkills};
-use super::{ActiveSkillLookupError, SkillDescriptor, SkillPathQuery};
+use super::{ActiveSkillLookupError, SkillDescriptor, SkillManagerEvent, SkillPathQuery};
 use crate::ai::skills::skill_utils::unique_skills;
 
 pub struct SkillManager {
@@ -55,8 +57,8 @@ impl SkillManager {
 
         ctx.spawn_stream_local(
             skill_watcher_rx,
-            |me, message, _ctx| {
-                me.handle_skill_watcher_event(message);
+            |me, message, ctx| {
+                me.handle_skill_watcher_event(message, ctx);
             },
             |_, _| {}, // No cleanup needed when stream ends
         );
@@ -202,6 +204,16 @@ impl SkillManager {
             .get(&LocalOrRemotePath::Local(home_dir))
             .map(|skills| skills.iter().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// Returns the parsed home skills currently cached by the local watcher.
+    pub fn home_skills(&self) -> impl Iterator<Item = &ParsedSkill> + '_ {
+        dirs::home_dir()
+            .map(LocalOrRemotePath::Local)
+            .into_iter()
+            .filter_map(|home_dir| self.directory_skills.get(&home_dir))
+            .flatten()
+            .filter_map(|path| self.skills_by_path.get(path))
     }
 
     /// Returns the currently-known directories which have skills registered.
@@ -406,7 +418,22 @@ impl SkillManager {
         self.bundled_skills.remove_remote(host_id);
     }
 
-    fn handle_skill_watcher_event(&mut self, event: SkillWatcherEvent) {
+    fn handle_skill_watcher_event(
+        &mut self,
+        event: SkillWatcherEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let home_skills_changed = match &event {
+            SkillWatcherEvent::SkillsAdded { skills } => {
+                skills.iter().any(|skill| skill.scope == SkillScope::Home)
+            }
+            SkillWatcherEvent::SkillsDeleted { paths } => paths.iter().any(|path| {
+                self.skills_by_path.values().any(|skill| {
+                    skill.scope == SkillScope::Home
+                        && (skill.path.starts_with(path) || path.starts_with(&skill.path))
+                })
+            }),
+        };
         match event {
             SkillWatcherEvent::SkillsAdded { skills } => {
                 self.handle_skills_added(skills);
@@ -414,6 +441,9 @@ impl SkillManager {
             SkillWatcherEvent::SkillsDeleted { paths } => {
                 self.handle_skills_deleted(paths);
             }
+        }
+        if home_skills_changed {
+            ctx.emit(SkillManagerEvent::HomeSkillsChanged);
         }
     }
 
@@ -523,7 +553,7 @@ fn is_home_directory(path: &LocalOrRemotePath) -> bool {
 }
 
 impl Entity for SkillManager {
-    type Event = ();
+    type Event = SkillManagerEvent;
 }
 
 impl SingletonEntity for SkillManager {}

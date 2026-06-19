@@ -10,6 +10,7 @@ use ::ai::index::full_source_code_embedding::manager::{
 use ::ai::index::full_source_code_embedding::{
     ContentHash, FragmentMetadata as LocalFragmentMetadata, NodeHash,
 };
+use ::ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
 use remote_server::proto::OpenBufferSuccess;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
@@ -36,15 +37,14 @@ use super::proto::{
     client_message, delete_file_response, discard_files_response, get_diff_state_response,
     get_fragment_metadata_from_hash_response, git_commit_chain_response, git_create_pr_response,
     git_generate_commit_message_response, git_get_committed_branch_files_response,
-    git_push_response, host_scoped_request, notification, resolve_conflict_response,
-    run_command_response, save_buffer_response, server_message, session_scoped_request,
-    write_file_response, Abort, Authenticate, BranchInfo, BufferEdit, BufferUpdatedPush,
-    BundledSkillProto, BundledSkillsSnapshot, ClientMessage, CloseBuffer, CodebaseIndexLimits,
-    CodebaseIndexStatus, CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot,
-    CodebaseResyncMode, DeleteFile, DeleteFileResponse, DeleteFileSuccess, DiscardFilesError,
-    DiscardFilesResponse, DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse,
-    FailedFileRead, FileContextProto, FileOperationError,
-    FragmentMetadata as ProtoFragmentMetadata,
+    git_push_response, host_scoped_request, notification, remote_skill_proto,
+    resolve_conflict_response, run_command_response, save_buffer_response, server_message,
+    session_scoped_request, write_file_response, Abort, Authenticate, BranchInfo, BufferEdit,
+    BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexLimits, CodebaseIndexStatus,
+    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile,
+    DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
+    DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead,
+    FileContextProto, FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
@@ -53,14 +53,15 @@ use super::proto::{
     GitGenerateCommitMessageRequest, GitGenerateCommitMessageResponse,
     GitGetCommittedBranchFilesRequest, GitGetCommittedBranchFilesResponse,
     GitGetCommittedBranchFilesSuccess, GitHubPrInfoPush, GitHubRepositoryInfoPush, GitOpDelta,
-    GitOpError, GitPushRequest, GitPushResponse, GitStatusPush, IndexCodebase, Initialize,
-    InitializeResponse, MissingFragmentMetadata, NavigatedToDirectory,
+    GitOpError, GitPushRequest, GitPushResponse, GitStatusPush, HomeSkillMetadata, IndexCodebase,
+    Initialize, InitializeResponse, MissingFragmentMetadata, NavigatedToDirectory,
     NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextResponse,
-    ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess, ResyncCodebase,
-    RipgrepSearchRequest, RunCommandError, RunCommandErrorCode, RunCommandRequest,
-    RunCommandResponse, RunCommandSuccess, SaveBuffer, SaveBufferResponse, SaveBufferSuccess,
-    ServerMessage, SessionBootstrapped, TextEdit, UpdateGitHubPrInfo, UpdateGitHubRepoInfo,
-    UpdateGitStatus, UploadHandoffSnapshot, WriteFile, WriteFileResponse, WriteFileSuccess,
+    RemoteAgentContextSnapshot, RemoteContextFileProto, RemoteSkillProto, ResolveConflict,
+    ResolveConflictResponse, ResolveConflictSuccess, ResyncCodebase, RipgrepSearchRequest,
+    RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess,
+    SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage, SessionBootstrapped,
+    TextEdit, UpdateGitHubPrInfo, UpdateGitHubRepoInfo, UpdateGitStatus, UploadHandoffSnapshot,
+    WriteFile, WriteFileResponse, WriteFileSuccess,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 use super::{diff_state_proto, ripgrep_search};
@@ -86,7 +87,9 @@ use super::protocol::RequestId;
 use crate::ai::agent::FileLocations;
 use crate::ai::blocklist::handoff::snapshot::upload_result_to_proto;
 use crate::ai::blocklist::{read_local_file_context, ReadFileContextResult};
-use crate::ai::skills::{bundled_skills_snapshot_protos, BundledSkill};
+use crate::ai::skills::{
+    bundled_skill_snapshot_protos, BundledSkill, SkillManager, SkillManagerEvent,
+};
 use crate::auth::auth_state::{AuthState, AuthStateProvider};
 use crate::code_review::git_actions;
 use crate::features::FeatureFlag;
@@ -109,6 +112,40 @@ fn daemon_bundled_resources_dir() -> Option<PathBuf> {
     let suffix = dir.strip_prefix("~/")?;
     let dir = dirs::home_dir()?.join(suffix);
     dir.is_dir().then_some(dir)
+}
+fn remote_agent_context_snapshot(
+    revision: u64,
+    bundled_skills: &[RemoteSkillProto],
+    ctx: &warpui::AppContext,
+) -> RemoteAgentContextSnapshot {
+    let home_dir = dirs::home_dir()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut skills = bundled_skills.to_vec();
+    skills.extend(
+        SkillManager::as_ref(ctx)
+            .home_skills()
+            .map(|skill| RemoteSkillProto {
+                path: skill.path.display_path(),
+                content: skill.content.clone(),
+                source: Some(remote_skill_proto::Source::Home(HomeSkillMetadata {})),
+            }),
+    );
+    skills.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut global_rules = ProjectContextModel::as_ref(ctx)
+        .global_rules()
+        .map(|rule| RemoteContextFileProto {
+            path: rule.path.display_path(),
+            content: rule.content,
+        })
+        .collect::<Vec<_>>();
+    global_rules.sort_by(|a, b| a.path.cmp(&b.path));
+    RemoteAgentContextSnapshot {
+        revision,
+        home_dir,
+        skills,
+        global_rules,
+    }
 }
 
 /// Outcome of dispatching a request-style `ClientMessage`.
@@ -251,16 +288,12 @@ pub struct ServerModel {
     /// Returned in every `InitializeResponse` so clients can deduplicate
     /// host-scoped models.
     host_id: String,
-    /// The bundled skill catalog, pre-parsed and serialized for the
-    /// `BundledSkillsSnapshot` push. `None` until startup parsing completes
-    /// (or forever, when the global resources directory is absent).
-    bundled_skills: Option<Vec<BundledSkillProto>>,
-    /// Connections that have already received the `BundledSkillsSnapshot`
-    /// push, either from the parse-completion broadcast or during their
-    /// `Initialize` handshake. Prevents a duplicate push when parsing
-    /// completes between a connection registering its sender and its
-    /// `Initialize` being handled.
-    bundled_skills_sent: HashSet<ConnectionId>,
+    /// Bundled skill source entries detected and rendered on the daemon.
+    bundled_skills: Vec<RemoteSkillProto>,
+    /// Latest revisioned full replacement of all daemon-host Agent Mode context.
+    remote_agent_context_snapshot: RemoteAgentContextSnapshot,
+    /// Connections that have already received the current snapshot revision.
+    remote_agent_context_snapshot_sent: HashSet<ConnectionId>,
     /// Per-session command executors created from `SessionBootstrapped` notifications.
     executors: HashMap<SessionId, Arc<LocalCommandExecutor>>,
     /// Tracks in-flight file write/delete operations and handles cleanup.
@@ -311,14 +344,17 @@ impl ServerModel {
             std::process::id(),
             host_id
         );
+        let bundled_skills = Vec::new();
+        let remote_agent_context_snapshot = remote_agent_context_snapshot(1, &bundled_skills, ctx);
         let mut model = Self {
             connection_senders: HashMap::new(),
             snapshot_sent_roots_by_connection: HashMap::new(),
             grace_timer_cancel: None,
             in_progress: HashMap::new(),
             host_id,
-            bundled_skills: None,
-            bundled_skills_sent: HashSet::new(),
+            bundled_skills,
+            remote_agent_context_snapshot,
+            remote_agent_context_snapshot_sent: HashSet::new(),
             executors: HashMap::new(),
             pending_file_ops: PendingFileOps::new(),
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
@@ -648,6 +684,24 @@ impl ServerModel {
                 }
             });
         }
+        {
+            let skill_manager = SkillManager::handle(ctx);
+            ctx.subscribe_to_model(&skill_manager, |me, _, event, ctx| match event {
+                SkillManagerEvent::HomeSkillsChanged => {
+                    me.refresh_remote_agent_context_snapshot(ctx);
+                }
+            });
+        }
+        {
+            let project_context = ProjectContextModel::handle(ctx);
+            ctx.subscribe_to_model(&project_context, |me, _, event, ctx| match event {
+                ProjectContextModelEvent::GlobalRulesChanged(_) => {
+                    me.refresh_remote_agent_context_snapshot(ctx);
+                }
+                ProjectContextModelEvent::PathIndexed
+                | ProjectContextModelEvent::KnownRulesChanged(_) => {}
+            });
+        }
         // Subscribe to diff state manager events — convert domain dispatches
         // to proto messages and send them to connected clients.
         {
@@ -666,11 +720,11 @@ impl ServerModel {
         if let Some(resources_dir) = daemon_bundled_resources_dir() {
             ctx.spawn(
                 BundledSkill::detect_in_resources_dir(resources_dir),
-                |me, catalog, _| {
-                    let skills = bundled_skills_snapshot_protos(&catalog);
+                |me, catalog, ctx| {
+                    let skills = bundled_skill_snapshot_protos(&catalog);
                     log::info!("Daemon parsed {} bundled skills", skills.len());
-                    me.bundled_skills = Some(skills);
-                    me.broadcast_bundled_skills_snapshot();
+                    me.bundled_skills = skills;
+                    me.refresh_remote_agent_context_snapshot(ctx);
                 },
             );
         } else {
@@ -688,38 +742,40 @@ impl ServerModel {
         model
     }
 
-    /// Broadcasts the parsed bundled skill catalog to all connections.
-    /// No-op until startup parsing has completed.
-    fn broadcast_bundled_skills_snapshot(&mut self) {
-        let Some(skills) = self.bundled_skills.clone() else {
-            return;
-        };
+    fn refresh_remote_agent_context_snapshot(&mut self, ctx: &warpui::AppContext) {
+        let revision = self
+            .remote_agent_context_snapshot
+            .revision
+            .saturating_add(1);
+        self.remote_agent_context_snapshot =
+            remote_agent_context_snapshot(revision, &self.bundled_skills, ctx);
+        self.broadcast_remote_agent_context_snapshot();
+    }
+
+    fn broadcast_remote_agent_context_snapshot(&mut self) {
         self.send_server_message(
             None,
             None,
-            server_message::Message::BundledSkillsSnapshot(BundledSkillsSnapshot { skills }),
+            server_message::Message::RemoteAgentContextSnapshot(
+                self.remote_agent_context_snapshot.clone(),
+            ),
         );
-        self.bundled_skills_sent
+        self.remote_agent_context_snapshot_sent
             .extend(self.connection_senders.keys().copied());
     }
 
-    /// Pushes the parsed bundled skill catalog to a single connection.
-    /// No-op until startup parsing has completed, or when the catalog was
-    /// already delivered to this connection (e.g. it registered before the
-    /// parse-completion broadcast fired).
-    fn send_bundled_skills_snapshot_to_connection(&mut self, conn_id: ConnectionId) {
-        if self.bundled_skills_sent.contains(&conn_id) {
+    fn send_remote_agent_context_snapshot_to_connection(&mut self, conn_id: ConnectionId) {
+        if self.remote_agent_context_snapshot_sent.contains(&conn_id) {
             return;
         }
-        let Some(skills) = self.bundled_skills.clone() else {
-            return;
-        };
         self.send_server_message(
             Some(conn_id),
             None,
-            server_message::Message::BundledSkillsSnapshot(BundledSkillsSnapshot { skills }),
+            server_message::Message::RemoteAgentContextSnapshot(
+                self.remote_agent_context_snapshot.clone(),
+            ),
         );
-        self.bundled_skills_sent.insert(conn_id);
+        self.remote_agent_context_snapshot_sent.insert(conn_id);
     }
 
     /// Called when a proxy connects.  Inserts `conn_tx` into the connection
@@ -749,7 +805,7 @@ impl ServerModel {
     /// and starts the grace timer if no connections remain.
     pub fn deregister_connection(&mut self, conn_id: ConnectionId, ctx: &mut ModelContext<Self>) {
         self.snapshot_sent_roots_by_connection.remove(&conn_id);
-        self.bundled_skills_sent.remove(&conn_id);
+        self.remote_agent_context_snapshot_sent.remove(&conn_id);
         // Guard against double-deregister (reader and writer tasks both call
         // this on connection close; the second call must be a safe no-op).
         if self.connection_senders.remove(&conn_id).is_none() {
@@ -1563,11 +1619,9 @@ impl ServerModel {
 
     /// Handles `Initialize` by returning the server version and host id.
     ///
-    /// Also configures Sentry crash reporting based on the user's identity
-    /// and preferences supplied by the connecting client, and sends the
-    /// bundled skill catalog to the initializing connection when startup
-    /// parsing has already completed (otherwise the parse-completion
-    /// broadcast delivers it).
+    /// Also configures Sentry crash reporting based on the user's identity and
+    /// preferences supplied by the connecting client, and sends the latest
+    /// remote Agent Mode context snapshot to the initializing connection.
     #[cfg_attr(not(feature = "crash_reporting"), allow(unused_variables))]
     fn handle_initialize(
         &mut self,
@@ -1593,13 +1647,9 @@ impl ServerModel {
             }
         }
 
-        // Push the bundled skill catalog to this connection if it is already
-        // parsed and the parse-completion broadcast didn't already deliver it
-        // (parsing can complete between this connection registering its
-        // sender and its `Initialize` being handled). Enqueued on the same
-        // channel as the response below, so the client buffers it as a push
-        // event during the handshake.
-        self.send_bundled_skills_snapshot_to_connection(conn_id);
+        // Enqueued on the same channel as the response below, so the client
+        // buffers it as a push event during the handshake.
+        self.send_remote_agent_context_snapshot_to_connection(conn_id);
 
         let server_version = ChannelState::app_version().unwrap_or("").to_string();
         HandlerOutcome::Sync(server_message::Message::InitializeResponse(
