@@ -88,9 +88,9 @@ fn setup_context_models(app: &mut App) {
 fn snapshot_decoding_keeps_valid_context_from_each_source() {
     let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
     let host_id = HostId::new("remote-host".to_string());
-    let decoded = decode_snapshot(&host_id, snapshot());
-    let bundled = decoded.bundled_skills.unwrap();
-    let home = decoded.home_context.unwrap();
+    let state = parse_snapshot(&host_id, snapshot());
+    let bundled = state.bundled_skills.unwrap();
+    let home = state.home_skills.unwrap();
 
     assert_eq!(bundled.skill("bundled").unwrap().name, "bundled");
     assert!(bundled.skill("unknown-mcp").is_none());
@@ -99,13 +99,13 @@ fn snapshot_decoding_keeps_valid_context_from_each_source() {
     assert_eq!(home.skills[0].name, "deploy");
     assert_eq!(home.skills[0].provider, SkillProvider::Agents);
     assert_eq!(home.skills[0].scope, SkillScope::Home);
-    assert_eq!(decoded.global_rules.len(), 1);
-    assert_eq!(decoded.global_rules[0].content, "global rule");
+    assert_eq!(state.global_rules.len(), 1);
+    assert_eq!(state.global_rules[0].content, "global rule");
     for path in home
         .skills
         .iter()
         .map(|skill| &skill.path)
-        .chain(decoded.global_rules.iter().map(|rule| &rule.path))
+        .chain(state.global_rules.iter().map(|rule| &rule.path))
     {
         assert_eq!(path.as_remote().unwrap().host_id, host_id);
         assert!(path.starts_with(&home.home_dir));
@@ -119,10 +119,10 @@ fn invalid_home_directory_drops_only_home_context() {
     let mut snapshot = snapshot();
     snapshot.home_dir = "relative/home".to_string();
 
-    let decoded = decode_snapshot(&host_id, snapshot);
-    assert!(decoded.bundled_skills.unwrap().skill("bundled").is_some());
-    assert!(decoded.home_context.is_none());
-    assert!(decoded.global_rules.is_empty());
+    let state = parse_snapshot(&host_id, snapshot);
+    assert!(state.bundled_skills.unwrap().skill("bundled").is_some());
+    assert!(state.home_skills.is_none());
+    assert!(state.global_rules.is_empty());
 }
 
 #[test]

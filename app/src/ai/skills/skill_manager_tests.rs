@@ -215,7 +215,63 @@ fn remote_home_provider_variants_are_available_for_provider_selection() {
 }
 
 #[test]
-fn remote_home_skill_overlapping_directory_catalog_is_deduplicated() {
+fn remote_home_provider_variants_are_scoped_to_the_descriptor_host() {
+    let first_host = HostId::new("first-host".to_string());
+    let second_host = HostId::new("second-host".to_string());
+    let first_skill = make_remote_home_skill(&first_host, "deploy", "shared content");
+    let second_skill = ParsedSkill {
+        path: remote_test_path(&second_host, "/home/user/.claude/skills/deploy/SKILL.md"),
+        provider: SkillProvider::Claude,
+        ..make_remote_home_skill(&second_host, "deploy", "shared content")
+    };
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+
+        handle.update(&mut app, |manager, _| {
+            manager.set_remote_home_skills(
+                first_host.clone(),
+                remote_test_path(&first_host, "/home/user"),
+                vec![first_skill],
+            );
+            manager.set_remote_home_skills(
+                second_host.clone(),
+                remote_test_path(&second_host, "/home/user"),
+                vec![second_skill],
+            );
+        });
+        let descriptor = handle
+            .read(&app, |manager, ctx| {
+                manager.get_skills_for_working_directory_with_origin(
+                    None,
+                    &SkillPathOrigin::Remote {
+                        host_id: first_host,
+                    },
+                    ctx,
+                )
+            })
+            .into_iter()
+            .find(|skill| skill.name == "deploy")
+            .unwrap();
+
+        assert!(!handle.read(&app, |manager, _| manager
+            .skill_exists_for_any_provider(&descriptor, &[SkillProvider::Claude])));
+        assert_eq!(
+            handle.read(&app, |manager, _| manager
+                .best_supported_provider(&descriptor, &[SkillProvider::Claude])),
+            SkillProvider::Agents
+        );
+    });
+}
+
+#[test]
+fn remote_home_skill_replaces_an_overlapping_index_entry() {
     let host_id = HostId::new("remote-host".to_string());
     let home_dir = remote_test_path(&host_id, "/home/user");
     let working_directory = home_dir.join("repo");
@@ -255,7 +311,7 @@ fn remote_home_skill_overlapping_directory_catalog_is_deduplicated() {
                 .filter(|skill| skill.name == "deploy")
                 .count(),
             1,
-            "the same remote skill should be listed once across home and directory catalogs"
+            "the indexed remote home skill should be listed once"
         );
     });
 }
@@ -1169,12 +1225,16 @@ fn active_skill_by_reference_with_origin_returns_typed_lookup_errors() {
         );
     });
 }
+
+// Remote home snapshots use the shared skill indexes and must remain host scoped.
 #[test]
 fn remote_home_skills_are_host_scoped_replaceable_and_path_invokable() {
     let first_host = HostId::new("first-host".to_string());
     let second_host = HostId::new("second-host".to_string());
     let first_skill = make_remote_home_skill(&first_host, "deploy", "first host content");
     let second_skill = make_remote_home_skill(&second_host, "deploy", "second host content");
+    let first_skill_path = first_skill.path.clone();
+    let second_skill_path = second_skill.path.clone();
     let first_reference = SkillReference::Path(first_skill.path.clone());
     let second_reference = SkillReference::Path(second_skill.path.clone());
     let first_cwd = remote_test_path(&first_host, "/work/repo");
@@ -1201,6 +1261,13 @@ fn remote_home_skills_are_host_scoped_replaceable_and_path_invokable() {
                 vec![second_skill],
             );
         });
+        assert_eq!(
+            handle
+                .read(&app, |manager, _| manager.skill_paths_by_name("deploy"))
+                .into_iter()
+                .collect::<HashSet<_>>(),
+            HashSet::from([first_skill_path.clone(), second_skill_path.clone()])
+        );
 
         for (cwd, host_id, expected_content, reference) in [
             (
@@ -1297,9 +1364,52 @@ fn remote_home_skills_are_host_scoped_replaceable_and_path_invokable() {
                 ctx,
             )
             .is_ok()));
+        assert_eq!(
+            handle.read(&app, |manager, _| manager.skill_paths_by_name("deploy")),
+            vec![second_skill_path]
+        );
     });
 }
 
+#[test]
+fn removing_remote_home_skills_preserves_project_skills_below_home() {
+    let host_id = HostId::new("remote-host".to_string());
+    let home_dir = remote_test_path(&host_id, "/home/user");
+    let home_skill = make_remote_home_skill(&host_id, "home", "home content");
+    let home_skill_path = home_skill.path.clone();
+    let project_dir = remote_test_path(&host_id, "/home/user/repo");
+    let project_skill = ParsedSkill {
+        path: project_dir.join(".agents/skills/project/SKILL.md"),
+        ..make_remote_skill(&host_id, "project")
+    };
+    let project_skill_path = project_skill.path.clone();
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+
+        handle.update(&mut app, |manager, _| {
+            manager.handle_skills_added(vec![project_skill]);
+            manager.set_remote_home_skills(host_id.clone(), home_dir, vec![home_skill]);
+            manager.remove_remote_home_skills(&host_id);
+        });
+
+        handle.read(&app, |manager, _| {
+            assert!(manager.skill_by_path(&home_skill_path).is_none());
+            assert!(manager.skill_by_path(&project_skill_path).is_some());
+            assert!(manager.skill_paths_by_name("home").is_empty());
+            assert_eq!(
+                manager.skill_paths_by_name("project"),
+                vec![project_skill_path]
+            );
+        });
+    });
+}
 // ============================================================================
 // Tests for best_supported_provider
 // ============================================================================

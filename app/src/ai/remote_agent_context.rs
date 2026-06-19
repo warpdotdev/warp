@@ -17,14 +17,16 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 use super::mcp::McpIntegration;
 use super::skills::{BundledSkill, BundledSkillActivation, SkillManager};
 
-struct DecodedHomeContext {
+/// Home skills parsed from a remote agent context snapshot.
+struct HomeSkills {
     home_dir: LocalOrRemotePath,
     skills: Vec<ParsedSkill>,
 }
 
-struct DecodedRemoteAgentContext {
+/// Valid application state parsed from a remote agent context snapshot.
+struct RemoteAgentContextState {
     bundled_skills: Option<BundledSkill>,
-    home_context: Option<DecodedHomeContext>,
+    home_skills: Option<HomeSkills>,
     global_rules: Vec<ProjectRule>,
 }
 
@@ -53,16 +55,16 @@ impl RemoteAgentContext {
         snapshot: RemoteAgentContextSnapshot,
         ctx: &mut ModelContext<Self>,
     ) {
-        let DecodedRemoteAgentContext {
+        let RemoteAgentContextState {
             bundled_skills,
-            home_context,
+            home_skills,
             global_rules,
-        } = decode_snapshot(&host_id, snapshot);
+        } = parse_snapshot(&host_id, snapshot);
         SkillManager::handle(ctx).update(ctx, |manager, _| {
             manager.replace_remote_agent_context(
                 host_id.clone(),
                 bundled_skills,
-                home_context.map(|home| (home.home_dir, home.skills)),
+                home_skills.map(|home| (home.home_dir, home.skills)),
             );
         });
         ProjectContextModel::handle(ctx).update(ctx, |model, _| {
@@ -80,10 +82,10 @@ impl RemoteAgentContext {
     }
 }
 
-fn decode_snapshot(
+fn parse_snapshot(
     host_id: &HostId,
     snapshot: RemoteAgentContextSnapshot,
-) -> DecodedRemoteAgentContext {
+) -> RemoteAgentContextState {
     let bundled_skills = FeatureFlag::BundledSkills
         .is_enabled()
         .then(|| bundled_skill_from_protos(host_id, &snapshot.skills));
@@ -92,9 +94,9 @@ fn decode_snapshot(
             safe: ("Ignoring remote home context with an invalid home directory"),
             full: ("Ignoring remote home context with an invalid home directory for {host_id}")
         );
-        return DecodedRemoteAgentContext {
+        return RemoteAgentContextState {
             bundled_skills,
-            home_context: None,
+            home_skills: None,
             global_rules: Vec::new(),
         };
     };
@@ -117,9 +119,9 @@ fn decode_snapshot(
         .into_iter()
         .filter_map(|file| project_rule_within_home(host_id, file, &home_dir))
         .collect();
-    DecodedRemoteAgentContext {
+    RemoteAgentContextState {
         bundled_skills,
-        home_context: Some(DecodedHomeContext { home_dir, skills }),
+        home_skills: Some(HomeSkills { home_dir, skills }),
         global_rules,
     }
 }
