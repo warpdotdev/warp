@@ -95,6 +95,48 @@ fn test_orchestration_cycle_bindings_are_editable() {
 }
 
 #[test]
+fn test_toggle_maximize_pane_binding_is_editable() {
+    App::test((), |mut app| async move {
+        app.update(crate::pane_group::init);
+
+        app.update(|ctx| {
+            // The maximize / minimize pane action is registered as an editable binding so
+            // it can be assigned a shortcut in Settings → Keyboard shortcuts.
+            assert!(
+                ctx.editable_bindings()
+                    .any(|binding| binding.name == "pane_group:toggle_maximize_pane"),
+                "pane_group:toggle_maximize_pane should be registered as an editable binding"
+            );
+
+            // It ships without a default keystroke, so nothing is shown next to the menu
+            // item until the user assigns one.
+            assert_eq!(
+                None,
+                keybinding_name_to_display_string("pane_group:toggle_maximize_pane", ctx)
+            );
+
+            // Once a shortcut is assigned, it resolves to a display string that the pane
+            // header menu item surfaces.
+            ctx.set_custom_trigger(
+                "pane_group:toggle_maximize_pane".to_owned(),
+                Trigger::Keystrokes(vec![Keystroke::parse("cmd-shift-m").unwrap()]),
+            );
+
+            let displayed_keybinding = if OperatingSystem::get().is_mac() {
+                "⇧⌘M"
+            } else {
+                "Shift Logo M"
+            };
+            assert_eq!(
+                Some(displayed_keybinding),
+                keybinding_name_to_display_string("pane_group:toggle_maximize_pane", ctx)
+                    .as_deref()
+            );
+        });
+    });
+}
+
+#[test]
 fn test_terminal_page_scroll_bindings_are_editable() {
     App::test((), |mut app| async move {
         app.update(terminal::init);
