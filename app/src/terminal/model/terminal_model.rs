@@ -40,6 +40,10 @@ use super::kitty::{
     create_kitty_error_reply, create_kitty_ok_reply, DeletionType, KittyAction, KittyChunk,
     KittyMessage, KittyResponse, PendingKittyMessage,
 };
+use super::lifecycle::{
+    BlockLifecycleCoordinator, CommandStartKind, IgnoreReason, LifecycleAction, LifecycleInput,
+    LifecycleSnapshot, LifecycleTransition, PreexecObservation, StartCommandOutcome,
+};
 use super::secrets::{RespectObfuscatedSecrets, SecretAndHandle};
 use super::selection::ScrollDelta;
 use super::session::{BootstrapSessionType, InBandCommandOutputReceiver, SessionId};
@@ -378,6 +382,7 @@ pub struct TerminalModel {
     /// List of blocks. All blocks are immutable except for the current block.
     /// Always non-empty (includes an invisible block).
     block_list: BlockList,
+    lifecycle_coordinator: BlockLifecycleCoordinator,
     /// Whether the blocklist has been cleared in the lifetime of this terminal model.
     pub blocklist_has_been_cleared: bool,
 
@@ -1056,6 +1061,7 @@ impl TerminalModel {
             alt_screen,
             is_input_dirty: false,
             block_list,
+            lifecycle_coordinator: BlockLifecycleCoordinator::default(),
             blocklist_has_been_cleared: false,
             alt_screen_active: false,
             title_stack: Vec::new(),
@@ -1422,6 +1428,7 @@ impl TerminalModel {
 
         self.block_list_mut()
             .load_shared_session_scrollback(scrollback);
+        self.lifecycle_coordinator.reset_unknown();
 
         // The scrollback contains the prompt for the active block, and the terminal view needs to be notified to render it.
         self.event_proxy.send_wakeup_event();
@@ -1432,6 +1439,7 @@ impl TerminalModel {
 
         self.block_list_mut()
             .append_followup_shared_session_scrollback(scrollback);
+        self.lifecycle_coordinator.reset_unknown();
 
         self.event_proxy.send_wakeup_event();
     }
@@ -1463,6 +1471,7 @@ impl TerminalModel {
         if self.handled_exit {
             return;
         }
+        let transition = self.plan_lifecycle_transition(LifecycleInput::Exit, None, None);
 
         self.handled_exit = true;
         // Forcibly exit the alt screen so that we can show the user the
@@ -1472,6 +1481,7 @@ impl TerminalModel {
         // possibly receive more output from the shell.
         self.block_list.active_block_mut().finish(0);
         self.event_proxy.send_terminal_event(Event::Exit { reason });
+        self.commit_lifecycle_transition(&transition);
     }
 
     pub fn is_read_only(&self) -> bool {
@@ -1641,18 +1651,21 @@ impl TerminalModel {
     /// from the input editor when it sends user bytes to the pty (usually the
     /// next command to run, but also ctrl-d). Once we've written to the pty on
     /// the user's behalf, we consider the active block started.
-    pub fn start_command_execution(&mut self) {
-        self.block_list.start_active_block();
+    pub fn start_command_execution(&mut self) -> StartCommandOutcome {
+        self.start_command_execution_for_kind(CommandStartKind::UserOrQueued)
     }
 
     pub fn start_command_execution_from_env_var_collection(
         &mut self,
         env_var_metadata: BlocklistEnvVarMetadata,
-    ) {
-        self.start_command_execution();
-        self.block_list
-            .active_block_mut()
-            .set_env_var_metadata(env_var_metadata);
+    ) -> StartCommandOutcome {
+        let outcome = self.start_command_execution_for_kind(CommandStartKind::UserOrQueued);
+        if outcome.is_accepted() {
+            self.block_list
+                .active_block_mut()
+                .set_env_var_metadata(env_var_metadata);
+        }
+        outcome
     }
 
     /// Starts the execution for a command in a shared session (sharer or viewer).
@@ -1660,8 +1673,11 @@ impl TerminalModel {
         &mut self,
         participant_id: ParticipantId,
         agent_metadata: Option<AgentInteractionMetadata>,
-    ) {
-        self.start_command_execution();
+    ) -> StartCommandOutcome {
+        let outcome = self.start_command_execution_for_kind(CommandStartKind::SharedSession);
+        if !outcome.is_accepted() {
+            return outcome;
+        }
 
         // If this command has AI metadata, attach it to the active block.
         if let Some(ai_metadata) = &agent_metadata {
@@ -1682,6 +1698,7 @@ impl TerminalModel {
                 log::warn!("Failed to send OrderedTerminalEventType::CommandExecutionStarted: {e}");
             }
         }
+        outcome
     }
 
     /// Starts the command execution (per `Self::start_command_execution`) and additionally sets
@@ -1689,11 +1706,90 @@ impl TerminalModel {
     pub fn start_command_execution_with_ai_metadata(
         &mut self,
         agent_metadata: AgentInteractionMetadata,
-    ) {
-        self.start_command_execution();
-        self.block_list
-            .active_block_mut()
-            .set_agent_interaction_mode(agent_metadata);
+    ) -> StartCommandOutcome {
+        let outcome = self.start_command_execution_for_kind(CommandStartKind::UserOrQueued);
+        if outcome.is_accepted() {
+            self.block_list
+                .active_block_mut()
+                .set_agent_interaction_mode(agent_metadata);
+        }
+        outcome
+    }
+
+    pub(in crate::terminal) fn start_in_band_command_execution(&mut self) -> StartCommandOutcome {
+        self.start_command_execution_for_kind(CommandStartKind::InBand)
+    }
+
+    fn start_command_execution_for_kind(&mut self, kind: CommandStartKind) -> StartCommandOutcome {
+        let transition =
+            self.plan_lifecycle_transition(LifecycleInput::StartCommand(kind), None, None);
+        let outcome = match transition.action {
+            LifecycleAction::StartActiveBlock => {
+                match kind {
+                    CommandStartKind::UserOrQueued | CommandStartKind::SharedSession => {
+                        self.block_list.start_active_block()
+                    }
+                    CommandStartKind::InBand => {
+                        self.block_list.start_active_block_for_in_band_command()
+                    }
+                }
+                StartCommandOutcome::Accepted
+            }
+            LifecycleAction::Ignore(IgnoreReason::CoalescedStart) => StartCommandOutcome::Coalesced,
+            LifecycleAction::Ignore(IgnoreReason::RejectedExecuting) => {
+                StartCommandOutcome::RejectedExecuting
+            }
+            LifecycleAction::Ignore(IgnoreReason::IgnoredTerminated) => {
+                StartCommandOutcome::IgnoredTerminated
+            }
+            action => {
+                log::error!("Unexpected lifecycle action for command start: {action:?}");
+                StartCommandOutcome::RejectedExecuting
+            }
+        };
+        self.commit_lifecycle_transition(&transition);
+        outcome
+    }
+
+    fn lifecycle_snapshot(
+        &self,
+        supplied_next_block_id: Option<&BlockId>,
+        hook_session_id: Option<u64>,
+    ) -> LifecycleSnapshot {
+        let active_block = self.block_list.active_block();
+        LifecycleSnapshot {
+            active_block_id: active_block.id().to_string(),
+            active_session_id: active_block.session_id().map(|id| id.as_u64()),
+            supplied_next_block_id: supplied_next_block_id.map(ToString::to_string),
+            hook_session_id,
+            block_state: active_block.state(),
+            started: active_block.started(),
+            finished: active_block.finished(),
+            received_precmd: active_block.has_received_precmd(),
+            is_in_band: active_block.is_in_band_command_block(),
+            is_bootstrapped: active_block.is_bootstrapped(),
+            is_bootstrap_done: self.block_list.is_bootstrapping_precmd_done(),
+            is_alt_screen_active: self.alt_screen_active,
+        }
+    }
+
+    fn plan_lifecycle_transition(
+        &mut self,
+        input: LifecycleInput,
+        supplied_next_block_id: Option<&BlockId>,
+        hook_session_id: Option<u64>,
+    ) -> LifecycleTransition {
+        let snapshot = self.lifecycle_snapshot(supplied_next_block_id, hook_session_id);
+        self.lifecycle_coordinator.plan(&snapshot, input)
+    }
+
+    fn commit_lifecycle_transition(&mut self, transition: &LifecycleTransition) {
+        if let Some(record) = transition.recovery_record.clone() {
+            log::debug!("Terminal lifecycle transition diagnostic: {record:?}");
+            self.event_proxy
+                .send_terminal_event(Event::LifecycleRecovery(record));
+        }
+        self.lifecycle_coordinator.commit(transition);
     }
 
     // Starts active block as a background block. Used in Alacritty integration tests to
@@ -2206,10 +2302,7 @@ impl TerminalModel {
             env_vars.insert("KUBECONFIG".to_string(), kube_config);
         }
         let handled_after_inband = data.was_sent_after_in_band_command();
-        // Preserve the existing alternate-screen no-op until lifecycle acceptance is centralized.
-        if !self.alt_screen_active {
-            self.block_list.apply_precmd_to_active(data);
-        }
+        self.block_list.apply_precmd_to_active(data);
 
         self.emit_handler_event(HandlerEvent::Precmd {
             session_id: session_id.map(|id| id.into()),
@@ -2219,10 +2312,7 @@ impl TerminalModel {
     }
 
     fn apply_preexec(&mut self, data: PreexecValue) {
-        // Preserve the existing alternate-screen no-op until lifecycle acceptance is centralized.
-        if !self.alt_screen_active {
-            self.block_list.apply_preexec_to_active(data);
-        }
+        self.block_list.apply_preexec_to_active(data);
         self.emit_handler_event(HandlerEvent::Preexec);
     }
 
@@ -2766,7 +2856,18 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn command_finished(&mut self, data: CommandFinishedValue) {
-        self.complete_command(data.completion_metadata);
+        let disposition = self
+            .block_list
+            .classify_next_block_id(&data.completion_metadata.next_block_id);
+        let transition = self.plan_lifecycle_transition(
+            LifecycleInput::CommandFinished(disposition),
+            Some(&data.completion_metadata.next_block_id),
+            data.session_id,
+        );
+        if matches!(transition.action, LifecycleAction::AcceptCommandFinished) {
+            self.complete_command(data.completion_metadata);
+        }
+        self.commit_lifecycle_transition(&transition);
     }
 
     fn set_current_working_directory(&mut self, path: String) {
@@ -2789,15 +2890,49 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {
-        self.apply_precmd_to_fresh_block(data.prompt_metadata);
+        let disposition = self
+            .block_list
+            .classify_next_block_id(&data.completion_metadata.next_block_id);
+        let transition = self.plan_lifecycle_transition(
+            LifecycleInput::CorrelatedPrecmd(disposition),
+            Some(&data.completion_metadata.next_block_id),
+            data.prompt_metadata.session_id,
+        );
+        if matches!(transition.action, LifecycleAction::ApplyPrecmd) {
+            self.apply_precmd_to_fresh_block(data.prompt_metadata);
+        }
+        self.commit_lifecycle_transition(&transition);
     }
 
     fn prompt_only_precmd(&mut self, data: PromptMetadata) {
-        self.apply_precmd_to_fresh_block(data);
+        let transition =
+            self.plan_lifecycle_transition(LifecycleInput::LegacyPrecmd, None, data.session_id);
+        if matches!(transition.action, LifecycleAction::ApplyPrecmd) {
+            self.apply_precmd_to_fresh_block(data);
+        }
+        self.commit_lifecycle_transition(&transition);
     }
 
     fn preexec(&mut self, data: PreexecValue) {
-        self.apply_preexec(data);
+        let active_block = self.block_list.active_block();
+        let observation = if active_block.state() == BlockState::Executing {
+            if active_block.command_to_string() == data.command.as_str() {
+                PreexecObservation::RepeatedSameCommand
+            } else {
+                PreexecObservation::RepeatedDifferentCommand
+            }
+        } else {
+            PreexecObservation::First
+        };
+        let transition = self.plan_lifecycle_transition(
+            LifecycleInput::Preexec(observation),
+            None,
+            data.session_id,
+        );
+        if matches!(transition.action, LifecycleAction::ApplyPreexec) {
+            self.apply_preexec(data);
+        }
+        self.commit_lifecycle_transition(&transition);
     }
 
     fn bootstrapped(&mut self, value: BootstrappedValue) {
@@ -2884,6 +3019,13 @@ impl ansi::Handler for TerminalModel {
 
     fn init_shell(&mut self, data: InitShellValue) {
         if !self.ignore_bootstrapping_messages {
+            let hook_session_id = Some(data.session_id.as_u64());
+            let transition =
+                self.plan_lifecycle_transition(LifecycleInput::InitShell, None, hook_session_id);
+            if !matches!(transition.action, LifecycleAction::BeginEpoch) {
+                self.commit_lifecycle_transition(&transition);
+                return;
+            }
             let subshell_info = if data.is_subshell {
                 let was_triggered_by_rc_file_snippet =
                     self.did_receive_rc_file_dcs.take().unwrap_or(false);
@@ -2923,6 +3065,7 @@ impl ansi::Handler for TerminalModel {
             self.emit_handler_event(HandlerEvent::InitShell {
                 pending_session_info: Box::new(pending_session_info),
             });
+            self.commit_lifecycle_transition(&transition);
         }
     }
 

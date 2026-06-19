@@ -893,6 +893,9 @@ pub enum FeatureFlag {
     /// their own model routers.
     CustomModelRouters,
 
+    /// Enables state-mutating recovery for abnormal terminal lifecycle sequences.
+    TerminalLifecycleRecovery,
+
     /// Shows a warning in the agent view when the active conversation's
     /// provider-side prompt cache has expired.
     PromptCacheExpiryWarning,

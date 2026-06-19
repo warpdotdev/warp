@@ -153,7 +153,10 @@ fn hex_encoded_json_dcs(payload: &str) -> Vec<u8> {
 }
 
 fn command_finished_and_precmd(terminal: &mut TerminalModel) {
-    let completion_metadata = CompletionMetadata::default();
+    let completion_metadata = CompletionMetadata {
+        exit_code: ExitCode::from(0),
+        next_block_id: BlockId::new(),
+    };
     terminal.command_finished(CommandFinishedValue {
         completion_metadata: completion_metadata.clone(),
         ..Default::default()
@@ -261,7 +264,13 @@ fn ssh_bootstraps_if_blocklist_empty() {
         shell_path: None,
     };
     terminal.bootstrapped(bootstrapped_value.clone());
-    terminal.command_finished(Default::default());
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: BlockId::new(),
+        },
+        session_id: None,
+    });
     terminal
         .block_list_mut()
         .precmd_with_completion_metadata(PrecmdValue {
@@ -855,6 +864,11 @@ fn test_reset_state() {
 #[test]
 fn test_exit_alt_screen_on_command_finished() {
     let mut terminal: TerminalModel = TerminalModel::mock(None, None);
+    terminal.start_command_execution();
+    terminal.preexec(PreexecValue {
+        command: "accepted".to_owned(),
+        session_id: None,
+    });
 
     terminal.enter_alt_screen(true);
 
@@ -870,47 +884,58 @@ fn test_exit_alt_screen_on_command_finished() {
 }
 
 #[test]
-fn precmd_and_preexec_remain_noops_while_the_alt_screen_is_active() {
+fn accepted_precmd_and_preexec_target_the_block_list_while_the_alt_screen_is_active() {
     let mut terminal = TerminalModel::mock(None, None);
-    let active_block_id = terminal.active_block_id().clone();
-    let active_block_state = terminal.block_list().active_block().state();
-    let active_block_started = terminal.block_list().active_block().started();
+    terminal.start_command_execution();
     terminal.enter_alt_screen(true);
+    terminal.preexec(PreexecValue {
+        command: "accepted".to_owned(),
+        session_id: None,
+    });
+    assert_eq!(
+        terminal.block_list().active_block().state(),
+        BlockState::Executing
+    );
+    assert!(terminal.alt_screen_active);
 
+    let next_block_id = BlockId::new();
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: next_block_id.clone(),
+        },
+        session_id: None,
+    });
+    terminal.enter_alt_screen(true);
     terminal.precmd_with_completion_metadata(PrecmdValue {
-        completion_metadata: CompletionMetadata::default(),
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id,
+        },
         prompt_metadata: PromptMetadata {
-            pwd: Some("/unexpected".to_owned()),
+            pwd: Some("/accepted".to_owned()),
             ..Default::default()
         },
     });
-    terminal.preexec(PreexecValue {
-        command: "unexpected".to_owned(),
-        session_id: None,
-    });
-
-    assert_eq!(terminal.active_block_id(), &active_block_id);
     assert_eq!(
-        terminal.block_list().active_block().state(),
-        active_block_state
-    );
-    assert_eq!(
-        terminal.block_list().active_block().started(),
-        active_block_started
-    );
-    assert_ne!(
         terminal
             .block_list()
             .active_block()
             .pwd()
             .map(String::as_str),
-        Some("/unexpected")
+        Some("/accepted")
     );
+    assert!(terminal.alt_screen_active);
 }
 
 #[test]
 fn test_unset_bracketed_paste_mode_on_command_finished() {
     let mut terminal: TerminalModel = TerminalModel::mock(None, None);
+    terminal.start_command_execution();
+    terminal.preexec(PreexecValue {
+        command: "accepted".to_owned(),
+        session_id: None,
+    });
 
     terminal.set_mode(Mode::BracketedPaste);
 
@@ -1032,6 +1057,136 @@ fn normal_lifecycle_pipeline_emits_completion_and_prompt_side_effects_once() {
         Ok(OrderedTerminalEventType::CommandExecutionFinished { .. })
     ));
     assert!(ordered_rx.try_recv().is_err());
+}
+
+#[test]
+fn repeated_and_executing_command_starts_are_safely_gated() {
+    let mut terminal = TerminalModel::mock(None, None);
+    let active_block_id = terminal.active_block_id().clone();
+
+    assert_eq!(
+        terminal.start_command_execution(),
+        StartCommandOutcome::Accepted
+    );
+    assert_eq!(
+        terminal.start_command_execution(),
+        StartCommandOutcome::Coalesced
+    );
+    assert_eq!(terminal.active_block_id(), &active_block_id);
+
+    terminal.preexec(PreexecValue {
+        command: "running".to_owned(),
+        session_id: None,
+    });
+    assert_eq!(
+        terminal.start_command_execution(),
+        StartCommandOutcome::RejectedExecuting
+    );
+    assert_eq!(terminal.active_block_id(), &active_block_id);
+    assert_eq!(
+        terminal.block_list().active_block().state(),
+        BlockState::Executing
+    );
+}
+
+#[test]
+fn duplicate_and_colliding_completion_evidence_is_ignored() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.start_command_execution();
+    terminal.preexec(PreexecValue {
+        command: "first".to_owned(),
+        session_id: None,
+    });
+    let first_block_id = terminal.active_block_id().clone();
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(9),
+            next_block_id: first_block_id.clone(),
+        },
+        session_id: None,
+    });
+    assert_eq!(terminal.active_block_id(), &first_block_id);
+    assert_eq!(
+        terminal.block_list().active_block().state(),
+        BlockState::Executing
+    );
+
+    let second_block_id = BlockId::new();
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: second_block_id.clone(),
+        },
+        session_id: None,
+    });
+    terminal.precmd(PrecmdValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: second_block_id.clone(),
+        },
+        prompt_metadata: PromptMetadata::default(),
+    });
+    terminal.start_command_execution();
+    terminal.preexec(PreexecValue {
+        command: "second".to_owned(),
+        session_id: None,
+    });
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(7),
+            next_block_id: first_block_id,
+        },
+        session_id: None,
+    });
+    assert_eq!(terminal.active_block_id(), &second_block_id);
+    assert_eq!(
+        terminal.block_list().active_block().state(),
+        BlockState::Executing
+    );
+}
+
+#[test]
+fn terminal_exit_absorbs_later_lifecycle_inputs() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.exit(ExitReason::PtyDisconnected);
+    let active_block_id = terminal.active_block_id().clone();
+    let block_count = terminal.block_list().blocks().len();
+    let pending_session_id = terminal.pending_session_id();
+
+    assert_eq!(
+        terminal.start_command_execution(),
+        StartCommandOutcome::IgnoredTerminated
+    );
+    terminal.preexec(PreexecValue {
+        command: "ignored".to_owned(),
+        session_id: None,
+    });
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(1),
+            next_block_id: BlockId::new(),
+        },
+        session_id: None,
+    });
+    terminal.precmd(PrecmdValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(1),
+            next_block_id: active_block_id.clone(),
+        },
+        prompt_metadata: PromptMetadata::default(),
+    });
+    terminal.legacy_precmd(PromptMetadata::default());
+    terminal.init_shell(InitShellValue {
+        shell: "bash".to_owned(),
+        user: "ignored".to_owned(),
+        hostname: "ignored".to_owned(),
+        session_id: 42.into(),
+        ..Default::default()
+    });
+
+    assert_eq!(terminal.active_block_id(), &active_block_id);
+    assert_eq!(terminal.block_list().blocks().len(), block_count);
+    assert_eq!(terminal.pending_session_id(), pending_session_id);
 }
 #[test]
 fn test_alt_screen_selection_tracks_scroll() {
@@ -1188,6 +1343,14 @@ fn test_rect_selection_in_alt_screen() {
 fn viewer_processes_dcs_hook_with_unregistered_session_id() {
     let mut terminal = TerminalModel::mock(None, None);
     terminal.set_shared_session_status(SharedSessionStatus::reader());
+    terminal.start_command_execution();
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: BlockId::new(),
+        },
+        session_id: None,
+    });
 
     let bytes = hex_encoded_json_dcs(
         r#"{
@@ -1214,6 +1377,14 @@ fn viewer_processes_dcs_hook_with_unregistered_session_id() {
 fn sharer_rejects_dcs_hook_with_unregistered_session_id() {
     let mut terminal = TerminalModel::mock(None, None);
     terminal.set_shared_session_status(SharedSessionStatus::ActiveSharer);
+    terminal.start_command_execution();
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: BlockId::new(),
+        },
+        session_id: None,
+    });
 
     let bytes = hex_encoded_json_dcs(
         r#"{
