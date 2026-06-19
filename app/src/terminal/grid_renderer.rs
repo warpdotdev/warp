@@ -1434,6 +1434,7 @@ fn render_grid_with_ligatures<'a>(
                 line_height_ratio,
                 baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
                 fixed_width_tab_size: None,
+                skip_caret_positions: false,
             },
             &string_data.style_runs,
             cell_size.x() * grid.columns() as f32,

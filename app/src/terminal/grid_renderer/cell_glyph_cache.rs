@@ -58,6 +58,7 @@ impl CellGlyphCache {
                         line_height_ratio: DEFAULT_LINE_HEIGHT_RATIO,
                         baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
                         fixed_width_tab_size: None,
+                        skip_caret_positions: false,
                     },
                     &[(
                         (0..run_length_chars),

@@ -1119,14 +1119,18 @@ impl Line {
     pub fn first_index(&self) -> usize {
         self.caret_positions
             .first()
-            .map_or(0, |caret| caret.start_offset)
+            .map(|caret| caret.start_offset)
+            .or_else(|| self.first_glyph().map(|g| g.index))
+            .unwrap_or(0)
     }
 
     /// The last character index that's within this line (inclusive).
     pub fn last_index(&self) -> usize {
         self.caret_positions
             .last()
-            .map_or(0, |caret| caret.last_offset)
+            .map(|caret| caret.last_offset)
+            .or_else(|| self.last_glyph().map(|g| g.index))
+            .unwrap_or(0)
     }
 
     /// The first character index that's after this line.

@@ -217,6 +217,7 @@ impl Element for ShimmeringTextElement {
                         line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
                         baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
                         fixed_width_tab_size: None,
+                        skip_caret_positions: false,
                     },
                     &styles,
                     max_width,

@@ -3414,6 +3414,7 @@ impl ParagraphStyles {
             line_height_ratio: self.line_height_ratio,
             baseline_ratio: self.baseline_ratio,
             fixed_width_tab_size: self.fixed_width_tab_size,
+            skip_caret_positions: false,
         }
     }
 
