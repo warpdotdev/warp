@@ -237,6 +237,13 @@ pub fn init(app: &mut AppContext) {
             FileNotebookAction::ReloadFile,
         )
         .with_context_predicate(id!("FileNotebookView")),
+        EditableBinding::new(
+            "notebookview:toggle_markdown_display_mode",
+            "Toggle Markdown rendered/raw view",
+            FileNotebookAction::ToggleMarkdownDisplayMode(MarkdownDisplayMode::Raw),
+        )
+        .with_context_predicate(id!("FileNotebookView"))
+        .with_key_binding("cmdorctrl-e"),
     ])
 }
 
@@ -1084,6 +1091,12 @@ impl TypedActionView for FileNotebookView {
                 self.context_menu.handle_action(action, ctx);
             }
             FileNotebookAction::ToggleMarkdownDisplayMode(mode) => {
+                // The rendered/raw toggle only applies to markdown files (its segmented
+                // control is only shown for them). The keybinding is registered view-wide,
+                // so ignore it on non-markdown panes.
+                if !self.is_markdown_file() {
+                    return;
+                }
                 self.markdown_display_mode = *mode;
                 self.display_mode_segmented_control
                     .update(ctx, |control, ctx| {
