@@ -64,8 +64,9 @@ pub enum PathSegment {
 /// Stores per-node expansion state for a rendered JSON tree.
 ///
 /// State is keyed by `Vec<PathSegment>` which identifies each node by its
-/// structural path in the tree. This is stable across streaming re-parses
-/// of the same JSON (Design §C1).
+/// structural path in the tree. Path-keyed state is stable across
+/// streaming re-parses because the path for any given node is deterministic
+/// as long as the surrounding JSON structure is unchanged.
 #[derive(Debug, Default, Clone)]
 pub struct JsonTreeState {
     /// Expansion state for object/array nodes. Absent = default (expanded at
@@ -134,13 +135,10 @@ pub struct JsonTreeColors {
 impl JsonTreeColors {
     /// Resolve colors from a `WarpTheme` and its background color.
     ///
-    /// Color mapping (Design §A1):
-    /// - key/index      → `theme.ansi_fg_cyan()`
-    /// - string         → `theme.ansi_fg_green()`
-    /// - number         → `theme.ansi_fg_yellow()`
-    /// - bool           → `theme.ansi_fg_magenta()`
-    /// - null           → `internal_colors::text_disabled()`
-    /// - annotation/punctuation → `internal_colors::text_sub()`
+    /// Each JSON value type maps to a visually distinct ANSI foreground color
+    /// so that keys, strings, numbers, booleans, and null are easy to
+    /// distinguish at a glance. Annotations and punctuation use the theme's
+    /// subdued text color so they don't compete with value content.
     pub fn from_theme(theme: &WarpTheme) -> Self {
         let bg = theme.background();
         Self {
@@ -549,8 +547,6 @@ fn render_container_node(
                 on_toggle_clone(path_for_toggle.clone(), depth);
             })
             .on_right_click(move |_ctx, _app, _pos| {
-                // Phase 1: invoke on_copy_json directly. A visual context menu
-                // will be wired up in Phase 3 within the view context.
                 on_copy_clone(path_for_copy.clone(), value_for_copy.clone());
             })
             .finish();

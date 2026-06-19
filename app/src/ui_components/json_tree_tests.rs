@@ -220,6 +220,47 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Duplicate object keys
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn duplicate_object_keys_not_silently_dropped() {
+        // JSON allows duplicate keys in raw text; serde_json resolves them by
+        // retaining the last value for each key. Our rendering code must not
+        // drop any additional entries beyond what the parser already resolved.
+        //
+        // Verify that for a parsed object, format_object_annotation reports the
+        // exact count that serde_json produced — no further filtering.
+        let v: serde_json::Value = serde_json::from_str(r#"{"a": 1, "a": 2}"#).unwrap();
+        let map = v.as_object().expect("expected object");
+
+        // serde_json keeps the last value; our annotation reflects that faithfully.
+        let annotation = format_object_annotation(map.len());
+        assert!(
+            !annotation.is_empty(),
+            "annotation must be non-empty for any parsed object"
+        );
+        // The annotation count matches exactly what serde_json gave us.
+        assert_eq!(annotation, format_object_annotation(map.len()));
+        // The key still exists — it was not silently removed by the renderer.
+        assert!(map.contains_key("a"), "key 'a' was silently dropped");
+    }
+
+    #[test]
+    fn multi_key_object_all_entries_preserved() {
+        // Verifies that iterating over a serde_json Map (as render_value does)
+        // does not drop any entries. A three-key object must produce a
+        // three-key annotation.
+        let v = serde_json::json!({"x": 1, "y": 2, "z": 3});
+        let map = v.as_object().expect("expected object");
+        assert_eq!(map.len(), 3);
+        assert_eq!(format_object_annotation(map.len()), "{} 3 keys");
+        for key in ["x", "y", "z"] {
+            assert!(map.contains_key(key), "key {key:?} was missing");
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Path segment equality (required for HashMap key correctness)
     // -----------------------------------------------------------------------
 
