@@ -3,10 +3,38 @@ Linear: APP-2527
 Figma: none provided (reference screenshot supplied in the originating request showing a generic collapsible JSON tree with chevron expanders and typed value colors; the visual treatment must follow Warp UI conventions, not the screenshot's exact styling)
 
 ## Summary
-Render the JSON request (arguments) and JSON response of an MCP tool call in the agent UI as an interactive, collapsible tree with chevron expanders and theme-driven colors for keys and values, instead of the current flat pretty-printed JSON blob. Long string values are elided by default and can be expanded in place via a chevron.
+Render the JSON request (arguments) and JSON response of an MCP tool call in the agent UI as an interactive, collapsible tree with chevron expanders and theme-driven colors for keys and values, instead of the current flat pretty-printed JSON blob. Long string values are elided by default and can be expanded in place via a chevron. The underlying JSON tree widget is designed as a generic, reusable UI component.
 
 ## Problem
 When the agent calls an MCP tool, expanding the tool-call detail currently shows the request arguments and the response as a single unformatted pretty-printed JSON string. For anything beyond a couple of fields this is hard to scan: there is no way to collapse uninteresting sub-objects, no visual distinction between keys and values, and long string values (file contents, logs, base64, stack traces) blow out the height of the view and bury the rest of the structure. Users need to quickly understand what was sent to a tool and what came back.
+
+## Example
+
+The following mock illustrates the intended rendering style for an expanded MCP tool call detail. `▶` is the right-pointing (collapsed) chevron; `▼` is the down-pointing (expanded) chevron. Colors represent value types — keys in cyan/blue, strings in green, numbers in yellow, booleans in magenta, null muted, type annotations in secondary text. Exact palette is determined by Warp theme tokens, not by this mock.
+
+```
+Request
+  ▼ {} 3 keys
+      path:   "/home/user/project"
+      depth:  2
+    ▼ filters:  [] 2 items
+          0:  "*.rs"
+          1:  "*.toml"
+
+Response
+  ▼ {} 2 keys
+      count:  42
+    ▶ files:  [] 3 items          ← collapsed; click to expand
+```
+
+Long string elision (collapsed → expanded):
+
+```
+  summary:  "This is a very long descri…"  ▶
+                           ↓ click ▶
+  summary:  ▼ "This is a very long description that spans many
+               characters and would dominate the view if always shown."
+```
 
 ## Behavior
 
@@ -16,7 +44,7 @@ When the agent calls an MCP tool, expanding the tool-call detail currently shows
 
 ### Request and response sections
 3. When expanded, the detail shows the request arguments as a tree. The root of the request tree is the tool's argument object (the JSON passed to the tool).
-4. Once a response is available, the detail additionally shows the response as a tree below the request, under a clear visual/label separation between request and response (e.g. a "Request" and "Response" label or equivalent divider). Before a response exists, only the request is shown.
+4. Once a response is available, the detail additionally shows the response as a tree below the request, under a clear visual/label separation between request and response (e.g. "Request" and "Response" labels with a divider). Before a response exists, only the request is shown.
 5. If the tool call is still pending (blocked awaiting approval, or running), the request tree renders as soon as the arguments are known; the response section is absent until a result arrives.
 
 ### Tree structure and expansion
@@ -44,24 +72,28 @@ When the agent calls an MCP tool, expanding the tool-call detail currently shows
 21. Strings at or below the threshold render in full inline with no expander.
 22. Multi-line strings (containing newlines) are treated as long for elision purposes: the collapsed preview shows the first line (or a truncated portion) with the expander; expanding shows the full multi-line content.
 
-### Selection and copy
-23. The user can select text within the rendered tree (keys and values) and copy it, preserving today's ability to select MCP tool content. Copying a selection yields the visible text of the selected region.
-24. **Open question:** whether "copy" of a collapsed container node should copy the underlying raw JSON of that subtree (convenient) or only the visible summary text. Default assumption: copy yields visible text only; a future enhancement may add "copy raw JSON".
+### Selection, copy, and context menu
+23. The user can select text within the rendered tree (keys and values) and copy it. Copying a selection yields the visible text of the selected region.
+24. Right-clicking anywhere in the tree body shows a context menu with at minimum:
+    - **Copy** — copies the current text selection, or the visible text of the right-clicked row if nothing is selected.
+    - **Copy JSON** — copies the raw JSON of the subtree rooted at the right-clicked node, formatted as pretty-printed JSON. For a scalar node this copies the scalar value. For the Request or Response section label this copies the full JSON of that section.
+25. "Copy JSON" always copies the complete underlying JSON of the subtree, regardless of whether the node is collapsed or expanded. This allows extracting a subtree for use in other tools without having to expand it first.
+26. The context menu is also available on the Request and Response section labels to copy the full JSON of that section.
 
 ### Malformed / edge-case data
-25. The response of an MCP tool call may not be a single JSON object — it can be structured content, one or more text content items, or an error. Rendering handles each:
+27. The response of an MCP tool call may not be a single JSON object — it can be structured content, one or more text content items, or an error. Rendering handles each:
     - Structured/JSON content renders as the tree described above.
     - Plain text content that is not valid JSON renders as a string value (subject to long-string elision), not as a failed/empty tree.
     - An error result renders as a clearly labeled error message (e.g. `Error: <message>`) rather than an empty or misleading tree.
     - A cancelled tool call renders a clear "cancelled" indication rather than an empty tree.
-26. If the request arguments are absent or null (a tool called with no arguments), the request tree renders an empty/`null` indication rather than a broken node.
-27. Values that are valid JSON but unusual — empty string, very large numbers, numbers that are whole-valued floats, unicode, nested arrays of objects — all render without panicking and without losing data. Whole-number integer arguments display as integers (e.g. `5`, not `5.0`), consistent with how the tool call is actually dispatched.
-28. Duplicate object keys (possible in raw JSON) all render; none are silently dropped.
+28. If the request arguments are absent or null (a tool called with no arguments), the request tree renders an empty/`null` indication rather than a broken node.
+29. Values that are valid JSON but unusual — empty string, very large numbers, numbers that are whole-valued floats, unicode, nested arrays of objects — all render without panicking and without losing data. Whole-number integer arguments display as integers (e.g. `5`, not `5.0`), consistent with how the tool call is actually dispatched.
+30. Duplicate object keys (possible in raw JSON) all render; none are silently dropped.
 
 ### Streaming
-29. While the tool-call request arguments are still streaming in, the request tree may update as more of the structure arrives; partial/in-progress structure renders without flicker that resets the user's expansion state for already-rendered nodes.
+31. While the tool-call request arguments are still streaming in, the request tree may update as more of the structure arrives; partial/in-progress structure renders without flicker that resets the user's expansion state for already-rendered nodes.
 
 ### Consistency and non-regression
-30. The expanded MCP detail remains inside the same bordered action container it uses today, with the same surrounding spacing, header, and footer behavior; only the body content (formerly a JSON blob) changes to the tree.
-31. Keyboard accept/reject/expand behavior of the action header is unchanged.
-32. Non-MCP action details (commands, edits, web fetch, etc.) are visually unaffected by this change.
+32. The expanded MCP detail remains inside the same bordered action container it uses today, with the same surrounding spacing, header, and footer behavior; only the body content (formerly a JSON blob) changes to the tree.
+33. Keyboard accept/reject/expand behavior of the action header is unchanged.
+34. Non-MCP action details (commands, edits, web fetch, etc.) are visually unaffected by this change.
