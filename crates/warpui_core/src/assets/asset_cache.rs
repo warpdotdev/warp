@@ -2,9 +2,14 @@ use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::Hash;
+#[cfg(not(target_arch = "wasm32"))]
+use std::hash::{DefaultHasher, Hasher};
+use std::num::NonZeroU64;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::UNIX_EPOCH;
 
 use anyhow::{anyhow, Error, Result};
 use async_channel::{self, Receiver, Sender};
@@ -64,6 +69,51 @@ impl std::fmt::Debug for AsyncAssetId {
     }
 }
 
+/// A content fingerprint for a local file on disk.
+///
+/// Used as part of an [`AssetSource::LocalFile`] cache key so that a file whose
+/// contents change on disk is treated as a distinct asset and re-read, rather
+/// than served from a now-stale cache entry. The fingerprint is a hash of the
+/// file's last-modified time and size, which are cheap to read and change
+/// whenever the file is rewritten. It is stored as a `NonZeroU64` so that
+/// `Option<LocalFileContentVersion>` stays pointer-width and does not grow the
+/// [`AssetSource`] enum.
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
+pub struct LocalFileContentVersion(NonZeroU64);
+
+impl LocalFileContentVersion {
+    /// Builds a content version by reading filesystem metadata for `path`.
+    ///
+    /// Performs blocking filesystem I/O, so this must only be called off the
+    /// render hot path (for example, once when a view resolves its image
+    /// sources), never on every frame. Returns `None` when metadata cannot be
+    /// read.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn for_path(path: impl AsRef<std::path::Path>) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        let modified_unix_nanos = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0);
+        let mut hasher = DefaultHasher::new();
+        modified_unix_nanos.hash(&mut hasher);
+        metadata.len().hash(&mut hasher);
+        let fingerprint = hasher.finish() | 1;
+        Some(Self(
+            NonZeroU64::new(fingerprint).unwrap_or(NonZeroU64::MIN),
+        ))
+    }
+
+    /// Filesystem metadata is unavailable on WASM, so a local-file content
+    /// version is never computed there.
+    #[cfg(target_arch = "wasm32")]
+    pub fn for_path(_path: impl AsRef<std::path::Path>) -> Option<Self> {
+        None
+    }
+}
+
 /// A "URI" for some data file. In other words, the location of an asset.
 #[derive(Derivative)]
 #[derivative(Clone, Hash, PartialEq, Eq, Debug)]
@@ -85,9 +135,37 @@ pub enum AssetSource {
         path: &'static str,
     },
     /// Accessible in the user's local filesystem at the provided path.
-    LocalFile { path: String },
+    LocalFile {
+        path: String,
+        /// Optional content fingerprint. When present, it makes the cache key
+        /// sensitive to on-disk changes so an edited file is re-read instead of
+        /// served stale. `None` preserves path-only caching for callers that do
+        /// not need invalidation.
+        content_version: Option<LocalFileContentVersion>,
+    },
     /// Image loaded directly with bytes
     Raw { id: String },
+}
+
+impl AssetSource {
+    /// Returns this source with a freshly-read local-file content version
+    /// attached when it is an [`AssetSource::LocalFile`]; all other variants are
+    /// returned unchanged.
+    ///
+    /// Reads filesystem metadata, so call this off the render hot path (for
+    /// example, once when a view resolves its image sources), never per frame.
+    pub fn with_local_file_content_version(self) -> Self {
+        match self {
+            AssetSource::LocalFile { path, .. } => {
+                let content_version = LocalFileContentVersion::for_path(&path);
+                AssetSource::LocalFile {
+                    path,
+                    content_version,
+                }
+            }
+            other => other,
+        }
+    }
 }
 
 /// The public representation of an asset's current state (i.e., in-memory availability).
@@ -321,7 +399,7 @@ impl AssetCache {
                     };
                     assets.insert(key.clone(), asset_state);
                 }
-                AssetSource::LocalFile { path } => {
+                AssetSource::LocalFile { path, .. } => {
                     assets.insert(key.clone(), AssetStateInternal::loading());
                     self.load_asynchronously::<T>(
                         source.clone(),
@@ -502,3 +580,7 @@ impl Entity for AssetCache {
 }
 
 impl SingletonEntity for AssetCache {}
+
+#[cfg(test)]
+#[path = "asset_cache_tests.rs"]
+mod tests;
