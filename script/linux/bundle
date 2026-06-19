@@ -5,8 +5,6 @@
 set -e
 
 WORKSPACE_ROOT_DIR="$(pwd)"
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT_DIR/target}"
-DIST_DIR="$CARGO_TARGET_DIR/dist"
 
 cleanup() {
   # Delete the directory that was used as a staging area during the bundling
@@ -121,6 +119,14 @@ while (( "$#" )); do
 done
 # set positional arguments in their proper place
 eval set -- "$PARAMS"
+
+# Statically compile the CLI and warpctrl artifacts so they can run on older Linux distros.
+if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
+  TARGET_TRIPLE="${BUILD_ARCH}-unknown-linux-musl"
+fi
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT_DIR/target${TARGET_TRIPLE:+/$TARGET_TRIPLE}}"
+
+DIST_DIR="$CARGO_TARGET_DIR/dist"
 
 if [[ $DEBUG = true ]]; then
   CARGO_PROFILE="dev"
