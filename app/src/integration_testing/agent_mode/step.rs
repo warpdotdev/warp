@@ -172,11 +172,9 @@ pub fn submit_ai_query(query: &str, timeout: Duration) -> TestStep {
 
 /// Persists the implementation conversation's token usage / cost / exchange
 /// count to runtime tags (namespaced `impl.*`) and its `git diff` to a durable
-/// file BEFORE a judge step replaces the active conversation. Both
-/// `output_code_diff_debug_info` and `output_conversation_debug_info` read
-/// `history_model.active_conversation(...)` at `on_finish` time — after `/new`
-/// the active conversation is the judge's, and the impl's analytics would be
-/// silently lost.
+/// file. Must run before the judge starts a new conversation with `/new`,
+/// which replaces the active conversation — analytics captured at `on_finish`
+/// would then reflect the judge's conversation rather than the implementation.
 pub fn capture_impl_artifacts() -> TestStep {
     new_step_with_default_assertions("Capture impl conversation artifacts").add_named_assertion(
         "Persist impl token usage + diff before judge swaps active conversation",
