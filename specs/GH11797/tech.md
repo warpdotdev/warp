@@ -25,8 +25,7 @@ Produces the chip value text using `jj log` with output templates. `change_id.sh
 returns the change ID truncated to exactly 8 characters (e.g., `qquqvwzk`) — chosen over
 `shortest(8)` so the chip has a fixed visual width independent of repo size.
 `jj log` invocations include `--ignore-working-copy` to prevent unintentional auto-snapshots
-during prompt rendering (this command is read-only — see the `jj_dirty_items` section for
-the asymmetric case). Logic:
+during prompt rendering. Logic:
 
 1. Query bookmarks on `@` — if found, output them directly.
 2. Otherwise, get the change ID via `change_id.short(8)`.
@@ -90,35 +89,27 @@ Produces the count of changed files in the working copy:
 ```rust
 // Bash/Zsh:
 const SH_DIRTY_CMD: &str =
-    "count=$(jj diff --summary 2>/dev/null | grep -cE '^[AMD] ') && [ \"$count\" -gt 0 ] && echo \"$count\"";
+    "count=$(jj diff --summary --ignore-working-copy 2>/dev/null | grep -cE '^[AMD] ') && [ \"$count\" -gt 0 ] && echo \"$count\"";
 ```
 
 ```rust
 // Fish:
-const FISH_DIRTY_CMD: &str = "set count (jj diff --summary 2>/dev/null | grep -cE '^[AMD] ') \
+const FISH_DIRTY_CMD: &str = "set count (jj diff --summary --ignore-working-copy 2>/dev/null | grep -cE '^[AMD] ') \
     && test $count -gt 0 && string trim $count";
 ```
 
 ```rust
 // PowerShell:
-const PWSH_DIRTY_CMD: &str = "$count = (jj diff --summary 2>$null | Select-String -Pattern '^[AMD] ').Count; \
+const PWSH_DIRTY_CMD: &str = "$count = (jj diff --summary --ignore-working-copy 2>$null | Select-String -Pattern '^[AMD] ').Count; \
     if ($count -gt 0) { $count }";
 ```
 
-#### `--ignore-working-copy` asymmetry
+#### `--ignore-working-copy`
 
-This command **intentionally omits `--ignore-working-copy`**, unlike `jj_bookmark()`. Reason: with
-`--ignore-working-copy`, `jj diff` compares the last snapshot against the parent — it does not see
-filesystem edits made since the last `jj` invocation. The dirty-count chip would then show stale
-or zero values until the user ran some other jj command. Dropping the flag lets `jj diff` snapshot
-the working copy on each prompt render and report a live count.
-
-The cost is that each prompt render appends one operation log entry. jj is designed for frequent
-snapshots and the operation log is inexpensive (and garbage-collected). This is the same
-behavior `jj status` already does when users run it manually.
-
-The bookmark chip keeps `--ignore-working-copy` because reading bookmarks doesn't depend on the
-working-copy snapshot.
+All `jj diff` invocations use `--ignore-working-copy` to prevent operation-log spam
+when the prompt refreshes. The dirty count may lag a fraction of a second behind the
+filesystem, but it avoids thrashing the jj repo state on every render — standard
+practice for shell prompt chips.
 
 #### Output parsing
 
