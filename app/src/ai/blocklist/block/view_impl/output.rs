@@ -99,6 +99,7 @@ use crate::ai::blocklist::secret_redaction::SecretRedactionState;
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
 use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
+use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::paths::shell_native_absolute_path;
 use crate::ai::skills::{
     icon_override_for_skill_name, render_skill_button, skill_path_from_location, SkillManager,
@@ -3231,6 +3232,73 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         flex.add_child(continue_button);
     }
 
+    if !is_passive_code_diff
+        && !props.is_conversation_transcript_viewer
+        && !props.shared_session_status.is_viewer()
+    {
+        if let Some(conversation_id) = props.model.conversation_id(app) {
+            if let Some(exchange_id) = props.model.exchange_id(app) {
+                let is_pinned = AIDocumentModel::as_ref(app).is_message_pinned(
+                    conversation_id,
+                    exchange_id,
+                    app,
+                );
+                let ui_builder = appearance.ui_builder().clone();
+                let pinned_messages_button = icon_button(
+                    appearance,
+                    if is_pinned {
+                        Icon::PinFilled
+                    } else {
+                        Icon::Pin
+                    },
+                    is_pinned,
+                    props.state_handles.pinned_messages_handle.clone(),
+                )
+                .with_tooltip(move || {
+                    let tooltip = if is_pinned {
+                        "Pinned response"
+                    } else {
+                        "Pin response"
+                    };
+                    ui_builder.tool_tip(tooltip.to_string()).build().finish()
+                })
+                .with_style(style_override)
+                .with_hovered_styles(style_override_with_background)
+                .with_active_styles(style_override_with_background)
+                .build()
+                .on_click(|ctx, _, _| {
+                    ctx.dispatch_typed_action(AIBlockAction::PinResponse);
+                })
+                .finish();
+
+                flex.add_child(pinned_messages_button);
+            }
+
+            let ui_builder = appearance.ui_builder().clone();
+            let notes_button = icon_button(
+                appearance,
+                Icon::Notebook,
+                false,
+                props.state_handles.notes_handle.clone(),
+            )
+            .with_tooltip(move || {
+                ui_builder
+                    .tool_tip("Open notes".to_string())
+                    .build()
+                    .finish()
+            })
+            .with_style(style_override)
+            .with_hovered_styles(style_override_with_background)
+            .with_active_styles(style_override_with_background)
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(AIBlockAction::OpenNotes);
+            })
+            .finish();
+
+            flex.add_child(notes_button);
+        }
+    }
     if !props.is_conversation_transcript_viewer && !cfg!(target_family = "wasm") {
         let ui_builder = appearance.ui_builder().clone();
         let fork_button = icon_button(

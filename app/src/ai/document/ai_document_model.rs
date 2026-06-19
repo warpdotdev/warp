@@ -19,7 +19,7 @@ use warpui::color::ColorU;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::AIAgentActionId;
+use crate::ai::agent::{AIAgentActionId, AIAgentExchangeId};
 use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -89,6 +89,29 @@ impl AIDocumentUserEditStatus {
 }
 
 const PLAN_FOLDER_NAME: &str = "Plans";
+pub const NOTES_DOCUMENT_TITLE: &str = "Notes";
+pub const PINNED_MESSAGES_DOCUMENT_TITLE: &str = "Pinned messages";
+const NOTES_DOCUMENT_INITIAL_CONTENT: &str =
+    "# Notes\n\nUse this scratchpad to capture thoughts while working with Warp Agent.\n";
+const PINNED_MESSAGES_DOCUMENT_INITIAL_CONTENT: &str =
+    "# Pinned messages\n\nKeep track of assistant responses you want to revisit.\n";
+const PINNED_MESSAGE_EXCERPT_CHAR_LIMIT: usize = 240;
+fn pinned_message_marker(exchange_id: AIAgentExchangeId) -> String {
+    format!("<!-- warp-pinned-message:{exchange_id} -->")
+}
+
+fn pinned_message_excerpt(text: &str) -> String {
+    let normalized = text.split_whitespace().join(" ");
+    if normalized.chars().count() <= PINNED_MESSAGE_EXCERPT_CHAR_LIMIT {
+        return normalized;
+    }
+
+    let excerpt = normalized
+        .chars()
+        .take(PINNED_MESSAGE_EXCERPT_CHAR_LIMIT)
+        .collect::<String>();
+    format!("{excerpt}…")
+}
 
 /// Represents a document queued for creation in Warp Drive.
 #[derive(Debug, Clone)]
@@ -764,6 +787,140 @@ impl AIDocumentModel {
         ctx.emit(AIDocumentModelEvent::StreamingDocumentsCleared(
             *conversation_id,
         ));
+    }
+
+    fn auxiliary_document_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+        title: &str,
+    ) -> Option<(AIDocumentId, AIDocumentVersion)> {
+        self.documents
+            .iter()
+            .filter(|(_, doc)| doc.conversation_id == conversation_id && doc.title == title)
+            .max_by_key(|(_, doc)| doc.created_at)
+            .map(|(id, doc)| (*id, doc.version))
+    }
+
+    fn create_auxiliary_document(
+        &mut self,
+        conversation_id: AIConversationId,
+        title: &str,
+        content: &str,
+        ctx: &mut ModelContext<Self>,
+    ) -> (AIDocumentId, AIDocumentVersion) {
+        let latest_document_id = self
+            .latest_document_id_by_conversation_id
+            .get(&conversation_id)
+            .copied();
+        let document_id = self.create_document(title, content, conversation_id, None, ctx);
+        match latest_document_id {
+            Some(latest_document_id) => {
+                self.latest_document_id_by_conversation_id
+                    .insert(conversation_id, latest_document_id);
+            }
+            None => {
+                self.latest_document_id_by_conversation_id
+                    .remove(&conversation_id);
+            }
+        }
+        let version = self
+            .documents
+            .get(&document_id)
+            .map(|doc| doc.version)
+            .unwrap_or_default();
+        (document_id, version)
+    }
+
+    pub fn get_or_create_notes_document(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> (AIDocumentId, AIDocumentVersion) {
+        self.auxiliary_document_for_conversation(conversation_id, NOTES_DOCUMENT_TITLE)
+            .unwrap_or_else(|| {
+                self.create_auxiliary_document(
+                    conversation_id,
+                    NOTES_DOCUMENT_TITLE,
+                    NOTES_DOCUMENT_INITIAL_CONTENT,
+                    ctx,
+                )
+            })
+    }
+
+    pub fn is_message_pinned(
+        &self,
+        conversation_id: AIConversationId,
+        exchange_id: AIAgentExchangeId,
+        ctx: &AppContext,
+    ) -> bool {
+        let Some((document_id, _)) = self
+            .auxiliary_document_for_conversation(conversation_id, PINNED_MESSAGES_DOCUMENT_TITLE)
+        else {
+            return false;
+        };
+        self.get_document_content(&document_id, ctx)
+            .is_some_and(|content| content.contains(&pinned_message_marker(exchange_id)))
+    }
+    pub fn pin_message_to_document(
+        &mut self,
+        conversation_id: AIConversationId,
+        exchange_id: AIAgentExchangeId,
+        prompt_text: &str,
+        output_text: &str,
+        conversation_link: Option<&str>,
+        ctx: &mut ModelContext<Self>,
+    ) -> (AIDocumentId, AIDocumentVersion, bool) {
+        let (document_id, version) = self
+            .auxiliary_document_for_conversation(conversation_id, PINNED_MESSAGES_DOCUMENT_TITLE)
+            .unwrap_or_else(|| {
+                self.create_auxiliary_document(
+                    conversation_id,
+                    PINNED_MESSAGES_DOCUMENT_TITLE,
+                    PINNED_MESSAGES_DOCUMENT_INITIAL_CONTENT,
+                    ctx,
+                )
+            });
+
+        let marker = pinned_message_marker(exchange_id);
+        let Some(doc) = self.documents.get_mut(&document_id) else {
+            return (document_id, version, false);
+        };
+        let current_content = doc.editor.as_ref(ctx).markdown_unescaped(ctx);
+        if current_content.contains(&marker) {
+            return (document_id, doc.version, false);
+        }
+
+        let prompt_excerpt = pinned_message_excerpt(prompt_text);
+        let output_excerpt = pinned_message_excerpt(output_text);
+        let mut entry = String::new();
+        entry.push_str("\n");
+        entry.push_str(&marker);
+        entry.push_str("\n");
+        if let Some(conversation_link) = conversation_link {
+            entry.push_str(&format!(
+                "- [ ] [Jump to conversation]({conversation_link}) — {output_excerpt}\n"
+            ));
+        } else {
+            entry.push_str(&format!("- [ ] {output_excerpt}\n"));
+        }
+        if !prompt_excerpt.is_empty() {
+            entry.push_str(&format!("  - Prompt: {prompt_excerpt}\n"));
+        }
+        entry.push_str(&format!("  - Exchange ID: `{exchange_id}`\n"));
+
+        let new_content = format!("{}{}", current_content.trim_end(), entry);
+        doc.editor.update(ctx, |editor, editor_ctx| {
+            editor.reset_with_markdown(&new_content, editor_ctx);
+        });
+        let version = doc.version;
+        ctx.emit(AIDocumentModelEvent::DocumentUpdated {
+            document_id,
+            version,
+            source: AIDocumentUpdateSource::User,
+        });
+        self.enqueue_save(&document_id);
+        self.maybe_update_cloud_notebook_data(&document_id, ctx);
+        (document_id, version, true)
     }
 
     /// Get a copy of the current document by id.
