@@ -451,8 +451,18 @@ impl Hoverable {
         ctx: &mut EventContext,
         app: &AppContext,
     ) -> bool {
-        let was_mouse_over_element = self.state().is_mouse_over_element;
+        let (was_mouse_over_element, was_hovered) = {
+            let state = self.state();
+            (state.is_mouse_over_element, state.is_hovered)
+        };
         let is_hovered = self.is_mouse_over_element(ctx, position);
+
+        // Synthetic mouse moves are generated after layout changes even when the pointer has not
+        // physically moved. Some hover-driven UI deliberately opts out of those synthetic outs so
+        // overlays or layout shifts don't briefly clear hover state and then immediately restore it.
+        if self.skip_synthetic_hover_out && is_synthetic && !is_hovered && was_hovered {
+            return false;
+        }
         self.state().is_mouse_over_element = is_hovered;
 
         // The type of timer that we might need to set, if there's a corresponding delay.
