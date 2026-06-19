@@ -414,9 +414,8 @@ impl AIRequestUsageModel {
 
         // If you have provided your own API key or connected a Grok
         // subscription, it doesn't matter if you are out of warp-provided requests.
-        let api_key_manager = ApiKeyManager::as_ref(ctx);
         let has_byo_credentials = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx)
-            && (api_key_manager.keys().has_any_key() || api_key_manager.has_grok_subscription());
+            && ApiKeyManager::as_ref(ctx).has_any_key();
 
         has_base_plan_ai_requests
             || (user_bonus_credits || workspace_bonus_credits)

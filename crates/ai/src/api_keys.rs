@@ -82,11 +82,6 @@ impl ApiKeys {
                 .any(|endpoint| !endpoint.api_key.trim().is_empty())
     }
 
-    /// Returns `true` when the user has at least one custom endpoint configured.
-    pub fn has_custom_endpoints(&self) -> bool {
-        !self.custom_endpoints.is_empty()
-    }
-
     /// Number of single-provider API keys currently configured (OpenAI,
     /// Anthropic, Google, OpenRouter). Custom endpoints are counted separately
     /// via `custom_endpoints`.
@@ -225,6 +220,12 @@ impl ApiKeyManager {
             .as_ref()
             .and_then(GrokTokens::access_token_for_request)
             .is_some()
+    }
+
+    /// Returns `true` when the user has any usable BYO credential: a pasted
+    /// provider or custom-endpoint key, or a connected Grok subscription.
+    pub fn has_any_key(&self) -> bool {
+        self.keys.has_any_key() || self.has_grok_subscription()
     }
 
     /// Stores (or clears, with `None`) the xAI/Grok OAuth tokens and persists
