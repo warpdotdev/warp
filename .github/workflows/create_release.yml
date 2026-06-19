@@ -707,9 +707,9 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+      # - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      #   with:
+      #     credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
       - name: Load PGP signing key and passphrase
         run: |
@@ -975,9 +975,9 @@ jobs:
           config_file: ${{ env.CONFIG_FILE }}
           channel: ${{ inputs.channel }}
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+      # - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      #   with:
+      #     credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
       # Namespace's User Bundled Cache persists target/ between jobs on the same profile, which can
       # leave stale packages from a previous channel's build in the linux bundle output dir.
