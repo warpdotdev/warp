@@ -569,7 +569,7 @@ fn parse_dcs_ssh_with_external_control_master() {
 }
 
 #[test]
-fn parse_dcs_precmd() {
+fn parse_dcs_precmd_ignores_completion_fields() {
     let bytes = hex_encoded_dcs_string(
         r#"{
                 "hook": "Precmd",
@@ -582,6 +582,7 @@ fn parse_dcs_precmd() {
                     "virtual_env": "",
                     "conda_env": "numpy",
                     "exit_code": 0,
+                    "next_block_id": "block_id",
                     "session_id": 167303092612201
                 }
             }"#,
@@ -610,6 +611,21 @@ fn parse_dcs_precmd() {
         ),
         _ => panic!("incorrect dcs value"),
     };
+}
+
+#[test]
+fn pending_precmd_ignores_completion_fields() {
+    let mut hook = PendingHook::create("Precmd").unwrap();
+    hook.update("exit_code".to_owned(), "127".to_owned());
+    hook.update("next_block_id".to_owned(), "block_id".to_owned());
+    hook.update("session_id".to_owned(), "167303092612201".to_owned());
+
+    match hook.finish() {
+        DProtoHook::Precmd { value } => {
+            assert_eq!(value.session_id, Some(167303092612201));
+        }
+        _ => panic!("incorrect dcs value"),
+    }
 }
 
 #[test]
