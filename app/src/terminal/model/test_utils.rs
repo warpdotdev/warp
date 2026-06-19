@@ -14,7 +14,10 @@ use pathfinder_geometry::vector::Vector2F;
 use warp_core::command::ExitCode;
 use warpui::r#async::executor::Background;
 
-use super::ansi::{CommandFinishedValue, Handler, PrecmdValue, PreexecValue, Processor};
+use super::ansi::{
+    CommandFinishedValue, CompletionMetadata, Handler, PrecmdValue, PreexecValue, Processor,
+    PromptMetadata,
+};
 use super::block::{Block, BlockId, BlockSize};
 use super::blocks::BlockList;
 use super::bootstrap::BootstrapStage;
@@ -373,25 +376,20 @@ impl TerminalModel {
     /// Simulates the completion of a block.
     /// Assumes that a block was running to begin with.
     pub fn finish_block(&mut self) {
-        self.command_finished(CommandFinishedValue {
+        let completion_metadata = CompletionMetadata {
             exit_code: ExitCode::from(0),
             next_block_id: BlockId::new(),
+        };
+        self.command_finished(CommandFinishedValue {
+            completion_metadata: completion_metadata.clone(),
             session_id: None,
         });
         self.precmd(PrecmdValue {
-            pwd: None,
-            git_head: None,
-            git_branch: None,
-            virtual_env: None,
-            conda_env: None,
-            node_version: None,
-            session_id: Some(0),
-            kube_config: None,
-            ps1: None,
-            honor_ps1: None,
-            rprompt: None,
-            ps1_is_encoded: Some(true),
-            is_after_in_band_command: false,
+            completion_metadata,
+            prompt_metadata: PromptMetadata {
+                session_id: Some(0),
+                ..Default::default()
+            },
         });
     }
 

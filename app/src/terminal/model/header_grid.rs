@@ -9,7 +9,7 @@ use pathfinder_color::ColorU;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::units::{IntoLines as _, Lines};
 
-use super::ansi::{self, Attr, Handler, PrecmdValue, PreexecValue, Processor};
+use super::ansi::{self, Attr, Handler, PrecmdValue, PreexecValue, Processor, PromptMetadata};
 use super::block::{BlockGridPoint, BlockSize};
 use super::blockgrid::BlockGrid;
 use super::bootstrap::BootstrapStage;
@@ -1142,6 +1142,10 @@ impl ansi::Handler for HeaderGrid {
     }
 
     fn precmd(&mut self, data: PrecmdValue) {
+        self.legacy_precmd(data.prompt_metadata);
+    }
+
+    fn legacy_precmd(&mut self, data: PromptMetadata) {
         if let Some(honor_ps1) = data.honor_ps1 {
             if honor_ps1 != self.honor_ps1 {
                 log::debug!(

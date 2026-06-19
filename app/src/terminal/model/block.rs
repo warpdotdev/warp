@@ -52,7 +52,7 @@ use crate::terminal::event::{
     BlockWorkingDirectoryUpdatedEvent, Event, UserBlockCompleted,
 };
 use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::ansi::{self, PrecmdValue, PreexecValue, Processor};
+use crate::terminal::model::ansi::{self, PrecmdValue, PreexecValue, Processor, PromptMetadata};
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::grid::grid_handler::TermMode;
 use crate::terminal::model::index::{Point, VisibleRow};
@@ -3327,10 +3327,13 @@ impl ansi::Handler for Block {
     }
 
     fn precmd(&mut self, data: PrecmdValue) {
+        self.legacy_precmd(data.prompt_metadata);
+    }
+
+    fn legacy_precmd(&mut self, data: PromptMetadata) {
         record_trace_event!("command_execution:block:precmd");
         let is_after_in_band_command = data.was_sent_after_in_band_command();
-
-        self.header_grid.precmd(data.clone());
+        self.header_grid.legacy_precmd(data.clone());
 
         self.state = BlockState::BeforeExecution;
         self.pwd = data.pwd;

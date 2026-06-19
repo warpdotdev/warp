@@ -91,7 +91,7 @@ pub fn insert_block_with_prompt(
     command: &str,
     output: &str,
 ) -> BlockIndex {
-    block_list.precmd(PrecmdValue {
+    block_list.legacy_precmd(PromptMetadata {
         ps1: Some(hex::encode(prompt)),
         honor_ps1: Some(true),
         ..Default::default()
@@ -122,8 +122,15 @@ pub fn insert_block_with_prompt(
 /// block list, the bootstrapped state). Tests that check for messages sent to the
 /// view need to also call `precmd`.
 pub fn command_finished_and_precmd(block_list: &mut BlockList) {
-    block_list.command_finished(Default::default());
-    block_list.precmd(Default::default());
+    let completion_metadata = ansi::CompletionMetadata::default();
+    block_list.command_finished(CommandFinishedValue {
+        completion_metadata: completion_metadata.clone(),
+        ..Default::default()
+    });
+    block_list.precmd(PrecmdValue {
+        completion_metadata,
+        prompt_metadata: PromptMetadata::default(),
+    });
 }
 fn drain_terminal_events(events_rx: &async_channel::Receiver<Event>) -> Vec<Event> {
     let mut events = Vec::new();

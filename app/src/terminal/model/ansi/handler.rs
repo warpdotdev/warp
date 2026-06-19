@@ -258,6 +258,9 @@ pub trait Handler {
     /// Callback for the Warp precmd hook.
     fn precmd(&mut self, _data: PrecmdValue) {}
 
+    /// Callback for a legacy Warp precmd hook without correlated completion metadata.
+    fn legacy_precmd(&mut self, _data: PromptMetadata) {}
+
     /// Update the active block's current working directory, independent of the
     /// prompt cycle. Invoked from OSC 7 (`\e]7;file://host/path`) so external
     /// tools can notify the terminal of CWD changes mid-command, without

@@ -58,7 +58,8 @@ pub use crate::terminal::history::HistoryEntry;
 use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
     ClearValue, CommandFinishedValue, ExitShellValue, Handler, InitShellValue, InitSubshellValue,
-    PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, SSHValue, SourcedRcFileForWarpValue,
+    PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, PromptMetadata, SSHValue,
+    SourcedRcFileForWarpValue,
 };
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::completions::{
@@ -997,13 +998,17 @@ impl TerminalModel {
             shell: "zsh".to_string(),
             ..Default::default()
         });
+        let completion_metadata = ansi::CompletionMetadata::default();
         terminal_model.command_finished(CommandFinishedValue {
+            completion_metadata: completion_metadata.clone(),
             session_id: Some(session_id.as_u64()),
-            ..Default::default()
         });
         terminal_model.precmd(PrecmdValue {
-            session_id: Some(session_id.as_u64()),
-            ..Default::default()
+            completion_metadata,
+            prompt_metadata: PromptMetadata {
+                session_id: Some(session_id.as_u64()),
+                ..Default::default()
+            },
         });
         terminal_model
     }
@@ -2707,7 +2712,7 @@ impl ansi::Handler for TerminalModel {
         // the blocklist (for the local shell).
         self.exit_alt_screen(true);
 
-        let block_id = data.next_block_id.to_string();
+        let block_id = data.completion_metadata.next_block_id.to_string();
         let is_for_in_band_command = self.block_list().active_block().is_in_band_command_block();
         let finished_block_bootstrap_stage = self.block_list().active_block().bootstrap_stage();
         delegate!(self.command_finished(data));
@@ -2751,6 +2756,10 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn precmd(&mut self, data: PrecmdValue) {
+        self.legacy_precmd(data.prompt_metadata);
+    }
+
+    fn legacy_precmd(&mut self, data: PromptMetadata) {
         self.ignore_bootstrapping_messages = false;
         let session_id = data.session_id;
         let mut env_vars = HashMap::new();
@@ -2758,7 +2767,7 @@ impl ansi::Handler for TerminalModel {
             env_vars.insert("KUBECONFIG".to_string(), kube_config);
         }
         let handled_after_inband = data.was_sent_after_in_band_command();
-        delegate!(self.precmd(data));
+        delegate!(self.legacy_precmd(data));
 
         self.emit_handler_event(HandlerEvent::Precmd {
             session_id: session_id.map(|id| id.into()),

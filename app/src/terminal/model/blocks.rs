@@ -42,8 +42,8 @@ use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
     Attr, BootstrappedValue, CharsetIndex, ClearMode, CommandFinishedValue, CursorShape,
-    CursorStyle, LineClearMode, Mode, PrecmdValue, PreexecValue, Processor, StandardCharset,
-    TabulationClearMode,
+    CursorStyle, LineClearMode, Mode, PrecmdValue, PreexecValue, Processor, PromptMetadata,
+    StandardCharset, TabulationClearMode,
 };
 use crate::terminal::model::block::{AgentViewVisibility, Block, SerializedBlock};
 use crate::terminal::model::blockgrid::BlockGrid;
@@ -311,7 +311,7 @@ pub struct BlockList {
     /// necessary to recompute the precmd payload after an in-band command runs. Thus we send an
     /// unpopulated precmd payload for in-band commands to make their execution as fast as
     /// possible.
-    last_populated_precmd_payload: Option<PrecmdValue>,
+    last_populated_precmd_payload: Option<PromptMetadata>,
 
     /// Cached data about the prompt that was visible in the input the last time
     /// the user submitted a command.  Some prompt tools update the prompt just
@@ -2610,18 +2610,18 @@ impl BlockList {
         &mut self,
         block_id: BlockId,
         bootstrap_stage: BootstrapStage,
-        precmd_value: Option<PrecmdValue>,
+        prompt_metadata: Option<PromptMetadata>,
         restored_block_was_local: bool,
     ) {
         self.create_new_block(
             block_id,
             bootstrap_stage,
-            precmd_value,
+            prompt_metadata,
             Some(restored_block_was_local),
         );
     }
 
-    /// If a precmd_value is provided, then we delegate the precmd
+    /// If prompt metadata is provided, then we delegate the precmd
     /// message to the block. In normal execution, we don't have
     /// this data here because it comes from a different hook dedicated
     /// to precmd itself. One place we provide the value is session
@@ -2631,7 +2631,7 @@ impl BlockList {
         &mut self,
         block_id: BlockId,
         bootstrap_stage: BootstrapStage,
-        precmd_value: Option<PrecmdValue>,
+        prompt_metadata: Option<PromptMetadata>,
         restored_block_was_local: Option<bool>,
     ) {
         let honor_ps1 = self.honor_ps1;
@@ -2679,8 +2679,8 @@ impl BlockList {
             .insert(block.id().clone(), block.index());
         self.blocks.push(block);
 
-        if let Some(precmd_value) = precmd_value {
-            delegate_to_block!(self.precmd(precmd_value));
+        if let Some(prompt_metadata) = prompt_metadata {
+            delegate_to_block!(self.legacy_precmd(prompt_metadata));
         }
     }
 
@@ -2921,7 +2921,7 @@ impl BlockList {
         bootstrap_stage: BootstrapStage,
         processor: &mut Processor,
     ) {
-        let precmd_value = PrecmdValue {
+        let prompt_metadata = PromptMetadata {
             pwd: block.pwd.clone(),
             git_head: block.git_head.clone(),
             git_branch: block.git_branch_name.clone(),
@@ -2940,7 +2940,7 @@ impl BlockList {
         self.create_new_block(
             block.id.clone(),
             bootstrap_stage,
-            Some(precmd_value),
+            Some(prompt_metadata),
             block.is_local,
         );
         if let Some(shell_host) = &block.shell_host {
@@ -3054,14 +3054,15 @@ impl BlockList {
             self.finish_background_block();
         }
 
-        self.active_block_mut().finish(data.exit_code);
+        self.active_block_mut()
+            .finish(data.completion_metadata.exit_code);
         self.update_active_block_height();
 
         self.update_selection_after_height_change();
         self.create_new_block(
-            data.next_block_id,
+            data.completion_metadata.next_block_id,
             next_bootstrap_stage,
-            None, /*precmd_value*/
+            None, /* prompt_metadata */
             None, /* restored_block_was_local */
         );
         if next_bootstrap_stage == BootstrapStage::ScriptExecution {
@@ -3752,6 +3753,10 @@ impl ansi::Handler for BlockList {
     /// the view. This is where we want to perform any costly
     /// operations relevant to the _previous_ block.
     fn precmd(&mut self, data: PrecmdValue) {
+        self.legacy_precmd(data.prompt_metadata);
+    }
+
+    fn legacy_precmd(&mut self, data: PromptMetadata) {
         let latest_block_finished_time = self.latest_block_finished_time.take();
         // We don't need to log this delay during the bootstrapping process, since these
         // are not blocks that the user has created. The delay here also can be very high
@@ -3776,11 +3781,11 @@ impl ansi::Handler for BlockList {
         // in-band command runs. Thus we send an unpopulated precmd payload for in-band commands to
         // make their execution as fast as possible.
         if data.was_sent_after_in_band_command() {
-            let mut precmd_value = self.last_populated_precmd_payload.clone().unwrap_or(data);
-            precmd_value.is_after_in_band_command = true;
-            delegate_to_block!(self.precmd(precmd_value));
+            let mut prompt_metadata = self.last_populated_precmd_payload.clone().unwrap_or(data);
+            prompt_metadata.is_after_in_band_command = true;
+            delegate_to_block!(self.legacy_precmd(prompt_metadata));
         } else {
-            delegate_to_block!(self.precmd(data.clone()));
+            delegate_to_block!(self.legacy_precmd(data.clone()));
             self.last_populated_precmd_payload = Some(data);
         }
 

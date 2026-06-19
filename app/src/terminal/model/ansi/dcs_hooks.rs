@@ -41,7 +41,7 @@ pub(super) enum DProtoHook {
         value: CommandFinishedValue,
     },
     Precmd {
-        value: PrecmdValue,
+        value: PrecmdHookValue,
     },
     Preexec {
         value: PreexecValue,
@@ -104,7 +104,7 @@ impl DProtoHook {
     pub fn session_id(&self) -> Option<SessionId> {
         match self {
             DProtoHook::InitShell { value } => Some(value.session_id),
-            DProtoHook::Precmd { value } => value.session_id.map(SessionId::from),
+            DProtoHook::Precmd { value } => value.session_id().map(SessionId::from),
             DProtoHook::ExitShell { value } => Some(value.session_id),
             DProtoHook::Preexec { value } => value.session_id.map(SessionId::from),
             DProtoHook::CommandFinished { value } => value.session_id.map(SessionId::from),
@@ -144,9 +144,6 @@ impl DProtoHook {
     pub fn default_from_name(hook: &str) -> Option<Self> {
         match hook {
             "CommandFinished" => Some(DProtoHook::CommandFinished {
-                value: Default::default(),
-            }),
-            "Precmd" => Some(DProtoHook::Precmd {
                 value: Default::default(),
             }),
             "Preexec" => Some(DProtoHook::Preexec {
@@ -203,46 +200,16 @@ impl DProtoHook {
         };
         match self {
             DProtoHook::CommandFinished { value } => match key.as_ref() {
-                "exit_code" => value.exit_code = v.parse::<i32>().unwrap_or_default().into(),
+                "exit_code" => {
+                    value.completion_metadata.exit_code =
+                        v.parse::<i32>().unwrap_or_default().into()
+                }
                 "next_block_id" => {
-                    value.next_block_id = v.to_string().into();
+                    value.completion_metadata.next_block_id = v.to_string().into();
                 }
                 "session_id" => value.session_id = v.parse::<u64>().ok(),
                 _ => {
                     log::warn!("Tried to add unknown field to CommandFinished");
-                }
-            },
-            DProtoHook::Precmd { value } => match key.as_ref() {
-                "pwd" => {
-                    value.pwd = map_empty_to_none(v);
-                }
-                "ps1" => {
-                    value.ps1 = map_empty_to_none(v);
-                }
-                "ps1_is_encoded" => value.ps1_is_encoded = v.parse::<bool>().ok(),
-                "honor_ps1" => value.honor_ps1 = v.parse::<bool>().ok(),
-                "rprompt" => {
-                    value.rprompt = map_empty_to_none(v);
-                }
-                "git_head" => {
-                    value.git_head = map_empty_to_none(v);
-                }
-                "git_branch" => {
-                    value.git_branch = map_empty_to_none(v);
-                }
-                "virtual_env" => {
-                    value.virtual_env = map_empty_to_none(v);
-                }
-                "conda_env" => {
-                    value.conda_env = map_empty_to_none(v);
-                }
-                "kube_config" => {
-                    value.kube_config = map_empty_to_none(v);
-                }
-                "exit_code" | "next_block_id" => {}
-                "session_id" => value.session_id = v.parse::<u64>().ok(),
-                _ => {
-                    log::warn!("Tried to add unknown field {key} to Precmd");
                 }
             },
             DProtoHook::InitShell { value } => match key.as_ref() {
@@ -412,18 +379,142 @@ impl DProtoHook {
     }
 }
 
+/// Canonical correlated payload received from the pty at precmd.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrecmdValue {
+    #[serde(flatten)]
+    pub completion_metadata: CompletionMetadata,
+    #[serde(flatten)]
+    pub prompt_metadata: PromptMetadata,
+}
+
+/// A decoded precmd payload, classified according to its completion evidence.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub(super) enum PrecmdHookValue {
+    Correlated(PrecmdValue),
+    Legacy(PromptMetadata),
+}
+
+impl PrecmdHookValue {
+    fn session_id(&self) -> HookSessionId {
+        match self {
+            Self::Correlated(value) => value.prompt_metadata.session_id,
+            Self::Legacy(value) => value.session_id,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawPrecmdValue {
+    #[serde(flatten)]
+    prompt_metadata: PromptMetadata,
+    #[serde(default)]
+    exit_code: RawPrecmdField<ExitCode>,
+    #[serde(default)]
+    next_block_id: RawPrecmdField<BlockId>,
+}
+
+#[derive(Debug, Default)]
+enum RawPrecmdField<T> {
+    #[default]
+    Missing,
+    Present(Option<T>),
+}
+
+impl<'de, T> Deserialize<'de> for RawPrecmdField<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<T>::deserialize(deserializer).map(Self::Present)
+    }
+}
+
+impl RawPrecmdValue {
+    fn populate_field(&mut self, key: String, value: String) {
+        let map_empty_to_none = |value: String| {
+            if value.is_empty() {
+                None
+            } else {
+                Some(value)
+            }
+        };
+        match key.as_str() {
+            "pwd" => self.prompt_metadata.pwd = map_empty_to_none(value),
+            "ps1" => self.prompt_metadata.ps1 = map_empty_to_none(value),
+            "ps1_is_encoded" => self.prompt_metadata.ps1_is_encoded = value.parse::<bool>().ok(),
+            "honor_ps1" => self.prompt_metadata.honor_ps1 = value.parse::<bool>().ok(),
+            "rprompt" => self.prompt_metadata.rprompt = map_empty_to_none(value),
+            "git_head" => self.prompt_metadata.git_head = map_empty_to_none(value),
+            "git_branch" => self.prompt_metadata.git_branch = map_empty_to_none(value),
+            "virtual_env" => self.prompt_metadata.virtual_env = map_empty_to_none(value),
+            "conda_env" => self.prompt_metadata.conda_env = map_empty_to_none(value),
+            "kube_config" => self.prompt_metadata.kube_config = map_empty_to_none(value),
+            "session_id" => self.prompt_metadata.session_id = value.parse::<u64>().ok(),
+            "exit_code" => {
+                self.exit_code = RawPrecmdField::Present(value.parse::<i32>().ok().map(Into::into));
+            }
+            "next_block_id" => {
+                self.next_block_id = RawPrecmdField::Present(Some(value.into()));
+            }
+            _ => {
+                log::warn!("Tried to add unknown field {key} to Precmd");
+            }
+        }
+    }
+    fn classify(self) -> Result<PrecmdHookValue, &'static str> {
+        match (self.exit_code, self.next_block_id) {
+            (
+                RawPrecmdField::Present(Some(exit_code)),
+                RawPrecmdField::Present(Some(next_block_id)),
+            ) => Ok(PrecmdHookValue::Correlated(PrecmdValue {
+                completion_metadata: CompletionMetadata {
+                    exit_code,
+                    next_block_id,
+                },
+                prompt_metadata: self.prompt_metadata,
+            })),
+            (RawPrecmdField::Missing, RawPrecmdField::Missing) => {
+                Ok(PrecmdHookValue::Legacy(self.prompt_metadata))
+            }
+            _ => Err("Precmd payload must contain both exit_code and next_block_id"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PrecmdHookValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        RawPrecmdValue::deserialize(deserializer)?
+            .classify()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 /// Received from the pty when a command has finished executing.
-#[derive(Debug, Deserialize, Default, Serialize, PartialEq, Eq)]
-pub struct CommandFinishedValue {
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CompletionMetadata {
     pub exit_code: ExitCode,
     pub next_block_id: BlockId,
+}
+
+/// Received from the pty when a command has finished executing.
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CommandFinishedValue {
+    #[serde(flatten)]
+    pub completion_metadata: CompletionMetadata,
     #[serde(default)]
     pub session_id: HookSessionId,
 }
-
-/// Received from the pty at precmd.
+/// Prompt and shell context received from the pty at precmd.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PrecmdValue {
+pub struct PromptMetadata {
     #[serde(deserialize_with = "empty_string_is_none", default)]
     pub pwd: Option<String>,
 
@@ -457,13 +548,13 @@ pub struct PrecmdValue {
 
     pub session_id: HookSessionId,
 
-    /// Whether this PrecmdValue was emitted after the completion of an in-band command.
+    /// Whether this prompt metadata was emitted after the completion of an in-band command.
     #[serde(default)]
     pub is_after_in_band_command: bool,
 }
 
-impl PrecmdValue {
-    /// Returns `true` if this PrecmdValue was emitted after the completion of an in-band command.
+impl PromptMetadata {
+    /// Returns `true` if this prompt metadata was emitted after the completion of an in-band command.
     ///
     /// This relies on the assumption that the warp_precmd shell function (responsible for writing
     /// this to the PTY from the shell) does not populate `pwd` or `ps1` when the previous command
@@ -473,7 +564,7 @@ impl PrecmdValue {
     }
 }
 
-impl Default for PrecmdValue {
+impl Default for PromptMetadata {
     fn default() -> Self {
         Self {
             pwd: Default::default(),
@@ -773,14 +864,25 @@ fn parse_shell_options_list(s: String) -> HashSet<String> {
 }
 
 /// Represents a shell hook that will be constructed over time by receiving key-value pairs.
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct PendingHook {
-    hook: DProtoHook,
+    value: PendingHookValue,
+}
+
+#[derive(Debug)]
+enum PendingHookValue {
+    Precmd(RawPrecmdValue),
+    Other(DProtoHook),
 }
 
 impl PendingHook {
     pub fn create(hook_name: &str) -> Option<Self> {
-        DProtoHook::default_from_name(hook_name).map(|hook| Self { hook })
+        let value = if hook_name == "Precmd" {
+            PendingHookValue::Precmd(RawPrecmdValue::default())
+        } else {
+            PendingHookValue::Other(DProtoHook::default_from_name(hook_name)?)
+        };
+        Some(Self { value })
     }
 
     /// Updates the field on the hook according to the given key-value pair.
@@ -788,10 +890,18 @@ impl PendingHook {
         if super::is_ansi_c_quoted(&value) {
             value = super::parse_ansi_c_quoted_string(value);
         }
-        self.hook.populate_field(key, value);
+        match &mut self.value {
+            PendingHookValue::Precmd(precmd) => precmd.populate_field(key, value),
+            PendingHookValue::Other(hook) => hook.populate_field(key, value),
+        }
     }
 
-    pub(super) fn finish(self) -> DProtoHook {
-        self.hook
+    pub(super) fn finish(self) -> Result<DProtoHook, &'static str> {
+        match self.value {
+            PendingHookValue::Precmd(precmd) => {
+                precmd.classify().map(|value| DProtoHook::Precmd { value })
+            }
+            PendingHookValue::Other(hook) => Ok(hook),
+        }
     }
 }
