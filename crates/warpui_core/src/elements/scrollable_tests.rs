@@ -175,6 +175,62 @@ impl crate::core::View for BasicScrollableView {
 impl TypedActionView for BasicScrollableView {
     type Action = ();
 }
+struct StaticScrollableElement;
+
+impl Element for StaticScrollableElement {
+    fn layout(&mut self, _: SizeConstraint, _: &mut LayoutContext, _: &AppContext) -> Vector2F {
+        Vector2F::zero()
+    }
+
+    fn after_layout(&mut self, _: &mut AfterLayoutContext, _: &AppContext) {}
+
+    fn paint(&mut self, _: Vector2F, _: &mut PaintContext, _: &AppContext) {}
+
+    fn size(&self) -> Option<Vector2F> {
+        Some(Vector2F::zero())
+    }
+
+    fn origin(&self) -> Option<Point> {
+        Some(Point::from_vec2f(Vector2F::zero(), ZIndex::new(0)))
+    }
+
+    fn dispatch_event(
+        &mut self,
+        _: &DispatchedEvent,
+        _: &mut EventContext,
+        _: &AppContext,
+    ) -> bool {
+        false
+    }
+}
+
+impl ScrollableElement for StaticScrollableElement {
+    fn scroll_data(&self, _: &AppContext) -> Option<ScrollData> {
+        Some(ScrollData {
+            scroll_start: Pixels::zero(),
+            visible_px: Pixels::new(1.),
+            total_size: Pixels::new(2.),
+        })
+    }
+
+    fn scroll(&mut self, _: Pixels, _: &mut EventContext) {}
+}
+
+#[test]
+fn always_visible_scrollbar_thumb_is_opt_in() {
+    let scrollable = Scrollable::vertical(
+        Default::default(),
+        StaticScrollableElement.finish_scrollable(),
+        ScrollbarWidth::Auto,
+        Fill::None,
+        Fill::None,
+        Fill::None,
+    );
+    assert!(!scrollable.always_show_nonactive_scrollbar_thumb);
+
+    let scrollable = scrollable.with_always_visible_scrollbar_thumb();
+    assert!(scrollable.always_show_nonactive_scrollbar_thumb);
+}
 
 const STACKED_VIEW_LENGTH: f32 = 100.;
 

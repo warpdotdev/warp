@@ -178,6 +178,10 @@ pub struct Scrollable {
     // The scrollbar is the runway for the draggable scrollbar. By default the scollbox renders to
     // the side of the child element. This setting makes the scrollbar render over the child instead.
     overlayed_scrollbar: bool,
+
+    /// Whether the inactive scrollbar thumb should remain visible even when neither the scrollbar
+    /// nor child is hovered.
+    always_show_nonactive_scrollbar_thumb: bool,
 }
 
 impl Scrollable {
@@ -210,6 +214,7 @@ impl Scrollable {
             padding_after_scrollbar: RIGHT_PADDING,
             child_max_z_index: None,
             overlayed_scrollbar: false,
+            always_show_nonactive_scrollbar_thumb: false,
         }
     }
 
@@ -269,6 +274,12 @@ impl Scrollable {
 
     pub fn with_overlayed_scrollbar(mut self) -> Self {
         self.overlayed_scrollbar = true;
+        self
+    }
+
+    /// Keeps the inactive scrollbar thumb visible when the content overflows, even without hover.
+    pub fn with_always_visible_scrollbar_thumb(mut self) -> Self {
+        self.always_show_nonactive_scrollbar_thumb = true;
         self
     }
 
@@ -519,7 +530,7 @@ impl Element for Scrollable {
             let child_hovered = self.state().child_hovered;
             let background = if hovered {
                 self.active_scrollbar_thumb_background
-            } else if child_hovered {
+            } else if child_hovered || self.always_show_nonactive_scrollbar_thumb {
                 self.nonactive_scrollbar_thumb_background
             } else {
                 Fill::None
