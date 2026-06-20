@@ -138,3 +138,7 @@ impl<'a> TuiPresentationContext<'a> {
             .expect("a child view is entered before it is exited");
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
