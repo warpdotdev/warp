@@ -144,68 +144,68 @@ fn transition_matrix_preserves_normal_flow_and_rejects_unsafe_completion() {
         ),
         (
             AwaitingPrecmd,
-            CorrelatedPrecmd(ActiveDuplicate),
+            PrecmdWithCompletionMetadata(ActiveDuplicate),
             AtPrompt,
             ApplyPrecmd,
         ),
         (
             AtPrompt,
-            CorrelatedPrecmd(ActiveDuplicate),
+            PrecmdWithCompletionMetadata(ActiveDuplicate),
             AtPrompt,
             Ignore(IgnoreReason::RepeatedPrecmd),
         ),
         (
             Submitted,
-            CorrelatedPrecmd(ActiveDuplicate),
+            PrecmdWithCompletionMetadata(ActiveDuplicate),
             Submitted,
             Ignore(IgnoreReason::RecoveryDisabled),
         ),
         (
             Executing,
-            CorrelatedPrecmd(ActiveDuplicate),
+            PrecmdWithCompletionMetadata(ActiveDuplicate),
             Executing,
             Ignore(IgnoreReason::RecoveryDisabled),
         ),
         (
             Unknown,
-            CorrelatedPrecmd(ActiveDuplicate),
+            PrecmdWithCompletionMetadata(ActiveDuplicate),
             Unknown,
             Ignore(IgnoreReason::RecoveryDisabled),
         ),
         (
             Terminated,
-            CorrelatedPrecmd(ActiveDuplicate),
+            PrecmdWithCompletionMetadata(ActiveDuplicate),
             Terminated,
             Ignore(IgnoreReason::IgnoredTerminated),
         ),
-        (AwaitingPrecmd, LegacyPrecmd, AtPrompt, ApplyPrecmd),
+        (AwaitingPrecmd, PromptOnlyPrecmd, AtPrompt, ApplyPrecmd),
         (
             AtPrompt,
-            LegacyPrecmd,
+            PromptOnlyPrecmd,
             AtPrompt,
             Ignore(IgnoreReason::RepeatedPrecmd),
         ),
         (
             Submitted,
-            LegacyPrecmd,
+            PromptOnlyPrecmd,
             Submitted,
-            Ignore(IgnoreReason::UnsupportedLegacyPrecmd),
+            Ignore(IgnoreReason::UnsupportedPromptOnlyPrecmd),
         ),
         (
             Executing,
-            LegacyPrecmd,
+            PromptOnlyPrecmd,
             Executing,
-            Ignore(IgnoreReason::UnsupportedLegacyPrecmd),
+            Ignore(IgnoreReason::UnsupportedPromptOnlyPrecmd),
         ),
         (
             Unknown,
-            LegacyPrecmd,
+            PromptOnlyPrecmd,
             Unknown,
-            Ignore(IgnoreReason::UnsupportedLegacyPrecmd),
+            Ignore(IgnoreReason::UnsupportedPromptOnlyPrecmd),
         ),
         (
             Terminated,
-            LegacyPrecmd,
+            PromptOnlyPrecmd,
             Terminated,
             Ignore(IgnoreReason::IgnoredTerminated),
         ),
@@ -286,7 +286,11 @@ fn transition_matrix_preserves_normal_flow_and_rejects_unsafe_completion() {
             }
         };
         assert_eq!(
-            plan(phase, CorrelatedPrecmd(Novel), &bootstrap_snapshot),
+            plan(
+                phase,
+                PrecmdWithCompletionMetadata(Novel),
+                &bootstrap_snapshot
+            ),
             expected_novel_precmd
         );
     }
@@ -331,7 +335,7 @@ fn transition_matrix_preserves_normal_flow_and_rejects_unsafe_completion() {
         assert_eq!(
             plan(
                 phase,
-                CorrelatedPrecmd(ExistingCollision),
+                PrecmdWithCompletionMetadata(ExistingCollision),
                 &bootstrap_snapshot
             ),
             (phase, Ignore(IgnoreReason::CollidingCompletion))
@@ -452,7 +456,7 @@ fn lifecycle_coordinator_records_only_conservative_or_recovery_transitions() {
 
     let transition = coordinator.plan(
         &before_execution,
-        CorrelatedPrecmd(NextBlockIdDisposition::ActiveDuplicate),
+        PrecmdWithCompletionMetadata(NextBlockIdDisposition::ActiveDuplicate),
     );
     assert_eq!(transition.action, ApplyPrecmd);
     assert!(transition.recovery_record.is_none());
@@ -464,7 +468,7 @@ fn lifecycle_coordinator_records_only_conservative_or_recovery_transitions() {
     };
     let transition = coordinator.plan(
         &at_prompt,
-        CorrelatedPrecmd(NextBlockIdDisposition::ActiveDuplicate),
+        PrecmdWithCompletionMetadata(NextBlockIdDisposition::ActiveDuplicate),
     );
     assert_eq!(transition.action, Ignore(IgnoreReason::RepeatedPrecmd));
     assert!(transition.recovery_record.is_some());

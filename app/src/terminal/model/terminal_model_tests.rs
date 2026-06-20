@@ -1119,7 +1119,7 @@ fn duplicate_and_colliding_completion_evidence_is_ignored() {
         },
         session_id: None,
     });
-    terminal.precmd(PrecmdValue {
+    terminal.precmd_with_completion_metadata(PrecmdValue {
         completion_metadata: CompletionMetadata {
             exit_code: ExitCode::from(0),
             next_block_id: second_block_id.clone(),
@@ -1168,14 +1168,14 @@ fn terminal_exit_absorbs_later_lifecycle_inputs() {
         },
         session_id: None,
     });
-    terminal.precmd(PrecmdValue {
+    terminal.precmd_with_completion_metadata(PrecmdValue {
         completion_metadata: CompletionMetadata {
             exit_code: ExitCode::from(1),
             next_block_id: active_block_id.clone(),
         },
         prompt_metadata: PromptMetadata::default(),
     });
-    terminal.legacy_precmd(PromptMetadata::default());
+    terminal.prompt_only_precmd(PromptMetadata::default());
     terminal.init_shell(InitShellValue {
         shell: "bash".to_owned(),
         user: "ignored".to_owned(),

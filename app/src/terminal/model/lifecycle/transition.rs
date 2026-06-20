@@ -36,8 +36,8 @@ pub(in crate::terminal) enum LifecycleInput {
     StartCommand(CommandStartKind),
     Preexec(PreexecObservation),
     CommandFinished(NextBlockIdDisposition),
-    CorrelatedPrecmd(NextBlockIdDisposition),
-    LegacyPrecmd,
+    PrecmdWithCompletionMetadata(NextBlockIdDisposition),
+    PromptOnlyPrecmd,
     InitShell,
     Exit,
 }
@@ -47,8 +47,8 @@ pub(in crate::terminal) enum LifecycleInputKind {
     StartCommand,
     Preexec,
     CommandFinished,
-    CorrelatedPrecmd,
-    LegacyPrecmd,
+    PrecmdWithCompletionMetadata,
+    PromptOnlyPrecmd,
     InitShell,
     Exit,
 }
@@ -59,8 +59,10 @@ impl LifecycleInput {
             LifecycleInput::StartCommand(_) => LifecycleInputKind::StartCommand,
             LifecycleInput::Preexec(_) => LifecycleInputKind::Preexec,
             LifecycleInput::CommandFinished(_) => LifecycleInputKind::CommandFinished,
-            LifecycleInput::CorrelatedPrecmd(_) => LifecycleInputKind::CorrelatedPrecmd,
-            LifecycleInput::LegacyPrecmd => LifecycleInputKind::LegacyPrecmd,
+            LifecycleInput::PrecmdWithCompletionMetadata(_) => {
+                LifecycleInputKind::PrecmdWithCompletionMetadata
+            }
+            LifecycleInput::PromptOnlyPrecmd => LifecycleInputKind::PromptOnlyPrecmd,
             LifecycleInput::InitShell => LifecycleInputKind::InitShell,
             LifecycleInput::Exit => LifecycleInputKind::Exit,
         }
@@ -93,7 +95,7 @@ pub(in crate::terminal) enum IgnoreReason {
     RepeatedPreexec,
     RepeatedPreexecDifferentCommand,
     RepeatedPrecmd,
-    UnsupportedLegacyPrecmd,
+    UnsupportedPromptOnlyPrecmd,
     RecoveryDisabled,
 }
 
@@ -197,23 +199,27 @@ pub(super) fn plan(
             AwaitingPrecmd | AtPrompt | Unknown => (previous_phase, Ignore(RecoveryDisabled)),
             Terminated => (Terminated, Ignore(IgnoredTerminated)),
         },
-        CorrelatedPrecmd(ExistingCollision) => (previous_phase, Ignore(CollidingCompletion)),
-        CorrelatedPrecmd(Novel) => match previous_phase {
+        PrecmdWithCompletionMetadata(ExistingCollision) => {
+            (previous_phase, Ignore(CollidingCompletion))
+        }
+        PrecmdWithCompletionMetadata(Novel) => match previous_phase {
             Terminated => (Terminated, Ignore(IgnoredTerminated)),
             AwaitingPrecmd | AtPrompt | Submitted | Executing | Unknown => {
                 (previous_phase, Ignore(RecoveryDisabled))
             }
         },
-        CorrelatedPrecmd(ActiveDuplicate) => match previous_phase {
+        PrecmdWithCompletionMetadata(ActiveDuplicate) => match previous_phase {
             AwaitingPrecmd => (AtPrompt, ApplyPrecmd),
             AtPrompt => (AtPrompt, Ignore(RepeatedPrecmd)),
             Submitted | Executing | Unknown => (previous_phase, Ignore(RecoveryDisabled)),
             Terminated => (Terminated, Ignore(IgnoredTerminated)),
         },
-        LegacyPrecmd => match previous_phase {
+        PromptOnlyPrecmd => match previous_phase {
             AwaitingPrecmd => (AtPrompt, ApplyPrecmd),
             AtPrompt => (AtPrompt, Ignore(RepeatedPrecmd)),
-            Submitted | Executing | Unknown => (previous_phase, Ignore(UnsupportedLegacyPrecmd)),
+            Submitted | Executing | Unknown => {
+                (previous_phase, Ignore(UnsupportedPromptOnlyPrecmd))
+            }
             Terminated => (Terminated, Ignore(IgnoredTerminated)),
         },
     }

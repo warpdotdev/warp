@@ -2894,7 +2894,7 @@ impl ansi::Handler for TerminalModel {
             .block_list
             .classify_next_block_id(&data.completion_metadata.next_block_id);
         let transition = self.plan_lifecycle_transition(
-            LifecycleInput::CorrelatedPrecmd(disposition),
+            LifecycleInput::PrecmdWithCompletionMetadata(disposition),
             Some(&data.completion_metadata.next_block_id),
             data.prompt_metadata.session_id,
         );
@@ -2906,7 +2906,7 @@ impl ansi::Handler for TerminalModel {
 
     fn prompt_only_precmd(&mut self, data: PromptMetadata) {
         let transition =
-            self.plan_lifecycle_transition(LifecycleInput::LegacyPrecmd, None, data.session_id);
+            self.plan_lifecycle_transition(LifecycleInput::PromptOnlyPrecmd, None, data.session_id);
         if matches!(transition.action, LifecycleAction::ApplyPrecmd) {
             self.apply_precmd_to_fresh_block(data);
         }
