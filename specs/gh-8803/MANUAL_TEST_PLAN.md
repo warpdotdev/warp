@@ -68,7 +68,7 @@ env = { JAVA_HOME = "{{env_HOME}}/.sdkman/candidates/java/21.0.11-amzn" }
 
 **Expected:** the button label is the descriptor's `name` ("jdtls"); clicking it launches the server; and once indexed, hover returns type info.
 
-**Description (post with the clip):** *A `[[editor.language_servers]]` entry surfaces an **Enable jdtls** button (label = descriptor `name`); clicking it launches the server, and hover then returns type info. Java has no built-in LSP in Warp, so a working hover also confirms the custom-only filetype received `textDocument/didOpen` with a language id derived from the descriptor — the `didOpen` fix.* (Paste the 6-line TOML so reviewers see the config.)
+**Description (post with the clip):** *A `[[editor.language_servers]]` entry surfaces an **Enable jdtls** button (label = descriptor `name`); clicking it launches the server, and hover then returns type info.* (Paste the 6-line TOML so reviewers see the config.)
 
 ## Clip 3 — Custom override of a built-in (gopls-custom / Go)
 
@@ -165,7 +165,6 @@ Not a clip (it inspects the log): secret-shaped values in a custom `command`/`ar
 
 - Custom LSPs work for files with no built-in (jdtls/Java, Clip 2) **and** override built-ins for shared filetypes (gopls-custom/Go, Clip 3).
 - The footer shows the **custom descriptor's `name`** when a custom wins resolution — the override-regression fix.
-- A custom-only filetype now receives `textDocument/didOpen` with a descriptor-derived language id, so hover/diagnostics work — the `didOpen` fix (a working hover in Clip 2 demonstrates this, since Java has no built-in LSP).
 - Enable state persists across restart via the SQLite `kind` column (Clip 4).
 - Settings hot-reload applies edits live — a removed custom hands its filetype back to the built-in — without restarting already-running servers (Clip 5).
 - Launch failures raise a descriptor-named toast (Clip 6) and the status menu stays reachable for recovery (Clip 7).
@@ -174,5 +173,5 @@ Not a clip (it inspects the log): secret-shaped values in a custom `command`/`ar
 ## Recording tips
 
 - Record at a resolution where the footer text is legible (a window capture at native size is both legible and small).
-- Linger on the frame that matters: Clip 2 (Enable label = custom name, then a successful hover = the `didOpen` wiring works), Clip 3 (override label ≠ built-in binary name), Clip 4 (auto-spawn after restart), Clip 6 (launch toast), Clip 7 (menu reachable after failure).
+- Linger on the frame that matters: Clip 2 (Enable label = custom name, then a successful hover shows the server working), Clip 3 (override label ≠ built-in binary name), Clip 4 (auto-spawn after restart), Clip 6 (launch toast), Clip 7 (menu reachable after failure).
 - Describe each clip in the PR text (the per-clip **Description**) rather than narrating on camera — keeps clips short and lets you drop the audio track (`-an`) to save size.
