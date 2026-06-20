@@ -1,48 +1,51 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::Arc;
 
 use ai::diff_validation::{AIRequestedCodeDiff, DiffType};
 use anyhow::{anyhow, Result};
 use chrono::Local;
-use command::r#async::Command;
-use itertools::Itertools;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use warp_core::command::ExitCode;
 use warp_terminal::model::BlockId;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
-    AIAgentActionType, AnyFileContent, CallMCPToolResult, CreateDocumentsResult,
-    EditDocumentsResult, FetchConversationResult, FileContext, FileGlobResult, FileGlobV2Match,
-    FileGlobV2Result, GrepFileMatch, GrepLineMatch, GrepResult, InsertReviewCommentsResult,
-    ReadDocumentsResult, ReadFilesRequest, ReadFilesResult, ReadMCPResourceResult,
-    ReadShellCommandOutputResult, ReadSkillResult, RequestCommandOutputResult,
-    RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, SearchCodebaseFailureReason,
-    SearchCodebaseResult, SendMessageToAgentResult, StartAgentResult, SuggestNewConversationResult,
-    SuggestPromptResult, TransferShellCommandControlToUserResult, UpdatedFileContext,
-    UploadArtifactResult, UseComputerResult, WaitForEventsResult,
+    AIAgentActionType, AnyFileContent, FileContext, FileGlobResult, FileGlobV2Result, GrepResult,
+    ReadFilesResult, ReadShellCommandOutputResult, RequestCommandOutputResult,
+    RequestFileEditsResult, TransferShellCommandControlToUserResult, UpdatedFileContext,
     WriteToLongRunningShellCommandResult,
 };
-use crate::ai::blocklist::{apply_edits, read_local_file_context, FileReadResult, SessionContext};
+use crate::ai::blocklist::{
+    apply_edits, ActionExecution, AgentToolActionModel, AgentToolExecutionContext,
+    AgentToolExecutor, AnyActionExecution, ExecuteActionInput, FileReadResult,
+    PreprocessActionInput, SessionContext, SurfaceSpecificToolExecutor,
+};
 use crate::ai::paths::host_native_absolute_path;
 use crate::auth::AuthStateProvider;
-use crate::terminal::shell::ShellType;
+use crate::terminal::model::session::{
+    BootstrapSessionType, ExecuteCommandOptions, HostInfo, IsSSHWrapperSession,
+    LocalCommandExecutor, Session, SessionInfo,
+};
+use crate::terminal::shell::{Shell, ShellLaunchData, ShellType};
 use crate::AuthState;
 
-/// Minimal TUI-owned tool action model for v0 auto-executed client tools.
-pub(crate) struct TuiToolActionModel {
-    results_by_conversation: HashMap<AIConversationId, Vec<AIAgentActionResult>>,
-    cards_by_conversation: HashMap<AIConversationId, Vec<TuiToolCard>>,
-}
-
+/// Minimal card data for TUI tool rendering.
 #[derive(Clone, Debug)]
 pub(crate) struct TuiToolCard {
     pub action_id: AIAgentActionId,
     pub title: String,
     pub lines: Vec<String>,
+}
+
+/// Minimal TUI-owned wrapper around shared tool action state and execution.
+pub(crate) struct TuiToolActionModel {
+    tools: AgentToolActionModel,
+    cards_by_conversation: HashMap<AIConversationId, Vec<TuiToolCard>>,
+    session: Arc<Session>,
 }
 
 pub(crate) enum TuiToolActionEvent {
@@ -53,8 +56,9 @@ pub(crate) enum TuiToolActionEvent {
 impl TuiToolActionModel {
     pub fn new(_: &mut ModelContext<Self>) -> Self {
         Self {
-            results_by_conversation: HashMap::new(),
+            tools: AgentToolActionModel::new(),
             cards_by_conversation: HashMap::new(),
+            session: Arc::new(tui_local_session()),
         }
     }
 
@@ -72,9 +76,7 @@ impl TuiToolActionModel {
         &mut self,
         conversation_id: AIConversationId,
     ) -> Vec<AIAgentActionResult> {
-        self.results_by_conversation
-            .remove(&conversation_id)
-            .unwrap_or_default()
+        self.tools.drain_finished_results(conversation_id)
     }
 
     pub fn queue_actions(
@@ -86,15 +88,11 @@ impl TuiToolActionModel {
         if actions.is_empty() {
             return;
         }
-
-        let current_working_directory = std::env::current_dir()
-            .ok()
-            .map(|path| path.to_string_lossy().to_string());
-        let shell_type = shell_type_from_env();
-        let shell_path = std::env::var("SHELL").ok();
-        let session_context = SessionContext::local(current_working_directory.clone());
-        let background_executor = ctx.background_executor();
-        let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+        self.tools.record_action_order(conversation_id, &actions);
+        for action in &actions {
+            self.tools
+                .record_serial_running_action(conversation_id, action.id.clone());
+        }
 
         self.cards_by_conversation
             .entry(conversation_id)
@@ -106,40 +104,83 @@ impl TuiToolActionModel {
             }));
         ctx.emit(TuiToolActionEvent::Updated { conversation_id });
 
-        ctx.spawn(
-            async move {
-                let mut outputs = Vec::with_capacity(actions.len());
-                for action in actions {
-                    let output = execute_action(
-                        action,
-                        conversation_id,
-                        current_working_directory.clone(),
-                        shell_type,
-                        shell_path.clone(),
-                        session_context.clone(),
-                        background_executor.clone(),
-                        auth_state.clone(),
-                    )
-                    .await;
-                    outputs.push(output);
-                }
-                outputs
-            },
-            move |model, outputs, ctx| {
-                for output in outputs {
-                    model
-                        .results_by_conversation
-                        .entry(conversation_id)
-                        .or_default()
-                        .push(output.result);
-                    model.update_card(conversation_id, output.card);
-                }
-                ctx.emit(TuiToolActionEvent::Updated { conversation_id });
-                ctx.emit(TuiToolActionEvent::ActionsFinished { conversation_id });
-            },
-        );
+        for action in actions {
+            self.start_action(action, conversation_id, ctx);
+        }
     }
 
+    /// Starts one queued TUI tool action through the shared executor.
+    fn start_action(
+        &mut self,
+        action: AIAgentAction,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let input = ExecuteActionInput {
+            action: &action,
+            conversation_id,
+        };
+        let mut surface = TuiToolExecutor::new(self.session.clone(), ctx);
+        let execution = AgentToolExecutor::execute_action(&mut surface, input, ctx);
+        let action_id = action.id.clone();
+        let task_id = action.task_id.clone();
+        let action_type = action.action.clone();
+
+        match execution {
+            AnyActionExecution::Async {
+                execute_future,
+                on_complete,
+            } => {
+                ctx.spawn(execute_future, move |model, result, ctx| {
+                    let result = AIAgentActionResult {
+                        id: action_id,
+                        task_id,
+                        result: on_complete(result, ctx),
+                    };
+                    model.finish_action(conversation_id, action_type, result, ctx);
+                });
+            }
+            AnyActionExecution::Sync(result) => {
+                let result = AIAgentActionResult {
+                    id: action_id,
+                    task_id,
+                    result,
+                };
+                self.finish_action(conversation_id, action_type, result, ctx);
+            }
+            AnyActionExecution::NotReady | AnyActionExecution::InvalidAction => {
+                let result = AIAgentActionResult {
+                    id: action_id,
+                    task_id,
+                    result: action_type.cancelled_result(),
+                };
+                self.finish_action(conversation_id, action_type, result, ctx);
+            }
+        }
+    }
+
+    /// Records a finished action result and emits follow-up readiness when the batch is complete.
+    fn finish_action(
+        &mut self,
+        conversation_id: AIConversationId,
+        action_type: AIAgentActionType,
+        result: AIAgentActionResult,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let card = card_for_result(result.id.clone(), &action_type, &result.result);
+        self.tools
+            .finish_running_action(conversation_id, &result.id);
+        self.tools
+            .push_finished_result(conversation_id, Arc::new(result));
+        self.update_card(conversation_id, card);
+        let is_done = !self.tools.has_running_actions(conversation_id);
+        ctx.emit(TuiToolActionEvent::Updated { conversation_id });
+        if is_done {
+            ctx.emit(TuiToolActionEvent::ActionsFinished { conversation_id });
+        }
+    }
+
+    /// Updates or inserts the rendered card for an action.
     fn update_card(&mut self, conversation_id: AIConversationId, card: TuiToolCard) {
         let cards = self
             .cards_by_conversation
@@ -162,196 +203,222 @@ impl Entity for TuiToolActionModel {
 
 impl SingletonEntity for TuiToolActionModel {}
 
-struct ExecutedAction {
-    result: AIAgentActionResult,
-    card: TuiToolCard,
-}
-
-async fn execute_action(
-    action: AIAgentAction,
-    _conversation_id: AIConversationId,
+struct TuiToolExecutor {
+    session: Arc<Session>,
     current_working_directory: Option<String>,
-    shell_type: ShellType,
-    shell_path: Option<String>,
     session_context: SessionContext,
+    shell_type: ShellType,
+    shell_launch_data: Option<ShellLaunchData>,
     background_executor: Arc<warpui::r#async::executor::Background>,
     auth_state: Arc<AuthState>,
-) -> ExecutedAction {
-    let result = match &action.action {
-        AIAgentActionType::RequestCommandOutput {
-            command,
-            wait_until_completion,
-            uses_pager,
-            ..
-        } => execute_command(
-            command,
-            *wait_until_completion,
-            *uses_pager,
-            current_working_directory,
-            shell_type,
-            shell_path,
-        )
-        .await
-        .map(AIAgentActionResultType::RequestCommandOutput)
-        .unwrap_or_else(|error| {
-            AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Completed {
-                block_id: BlockId::new(),
-                command: command.clone(),
-                output: format!("{error:#}"),
-                exit_code: ExitCode::from(1),
-                start_ts: Some(Local::now()),
-                completed_ts: Some(Local::now()),
-            })
-        }),
-        AIAgentActionType::ReadShellCommandOutput { .. } => {
-            AIAgentActionResultType::ReadShellCommandOutput(ReadShellCommandOutputResult::Error(
-                crate::ai::agent::ShellCommandError::BlockNotFound,
-            ))
-        }
-        AIAgentActionType::WriteToLongRunningShellCommand { .. } => {
-            AIAgentActionResultType::WriteToLongRunningShellCommand(
-                WriteToLongRunningShellCommandResult::Error(
-                    crate::ai::agent::ShellCommandError::BlockNotFound,
-                ),
-            )
-        }
-        AIAgentActionType::TransferShellCommandControlToUser { .. } => {
-            AIAgentActionResultType::TransferShellCommandControlToUser(
-                TransferShellCommandControlToUserResult::Error(
-                    crate::ai::agent::ShellCommandError::BlockNotFound,
-                ),
-            )
-        }
-        AIAgentActionType::ReadFiles(ReadFilesRequest { locations }) => {
-            execute_read_files(locations.clone(), current_working_directory, None)
-                .await
-                .map(AIAgentActionResultType::ReadFiles)
-                .unwrap_or_else(|error| {
-                    AIAgentActionResultType::ReadFiles(ReadFilesResult::Error(format!("{error:#}")))
-                })
-        }
-        AIAgentActionType::RequestFileEdits { file_edits, .. } => execute_file_edits(
-            file_edits.clone(),
-            &session_context,
-            background_executor,
-            auth_state,
-        )
-        .await
-        .map(AIAgentActionResultType::RequestFileEdits)
-        .unwrap_or_else(|error| {
-            AIAgentActionResultType::RequestFileEdits(
-                RequestFileEditsResult::DiffApplicationFailed {
-                    error: format!("{error:#}"),
-                },
-            )
-        }),
-        AIAgentActionType::Grep { queries, path } => execute_grep(
-            queries.clone(),
-            path.clone(),
-            current_working_directory,
-            shell_type,
-            shell_path,
-        )
-        .await
-        .map(AIAgentActionResultType::Grep)
-        .unwrap_or_else(|error| {
-            AIAgentActionResultType::Grep(GrepResult::Error(format!("{error:#}")))
-        }),
-        AIAgentActionType::FileGlob { patterns, path } => {
-            let search_dir = path.clone().unwrap_or_else(|| ".".to_string());
-            execute_file_glob(
-                patterns.clone(),
-                search_dir,
-                current_working_directory,
-                shell_type,
-                shell_path,
-            )
-            .await
-            .map(|result| match result {
-                FileGlobV2Result::Success { matched_files, .. } => {
-                    AIAgentActionResultType::FileGlob(FileGlobResult::Success {
-                        matched_files: matched_files.into_iter().map(|m| m.file_path).join("\n"),
-                    })
-                }
-                FileGlobV2Result::Error(error) => {
-                    AIAgentActionResultType::FileGlob(FileGlobResult::Error(error))
-                }
-                FileGlobV2Result::Cancelled => {
-                    AIAgentActionResultType::FileGlob(FileGlobResult::Cancelled)
-                }
-            })
-            .unwrap_or_else(|error| {
-                AIAgentActionResultType::FileGlob(FileGlobResult::Error(format!("{error:#}")))
-            })
-        }
-        AIAgentActionType::FileGlobV2 {
-            patterns,
-            search_dir,
-        } => execute_file_glob(
-            patterns.clone(),
-            search_dir.clone().unwrap_or_else(|| ".".to_string()),
-            current_working_directory,
-            shell_type,
-            shell_path,
-        )
-        .await
-        .map(AIAgentActionResultType::FileGlobV2)
-        .unwrap_or_else(|error| {
-            AIAgentActionResultType::FileGlobV2(FileGlobV2Result::Error(format!("{error:#}")))
-        }),
-        unsupported => unsupported_result(unsupported),
-    };
+}
 
-    let card = card_for_result(action.id.clone(), &action.action, &result);
-    ExecutedAction {
-        result: AIAgentActionResult {
-            id: action.id,
-            task_id: action.task_id,
-            result,
-        },
-        card,
+impl TuiToolExecutor {
+    /// Creates a surface-specific executor for one TUI action execution pass.
+    fn new(session: Arc<Session>, ctx: &mut ModelContext<TuiToolActionModel>) -> Self {
+        let current_working_directory = std::env::current_dir()
+            .ok()
+            .map(|path| path.to_string_lossy().to_string());
+        Self {
+            session,
+            current_working_directory: current_working_directory.clone(),
+            session_context: SessionContext::local(current_working_directory),
+            shell_type: shell_type_from_env(),
+            shell_launch_data: None,
+            background_executor: ctx.background_executor(),
+            auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
+        }
     }
 }
 
+impl SurfaceSpecificToolExecutor for TuiToolExecutor {
+    type Context<'a> = ModelContext<'a, TuiToolActionModel>;
+
+    fn tool_execution_context(&self, _ctx: &Self::Context<'_>) -> AgentToolExecutionContext {
+        self.execution_context()
+    }
+
+    fn tool_execution_context_from_app(&self, _ctx: &AppContext) -> AgentToolExecutionContext {
+        self.execution_context()
+    }
+
+    fn app_context<'a, 'b>(ctx: &'a Self::Context<'b>) -> &'a AppContext {
+        ctx
+    }
+
+    fn preprocess_shell(
+        &mut self,
+        _input: PreprocessActionInput<'_>,
+        _ctx: &mut Self::Context<'_>,
+    ) -> BoxFuture<'static, ()> {
+        futures::future::ready(()).boxed()
+    }
+
+    fn execute_shell(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        _ctx: &mut Self::Context<'_>,
+    ) -> AnyActionExecution {
+        match &input.action.action {
+            AIAgentActionType::RequestCommandOutput {
+                command,
+                wait_until_completion,
+                uses_pager,
+                ..
+            } => {
+                let command = command.clone();
+                let current_working_directory = self.current_working_directory.clone();
+                let shell_type = self.shell_type;
+                let session = self.session.clone();
+                let wait_until_completion = *wait_until_completion;
+                let uses_pager = *uses_pager;
+                ActionExecution::new_async(
+                    async move {
+                        execute_command(
+                            command,
+                            wait_until_completion,
+                            uses_pager,
+                            current_working_directory,
+                            shell_type,
+                            session,
+                        )
+                        .await
+                    },
+                    |result, _ctx| {
+                        AIAgentActionResultType::RequestCommandOutput(result.unwrap_or_else(
+                            |error| RequestCommandOutputResult::Completed {
+                                block_id: BlockId::new(),
+                                command: "<failed>".to_string(),
+                                output: format!("{error:#}"),
+                                exit_code: ExitCode::from(1),
+                                start_ts: Some(Local::now()),
+                                completed_ts: Some(Local::now()),
+                            },
+                        ))
+                    },
+                )
+                .into()
+            }
+            AIAgentActionType::ReadShellCommandOutput { .. } => {
+                ActionExecution::<()>::Sync(AIAgentActionResultType::ReadShellCommandOutput(
+                    ReadShellCommandOutputResult::Error(
+                        crate::ai::agent::ShellCommandError::BlockNotFound,
+                    ),
+                ))
+                .into()
+            }
+            AIAgentActionType::WriteToLongRunningShellCommand { .. } => {
+                ActionExecution::<()>::Sync(
+                    AIAgentActionResultType::WriteToLongRunningShellCommand(
+                        WriteToLongRunningShellCommandResult::Error(
+                            crate::ai::agent::ShellCommandError::BlockNotFound,
+                        ),
+                    ),
+                )
+                .into()
+            }
+            AIAgentActionType::TransferShellCommandControlToUser { .. } => {
+                ActionExecution::<()>::Sync(
+                    AIAgentActionResultType::TransferShellCommandControlToUser(
+                        TransferShellCommandControlToUserResult::Error(
+                            crate::ai::agent::ShellCommandError::BlockNotFound,
+                        ),
+                    ),
+                )
+                .into()
+            }
+            _ => ActionExecution::<()>::InvalidAction.into(),
+        }
+    }
+
+    fn should_autoexecute_shell(
+        &mut self,
+        _input: ExecuteActionInput<'_>,
+        _ctx: &mut Self::Context<'_>,
+    ) -> bool {
+        true
+    }
+
+    fn preprocess_file_edits(
+        &mut self,
+        _input: PreprocessActionInput<'_>,
+        _ctx: &mut Self::Context<'_>,
+    ) -> BoxFuture<'static, ()> {
+        futures::future::ready(()).boxed()
+    }
+
+    fn execute_file_edits(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        _ctx: &mut Self::Context<'_>,
+    ) -> AnyActionExecution {
+        let AIAgentActionType::RequestFileEdits { file_edits, .. } = &input.action.action else {
+            return ActionExecution::<()>::InvalidAction.into();
+        };
+        let file_edits = file_edits.clone();
+        let session_context = self.session_context.clone();
+        let background_executor = self.background_executor.clone();
+        let auth_state = self.auth_state.clone();
+        ActionExecution::new_async(
+            async move {
+                execute_file_edits(file_edits, session_context, background_executor, auth_state)
+                    .await
+            },
+            |result, _ctx| {
+                AIAgentActionResultType::RequestFileEdits(result.unwrap_or_else(|error| {
+                    RequestFileEditsResult::DiffApplicationFailed {
+                        error: format!("{error:#}"),
+                    }
+                }))
+            },
+        )
+        .into()
+    }
+
+    fn should_autoexecute_file_edits(
+        &mut self,
+        _input: ExecuteActionInput<'_>,
+        _ctx: &mut Self::Context<'_>,
+    ) -> bool {
+        true
+    }
+}
+
+impl TuiToolExecutor {
+    /// Builds the shared execution context for surface-neutral tools.
+    fn execution_context(&self) -> AgentToolExecutionContext {
+        AgentToolExecutionContext {
+            current_working_directory: self.current_working_directory.clone(),
+            shell_launch_data: self.shell_launch_data.clone(),
+            session: Some(self.session.clone()),
+            terminal_view_id: None,
+        }
+    }
+}
+
+/// Executes a TUI shell command through the local session.
 async fn execute_command(
-    command: &str,
+    command: String,
     wait_until_completion: bool,
     uses_pager: Option<bool>,
     current_working_directory: Option<String>,
     shell_type: ShellType,
-    shell_path: Option<String>,
+    session: Arc<Session>,
 ) -> Result<RequestCommandOutputResult> {
     let command = if uses_pager == Some(true) && wait_until_completion {
-        decorate_pager_command(command, shell_type)
+        decorate_pager_command(&command, shell_type)
     } else {
-        command.to_string()
+        command
     };
     let block_id = BlockId::new();
     let start_ts = Local::now();
-    let mut process = Command::new(shell_path.unwrap_or_else(|| shell_type.name().to_string()));
-    match shell_type {
-        ShellType::PowerShell => {
-            process.arg("-NoProfile").arg("-Command").arg(&command);
-        }
-        ShellType::Fish => {
-            process.arg("--no-config").arg("-c").arg(&command);
-        }
-        ShellType::Bash => {
-            process.arg("--norc").arg("-c").arg(&command);
-        }
-        ShellType::Zsh => {
-            process.arg("-f").arg("-c").arg(&command);
-        }
-    }
-    if let Some(cwd) = current_working_directory {
-        process.current_dir(cwd);
-    }
-    let output = process
-        .kill_on_drop(true)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
+    let output = session
+        .execute_command(
+            &command,
+            current_working_directory.as_deref(),
+            None,
+            ExecuteCommandOptions::default(),
+        )
         .await?;
     let completed_ts = Local::now();
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -366,40 +433,22 @@ async fn execute_command(
         block_id,
         command,
         output: combined,
-        exit_code: ExitCode::from(output.status.code().unwrap_or(1)),
+        exit_code: output.exit_code().unwrap_or_else(|| ExitCode::from(1)),
         start_ts: Some(start_ts),
         completed_ts: Some(completed_ts),
     })
 }
 
-async fn execute_read_files(
-    locations: Vec<crate::ai::agent::FileLocations>,
-    current_working_directory: Option<String>,
-    shell: Option<crate::terminal::ShellLaunchData>,
-) -> Result<ReadFilesResult> {
-    let result =
-        read_local_file_context(&locations, current_working_directory, shell, None, None).await?;
-    if result.missing_files.is_empty() {
-        Ok(ReadFilesResult::Success {
-            files: result.file_contexts,
-        })
-    } else {
-        Ok(ReadFilesResult::Error(format!(
-            "These files do not exist: {}",
-            result.missing_files.join(", ")
-        )))
-    }
-}
-
+/// Applies and saves TUI file edits automatically for v0.
 async fn execute_file_edits(
     file_edits: Vec<crate::ai::agent::FileEdit>,
-    session_context: &SessionContext,
+    session_context: SessionContext,
     background_executor: Arc<warpui::r#async::executor::Background>,
     auth_state: Arc<AuthState>,
 ) -> Result<RequestFileEditsResult> {
     let diffs = apply_edits(
         file_edits,
-        session_context,
+        &session_context,
         &Default::default(),
         background_executor,
         auth_state,
@@ -407,106 +456,18 @@ async fn execute_file_edits(
         |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
     )
     .await
-    .map_err(|errors| anyhow!(errors.iter().map(|e| format!("{e:?}")).join("\n")))?;
+    .map_err(|errors| {
+        anyhow!(errors
+            .iter()
+            .map(|error| format!("{error:?}"))
+            .collect::<Vec<_>>()
+            .join("\n"))
+    })?;
 
-    apply_requested_diffs(diffs, session_context).await
+    apply_requested_diffs(diffs, &session_context).await
 }
 
-async fn execute_grep(
-    queries: Vec<String>,
-    path: String,
-    current_working_directory: Option<String>,
-    shell_type: ShellType,
-    shell_path: Option<String>,
-) -> Result<GrepResult> {
-    let absolute_path = absolutize(&path, current_working_directory.as_deref());
-    let escaped_path = shell_escape(&absolute_path.to_string_lossy());
-    let pattern = queries.iter().map(|q| shell_escape(q)).join(" -e ");
-    let command = format!("grep -R -n -e {pattern} {escaped_path}");
-    let output =
-        run_shell_capture(&command, current_working_directory, shell_type, shell_path).await?;
-    let mut by_file: HashMap<String, Vec<GrepLineMatch>> = HashMap::new();
-    for line in output.lines() {
-        let Some((file, rest)) = line.split_once(':') else {
-            continue;
-        };
-        let Some((line_number, _)) = rest.split_once(':') else {
-            continue;
-        };
-        if let Ok(line_number) = line_number.parse::<usize>() {
-            by_file
-                .entry(file.to_string())
-                .or_default()
-                .push(GrepLineMatch { line_number });
-        }
-    }
-    Ok(GrepResult::Success {
-        matched_files: by_file
-            .into_iter()
-            .map(|(file_path, matched_lines)| GrepFileMatch {
-                file_path,
-                matched_lines,
-            })
-            .collect(),
-    })
-}
-
-async fn execute_file_glob(
-    patterns: Vec<String>,
-    search_dir: String,
-    current_working_directory: Option<String>,
-    shell_type: ShellType,
-    shell_path: Option<String>,
-) -> Result<FileGlobV2Result> {
-    let absolute_path = absolutize(&search_dir, current_working_directory.as_deref());
-    let command = format!(
-        "find {} -type f",
-        shell_escape(&absolute_path.to_string_lossy())
-    );
-    let output =
-        run_shell_capture(&command, current_working_directory, shell_type, shell_path).await?;
-    let matched_files = output
-        .lines()
-        .filter(|path| {
-            patterns
-                .iter()
-                .any(|pattern| simple_glob_match(pattern, path))
-        })
-        .map(|file_path| FileGlobV2Match {
-            file_path: file_path.to_string(),
-        })
-        .collect();
-    Ok(FileGlobV2Result::Success {
-        matched_files,
-        warnings: None,
-    })
-}
-
-async fn run_shell_capture(
-    command: &str,
-    current_working_directory: Option<String>,
-    shell_type: ShellType,
-    shell_path: Option<String>,
-) -> Result<String> {
-    match execute_command(
-        command,
-        true,
-        None,
-        current_working_directory,
-        shell_type,
-        shell_path,
-    )
-    .await?
-    {
-        RequestCommandOutputResult::Completed { output, .. } => Ok(output),
-        RequestCommandOutputResult::LongRunningCommandSnapshot { grid_contents, .. } => {
-            Ok(grid_contents)
-        }
-        RequestCommandOutputResult::CancelledBeforeExecution
-        | RequestCommandOutputResult::Denylisted { .. } => Ok(String::new()),
-    }
-}
-
+/// Saves requested code diffs and builds the action result payload.
 async fn apply_requested_diffs(
     diffs: Vec<AIRequestedCodeDiff>,
     session_context: &SessionContext,
@@ -562,6 +523,7 @@ async fn apply_requested_diffs(
     })
 }
 
+/// Applies one requested diff to its original content.
 fn apply_diff_to_content(diff: &AIRequestedCodeDiff) -> Result<(String, bool, usize, usize)> {
     match &diff.diff_type {
         DiffType::Create { delta } => Ok((
@@ -611,100 +573,7 @@ fn apply_diff_to_content(diff: &AIRequestedCodeDiff) -> Result<(String, bool, us
     }
 }
 
-fn unsupported_result(action: &AIAgentActionType) -> AIAgentActionResultType {
-    match action {
-        AIAgentActionType::UploadArtifact(_) => AIAgentActionResultType::UploadArtifact(
-            UploadArtifactResult::Error("Tool is not implemented in warp-tui v0".to_string()),
-        ),
-        AIAgentActionType::SearchCodebase(_) => {
-            AIAgentActionResultType::SearchCodebase(SearchCodebaseResult::Failed {
-                reason: SearchCodebaseFailureReason::ClientError,
-                message: "Tool is not implemented in warp-tui v0".to_string(),
-            })
-        }
-        AIAgentActionType::ReadMCPResource { .. } => AIAgentActionResultType::ReadMCPResource(
-            ReadMCPResourceResult::Error("Tool is not implemented in warp-tui v0".to_string()),
-        ),
-        AIAgentActionType::CallMCPTool { .. } => AIAgentActionResultType::CallMCPTool(
-            CallMCPToolResult::Error("Tool is not implemented in warp-tui v0".to_string()),
-        ),
-        AIAgentActionType::SuggestNewConversation { message_id } => {
-            AIAgentActionResultType::SuggestNewConversation(
-                SuggestNewConversationResult::Accepted {
-                    message_id: message_id.clone(),
-                },
-            )
-        }
-        AIAgentActionType::SuggestPrompt(request) => {
-            AIAgentActionResultType::SuggestPrompt(SuggestPromptResult::Accepted {
-                query: match request {
-                    crate::ai::agent::SuggestPromptRequest::UnitTestsSuggestion {
-                        query, ..
-                    }
-                    | crate::ai::agent::SuggestPromptRequest::PromptSuggestion {
-                        prompt: query,
-                        ..
-                    } => query.clone(),
-                },
-            })
-        }
-        AIAgentActionType::OpenCodeReview => AIAgentActionResultType::OpenCodeReview,
-        AIAgentActionType::InitProject => AIAgentActionResultType::InitProject,
-        AIAgentActionType::ReadDocuments(_) => AIAgentActionResultType::ReadDocuments(
-            ReadDocumentsResult::Error("Tool is not implemented in warp-tui v0".to_string()),
-        ),
-        AIAgentActionType::EditDocuments(_) => AIAgentActionResultType::EditDocuments(
-            EditDocumentsResult::Error("Tool is not implemented in warp-tui v0".to_string()),
-        ),
-        AIAgentActionType::CreateDocuments(_) => AIAgentActionResultType::CreateDocuments(
-            CreateDocumentsResult::Error("Tool is not implemented in warp-tui v0".to_string()),
-        ),
-        AIAgentActionType::UseComputer(_) => AIAgentActionResultType::UseComputer(
-            UseComputerResult::Error("Tool is not implemented in warp-tui v0".to_string()),
-        ),
-        AIAgentActionType::InsertCodeReviewComments { repo_path, .. } => {
-            AIAgentActionResultType::InsertReviewComments(InsertReviewCommentsResult::Error {
-                repo_path: repo_path.to_string_lossy().to_string(),
-                message: "Tool is not implemented in warp-tui v0".to_string(),
-            })
-        }
-        AIAgentActionType::RequestComputerUse(_) => AIAgentActionResultType::RequestComputerUse(
-            RequestComputerUseResult::Error("Tool is not implemented in warp-tui v0".to_string()),
-        ),
-        AIAgentActionType::ReadSkill(_) => AIAgentActionResultType::ReadSkill(
-            ReadSkillResult::Error("Tool is not implemented in warp-tui v0".to_string()),
-        ),
-        AIAgentActionType::FetchConversation { .. } => AIAgentActionResultType::FetchConversation(
-            FetchConversationResult::Error("Tool is not implemented in warp-tui v0".to_string()),
-        ),
-        AIAgentActionType::StartAgent { version, .. } => {
-            AIAgentActionResultType::StartAgent(StartAgentResult::Error {
-                error: "Tool is not implemented in warp-tui v0".to_string(),
-                version: *version,
-            })
-        }
-        AIAgentActionType::SendMessageToAgent { .. } => {
-            AIAgentActionResultType::SendMessageToAgent(SendMessageToAgentResult::Error(
-                "Tool is not implemented in warp-tui v0".to_string(),
-            ))
-        }
-        AIAgentActionType::AskUserQuestion { .. } => AIAgentActionResultType::AskUserQuestion(
-            crate::ai::agent::AskUserQuestionResult::Error(
-                "Tool is not implemented in warp-tui v0".to_string(),
-            ),
-        ),
-        AIAgentActionType::RunAgents(_) => {
-            AIAgentActionResultType::RunAgents(RunAgentsResult::Failure {
-                error: "Tool is not implemented in warp-tui v0".to_string(),
-            })
-        }
-        AIAgentActionType::WaitForEvents { .. } => {
-            AIAgentActionResultType::WaitForEvents(WaitForEventsResult::Completed)
-        }
-        _ => action.cancelled_result(),
-    }
-}
-
+/// Builds a concise TUI card from a tool result.
 fn card_for_result(
     action_id: AIAgentActionId,
     action: &AIAgentActionType,
@@ -735,11 +604,55 @@ fn card_for_result(
                 updated_files
                     .iter()
                     .map(|file| file.file_context.file_name.as_str())
+                    .collect::<Vec<_>>()
                     .join(", "),
             );
             lines.push(format!(
                 "+{lines_added} -{lines_removed} · applied automatically"
             ));
+        }
+        AIAgentActionResultType::ReadFiles(ReadFilesResult::Success { files }) => {
+            lines.push(format!("read {} file(s)", files.len()));
+        }
+        AIAgentActionResultType::ReadFiles(ReadFilesResult::Error(e)) => {
+            lines.push(format!("error: {}", e.lines().next().unwrap_or("unknown")));
+        }
+        AIAgentActionResultType::ReadFiles(ReadFilesResult::Cancelled) => {
+            lines.push("cancelled".to_string());
+        }
+        AIAgentActionResultType::Grep(GrepResult::Success { matched_files }) => {
+            lines.push(format!("{} file(s) matched", matched_files.len()));
+        }
+        AIAgentActionResultType::Grep(GrepResult::Error(e)) => {
+            lines.push(format!("error: {}", e.lines().next().unwrap_or("unknown")));
+        }
+        AIAgentActionResultType::Grep(GrepResult::Cancelled) => {
+            lines.push("cancelled".to_string());
+        }
+        AIAgentActionResultType::FileGlob(FileGlobResult::Success { matched_files }) => {
+            let count = if matched_files.trim().is_empty() {
+                0
+            } else {
+                matched_files.lines().count()
+            };
+            lines.push(format!("{count} file(s) matched"));
+        }
+        AIAgentActionResultType::FileGlob(FileGlobResult::Error(e)) => {
+            lines.push(format!("error: {}", e.lines().next().unwrap_or("unknown")));
+        }
+        AIAgentActionResultType::FileGlob(FileGlobResult::Cancelled) => {
+            lines.push("cancelled".to_string());
+        }
+        AIAgentActionResultType::FileGlobV2(FileGlobV2Result::Success {
+            matched_files, ..
+        }) => {
+            lines.push(format!("{} file(s) matched", matched_files.len()));
+        }
+        AIAgentActionResultType::FileGlobV2(FileGlobV2Result::Error(e)) => {
+            lines.push(format!("error: {}", e.lines().next().unwrap_or("unknown")));
+        }
+        AIAgentActionResultType::FileGlobV2(FileGlobV2Result::Cancelled) => {
+            lines.push("cancelled".to_string());
         }
         other => {
             lines.push(other.to_string());
@@ -752,6 +665,7 @@ fn card_for_result(
     }
 }
 
+/// Decorates pager commands so they do not take over the terminal UI.
 fn decorate_pager_command(command: &str, shell_type: ShellType) -> String {
     match shell_type {
         ShellType::Zsh | ShellType::Bash => format!("({command}) | command cat"),
@@ -760,6 +674,7 @@ fn decorate_pager_command(command: &str, shell_type: ShellType) -> String {
     }
 }
 
+/// Detects the user's shell type from the process environment.
 fn shell_type_from_env() -> ShellType {
     std::env::var("SHELL")
         .ok()
@@ -768,35 +683,42 @@ fn shell_type_from_env() -> ShellType {
         .unwrap_or(ShellType::Zsh)
 }
 
-fn absolutize(path: &str, cwd: Option<&str>) -> PathBuf {
-    let path = PathBuf::from(path);
-    if path.is_absolute() {
-        path
-    } else {
-        cwd.map(PathBuf::from)
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-            .join(path)
-    }
-}
-
-fn shell_escape(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn simple_glob_match(pattern: &str, path: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    let needle = pattern.trim_matches('*');
-    if needle.is_empty() {
-        true
-    } else if pattern.starts_with('*') && pattern.ends_with('*') {
-        path.contains(needle)
-    } else if pattern.starts_with('*') {
-        path.ends_with(needle)
-    } else if pattern.ends_with('*') {
-        path.starts_with(needle)
-    } else {
-        path == pattern || path.ends_with(pattern)
-    }
+/// Creates the single local session used by the v0 TUI.
+fn tui_local_session() -> Session {
+    let shell_path = std::env::var("SHELL").ok();
+    let shell_type = shell_type_from_env();
+    let command_executor = Arc::new(LocalCommandExecutor::new(
+        shell_path.as_ref().map(PathBuf::from),
+        shell_type,
+    ));
+    Session::new(
+        SessionInfo {
+            session_id: 0.into(),
+            shell: Shell::new(shell_type, None, None, Default::default(), shell_path),
+            launch_data: None,
+            histfile: None,
+            user: "local:user".to_owned(),
+            hostname: "local:host".to_owned(),
+            subshell_info: None,
+            path: std::env::var("PATH").ok(),
+            environment_variable_names: Default::default(),
+            aliases: Default::default(),
+            abbreviations: Default::default(),
+            function_names: Default::default(),
+            builtins: Default::default(),
+            keywords: Default::default(),
+            is_ssh_wrapper_session: IsSSHWrapperSession::No,
+            home_dir: dirs::home_dir().map(|path| path.to_string_lossy().to_string()),
+            cdpath: None,
+            editor: None,
+            session_type: BootstrapSessionType::Local,
+            host_info: HostInfo {
+                os_category: Some(std::env::consts::OS.to_string()),
+                linux_distribution: None,
+            },
+            wsl_name: None,
+            spawning_session_id: None,
+        },
+        command_executor,
+    )
 }

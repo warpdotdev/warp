@@ -34,10 +34,12 @@ pub(super) mod view_util;
 
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{
-    apply_edits, read_local_file_context, BlocklistAIActionEvent, BlocklistAIActionModel,
-    FileReadResult, ReadFileContextResult, RequestFileEditsFormatKind, ShellCommandExecutor,
+    apply_edits, read_local_file_context, ActionExecution, AgentToolActionModel,
+    AgentToolExecutionContext, AgentToolExecutor, AnyActionExecution, BlocklistAIActionEvent,
+    BlocklistAIActionModel, ExecuteActionInput, FileReadResult, PreprocessActionInput,
+    ReadFileContextResult, RequestFileEditsFormatKind, ShellCommandExecutor,
     ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
-    StartAgentRequestId,
+    StartAgentRequestId, SurfaceSpecificToolExecutor,
 };
 pub(crate) use agent_conversation_engine::AgentConversationEngine;
 #[cfg(feature = "tui")]

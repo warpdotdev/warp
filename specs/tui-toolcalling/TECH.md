@@ -53,6 +53,63 @@ pub(crate) struct TuiToolActionModel {
 ```
 The shared model owns action queueing, preprocessing, running/finished state, action ordering, cancellation, and finished result draining. GUI-specific inline views, shared-session viewer UI, terminal block events, `TerminalModel`, `AIBlock`, `RequestedCommandView`, and `CodeDiffView` stay out of the shared model.
 For v0, TUI tools auto-accept. The shared model should avoid a user-confirmation blocked state for TUI and immediately execute tools when permission checks allow or when v0 auto-accept rules apply.
+### Shared-first tool executor
+Tool execution should be centralized in a shared executor used by both GUI and TUI. Shared tools are handled directly by the shared executor. Inherently surface-specific tools are delegated to a required surface executor implemented by both surfaces.
+```rust
+pub(crate) struct AgentToolExecutor<S> {
+    surface: S,
+    shared_context: AgentToolExecutionContext,
+}
+
+pub(crate) trait SurfaceSpecificToolExecutor {
+    fn preprocess_shell(
+        &mut self,
+        input: PreprocessActionInput<'_>,
+        ctx: &mut AppContext,
+    ) -> BoxFuture<'static, ()>;
+
+    fn execute_shell(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut AppContext,
+    ) -> AnyActionExecution;
+
+    fn should_autoexecute_shell(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut AppContext,
+    ) -> bool;
+
+    fn preprocess_file_edits(
+        &mut self,
+        input: PreprocessActionInput<'_>,
+        ctx: &mut AppContext,
+    ) -> BoxFuture<'static, ()>;
+
+    fn execute_file_edits(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut AppContext,
+    ) -> AnyActionExecution;
+
+    fn should_autoexecute_file_edits(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut AppContext,
+    ) -> bool;
+}
+```
+`AgentToolExecutor` owns the only top-level `AIAgentActionType` dispatch. For shared tools like grep, file glob, and read files, it runs shared default logic. For non-shared tools like shell commands and file edits, it delegates to `SurfaceSpecificToolExecutor`.
+This avoids optional override registries. Since GUI and TUI are the only surfaces, if a tool is inherently non-shared, both surfaces must implement the same required method and make an explicit decision.
+The GUI implementation delegates to existing GUI machinery:
+* shell commands use `ShellCommandExecutor`, `TerminalModel`, and terminal blocks;
+* file edits use `RequestFileEditsExecutor` and `CodeDiffView`;
+* GUI-only events remain in the GUI action executor unless they become true shared agent tools.
+The TUI implementation supplies only TUI-specific behavior:
+* shell commands use the TUI local `Session` and TUI-owned process state;
+* file edits use shared diff application plus v0 auto-save;
+* simple cards summarize surface-specific execution for the transcript.
+`app/src/ai/blocklist/action_model/basic_tool_executor.rs` must not remain as a TUI-only top-level dispatch tree. Its reusable pieces should move into shared executor helpers or TUI surface-specific methods, and both GUI and TUI must call the same `AgentToolExecutor<S>` before this PR is complete.
 ### Tool-result follow-up
 Move action-result follow-up out of `BlocklistAIController` and into shared conversation machinery. The tool-result turn is part of the shared loop:
 ```text
@@ -74,30 +131,14 @@ The shared follow-up logic should wait until a conversation has no unfinished ac
 * the `AgentConversationEngine` tool-result follow-up hookup.
 After this is wired, remove `supported_tools_override: Some(vec![])` from normal TUI prompt sends.
 ### Command running
-Split `ShellCommandExecutor` into shared shell-tool semantics plus backend-specific execution.
-```rust
-pub(crate) enum ShellToolBackend {
-    GuiTerminal { /* existing terminal-block behavior */ },
-    TuiProcess(ModelHandle<TuiCommandModel>),
-}
-```
-The shared shell-tool logic should keep permission checks, pager handling, result mapping, long-running snapshots, and read/write follow-up semantics. The existing GUI backend keeps terminal-block behavior.
-The TUI backend should not pretend it has terminal blocks. It should track commands by a TUI-owned command id and convert to the legacy `BlockId` field only at the action-result/API boundary, because existing result types store command ids as `BlockId` ([`crates/ai/src/agent/action_result/mod.rs:183 @ f2592f0`](https://github.com/warpdotdev/warp/blob/f2592f04a9c6544780d830058d6571a2f091df80/crates/ai/src/agent/action_result/mod.rs#L183)).
+Command execution is surface-specific and should be required by `SurfaceSpecificToolExecutor`.
+The GUI implementation keeps existing terminal-block behavior through `ShellCommandExecutor`.
+The TUI implementation should not pretend it has terminal blocks. It should track commands by a TUI-owned command id and convert to the legacy `BlockId` field only at the action-result/API boundary, because existing result types store command ids as `BlockId` ([`crates/ai/src/agent/action_result/mod.rs:183 @ f2592f0`](https://github.com/warpdotdev/warp/blob/f2592f04a9c6544780d830058d6571a2f091df80/crates/ai/src/agent/action_result/mod.rs#L183)).
 `TuiCommandModel` stores command text, start/finish timestamps, exit code, captured stdout/stderr buffer, stdin handle, and cancellation handle. `RequestCommandOutput` returns `Completed` when finished and `LongRunningCommandSnapshot` with bounded captured output when still running at the wait boundary. `ReadShellCommandOutput` and `WriteToLongRunningShellCommand` look up the TUI command mapping and return the existing result variants.
 ### File edits
 Keep `diff_application::apply_edits` as the shared diff parser/matcher; it already accepts `SessionContext` and a file-read closure ([`diff_application.rs:161 @ f2592f0`](https://github.com/warpdotdev/warp/blob/f2592f04a9c6544780d830058d6571a2f091df80/app/src/ai/blocklist/action_model/execute/request_file_edits/diff_application.rs#L161)).
 Change `ApplyDiffModel::apply_diffs` to take the session snapshot/session context as input instead of storing `ModelHandle<ActiveSession>` ([`apply_diff_model.rs:25 @ f2592f0`](https://github.com/warpdotdev/warp/blob/f2592f04a9c6544780d830058d6571a2f091df80/app/src/ai/blocklist/action_model/execute/request_file_edits/apply_diff_model.rs#L25)).
-Replace the executor’s hard dependency on `CodeDiffView` with surface-neutral pending diff state.
-```rust
-pub(crate) enum PendingFileEditState {
-    Applying,
-    Ready { diffs: Vec<AIRequestedCodeDiff> },
-    Failed { errors: Vec1<DiffApplicationError> },
-    Saving,
-    Finished,
-}
-```
-GUI can populate `CodeDiffView` from this state. TUI renders a simple diff summary card from the same state.
+File edit execution is surface-specific and should be required by `SurfaceSpecificToolExecutor`, but diff application should be shared. GUI can keep `CodeDiffView` for approval and saving. TUI uses the same diff application logic, then auto-saves for v0.
 For v0, TUI auto-accepts file edits after preprocessing succeeds. It writes local files, computes unified diff/line stats/deleted files, and returns `RequestFileEditsResult::Success`. Diff application failures return `RequestFileEditsResult::DiffApplicationFailed` so the agent can recover ([`request_file_edits.rs:135 @ f2592f0`](https://github.com/warpdotdev/warp/blob/f2592f04a9c6544780d830058d6571a2f091df80/app/src/ai/blocklist/action_model/execute/request_file_edits.rs#L135), [`convert.rs:197 @ f2592f0`](https://github.com/warpdotdev/warp/blob/f2592f04a9c6544780d830058d6571a2f091df80/crates/ai/src/agent/action_result/convert.rs#L197)).
 ### Minimal TUI tool UI
 Add simple TUI tool cards next to the current transcript/input views. No rich approval/edit UI in this PR.
