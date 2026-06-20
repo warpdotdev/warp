@@ -295,6 +295,19 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
   warp_git () {
     GIT_OPTIONAL_LOCKS=0 command git "$@"
   }
+  # Reads process substitution outputs into caller-local variables. Passing all
+  # process substitutions in one function call starts their commands in parallel
+  # before this function begins reading.
+  warp_read_parallel_outputs () {
+    local output_var
+    local output_path
+    while (( $# > 0 )); do
+      output_var=$1
+      output_path=$2
+      IFS= read -r -d '' "$output_var" < "$output_path" || true
+      shift 2
+    done
+  }
 
   # Note that this is very performance sensitive code, so try not to
   # invoke any external commands in here.
@@ -381,6 +394,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       local escaped_git_branch=""
       local escaped_kube_config=""
       local node_cache_key=""
+      local escaped_git_values=""
 
       # Only fill these fields once we've finished bootstrapping, as the
       # blocks created during the bootstrap process don't have visible
@@ -442,50 +456,37 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
 
         # Starting every process substitution before reading any of them lets
         # the independent prompt-context commands run in parallel.
-        local virtual_env_fd
-        local conda_env_fd
-        local node_version_fd
-        local git_fd
-        local kube_config_fd
-        exec {virtual_env_fd}< <(warp_escape_json_if_nonempty "${VIRTUAL_ENV:-}")
-        exec {conda_env_fd}< <(warp_escape_json_if_nonempty "${CONDA_DEFAULT_ENV:-}")
-        exec {node_version_fd}< <(
-          if [[ -n $node_cache_key ]]; then
-            if [[ "$node_cache_key" == "$_WARP_NODE_VERSION_CACHE_KEY" ]]; then
-              printf '%s' "$_WARP_NODE_VERSION_CACHE_VALUE"
-            else
-              warp_escape_json_if_nonempty "$(node --version 2>/dev/null)"
+        warp_read_parallel_outputs \
+          escaped_virtual_env <(warp_escape_json_if_nonempty "${VIRTUAL_ENV:-}") \
+          escaped_conda_env <(warp_escape_json_if_nonempty "${CONDA_DEFAULT_ENV:-}") \
+          escaped_node_version <(
+            if [[ -n $node_cache_key ]]; then
+              if [[ "$node_cache_key" == "$_WARP_NODE_VERSION_CACHE_KEY" ]]; then
+                printf '%s' "$_WARP_NODE_VERSION_CACHE_VALUE"
+              else
+                warp_escape_json_if_nonempty "$(node --version 2>/dev/null)"
+              fi
             fi
-          fi
-        )
-        exec {git_fd}< <(
-          local git_branch=""
-          local git_head=""
-          if command -v git >/dev/null 2>&1; then
-            git_branch=$(warp_git symbolic-ref --short HEAD 2> /dev/null)
-            # The git branch the user is on, or the git commit hash if they're not on a branch.
-            git_head="${git_branch:-$(warp_git rev-parse --short HEAD 2> /dev/null)}"
-          fi
-          warp_escape_json_if_nonempty "$git_head"
-          printf '\n'
-          warp_escape_json_if_nonempty "$git_branch"
-        )
-        exec {kube_config_fd}< <(warp_escape_json_if_nonempty "${KUBECONFIG:-}")
-        escaped_virtual_env=$(<&$virtual_env_fd)
-        exec {virtual_env_fd}<&-
-        escaped_conda_env=$(<&$conda_env_fd)
-        exec {conda_env_fd}<&-
-        escaped_node_version=$(<&$node_version_fd)
-        exec {node_version_fd}<&-
+          ) \
+          escaped_git_values <(
+            local git_branch=""
+            local git_head=""
+            if command -v git >/dev/null 2>&1; then
+              git_branch=$(warp_git symbolic-ref --short HEAD 2> /dev/null)
+              # The git branch the user is on, or the git commit hash if they're not on a branch.
+              git_head="${git_branch:-$(warp_git rev-parse --short HEAD 2> /dev/null)}"
+            fi
+            warp_escape_json_if_nonempty "$git_head"
+            printf '\n'
+            warp_escape_json_if_nonempty "$git_branch"
+          ) \
+          escaped_kube_config <(warp_escape_json_if_nonempty "${KUBECONFIG:-}")
         if [[ -n $node_cache_key ]]; then
           _WARP_NODE_VERSION_CACHE_KEY="$node_cache_key"
           _WARP_NODE_VERSION_CACHE_VALUE="$escaped_node_version"
         fi
-        IFS= read -r escaped_git_head <&$git_fd || true
-        escaped_git_branch=$(<&$git_fd)
-        exec {git_fd}<&-
-        escaped_kube_config=$(<&$kube_config_fd)
-        exec {kube_config_fd}<&-
+        escaped_git_head=${escaped_git_values%%$'\n'*}
+        escaped_git_branch=${escaped_git_values#*$'\n'}
       fi
 
 
