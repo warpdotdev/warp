@@ -20,7 +20,7 @@ the Description is posted.
 
 - `~/src/gradle-test` — minimal Gradle Java project, git-init'd. `gradle init --type java-application --dsl groovy --test-framework junit-jupiter --project-name demo --package com.example` generates one.
 - `~/src/go-test` — minimal Go module, git-init'd. `go mod init example.com/gotest` plus a `main.go` with a `Greeting` function.
-- `~/src/go-test2` — a *second* Go module (git-init'd), used by Clip 6 to show a new `.go` file falling back to the built-in gopls after the custom is removed.
+- `~/src/go-test2` — a *second* Go module (git-init'd), used by Clip 5 to show a new `.go` file falling back to the built-in gopls after the custom is removed.
 - `jdtls` on `PATH` (e.g. `brew install jdtls`).
 - `gopls` at `~/go/bin/gopls` (`go install golang.org/x/tools/gopls@latest`).
 - JDK 21+ via SDKMAN at `~/.sdkman/candidates/java/21.0.11-amzn` (or adjust the `JAVA_HOME` line in Clip 2's snippet).
@@ -38,7 +38,7 @@ the Description is posted.
    ```sh
    ./script/run
    ```
-   Relaunches (Clip 5) can just run `./script/run` again — it's incremental, so fast when nothing changed — or reopen the built bundle with `open <cargo-target-dir>/debug/bundle/osx/WarpOss.app`.
+   Relaunches (Clip 4) can just run `./script/run` again — it's incremental, so fast when nothing changed — or reopen the built bundle with `open <cargo-target-dir>/debug/bundle/osx/WarpOss.app`.
 
 ---
 
@@ -64,23 +64,13 @@ filetypes = [{ pattern = "*.java" }]
 env = { JAVA_HOME = "{{env_HOME}}/.sdkman/candidates/java/21.0.11-amzn" }
 ```
 
-**Record:** open `App.java` **fresh** (close the Clip 1 pane first so the footer re-resolves) → footer shows an **"Enable jdtls"** button → click it → jdtls spawns (footer progress/indexing).
+**Record:** open `App.java` **fresh** (close the Clip 1 pane first so the footer re-resolves) → footer shows an **"Enable jdtls"** button → click it → jdtls spawns (footer progress/indexing) → **wait for indexing to settle, then hover over a method (e.g. `getGreeting`)** → a type-info tooltip appears.
 
-**Expected:** the button label is the descriptor's `name` ("jdtls"); clicking it launches the server.
+**Expected:** the button label is the descriptor's `name` ("jdtls"); clicking it launches the server; and once indexed, hover returns type info.
 
-**Description (post with the clip):** *A `[[editor.language_servers]]` entry surfaces an **Enable jdtls** button (label = descriptor `name`); clicking it launches the server.* (Paste the 6-line TOML so reviewers see the config.)
+**Description (post with the clip):** *A `[[editor.language_servers]]` entry surfaces an **Enable jdtls** button (label = descriptor `name`); clicking it launches the server, and hover then returns type info. Java has no built-in LSP in Warp, so a working hover also confirms the custom-only filetype received `textDocument/didOpen` with a language id derived from the descriptor — the `didOpen` fix.* (Paste the 6-line TOML so reviewers see the config.)
 
-## Clip 3 — Hover + go-to-definition (the `didOpen` fix)
-
-**Setup:** none — jdtls is the running server from Clip 2. **Wait for indexing to settle** (footer activity stops) before recording, or hover won't respond.
-
-**Record:** hover over a method (e.g. `getGreeting`) → type-info tooltip; then Cmd-click a symbol → jumps to its definition.
-
-**Expected:** hover and go-to-definition both work.
-
-**Description (post with the clip):** *Hover and go-to-definition work — a custom-only Java filetype (no built-in language id) now receives `textDocument/didOpen` with the language id derived from the matched descriptor. This is the `didOpen` fix.*
-
-## Clip 4 — Custom override of a built-in (gopls-custom / Go)
+## Clip 3 — Custom override of a built-in (gopls-custom / Go)
 
 **Setup (off-camera):** append to `settings.toml` and save:
 ```toml
@@ -97,9 +87,9 @@ filetypes = [{ pattern = "*.go" }]
 
 **Description (post with the clip):** *A custom entry overrides the built-in `gopls` for `*.go`. The footer shows the custom descriptor's `name` ("gopls-custom"), not the built-in's binary name, because the custom won the resolve.*
 
-## Clip 5 — Persistence across restart
+## Clip 4 — Persistence across restart
 
-**Setup:** jdtls and gopls-custom enabled (Clips 2 and 4).
+**Setup:** jdtls and gopls-custom enabled (Clips 2 and 3).
 
 **Record:** quit Warp completely, relaunch (`./script/run` or reopen the bundle), then open `App.java` from `gradle-test` (and `main.go` from `go-test`).
 
@@ -107,19 +97,19 @@ filetypes = [{ pattern = "*.go" }]
 
 **Description (post with the clip):** *Enable state persists across restart via the SQLite `workspace_language_server.kind = 'Custom'` column — servers auto-spawn with no re-prompt.*
 
-## Clip 6 — Hot-reload semantics (optional)
+## Clip 5 — Hot-reload semantics (optional)
 
-**Setup:** gopls-custom running in go-test (from Clip 4/5).
+**Setup:** gopls-custom running in go-test (from Clip 3/4).
 
 **Record:** delete the `gopls-custom` block from `settings.toml` and save, then open `~/src/go-test2/main.go` (a different repo, never served by gopls-custom).
 
 **Expected:**
 - The gopls **already running in go-test keeps running** — a settings edit does not restart or stop a running server (invariant 19).
-- go-test2's `.go` now resolves to the **built-in gopls**: the footer shows a built-in "gopls" CTA (Enable / Install gopls), *not* "gopls-custom". Removing the custom handed `*.go` back to the built-in — the reverse of Clip 4's override. (Go has a built-in server, so this is **not** the "unavailable" state; that only appears for filetypes with no built-in, like Java before jdtls.)
+- go-test2's `.go` now resolves to the **built-in gopls**: the footer shows a built-in "gopls" CTA (Enable / Install gopls), *not* "gopls-custom". Removing the custom handed `*.go` back to the built-in — the reverse of Clip 3's override. (Go has a built-in server, so this is **not** the "unavailable" state; that only appears for filetypes with no built-in, like Java before jdtls.)
 
 **Description (post with the clip):** *Hot-reload applies the edit live: the removed custom no longer claims `*.go` for new files (the built-in gopls takes back over), while the gopls already running in go-test is not restarted (invariant 19).*
 
-## Clip 7 — Launch failure → toast
+## Clip 6 — Launch failure → toast
 
 **Setup (off-camera):** append a descriptor whose command passes validation but isn't installed, save, and create an empty target file:
 ```toml
@@ -138,9 +128,9 @@ touch ~/src/go-test/sample.ghost
 
 **Description (post with the clip):** *A server that fails to launch raises a toast that names the descriptor (`ghost-lsp`), so the user knows which server failed.*
 
-## Clip 8 — Failure recovery: menu reachable after a fresh failure
+## Clip 7 — Failure recovery: menu reachable after a fresh failure
 
-**Setup:** continues from Clip 7 — `ghost-lsp` has just failed to launch in this session; do **not** reopen the file.
+**Setup:** continues from Clip 6 — `ghost-lsp` has just failed to launch in this session; do **not** reopen the file.
 
 **Record:** click the LSP status indicator (the lightning-bolt) in the footer to open its menu → click **Restart server**.
 
@@ -173,16 +163,16 @@ Not a clip (it inspects the log): secret-shaped values in a custom `command`/`ar
 
 ## What reviewers should take away
 
-- Custom LSPs work for files with no built-in (jdtls/Java, Clips 2–3) **and** override built-ins for shared filetypes (gopls-custom/Go, Clip 4).
+- Custom LSPs work for files with no built-in (jdtls/Java, Clip 2) **and** override built-ins for shared filetypes (gopls-custom/Go, Clip 3).
 - The footer shows the **custom descriptor's `name`** when a custom wins resolution — the override-regression fix.
-- A custom-only filetype now receives `textDocument/didOpen` with a descriptor-derived language id, so hover/diagnostics work — the `didOpen` fix (Clip 3).
-- Enable state persists across restart via the SQLite `kind` column (Clip 5).
-- Settings hot-reload applies edits live — a removed custom hands its filetype back to the built-in — without restarting already-running servers (Clip 6).
-- Launch failures raise a descriptor-named toast (Clip 7) and the status menu stays reachable for recovery (Clip 8).
+- A custom-only filetype now receives `textDocument/didOpen` with a descriptor-derived language id, so hover/diagnostics work — the `didOpen` fix (a working hover in Clip 2 demonstrates this, since Java has no built-in LSP).
+- Enable state persists across restart via the SQLite `kind` column (Clip 4).
+- Settings hot-reload applies edits live — a removed custom hands its filetype back to the built-in — without restarting already-running servers (Clip 5).
+- Launch failures raise a descriptor-named toast (Clip 6) and the status menu stays reachable for recovery (Clip 7).
 - Secret-shaped `command`/`args` are redacted in logs (off-camera check).
 
 ## Recording tips
 
 - Record at a resolution where the footer text is legible (a window capture at native size is both legible and small).
-- Linger on the frame that matters: Clip 2 (Enable label = custom name), Clip 3 (hover = `didOpen` fix), Clip 4 (override label ≠ built-in binary name), Clip 5 (auto-spawn after restart), Clip 7 (launch toast), Clip 8 (menu reachable after failure).
+- Linger on the frame that matters: Clip 2 (Enable label = custom name, then a successful hover = the `didOpen` wiring works), Clip 3 (override label ≠ built-in binary name), Clip 4 (auto-spawn after restart), Clip 6 (launch toast), Clip 7 (menu reachable after failure).
 - Describe each clip in the PR text (the per-clip **Description**) rather than narrating on camera — keeps clips short and lets you drop the audio track (`-an`) to save size.
