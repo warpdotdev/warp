@@ -1784,6 +1784,14 @@ impl Delimiter {
             return false;
         }
 
+        // `<u>` (UnderlineStart) is only ever resolved by an explicit `</u>` via
+        // `parse_underline`. It must never pair with another `<u>` through the
+        // emphasis algorithm, which would consume both markers and delete the text
+        // around them. An unclosed `<u>` should round-trip to literal text instead.
+        if self.kind == DelimiterKind::UnderlineStart {
+            return false;
+        }
+
         // For strikethrough, the delimiter counts must match.
         if self.kind == DelimiterKind::Strikethrough {
             return self.count == other.count;
