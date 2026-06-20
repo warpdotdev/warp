@@ -132,6 +132,28 @@ pub struct ResponseStream {
 }
 
 impl ResponseStream {
+    #[cfg(test)]
+    pub fn new_for_test(id: ResponseStreamId) -> Self {
+        let (cancellation_tx, _rx) = oneshot::channel();
+        Self {
+            id,
+            params: api::RequestParams::new_for_test(),
+            retry_count: 0,
+            start_time: Local::now(),
+            time_to_latest_event: TimeDelta::seconds(0),
+            cancellation_tx: Some(cancellation_tx),
+            original_error: None,
+            has_received_client_actions: false,
+            ai_identifiers: AIIdentifiers::default(),
+            can_attempt_resume_on_error: false,
+            should_resume_conversation_after_stream_finished: false,
+            stream_finished_received: false,
+            error_event_emitted: false,
+            deferred_retry_pending: false,
+            current_request_id: Some(Uuid::new_v4()),
+        }
+    }
+
     pub fn new(
         params: api::RequestParams,
         ai_identifiers: AIIdentifiers,
@@ -374,6 +396,13 @@ impl ResponseStream {
                         return;
                     }
                     RecoveryAction::Resume => {
+                        // Recoverable failure after client actions: we'll resume the
+                        // conversation once the stream finishes rather than surface the
+                        // error, so the UI suppresses the banner. Log it so the
+                        // auto-recovery isn't completely silent.
+                        log::warn!(
+                            "MultiAgent request failed after client actions; resuming conversation after stream finishes - Error: {e:?}"
+                        );
                         // The resume spawn itself waits for connectivity.
                         self.should_resume_conversation_after_stream_finished = true;
                     }
@@ -441,6 +470,13 @@ impl ResponseStream {
                     return;
                 }
                 RecoveryAction::Resume => {
+                    // Recoverable truncation after client actions: we'll resume the
+                    // conversation once the stream finishes rather than surface the
+                    // error, so the UI suppresses the banner. Log it so the
+                    // auto-recovery isn't completely silent.
+                    log::warn!(
+                        "MultiAgent request truncated after client actions; resuming conversation after stream finishes - Error: {unexpected_eof:?}"
+                    );
                     self.should_resume_conversation_after_stream_finished = true;
                     self.error_event_emitted = true;
                     self.report_request_failure(&unexpected_eof, is_online);

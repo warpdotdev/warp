@@ -53,7 +53,7 @@ struct EventListener {
 impl EventListener {
     fn new(ctx: &mut warpui_core::ModelContext<Self>) -> Self {
         let test_settings = TestSettings::handle(ctx);
-        ctx.subscribe_to_model(&test_settings, |me, event, _ctx| {
+        ctx.subscribe_to_model(&test_settings, |me, _, event, _ctx| {
             // Update our internal state if we get a change event for
             // SimpleSetting.
             if matches!(event, TestSettingsChangedEvent::SimpleSetting { .. }) {

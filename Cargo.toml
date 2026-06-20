@@ -379,7 +379,7 @@ dirs = "6.0.0"
 rayon = "1.10.0"
 sha2 = "0.10"
 shellexpand = "3.1.1"
-warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "a1000677e302b8fdcefb08365f3f7a81bbba23b3", default-features = false }
+warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "a937ae35dfe20eaed030664ad52b36657390b162", default-features = false }
 winit = { git = "https://github.com/warpdotdev/winit.git", rev = "a4e0ecb5f9626ccac9445a73dc28354b52423abc" }
 x11rb = "0.13.0"
 mockito = "1.7.0"

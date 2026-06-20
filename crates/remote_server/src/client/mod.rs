@@ -15,10 +15,10 @@ use crate::codebase_index_proto::{
 };
 use crate::proto::{
     notification, server_message, session_scoped_request, Abort, Authenticate, BufferEdit,
-    BundledSkillProto, ClientMessage, CloseBuffer, CodebaseIndexLimits, DiffMode,
-    DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot, ErrorCode, GitStatusMetadata,
-    Initialize, InitializeResponse, LoadRepoMetadataDirectoryResponse,
-    NavigatedToDirectoryResponse, PrInfo, RepositoryInfo, RunCommandRequest, RunCommandResponse,
+    ClientMessage, CloseBuffer, CodebaseIndexLimits, DiffMode, DiffStateFileDelta,
+    DiffStateMetadataUpdate, DiffStateSnapshot, ErrorCode, GitStatusMetadata, Initialize,
+    InitializeResponse, LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, PrInfo,
+    RemoteAgentContextSnapshot, RepositoryInfo, RunCommandRequest, RunCommandResponse,
     ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState, UpdateGitHubPrInfo,
     UpdateGitHubRepoInfo, UpdateGitStatus,
 };
@@ -127,8 +127,10 @@ pub enum ClientEvent {
         mode: DiffMode,
         delta: DiffStateFileDelta,
     },
-    /// The daemon pushed its pre-parsed bundled skill catalog.
-    BundledSkillsSnapshotReceived { skills: Vec<BundledSkillProto> },
+    /// The daemon pushed a revisioned full replacement of its Agent Mode context.
+    RemoteAgentContextSnapshotReceived {
+        snapshot: RemoteAgentContextSnapshot,
+    },
     /// An aggregate git status push (branch + diff stats) was pushed by the
     /// server for the tab / prompt chips.
     GitStatusPushReceived {
@@ -688,10 +690,8 @@ impl RemoteServerClient {
                     delta,
                 })
             }
-            server_message::Message::BundledSkillsSnapshot(snapshot) => {
-                Some(ClientEvent::BundledSkillsSnapshotReceived {
-                    skills: snapshot.skills,
-                })
+            server_message::Message::RemoteAgentContextSnapshot(snapshot) => {
+                Some(ClientEvent::RemoteAgentContextSnapshotReceived { snapshot })
             }
             server_message::Message::GitStatusPush(push) => {
                 let Some(repo_path) = StandardizedPath::try_new(&push.repo_path).ok() else {

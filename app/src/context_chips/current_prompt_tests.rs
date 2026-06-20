@@ -23,6 +23,8 @@ use crate::code_review::git_repo_model::{GitRepoStatusModel, GitStatusMetadata};
 #[cfg(feature = "local_fs")]
 use crate::code_review::github_repo_model::GitHubRepoModel;
 use crate::context_chips::context_chip::{Environment, PromptGenerator};
+#[cfg(feature = "local_fs")]
+use crate::context_chips::display_chip::GitBranchTrackingStatus;
 use crate::context_chips::prompt::Prompt;
 use crate::context_chips::{ChipAvailability, ChipDisabledReason, ContextChipKind};
 use crate::features::FeatureFlag;
@@ -42,6 +44,16 @@ use crate::terminal::view::PromptPosition;
 use crate::terminal::History;
 #[cfg(feature = "local_fs")]
 use crate::util::git::PrInfo;
+
+#[cfg(feature = "local_fs")]
+fn git_status_metadata(branch: &str) -> GitStatusMetadata {
+    GitStatusMetadata {
+        current_branch_name: branch.to_string(),
+        main_branch_name: "main".to_string(),
+        stats_against_head: DiffStats::default(),
+        branch_tracking_status: GitBranchTrackingStatus::new(branch.to_string(), None, 0, 0),
+    }
+}
 
 #[test]
 fn test_context_menu_items() {
@@ -583,11 +595,7 @@ fn test_git_status_change_updates_chip_value() {
                 .unwrap()
         });
 
-        let initial_metadata = GitStatusMetadata {
-            current_branch_name: "main".to_string(),
-            main_branch_name: "main".to_string(),
-            stats_against_head: DiffStats::default(),
-        };
+        let initial_metadata = git_status_metadata("main");
         let git_status = app.add_model(move |ctx| {
             GitRepoStatusModel::new_local_for_test(repo_handle, Some(initial_metadata), ctx)
         });
@@ -603,14 +611,7 @@ fn test_git_status_change_updates_chip_value() {
 
         // Simulate a branch change by updating the model's metadata.
         git_status.update(&mut app, |model, ctx| {
-            model.set_metadata_for_test(
-                Some(GitStatusMetadata {
-                    current_branch_name: "feature-branch".to_string(),
-                    main_branch_name: "main".to_string(),
-                    stats_against_head: DiffStats::default(),
-                }),
-                ctx,
-            );
+            model.set_metadata_for_test(Some(git_status_metadata("feature-branch")), ctx);
         });
 
         app.read(|ctx| {
@@ -623,6 +624,86 @@ fn test_git_status_change_updates_chip_value() {
                     "feature-branch".to_string(),
                 )),
                 "Chip value should reflect the new branch name after metadata change"
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_git_status_change_updates_branch_status_chip_value() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| {
+            Prompt::mock_with(
+                [ContextChipKind::GitBranchStatus],
+                false,
+                WarpPromptSeparator::None,
+            )
+        });
+        app.add_singleton_model(SessionSettings::new_with_defaults);
+        app.add_singleton_model(|_ctx| {
+            settings::PublicPreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+        app.add_singleton_model(|_| {
+            settings::PrivatePreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        let repo_handle = watcher_handle.update(&mut app, |watcher, ctx| {
+            watcher
+                .add_directory(
+                    warp_util::standardized_path::StandardizedPath::from_local_canonicalized(
+                        temp_dir.path(),
+                    )
+                    .unwrap(),
+                    ctx,
+                )
+                .unwrap()
+        });
+
+        let git_status = app
+            .add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repo_handle, None, ctx));
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
+
+        current_prompt.update(&mut app, |cp, ctx| {
+            cp.set_git_repo_status(Some(git_status.downgrade()), ctx);
+            cp.update_states_with_new_context(ctx);
+        });
+
+        let branch_tracking_status = GitBranchTrackingStatus::new(
+            "feature-branch".to_string(),
+            Some("origin/feature-branch".to_string()),
+            3,
+            1,
+        );
+        git_status.update(&mut app, |model, ctx| {
+            model.set_metadata_for_test(
+                Some(GitStatusMetadata {
+                    current_branch_name: "feature-branch".to_string(),
+                    main_branch_name: "main".to_string(),
+                    stats_against_head: DiffStats::default(),
+                    branch_tracking_status: branch_tracking_status.clone(),
+                }),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            let value = current_prompt
+                .as_ref(ctx)
+                .latest_chip_value(&ContextChipKind::GitBranchStatus);
+            assert_eq!(
+                value,
+                Some(&crate::context_chips::ChipValue::GitBranchStatus(
+                    branch_tracking_status,
+                )),
+                "Branch status chip should reflect ahead and behind metadata"
             );
         });
     });
@@ -669,11 +750,7 @@ fn test_git_status_pr_info_updates_github_pr_chip_value() {
         let git_status = app.add_model(move |ctx| {
             GitRepoStatusModel::new_local_for_test(
                 repo_handle,
-                Some(GitStatusMetadata {
-                    current_branch_name: "feature-a".to_string(),
-                    main_branch_name: "main".to_string(),
-                    stats_against_head: DiffStats::default(),
-                }),
+                Some(git_status_metadata("feature-a")),
                 ctx,
             )
         });

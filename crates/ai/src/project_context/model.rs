@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use futures::future::BoxFuture;
+use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui_core::{AppContext, Entity, ModelContext, SingletonEntity};
 
@@ -211,6 +212,10 @@ pub struct ProjectContextModel {
     /// File-based global rules and their local watcher state. Kept separate
     /// from `path_to_rules`, which is project-scoped.
     pub(super) global_rules: GlobalRules,
+    /// File-based global rules published by connected remote hosts. Kept
+    /// separate from local globals so existing local Rules UI accessors remain
+    /// local-only.
+    remote_global_rules: HashMap<HostId, Vec<ProjectRule>>,
 }
 
 #[derive(Default, Debug)]
@@ -276,7 +281,7 @@ impl ProjectContextModel {
         let mut model = Self::default();
         #[cfg(feature = "local_fs")]
         {
-            ctx.subscribe_to_model(&RepoMetadataModel::handle(ctx), move |me, event, ctx| {
+            ctx.subscribe_to_model(&RepoMetadataModel::handle(ctx), move |me, _, event, ctx| {
                 match event {
                     RepoMetadataEvent::RepositoryUpdated { id } => {
                         me.refresh_project_rules_for_repo(
@@ -542,6 +547,15 @@ impl ProjectContextModel {
         // sorted by path — deterministic without needing a separate
         // ordering pass.
         let mut active_rules: Vec<ProjectRule> = self.global_rules.active_rules().collect();
+        if let Some(remote) = path.as_remote() {
+            active_rules.extend(
+                self.remote_global_rules
+                    .get(&remote.host_id)
+                    .into_iter()
+                    .flatten()
+                    .cloned(),
+            );
+        }
         let (project_root, additional_rule_paths) = match project_result {
             Some(project) => {
                 active_rules.extend(project.active_rules);
@@ -555,8 +569,9 @@ impl ProjectContextModel {
         }
 
         // Use the indexed project root when available; otherwise fall back to
-        // the parent of the first global rule.
-        let root_path = project_root.or_else(|| self.global_rules.first_rule_parent())?;
+        // the parent of the first local or remote global rule.
+        let root_path =
+            project_root.or_else(|| active_rules.first().and_then(|rule| rule.path.parent()))?;
 
         Some(ProjectRulesResult {
             root_path,
@@ -607,6 +622,21 @@ impl ProjectContextModel {
     /// Iteration order is sorted by path because global rules are backed by a `BTreeMap`.
     pub fn global_rule_paths(&self) -> impl Iterator<Item = LocalOrRemotePath> + '_ {
         self.global_rules.paths()
+    }
+
+    /// Returns every indexed global rule with its cached content, sorted by path.
+    pub fn global_rules(&self) -> impl Iterator<Item = ProjectRule> + '_ {
+        self.global_rules.active_rules()
+    }
+    /// Replaces the file-based global rule catalog for one remote host.
+    pub fn set_remote_global_rules(&mut self, host_id: HostId, mut rules: Vec<ProjectRule>) {
+        rules.sort_by_key(|rule| rule.path.display_path());
+        self.remote_global_rules.insert(host_id, rules);
+    }
+
+    /// Removes the file-based global rule catalog for a disconnected remote host.
+    pub fn remove_remote_global_rules(&mut self, host_id: &HostId) {
+        self.remote_global_rules.remove(host_id);
     }
 
     /// Returns the rule file paths associated with a specific workspace root path.

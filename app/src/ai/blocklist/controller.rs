@@ -415,7 +415,9 @@ impl InputQuery {
     fn query(&self) -> String {
         match &self.input_query {
             InputQueryType::UserSubmittedQueryFromInput { query, .. } => query.clone(),
-            InputQueryType::AIInputType { ai_input } => ai_input.user_query().unwrap_or_default(),
+            InputQueryType::AIInputType { ai_input } => {
+                ai_input.display_query().unwrap_or_default()
+            }
         }
     }
 }
@@ -437,7 +439,7 @@ impl BlocklistAIController {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&action_model, move |me, event, ctx| {
+        ctx.subscribe_to_model(&action_model, move |me, _, event, ctx| {
             let BlocklistAIActionEvent::FinishedAction {
                 conversation_id,
                 cancellation_reason,
@@ -555,7 +557,7 @@ impl BlocklistAIController {
             me.send_follow_up_for_conversation(*conversation_id, trigger, ctx);
         });
 
-        ctx.subscribe_to_model(&agent_view_controller, |me, event, ctx| {
+        ctx.subscribe_to_model(&agent_view_controller, |me, _, event, ctx| {
             let AgentViewControllerEvent::ExitedAgentView {
                 conversation_id,
                 final_exchange_count,
@@ -599,12 +601,12 @@ impl BlocklistAIController {
         // Subscribe to the orchestration event service to inject events
         // (e.g. MessagesReceivedFromAgents) into conversations that receive inter-agent messages.
         let svc = OrchestrationEventService::handle(ctx);
-        ctx.subscribe_to_model(&svc, move |me, event, ctx| {
+        ctx.subscribe_to_model(&svc, move |me, _, event, ctx| {
             let OrchestrationEventServiceEvent::EventsReady { conversation_id } = event;
             me.handle_pending_events_ready(*conversation_id, ctx);
         });
         let streamer = OrchestrationEventStreamer::handle(ctx);
-        ctx.subscribe_to_model(&streamer, move |me, event, ctx| match event {
+        ctx.subscribe_to_model(&streamer, move |me, _, event, ctx| match event {
             OrchestrationEventStreamerEvent::DormantClaudeWakeReady {
                 conversation_id,
                 wake_message,
@@ -2470,7 +2472,7 @@ impl BlocklistAIController {
         let input_contains_user_query = request_input
             .all_inputs()
             .any(|input| input.is_user_query());
-        ctx.subscribe_to_model(&response_stream, move |me, event, ctx| {
+        ctx.subscribe_to_model(&response_stream, move |me, _, event, ctx| {
             me.handle_response_stream_event(
                 input_contains_user_query,
                 event,
@@ -2611,6 +2613,27 @@ impl BlocklistAIController {
     ) -> bool {
         self.in_flight_response_streams
             .has_active_stream_for_conversation(conversation_id, app)
+    }
+
+    #[cfg(test)]
+    pub fn register_mock_stream_for_test(
+        &mut self,
+        stream_id: ResponseStreamId,
+        conversation_id: AIConversationId,
+        stream: ModelHandle<ResponseStream>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let stream_clone = stream.clone();
+        ctx.subscribe_to_model(&stream, move |me, _, event, ctx| {
+            me.handle_response_stream_event(false, event, &stream_clone, ctx);
+        });
+        self.in_flight_response_streams.register_new_stream(
+            stream_id,
+            conversation_id,
+            stream,
+            CancellationReason::ManuallyCancelled,
+            ctx,
+        );
     }
 
     /// Cancels 'progress' for the active conversation if there is one:
@@ -3134,6 +3157,7 @@ impl BlocklistAIController {
                             error_message: error_message.to_owned(),
                             will_attempt_resume: false,
                             waiting_for_network: false,
+                            is_user_error: false,
                         },
                         /*recovery_pending*/ false,
                         stream_id,
@@ -3178,6 +3202,7 @@ impl BlocklistAIController {
                             error_message: error_message.to_owned(),
                             will_attempt_resume: false,
                             waiting_for_network: false,
+                            is_user_error: false,
                         },
                         /*recovery_pending*/ false,
                         stream_id,
@@ -3236,6 +3261,7 @@ impl BlocklistAIController {
                             error_message,
                             will_attempt_resume: false,
                             waiting_for_network: false,
+                            is_user_error: false,
                         },
                         /*recovery_pending*/ false,
                         stream_id,

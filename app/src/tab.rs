@@ -72,6 +72,7 @@ const WARP_2_HOVERED_TAB_COLOR_OPACITY: Opacity = 50;
 const TAB_CLOSE_BUTTON_OPACITY: Opacity = 60;
 const TAB_CLOSE_BUTTON_WIDTH: f32 = 20.0;
 const MAX_TOOLTIP_LENGTH: usize = 80;
+pub(crate) const TAB_PIN_INDICATOR_ICON_SIZE: f32 = 16.0;
 
 const TAB_INDICATOR_SYNCED_COLOR: u32 = 0x4A93FFFF;
 
@@ -1228,7 +1229,10 @@ impl<'a> TabComponent<'a> {
         }
     }
 
-    fn render_close_tab_button(
+    /// Renders the close-button slot for the tab: the close button when
+    /// hovered, a pin indicator when the tab is pinned, or an empty
+    /// width-reserving placeholder otherwise.
+    fn render_close_button_or_pin_icon(
         &self,
         background: Option<Fill>,
         is_hovered: bool,
@@ -1301,6 +1305,26 @@ impl<'a> TabComponent<'a> {
                     ctx.dispatch_typed_action(WorkspaceAction::CloseTab(tab_index))
                 })
                 .finish()
+        } else if self.show_pin_indicator() {
+            // Pinned: render the pin in the exact slot the close button uses so
+            // hovering swaps icons in place without changing the layout.
+            let theme = self.appearance.theme();
+            ConstrainedBox::new(
+                Align::new(
+                    ConstrainedBox::new(
+                        Icon::PinFilledDiagonal
+                            .to_warpui_icon(theme.main_text_color(theme.background()))
+                            .finish(),
+                    )
+                    .with_width(TAB_PIN_INDICATOR_ICON_SIZE)
+                    .with_height(TAB_PIN_INDICATOR_ICON_SIZE)
+                    .finish(),
+                )
+                .finish(),
+            )
+            .with_width(ICON_DIMENSIONS)
+            .with_height(ICON_DIMENSIONS)
+            .finish()
         } else {
             ConstrainedBox::new(Empty::new().finish())
                 .with_width(ICON_DIMENSIONS)
@@ -1312,6 +1336,13 @@ impl<'a> TabComponent<'a> {
             SavePosition::new(button, &format!("close_tab_button:{}", self.tab_index)).finish(),
         )
         .finish()
+    }
+
+    /// True when this tab should display the pinned indicator in its close-
+    /// button slot: pinning is enabled, the tab is pinned, and it isn't a
+    /// grouped member (groups render their own pin).
+    fn show_pin_indicator(&self) -> bool {
+        FeatureFlag::PinnedTabs.is_enabled() && self.tab.pinned && !self.grouped_member
     }
 
     fn render_indicator(&self) -> Option<Box<dyn Element>> {
@@ -1632,7 +1663,7 @@ impl<'a> TabComponent<'a> {
         let build_close_button_overlay = |is_hovered: bool| {
             Container::new(
                 ConstrainedBox::new(
-                    self.render_close_tab_button(Some(close_button_background), is_hovered),
+                    self.render_close_button_or_pin_icon(Some(close_button_background), is_hovered),
                 )
                 .with_width(TAB_CLOSE_BUTTON_WIDTH)
                 .with_height(TAB_CLOSE_BUTTON_WIDTH)

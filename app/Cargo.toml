@@ -730,6 +730,7 @@ github_pr_prompt_chip = []
 create_project_flow = []
 agent_mode_evals = [
     "integration_tests",
+    "warpui/defer_scene_build",
     "full_source_code_embedding",
     "cross_repo_context",
     "cloud_object_models/agent_mode_evals",

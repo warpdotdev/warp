@@ -140,7 +140,7 @@ impl Sessions {
         #[cfg(feature = "local_tty")]
         if FeatureFlag::SshRemoteServer.is_enabled() {
             let mgr = RemoteServerManager::handle(ctx);
-            ctx.subscribe_to_model(&mgr, |sessions, event, ctx| match event {
+            ctx.subscribe_to_model(&mgr, |sessions, _, event, ctx| match event {
                 RemoteServerManagerEvent::SessionConnected {
                     session_id: sid,
                     host_id,
@@ -169,7 +169,7 @@ impl Sessions {
                 | RemoteServerManagerEvent::SessionConnectionFailed { .. }
                 | RemoteServerManagerEvent::HostConnected { .. }
                 | RemoteServerManagerEvent::HostDisconnected { .. }
-                | RemoteServerManagerEvent::BundledSkillsSnapshot { .. }
+                | RemoteServerManagerEvent::RemoteAgentContextSnapshot { .. }
                 | RemoteServerManagerEvent::NavigatedToDirectory { .. }
                 | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
                 | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
@@ -901,10 +901,13 @@ impl From<BootstrapSessionType> for SessionType {
 pub struct Session {
     info: SessionInfo,
     external_commands: Arc<OnceCell<HashSet<SmolStr>>>,
+    /// Function names collected asynchronously after bootstrap via an in-band command.
+    additional_function_names: Arc<OnceCell<HashSet<SmolStr>>>,
     /// The command executor for this session. Behind a `RwLock` so it can be
     /// swapped after a remote server reconnect (via `set_command_executor`).
     command_executor: RwLock<Arc<dyn CommandExecutor>>,
     load_external_commands_future: OnceCell<Shared<BoxFuture<'static, ()>>>,
+    load_all_function_names_future: OnceCell<Shared<BoxFuture<'static, ()>>>,
     command_case_sensitivity: TopLevelCommandCaseSensitivity,
     /// The authoritative session type, initially derived from the
     /// [`BootstrapSessionType`] in `SessionInfo` and updated by [`Sessions`]
@@ -929,8 +932,10 @@ impl Session {
         Self {
             info: session_info,
             external_commands: Arc::new(OnceCell::new()),
+            additional_function_names: Arc::new(OnceCell::new()),
             command_executor: RwLock::new(command_executor),
             load_external_commands_future: Default::default(),
+            load_all_function_names_future: Default::default(),
             command_case_sensitivity,
             session_type: Mutex::new(session_type),
         }
@@ -1049,7 +1054,11 @@ impl Session {
     }
 
     pub fn function_names(&self) -> impl Iterator<Item = &str> {
-        self.info.function_names.iter().map(Deref::deref)
+        self.info
+            .function_names
+            .iter()
+            .chain(self.additional_function_names.get().into_iter().flatten())
+            .map(Deref::deref)
     }
 
     pub fn executable_names(&self) -> impl Iterator<Item = &str> {
@@ -1113,6 +1122,66 @@ impl Session {
     /// Returns `true` if external commands have finished loading for this `Session`.
     pub fn has_loaded_external_commands(&self) -> bool {
         self.external_commands.get().is_some()
+    }
+
+    /// Asynchronously collects all function names via an in-band shell command.
+    pub async fn load_all_function_names(&self) {
+        let Some(command) = self
+            .info
+            .shell
+            .shell_type()
+            .shell_command_to_get_all_functions()
+        else {
+            return;
+        };
+
+        let (load_future, receiver) = (async {
+            let additional_function_names = self.additional_function_names.clone();
+            let existing = &self.info.function_names;
+
+            let result = self
+                .execute_command(command, None, None, ExecuteCommandOptions::default())
+                .await;
+
+            let new_names: HashSet<SmolStr> = match result {
+                Ok(output) if output.status == CommandExitStatus::Success => {
+                    match output.to_string() {
+                        Ok(output_string) => output_string
+                            .lines()
+                            .filter(|name| !name.is_empty() && !existing.contains(*name))
+                            .map(Into::into)
+                            .collect(),
+                        Err(e) => {
+                            log::warn!("Failed to decode all function names output: {e:#}");
+                            HashSet::new()
+                        }
+                    }
+                }
+                Ok(_) => {
+                    log::warn!(
+                        "In-band command for all function names returned non-success status"
+                    );
+                    HashSet::new()
+                }
+                Err(e) => {
+                    log::warn!("Failed to load all function names: {e:#}");
+                    HashSet::new()
+                }
+            };
+
+            if additional_function_names.set(new_names).is_err() {
+                log::warn!("Additional function names were already set for this session.");
+            }
+        })
+        .remote_handle();
+
+        match self
+            .load_all_function_names_future
+            .try_insert(receiver.boxed().shared())
+        {
+            Ok(_) => load_future.await,
+            Err((existing_receiver, _)) => existing_receiver.clone().await,
+        };
     }
 
     /// Asynchronously loads the external commands.
@@ -1210,6 +1279,7 @@ impl Session {
             .into_iter()
             .flatten()
             .chain(&self.info.function_names)
+            .chain(self.additional_function_names.get().into_iter().flatten())
             .chain(self.info.aliases.keys())
             .chain(self.info.abbreviations.keys())
             .chain(&self.info.builtins)
@@ -1761,6 +1831,8 @@ pub mod testing {
                 load_external_commands_future: Default::default(),
                 command_case_sensitivity: TopLevelCommandCaseSensitivity::CaseSensitive,
                 session_type: Mutex::new(session_type),
+                additional_function_names: Default::default(),
+                load_all_function_names_future: Default::default(),
             }
         }
 
@@ -1776,6 +1848,8 @@ pub mod testing {
                 load_external_commands_future: Default::default(),
                 command_case_sensitivity: TopLevelCommandCaseSensitivity::CaseSensitive,
                 session_type: Mutex::new(session_type),
+                additional_function_names: Default::default(),
+                load_all_function_names_future: Default::default(),
             }
         }
 

@@ -790,9 +790,6 @@ pub enum FeatureFlag {
     /// Enables Warp local control through the standalone warpctrl CLI.
     WarpControlCli,
 
-    /// When enabled, free-tier users are blocked from AI features (no-AI experiment arm).
-    FreeUserNoAi,
-
     /// Enables the ask_user_question tool allowing the agent to ask clarifying questions.
     AskUserQuestion,
 
@@ -958,7 +955,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::RemoteCodebaseIndexing,
-    FeatureFlag::AsyncFind,
     FeatureFlag::GitGraph,
     FeatureFlag::GitGraphWrite,
     FeatureFlag::GPTConfigurableContextWindow,
@@ -970,8 +966,8 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     #[cfg(target_os = "macos")]
-    FeatureFlag::DragTabsToWindows,
     FeatureFlag::GroupedTabs,
+    FeatureFlag::AsyncFind,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
@@ -987,6 +983,8 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    FeatureFlag::DragTabsToWindows,
 ];
 
 /// Flags that we want to allow to switch at runtime (assuming RuntimeFeatureFlags is set)
@@ -1082,6 +1080,9 @@ impl FeatureFlag {
                 "Enables write operations (checkout, branch/tag management, merge, rebase, reset, cherry-pick, revert, push/pull, archive) from the Git Graph right-click menus.",
             ),
             GroupedTabs => Some("Enables organizing tabs into named, collapsible groups."),
+            AsyncFind => Some(
+                "Runs terminal find on a background thread to keep the UI responsive while searching large outputs.",
+            ),
             _ => None,
         }
     }

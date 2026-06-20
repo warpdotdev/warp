@@ -30,7 +30,7 @@ impl ConversationListViewModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let conversations_model = AgentConversationsModel::handle(ctx);
 
-        ctx.subscribe_to_model(&conversations_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&conversations_model, |me, _, event, ctx| {
             match event {
                 // These events change the set of items in the list, so we need
                 // to rebuild the cached ID list.

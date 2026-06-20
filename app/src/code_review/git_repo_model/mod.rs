@@ -10,6 +10,7 @@ pub use remote::RemoteGitRepoStatusModel;
 
 use super::diff_state::DiffStats;
 pub use super::git_repo_models::GitRepoModels;
+use crate::context_chips::display_chip::GitBranchTrackingStatus;
 
 /// Public metadata exposed to consumers — the subset of diff metadata
 /// that the git chip (prompt display, agent view footer) needs.
@@ -19,6 +20,7 @@ pub struct GitStatusMetadata {
     pub current_branch_name: String,
     pub main_branch_name: String,
     pub stats_against_head: DiffStats,
+    pub branch_tracking_status: GitBranchTrackingStatus,
 }
 
 // ── GitRepoStatusModel ──────────────────────────────────────────────────────
@@ -105,7 +107,9 @@ pub(super) fn new_local_git_repo_status_model(
 ) -> ModelHandle<GitRepoStatusModel> {
     let inner = ctx.add_model(|ctx| LocalGitRepoStatusModel::new(repo_path, repository_model, ctx));
     ctx.add_model(|ctx| {
-        ctx.subscribe_to_model(&inner, GitRepoStatusModel::forward_event);
+        ctx.subscribe_to_model(&inner, |me, _, event, ctx| {
+            GitRepoStatusModel::forward_event(me, event, ctx)
+        });
         GitRepoStatusModel::Local(inner)
     })
 }
@@ -116,7 +120,9 @@ pub(super) fn new_remote_git_repo_status_model(
 ) -> ModelHandle<GitRepoStatusModel> {
     let inner = ctx.add_model(|ctx| RemoteGitRepoStatusModel::new(remote_path, ctx));
     ctx.add_model(|ctx| {
-        ctx.subscribe_to_model(&inner, GitRepoStatusModel::forward_event);
+        ctx.subscribe_to_model(&inner, |me, _, event, ctx| {
+            GitRepoStatusModel::forward_event(me, event, ctx)
+        });
         GitRepoStatusModel::Remote(inner)
     })
 }
@@ -130,7 +136,7 @@ impl GitRepoStatusModel {
     ) -> Self {
         let inner =
             ctx.add_model(move |_| LocalGitRepoStatusModel::new_for_test(repository, metadata));
-        ctx.subscribe_to_model(&inner, Self::forward_event);
+        ctx.subscribe_to_model(&inner, |me, _, event, ctx| me.forward_event(event, ctx));
         Self::Local(inner)
     }
 

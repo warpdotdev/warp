@@ -1,6 +1,6 @@
 use super::{
-    AmbientAgentEnvironment, AwsProviderConfig, BaseImage, EnvironmentSecretRef, GcpProviderConfig,
-    GithubRepo, ProvidersConfig,
+    AmbientAgentEnvironment, AwsProviderConfig, BaseImage, CodeForge, EnvironmentSecretRef,
+    GcpProviderConfig, GithubRepo, ProvidersConfig, SourceRepo,
 };
 
 #[test]
@@ -16,11 +16,83 @@ fn deserialize_legacy_environment_without_providers() {
     assert_eq!(env.name, "my-env");
     assert_eq!(env.providers, ProvidersConfig::default());
     assert_eq!(env.github_repos.len(), 1);
+    assert_eq!(env.code_forge, None);
+    assert_eq!(env.source_repos, None);
+    assert_eq!(
+        env.effective_repos(),
+        vec![SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".into(),
+            "warp".into()
+        )]
+    );
     assert_eq!(
         env.base_image,
         BaseImage::DockerImage("ubuntu:latest".into())
     );
     assert_eq!(env.setup_commands, vec!["echo hello"]);
+}
+
+#[test]
+fn deserialize_gitlab_environment_uses_authoritative_source_repos() {
+    let json = serde_json::json!({
+        "name": "gitlab-env",
+        "code_forge": "GITLAB",
+        "github_repos": [{"owner": "legacy-mirror", "repo": "ignored"}],
+        "source_repos": [{
+            "owner": "platform/backend",
+            "repo": "api"
+        }],
+        "docker_image": "ubuntu:latest"
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(env.effective_code_forge(), CodeForge::GitLab);
+    assert_eq!(env.source_repos.as_ref().unwrap()[0].code_forge, None);
+    assert_eq!(
+        env.effective_repos(),
+        vec![SourceRepo::new(
+            CodeForge::GitLab,
+            "platform/backend".into(),
+            "api".into()
+        )]
+    );
+    assert_eq!(
+        env.effective_repos()[0].https_clone_url(),
+        "https://gitlab.com/platform/backend/api.git"
+    );
+}
+
+#[test]
+fn present_empty_source_repos_override_legacy_mirror() {
+    let json = serde_json::json!({
+        "name": "empty-env",
+        "code_forge": "GITLAB",
+        "github_repos": [{"owner": "legacy-mirror", "repo": "ignored"}],
+        "source_repos": [],
+        "docker_image": "ubuntu:latest"
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert!(env.effective_repos().is_empty());
+}
+
+#[test]
+fn legacy_environment_serialization_omits_provider_neutral_fields() {
+    let env = AmbientAgentEnvironment::new(
+        "legacy-env".into(),
+        None,
+        vec![GithubRepo::new("warpdotdev".into(), "warp".into())],
+        "ubuntu:latest".into(),
+        vec![],
+    );
+
+    let json = serde_json::to_value(&env).unwrap();
+
+    assert!(!json.as_object().unwrap().contains_key("code_forge"));
+    assert!(!json.as_object().unwrap().contains_key("source_repos"));
 }
 
 #[test]

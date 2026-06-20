@@ -539,6 +539,16 @@ impl LaunchMode {
         }
     }
 
+    fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            LaunchMode::App { .. } => "app",
+            LaunchMode::CommandLine { command, .. } => command.as_str_for_tracing(),
+            LaunchMode::Test { .. } => "test",
+            LaunchMode::RemoteServerDaemon { .. } => "remote_server_daemon",
+            LaunchMode::RemoteServerProxy => "remote_server_proxy",
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn new_for_unit_test() -> Self {
         LaunchMode::Test {
@@ -581,7 +591,11 @@ fn apply_scroll_multiplier(event: &mut Event, app: &AppContext) {
     }
 }
 
-/// Runs the app. If a subcommand was requested, it'll be run instead of the main application.
+/// Runs the shared Warp executable as the app or as one of its command-line modes.
+///
+/// The bundled Warp Control wrapper injects `--warpctrl`, which is dispatched
+/// before the normal Warp/Oz parser. Oz subcommands are part of that normal
+/// parser and therefore do not require a separate mode flag.
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
 pub fn run() -> Result<()> {
     // Perform any necessary platform-specific initialization.
@@ -801,7 +815,11 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
     // Start the `run_internal` span here - we can't do it before this point
     // because we need the tracing initialization to be complete first.
-    let span = ::tracing::info_span!("run_internal", tags.cloud_agent = true);
+    let span = ::tracing::info_span!(
+        "run_internal",
+        tags.cloud_agent = true,
+        launch_mode = launch_mode.as_str_for_tracing()
+    );
     let _enter = span.enter();
 
     let log_destination = launch_mode.log_destination();
@@ -924,7 +942,12 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // the TOML-backed store. When disabled, they live in the platform-native
     // store (same backend as private). Use the correct one for pre-app reads.
     #[cfg_attr(
-        not(any(enable_crash_recovery, any(target_os = "linux", target_os = "freebsd"))),
+        not(any(
+            enable_crash_recovery,
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "macos"
+        )),
         expect(unused)
     )]
     let prefs_for_public_settings: &dyn warpui_extras::user_preferences::UserPreferences =
@@ -976,6 +999,11 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         let dev_icon = ASSETS.get("bundled/png/local.png")?;
         app_builder.set_dev_icon(dev_icon);
 
+        let show_dock_icon = crate::settings::app_icon::ShowDockIconState::read_from_preferences(
+            prefs_for_public_settings,
+        )
+        .unwrap_or_else(crate::settings::app_icon::ShowDockIconState::default_value);
+        app_builder.set_show_dock_icon_on_launch(show_dock_icon);
         app_builder.set_menu_bar_builder(app_menus::menu_bar);
         app_builder.set_dock_menu_builder(|_| app_menus::dock_menu());
     }
@@ -1381,7 +1409,7 @@ pub(crate) fn initialize_app(
         #[cfg(not(target_family = "wasm"))]
         if FeatureFlag::SuperGrok.is_enabled() {
             use crate::workspaces::user_workspaces::UserWorkspacesEvent;
-            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, event, ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, _, event, ctx| {
                 if matches!(event, UserWorkspacesEvent::TeamsChanged) {
                     let allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
                     manager.set_grok_refresh_allowed(allowed, ctx);
@@ -1626,7 +1654,7 @@ pub(crate) fn initialize_app(
             {
                 use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
                 let mgr = RemoteServerManager::handle(ctx);
-                ctx.subscribe_to_model(&mgr, |me, event, ctx| match event {
+                ctx.subscribe_to_model(&mgr, |me, _, event, ctx| match event {
                     RemoteServerManagerEvent::RepoMetadataSnapshot { host_id, update } => {
                         me.insert_remote_snapshot(host_id.clone(), update, ctx);
                     }
@@ -1916,8 +1944,6 @@ pub(crate) fn initialize_app(
 
     // SkillManager is used to cache SKILL.md files for all active terminal views and their working directories
     ctx.add_singleton_model(SkillManager::new);
-    #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
-    ai::skills::wire_remote_bundled_skills(ctx);
 
     // CloudViewModel subscribes to UpdateManager so that it can be notified when objects are
     // created on the server.
@@ -2077,6 +2103,10 @@ pub(crate) fn initialize_app(
     // Index global rules (e.g. ~/.agents/AGENTS.md) on a background task so
     // they are available to subsequent agent queries.
     ProjectContextModel::handle(ctx).update(ctx, |me, ctx| me.index_global_rules(ctx));
+    #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
+    {
+        ctx.add_singleton_model(ai::remote_agent_context::RemoteAgentContext::new);
+    }
 
     ctx.add_singleton_model(|ctx| {
         PersistedWorkspace::new(

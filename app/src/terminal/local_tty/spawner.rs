@@ -2,10 +2,8 @@ use anyhow::Result;
 use warpui::{AppContext, Entity, SingletonEntity};
 #[cfg(unix)]
 use {
-    crate::report_error,
-    crate::terminal::local_tty::server::TerminalServer,
-    anyhow::{bail, Context},
-    std::process::Child,
+    crate::report_error, crate::terminal::local_tty::server::TerminalServer, anyhow::bail,
+    std::cmp::Reverse, std::collections::HashMap, std::ffi::OsString, std::process::Child,
 };
 
 #[cfg(target_os = "windows")]
@@ -185,11 +183,27 @@ impl PtySpawner {
 
         #[cfg(unix)]
         if let Some(server) = &self.server {
-            let result = Self::spawn_pty_via_server(server, options.clone()).context(
-                "Failed to spawn pty via terminal server; falling back to spawning locally...",
-            );
+            let result = Self::spawn_pty_via_server(server, options.clone());
             if let Err(err) = result {
-                report_error!(err);
+                // Log env var names + sizes for any terminal server failure.
+                // Large env vars are the most common cause (E2BIG on Linux,
+                // socket overflow on macOS), so logging them on every failure
+                // makes both cases diagnosable from the logs.
+                log_env_var_diagnostics(&options.env_vars);
+
+                // E2BIG is deterministic — retrying from the main process with
+                // the same PtyOptions would hit the same limit — so fail
+                // immediately rather than falling back.
+                if is_e2big(&err) {
+                    // err already contains the original message. We add some context on how to fix.
+                    return Err(err.context(
+                        "This can happen when env vars in the image or Oz secrets are \
+                         too long.",
+                    ));
+                }
+                report_error!(err.context(
+                    "Failed to spawn pty via terminal server; falling back to spawning locally...",
+                ));
                 is_fallback = true;
             } else {
                 send_telemetry_from_app_ctx!(
@@ -260,3 +274,62 @@ impl Entity for PtySpawner {
 }
 
 impl SingletonEntity for PtySpawner {}
+
+/// Returns `true` if the error (or any cause in its chain) indicates that
+/// `execve` failed with `ENAMETOOLONG` / E2BIG ("Argument list too long").
+///
+/// The terminal-server IPC path stringifies the raw `io::Error`, so we cannot
+/// reliably downcast; instead we check the formatted error message as a
+/// fallback.
+#[cfg(unix)]
+fn is_e2big(err: &anyhow::Error) -> bool {
+    // Try the "real" io::Error in the chain first (direct-spawn path).
+    if err.chain().any(|e| {
+        e.downcast_ref::<std::io::Error>()
+            .and_then(|e| e.raw_os_error())
+            .is_some_and(|code| code == libc::E2BIG)
+    }) {
+        return true;
+    }
+    // Fall back to string matching for the IPC path where the io::Error
+    // was serialised to a String before being sent back to the client.
+    let msg = format!("{err:#}");
+    msg.contains("os error 7") || msg.contains("Argument list too long")
+}
+
+/// Logs the names and byte-lengths (not values) of env vars passed to the
+/// shell. Called on any terminal server failure to aid diagnosis of oversized
+/// env var / secret configurations (E2BIG on Linux, socket overflow on macOS).
+#[cfg(unix)]
+fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
+    log::error!("Shell spawn env var diagnostics (names and sizes only, no values):");
+
+    // Log the additional env vars supplied via PtyOptions.
+    let mut extra: Vec<(&OsString, usize)> = extra_env_vars
+        .iter()
+        .map(|(k, v)| (k, k.len() + v.len() + 2))
+        .collect();
+    extra.sort_by_key(|(_, size)| Reverse(*size));
+    log::error!("  PtyOptions env_vars ({} entries):", extra_env_vars.len());
+    for (key, size) in extra.iter().take(20) {
+        log::error!("    {:?} — {} bytes", key, size);
+    }
+
+    // Log the largest vars from the inherited process environment.
+    let mut inherited: Vec<(OsString, usize)> = std::env::vars_os()
+        .map(|(k, v)| {
+            let size = k.len() + v.len() + 2;
+            (k, size)
+        })
+        .collect();
+    inherited.sort_by_key(|(_, size)| Reverse(*size));
+    let total: usize = inherited.iter().map(|(_, s)| s).sum();
+    log::error!(
+        "  Inherited process env ({} vars, ~{} bytes total):",
+        inherited.len(),
+        total
+    );
+    for (key, size) in inherited.iter().take(20) {
+        log::error!("    {:?} — {} bytes", key, size);
+    }
+}

@@ -96,7 +96,7 @@ impl LocalGitHubRepoModel {
 
         // Track branch changes from the sibling. Only PR info depends on the
         // branch — repository info is deliberately left untouched here.
-        ctx.subscribe_to_model(&git_status, |me, event, ctx| match event {
+        ctx.subscribe_to_model(&git_status, |me, _, event, ctx| match event {
             GitRepoStatusEvent::MetadataChanged => {
                 let new_branch = me
                     .git_status
