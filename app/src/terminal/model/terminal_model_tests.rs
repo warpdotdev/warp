@@ -157,7 +157,7 @@ fn command_finished_and_precmd(terminal: &mut TerminalModel) {
         completion_metadata: completion_metadata.clone(),
         ..Default::default()
     });
-    terminal.precmd(PrecmdValue {
+    terminal.precmd_with_completion_metadata(PrecmdValue {
         completion_metadata,
         prompt_metadata: PromptMetadata::default(),
     });
@@ -172,7 +172,7 @@ fn ignores_non_inline_iterm_file_payload_without_overwriting_cwd_file() {
     fs::write(&target_path, original_bytes).unwrap();
 
     let mut terminal = TerminalModel::mock(None, None);
-    terminal.legacy_precmd(PromptMetadata {
+    terminal.prompt_only_precmd(PromptMetadata {
         pwd: Some(temp_dir.path().to_string_lossy().to_string()),
         ..Default::default()
     });
@@ -193,7 +193,7 @@ fn ignores_multipart_non_inline_iterm_file_payload_without_overwriting_cwd_file(
     fs::write(&target_path, original_bytes).unwrap();
 
     let mut terminal = TerminalModel::mock(None, None);
-    terminal.legacy_precmd(PromptMetadata {
+    terminal.prompt_only_precmd(PromptMetadata {
         pwd: Some(temp_dir.path().to_string_lossy().to_string()),
         ..Default::default()
     });
@@ -261,10 +261,12 @@ fn ssh_bootstraps_if_blocklist_empty() {
     };
     terminal.bootstrapped(bootstrapped_value.clone());
     terminal.command_finished(Default::default());
-    terminal.block_list_mut().precmd(PrecmdValue {
-        completion_metadata: CompletionMetadata::default(),
-        prompt_metadata: PromptMetadata::default(),
-    });
+    terminal
+        .block_list_mut()
+        .precmd_with_completion_metadata(PrecmdValue {
+            completion_metadata: CompletionMetadata::default(),
+            prompt_metadata: PromptMetadata::default(),
+        });
 
     assert!(terminal.is_active_block_bootstrapped());
 

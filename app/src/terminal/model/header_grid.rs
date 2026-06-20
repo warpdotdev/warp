@@ -1141,11 +1141,11 @@ impl ansi::Handler for HeaderGrid {
         delegate_with_writer!(self.text_area_size_chars(writer));
     }
 
-    fn precmd(&mut self, data: PrecmdValue) {
-        self.legacy_precmd(data.prompt_metadata);
+    fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {
+        self.prompt_only_precmd(data.prompt_metadata);
     }
 
-    fn legacy_precmd(&mut self, data: PromptMetadata) {
+    fn prompt_only_precmd(&mut self, data: PromptMetadata) {
         if let Some(honor_ps1) = data.honor_ps1 {
             if honor_ps1 != self.honor_ps1 {
                 log::debug!(

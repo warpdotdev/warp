@@ -379,7 +379,7 @@ impl DProtoHook {
     }
 }
 
-/// Canonical correlated payload received from the pty at precmd.
+/// Payload with completion metadata received from the PTY at precmd.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrecmdValue {
     #[serde(flatten)]
@@ -392,15 +392,15 @@ pub struct PrecmdValue {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub(super) enum PrecmdHookValue {
-    Correlated(PrecmdValue),
-    Legacy(PromptMetadata),
+    WithCompletionMetadata(PrecmdValue),
+    PromptOnly(PromptMetadata),
 }
 
 impl PrecmdHookValue {
     fn session_id(&self) -> HookSessionId {
         match self {
-            Self::Correlated(value) => value.prompt_metadata.session_id,
-            Self::Legacy(value) => value.session_id,
+            Self::WithCompletionMetadata(value) => value.prompt_metadata.session_id,
+            Self::PromptOnly(value) => value.session_id,
         }
     }
 }
@@ -471,7 +471,7 @@ impl RawPrecmdValue {
             (
                 RawPrecmdField::Present(Some(exit_code)),
                 RawPrecmdField::Present(Some(next_block_id)),
-            ) => Ok(PrecmdHookValue::Correlated(PrecmdValue {
+            ) => Ok(PrecmdHookValue::WithCompletionMetadata(PrecmdValue {
                 completion_metadata: CompletionMetadata {
                     exit_code,
                     next_block_id,
@@ -479,7 +479,7 @@ impl RawPrecmdValue {
                 prompt_metadata: self.prompt_metadata,
             })),
             (RawPrecmdField::Missing, RawPrecmdField::Missing) => {
-                Ok(PrecmdHookValue::Legacy(self.prompt_metadata))
+                Ok(PrecmdHookValue::PromptOnly(self.prompt_metadata))
             }
             _ => Err("Precmd payload must contain both exit_code and next_block_id"),
         }

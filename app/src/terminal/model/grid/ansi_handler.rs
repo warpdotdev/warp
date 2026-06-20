@@ -1211,7 +1211,7 @@ impl ansi::Handler for GridHandler {
         let _ = write!(writer, "\x1b[8;{};{}t", self.visible_rows(), self.columns());
     }
 
-    fn precmd(&mut self, _: PrecmdValue) {
+    fn precmd_with_completion_metadata(&mut self, _: PrecmdValue) {
         unreachable!("Precmd hook is handled at block layer")
     }
 

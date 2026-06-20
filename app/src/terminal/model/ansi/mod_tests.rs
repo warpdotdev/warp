@@ -187,15 +187,15 @@ impl Handler for MockHandler {
             .push(DProtoHook::CommandFinished { value: data });
     }
 
-    fn precmd(&mut self, data: PrecmdValue) {
+    fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {
         self.d_proto_hooks.push(DProtoHook::Precmd {
-            value: PrecmdHookValue::Correlated(data),
+            value: PrecmdHookValue::WithCompletionMetadata(data),
         });
     }
 
-    fn legacy_precmd(&mut self, data: PromptMetadata) {
+    fn prompt_only_precmd(&mut self, data: PromptMetadata) {
         self.d_proto_hooks.push(DProtoHook::Precmd {
-            value: PrecmdHookValue::Legacy(data),
+            value: PrecmdHookValue::PromptOnly(data),
         });
     }
 
@@ -577,7 +577,7 @@ fn parse_dcs_ssh_with_external_control_master() {
 }
 
 #[test]
-fn parse_dcs_precmd_classifies_correlated_payload() {
+fn parse_dcs_precmd_classifies_payload_with_completion_metadata() {
     let bytes = hex_encoded_dcs_string(
         r#"{
                 "hook": "Precmd",
@@ -601,7 +601,7 @@ fn parse_dcs_precmd_classifies_correlated_payload() {
     match handler.d_proto_hooks.first().unwrap() {
         DProtoHook::Precmd { value } => assert_eq!(
             *value,
-            PrecmdHookValue::Correlated(PrecmdValue {
+            PrecmdHookValue::WithCompletionMetadata(PrecmdValue {
                 completion_metadata: CompletionMetadata {
                     exit_code: ExitCode::from(0),
                     next_block_id: "block_id".to_owned().into(),
@@ -628,7 +628,7 @@ fn parse_dcs_precmd_classifies_correlated_payload() {
 }
 
 #[test]
-fn pending_precmd_classifies_correlated_payload() {
+fn pending_precmd_classifies_payload_with_completion_metadata() {
     let mut hook = PendingHook::create("Precmd").unwrap();
     hook.update("exit_code".to_owned(), "127".to_owned());
     hook.update("next_block_id".to_owned(), "block_id".to_owned());
@@ -636,7 +636,7 @@ fn pending_precmd_classifies_correlated_payload() {
 
     match hook.finish().unwrap() {
         DProtoHook::Precmd {
-            value: PrecmdHookValue::Correlated(value),
+            value: PrecmdHookValue::WithCompletionMetadata(value),
         } => {
             assert_eq!(
                 value.completion_metadata,
@@ -652,7 +652,7 @@ fn pending_precmd_classifies_correlated_payload() {
 }
 
 #[test]
-fn parse_dcs_precmd_classifies_legacy_payload() {
+fn parse_dcs_precmd_classifies_prompt_only_payload() {
     let bytes = hex_encoded_dcs_string(
         r#"{
                 "hook": "Precmd",
@@ -667,7 +667,7 @@ fn parse_dcs_precmd_classifies_legacy_payload() {
     assert_eq!(handler.d_proto_hooks.len(), 1);
     match handler.d_proto_hooks.first().unwrap() {
         DProtoHook::Precmd {
-            value: PrecmdHookValue::Legacy(value),
+            value: PrecmdHookValue::PromptOnly(value),
         } => {
             assert_eq!(value.pwd.as_deref(), Some("/Users"));
             assert_eq!(value.session_id, Some(167303092612201));
@@ -748,7 +748,7 @@ fn parse_dcs_unregistered_session_id_allowed_when_validation_disabled() {
     assert_eq!(handler.d_proto_hooks.len(), 1);
     match handler.d_proto_hooks.first().unwrap() {
         DProtoHook::Precmd {
-            value: PrecmdHookValue::Legacy(value),
+            value: PrecmdHookValue::PromptOnly(value),
         } => assert_eq!(value.session_id, Some(167303092612201)),
         _ => panic!("incorrect dcs value"),
     };

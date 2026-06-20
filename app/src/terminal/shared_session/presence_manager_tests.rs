@@ -319,7 +319,7 @@ fn block_list_for_test(max_block_index: usize) -> BlockList {
             completion_metadata: completion_metadata.clone(),
             session_id: None,
         });
-        block_list.precmd(PrecmdValue {
+        block_list.precmd_with_completion_metadata(PrecmdValue {
             completion_metadata,
             prompt_metadata: PromptMetadata::default(),
         });

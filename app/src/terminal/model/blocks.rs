@@ -2680,7 +2680,7 @@ impl BlockList {
         self.blocks.push(block);
 
         if let Some(prompt_metadata) = prompt_metadata {
-            delegate_to_block!(self.legacy_precmd(prompt_metadata));
+            delegate_to_block!(self.prompt_only_precmd(prompt_metadata));
         }
     }
 
@@ -3752,11 +3752,11 @@ impl ansi::Handler for BlockList {
     /// responsible for sending the `AfterBlockCompleted` event to
     /// the view. This is where we want to perform any costly
     /// operations relevant to the _previous_ block.
-    fn precmd(&mut self, data: PrecmdValue) {
-        self.legacy_precmd(data.prompt_metadata);
+    fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {
+        self.prompt_only_precmd(data.prompt_metadata);
     }
 
-    fn legacy_precmd(&mut self, data: PromptMetadata) {
+    fn prompt_only_precmd(&mut self, data: PromptMetadata) {
         let latest_block_finished_time = self.latest_block_finished_time.take();
         // We don't need to log this delay during the bootstrapping process, since these
         // are not blocks that the user has created. The delay here also can be very high
@@ -3783,9 +3783,9 @@ impl ansi::Handler for BlockList {
         if data.was_sent_after_in_band_command() {
             let mut prompt_metadata = self.last_populated_precmd_payload.clone().unwrap_or(data);
             prompt_metadata.is_after_in_band_command = true;
-            delegate_to_block!(self.legacy_precmd(prompt_metadata));
+            delegate_to_block!(self.prompt_only_precmd(prompt_metadata));
         } else {
-            delegate_to_block!(self.legacy_precmd(data.clone()));
+            delegate_to_block!(self.prompt_only_precmd(data.clone()));
             self.last_populated_precmd_payload = Some(data);
         }
 

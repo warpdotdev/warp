@@ -586,8 +586,10 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
         match hook {
             Ok(DProtoHook::CommandFinished { value }) => self.handler.command_finished(value),
             Ok(DProtoHook::Precmd { value }) => match value {
-                PrecmdHookValue::Correlated(value) => self.handler.precmd(value),
-                PrecmdHookValue::Legacy(value) => self.handler.legacy_precmd(value),
+                PrecmdHookValue::WithCompletionMetadata(value) => {
+                    self.handler.precmd_with_completion_metadata(value)
+                }
+                PrecmdHookValue::PromptOnly(value) => self.handler.prompt_only_precmd(value),
             },
             Ok(DProtoHook::Preexec { value }) => self.handler.preexec(value),
             Ok(DProtoHook::Bootstrapped { value }) => self.handler.bootstrapped(*value),

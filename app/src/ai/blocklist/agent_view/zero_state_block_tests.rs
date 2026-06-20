@@ -78,7 +78,7 @@ fn display_working_directory_abbreviates_subdirectory_under_home() {
 #[test]
 fn cwd_for_recent_conversations_prefers_active_block_pwd() {
     let mut terminal = prebootstrap_terminal_with_startup_path("/startup/path");
-    terminal.legacy_precmd(PromptMetadata {
+    terminal.prompt_only_precmd(PromptMetadata {
         pwd: Some("/active/path".to_owned()),
         session_id: Some(123),
         ..Default::default()

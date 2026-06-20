@@ -1003,7 +1003,7 @@ impl TerminalModel {
             completion_metadata: completion_metadata.clone(),
             session_id: Some(session_id.as_u64()),
         });
-        terminal_model.precmd(PrecmdValue {
+        terminal_model.precmd_with_completion_metadata(PrecmdValue {
             completion_metadata,
             prompt_metadata: PromptMetadata {
                 session_id: Some(session_id.as_u64()),
@@ -2755,11 +2755,11 @@ impl ansi::Handler for TerminalModel {
         self.block_list.set_current_working_directory(path);
     }
 
-    fn precmd(&mut self, data: PrecmdValue) {
-        self.legacy_precmd(data.prompt_metadata);
+    fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {
+        self.prompt_only_precmd(data.prompt_metadata);
     }
 
-    fn legacy_precmd(&mut self, data: PromptMetadata) {
+    fn prompt_only_precmd(&mut self, data: PromptMetadata) {
         self.ignore_bootstrapping_messages = false;
         let session_id = data.session_id;
         let mut env_vars = HashMap::new();
@@ -2767,7 +2767,7 @@ impl ansi::Handler for TerminalModel {
             env_vars.insert("KUBECONFIG".to_string(), kube_config);
         }
         let handled_after_inband = data.was_sent_after_in_band_command();
-        delegate!(self.legacy_precmd(data));
+        delegate!(self.prompt_only_precmd(data));
 
         self.emit_handler_event(HandlerEvent::Precmd {
             session_id: session_id.map(|id| id.into()),

@@ -384,7 +384,7 @@ impl TerminalModel {
             completion_metadata: completion_metadata.clone(),
             session_id: None,
         });
-        self.precmd(PrecmdValue {
+        self.precmd_with_completion_metadata(PrecmdValue {
             completion_metadata,
             prompt_metadata: PromptMetadata {
                 session_id: Some(0),

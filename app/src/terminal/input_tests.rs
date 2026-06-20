@@ -461,7 +461,7 @@ pub fn simulate_directory_for_completion<A, S>(
         let block_metadata = BlockMetadata::new(Some(session_id), Some(directory.clone()));
         let block_index = {
             let mut model = terminal.model.lock();
-            model.block_list_mut().legacy_precmd(PromptMetadata {
+            model.block_list_mut().prompt_only_precmd(PromptMetadata {
                 pwd: Some(directory.clone()),
                 session_id: Some(session_id.into()),
                 ..Default::default()

@@ -3326,14 +3326,14 @@ impl ansi::Handler for Block {
             ));
     }
 
-    fn precmd(&mut self, data: PrecmdValue) {
-        self.legacy_precmd(data.prompt_metadata);
+    fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {
+        self.prompt_only_precmd(data.prompt_metadata);
     }
 
-    fn legacy_precmd(&mut self, data: PromptMetadata) {
+    fn prompt_only_precmd(&mut self, data: PromptMetadata) {
         record_trace_event!("command_execution:block:precmd");
         let is_after_in_band_command = data.was_sent_after_in_band_command();
-        self.header_grid.legacy_precmd(data.clone());
+        self.header_grid.prompt_only_precmd(data.clone());
 
         self.state = BlockState::BeforeExecution;
         self.pwd = data.pwd;
