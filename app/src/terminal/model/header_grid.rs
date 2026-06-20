@@ -611,7 +611,7 @@ impl HeaderGrid {
         self.cached_prompt_end_point = None;
         self.cached_command_start_point = None;
 
-        self.legacy_precmd(data);
+        self.prompt_only_precmd(data);
         self.prompt_and_command_grid.start();
         self.mark_and_cache_end_of_prompt();
         let (destination_cursor_point, destination_input_needs_wrap) = self

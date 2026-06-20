@@ -495,7 +495,7 @@ fn lifecycle_coordinator_gates_prompt_refresh_recovery() {
 
     let transition = coordinator.plan(
         &snapshot,
-        LifecycleInput::CorrelatedPrecmd(NextBlockIdDisposition::ActiveDuplicate),
+        LifecycleInput::PrecmdWithCompletionMetadata(NextBlockIdDisposition::ActiveDuplicate),
     );
     assert_eq!(
         transition.action,

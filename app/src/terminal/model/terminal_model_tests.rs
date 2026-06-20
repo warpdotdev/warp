@@ -765,7 +765,7 @@ fn set_custom_title() {
         .with_terminal_events_tx(event_tx)
         .build();
     let mut terminal = TerminalModel::mock(None, Some(event_proxy));
-    terminal.legacy_precmd(PromptMetadata::default());
+    terminal.prompt_only_precmd(PromptMetadata::default());
 
     // Empty all the events that could've been sent to this channel prior to us changing the
     // title for tests.
@@ -1061,14 +1061,15 @@ fn normal_lifecycle_pipeline_emits_completion_and_prompt_side_effects_once() {
 }
 
 #[test]
-fn repeated_correlated_and_legacy_precmd_refresh_only_the_active_prompt() {
+fn repeated_precmd_with_completion_metadata_and_prompt_only_precmd_refresh_only_the_active_prompt()
+{
     let _recovery_enabled = FeatureFlag::TerminalLifecycleRecovery.override_enabled(true);
     let (event_tx, event_rx) = async_channel::unbounded();
     let event_proxy = ChannelEventListener::builder_for_test()
         .with_terminal_events_tx(event_tx)
         .build();
     let mut terminal = TerminalModel::mock(None, Some(event_proxy));
-    terminal.legacy_precmd(PromptMetadata::default());
+    terminal.prompt_only_precmd(PromptMetadata::default());
     while event_rx.try_recv().is_ok() {}
 
     for c in "typed".chars() {
@@ -1081,13 +1082,13 @@ fn repeated_correlated_and_legacy_precmd_refresh_only_the_active_prompt() {
     let active_block_id = terminal.active_block_id().clone();
     let active_block_count = terminal.block_list().blocks().len();
 
-    terminal.precmd(PrecmdValue {
+    terminal.precmd_with_completion_metadata(PrecmdValue {
         completion_metadata: CompletionMetadata {
             exit_code: ExitCode::from(7),
             next_block_id: active_block_id.clone(),
         },
         prompt_metadata: PromptMetadata {
-            pwd: Some("/correlated".to_owned()),
+            pwd: Some("/with-completion-metadata".to_owned()),
             session_id: Some(123),
             ..Default::default()
         },
@@ -1113,7 +1114,7 @@ fn repeated_correlated_and_legacy_precmd_refresh_only_the_active_prompt() {
             .active_block()
             .pwd()
             .map(String::as_str),
-        Some("/correlated")
+        Some("/with-completion-metadata")
     );
 
     let events: Vec<_> = std::iter::from_fn(|| event_rx.try_recv().ok()).collect();
@@ -1152,8 +1153,8 @@ fn repeated_correlated_and_legacy_precmd_refresh_only_the_active_prompt() {
         )
     }));
 
-    terminal.legacy_precmd(PromptMetadata {
-        pwd: Some("/legacy".to_owned()),
+    terminal.prompt_only_precmd(PromptMetadata {
+        pwd: Some("/prompt-only".to_owned()),
         session_id: Some(123),
         ..Default::default()
     });
@@ -1169,11 +1170,11 @@ fn repeated_correlated_and_legacy_precmd_refresh_only_the_active_prompt() {
             .active_block()
             .pwd()
             .map(String::as_str),
-        Some("/legacy")
+        Some("/prompt-only")
     );
 
     terminal.start_command_execution();
-    terminal.legacy_precmd(PromptMetadata {
+    terminal.prompt_only_precmd(PromptMetadata {
         pwd: Some("/ignored-submitted".to_owned()),
         session_id: Some(123),
         ..Default::default()
@@ -1184,13 +1185,13 @@ fn repeated_correlated_and_legacy_precmd_refresh_only_the_active_prompt() {
             .active_block()
             .pwd()
             .map(String::as_str),
-        Some("/legacy")
+        Some("/prompt-only")
     );
     terminal.preexec(PreexecValue {
         command: "typed".to_owned(),
         session_id: Some(123),
     });
-    terminal.legacy_precmd(PromptMetadata {
+    terminal.prompt_only_precmd(PromptMetadata {
         pwd: Some("/ignored-executing".to_owned()),
         session_id: Some(123),
         ..Default::default()
@@ -1201,14 +1202,14 @@ fn repeated_correlated_and_legacy_precmd_refresh_only_the_active_prompt() {
             .active_block()
             .pwd()
             .map(String::as_str),
-        Some("/legacy")
+        Some("/prompt-only")
     );
 
     let mut unknown_terminal = TerminalModel::mock(None, None);
     unknown_terminal.lifecycle_coordinator.reset_unknown();
     let unknown_active_block_id = unknown_terminal.active_block_id().clone();
     let unknown_block_count = unknown_terminal.block_list().blocks().len();
-    unknown_terminal.legacy_precmd(PromptMetadata {
+    unknown_terminal.prompt_only_precmd(PromptMetadata {
         pwd: Some("/ignored-unknown".to_owned()),
         ..Default::default()
     });
@@ -1226,7 +1227,7 @@ fn repeated_precmd_refresh_is_disabled_by_default() {
     let mut terminal = TerminalModel::mock(None, None);
     let active_block_id = terminal.active_block_id().clone();
 
-    terminal.legacy_precmd(PromptMetadata {
+    terminal.prompt_only_precmd(PromptMetadata {
         pwd: Some("/new".to_owned()),
         ..Default::default()
     });
