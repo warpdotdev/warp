@@ -1093,11 +1093,6 @@ pub enum EditorAction {
     EmacsBinding,
     #[cfg(feature = "voice_input")]
     ToggleVoiceInput(voice_input::VoiceInputToggledFrom),
-    /// Abort any active voice recording without transcribing the captured audio.
-    /// Used to cancel voice input when a key chord is pressed while the voice toggle
-    /// key is held (e.g., Shift pressed before Ctrl+Shift+V).
-    #[cfg(feature = "voice_input")]
-    AbortVoiceInput,
     AttachFiles,
     SetAIContextMenuOpen(bool),
     ReadAndProcessImagesAsync {
@@ -1121,7 +1116,62 @@ impl EditorAction {
                 | EditorAction::TryToShowXRay(_)
                 | EditorAction::HideXRay
                 | EditorAction::Select(_)
-                | EditorAction::AbortVoiceInput
+        )
+    }
+    #[cfg(feature = "voice_input")]
+    fn aborts_voice_input(&self) -> bool {
+        matches!(
+            self,
+            // Text insertion / submission.
+            Self::UserInsert(_)
+                | Self::VimUserInsert(_)
+                | Self::ImeCommit(_)
+                | Self::Tab
+                | Self::ShiftTab
+                | Self::Yank
+                | Self::Newline
+                | Self::CtrlEnter
+                | Self::ShiftEnter
+                | Self::AltEnter
+                | Self::Enter
+                | Self::CmdEnter
+                | Self::InsertLastWordPrevCommand
+                | Self::InsertNonExpandingSpace
+                | Self::InsertAutosuggestion
+                // Clipboard mutations.
+                | Self::Cut
+                | Self::Paste
+                | Self::MiddleClickPaste
+                // Deletion/editing family.
+                | Self::Delete
+                | Self::Backspace
+                | Self::VimBackspace
+                | Self::CutWordLeft
+                | Self::CutWordRight
+                | Self::DeleteWordLeft
+                | Self::DeleteWordRight
+                | Self::CutAllRight
+                | Self::CutAllLeft
+                | Self::DeleteAllRight
+                | Self::DeleteAllLeft
+                | Self::ClearLines
+                | Self::ClearAndCopyLines
+                | Self::CtrlC
+                // History/structural edits.
+                | Self::Undo
+                | Self::Redo
+                | Self::Fold
+                | Self::Unfold
+                | Self::FoldSelectedRanges
+                | Self::AddNextOccurrence
+                | Self::AddCursorAbove
+                | Self::AddCursorBelow
+                // File attachment interactions that require editable handling.
+                | Self::AttachFiles
+                | Self::DragAndDropFiles(_)
+                // Explicit user cancel intent and unbound modifier chords.
+                | Self::Escape
+                | Self::UnhandledModifierKey(_)
         )
     }
 
@@ -4216,13 +4266,6 @@ impl EditorView {
     }
 
     pub fn paste(&mut self, ctx: &mut ViewContext<Self>) {
-        // If voice input is recording, abort it first so the editor is editable for the paste.
-        // This handles the case where the voice toggle key (e.g. Ctrl) is held while the user
-        // presses a paste shortcut (e.g. Ctrl+V).
-        #[cfg(feature = "voice_input")]
-        if self.is_voice_input_active() {
-            self.stop_voice_input(true /* cancel_transcription */, ctx);
-        }
         // If this editor does not delegate paste handling, insert clipboard text content.
         // When paste handling is delegated, the parent view (e.g. the terminal input) is
         // responsible for processing the paste.
@@ -4344,11 +4387,6 @@ impl EditorView {
     /// Clears editor buffer if the vim mode allows for it, but does not
     /// clear the undo/redo stack.
     pub fn handle_ctrl_c(&mut self, ctx: &mut ViewContext<Self>) {
-        #[cfg(feature = "voice_input")]
-        {
-            self.stop_voice_input(true, ctx);
-        }
-
         #[cfg(windows)]
         // On Windows, if there is selected text, users expect ctrl-c to copy.
         if !self.selected_text(ctx).is_empty() {
@@ -6153,8 +6191,6 @@ impl EditorView {
                 });
             }
         }
-        #[cfg(feature = "voice_input")]
-        self.stop_voice_input(true, ctx);
     }
 
     fn delete_all(&mut self, direction: CutDirection, cut: bool, ctx: &mut ViewContext<Self>) {
@@ -8500,6 +8536,10 @@ impl TypedActionView for EditorView {
     }
 
     fn handle_action(&mut self, action: &EditorAction, ctx: &mut ViewContext<Self>) {
+        #[cfg(feature = "voice_input")]
+        if self.is_voice_input_active() && action.aborts_voice_input() {
+            self.stop_voice_input(true /* cancel_transcription */, ctx);
+        }
         use EditorAction::*;
         match action {
             Scroll(position) => self.scroll(*position, ctx),
@@ -8598,26 +8638,11 @@ impl TypedActionView for EditorView {
                 ctx.focus_self();
             }
             UnhandledModifierKey(keystroke) => {
-                #[cfg(feature = "voice_input")]
-                {
-                    // If a key chord that doesn't match a registered keybinding is pressed
-                    // while voice input is recording, abort voice so the editor is editable.
-                    // Note: for keybindings that DO match (e.g. Ctrl+Shift+V for paste),
-                    // voice is aborted at the action-handler level (see paste()) or via
-                    // modifier_key_change (see maybe_handle_voice_toggle()).
-                    if self.is_voice_input_active() {
-                        self.stop_voice_input(true /* cancel_transcription */, ctx);
-                    }
-                }
                 if self.can_select(ctx) {
                     // This event helps us to keep track of what key bindings users
                     // try to use in the editor but are currently not available in Warp.
                     ctx.emit(Event::UnhandledModifierKeyOnEditor(keystroke.clone()))
                 }
-            }
-            #[cfg(feature = "voice_input")]
-            AbortVoiceInput => {
-                self.stop_voice_input(true /* cancel_transcription */, ctx);
             }
             ClearParentSelections => {
                 self.maybe_commit_incomplete_ime_text(ctx);

@@ -457,18 +457,6 @@ impl EditorElement {
                 ctx.dispatch_typed_action(EditorAction::ToggleVoiceInput(
                     voice_input::VoiceInputToggledFrom::Key { state: *state },
                 ));
-            } else if matches!(state, KeyState::Pressed)
-                && self.view_snapshot.voice_input_state.is_active()
-            {
-                // A modifier key other than the voice toggle key was pressed while voice is
-                // recording. Abort voice so that the resulting key chord can proceed normally.
-                //
-                // Example: if Ctrl is the voice toggle key and the user presses Ctrl+Shift+V
-                // to paste, voice is aborted when Shift is pressed. This ensures the editor
-                // is editable by the time V is pressed and the paste keybinding fires.
-                // (Keybindings are matched before element event handlers, so the abort must
-                // happen before the non-modifier key is pressed.)
-                ctx.dispatch_typed_action(EditorAction::AbortVoiceInput);
             }
         }
     }

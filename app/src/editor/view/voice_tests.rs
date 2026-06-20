@@ -1,3 +1,5 @@
+use super::super::EditorAction;
+use super::VoiceInputState;
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
 use crate::editor::EditorView;
@@ -37,11 +39,23 @@ fn initialize_app(app: &mut App) {
     });
 }
 
-/// When transcription returns an empty string, the editor buffer must not be modified.
-/// This guards against the previous behavior where `user_insert("")` would be called,
-/// which could clear any existing text selection.
 #[test]
-fn test_empty_transcription_does_not_modify_buffer() {
+fn test_aborts_voice_input_predicate_for_passive_and_editing_actions() {
+    assert!(EditorAction::Paste.aborts_voice_input());
+    assert!(EditorAction::CtrlC.aborts_voice_input());
+    assert!(
+        EditorAction::UnhandledModifierKey(Arc::new("ctrl-k".to_string())).aborts_voice_input()
+    );
+    assert!(!EditorAction::Focus.aborts_voice_input());
+    assert!(!EditorAction::HideXRay.aborts_voice_input());
+    assert!(
+        !EditorAction::ToggleVoiceInput(voice_input::VoiceInputToggledFrom::Button)
+            .aborts_voice_input()
+    );
+}
+
+#[test]
+fn test_handle_action_aborts_active_voice_for_editing_action() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
@@ -49,24 +63,70 @@ fn test_empty_transcription_does_not_modify_buffer() {
             EditorView::new(Default::default(), ctx)
         });
 
-        // Pre-fill the editor with content.
         editor.update(&mut app, |editor, ctx| {
-            editor.set_buffer_text("existing content", ctx);
-        });
+            editor.set_voice_input_state(VoiceInputState::Listening, ctx);
+            assert!(editor.is_voice_input_active());
 
-        // Apply an empty transcription result (simulates silence / no speech detected).
-        editor.update(&mut app, |editor, ctx| {
-            editor.apply_transcribed_voice_input(Ok(String::new()), ctx);
-        });
-
-        // Buffer must be unchanged.
-        editor.read(&app, |editor, ctx| {
-            assert_eq!(
-                editor.buffer_text(ctx),
-                "existing content",
-                "Empty transcription result must not modify the editor buffer"
+            <EditorView as warpui::TypedActionView>::handle_action(
+                editor,
+                &EditorAction::UnhandledModifierKey(Arc::new("ctrl-k".to_string())),
+                ctx,
             );
+
+            assert!(!editor.is_voice_input_active());
         });
+    });
+}
+
+#[test]
+fn test_handle_action_keeps_active_voice_for_passive_action() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new(Default::default(), ctx)
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_voice_input_state(VoiceInputState::Listening, ctx);
+            assert!(editor.is_voice_input_active());
+
+            <EditorView as warpui::TypedActionView>::handle_action(
+                editor,
+                &EditorAction::Focus,
+                ctx,
+            );
+
+            assert!(editor.is_voice_input_active());
+        });
+    });
+}
+
+/// When transcription returns blank text (empty or whitespace-only), the editor
+/// buffer must not be modified. This guards against replacing selections with an
+/// empty insert.
+#[test]
+fn test_blank_transcription_does_not_modify_buffer() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new(Default::default(), ctx)
+        });
+        for transcribed_text in ["", "   \n\t "] {
+            editor.update(&mut app, |editor, ctx| {
+                editor.set_buffer_text("existing content", ctx);
+                editor.apply_transcribed_voice_input(Ok(transcribed_text.to_string()), ctx);
+            });
+
+            editor.read(&app, |editor, ctx| {
+                assert_eq!(
+                    editor.buffer_text(ctx),
+                    "existing content",
+                    "Blank transcription result must not modify the editor buffer"
+                );
+            });
+        }
     });
 }
 
