@@ -41,13 +41,14 @@ use crate::ai::skills::SkillManager;
 use crate::ai::AIRequestUsageModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
+use crate::code::editor_management::{CodeManager, CodeSource};
 use crate::context_chips::prompt::Prompt;
 use crate::editor::Event;
 use crate::gpu_state::GPUState;
 use crate::network::NetworkStatus;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::notebook::NotebookView;
-use crate::pane_group::{Direction, PaneGroupAction, PaneId};
+use crate::pane_group::{CodePane, Direction, PaneGroupAction, PaneId};
 use crate::pricing::PricingInfoModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
@@ -2243,6 +2244,86 @@ fn test_focus_notebook() {
             assert_eq!(
                 active_session_state(panes, first_terminal_id, ctx),
                 ActiveSessionState::Active
+            );
+        });
+    })
+}
+
+/// Regression test for #8187: workspace shortcuts (e.g. Toggle keyboard shortcuts,
+/// Cmd+/) are gated by the `Workspace_TextOpen` keymap flag, which must track the
+/// *focused* pane — not merely whether a code pane exists in the tab. Previously the
+/// flag stayed set while any code pane was open, silently disabling those shortcuts
+/// for a focused terminal pane.
+#[test]
+fn test_workspace_text_open_tracks_focused_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        // Code panes register themselves with the CodeManager singleton on creation.
+        app.add_singleton_model(|_| CodeManager::default());
+
+        let workspace = mock_workspace(&mut app);
+        let pane_group = workspace.read(&app, |workspace, _ctx| {
+            workspace
+                .get_pane_group_view(0)
+                .expect("should have pane group for tab 0")
+                .clone()
+        });
+
+        let first_terminal_id = pane_group.read(&app, |panes, _ctx| {
+            get_newly_created_pane_id(panes, &[])
+                .as_terminal_pane_id()
+                .expect("should be a terminal pane")
+        });
+
+        // Open a code (file editor) pane to the left and focus it.
+        let code_id = pane_group.update(&mut app, |panes, ctx| {
+            let code_pane = CodePane::new(
+                CodeSource::New {
+                    default_directory: None,
+                },
+                None,
+                ctx,
+            );
+            panes.add_pane_with_direction(
+                Direction::Left,
+                code_pane,
+                true, /* focus_new_pane */
+                ctx,
+            );
+            get_newly_created_pane_id(panes, &[first_terminal_id.into()])
+        });
+
+        // With the code pane focused, workspace shortcuts yield to the editor.
+        pane_group.read(&app, |panes, ctx| {
+            assert_eq!(panes.focused_pane_id(ctx), code_id);
+            assert!(code_id.is_code_pane());
+        });
+        workspace.read(&app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .keymap_context(ctx)
+                    .set
+                    .contains("Workspace_TextOpen"),
+                "Workspace_TextOpen should be set while the code pane is focused"
+            );
+        });
+
+        // Focus the terminal pane. The code pane is still open, but workspace
+        // shortcuts must work again for the focused terminal.
+        pane_group.update(&mut app, |panes, ctx| {
+            assert!(panes.focus_pane(first_terminal_id.into(), true, ctx));
+        });
+        pane_group.read(&app, |panes, ctx| {
+            assert_eq!(panes.focused_pane_id(ctx), first_terminal_id.into());
+        });
+        workspace.read(&app, |workspace, ctx| {
+            assert!(
+                !workspace
+                    .keymap_context(ctx)
+                    .set
+                    .contains("Workspace_TextOpen"),
+                "Workspace_TextOpen must be cleared when a terminal pane is focused, \
+                 even though a code pane is still open (regression for #8187)"
             );
         });
     })

@@ -25227,13 +25227,16 @@ impl View for Workspace {
             context.set.insert("Workspace_PaneDragging");
         }
 
-        // TODO: This is temporary. We currently check if any code pane is open where it should
-        // really be whether the code pane is opened and focused.
+        // `Workspace_TextOpen` suppresses workspace-level keybindings (e.g. Toggle
+        // keyboard shortcuts, Cmd+/) so the code editor can claim them for itself.
+        // Gate it on the code pane being *focused*, not merely present: otherwise
+        // those shortcuts are silently dead for a focused terminal pane whenever a
+        // file is open elsewhere in the same tab.
         if self
             .active_tab_pane_group()
             .as_ref(app)
-            .pane_ids()
-            .any(|id| id.is_code_pane())
+            .focused_pane_id(app)
+            .is_code_pane()
         {
             context.set.insert("Workspace_TextOpen");
         }
