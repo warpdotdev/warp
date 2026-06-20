@@ -459,6 +459,48 @@ pub fn test_single_command() -> Builder {
         .with_step(execute_echo(0))
 }
 
+pub fn test_real_shell_recovers_when_command_finished_is_suppressed() -> Builder {
+    FeatureFlag::TerminalLifecycleRecovery.set_enabled(true);
+
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_step(
+            new_step_with_default_assertions("Suppress the next CommandFinished hook").with_action(
+                |app, window_id, _| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view
+                        .read(app, |view, _| view.model.clone())
+                        .lock()
+                        .suppress_next_command_finished_for_integration_test();
+                },
+            ),
+        )
+        .with_step(execute_echo(0))
+        .with_step(
+            new_step_with_default_assertions("Validate recovered completion metadata")
+                .add_named_assertion(
+                    "Recovered metadata matches the suppressed hook",
+                    |app, window_id| {
+                        let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                        terminal_view.read(app, |view, _| {
+                            let model = view.model.lock();
+                            let suppressed = model
+                                .suppressed_command_finished_for_integration_test()
+                                .expect("The real shell should emit a CommandFinished hook.");
+                            let completed_block = model
+                                .block_list()
+                                .last_non_hidden_block()
+                                .expect("The recovered command block should exist.");
+                            assert_eq!(completed_block.exit_code(), suppressed.exit_code);
+                            assert_eq!(model.active_block_id(), &suppressed.next_block_id);
+                            AssertionOutcome::Success
+                        })
+                    },
+                ),
+        )
+}
+
 pub fn test_open_and_close_settings() -> Builder {
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))

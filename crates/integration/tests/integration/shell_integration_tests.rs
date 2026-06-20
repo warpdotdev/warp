@@ -12,6 +12,8 @@ use super::integration_tests;
 integration_tests! {
     // Test command execution works.
     test_single_command,
+    // Tests real shell lifecycle recovery when CommandFinished is lost.
+    test_real_shell_recovers_when_command_finished_is_suppressed,
     // Test shell process terminates when session is closed.
     test_add_and_close_session,
     // Test powerlevel10k detection (via bootstrap script logic).

@@ -384,6 +384,10 @@ pub struct TerminalModel {
     /// Always non-empty (includes an invisible block).
     block_list: BlockList,
     lifecycle_coordinator: BlockLifecycleCoordinator,
+    #[cfg(feature = "integration_tests")]
+    suppress_next_command_finished_for_integration_test: bool,
+    #[cfg(feature = "integration_tests")]
+    suppressed_command_finished_for_integration_test: Option<CompletionMetadata>,
     /// Whether the blocklist has been cleared in the lifetime of this terminal model.
     pub blocklist_has_been_cleared: bool,
 
@@ -1063,6 +1067,10 @@ impl TerminalModel {
             is_input_dirty: false,
             block_list,
             lifecycle_coordinator: BlockLifecycleCoordinator::default(),
+            #[cfg(feature = "integration_tests")]
+            suppress_next_command_finished_for_integration_test: false,
+            #[cfg(feature = "integration_tests")]
+            suppressed_command_finished_for_integration_test: None,
             blocklist_has_been_cleared: false,
             alt_screen_active: false,
             title_stack: Vec::new(),
@@ -1589,6 +1597,18 @@ impl TerminalModel {
 
     pub fn active_block_id(&self) -> &BlockId {
         self.block_list.active_block_id()
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn suppress_next_command_finished_for_integration_test(&mut self) {
+        self.suppress_next_command_finished_for_integration_test = true;
+        self.suppressed_command_finished_for_integration_test = None;
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn suppressed_command_finished_for_integration_test(&self) -> Option<&CompletionMetadata> {
+        self.suppressed_command_finished_for_integration_test
+            .as_ref()
     }
 
     pub fn has_pending_ssh_session(&self) -> bool {
@@ -2867,6 +2887,12 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn command_finished(&mut self, data: CommandFinishedValue) {
+        #[cfg(feature = "integration_tests")]
+        if self.suppress_next_command_finished_for_integration_test {
+            self.suppress_next_command_finished_for_integration_test = false;
+            self.suppressed_command_finished_for_integration_test = Some(data.completion_metadata);
+            return;
+        }
         let disposition = self
             .block_list
             .classify_next_block_id(&data.completion_metadata.next_block_id);
