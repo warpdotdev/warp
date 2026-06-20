@@ -14,6 +14,7 @@ use session_sharing_protocol::common::{
     AICommandMetadata, OrderedTerminalEventType, ParticipantId,
 };
 use session_sharing_protocol::sharer::SessionSourceType;
+use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warp_core::report_error;
 use warp_core::semantic_selection::SemanticSelection;
@@ -1471,7 +1472,7 @@ impl TerminalModel {
         if self.handled_exit {
             return;
         }
-        let transition = self.plan_lifecycle_transition(LifecycleInput::Exit, None, None);
+        let transition = self.plan_lifecycle_transition(LifecycleInput::Exit, None, None, None);
 
         self.handled_exit = true;
         // Forcibly exit the alt screen so that we can show the user the
@@ -1722,7 +1723,7 @@ impl TerminalModel {
 
     fn start_command_execution_for_kind(&mut self, kind: CommandStartKind) -> StartCommandOutcome {
         let transition =
-            self.plan_lifecycle_transition(LifecycleInput::StartCommand(kind), None, None);
+            self.plan_lifecycle_transition(LifecycleInput::StartCommand(kind), None, None, None);
         let outcome = match transition.action {
             LifecycleAction::StartActiveBlock => {
                 match kind {
@@ -1754,9 +1755,14 @@ impl TerminalModel {
     fn lifecycle_snapshot(
         &self,
         supplied_next_block_id: Option<&BlockId>,
+        supplied_exit_code: Option<ExitCode>,
         hook_session_id: Option<u64>,
     ) -> LifecycleSnapshot {
         let active_block = self.block_list.active_block();
+        let completion_mismatch = supplied_next_block_id == Some(active_block.id())
+            && supplied_exit_code
+                .zip(self.block_list.previous_command_exit_code())
+                .is_some_and(|(supplied, recorded)| supplied != recorded);
         LifecycleSnapshot {
             active_block_id: active_block.id().to_string(),
             active_session_id: active_block.session_id().map(|id| id.as_u64()),
@@ -1770,6 +1776,7 @@ impl TerminalModel {
             is_bootstrapped: active_block.is_bootstrapped(),
             is_bootstrap_done: self.block_list.is_bootstrapping_precmd_done(),
             is_alt_screen_active: self.alt_screen_active,
+            completion_mismatch,
         }
     }
 
@@ -1777,9 +1784,11 @@ impl TerminalModel {
         &mut self,
         input: LifecycleInput,
         supplied_next_block_id: Option<&BlockId>,
+        supplied_exit_code: Option<ExitCode>,
         hook_session_id: Option<u64>,
     ) -> LifecycleTransition {
-        let snapshot = self.lifecycle_snapshot(supplied_next_block_id, hook_session_id);
+        let snapshot =
+            self.lifecycle_snapshot(supplied_next_block_id, supplied_exit_code, hook_session_id);
         self.lifecycle_coordinator.plan(&snapshot, input)
     }
 
@@ -2270,6 +2279,8 @@ impl TerminalModel {
         self.exit_alt_screen(true);
 
         let block_id = data.next_block_id.to_string();
+        self.block_list
+            .ensure_active_block_executing_for_completion();
         let is_for_in_band_command = self.block_list().active_block().is_in_band_command_block();
         let finished_block_bootstrap_stage = self.block_list().active_block().bootstrap_stage();
         self.block_list.complete_active_block_and_advance(data);
@@ -2862,6 +2873,7 @@ impl ansi::Handler for TerminalModel {
         let transition = self.plan_lifecycle_transition(
             LifecycleInput::CommandFinished(disposition),
             Some(&data.completion_metadata.next_block_id),
+            Some(data.completion_metadata.exit_code),
             data.session_id,
         );
         if matches!(transition.action, LifecycleAction::AcceptCommandFinished) {
@@ -2896,17 +2908,32 @@ impl ansi::Handler for TerminalModel {
         let transition = self.plan_lifecycle_transition(
             LifecycleInput::PrecmdWithCompletionMetadata(disposition),
             Some(&data.completion_metadata.next_block_id),
+            Some(data.completion_metadata.exit_code),
             data.prompt_metadata.session_id,
         );
-        if matches!(transition.action, LifecycleAction::ApplyPrecmd) {
-            self.apply_precmd_to_fresh_block(data.prompt_metadata);
+        match transition.action {
+            LifecycleAction::ApplyPrecmd => self.apply_precmd_to_fresh_block(data.prompt_metadata),
+            LifecycleAction::ReconcileCompletionThenApplyPrecmd => {
+                self.complete_command(data.completion_metadata);
+                self.apply_precmd_to_fresh_block(data.prompt_metadata);
+            }
+            LifecycleAction::StartActiveBlock
+            | LifecycleAction::ApplyPreexec
+            | LifecycleAction::AcceptCommandFinished
+            | LifecycleAction::BeginEpoch
+            | LifecycleAction::Terminate
+            | LifecycleAction::Ignore(_) => {}
         }
         self.commit_lifecycle_transition(&transition);
     }
 
     fn prompt_only_precmd(&mut self, data: PromptMetadata) {
-        let transition =
-            self.plan_lifecycle_transition(LifecycleInput::PromptOnlyPrecmd, None, data.session_id);
+        let transition = self.plan_lifecycle_transition(
+            LifecycleInput::PromptOnlyPrecmd,
+            None,
+            None,
+            data.session_id,
+        );
         if matches!(transition.action, LifecycleAction::ApplyPrecmd) {
             self.apply_precmd_to_fresh_block(data);
         }
@@ -2926,6 +2953,7 @@ impl ansi::Handler for TerminalModel {
         };
         let transition = self.plan_lifecycle_transition(
             LifecycleInput::Preexec(observation),
+            None,
             None,
             data.session_id,
         );
@@ -3020,8 +3048,12 @@ impl ansi::Handler for TerminalModel {
     fn init_shell(&mut self, data: InitShellValue) {
         if !self.ignore_bootstrapping_messages {
             let hook_session_id = Some(data.session_id.as_u64());
-            let transition =
-                self.plan_lifecycle_transition(LifecycleInput::InitShell, None, hook_session_id);
+            let transition = self.plan_lifecycle_transition(
+                LifecycleInput::InitShell,
+                None,
+                None,
+                hook_session_id,
+            );
             if !matches!(transition.action, LifecycleAction::BeginEpoch) {
                 self.commit_lifecycle_transition(&transition);
                 return;

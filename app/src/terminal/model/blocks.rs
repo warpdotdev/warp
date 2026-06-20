@@ -12,6 +12,7 @@ use instant::SystemTime;
 use selection::BlockListSelection;
 pub use selection::SelectionRange;
 use sum_tree::{Dimension, Item, SeekBias, SumTree};
+use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::color::ColorU;
@@ -293,6 +294,9 @@ pub struct BlockList {
     restored_session_ts: Option<DateTime<Local>>,
 
     latest_block_finished_time: Option<SystemTime>,
+    /// Whether the next prompt must avoid repeating deferred completion work for an already-finished
+    /// active block that recovery advanced past.
+    skip_next_after_block_completed_event: bool,
 
     /// The number of in-band commands that are "in-flight", where "in-flight" is defined as
     /// written to the PTY without yet a completed block.
@@ -653,6 +657,7 @@ impl BlockList {
             is_restored_session: false,
             restored_session_ts: None,
             latest_block_finished_time: None,
+            skip_next_after_block_completed_event: false,
             early_output: EarlyOutput::new(event_proxy),
             in_flight_in_band_command_count: 0,
             last_populated_precmd_payload: None,
@@ -868,6 +873,16 @@ impl BlockList {
         } else {
             NextBlockIdDisposition::Novel
         }
+    }
+
+    /// Returns the exit code of the completed command immediately preceding the active block.
+    pub(super) fn previous_command_exit_code(&self) -> Option<ExitCode> {
+        [2usize, 3usize]
+            .into_iter()
+            .flat_map(|offset| self.blocks.len().checked_sub(offset))
+            .map(|idx| &self.blocks[idx])
+            .find(|block| !block.is_background() && block.finished())
+            .map(Block::exit_code)
     }
 
     fn next_gap_height(&self) -> Option<Lines> {
@@ -2852,6 +2867,19 @@ impl BlockList {
         self.active_block_mut().ensure_started_for_preexec();
     }
 
+    /// Moves an unfinished active block through a minimal preexec-equivalent transition so its
+    /// completion records that execution occurred.
+    pub(super) fn ensure_active_block_executing_for_completion(&mut self) {
+        if self.active_block().finished() || self.active_block().state() == BlockState::Executing {
+            return;
+        }
+        if self.is_bootstrapping_precmd_done() {
+            EarlyOutput::preexec(self);
+        }
+        self.ensure_active_block_started();
+        self.active_block_mut().ensure_executing_for_completion();
+    }
+
     /// Increments `self.in_flight_in_band_command_count` and starts the active block as usual.
     pub fn start_active_block_for_in_band_command(&mut self) {
         self.cache_active_prompt_data();
@@ -3071,6 +3099,7 @@ impl BlockList {
         log::trace!(
             "Completing active block with next ID disposition {next_block_id_disposition:?}"
         );
+        let active_block_was_finished = self.active_block().finished();
         if self.active_block().is_for_in_band_command {
             self.in_flight_in_band_command_count =
                 self.in_flight_in_band_command_count.saturating_sub(1);
@@ -3085,7 +3114,14 @@ impl BlockList {
             self.finish_background_block();
         }
 
-        self.active_block_mut().finish(data.exit_code);
+        if active_block_was_finished {
+            self.skip_next_after_block_completed_event = true;
+            self.latest_block_finished_time = None;
+        } else {
+            self.skip_next_after_block_completed_event = false;
+            self.active_block_mut().finish(data.exit_code);
+            self.latest_block_finished_time = Some(instant::SystemTime::now());
+        }
         self.update_active_block_height();
 
         self.update_selection_after_height_change();
@@ -3107,7 +3143,6 @@ impl BlockList {
             );
             self.bootstrap_stage = next_bootstrap_stage;
         }
-        self.latest_block_finished_time = Some(instant::SystemTime::now());
     }
 
     /// Applies normal prompt metadata to the active block and finalizes the previous block's
@@ -3152,7 +3187,9 @@ impl BlockList {
             .flat_map(|offset| self.blocks.len().checked_sub(offset))
             .map(|idx| &self.blocks[idx])
             .find(|block| !block.is_background());
-        if let Some(previous_block) = previous_block {
+        if self.skip_next_after_block_completed_event {
+            self.skip_next_after_block_completed_event = false;
+        } else if let Some(previous_block) = previous_block {
             self.send_after_block_completed_event(previous_block, block_finished_to_precmd_delay);
         } else {
             self.event_proxy
