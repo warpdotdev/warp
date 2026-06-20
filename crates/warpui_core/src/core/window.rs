@@ -178,6 +178,14 @@ impl StoredView {
         }
     }
 
+    pub fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId> {
+        match self {
+            StoredView::Gui(view) => view.child_view_ids(app),
+            #[cfg(feature = "tui")]
+            StoredView::Tui(_) => Vec::new(),
+        }
+    }
+
     pub fn self_or_child_interacted_with(
         &self,
         app: &mut AppContext,
