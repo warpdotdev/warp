@@ -94,6 +94,22 @@ pub trait TuiElement {
     }
 }
 
+/// A no-op [`TuiElement`] used as a trivial leaf placeholder in tests that only
+/// exercise the surrounding element (e.g. child-view embedding or event
+/// dispatch) and don't care what the leaf renders.
+#[cfg(test)]
+impl TuiElement for () {
+    fn layout(&mut self, _constraint: TuiConstraint) -> TuiSize {
+        TuiSize::ZERO
+    }
+
+    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer) {}
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        0
+    }
+}
+
 /// Threads the current view ancestry through the element tree during the
 /// presenter's child-view recursion, recording each child view's parent so the
 /// shared core can attribute events and actions to the right view.
