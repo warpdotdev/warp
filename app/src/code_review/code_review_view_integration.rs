@@ -394,9 +394,14 @@ impl CodeReviewView {
             .get_index(editor_index)
             .and_then(|(_, file_state)| file_state.editor_state.as_ref())?;
         let editor = editor_state.editor().clone();
-        Some(editor.as_ref(ctx).editor().read(ctx, |code_editor_view, ctx| {
-            code_editor_view.hidden_section_count_for_test(ctx)
-        }))
+        Some(
+            editor
+                .as_ref(ctx)
+                .editor()
+                .read(ctx, |code_editor_view, ctx| {
+                    code_editor_view.hidden_section_count_for_test(ctx)
+                }),
+        )
     }
 
     /// Fully expand the first hidden section of the given file's diff editor,
