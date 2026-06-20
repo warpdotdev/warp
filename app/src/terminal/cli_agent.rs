@@ -87,6 +87,14 @@ const PI_COLOR: ColorU = ColorU {
     a: 255,
 };
 
+/// Antigravity brand color (white, monochrome logo)
+const ANTIGRAVITY_COLOR: ColorU = ColorU {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 255,
+};
+
 /// Auggie brand color (white, monochrome logo)
 const AUGGIE_COLOR: ColorU = ColorU {
     r: 255,
@@ -312,7 +320,7 @@ impl CLIAgent {
             CLIAgent::Goose => Some(GOOSE_COLOR),
             CLIAgent::Hermes => Some(HERMES_PURPLE),
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
-            CLIAgent::Antigravity => None,
+            CLIAgent::Antigravity => Some(ANTIGRAVITY_COLOR),
             CLIAgent::Unknown => None,
         }
     }
