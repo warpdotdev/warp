@@ -493,7 +493,7 @@ impl EditorView {
         match result {
             Ok(transcribe_response) => {
                 log::debug!("Transcribed voice input: {transcribe_response:?}");
-                if !transcribe_response.is_empty() {
+                if !transcribe_response.trim().is_empty() {
                     self.user_insert(&transcribe_response, ctx);
                 }
             }
