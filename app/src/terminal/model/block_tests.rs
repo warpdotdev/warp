@@ -11,7 +11,7 @@ use super::*;
 use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::terminal::model::ansi::{Attr, Handler};
 use crate::terminal::model::cell::Flags;
-use crate::terminal::model::header_grid::PromptEndPoint;
+use crate::terminal::model::header_grid::{CommandStartPoint, PromptEndPoint};
 use crate::terminal::model::session::SessionInfo;
 use crate::terminal::model::test_utils::{
     create_test_block_with_grids, test_iterm_image, TestBlockBuilder,
@@ -40,6 +40,293 @@ impl float_cmp::ApproxEq for BlockSection {
             (a, b) => std::mem::discriminant(&a) == std::mem::discriminant(&b),
         }
     }
+}
+
+#[test]
+fn refresh_prompt_replaces_prompt_context_and_rprompt_while_preserving_command_and_cursor() {
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(event_tx)
+        .build();
+    let mut block = TestBlockBuilder::new()
+        .with_honor_ps1(true)
+        .with_size_info(SizeInfo::new_without_font_metrics(4, 40))
+        .with_event_proxy(event_proxy)
+        .build();
+    block.apply_precmd(PromptMetadata {
+        pwd: Some("/old".to_owned()),
+        ps1: Some(hex::encode("old> ")),
+        honor_ps1: Some(true),
+        rprompt: Some(hex::encode("OLD RIGHT")),
+        git_head: Some("old-head".to_owned()),
+        git_branch: Some("old-branch".to_owned()),
+        virtual_env: Some("/old/venv".to_owned()),
+        conda_env: Some("old-conda".to_owned()),
+        node_version: Some("old-node".to_owned()),
+        session_id: Some(1),
+        ..Default::default()
+    });
+    while event_rx.try_recv().is_ok() {}
+
+    for c in "abcdef".chars() {
+        block.input(c);
+    }
+    block.move_backward(2);
+    let old_cursor = block.grid_handler().cursor_point();
+    assert_eq!(old_cursor, Point::new(0, 9));
+
+    assert!(block.refresh_prompt(PromptMetadata {
+        pwd: Some("/new".to_owned()),
+        ps1: Some(hex::encode("new-long> ")),
+        honor_ps1: Some(true),
+        rprompt: Some(hex::encode("NEW RIGHT")),
+        git_head: Some("new-head".to_owned()),
+        git_branch: Some("new-branch".to_owned()),
+        virtual_env: Some("/new/venv".to_owned()),
+        conda_env: Some("new-conda".to_owned()),
+        node_version: Some("new-node".to_owned()),
+        session_id: Some(2),
+        ..Default::default()
+    }));
+
+    assert_eq!(
+        block.header_grid.prompt_contents_to_string(false),
+        "new-long> "
+    );
+    assert_eq!(block.command_to_string(), "abcdef");
+    assert_eq!(
+        block.rprompt_grid().contents_to_string(false, None),
+        "NEW RIGHT"
+    );
+    assert_eq!(block.grid_handler().cursor_point(), Point::new(0, 14));
+    assert_eq!(block.pwd().map(String::as_str), Some("/new"));
+    assert_eq!(block.git_branch().map(String::as_str), Some("new-head"));
+    assert_eq!(
+        block.git_branch_name().map(String::as_str),
+        Some("new-branch")
+    );
+    assert_eq!(block.virtual_env_short_name().as_deref(), Some("venv"));
+    assert_eq!(block.conda_env().map(String::as_str), Some("new-conda"));
+    assert_eq!(block.node_version().map(String::as_str), Some("new-node"));
+    assert_eq!(block.session_id(), Some(2.into()));
+    assert_eq!(block.state(), BlockState::BeforeExecution);
+    assert!(block.has_received_precmd());
+
+    let events: Vec<_> = std::iter::from_fn(|| event_rx.try_recv().ok()).collect();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::BlockWorkingDirectoryUpdated(_)))
+            .count(),
+        1
+    );
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Event::BlockMetadataReceived(_))));
+
+    assert!(block.refresh_prompt(PromptMetadata::default()));
+    assert_eq!(block.pwd(), None);
+    let events: Vec<_> = std::iter::from_fn(|| event_rx.try_recv().ok()).collect();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::BlockWorkingDirectoryUpdated(_)))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn refresh_prompt_preserves_reflowed_wide_and_hard_wrapped_command_cells() {
+    let mut wrapped_block = TestBlockBuilder::new()
+        .with_honor_ps1(true)
+        .with_size_info(SizeInfo::new_without_font_metrics(4, 6))
+        .build();
+    wrapped_block.apply_precmd(PromptMetadata {
+        ps1: Some(hex::encode(">>")),
+        honor_ps1: Some(true),
+        ..Default::default()
+    });
+    for c in "ab界cd  ".chars() {
+        wrapped_block.input(c);
+    }
+    wrapped_block.move_backward(2);
+    assert_eq!(
+        wrapped_block.grid_handler().cursor_point(),
+        Point::new(1, 2)
+    );
+
+    assert!(wrapped_block.refresh_prompt(PromptMetadata {
+        ps1: Some(hex::encode(">>>>")),
+        honor_ps1: Some(true),
+        ..Default::default()
+    }));
+    assert_eq!(wrapped_block.command_to_string(), "ab界cd  ");
+    assert_eq!(
+        wrapped_block.grid_handler().cursor_point(),
+        Point::new(1, 4)
+    );
+
+    let mut hard_wrapped_block = TestBlockBuilder::new()
+        .with_honor_ps1(true)
+        .with_size_info(SizeInfo::new_without_font_metrics(4, 10))
+        .build();
+    hard_wrapped_block.apply_precmd(PromptMetadata {
+        ps1: Some(hex::encode(">")),
+        honor_ps1: Some(true),
+        ..Default::default()
+    });
+    for c in "ab".chars() {
+        hard_wrapped_block.input(c);
+    }
+    hard_wrapped_block.newline();
+    for c in "cd".chars() {
+        hard_wrapped_block.input(c);
+    }
+
+    assert!(hard_wrapped_block.refresh_prompt(PromptMetadata {
+        ps1: Some(hex::encode("long>")),
+        honor_ps1: Some(true),
+        ..Default::default()
+    }));
+    assert_eq!(hard_wrapped_block.command_to_string(), "ab\n   cd");
+    assert_eq!(
+        hard_wrapped_block.grid_handler().cursor_point(),
+        Point::new(1, 5)
+    );
+}
+
+#[test]
+fn refresh_prompt_does_not_copy_an_exact_width_prompt_cell_into_the_command() {
+    let mut block = TestBlockBuilder::new()
+        .with_honor_ps1(true)
+        .with_size_info(SizeInfo::new_without_font_metrics(4, 6))
+        .build();
+    block.apply_precmd(PromptMetadata {
+        ps1: Some(hex::encode("123456")),
+        honor_ps1: Some(true),
+        ..Default::default()
+    });
+    for c in "ab".chars() {
+        block.input(c);
+    }
+
+    assert!(block.refresh_prompt(PromptMetadata {
+        ps1: Some(hex::encode(">")),
+        honor_ps1: Some(true),
+        ..Default::default()
+    }));
+    assert_eq!(block.command_to_string(), "ab");
+    assert_eq!(block.grid_handler().cursor_point(), Point::new(0, 3));
+    let mut wrapped_cursor_block = TestBlockBuilder::new()
+        .with_honor_ps1(true)
+        .with_size_info(SizeInfo::new_without_font_metrics(4, 6))
+        .build();
+    wrapped_cursor_block.apply_precmd(PromptMetadata {
+        ps1: Some(hex::encode(">")),
+        honor_ps1: Some(true),
+        ..Default::default()
+    });
+    for c in "abcde".chars() {
+        wrapped_cursor_block.input(c);
+    }
+    assert!(wrapped_cursor_block.refresh_prompt(PromptMetadata {
+        ps1: Some(hex::encode(">>")),
+        honor_ps1: Some(true),
+        ..Default::default()
+    }));
+    assert_eq!(wrapped_cursor_block.command_to_string(), "abcde");
+    assert_eq!(
+        wrapped_cursor_block.grid_handler().cursor_point(),
+        Point::new(1, 1)
+    );
+
+    let mut marked_block = TestBlockBuilder::new()
+        .with_honor_ps1(true)
+        .with_size_info(SizeInfo::new_without_font_metrics(4, 6))
+        .build();
+    marked_block.prompt_marker(ansi::PromptMarker::StartPrompt {
+        kind: ansi::PromptKind::Initial,
+    });
+    for c in "123456".chars() {
+        marked_block.input(c);
+    }
+    marked_block.prompt_marker(ansi::PromptMarker::EndPrompt);
+    for c in "ab".chars() {
+        marked_block.input(c);
+    }
+
+    assert!(marked_block.refresh_prompt(PromptMetadata {
+        ps1: Some(hex::encode(">")),
+        honor_ps1: Some(true),
+        ..Default::default()
+    }));
+    assert_eq!(marked_block.command_to_string(), "ab");
+    assert_eq!(marked_block.grid_handler().cursor_point(), Point::new(0, 3));
+
+    let mut earlier_row_cursor_block = TestBlockBuilder::new()
+        .with_honor_ps1(true)
+        .with_size_info(SizeInfo::new_without_font_metrics(4, 10))
+        .build();
+    earlier_row_cursor_block.apply_precmd(PromptMetadata {
+        ps1: Some(hex::encode(">")),
+        honor_ps1: Some(true),
+        ..Default::default()
+    });
+    for c in "ab".chars() {
+        earlier_row_cursor_block.input(c);
+    }
+    earlier_row_cursor_block.newline();
+    for c in "cd".chars() {
+        earlier_row_cursor_block.input(c);
+    }
+    earlier_row_cursor_block.goto(VisibleRow(0), 3);
+
+    assert!(earlier_row_cursor_block.refresh_prompt(PromptMetadata {
+        ps1: Some(hex::encode("long>")),
+        honor_ps1: Some(true),
+        ..Default::default()
+    }));
+    assert_eq!(earlier_row_cursor_block.command_to_string(), "ab\n   cd");
+    assert_eq!(
+        earlier_row_cursor_block.grid_handler().cursor_point(),
+        Point::new(0, 7)
+    );
+}
+
+#[test]
+fn refresh_prompt_with_a_stale_command_boundary_does_not_replace_context() {
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(event_tx)
+        .build();
+    let mut block = TestBlockBuilder::new()
+        .with_honor_ps1(true)
+        .with_event_proxy(event_proxy)
+        .build();
+    block.apply_precmd(PromptMetadata {
+        pwd: Some("/old".to_owned()),
+        ps1: Some(hex::encode("old> ")),
+        honor_ps1: Some(true),
+        git_head: Some("old-head".to_owned()),
+        ..Default::default()
+    });
+    block
+        .header_grid
+        .set_raw_command_start_point(Some(CommandStartPoint::Stale));
+    while event_rx.try_recv().is_ok() {}
+
+    assert!(!block.refresh_prompt(PromptMetadata {
+        pwd: Some("/new".to_owned()),
+        ps1: Some(hex::encode("new> ")),
+        honor_ps1: Some(true),
+        git_head: Some("new-head".to_owned()),
+        ..Default::default()
+    }));
+    assert_eq!(block.pwd().map(String::as_str), Some("/old"));
+    assert_eq!(block.git_branch().map(String::as_str), Some("old-head"));
+    assert!(!std::iter::from_fn(|| event_rx.try_recv().ok())
+        .any(|event| matches!(event, Event::BlockWorkingDirectoryUpdated(_))));
 }
 
 #[test]

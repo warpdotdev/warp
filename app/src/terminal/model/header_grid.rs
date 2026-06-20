@@ -220,6 +220,11 @@ impl HeaderGrid {
         self.cached_prompt_end_point = point;
     }
 
+    #[cfg(test)]
+    pub(super) fn set_raw_command_start_point(&mut self, point: Option<CommandStartPoint>) {
+        self.cached_command_start_point = point;
+    }
+
     fn command_to_string_internal(
         &self,
         include_esc_sequences: bool,
@@ -558,6 +563,74 @@ impl HeaderGrid {
 
     pub fn command_to_string_with_max_rows(&self, max_rows: Option<usize>) -> String {
         self.command_to_string_internal(false, max_rows, RespectObfuscatedSecrets::Yes, false)
+    }
+    fn command_start_point_for_prompt_refresh(&self) -> Option<Point> {
+        match self.command_start_point() {
+            Some(CommandStartPoint::CommandStart { point }) => {
+                let prompt_ends_at_command_start = matches!(
+                    self.prompt_end_point(),
+                    Some(PromptEndPoint::PromptEnd {
+                        point: prompt_end_point,
+                        ..
+                    }) if prompt_end_point == point
+                );
+                Some(if prompt_ends_at_command_start {
+                    point.wrapping_add(self.prompt_and_command_grid.grid_handler().columns(), 1)
+                } else {
+                    point
+                })
+            }
+            Some(CommandStartPoint::Stale) => None,
+            None if self.honor_ps1 => {
+                let point = self.prompt_grid.grid_handler().cursor_point();
+                Some(
+                    if self.prompt_grid.grid_storage().cursor().input_needs_wrap {
+                        point.wrapping_add(self.prompt_grid.grid_handler().columns(), 1)
+                    } else {
+                        point
+                    },
+                )
+            }
+            None => Some(Point::new(0, 0)),
+        }
+    }
+
+    pub(super) fn refresh_prompt(&mut self, data: PromptMetadata) -> bool {
+        let Some(command_start_point) = self.command_start_point_for_prompt_refresh() else {
+            log::warn!("Skipped prompt-grid refresh because the command boundary was stale.");
+            return false;
+        };
+        let old_prompt_and_command_grid = self.prompt_and_command_grid.clone();
+        let source_cursor = old_prompt_and_command_grid.grid_storage().cursor().clone();
+        let source_cursor_point = old_prompt_and_command_grid.grid_handler().cursor_point();
+
+        self.prompt_grid.reset_for_prompt_refresh();
+        self.prompt_and_command_grid.reset_for_prompt_refresh();
+        self.receiving_chars_for_prompt = None;
+        self.ignore_next_prompt_preview = false;
+        self.cached_prompt_end_point = None;
+        self.cached_command_start_point = None;
+
+        self.legacy_precmd(data);
+        self.prompt_and_command_grid.start();
+        self.mark_and_cache_end_of_prompt();
+        let (destination_cursor_point, destination_input_needs_wrap) = self
+            .prompt_and_command_grid
+            .grid_handler_mut()
+            .append_cells_from_grid_starting_at(
+                old_prompt_and_command_grid.grid_handler(),
+                command_start_point,
+                source_cursor_point,
+                source_cursor.input_needs_wrap,
+            );
+        self.prompt_and_command_grid
+            .grid_handler_mut()
+            .restore_cursor_after_grid_copy(
+                &source_cursor,
+                destination_cursor_point,
+                destination_input_needs_wrap,
+            );
+        true
     }
 
     pub fn prompt_start_blockgrid_point(&self) -> BlockGridPoint {

@@ -3127,6 +3127,19 @@ impl BlockList {
         }
     }
 
+    pub(super) fn refresh_active_prompt(&mut self, data: PromptMetadata) -> bool {
+        if data.was_sent_after_in_band_command() {
+            let mut prompt_metadata = self.last_populated_precmd_payload.clone().unwrap_or(data);
+            prompt_metadata.is_after_in_band_command = true;
+            return self.active_block_mut().refresh_prompt(prompt_metadata);
+        }
+        let refreshed = self.active_block_mut().refresh_prompt(data.clone());
+        if refreshed {
+            self.last_populated_precmd_payload = Some(data);
+        }
+        refreshed
+    }
+
     pub(super) fn apply_preexec_to_active(&mut self, data: PreexecValue) {
         // We don't start handling early output until the session is fully bootstrapped,
         // because the distinction between typeahead and background output only

@@ -44,12 +44,12 @@ pub enum Event {
     },
     /// Sent when a new block is created.
     BlockMetadataReceived(BlockMetadataReceivedEvent),
-    /// Sent when a block's working directory has been updated outside of the
-    /// normal precmd path (e.g. via an OSC 7 escape sequence). Subscribers
-    /// that only care about CWD changes should listen for this in addition to
-    /// `BlockMetadataReceived`; subscribers tied to precmd semantics (such as
-    /// the requested-command finish detector) should keep listening only to
-    /// `BlockMetadataReceived` so they preserve their once-per-block contract.
+    /// Sent when a block's working directory changes independently of the
+    /// once-per-block precmd metadata event, such as via an OSC 7 escape
+    /// sequence or a repeated-prompt refresh. Subscribers that only care about
+    /// CWD changes should listen for this in addition to `BlockMetadataReceived`;
+    /// subscribers tied to once-per-block precmd semantics should keep listening
+    /// only to `BlockMetadataReceived`.
     BlockWorkingDirectoryUpdated(BlockWorkingDirectoryUpdatedEvent),
     /// Sent after a background block is started and added to the block list.
     BackgroundBlockStarted,
@@ -274,17 +274,17 @@ pub struct BlockMetadataReceivedEvent {
 }
 
 #[derive(Clone, Debug)]
-/// A notification that an existing block's working directory has been updated
-/// out-of-band (e.g. by an OSC 7 escape sequence) without a fresh precmd. The
-/// payload mirrors `BlockMetadataReceivedEvent` so CWD-dependent listeners can
-/// reuse the same handling, but listeners that rely on precmd semantics should
-/// keep using `BlockMetadataReceivedEvent`.
+/// A notification that an existing block's working directory has changed
+/// independently of the once-per-block precmd metadata event. The payload
+/// mirrors `BlockMetadataReceivedEvent` so CWD-dependent listeners can reuse
+/// the same handling, but listeners that rely on once-per-block precmd
+/// semantics should keep using `BlockMetadataReceivedEvent`.
 ///
 /// Note: `is_for_in_band_command` here describes the block carrying the update,
 /// while the similarly-spelled `is_after_in_band_command` on
 /// `BlockMetadataReceivedEvent` describes the *previous* block. The semantics
-/// differ because precmd fires after a block runs, while OSC 7 fires while the
-/// block is alive.
+/// differ because the initial precmd fires after a block runs, while this event
+/// describes a change on the still-active block.
 pub struct BlockWorkingDirectoryUpdatedEvent {
     pub block_metadata: BlockMetadata,
     pub block_index: BlockIndex,

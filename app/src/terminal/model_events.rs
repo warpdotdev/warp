@@ -10,7 +10,7 @@ use super::model::block::BlockId;
 use super::model::completions::ShellCompletion;
 use super::model::lifecycle::LifecycleTelemetryEvent;
 use super::model::session::{IsSSHWrapperSession, SessionId, SessionInfo};
-use super::model::terminal_model::{CommandType, ExitReason, HandlerEvent};
+use super::model::terminal_model::{CommandType, ExitReason, HandlerEvent, PrecmdDisposition};
 use crate::features::FeatureFlag;
 use crate::remote_server::manager::RemoteServerManager;
 use crate::server::telemetry::ImageProtocol;
@@ -133,6 +133,7 @@ impl ModelEventDispatcher {
                 session_id,
                 handled_after_inband,
                 env_vars,
+                disposition,
             }) => {
                 // Update the active session to the one that corresponds to the received SessionId.
                 self.active_session_id = session_id;
@@ -151,7 +152,12 @@ impl ModelEventDispatcher {
                     }
                 }
 
-                ModelEvent::Handler(AnsiHandlerEvent::Precmd)
+                match disposition {
+                    PrecmdDisposition::AppliedToFreshBlock => {
+                        ModelEvent::Handler(AnsiHandlerEvent::Precmd)
+                    }
+                    PrecmdDisposition::RefreshedActivePrompt => return,
+                }
             }
             Event::Handler(HandlerEvent::Preexec) => ModelEvent::Handler(AnsiHandlerEvent::Preexec),
             Event::Handler(HandlerEvent::CommandFinished { command_type }) => match command_type {
@@ -357,8 +363,8 @@ pub enum ModelEvent {
     },
     /// Sent when a new block is created.
     BlockMetadataReceived(BlockMetadataReceivedEvent),
-    /// Sent when an existing block's working directory has been updated
-    /// outside of the precmd path (e.g. via an OSC 7 escape sequence).
+    /// Sent when an existing block's working directory changes independently
+    /// of the once-per-block precmd metadata event.
     BlockWorkingDirectoryUpdated(BlockWorkingDirectoryUpdatedEvent),
     /// Sent after a background block is started and added to the block list.
     BackgroundBlockStarted,

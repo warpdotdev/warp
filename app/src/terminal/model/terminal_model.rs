@@ -2308,6 +2308,26 @@ impl TerminalModel {
             session_id: session_id.map(|id| id.into()),
             handled_after_inband,
             env_vars,
+            disposition: PrecmdDisposition::AppliedToFreshBlock,
+        });
+    }
+
+    fn refresh_current_prompt(&mut self, data: PromptMetadata) {
+        let session_id = data.session_id;
+        let mut env_vars = HashMap::new();
+        if let Some(kube_config) = data.kube_config.clone() {
+            env_vars.insert("KUBECONFIG".to_string(), kube_config);
+        }
+        let handled_after_inband = data.was_sent_after_in_band_command();
+        if !self.block_list.refresh_active_prompt(data) {
+            return;
+        }
+
+        self.emit_handler_event(HandlerEvent::Precmd {
+            session_id: session_id.map(Into::into),
+            handled_after_inband,
+            env_vars,
+            disposition: PrecmdDisposition::RefreshedActivePrompt,
         });
     }
 
@@ -2460,6 +2480,11 @@ pub enum CommandType {
     User,
     Bootstrap,
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrecmdDisposition {
+    AppliedToFreshBlock,
+    RefreshedActivePrompt,
+}
 
 #[derive(Clone, Debug)]
 pub enum HandlerEvent {
@@ -2471,6 +2496,7 @@ pub enum HandlerEvent {
         session_id: Option<SessionId>,
         handled_after_inband: bool,
         env_vars: HashMap<String, String>,
+        disposition: PrecmdDisposition,
     },
     Preexec,
     CommandFinished {
@@ -2898,8 +2924,16 @@ impl ansi::Handler for TerminalModel {
             Some(&data.completion_metadata.next_block_id),
             data.prompt_metadata.session_id,
         );
-        if matches!(transition.action, LifecycleAction::ApplyPrecmd) {
-            self.apply_precmd_to_fresh_block(data.prompt_metadata);
+        match transition.action {
+            LifecycleAction::ApplyPrecmd => self.apply_precmd_to_fresh_block(data.prompt_metadata),
+            LifecycleAction::RefreshPrecmd => self.refresh_current_prompt(data.prompt_metadata),
+            LifecycleAction::StartActiveBlock
+            | LifecycleAction::ApplyPreexec
+            | LifecycleAction::AcceptCommandFinished
+            | LifecycleAction::ReconcileCompletionThenApplyPrecmd
+            | LifecycleAction::BeginEpoch
+            | LifecycleAction::Terminate
+            | LifecycleAction::Ignore(_) => {}
         }
         self.commit_lifecycle_transition(&transition);
     }
@@ -2907,8 +2941,16 @@ impl ansi::Handler for TerminalModel {
     fn prompt_only_precmd(&mut self, data: PromptMetadata) {
         let transition =
             self.plan_lifecycle_transition(LifecycleInput::PromptOnlyPrecmd, None, data.session_id);
-        if matches!(transition.action, LifecycleAction::ApplyPrecmd) {
-            self.apply_precmd_to_fresh_block(data);
+        match transition.action {
+            LifecycleAction::ApplyPrecmd => self.apply_precmd_to_fresh_block(data),
+            LifecycleAction::RefreshPrecmd => self.refresh_current_prompt(data),
+            LifecycleAction::StartActiveBlock
+            | LifecycleAction::ApplyPreexec
+            | LifecycleAction::AcceptCommandFinished
+            | LifecycleAction::ReconcileCompletionThenApplyPrecmd
+            | LifecycleAction::BeginEpoch
+            | LifecycleAction::Terminate
+            | LifecycleAction::Ignore(_) => {}
         }
         self.commit_lifecycle_transition(&transition);
     }

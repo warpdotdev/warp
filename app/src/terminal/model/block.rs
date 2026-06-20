@@ -2965,6 +2965,58 @@ impl Block {
             }));
     }
 
+    pub(super) fn refresh_prompt(&mut self, data: PromptMetadata) -> bool {
+        record_trace_event!("command_execution:block:refresh_prompt");
+        if !self.header_grid.refresh_prompt(data.clone()) {
+            return false;
+        }
+        self.rprompt_grid.reset_for_prompt_refresh();
+        self.git_branch.clone_from(&data.git_head);
+        self.git_branch_name.clone_from(&data.git_branch);
+        self.virtual_env = data.virtual_env;
+        self.conda_env = data.conda_env;
+        self.node_version = data.node_version;
+        self.session_id = data.session_id.map(Into::into);
+        self.rprompt.clone_from(&data.rprompt);
+
+        if let Some(rprompt) = data.rprompt {
+            self.init_rprompt_grid(&rprompt);
+        }
+
+        self.update_current_working_directory(data.pwd);
+        true
+    }
+
+    fn update_current_working_directory(&mut self, pwd: Option<String>) {
+        if self.pwd == pwd {
+            return;
+        }
+        self.pwd = pwd;
+        // Use a dedicated event variant rather than `BlockMetadataReceived`
+        // because the latter is implicitly contracted to fire once per block
+        // (at precmd) and a number of subscribers rely on that — see e.g.
+        // the requested-command finish detector in
+        // `ai/blocklist/action_model/execute/shell_command.rs`. Subscribers
+        // that genuinely care about CWD changes opt in by also listening to
+        // `BlockWorkingDirectoryUpdated`.
+        self.event_proxy
+            .send_terminal_event(Event::BlockWorkingDirectoryUpdated(
+                BlockWorkingDirectoryUpdatedEvent {
+                    block_metadata: self.metadata(),
+                    block_index: self.block_index,
+                    // Preserve the block's in-band status so listeners can keep
+                    // applying the same in-band guard they apply to precmd-driven
+                    // metadata updates (e.g. skipping repo-detection / chip
+                    // refreshes for in-band command blocks).
+                    is_for_in_band_command: self.is_for_in_band_command,
+                    is_done_bootstrapping: matches!(
+                        self.bootstrap_stage,
+                        BootstrapStage::PostBootstrapPrecmd
+                    ),
+                },
+            ));
+    }
+
     pub(super) fn apply_preexec(&mut self, data: PreexecValue) {
         record_trace_event!("command_execution:block:prexec");
 
@@ -3372,33 +3424,7 @@ impl ansi::Handler for Block {
     }
 
     fn set_current_working_directory(&mut self, path: String) {
-        if self.pwd.as_deref() == Some(path.as_str()) {
-            return;
-        }
-        self.pwd = Some(path);
-        // Use a dedicated event variant rather than `BlockMetadataReceived`
-        // because the latter is implicitly contracted to fire once per block
-        // (at precmd) and a number of subscribers rely on that — see e.g.
-        // the requested-command finish detector in
-        // `ai/blocklist/action_model/execute/shell_command.rs`. Subscribers
-        // that genuinely care about CWD changes opt in by also listening to
-        // `BlockWorkingDirectoryUpdated`.
-        self.event_proxy
-            .send_terminal_event(Event::BlockWorkingDirectoryUpdated(
-                BlockWorkingDirectoryUpdatedEvent {
-                    block_metadata: self.metadata(),
-                    block_index: self.block_index,
-                    // Preserve the block's in-band status so listeners can keep
-                    // applying the same in-band guard they apply to precmd-driven
-                    // metadata updates (e.g. skipping repo-detection / chip
-                    // refreshes for in-band command blocks).
-                    is_for_in_band_command: self.is_for_in_band_command,
-                    is_done_bootstrapping: matches!(
-                        self.bootstrap_stage,
-                        BootstrapStage::PostBootstrapPrecmd
-                    ),
-                },
-            ));
+        self.update_current_working_directory(Some(path));
     }
 
     fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {

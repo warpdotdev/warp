@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use instant::Instant;
+use warp_core::features::FeatureFlag;
 use warp_core::telemetry::TelemetryEvent;
 
 use super::telemetry::{
@@ -152,7 +153,7 @@ fn transition_matrix_preserves_normal_flow_and_rejects_unsafe_completion() {
             AtPrompt,
             PrecmdWithCompletionMetadata(ActiveDuplicate),
             AtPrompt,
-            Ignore(IgnoreReason::RepeatedPrecmd),
+            RefreshPrecmd,
         ),
         (
             Submitted,
@@ -179,12 +180,7 @@ fn transition_matrix_preserves_normal_flow_and_rejects_unsafe_completion() {
             Ignore(IgnoreReason::IgnoredTerminated),
         ),
         (AwaitingPrecmd, PromptOnlyPrecmd, AtPrompt, ApplyPrecmd),
-        (
-            AtPrompt,
-            PromptOnlyPrecmd,
-            AtPrompt,
-            Ignore(IgnoreReason::RepeatedPrecmd),
-        ),
+        (AtPrompt, PromptOnlyPrecmd, AtPrompt, RefreshPrecmd),
         (
             Submitted,
             PromptOnlyPrecmd,
@@ -413,6 +409,7 @@ fn lifecycle_phase_reconciliation_requires_compatible_live_evidence() {
 fn lifecycle_coordinator_records_only_conservative_or_recovery_transitions() {
     use LifecycleAction::*;
     use LifecycleInput::*;
+    let _recovery_enabled = FeatureFlag::TerminalLifecycleRecovery.override_enabled(true);
 
     let before_execution = LifecycleSnapshot {
         active_block_id: "active".to_owned(),
@@ -470,7 +467,41 @@ fn lifecycle_coordinator_records_only_conservative_or_recovery_transitions() {
         &at_prompt,
         PrecmdWithCompletionMetadata(NextBlockIdDisposition::ActiveDuplicate),
     );
-    assert_eq!(transition.action, Ignore(IgnoreReason::RepeatedPrecmd));
+    assert_eq!(transition.action, RefreshPrecmd);
+    assert!(transition.recovery_record.is_some());
+}
+
+#[test]
+fn lifecycle_coordinator_gates_prompt_refresh_recovery() {
+    let _recovery_disabled = FeatureFlag::TerminalLifecycleRecovery.override_enabled(false);
+    let snapshot = LifecycleSnapshot {
+        active_block_id: "active".to_owned(),
+        active_session_id: Some(1),
+        supplied_next_block_id: Some("active".to_owned()),
+        hook_session_id: Some(1),
+        block_state: BlockState::BeforeExecution,
+        started: false,
+        finished: false,
+        received_precmd: true,
+        is_in_band: false,
+        is_bootstrapped: true,
+        is_bootstrap_done: true,
+        is_alt_screen_active: false,
+    };
+    let mut coordinator = super::BlockLifecycleCoordinator {
+        phase: LifecyclePhase::AtPrompt,
+        ..Default::default()
+    };
+
+    let transition = coordinator.plan(
+        &snapshot,
+        LifecycleInput::CorrelatedPrecmd(NextBlockIdDisposition::ActiveDuplicate),
+    );
+    assert_eq!(
+        transition.action,
+        LifecycleAction::Ignore(IgnoreReason::RecoveryDisabled)
+    );
+    assert_eq!(transition.next_phase, LifecyclePhase::AtPrompt);
     assert!(transition.recovery_record.is_some());
 }
 

@@ -138,7 +138,6 @@ pub(in crate::terminal) enum IgnoreReason {
     CollidingCompletion,
     RepeatedPreexec,
     RepeatedPreexecDifferentCommand,
-    RepeatedPrecmd,
     UnsupportedPromptOnlyPrecmd,
     RecoveryDisabled,
 }
@@ -280,7 +279,7 @@ pub(super) fn plan(
         },
         PrecmdWithCompletionMetadata(ActiveDuplicate) => match previous_phase {
             AwaitingPrecmd => (AtPrompt, ApplyPrecmd),
-            AtPrompt => (AtPrompt, Ignore(RepeatedPrecmd)),
+            AtPrompt => (AtPrompt, RefreshPrecmd),
             Submitted | Executing | Unknown => (previous_phase, Ignore(RecoveryDisabled)),
             Terminated => (Terminated, Ignore(IgnoredTerminated)),
         },
@@ -288,7 +287,7 @@ pub(super) fn plan(
         // cannot prove completion or advance the block list by itself.
         PromptOnlyPrecmd => match previous_phase {
             AwaitingPrecmd => (AtPrompt, ApplyPrecmd),
-            AtPrompt => (AtPrompt, Ignore(RepeatedPrecmd)),
+            AtPrompt => (AtPrompt, RefreshPrecmd),
             Submitted | Executing | Unknown => {
                 (previous_phase, Ignore(UnsupportedPromptOnlyPrecmd))
             }

@@ -5,6 +5,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Local};
 use vec1::vec1;
 use warp_core::command::ExitCode;
+use warp_core::features::FeatureFlag;
 use warp_terminal::model::ansi::ClearMode;
 use warpui::r#async::executor::Background;
 use warpui::text::{str_to_byte_vec, SelectionType};
@@ -764,6 +765,7 @@ fn set_custom_title() {
         .with_terminal_events_tx(event_tx)
         .build();
     let mut terminal = TerminalModel::mock(None, Some(event_proxy));
+    terminal.legacy_precmd(PromptMetadata::default());
 
     // Empty all the events that could've been sent to this channel prior to us changing the
     // title for tests.
@@ -1056,6 +1058,188 @@ fn normal_lifecycle_pipeline_emits_completion_and_prompt_side_effects_once() {
         Ok(OrderedTerminalEventType::CommandExecutionFinished { .. })
     ));
     assert!(ordered_rx.try_recv().is_err());
+}
+
+#[test]
+fn repeated_correlated_and_legacy_precmd_refresh_only_the_active_prompt() {
+    let _recovery_enabled = FeatureFlag::TerminalLifecycleRecovery.override_enabled(true);
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(event_tx)
+        .build();
+    let mut terminal = TerminalModel::mock(None, Some(event_proxy));
+    terminal.legacy_precmd(PromptMetadata::default());
+    while event_rx.try_recv().is_ok() {}
+
+    for c in "typed".chars() {
+        terminal.block_list_mut().active_block_for_test().input(c);
+    }
+    terminal
+        .block_list_mut()
+        .active_block_for_test()
+        .move_backward(2);
+    let active_block_id = terminal.active_block_id().clone();
+    let active_block_count = terminal.block_list().blocks().len();
+
+    terminal.precmd(PrecmdValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(7),
+            next_block_id: active_block_id.clone(),
+        },
+        prompt_metadata: PromptMetadata {
+            pwd: Some("/correlated".to_owned()),
+            session_id: Some(123),
+            ..Default::default()
+        },
+    });
+
+    assert_eq!(terminal.active_block_id(), &active_block_id);
+    assert_eq!(terminal.block_list().blocks().len(), active_block_count);
+    assert_eq!(
+        terminal.block_list().active_block().command_to_string(),
+        "typed"
+    );
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
+            .grid_handler()
+            .cursor_point(),
+        Point::new(0, 3)
+    );
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
+            .pwd()
+            .map(String::as_str),
+        Some("/correlated")
+    );
+
+    let events: Vec<_> = std::iter::from_fn(|| event_rx.try_recv().ok()).collect();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::BlockWorkingDirectoryUpdated(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    Event::Handler(HandlerEvent::Precmd {
+                        disposition: PrecmdDisposition::RefreshedActivePrompt,
+                        ..
+                    })
+                )
+            })
+            .count(),
+        1
+    );
+    assert!(!events.iter().any(|event| {
+        matches!(
+            event,
+            Event::BlockCompleted(_)
+                | Event::AfterBlockCompleted(_)
+                | Event::BlockMetadataReceived(_)
+                | Event::Handler(HandlerEvent::Precmd {
+                    disposition: PrecmdDisposition::AppliedToFreshBlock,
+                    ..
+                })
+        )
+    }));
+
+    terminal.legacy_precmd(PromptMetadata {
+        pwd: Some("/legacy".to_owned()),
+        session_id: Some(123),
+        ..Default::default()
+    });
+    assert_eq!(terminal.active_block_id(), &active_block_id);
+    assert_eq!(terminal.block_list().blocks().len(), active_block_count);
+    assert_eq!(
+        terminal.block_list().active_block().command_to_string(),
+        "typed"
+    );
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
+            .pwd()
+            .map(String::as_str),
+        Some("/legacy")
+    );
+
+    terminal.start_command_execution();
+    terminal.legacy_precmd(PromptMetadata {
+        pwd: Some("/ignored-submitted".to_owned()),
+        session_id: Some(123),
+        ..Default::default()
+    });
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
+            .pwd()
+            .map(String::as_str),
+        Some("/legacy")
+    );
+    terminal.preexec(PreexecValue {
+        command: "typed".to_owned(),
+        session_id: Some(123),
+    });
+    terminal.legacy_precmd(PromptMetadata {
+        pwd: Some("/ignored-executing".to_owned()),
+        session_id: Some(123),
+        ..Default::default()
+    });
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
+            .pwd()
+            .map(String::as_str),
+        Some("/legacy")
+    );
+
+    let mut unknown_terminal = TerminalModel::mock(None, None);
+    unknown_terminal.lifecycle_coordinator.reset_unknown();
+    let unknown_active_block_id = unknown_terminal.active_block_id().clone();
+    let unknown_block_count = unknown_terminal.block_list().blocks().len();
+    unknown_terminal.legacy_precmd(PromptMetadata {
+        pwd: Some("/ignored-unknown".to_owned()),
+        ..Default::default()
+    });
+    assert_eq!(unknown_terminal.active_block_id(), &unknown_active_block_id);
+    assert_eq!(
+        unknown_terminal.block_list().blocks().len(),
+        unknown_block_count
+    );
+    assert_eq!(unknown_terminal.block_list().active_block().pwd(), None);
+}
+
+#[test]
+fn repeated_precmd_refresh_is_disabled_by_default() {
+    let _recovery_disabled = FeatureFlag::TerminalLifecycleRecovery.override_enabled(false);
+    let mut terminal = TerminalModel::mock(None, None);
+    let active_block_id = terminal.active_block_id().clone();
+
+    terminal.legacy_precmd(PromptMetadata {
+        pwd: Some("/new".to_owned()),
+        ..Default::default()
+    });
+
+    assert_eq!(terminal.active_block_id(), &active_block_id);
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
+            .pwd()
+            .map(String::as_str),
+        None
+    );
 }
 
 #[test]

@@ -2416,6 +2416,109 @@ impl GridHandler {
         }
     }
 
+    /// Appends cells at and after `start` from another grid while reflowing soft-wrapped rows.
+    ///
+    /// Returns the destination cursor point and wrap state corresponding to `source_cursor`.
+    pub(in crate::terminal::model) fn append_cells_from_grid_starting_at(
+        &mut self,
+        other: &GridHandler,
+        start: Point,
+        source_cursor: Point,
+        source_cursor_needs_wrap: bool,
+    ) -> (Point, bool) {
+        let max_point = other.grid.max_cursor_point.convert_to_absolute(other);
+        let max_row = max(
+            max(
+                max_point.row,
+                other.bottommost_nonempty_row().unwrap_or(start.row),
+            ),
+            source_cursor.row,
+        );
+        let mut mapped_cursor = None;
+
+        for row_idx in start.row..=max_row {
+            let row = other.row(row_idx).expect("row should exist");
+            let start_col = if row_idx == start.row { start.col } else { 0 };
+            let mut end_col = if row_idx < max_row && other.row_wraps(row_idx) {
+                other.columns()
+            } else {
+                row.line_length()
+            };
+            if row_idx == max_point.row {
+                end_col = max(end_col, max_point.col);
+            }
+            if row_idx == source_cursor.row {
+                end_col = max(end_col, source_cursor.col);
+            }
+            end_col = min(end_col, other.columns());
+
+            for col in start_col..end_col {
+                if self.grid.cursor().input_needs_wrap {
+                    self.wrapline();
+                }
+
+                let source_point = Point::new(row_idx, col);
+                if source_point == source_cursor && !source_cursor_needs_wrap {
+                    mapped_cursor =
+                        Some((self.cursor_point(), self.grid.cursor().input_needs_wrap));
+                }
+
+                let destination = self.grid.cursor_point();
+                let mut cloned_cell = row[col].clone();
+                cloned_cell.flags_mut().insert(Flags::BOLD);
+                self.grid[destination.row][destination.col] = cloned_cell;
+
+                if self.grid.cursor_point().col >= self.columns() - 1 {
+                    self.update_cursor(|cursor| {
+                        cursor.input_needs_wrap = true;
+                    });
+                } else {
+                    self.update_cursor(|cursor| {
+                        cursor.point.col += 1;
+                    });
+                    self.grid.update_max_cursor();
+                }
+
+                if source_point == source_cursor && source_cursor_needs_wrap {
+                    mapped_cursor =
+                        Some((self.cursor_point(), self.grid.cursor().input_needs_wrap));
+                }
+            }
+
+            if mapped_cursor.is_none()
+                && row_idx == source_cursor.row
+                && source_cursor.col == end_col
+            {
+                mapped_cursor = Some((self.cursor_point(), self.grid.cursor().input_needs_wrap));
+            }
+
+            if !other.row_wraps(row_idx) && row_idx < max_row {
+                self.linefeed();
+                self.carriage_return();
+            }
+        }
+
+        mapped_cursor.unwrap_or_else(|| (self.cursor_point(), self.grid.cursor().input_needs_wrap))
+    }
+
+    pub(in crate::terminal::model) fn restore_cursor_after_grid_copy(
+        &mut self,
+        source_cursor: &Cursor,
+        destination_point: Point,
+        destination_input_needs_wrap: bool,
+    ) {
+        let visible_row = destination_point
+            .row
+            .saturating_sub(self.history_size())
+            .min(self.visible_rows().saturating_sub(1));
+        let destination_col = destination_point.col.min(self.columns().saturating_sub(1));
+        self.update_cursor(|cursor| {
+            *cursor = source_cursor.clone();
+            cursor.point.row = VisibleRow(visible_row);
+            cursor.point.col = destination_col;
+            cursor.input_needs_wrap = destination_input_needs_wrap;
+        });
+    }
     /// Marks a location in the grid as being the end of a shell prompt (and
     /// the start of the user's command).
     pub(in crate::terminal::model) fn mark_end_of_prompt(

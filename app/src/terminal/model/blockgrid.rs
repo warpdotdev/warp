@@ -376,6 +376,16 @@ impl BlockGrid {
         self.started = true;
         self.start_time = Some(Instant::now());
     }
+    pub(super) fn reset_for_prompt_refresh(&mut self) {
+        ansi::Handler::reset_state(self);
+        self.started = false;
+        self.finished = false;
+        self.start_time = None;
+        self.cached_rightmost_visible_nonempty_cell = Default::default();
+        self.cached_has_visible_chars = Default::default();
+        self.cached_starts_with_input_buffer_sequence = Default::default();
+        self.trim_trailing_blank_rows = false;
+    }
 
     pub(in crate::terminal) fn grid_storage(&self) -> &GridStorage {
         self.grid_handler.grid_storage()

@@ -15,6 +15,7 @@ pub(in crate::terminal) use transition::{
     CommandStartKind, IgnoreReason, LifecycleAction, LifecycleInput, LifecyclePhase,
     LifecycleSnapshot, LifecycleTransition, NextBlockIdDisposition, PreexecObservation,
 };
+use warp_core::features::FeatureFlag;
 
 /// Describes whether a command-start intent was accepted or conservatively ignored.
 ///
@@ -73,8 +74,18 @@ impl BlockLifecycleCoordinator {
         input: LifecycleInput,
     ) -> LifecycleTransition {
         let previous_phase = transition::reconcile_phase(self.phase, snapshot);
-        let (next_phase, action) = transition::plan(previous_phase, input, snapshot);
+        let (next_phase, planned_action) = transition::plan(previous_phase, input, snapshot);
+        let action = if matches!(
+            planned_action,
+            LifecycleAction::RefreshPrecmd | LifecycleAction::ReconcileCompletionThenApplyPrecmd
+        ) && !FeatureFlag::TerminalLifecycleRecovery.is_enabled()
+        {
+            LifecycleAction::Ignore(IgnoreReason::RecoveryDisabled)
+        } else {
+            planned_action
+        };
         let should_record = action.is_ignored()
+            || matches!(action, LifecycleAction::RefreshPrecmd)
             || matches!(
                 (previous_phase, input),
                 (
