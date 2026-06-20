@@ -480,3 +480,7 @@ pub enum AnsiHandlerEvent {
 impl Entity for ModelEventDispatcher {
     type Event = ModelEvent;
 }
+
+#[cfg(test)]
+#[path = "model_events_tests.rs"]
+mod tests;
