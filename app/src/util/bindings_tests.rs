@@ -113,8 +113,7 @@ fn test_toggle_maximize_pane_binding_is_editable() {
             // It ships with a mac-only default shortcut (cmd-shift-enter) via its custom
             // action; other platforms have no default until the user assigns one. Either
             // way, whatever resolves here is what the pane header menu item surfaces.
-            let default =
-                keybinding_name_to_display_string(TOGGLE_MAXIMIZE_PANE_BINDING_NAME, ctx);
+            let default = keybinding_name_to_display_string(TOGGLE_MAXIMIZE_PANE_BINDING_NAME, ctx);
             if OperatingSystem::get().is_mac() {
                 assert_eq!(Some("⇧⌘⏎"), default.as_deref());
             } else {
