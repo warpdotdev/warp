@@ -1,3 +1,10 @@
+//! Defines structured, rate-limited diagnostics for lifecycle recovery and conservative handling.
+//!
+//! Records contain only allowlisted lifecycle evidence and never command text, output, prompt
+//! contents, working directories, or other UGC. `TerminalModel` emits records through an internal
+//! terminal event, and `ModelEventDispatcher` forwards them to the feature-specific telemetry
+//! event.
+
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -9,8 +16,13 @@ use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
 use super::transition::{LifecycleAction, LifecycleInputKind, LifecyclePhase, LifecycleSnapshot};
 use crate::terminal::model::block::BlockState;
 
+/// Limits identical lifecycle diagnostics to one emitted aggregate per minute.
 const TRANSITION_TELEMETRY_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Captures the allowlisted evidence for one lifecycle diagnostic.
+///
+/// The first occurrence is emitted immediately. A later aggregate includes the number of
+/// equivalent records suppressed during the same rate-limit interval.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LifecycleRecoveryRecord {
     pub(in crate::terminal) previous_phase: LifecyclePhase,
@@ -33,6 +45,7 @@ pub struct LifecycleRecoveryRecord {
 }
 
 impl LifecycleRecoveryRecord {
+    /// Builds a diagnostic record from the planned transition and its live evidence.
     pub(super) fn new(
         previous_phase: LifecyclePhase,
         next_phase: LifecyclePhase,
@@ -62,6 +75,7 @@ impl LifecycleRecoveryRecord {
     }
 }
 
+/// Keys rate limiting by the policy decision rather than input-specific identifiers.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct TransitionKey {
     previous_phase: LifecyclePhase,
@@ -69,17 +83,20 @@ struct TransitionKey {
     action: LifecycleAction,
 }
 
+/// Tracks the last emitted aggregate and the repeats suppressed since then.
 struct RateLimitState {
     last_emitted: Instant,
     suppressed_repeats: u64,
 }
 
+/// Rate-limits lifecycle diagnostics independently for one terminal coordinator.
 #[derive(Default)]
 pub(super) struct LifecycleTelemetryLimiter {
     transitions: HashMap<TransitionKey, RateLimitState>,
 }
 
 impl LifecycleTelemetryLimiter {
+    /// Records an occurrence and returns it only when it should be emitted immediately.
     pub(super) fn record(
         &mut self,
         record: LifecycleRecoveryRecord,
@@ -87,6 +104,7 @@ impl LifecycleTelemetryLimiter {
         self.record_at(record, Instant::now())
     }
 
+    /// Records an occurrence at a supplied instant for deterministic rate-limit evaluation.
     pub(super) fn record_at(
         &mut self,
         mut record: LifecycleRecoveryRecord,
@@ -120,9 +138,11 @@ impl LifecycleTelemetryLimiter {
     }
 }
 
+/// Defines feature-specific telemetry events emitted by the lifecycle coordinator.
 #[derive(Debug, EnumDiscriminants)]
 #[strum_discriminants(derive(EnumIter))]
 pub(in crate::terminal) enum LifecycleTelemetryEvent {
+    /// Reports a conservative or recovery lifecycle transition.
     Recovery(LifecycleRecoveryRecord),
 }
 
