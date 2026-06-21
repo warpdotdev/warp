@@ -1064,6 +1064,32 @@ fn test_reuse_file_state_rebuilds_discard_button() {
     });
 }
 
+/// The per-file "Open file" button captures the diff's first changed line at
+/// build time. Reusing a `FileState` must rebuild it from the current diff so a
+/// reload that changes the diff for the same path can't leave the button
+/// navigating to the previous diff's (now stale) location.
+#[test]
+fn test_reuse_file_state_rebuilds_open_in_tab_button() {
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
+
+        let prev = take_single_file_state(&mut app, "src/main.rs", "line 1\nline 2\nline 3");
+        let original_button = prev.open_in_tab_button.clone();
+        let file = modified_file_diff_and_content("src/main.rs", "line 1\nline 2\nline 3");
+
+        ctx.code_review_view.update(&mut app, |view, view_ctx| {
+            let reused = view
+                .reuse_file_state_if_compatible(prev, &file, view_ctx)
+                .expect("an unchanged, non-binary file with an editor should be reused");
+            assert_ne!(
+                reused.open_in_tab_button, original_button,
+                "reusing a file state must rebuild the Open file button so it targets \
+                 the current diff's location instead of a stale captured line"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_reuse_file_state_rebuilds_when_file_becomes_binary() {
     App::test((), |mut app| async move {

@@ -2691,7 +2691,6 @@ impl CodeReviewView {
             let is_expanded = self.should_auto_expand_file(&file.file_diff);
 
             let file_path = file.file_diff.file_path.clone();
-            let file_line = file_line_for_open(&file.file_diff);
 
             let chevron_path = file_path.clone();
             let initial_icon = if is_expanded {
@@ -2710,22 +2709,7 @@ impl CodeReviewView {
                     })
             });
 
-            let open_tab_path = file_path.clone();
-            let open_in_tab_button = ctx.add_typed_action_view(move |_ctx| {
-                ActionButton::new("", NakedTheme)
-                    .with_icon(Icon::LinkExternal)
-                    .with_size(ButtonSize::InlineActionHeader)
-                    .with_tooltip("Open file")
-                    .on_click(move |ctx| {
-                        ctx.dispatch_typed_action(CodeReviewAction::OpenInNewTab {
-                            path: open_tab_path.clone(),
-                            line_and_column: file_line.map(|line| LineAndColumnArg {
-                                line_num: line,
-                                column_num: None,
-                            }),
-                        })
-                    })
-            });
+            let open_in_tab_button = self.build_open_in_tab_button(&file.file_diff, ctx);
 
             let discard_button = self.build_discard_button(
                 file.file_diff.file_path.clone(),
@@ -2815,6 +2799,38 @@ impl CodeReviewView {
         })
     }
 
+    /// Builds the per-file "Open file" action button, capturing the diff's first
+    /// changed line ([`file_line_for_open`]) so the button opens the file at the
+    /// relevant location.
+    ///
+    /// Like [`Self::build_discard_button`], this is rebuilt on every reuse: the
+    /// captured line is derived from the file's diff, so a reload that changes
+    /// the diff for a same-path file must refresh it or the button would
+    /// navigate to a stale location.
+    fn build_open_in_tab_button(
+        &self,
+        file_diff: &FileDiff,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<ActionButton> {
+        let path = file_diff.file_path.clone();
+        let file_line = file_line_for_open(file_diff);
+        ctx.add_typed_action_view(move |_ctx| {
+            ActionButton::new("", NakedTheme)
+                .with_icon(Icon::LinkExternal)
+                .with_size(ButtonSize::InlineActionHeader)
+                .with_tooltip("Open file")
+                .on_click(move |ctx| {
+                    ctx.dispatch_typed_action(CodeReviewAction::OpenInNewTab {
+                        path: path.clone(),
+                        line_and_column: file_line.map(|line| LineAndColumnArg {
+                            line_num: line,
+                            column_num: None,
+                        }),
+                    })
+                })
+        })
+    }
+
     /// Attempts to reuse an existing file's editor for the incoming diff during a
     /// full reload, refreshing it in place rather than rebuilding it.
     ///
@@ -2873,20 +2889,26 @@ impl CodeReviewView {
             }
         }
 
-        // The Discard button captures `git_operation_blocked` at build time, so
-        // the reused button reflects whatever git state existed when this file
-        // was last built — not now. A reload that lands after a merge/rebase
-        // started (or finished) would otherwise keep a stale button: enabled and
-        // able to dispatch a discard while git operations are blocked, or
-        // permanently inert once they unblock. Rebuild it against the current
-        // state. This is a tiny view with no loaded state, so it does not affect
-        // `all_editors_loaded` and never reintroduces the skeleton flash.
+        // The per-file action buttons capture diff-derived or ambient state at
+        // build time, so a reused file state must refresh them or they go stale:
+        //   - Discard captures `git_operation_blocked`: a reload landing after a
+        //     merge/rebase starts (or finishes) would otherwise keep a button
+        //     that can dispatch a discard while git operations are blocked, or
+        //     one left permanently inert once they unblock.
+        //   - Open file captures the diff's first changed line, which moves when
+        //     the diff changes, so the stale button would navigate to the old
+        //     location.
+        // Both are tiny views with no loaded state, so rebuilding them doesn't
+        // touch `all_editors_loaded` and never reintroduces the skeleton flash.
+        // (The other buttons capture only the file's own path, which is the
+        // reuse key and therefore unchanged.)
         let git_operation_blocked = self
             .diff_state_model
             .as_ref(ctx)
             .is_git_operation_blocked(ctx);
         prev.discard_button =
             self.build_discard_button(file.file_diff.file_path.clone(), git_operation_blocked, ctx);
+        prev.open_in_tab_button = self.build_open_in_tab_button(&file.file_diff, ctx);
 
         Some(prev)
     }
