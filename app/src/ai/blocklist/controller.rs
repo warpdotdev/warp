@@ -3182,16 +3182,14 @@ impl BlocklistAIController {
             }
             Some(warp_multi_agent_api::response_event::stream_finished::Reason::InternalError(
                 warp_multi_agent_api::response_event::stream_finished::InternalError{ message})) => {
-                let error_message = format!(
-                    "Response stream finished unexpectedly with internal error: {message}",
-                );
+                let (error_message, is_user_error) = format_internal_error(&message);
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
                         RenderableAIError::Other {
                             error_message,
                             will_attempt_resume: false,
                             waiting_for_network: false,
-                            is_user_error: false,
+                            is_user_error,
                         },
                         /*recovery_pending*/ false,
                         stream_id,
@@ -3385,6 +3383,34 @@ fn get_running_command(terminal_model: &TerminalModel) -> Option<RunningCommand>
         requested_command_id: active_block.requested_command_action_id().cloned(),
         is_alt_screen_active,
     })
+}
+
+/// Formats an internal error message received from the server's
+/// `stream_finished` event for display to the user.
+///
+/// Returns `(error_message, is_user_error)`.
+///
+/// When the agent generates a V4A patch where every hunk has empty old and new
+/// content, the server reports an internal parse error (`"patch contains no
+/// changes"`). This is a benign condition — the file may already be up to date —
+/// so we surface a clear, actionable message instead of the raw internal error
+/// string, and mark it as a user error so the task is classified as `Failed`
+/// rather than `Error`.
+fn format_internal_error(message: &str) -> (String, bool) {
+    if message.contains("patch contains no changes") {
+        (
+            "The agent attempted to apply file edits, but no changes were needed. \
+             The file may already be up to date."
+                .to_string(),
+            // is_user_error — benign condition, classify as Failed not Error
+            true,
+        )
+    } else {
+        (
+            format!("Response stream finished unexpectedly with internal error: {message}"),
+            false,
+        )
+    }
 }
 
 #[cfg(test)]

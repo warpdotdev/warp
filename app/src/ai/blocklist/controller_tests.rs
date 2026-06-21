@@ -326,3 +326,48 @@ fn mock_response_stream_updates_history_through_controller() {
         )));
     });
 }
+
+#[test]
+fn format_internal_error_empty_v4a_patch_surfaces_actionable_message() {
+    // Regression test for #12718: when the server reports a V4A parse error
+    // because every hunk has empty old/new content, the user should see a
+    // clear, actionable message — not the raw internal error string.
+    let (msg, is_user_error) = super::format_internal_error(
+        "failed to parse V4A patch: Invalid data: patch contains no changes: \
+         both old and new are empty in every update hunk",
+    );
+    assert!(
+        msg.contains("no changes were needed"),
+        "expected user-friendly message, got: {msg}"
+    );
+    assert!(
+        !msg.contains("failed to parse"),
+        "raw internal error should not be shown to user: {msg}"
+    );
+    assert!(
+        !msg.contains("patch contains no changes"),
+        "raw internal error should not be shown to user: {msg}"
+    );
+    assert!(
+        is_user_error,
+        "benign empty-patch should be classified as user error (Failed)"
+    );
+}
+
+#[test]
+fn format_internal_error_generic_error_preserved() {
+    // Non-V4A internal errors should keep the original formatting.
+    let (msg, is_user_error) = super::format_internal_error("something else went wrong");
+    assert!(
+        msg.contains("something else went wrong"),
+        "generic error message should be preserved: {msg}"
+    );
+    assert!(
+        msg.contains("Response stream finished unexpectedly"),
+        "generic error should retain context prefix: {msg}"
+    );
+    assert!(
+        !is_user_error,
+        "generic internal errors should not be classified as user error"
+    );
+}
