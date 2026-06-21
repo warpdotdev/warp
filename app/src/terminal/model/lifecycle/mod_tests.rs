@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use instant::Instant;
+use warp_core::features::FeatureFlag;
 use warp_core::telemetry::TelemetryEvent;
 
 use super::telemetry::{

@@ -264,7 +264,8 @@ pub(super) fn plan(
             Terminated => (Terminated, Ignore(IgnoredTerminated)),
         },
         // A `Precmd` with completion metadata can apply a prompt after an already accepted
-        // completion. Novel-ID completion recovery remains disabled in this transition slice.
+        // completion. A novel next-block ID selects recovery, which the coordinator feature-gates
+        // before application.
         PrecmdWithCompletionMetadata(ExistingCollision) => {
             (previous_phase, Ignore(CollidingCompletion))
         }

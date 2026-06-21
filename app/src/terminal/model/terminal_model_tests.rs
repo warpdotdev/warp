@@ -168,6 +168,32 @@ fn command_finished_and_precmd(terminal: &mut TerminalModel) {
     });
 }
 
+fn normal_command_finished_and_precmd(
+    terminal: &mut TerminalModel,
+    prompt_metadata: PromptMetadata,
+) {
+    assert_eq!(
+        terminal.start_command_execution(),
+        StartCommandOutcome::Accepted
+    );
+    terminal.preexec(PreexecValue {
+        command: "completed".to_owned(),
+        session_id: None,
+    });
+    let completion_metadata = CompletionMetadata {
+        exit_code: ExitCode::from(0),
+        next_block_id: BlockId::new(),
+    };
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: completion_metadata.clone(),
+        ..Default::default()
+    });
+    terminal.precmd_with_completion_metadata(PrecmdValue {
+        completion_metadata,
+        prompt_metadata,
+    });
+}
+
 #[test]
 fn ignores_non_inline_iterm_file_payload_without_overwriting_cwd_file() {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -1499,21 +1525,35 @@ fn repeated_precmd_with_completion_metadata_and_prompt_only_precmd_are_ignored()
         .with_terminal_events_tx(event_tx)
         .build();
     let mut terminal = TerminalModel::mock(None, Some(event_proxy));
-    terminal.prompt_only_precmd(PromptMetadata {
-        pwd: Some("/initial".to_owned()),
-        ..Default::default()
-    });
+    normal_command_finished_and_precmd(
+        &mut terminal,
+        PromptMetadata {
+            pwd: Some("/initial".to_owned()),
+            ps1: Some(hex::encode("$ ")),
+            honor_ps1: Some(true),
+            ..Default::default()
+        },
+    );
     while event_rx.try_recv().is_ok() {}
-
-    for c in "typed".chars() {
-        terminal.block_list_mut().active_block_for_test().input(c);
-    }
+    terminal
+        .block_list_mut()
+        .active_block_for_test()
+        .init_command("typed");
     terminal
         .block_list_mut()
         .active_block_for_test()
         .move_backward(2);
     let active_block_id = terminal.active_block_id().clone();
     let active_block_count = terminal.block_list().blocks().len();
+    assert_eq!(
+        terminal.block_list().active_block().command_to_string(),
+        "typed"
+    );
+    let cursor_point = terminal
+        .block_list()
+        .active_block()
+        .grid_handler()
+        .cursor_point();
 
     terminal.precmd_with_completion_metadata(PrecmdValue {
         completion_metadata: CompletionMetadata {
@@ -1539,7 +1579,7 @@ fn repeated_precmd_with_completion_metadata_and_prompt_only_precmd_are_ignored()
             .active_block()
             .grid_handler()
             .cursor_point(),
-        Point::new(0, 3)
+        cursor_point
     );
     assert_eq!(
         terminal
@@ -1578,6 +1618,14 @@ fn repeated_precmd_with_completion_metadata_and_prompt_only_precmd_are_ignored()
         terminal
             .block_list()
             .active_block()
+            .grid_handler()
+            .cursor_point(),
+        cursor_point
+    );
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
             .pwd()
             .map(String::as_str),
         Some("/initial")
@@ -1585,14 +1633,37 @@ fn repeated_precmd_with_completion_metadata_and_prompt_only_precmd_are_ignored()
 }
 
 #[test]
-fn repeated_prompt_only_precmd_is_ignored_when_recovery_is_disabled() {
+fn repeated_precmd_with_completion_metadata_and_prompt_only_precmd_are_ignored_when_recovery_is_disabled(
+) {
     let _recovery_disabled = FeatureFlag::TerminalLifecycleRecovery.override_enabled(false);
     let mut terminal = TerminalModel::mock(None, None);
+    normal_command_finished_and_precmd(
+        &mut terminal,
+        PromptMetadata {
+            pwd: Some("/initial".to_owned()),
+            ..Default::default()
+        },
+    );
     let active_block_id = terminal.active_block_id().clone();
-    terminal.prompt_only_precmd(PromptMetadata {
-        pwd: Some("/initial".to_owned()),
-        ..Default::default()
+    terminal.precmd_with_completion_metadata(PrecmdValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(7),
+            next_block_id: active_block_id.clone(),
+        },
+        prompt_metadata: PromptMetadata {
+            pwd: Some("/with-completion-metadata".to_owned()),
+            ..Default::default()
+        },
     });
+    assert_eq!(terminal.active_block_id(), &active_block_id);
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
+            .pwd()
+            .map(String::as_str),
+        Some("/initial")
+    );
 
     terminal.prompt_only_precmd(PromptMetadata {
         pwd: Some("/new".to_owned()),
