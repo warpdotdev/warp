@@ -1131,3 +1131,13 @@ fn parse_osc7_empty_payload_ignored() {
 
     assert!(handler.cwd_updates.is_empty());
 }
+
+#[test]
+fn parse_osc1337_without_second_param_does_not_panic() {
+    // Regression test for GH #12817: a bare `ESC ] 1337 BEL` (no second parameter)
+    // previously triggered an index-out-of-bounds panic because the 1337 arm
+    // accessed params[1] without a length guard. It must be silently ignored.
+    let bytes: &[u8] = b"\x1b]1337\x07";
+    // Must not panic.
+    let _ = parse_bytes(bytes);
+}
