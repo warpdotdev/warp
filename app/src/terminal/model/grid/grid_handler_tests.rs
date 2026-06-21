@@ -2311,3 +2311,28 @@ fn test_full_grid_clear_resize_then_bounds_to_string_does_not_panic() {
         );
     }
 }
+
+#[test]
+fn test_delete_chars_oversized_count_does_not_corrupt_cells_before_cursor() {
+    // Regression test for GH #12820: DCH (CSI P) with a count larger than
+    // the remaining cells to end-of-line was clamping to `cols` instead of
+    // `cols - cursor_col`, causing the tail-clear range to extend left of
+    // the cursor and destroy characters before it.
+    //
+    // 5-column row "abcde", cursor at col 3, delete count=10 (>> 2 remaining).
+    // Expected: "abc  " — columns 0-2 must survive unchanged.
+    let mut grid = GridHandler::new_for_test(1, 5);
+    for c in "abcde".chars() {
+        grid.input(c);
+    }
+    grid.goto(VisibleRow(0), 3);
+    grid.delete_chars(10);
+
+    let row = &grid.grid_storage()[VisibleRow(0)];
+    assert_eq!(row[0].c, 'a', "col 0 must not be erased");
+    assert_eq!(row[1].c, 'b', "col 1 must not be erased");
+    assert_eq!(row[2].c, 'c', "col 2 must not be erased");
+    // cols 3 and 4 must be blanked (grid uses '\0' for blank cells)
+    assert_eq!(row[3].c, '\0', "col 3 must be blank after DCH");
+    assert_eq!(row[4].c, '\0', "col 4 must be blank after DCH");
+}
