@@ -19095,6 +19095,11 @@ impl Workspace {
         let theme = appearance.theme();
         let is_collapsed = group.collapsed;
 
+        let group_color: Option<ColorU> = group
+            .color
+            .resolve(None)
+            .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into());
+
         let mouse_states = self
             .horizontal_tab_group_mouse_states
             .borrow_mut()
@@ -19106,23 +19111,24 @@ impl Workspace {
         let any_member_active = !self.current_workspace_state.is_agent_management_view_open
             && member_range.contains(&self.active_tab_index);
 
+        // 8px gap to the right of the header (i.e. left of the member tabs) on
+        // expanded groups, matched by the trailing gap after the last member.
         const EXPANDED_GROUP_MEMBER_INSET: f32 = 8.;
 
         let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-
         let header = self.render_horizontal_tab_group_header(
             group,
             &mouse_states,
             is_collapsed,
             any_member_active,
+            is_first_in_bar,
+            group_color,
             appearance,
             ctx,
         );
         if is_collapsed {
             row.add_child(header);
         } else {
-            // Space between the header and the first member tab.
-            // Matches the spacing at the end of the expanded group.
             row.add_child(
                 Container::new(header)
                     .with_padding_right(EXPANDED_GROUP_MEMBER_INSET)
@@ -19161,15 +19167,21 @@ impl Workspace {
             }
         }
 
-        let mut container = Container::new(row.finish()).with_border(
-            Border::all(1.)
-                // Left border only on the first slot to avoid double borders.
-                .with_sides(false, is_first_in_bar, false, true)
-                .with_border_fill(internal_colors::fg_overlay_1(theme)),
-        );
+        // The outer container carries no background: a collapsed group's header
+        // paints its own tab-style fill, and an expanded group's member tabs
+        // paint theirs, so there's never a group panel sitting behind the
+        // member tabs.
+        let mut container = Container::new(row.finish());
         if !is_collapsed {
-            // Trailing drop area after the last member.
-            container = container.with_padding_right(EXPANDED_GROUP_MEMBER_INSET);
+            container = container
+                .with_border(
+                    Border::all(1.)
+                        // Left border only on the first slot to avoid double borders.
+                        .with_sides(false, is_first_in_bar, false, true)
+                        .with_border_fill(internal_colors::fg_overlay_1(theme)),
+                )
+                // 8px drop area at the end of the expanded group.
+                .with_padding_right(EXPANDED_GROUP_MEMBER_INSET);
         }
         let container = container.finish();
 
@@ -19210,12 +19222,15 @@ impl Workspace {
 
     /// Header (icon collage + name) for a horizontal tab group. Click
     /// toggles collapse; double-click renames; right-click opens the menu.
+    #[allow(clippy::too_many_arguments)]
     fn render_horizontal_tab_group_header(
         &self,
         group: &TabGroup,
         mouse_states: &HorizontalTabGroupMouseStates,
         is_collapsed: bool,
         any_member_active: bool,
+        is_first_in_bar: bool,
+        group_color: Option<ColorU>,
         appearance: &Appearance,
         ctx: &AppContext,
     ) -> Box<dyn Element> {
@@ -19267,38 +19282,54 @@ impl Workspace {
             .with_child(name_element)
             .finish();
 
-        // Resolve the group's color so the header tints to match its member
-        // tabs in the tab bar.
-        let group_color: Option<ColorU> = group
-            .color
-            .resolve(None)
-            .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into());
         let header_active_bg = internal_colors::fg_overlay_2(theme);
         let header_hover_bg = internal_colors::fg_overlay_1(theme);
+        let border_fill = internal_colors::fg_overlay_1(theme);
         let mut header = Hoverable::new(mouse_states.header.clone(), move |state| {
-            let bg: ElementFill = if let Some(color) = group_color {
-                // Member tabs render with a vertical gradient from the theme
-                // background to the group color; use the same opacity scheme
-                // so the header reads as the start of that visual run.
-                let opacity = if header_selected || state.is_hovered() {
-                    50
-                } else {
-                    25
-                };
-                coloru_with_opacity(color, opacity).into()
-            } else if header_selected {
-                header_active_bg.into()
-            } else if state.is_hovered() {
-                header_hover_bg.into()
-            } else {
-                ElementFill::None
-            };
-
-            Container::new(row)
+            let hovered = state.is_hovered();
+            let mut container = Container::new(row)
                 .with_horizontal_padding(8.)
-                .with_vertical_padding(6.)
-                .with_background(bg)
-                .finish()
+                .with_vertical_padding(6.);
+
+            if is_collapsed {
+                // A collapsed group is a single tab chip, so it matches the
+                // exact opacity scheme regular colored tabs use (20/40/60 for
+                // idle/hover/active).
+                let bg: ElementFill = if let Some(color) = group_color {
+                    let opacity = if header_selected {
+                        60
+                    } else if hovered {
+                        40
+                    } else {
+                        20
+                    };
+                    coloru_with_opacity(color, opacity).into()
+                } else if header_selected {
+                    header_active_bg.into()
+                } else if hovered {
+                    header_hover_bg.into()
+                } else {
+                    ElementFill::None
+                };
+                container = container.with_background(bg).with_border(
+                    Border::all(1.)
+                        // Left border only on the first slot to avoid double borders.
+                        .with_sides(false, is_first_in_bar, false, true)
+                        .with_border_fill(border_fill),
+                );
+            } else {
+                let bg: ElementFill = if let Some(color) = group_color {
+                    let opacity = if hovered { 50 } else { 25 };
+                    coloru_with_opacity(color, opacity).into()
+                } else if hovered {
+                    header_hover_bg.into()
+                } else {
+                    ElementFill::None
+                };
+                container = container.with_background(bg);
+            }
+
+            container.finish()
         })
         .with_cursor(Cursor::PointingHand)
         .with_defer_events_to_children();
