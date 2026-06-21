@@ -41,6 +41,16 @@ pub trait TuiView: Entity {
         ctx.set.insert(Self::ui_name());
         ctx
     }
+
+    /// Returns the ids of child views this view directly owns via
+    /// [`ViewHandle`]s that are not registered in the structural parent/child
+    /// graph, regardless of whether they are currently being rendered.
+    ///
+    /// See [`View::child_view_ids`](crate::View::child_view_ids) for the full
+    /// contract. The semantics are identical for TUI views.
+    fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
+        Vec::new()
+    }
 }
 
 /// The object-safe, type-erased TUI view object stored per window: the TUI
@@ -66,6 +76,7 @@ pub trait AnyTuiView {
         view_id: EntityId,
     );
     fn keymap_context(&self, app: &AppContext) -> keymap::Context;
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId>;
 }
 
 impl<T> AnyTuiView for T
@@ -112,5 +123,9 @@ where
 
     fn keymap_context(&self, app: &AppContext) -> keymap::Context {
         TuiView::keymap_context(self, app)
+    }
+
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId> {
+        TuiView::child_view_ids(self, app)
     }
 }
