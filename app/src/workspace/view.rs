@@ -19312,14 +19312,8 @@ impl Workspace {
         let positioned_container =
             SavePosition::new(positioned_container, &htab_group_position_id(group_id)).finish();
 
-        // Flex = header + one per member so the group shrinks proportionally
-        // with sibling tabs. A collapsed group renders only its header, so it
-        // should claim a single slot's worth of flex.
-        let group_flex = if is_collapsed {
-            1.0
-        } else {
-            1.0 + run_len as f32
-        };
+        // Flex from member count (not collapse state) so layout doesn't shift when the group expands/collapses.
+        let group_flex = 1.0 + run_len as f32;
         Shrinkable::new(group_flex, positioned_container).finish()
     }
 
