@@ -186,7 +186,7 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
     async fn update_platform_plugin(&self) -> Result<(), PluginInstallError> {
         let mut log = String::new();
         self.run_logged(
-            &["plugin", "marketplace", "add", PLATFORM_MARKETPLACE_REPO],
+            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
             &mut log,
         )
         .await?;
