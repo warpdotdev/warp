@@ -3397,6 +3397,12 @@ fn get_running_command(terminal_model: &TerminalModel) -> Option<RunningCommand>
 /// string, and mark it as a user error so the task is classified as `Failed`
 /// rather than `Error`.
 fn format_internal_error(message: &str) -> (String, bool) {
+    // NOTE: This substring is coupled to the server's V4A parse error wording.
+    // The client only receives an unstructured `InternalError { message }`, so a
+    // substring match is the only available signal. If the server changes the
+    // wording this falls through to the generic branch (safe — just loses the
+    // friendly message).
+    // TODO: Replace with a structured error code once the server exposes one.
     if message.contains("patch contains no changes") {
         (
             "The agent attempted to apply file edits, but no changes were needed. \
