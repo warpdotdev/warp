@@ -1343,10 +1343,13 @@ fn precmd_with_completion_metadata_completion_recovery_is_disabled_by_default() 
 fn precmd_with_completion_metadata_recovers_in_band_completion_and_reuses_cached_prompt() {
     let _recovery_enabled = FeatureFlag::TerminalLifecycleRecovery.override_enabled(true);
     let mut terminal = TerminalModel::mock(None, None);
-    terminal.prompt_only_precmd(PromptMetadata {
-        pwd: Some("/cached-prompt".to_owned()),
-        ..Default::default()
-    });
+    normal_command_finished_and_precmd(
+        &mut terminal,
+        PromptMetadata {
+            pwd: Some("/cached-prompt".to_owned()),
+            ..Default::default()
+        },
+    );
     let completed_block_id = terminal.active_block_id().clone();
     assert_eq!(
         terminal.start_in_band_command_execution(),
