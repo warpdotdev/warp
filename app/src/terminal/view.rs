@@ -4502,14 +4502,10 @@ impl TerminalView {
                             );
                             me.show_ssh_remote_server_failed_banner(
                                 *session_id,
-                                remote_server::transport::UserFacingError {
-                                    body: "Failed to start SSH extension".into(),
-                                    detail: if error.is_empty() {
-                                        None
-                                    } else {
-                                        Some(error.clone())
-                                    },
-                                },
+                                crate::terminal::ssh::failure_classification::build_ssh_failure_banner_error(
+                                    error,
+                                    proxy_stderr.as_deref(),
+                                ),
                                 ctx,
                             );
                         }
