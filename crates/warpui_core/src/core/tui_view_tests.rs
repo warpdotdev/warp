@@ -5,7 +5,7 @@
 //! additively alongside the full GUI test suite under `--features tui`.
 
 use super::*;
-use crate::elements::tui::TuiElement;
+use crate::elements::tui::{TuiBuffer, TuiConstraint, TuiElement, TuiRect, TuiSize};
 use crate::platform::WindowStyle;
 
 /// A GUI root view hosting TUI views: under the additive design, GUI and TUI
