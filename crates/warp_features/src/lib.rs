@@ -880,6 +880,12 @@ pub enum FeatureFlag {
     /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
+
+    /// Gates the "Open with <Editor>" item in the session tab right-click menu
+    /// and the file-tree directory header right-click menu. The label is
+    /// derived from the user's `code.editor.open_file_editor` setting. See
+    /// `specs/gh-8226-open-with-editor/PRODUCT.md`.
+    OpenDirectoryInExternalEditor,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
