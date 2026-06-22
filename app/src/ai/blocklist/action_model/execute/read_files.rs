@@ -1,24 +1,20 @@
 use std::path::{Path, PathBuf};
 
-use futures::{future::BoxFuture, FutureExt};
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
-
-use crate::{
-    ai::{
-        agent::{
-            AIAgentAction, AIAgentActionResultType, AIAgentActionType, ReadFilesRequest,
-            ReadFilesResult,
-        },
-        blocklist::BlocklistAIPermissions,
-        paths::host_native_absolute_path,
-    },
-    terminal::model::session::{active_session::ActiveSession, SessionType},
-};
 
 use super::{
     read_local_file_context, ActionExecution, AnyActionExecution, ExecuteActionInput,
     PreprocessActionInput,
 };
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionResultType, AIAgentActionType, ReadFilesRequest, ReadFilesResult,
+};
+use crate::ai::blocklist::BlocklistAIPermissions;
+use crate::ai::paths::host_native_absolute_path;
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::SessionType;
 
 pub struct ReadFilesExecutor {
     active_session: ModelHandle<ActiveSession>,
@@ -114,20 +110,21 @@ impl ReadFilesExecutor {
 
         // Check if this is a remote session with a connected host.
         let session_type = self.active_session.as_ref(ctx).session_type(ctx);
-        let remote_client = match &session_type {
+        let host_request_handle = match &session_type {
             Some(SessionType::WarpifiedRemote {
                 host_id: Some(host_id),
-            }) => remote_server::manager::RemoteServerManager::as_ref(ctx)
-                .client_for_host(host_id)
-                .cloned(),
+            }) => Some(
+                remote_server::manager::RemoteServerManager::as_ref(ctx)
+                    .host_request_handle(host_id),
+            ),
             _ => None,
         };
 
-        // Remote session without a usable remote server client. File reading
+        // Remote session without a usable remote server connection. File reading
         // requires either local access or a connected remote server, neither
         // of which is available.
         if matches!(session_type, Some(SessionType::WarpifiedRemote { .. }))
-            && remote_client.is_none()
+            && host_request_handle.is_none()
         {
             return ActionExecution::Sync(AIAgentActionResultType::ReadFiles(
                 ReadFilesResult::Error(
@@ -138,7 +135,7 @@ impl ReadFilesExecutor {
             ));
         }
 
-        if let Some(client) = remote_client {
+        if let Some(handle) = host_request_handle {
             return ActionExecution::Async {
                 execute_future: Box::pin(async move {
                     let request = remote_server::proto::ReadFileContextRequest {
@@ -167,7 +164,7 @@ impl ReadFilesExecutor {
                         max_batch_bytes: None,
                     };
 
-                    let response = client
+                    let response = handle
                         .read_file_context(request)
                         .await
                         .map_err(|e| anyhow::anyhow!("Remote read failed: {e}"))?;

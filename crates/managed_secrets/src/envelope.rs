@@ -1,4 +1,5 @@
-use std::{io, sync::Once};
+use std::io;
+use std::sync::Once;
 
 use base64::Engine;
 use warp_graphql::managed_secrets::ManagedSecretType;
@@ -14,8 +15,9 @@ pub fn init() {
     INIT.call_once(|| {
         tink_hybrid::init();
 
-        use hpke_impl::{HpkePrivateKeyManager, HpkePublicKeyManager};
         use std::sync::Arc;
+
+        use hpke_impl::{HpkePrivateKeyManager, HpkePublicKeyManager};
         tink_core::registry::register_key_manager(Arc::new(HpkePublicKeyManager::new()))
             .expect("unable to register HPKE public key manager");
         tink_core::registry::register_key_manager(Arc::new(HpkePrivateKeyManager::new()))

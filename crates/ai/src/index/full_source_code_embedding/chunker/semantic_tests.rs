@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use languages::language_by_filename;
+use warp_util::standardized_path::StandardizedPath;
 
 use super::*;
 
@@ -33,12 +34,14 @@ fn main() {
 "#;
 
     let max_chunk_size = 128;
+    let language_path =
+        StandardizedPath::try_new("/test.rs").expect("test path should be absolute");
 
     let chunks = chunk_code(
         source_code,
         Path::new("test.rs"),
         max_chunk_size,
-        &language_by_filename(Path::new("test.rs"))
+        &language_by_filename(&language_path)
             .expect("Rust language must exist")
             .grammar,
     )

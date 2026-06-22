@@ -4,50 +4,43 @@ use std::{
     time::Duration,
 };
 
-use pathfinder_color::ColorU;
-use warp_core::{
-    features::FeatureFlag, paths::home_relative_path, ui::theme::color::internal_colors,
-};
-use warpui::{
-    elements::{
-        Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-        Container, CornerRadius, CrossAxisAlignment, Dismiss, Element, Empty, Expanded, Flex,
-        MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Text,
-    },
-    fonts::{Properties, Weight},
-    platform::{file_picker::FilePickerError, FilePickerConfiguration},
-    r#async::{SpawnedFutureHandle, Timer},
-    ui_components::components::UiComponent,
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
-};
-
-use crate::{
-    appearance::Appearance,
-    themes::theme::Blend,
-    ui_components::{
-        buttons::icon_button,
-        dialog::{dialog_styles, Dialog},
-        icons::Icon,
-    },
-    view_components::{
-        action_button::{ActionButton, ButtonSize, PrimaryTheme, SecondaryTheme},
-        DismissibleToast,
-    },
-    workspace::ToastStack,
-};
-
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use git2::Repository as GitRepository;
-
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
-
 #[cfg(all(
     feature = "local_fs",
     not(target_family = "wasm"),
     not(any(test, feature = "integration_tests"))
 ))]
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManagerEvent;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use git2::Repository as GitRepository;
+use pathfinder_color::ColorU;
+use warp_core::features::FeatureFlag;
+use warp_core::paths::home_relative_path;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, Dismiss, Element, Empty, Expanded, Flex,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::platform::file_picker::FilePickerError;
+use warpui::platform::FilePickerConfiguration;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::ui_components::components::UiComponent;
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+
+use crate::appearance::Appearance;
+use crate::modal::MODAL_BACKDROP_OPACITY;
+use crate::themes::theme::Blend;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, ButtonSize, PrimaryTheme, SecondaryTheme,
+};
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
 
 const DIALOG_WIDTH: f32 = 600.;
 const AVAILABLE_LIST_MAX_HEIGHT: f32 = 260.;
@@ -149,8 +142,8 @@ impl AgentAssistedEnvironmentModal {
                 }
 
                 match event {
-                    CodebaseIndexManagerEvent::SyncStateUpdated
-                    | CodebaseIndexManagerEvent::NewIndexCreated
+                    CodebaseIndexManagerEvent::SyncStateUpdated { .. }
+                    | CodebaseIndexManagerEvent::NewIndexCreated { .. }
                     | CodebaseIndexManagerEvent::RemoveExpiredIndexMetadata { .. }
                     | CodebaseIndexManagerEvent::IndexMetadataUpdated { .. } => {
                         me.refresh_available_repos(ctx);
@@ -663,7 +656,7 @@ impl AgentAssistedEnvironmentModal {
             .finish();
 
         Container::new(Align::new(dialog).finish())
-            .with_background_color(ColorU::new(0, 0, 0, 179))
+            .with_background_color(ColorU::new(0, 0, 0, MODAL_BACKDROP_OPACITY))
             .with_corner_radius(app.windows().window_corner_radius())
             .finish()
     }

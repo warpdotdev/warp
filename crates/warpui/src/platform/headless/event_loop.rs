@@ -1,14 +1,9 @@
 use std::mem::ManuallyDrop;
 use std::sync::mpsc::{Receiver, Sender};
 
-use crate::{
-    platform::{
-        self,
-        app::{AppCallbackDispatcher, ApproveTerminateResult, TerminationResult},
-        TerminationMode,
-    },
-    AppContext, WindowId,
-};
+use crate::platform::app::{AppCallbackDispatcher, ApproveTerminateResult, TerminationResult};
+use crate::platform::{self, TerminationMode};
+use crate::{AppContext, WindowId};
 
 /// Application events handled on the headless platform's main thread.
 pub(super) enum AppEvent {

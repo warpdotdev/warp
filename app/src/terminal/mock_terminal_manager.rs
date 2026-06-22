@@ -5,17 +5,15 @@ use parking_lot::FairMutex;
 use pathfinder_geometry::vector::Vector2F;
 use warpui::{AppContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
 
+use super::event_listener::ChannelEventListener;
+use super::model::session::Sessions;
+use super::model_events::ModelEventDispatcher;
+use super::{ShellLaunchState, TerminalManager, TerminalModel, TerminalView};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::{
-    ai::blocklist::SerializedBlockListItem, context_chips::prompt_type::PromptType,
-    pane_group::TerminalViewResources, terminal::view::ConversationRestorationInNewPaneType,
-};
-
-use super::{
-    event_listener::ChannelEventListener, model::session::Sessions,
-    model_events::ModelEventDispatcher, ShellLaunchState, TerminalManager, TerminalModel,
-    TerminalView,
-};
+use crate::ai::blocklist::SerializedBlockListItem;
+use crate::context_chips::prompt_type::PromptType;
+use crate::pane_group::TerminalViewResources;
+use crate::terminal::view::ConversationRestorationInNewPaneType;
 
 pub struct MockTerminalManager {
     model: Arc<FairMutex<TerminalModel>>,
@@ -134,17 +132,13 @@ impl TerminalManager for MockTerminalManager {
 
 #[cfg(test)]
 mod testing {
-    use warpui::{platform::WindowStyle, App, Element, SingletonEntity};
-
-    use crate::{
-        server::server_api::ServerApiProvider,
-        terminal::{
-            shell::{ShellName, ShellType},
-            ShellLaunchState,
-        },
-    };
+    use warpui::platform::WindowStyle;
+    use warpui::{App, Element, SingletonEntity};
 
     use super::*;
+    use crate::server::server_api::ServerApiProvider;
+    use crate::terminal::shell::{ShellName, ShellType};
+    use crate::terminal::ShellLaunchState;
 
     struct TerminalRootView {
         terminal_view: ViewHandle<TerminalView>,

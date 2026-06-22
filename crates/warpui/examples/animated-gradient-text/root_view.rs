@@ -4,8 +4,9 @@ use warpui::elements::shimmering_text::{
 };
 use warpui::elements::{Align, ConstrainedBox, ParentElement, Rect, Stack};
 use warpui::fonts::FamilyId;
-use warpui::SingletonEntity as _;
-use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
+};
 
 pub struct RootView {
     text: String,

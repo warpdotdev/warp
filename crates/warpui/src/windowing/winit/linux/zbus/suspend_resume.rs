@@ -2,7 +2,8 @@ use futures_lite::StreamExt;
 use winit::event_loop::EventLoopProxy;
 use zbus::proxy;
 
-use crate::{r#async::executor::Background, windowing::winit::app::CustomEvent};
+use crate::r#async::executor::Background;
+use crate::windowing::winit::app::CustomEvent;
 
 /// A zbus proxy for receiving PrepareForSleep signals from systemd-logind.
 #[proxy(

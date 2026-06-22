@@ -1,14 +1,12 @@
-use crate::platform::CapturedFrame;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
 use image::ImageEncoder;
 #[cfg(feature = "integration_tests")]
 use instant::Instant;
-use std::{
-    path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
-};
+
+use crate::platform::CapturedFrame;
 
 /// Well-known key used to store the `VideoRecorder` inside `StepDataMap`.
 pub const VIDEO_RECORDER_KEY: &str = "video_recorder";
@@ -172,11 +170,13 @@ fn encode_to_mp4(
     frames: &[TimestampedFrame],
     overlay_log: Option<&super::overlay::OverlayLog>,
 ) -> anyhow::Result<()> {
-    use super::overlay::OverlayState;
+    use std::io::Cursor;
+
     use minimp4::Mp4Muxer;
     use openh264::encoder::Encoder;
     use openh264::formats::{RgbSliceU8, YUVBuffer};
-    use std::io::Cursor;
+
+    use super::overlay::OverlayState;
 
     const TARGET_FPS: u32 = 60;
     const FRAME_DURATION_MS: u128 = 1000 / TARGET_FPS as u128;
@@ -291,8 +291,9 @@ fn save_frames_as_pngs(output_path: &Path, frames: &[TimestampedFrame]) -> anyho
 /// `state.stopped` is set the loop exits cleanly.
 #[cfg(feature = "integration_tests")]
 pub async fn run_capture_loop(app: crate::App, state: CaptureLoopState) {
-    use crate::r#async::Timer;
     use std::time::Duration;
+
+    use crate::r#async::Timer;
 
     loop {
         Timer::after(Duration::from_millis(16)).await;

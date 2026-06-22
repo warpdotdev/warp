@@ -10,15 +10,152 @@
 //! `Arc<dyn RemoteTransport>` for reconnection.
 //!
 //! [`RemoteServerManager`]: crate::manager::RemoteServerManager
+use std::future::Future;
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 use std::pin::Pin;
 
 use async_channel::Receiver;
-use warpui::r#async::executor;
+use serde::Serialize;
+use warpui_core::r#async::executor;
 
+#[cfg(not(target_family = "wasm"))]
+use crate::client::RemoteServerLog;
 use crate::client::{ClientEvent, RemoteServerClient};
+use crate::manager::RemoteServerExitStatus;
 use crate::setup::{PreinstallCheckResult, RemotePlatform};
+
+/// How the remote server binary was installed. Used for telemetry to
+/// distinguish direct remote downloads from client-side SCP uploads.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallSource {
+    /// The remote host downloaded the binary directly from the CDN.
+    Server,
+    /// The client downloaded the binary locally and uploaded it via SCP.
+    Client,
+}
+
+/// Result of [`RemoteTransport::install_binary`], bundling the install
+/// result with the source that was attempted. The source is always set
+/// once the install path is determined, regardless of whether the
+/// install succeeded or failed.
+pub struct InstallOutcome {
+    /// Which install path was attempted.
+    pub source: Option<InstallSource>,
+    /// Whether the install succeeded.
+    pub result: Result<(), Error>,
+}
+
+/// Structured error for user-facing display in the SSH remote-server
+/// failed banner. Separates the always-visible body from an optional set of
+/// details.
+#[derive(Clone, Debug)]
+pub struct UserFacingError {
+    /// Always-visible explanation of what went wrong,
+    /// e.g. "Failed to install SSH extension".
+    pub body: String,
+    /// Optional technical detail shown to the user (stderr,
+    /// timeout duration, unsupported OS/arch). `None` when the
+    /// underlying error doesn't carry anything useful for the user.
+    pub detail: Option<String>,
+}
+
+/// The setup stage that failed, used to generate context-appropriate
+/// user-facing messages from a [`Error`].
+#[derive(Clone, Copy, Debug)]
+pub enum SetupStage {
+    DetectPlatform,
+    PreinstallCheck,
+    CheckBinary,
+    InstallBinary,
+    Launch,
+}
+
+impl SetupStage {
+    fn action_description(self) -> &'static str {
+        match self {
+            Self::DetectPlatform => "detect remote platform",
+            Self::PreinstallCheck => "run preinstall check",
+            Self::CheckBinary => "verify SSH extension",
+            Self::InstallBinary => "install SSH extension",
+            Self::Launch => "start SSH extension",
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// The operation timed out.
+    #[error("timed out")]
+    TimedOut,
+    /// The remote host reported an OS not supported by the prebuilt binary.
+    #[error("unsupported OS: {os}")]
+    UnsupportedOs { os: String },
+    /// The remote host reported a CPU architecture not supported by the prebuilt binary.
+    #[error("unsupported architecture: {arch}")]
+    UnsupportedArch { arch: String },
+    /// A remote script ran but exited with a non-zero code.
+    #[error("script failed (exit {exit_code}): {stderr}")]
+    ScriptFailed { exit_code: i32, stderr: String },
+    /// Any other transport-level or unexpected failure.
+    #[error(transparent)]
+    Other(anyhow::Error),
+}
+
+/// Maximum number of stderr characters to include in the user-facing
+/// detail for `ScriptFailed` errors. Keeps the banner reasonable even
+/// when a remote script dumps a large amount of output.
+const MAX_STDERR_DISPLAY_CHARS: usize = 512;
+
+impl Error {
+    /// Converts this error into a [`UserFacingError`] suitable for the
+    /// SSH remote-server failed banner, using `stage` to provide
+    /// context-appropriate copy.
+    pub fn user_facing_error(&self, stage: SetupStage) -> UserFacingError {
+        let body = format!("Failed to {}", stage.action_description());
+        let detail = match self {
+            Self::TimedOut => {
+                Some("The operation timed out — check your network connection".into())
+            }
+            Self::UnsupportedOs { os } => Some(format!("Unsupported OS: {os}")),
+            Self::UnsupportedArch { arch } => Some(format!("Unsupported architecture: {arch}")),
+            Self::ScriptFailed { exit_code, stderr } => {
+                let truncated = if stderr.chars().count() > MAX_STDERR_DISPLAY_CHARS {
+                    let end: usize = stderr
+                        .char_indices()
+                        .nth(MAX_STDERR_DISPLAY_CHARS)
+                        .map(|(i, _)| i)
+                        .unwrap_or(stderr.len());
+                    format!("{}…", &stderr[..end])
+                } else {
+                    stderr.clone()
+                };
+                Some(format!("Script exited with code {exit_code}: {truncated}"))
+            }
+            Self::Other(_) => None,
+        };
+        UserFacingError { body, detail }
+    }
+}
+
+/// The SSH `ControlMaster` socket (if any) behind a connection, tagged
+/// with who owns the master process. Ownership decides teardown
+/// behavior: only `WarpManaged` masters are stopped with `ssh -O exit`
+/// on explicit teardown (see [`crate::ssh::stop_control_master`]);
+/// `UserOwned` masters must be left running.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug, Clone)]
+pub enum ControlPath {
+    /// Warp created the ControlMaster at this socket path and is
+    /// responsible for tearing it down on session exit.
+    WarpManaged(PathBuf),
+    /// The SSH wrapper attached to a ControlMaster the user already had
+    /// running at this socket path. Warp must never tear it down.
+    UserOwned(PathBuf),
+    /// No ControlMaster socket (e.g. in-process test transports).
+    None,
+}
 
 /// A successful return from [`RemoteTransport::connect`].
 ///
@@ -35,6 +172,14 @@ use crate::setup::{PreinstallCheckResult, RemotePlatform};
 pub struct Connection {
     pub client: RemoteServerClient,
     pub event_rx: Receiver<ClientEvent>,
+    /// Receiver for request-failure telemetry events. Separate from
+    /// `event_rx` so the failure sender on the client doesn't keep the
+    /// lifecycle event channel alive.
+    pub failure_rx: async_channel::Receiver<crate::client::RequestFailedEvent>,
+    /// Receiver for host-scoped responses whose `request_id` was not in
+    /// this client's `pending_requests`. The manager drains this to match
+    /// against its `pending_host_requests`.
+    pub host_response_rx: async_channel::Receiver<crate::proto::ServerMessage>,
     /// The subprocess whose stdio backs the client (e.g.
     /// `ssh … remote-server-proxy`). Spawned with `kill_on_drop(true)`
     /// by the transport, so dropping this `Child` sends SIGKILL to the
@@ -45,15 +190,16 @@ pub struct Connection {
     #[cfg(not(target_family = "wasm"))]
     pub child: async_process::Child,
     /// For transports that multiplex through a local SSH
-    /// `ControlMaster` socket: the path to that socket, used on
-    /// explicit teardown (after the user's shell exits) to run
-    /// `ssh -O exit` and force the master to terminate without
-    /// waiting for half-closed channels. `None` for transports with
-    /// no separate master process (in-process tests, etc.).
-    ///
-    /// See [`crate::ssh::stop_control_master`] for the exact command.
+    /// `ControlMaster` socket: the socket path tagged with master
+    /// ownership, which decides whether explicit teardown (after the
+    /// user's shell exits) runs `ssh -O exit` against it. See
+    /// [`ControlPath`].
     #[cfg(not(target_family = "wasm"))]
-    pub control_path: Option<PathBuf>,
+    pub control_path: ControlPath,
+    /// Tail buffer of the last N stderr lines from the SSH subprocess.
+    /// Drained on connection failure and attached to telemetry.
+    #[cfg(not(target_family = "wasm"))]
+    pub stderr_tail: RemoteServerLog,
 }
 
 /// Transport abstraction for remote server connections.
@@ -63,11 +209,12 @@ pub struct Connection {
 pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
     /// Detects the remote host's OS and architecture by running `uname -sm`.
     ///
-    /// Returns the parsed [`RemotePlatform`] on success, or an error string
-    /// if the command fails or the output cannot be parsed.
+    /// Returns the parsed [`RemotePlatform`] on success, or a
+    /// [`Error`] if the command fails or the output cannot
+    /// be parsed.
     fn detect_platform(
         &self,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<RemotePlatform, String>> + Send>>;
+    ) -> Pin<Box<dyn Future<Output = Result<RemotePlatform, Error>> + Send>>;
 
     /// Runs the preinstall check script ([`crate::setup::PREINSTALL_CHECK_SCRIPT`])
     /// over the existing connection and parses its structured stdout into
@@ -76,16 +223,16 @@ pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
     /// This runs **before** any user-visible install affordance (the
     /// install choice block, auto-install, auto-update, or connect) and
     /// is the gate that decides whether to proceed with the install
-    /// pipeline or fall back to the legacy SSH flow.
+    /// pipeline or fall back to the wrapper-only SSH flow.
     ///
     /// Returns `Ok(_)` on success (including when the script reported
     /// `Unknown` — that's a parser-level outcome, not a transport-level
-    /// failure). Returns `Err(_)` only on SSH-level failure (timeout,
+    /// failure). Returns `Err(_)` only on transport-level failure (timeout,
     /// broken pipe, non-zero exit with no parseable summary), which the
     /// caller treats as inconclusive (fail open).
     fn run_preinstall_check(
         &self,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<PreinstallCheckResult, String>> + Send>>;
+    ) -> Pin<Box<dyn Future<Output = Result<PreinstallCheckResult, Error>> + Send>>;
 
     /// Checks whether the remote server binary is present on the remote host.
     ///
@@ -95,10 +242,8 @@ pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
     ///
     /// Returns `Ok(true)` if the binary is installed and executable,
     /// `Ok(false)` if it is definitively not installed, and
-    /// `Err(_)` if the check failed (e.g. SSH timeout/unreachable).
-    fn check_binary(
-        &self,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + Send>>;
+    /// `Err(_)` if the check failed (e.g. timeout or unreachable).
+    fn check_binary(&self) -> Pin<Box<dyn Future<Output = Result<bool, Error>> + Send>>;
 
     /// Checks whether the remote host already has an existing install
     /// of the remote server binary.
@@ -109,9 +254,7 @@ pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
     ///
     /// Returns `Ok(true)` if a prior install was detected, `Ok(false)`
     /// if not, and `Err(_)` on SSH failure.
-    fn check_has_old_binary(
-        &self,
-    ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send>>;
+    fn check_has_old_binary(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send>>;
 
     /// Installs the remote server binary on the remote host.
     ///
@@ -119,11 +262,9 @@ pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
     /// ([`RemoteServerManager::install_binary`]) is responsible for emitting
     /// [`SetupStateChanged`] and [`BinaryInstallComplete`].
     ///
-    /// Returns `Ok(())` if the install succeeded, and
-    /// `Err(_)` if the install failed (e.g. SSH timeout, script error).
-    fn install_binary(
-        &self,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>;
+    /// Returns an [`InstallOutcome`] containing the install result and
+    /// the [`InstallSource`] that was attempted (if known).
+    fn install_binary(&self) -> Pin<Box<dyn Future<Output = InstallOutcome> + Send>>;
 
     /// Establish a new connection to the remote server.
     ///
@@ -138,7 +279,7 @@ pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
     fn connect(
         &self,
         executor: std::sync::Arc<executor::Background>,
-    ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<Connection>> + Send>>;
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Connection>> + Send>>;
 
     /// Remove the remote server binary, forcing a reinstall on the next
     /// [`install_binary`] call.
@@ -152,5 +293,14 @@ pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
     /// [`install_binary`]: RemoteTransport::install_binary
     fn remove_remote_server_binary(
         &self,
-    ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>;
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>;
+
+    /// Returns `true` if the transport considers a reconnect viable after
+    /// a spontaneous disconnect with the given exit status.
+    ///
+    /// Transports that can determine the underlying connection is
+    /// unrecoverable (e.g. SSH detecting a dead ControlMaster via exit
+    /// code 255) should return `false`, which tells the manager to skip
+    /// the reconnect loop entirely.
+    fn is_reconnectable(&self, exit_status: Option<&RemoteServerExitStatus>) -> bool;
 }

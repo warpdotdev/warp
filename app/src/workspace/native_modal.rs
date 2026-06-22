@@ -1,20 +1,20 @@
+use settings::Setting as _;
+use warp_core::ui::theme::Fill;
+use warpui::elements::{Align, Container, Empty, Flex, MouseStateHandle, ParentElement};
+use warpui::fonts::Weight;
+use warpui::keymap::FixedBinding;
+use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
+use warpui::platform::Cursor;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::text::Span;
+use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+};
+
 use crate::appearance::Appearance;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 use crate::ui_components::dialog::{dialog_styles, Dialog};
-use settings::Setting as _;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{Align, Container, Empty, Flex, ParentElement};
-use warpui::keymap::FixedBinding;
-use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
-use warpui::ui_components::components::{Coords, UiComponent};
-use warpui::{
-    elements::MouseStateHandle,
-    fonts::Weight,
-    platform::Cursor,
-    ui_components::{button::ButtonVariant, components::UiComponentStyles, text::Span},
-    Element, Entity, TypedActionView, View,
-};
-use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext};
 
 pub(super) fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;

@@ -1,39 +1,29 @@
 use std::collections::HashMap;
 
-use crate::Builder;
 use regex::Regex;
 use settings::Setting as _;
-use warp::{
-    features::FeatureFlag,
-    integration_testing::{
-        step::new_step_with_default_assertions,
-        subshell::{
-            accept_tmux_install, assert_subshell_banner_is_showing,
-            assert_subshell_is_bootstrapped, enter_ssh_command, enter_ssh_password,
-            run_exit_command, setup_gcloud_sdk, trigger_subshell_bootstrap,
-            wait_for_password_prompt,
-        },
-        terminal::{
-            assert_active_block_output_for_single_terminal_in_tab,
-            assert_long_running_block_executing_for_single_terminal_in_tab,
-            execute_command_for_single_terminal_in_tab,
-            util::{current_shell_starter_and_version, nonce, ExactLine, ExpectedExitStatus},
-            validate_block_output, wait_until_bootstrapped_single_pane_for_tab,
-        },
-        view_getters::{single_terminal_view, single_terminal_view_for_tab},
-    },
-    terminal::{
-        model::bootstrap::BootstrapStage,
-        session_settings::{StartupShell, StartupShellOverride},
-        shell::ShellType,
-    },
+use warp::integration_testing::step::new_step_with_default_assertions;
+use warp::integration_testing::subshell::{
+    enter_ssh_command, enter_ssh_password, setup_gcloud_sdk, wait_for_password_prompt,
 };
-use warpui::{
-    async_assert, async_assert_eq,
-    integration::{AssertionCallback, AssertionOutcome, TestStep},
+use warp::integration_testing::terminal::util::{
+    current_shell_starter_and_version, nonce, ExactLine, ExpectedExitStatus,
 };
+use warp::integration_testing::terminal::{
+    assert_active_block_output_for_single_terminal_in_tab,
+    assert_long_running_block_executing_for_single_terminal_in_tab,
+    execute_command_for_single_terminal_in_tab, validate_block_output,
+    wait_until_bootstrapped_single_pane_for_tab,
+};
+use warp::integration_testing::view_getters::{single_terminal_view, single_terminal_view_for_tab};
+use warp::terminal::model::bootstrap::BootstrapStage;
+use warp::terminal::session_settings::{StartupShell, StartupShellOverride};
+use warp::terminal::shell::ShellType;
+use warpui_core::integration::{AssertionCallback, AssertionOutcome, TestStep};
+use warpui_core::{async_assert, async_assert_eq};
 
 use super::new_builder;
+use crate::Builder;
 
 /// Verifies that the active block is part of a remote session.
 fn assert_active_block_is_remote(user: &'static str, host: &'static str) -> AssertionCallback {
@@ -157,7 +147,7 @@ fn verify_login_shell(shell: &str) -> TestStep {
 
 /// A macro to generate a test function to validate that we are able to
 /// bootstrap a given remote shell when using ssh.
-macro_rules! generate_can_bootstrap_legacy_ssh_test_for_shell {
+macro_rules! generate_can_bootstrap_ssh_wrapper_test_for_shell {
     ($fn_name:ident, $shell:literal) => {
         /// Ensure we can successfully ssh into a $shell remote shell and bootstrap it
         /// successfully.
@@ -165,9 +155,6 @@ macro_rules! generate_can_bootstrap_legacy_ssh_test_for_shell {
             new_builder()
                 // TODO(CORE-2333) PowerShell has no SSH wrapper.
                 .set_should_run_test(|| {
-                    if FeatureFlag::SSHTmuxWrapper.is_enabled() {
-                        return false;
-                    }
                     let (starter, _) = current_shell_starter_and_version();
                     starter.shell_type() != ShellType::PowerShell
                 })
@@ -186,62 +173,6 @@ macro_rules! generate_can_bootstrap_legacy_ssh_test_for_shell {
                     .add_assertion(assert_active_block_is_remote($shell, "ubuntu-14-04")),
                 )
                 .with_step(verify_login_shell($shell))
-        }
-    };
-}
-
-/// A macro to generate a test function to validate that we are able to
-/// bootstrap a given remote shell when using ssh.
-macro_rules! generate_can_bootstrap_tmux_ssh_test_for_shell {
-    ($fn_name:ident, $shell:literal, $install_tmux:literal) => {
-        /// Ensure we can successfully ssh into a $shell remote shell and bootstrap it
-        /// successfully.
-        pub fn $fn_name() -> Builder {
-            fn warpify(builder: Builder) -> Builder {
-                builder
-                    .with_step(enter_ssh_command($shell))
-                    .with_step(wait_for_password_prompt(0 /*tab_idx*/, $shell))
-                    .with_step(
-                        enter_ssh_password()
-                            .set_post_step_pause(std::time::Duration::from_millis(250)),
-                    )
-                    .with_step(assert_subshell_banner_is_showing())
-                    .with_step(trigger_subshell_bootstrap())
-            }
-
-            fn assert_warpification(builder: Builder) -> Builder {
-                builder
-                    .with_step(assert_subshell_is_bootstrapped(0, 0))
-                    .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-                    .with_step(
-                        new_step_with_default_assertions(
-                            "Assert active block is part of a remote session",
-                        )
-                        .add_assertion(assert_active_block_is_remote($shell, "ubuntu-14-04")),
-                    )
-                    .with_step(verify_login_shell($shell))
-            }
-
-            let builder = new_builder()
-                // TODO(CORE-2333) PowerShell has no SSH wrapper.
-                .set_should_run_test(|| {
-                    if !FeatureFlag::SSHTmuxWrapper.is_enabled() {
-                        return false;
-                    }
-                    let (starter, _) = current_shell_starter_and_version();
-                    starter.shell_type() != ShellType::PowerShell
-                })
-                .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
-                .with_step(setup_gcloud_sdk());
-            // Install Tmux
-            let builder = warpify(builder).with_step(
-                accept_tmux_install().set_post_step_pause(std::time::Duration::from_secs(3)),
-            );
-            // Quit SSH Session once we validate warpificaiton works with Tmux Install
-            let builder = assert_warpification(builder).with_step(run_exit_command());
-
-            // Validate we can Warpify when Tmux is already installed
-            assert_warpification(warpify(builder))
         }
     };
 }
@@ -289,12 +220,8 @@ macro_rules! generate_long_running_block_ssh_test_for_shell {
 
 // Generate test methods to validate expected ssh behavior for a variety of
 // remote shells.
-generate_can_bootstrap_legacy_ssh_test_for_shell!(test_legacy_ssh_into_bash, "bash");
-generate_can_bootstrap_legacy_ssh_test_for_shell!(test_legacy_ssh_into_zsh, "zsh");
-generate_can_bootstrap_tmux_ssh_test_for_shell!(test_tmux_ssh_into_bash, "bash", false);
-generate_can_bootstrap_tmux_ssh_test_for_shell!(test_tmux_ssh_into_zsh, "zsh", false);
-generate_can_bootstrap_tmux_ssh_test_for_shell!(test_install_tmux_ssh_into_bash, "bash", true);
-generate_can_bootstrap_tmux_ssh_test_for_shell!(test_install_tmux_ssh_into_zsh, "zsh", true);
+generate_can_bootstrap_ssh_wrapper_test_for_shell!(test_ssh_wrapper_into_bash, "bash");
+generate_can_bootstrap_ssh_wrapper_test_for_shell!(test_ssh_wrapper_into_zsh, "zsh");
 generate_long_running_block_ssh_test_for_shell!(test_ssh_into_fish, "fish", prompt_regex: r"\nfish@ubuntu-14-04 ~>$");
 generate_long_running_block_ssh_test_for_shell!(test_ssh_into_sh, "sh", prompt_regex: r"\n\$ $");
 generate_long_running_block_ssh_test_for_shell!(test_ssh_into_ash, "ash", prompt_regex: r"\n\$ $");

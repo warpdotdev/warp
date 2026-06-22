@@ -3,6 +3,7 @@ use std::sync::Arc;
 use futures_lite::future::yield_now;
 use warpui::{AppContext, SingletonEntity};
 
+use super::WorkflowSearchItem;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::search::async_snapshot_data_source::AsyncSnapshotDataSource;
 use crate::search::command_search::searcher::CommandSearchItemAction;
@@ -14,8 +15,6 @@ use crate::server::ids::SyncId;
 use crate::settings::AISettings;
 use crate::workflows::{CloudWorkflowModel, WorkflowSource};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-
-use super::WorkflowSearchItem;
 
 pub(crate) struct WorkflowMatchCandidate {
     pub id: SyncId,

@@ -1,41 +1,28 @@
-use std::{
-    collections::HashSet,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use warp_util::path::EscapeChar;
-use warpui::{
-    accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole},
-    SingletonEntity, ViewContext,
-};
-
-#[cfg(feature = "local_fs")]
-use crate::code::editor_management::CodeSource;
-use crate::{
-    report_if_error,
-    terminal::{
-        event::UserBlockCompleted,
-        general_settings::GeneralSettings,
-        model::session::Session,
-        view::inline_banner::{OpenInWarpBannerAction, OpenInWarpBannerState},
-    },
-    util::openable_file_type::{is_file_openable_in_warp, OpenableFileType},
-};
 use settings::Setting as _;
-use warp_completer::{
-    completer::TopLevelCommandCaseSensitivity,
-    parsers::{
-        classify_command,
-        hir::{Command, Expression},
-        simple::all_parsed_commands,
-    },
-    signatures::CommandRegistry,
-};
+use warp_completer::completer::TopLevelCommandCaseSensitivity;
+use warp_completer::parsers::classify_command;
+use warp_completer::parsers::hir::{Command, Expression};
+use warp_completer::parsers::simple::all_parsed_commands;
+use warp_completer::signatures::CommandRegistry;
+use warp_util::path::EscapeChar;
+use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+use warpui::{SingletonEntity, ViewContext};
 
 use super::{Event, InlineBannerItem, InlineBannerType, TerminalView};
+#[cfg(feature = "local_fs")]
+use crate::code::editor_management::CodeSource;
+use crate::report_if_error;
+use crate::terminal::event::UserBlockCompleted;
+use crate::terminal::general_settings::GeneralSettings;
+use crate::terminal::model::session::Session;
+use crate::terminal::view::inline_banner::{OpenInWarpBannerAction, OpenInWarpBannerState};
+use crate::util::openable_file_type::{is_file_openable_in_warp, OpenableFileType};
 
 #[cfg(test)]
 #[path = "open_in_warp_tests.rs"]

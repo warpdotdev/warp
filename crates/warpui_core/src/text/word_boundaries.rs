@@ -1,11 +1,11 @@
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::iter::Peekable;
-use std::{borrow::Cow, collections::HashSet};
 
 use itertools::Either;
 use string_offset::CharOffset;
 
 use super::point::Point;
-
 use super::words::is_default_word_boundary;
 use super::TextBuffer;
 

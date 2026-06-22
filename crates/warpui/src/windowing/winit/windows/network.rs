@@ -1,4 +1,3 @@
-use crate::windowing::winit::app::CustomEvent;
 use anyhow::Context;
 use windows::core::{implement, Interface};
 use windows::Win32::Networking::NetworkListManager::{
@@ -10,6 +9,8 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, IConnectionPoint, IConnectionPointContainer, CLSCTX_ALL,
     COINIT_APARTMENTTHREADED,
 };
+
+use crate::windowing::winit::app::CustomEvent;
 
 /// Implements the INetworkListManagerEvents trait so we can pass along connectivity events from Windows
 /// OS to our winit event loop.

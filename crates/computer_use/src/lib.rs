@@ -7,15 +7,14 @@ mod noop;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
 
+use std::borrow::Cow;
+
+use async_trait::async_trait;
 // Clippy doesn't like us pulling in a file as two different modules,
 // so we add this alias instead of using another cfg_attr on the imp
 // module definition.
 #[cfg(noop)]
 use noop as imp;
-
-use std::borrow::Cow;
-
-use async_trait::async_trait;
 pub use pathfinder_geometry::vector::Vector2I;
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSecondsWithFrac, serde_as};

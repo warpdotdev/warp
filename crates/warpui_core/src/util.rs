@@ -1,4 +1,5 @@
-use std::{fs, io, path::PathBuf};
+use std::path::PathBuf;
+use std::{fs, io};
 
 use anyhow::Result;
 
@@ -65,5 +66,5 @@ pub fn parse_i32(input: &[u8]) -> Option<i32> {
 }
 
 #[cfg(test)]
-#[path = "util_test.rs"]
+#[path = "util_tests.rs"]
 mod tests;

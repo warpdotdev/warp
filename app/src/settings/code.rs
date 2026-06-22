@@ -1,6 +1,5 @@
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
-};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 
 define_settings_group!(CodeSettings, settings: [
     code_as_default_editor: CodeAsDefaultEditor {
@@ -59,5 +58,25 @@ define_settings_group!(CodeSettings, settings: [
         private: false,
         toml_path: "code.editor.show_global_search",
         description: "Whether global file search is shown in the tools panel.",
+    },
+    // Controls whether hidden files (dotfiles) are shown in the project explorer.
+    show_hidden_files: ShowHiddenFiles {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "code.editor.show_hidden_files",
+        description: "Whether hidden files (dotfiles) are shown in the project explorer.",
+    },
+    // Controls whether the language server reformats the file on save.
+    format_on_save: FormatOnSave {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "code.editor.format_on_save",
+        description: "Whether the language server automatically formats the file on save. Other LSP features (hover, go-to-definition, references, diagnostics) are unaffected.",
     },
 ]);

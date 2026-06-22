@@ -1,10 +1,10 @@
 use ai::agent::action_result::AIAgentActionResultType;
-use futures::{future::BoxFuture, FutureExt};
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use warpui::{Entity, ModelContext};
 
-use crate::ai::agent::{AIAgentActionType, UseComputerResult};
-
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+use crate::ai::agent::{AIAgentActionType, UseComputerResult};
 
 pub struct UseComputerExecutor;
 

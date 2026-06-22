@@ -2,6 +2,32 @@
 // Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
 
 //! TTY related functionality.
+use std::collections::HashMap;
+use std::ffi::{CStr, OsString};
+use std::fs::{DirBuilder, File};
+use std::mem::MaybeUninit;
+use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::path::{Path, PathBuf};
+use std::{io, ptr};
+
+use anyhow::{Context as _, Error, Result};
+use command::blocking::Command;
+use itertools::Itertools;
+use libc::{self, c_int, winsize, TIOCSCTTY};
+use mio::unix::SourceFd;
+use mio::Interest;
+use nix::pty::openpty;
+use nix::sys::termios::{self, InputFlags, SetArg};
+use serde::{Deserialize, Serialize};
+use signal_hook_mio::v1_0::Signals;
+use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
+use warpui::{AppContext, SingletonEntity};
+
+use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
+use super::spawner::{PtyHandle, PtySpawnInfo, PtySpawner};
+use super::{ChildEvent, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
 use crate::terminal::bootstrap::raw_init_shell_script_for_shell;
 use crate::terminal::cli_agent_sessions::event::current_protocol_version;
 use crate::terminal::local_tty::docker_sandbox::{
@@ -12,43 +38,9 @@ use crate::terminal::local_tty::shell::{
 };
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
-use crate::ASSETS;
-use warp_core::features::FeatureFlag;
+use crate::{report_if_error, ASSETS};
 
-use crate::report_if_error;
-use itertools::Itertools;
-
-use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
-use super::spawner::{PtyHandle, PtySpawnInfo, PtySpawner};
-use super::{ChildEvent, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
-use anyhow::{Context as _, Error, Result};
-use libc::{self, c_int, winsize, TIOCSCTTY};
-
-use mio::unix::SourceFd;
-use mio::Interest;
-use nix::{
-    pty::openpty,
-    sys::termios::{self, InputFlags, SetArg},
-};
-use serde::{Deserialize, Serialize};
-use signal_hook_mio::v1_0::Signals;
-
-use command::blocking::Command;
-use std::{
-    collections::HashMap,
-    ffi::{CStr, OsString},
-    fs::{DirBuilder, File},
-    io,
-    mem::MaybeUninit,
-    os::unix::{
-        fs::DirBuilderExt,
-        io::{AsRawFd, FromRawFd, RawFd},
-    },
-    path::{Path, PathBuf},
-    ptr,
-};
-use warp_core::channel::ChannelState;
-use warpui::{AppContext, SingletonEntity};
+const BASH_HISTORY_SIZE_SENTINEL: &str = "57265949261";
 
 /// Get raw fds for leader/follower ends of a new PTY.
 fn make_pty(size: winsize) -> Result<(RawFd, RawFd)> {
@@ -193,8 +185,10 @@ pub(super) fn spawn(options: PtyOptions) -> Result<PtySpawnInfo> {
         start_dir,
         env_vars,
         enable_ssh_wrapper,
+        reuse_ssh_control_master,
         shell_debug_mode,
         honor_ps1,
+        node_version_chip_enabled,
         close_fds,
     } = options;
     let shell_starter = match shell_starter {
@@ -212,8 +206,10 @@ pub(super) fn spawn(options: PtyOptions) -> Result<PtySpawnInfo> {
         env_vars,
         start_dir,
         enable_ssh_wrapper,
+        reuse_ssh_control_master,
         shell_debug_mode,
         honor_ps1,
+        node_version_chip_enabled,
     );
 
     spawn_command_in_pty(command, &size, close_fds)
@@ -224,14 +220,17 @@ pub(super) fn spawn(options: PtyOptions) -> Result<PtySpawnInfo> {
 ///
 /// Does not perform any PTY-level setup; hand the returned `Command`
 /// to [`spawn_command_in_pty`].
+#[allow(clippy::too_many_arguments)]
 fn build_host_shell_command(
     shell_starter: DirectShellStarter,
     window_id: Option<usize>,
     env_vars: HashMap<OsString, OsString>,
     start_dir: Option<PathBuf>,
     enable_ssh_wrapper: bool,
+    reuse_ssh_control_master: bool,
     shell_debug_mode: bool,
     honor_ps1: bool,
+    node_version_chip_enabled: bool,
 ) -> Command {
     let mut buf = [0; 1024];
     let pw = get_pw_entry(&mut buf);
@@ -304,6 +303,13 @@ fn build_host_shell_command(
         builder.env("WARP_USE_SSH_WRAPPER", "0");
     }
 
+    // Whether the SSH wrapper should attach to an existing ControlMaster
+    // for the destination host instead of always creating its own.
+    builder.env(
+        "WARP_SSH_REUSE_CONTROL_MASTER",
+        if reuse_ssh_control_master { "1" } else { "0" },
+    );
+
     // For integration tests, put SSH control master sockets under the actual
     // home directory, as the length of the path to sockets placed in the
     // integration test home directory can exceed length limits.
@@ -333,6 +339,14 @@ fn build_host_shell_command(
         builder.env("WARP_HONOR_PS1", "0");
     }
 
+    // Gate the shell's per-prompt `node --version` detection on whether the
+    // Node.js Version chip is enabled. The bootstrap treats any value other than
+    // "0" as enabled, so we only ever set "0" to disable it.
+    builder.env(
+        "WARP_PROMPT_NODE_VERSION_ENABLED",
+        if node_version_chip_enabled { "1" } else { "0" },
+    );
+
     // Pass through any additional entries to add to PATH.
     let path_append = extra_path_entries()
         .map(|p| p.to_string_lossy().into_owned())
@@ -340,13 +354,14 @@ fn build_host_shell_command(
     builder.env("WARP_PATH_APPEND", path_append);
 
     if matches!(shell_starter.shell_type(), ShellType::Bash) {
-        // Set an initial very large value for HISTFILESIZE so that it
-        // doesn't get truncated on startup.
-        let sentinel_value = "57265949261";
-        builder.env("HISTFILESIZE", sentinel_value);
-        // Set a second environment variable that we can use to know whether
-        // the user rcfiles set HISTFILESIZE or not.
-        builder.env("WARP_INITIAL_HISTFILESIZE", sentinel_value);
+        // Set initial very large values so bash imports the user's existing
+        // history without truncating the file or in-memory list on startup.
+        builder.env("HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+        builder.env("HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
+        // Set second environment variables that we can use to know whether
+        // the user rcfiles set these variables or not.
+        builder.env("WARP_INITIAL_HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+        builder.env("WARP_INITIAL_HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
     }
 
     // Pass the desired initial working directory as an environment variable
@@ -711,8 +726,10 @@ fn spawn_docker_sandbox(
         start_dir: _,
         env_vars,
         enable_ssh_wrapper,
+        reuse_ssh_control_master,
         shell_debug_mode,
         honor_ps1,
+        node_version_chip_enabled,
         close_fds,
     } = options;
 
@@ -721,8 +738,10 @@ fn spawn_docker_sandbox(
         window_id,
         env_vars,
         enable_ssh_wrapper,
+        reuse_ssh_control_master,
         shell_debug_mode,
         honor_ps1,
+        node_version_chip_enabled,
     );
 
     spawn_command_in_pty(command, &size, close_fds)
@@ -734,13 +753,16 @@ fn spawn_docker_sandbox(
 ///
 /// Does not perform any PTY-level setup; hand the returned `Command`
 /// to [`spawn_command_in_pty`].
+#[allow(clippy::too_many_arguments)]
 fn build_docker_sandbox_command(
     docker_starter: &DockerSandboxShellStarter,
     window_id: Option<usize>,
     env_vars: HashMap<OsString, OsString>,
     enable_ssh_wrapper: bool,
+    reuse_ssh_control_master: bool,
     shell_debug_mode: bool,
     honor_ps1: bool,
+    node_version_chip_enabled: bool,
 ) -> Command {
     let mut buf = [0; 1024];
     let pw = get_pw_entry(&mut buf);
@@ -790,6 +812,10 @@ fn build_docker_sandbox_command(
         "WARP_USE_SSH_WRAPPER",
         if enable_ssh_wrapper { "1" } else { "0" },
     );
+    builder.env(
+        "WARP_SSH_REUSE_CONTROL_MASTER",
+        if reuse_ssh_control_master { "1" } else { "0" },
+    );
     builder.env("SSH_SOCKET_DIR", ssh_socket_dir());
     builder.env("WARP_IS_LOCAL_SHELL_SESSION", "1");
     if FeatureFlag::HOANotifications.is_enabled() {
@@ -802,15 +828,20 @@ fn build_docker_sandbox_command(
         builder.env("WARP_SHELL_DEBUG_MODE", "1");
     }
     builder.env("WARP_HONOR_PS1", if honor_ps1 { "1" } else { "0" });
+    builder.env(
+        "WARP_PROMPT_NODE_VERSION_ENABLED",
+        if node_version_chip_enabled { "1" } else { "0" },
+    );
     let path_append = extra_path_entries()
         .map(|p| p.to_string_lossy().into_owned())
         .join(":");
     builder.env("WARP_PATH_APPEND", path_append);
     // Sandbox shell is always bash (per the container image convention),
     // matching the host-shell path's behavior for bash shells.
-    let sentinel_value = "57265949261";
-    builder.env("HISTFILESIZE", sentinel_value);
-    builder.env("WARP_INITIAL_HISTFILESIZE", sentinel_value);
+    builder.env("HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+    builder.env("HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
+    builder.env("WARP_INITIAL_HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+    builder.env("WARP_INITIAL_HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
     // Intentionally do NOT set `WARP_INITIAL_WORKING_DIR` for sandboxes:
     // the container's init script cds into the sandbox home dir, not
     // the host's startup dir.
@@ -865,7 +896,8 @@ fn prepare_docker_sandbox(starter: &DockerSandboxShellStarter) -> Result<()> {
     };
 
     // 1. Write the init script to this sandbox's dedicated host init dir.
-    let init_script = raw_init_shell_script_for_shell(ShellType::Bash, &ASSETS);
+    let init_script =
+        raw_init_shell_script_for_shell(ShellType::Bash, &ASSETS, starter.session_id());
     let init_dir = starter.init_dir();
     mk_owner_only_dir(&init_dir)?;
     std::fs::write(starter.init_path(), init_script).context("write sandbox init script")?;
@@ -876,6 +908,10 @@ fn prepare_docker_sandbox(starter: &DockerSandboxShellStarter) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "unix_tests.rs"]
+mod tests;
 
 /// A set of platform helper utilities copied directly from std::sys.
 ///

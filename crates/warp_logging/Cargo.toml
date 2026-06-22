@@ -29,6 +29,9 @@ wasm-bindgen.workspace = true
 web-sys.workspace = true
 warp_web_event_bus.workspace = true
 
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+tempfile.workspace = true
+
 [features]
 crash_reporting = ["dep:sentry", "dep:sentry-log", "warp_core/crash_reporting"]
 agent_mode_evals = []

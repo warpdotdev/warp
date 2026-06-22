@@ -1,6 +1,5 @@
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
-};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 use warpui::{AppContext, WindowId};
 
 define_settings_group!(WindowSettings, settings: [

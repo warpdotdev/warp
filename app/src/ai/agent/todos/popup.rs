@@ -1,27 +1,24 @@
-use crate::ai::blocklist::{BlocklistAIContextEvent, BlocklistAIContextModel};
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
-    ClippedScrollStateHandle, ClippedScrollable, Dismiss, Empty, Expanded, ParentElement,
-    SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable,
+    Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Dismiss, DropShadow, Empty, Expanded, Flex, MainAxisSize, ParentElement,
+    Radius, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Text,
 };
-use warpui::fonts::FamilyId;
-use warpui::ModelHandle;
-use warpui::SingletonEntity;
+use warpui::fonts::{FamilyId, Properties, Weight};
+use warpui::keymap::FixedBinding;
 use warpui::{
-    elements::{
-        Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow, Flex,
-        MainAxisSize, Radius, Text,
-    },
-    fonts::{Properties, Weight},
-    keymap::FixedBinding,
-    AppContext, Element, Entity, EntityId, TypedActionView, View, ViewContext,
+    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext,
 };
 
 use crate::ai::agent::icons::{in_progress_icon, pending_icon, succeeded_icon};
 use crate::ai::agent::todos::AIAgentTodoList;
-use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::blocklist::{
+    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel,
+};
 use crate::ui_components::blended_colors;
 
 pub struct AgentTodosPopupView {

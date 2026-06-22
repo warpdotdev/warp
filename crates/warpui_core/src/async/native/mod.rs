@@ -2,7 +2,6 @@ pub mod executor;
 
 pub use async_io::{block_on, Timer};
 use futures::Future;
-
 pub use futures_util::future::BoxFuture;
 
 trait_set::trait_set! {

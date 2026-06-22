@@ -1,53 +1,58 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-use std::{collections::HashSet, sync::mpsc::SyncSender};
 
-use lsp::LanguageId;
-#[cfg(feature = "local_fs")]
-use lsp::{LspManagerModel, LspServerConfig};
-#[cfg(feature = "local_fs")]
-use repo_metadata::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
-use serde::{Deserialize, Serialize};
-
-use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
-use crate::ai::AIRequestUsageModel;
-use crate::persistence::ModelEvent;
-use crate::report_if_error;
-use crate::send_telemetry_from_ctx;
-use crate::settings::CodeSettings;
-use crate::terminal::TerminalView;
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::TelemetryEvent;
-use ai::{
-    index::full_source_code_embedding::manager::{CodebaseIndexManager, CodebaseIndexManagerEvent},
-    workspace::{WorkspaceMetadata, WorkspaceMetadataEvent},
+use ai::index::full_source_code_embedding::manager::{
+    CodebaseIndexManager, CodebaseIndexManagerEvent,
 };
+use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
+use ai::workspace::{WorkspaceMetadata, WorkspaceMetadataEvent};
 use anyhow::Context;
 use chrono::Utc;
 use itertools::Itertools;
 use lsp::supported_servers::LSPServerType;
+use lsp::LanguageId;
+#[cfg(feature = "local_fs")]
+use lsp::LspEvent;
+#[cfg(feature = "local_fs")]
+use lsp::{LspManagerModel, LspServerConfig};
+#[cfg(feature = "local_fs")]
+use repo_metadata::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
+#[cfg(feature = "local_fs")]
+use repo_metadata::RepoMetadataModel;
+use serde::{Deserialize, Serialize};
+#[cfg(feature = "local_fs")]
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+#[cfg(feature = "local_fs")]
+use warp_util::{local_or_remote_path::LocalOrRemotePath, standardized_path::StandardizedPath};
 #[cfg(feature = "local_fs")]
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+#[cfg(feature = "local_fs")]
+use crate::ai::codebase_auto_indexing::{
+    auto_index_candidate_roots, should_auto_index_codebase, CodebaseAutoIndexingSurface,
+};
+use crate::ai::metadata_project_rules::read_project_rule_contents;
+use crate::ai::AIRequestUsageModel;
 #[cfg(feature = "local_fs")]
 use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager;
 #[cfg(feature = "local_fs")]
 use crate::code::lsp_telemetry::LspTelemetryEvent;
+use crate::persistence::ModelEvent;
 #[cfg(feature = "local_fs")]
 use crate::server::server_api::ServerApiProvider;
+use crate::settings::CodeSettings;
 #[cfg(feature = "local_fs")]
 use crate::terminal::local_shell::LocalShellState;
+use crate::terminal::TerminalView;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::{report_if_error, send_telemetry_from_ctx, TelemetryEvent};
 #[cfg(feature = "local_fs")]
 use crate::{view_components::DismissibleToast, workspace::ToastStack};
-#[cfg(feature = "local_fs")]
-use lsp::LspEvent;
-#[cfg(feature = "local_fs")]
-use warp_core::channel::ChannelState;
-
-use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
 
 /// Represents whether an LSP server is enabled or disabled for a workspace.
 ///
@@ -234,13 +239,12 @@ impl PersistedWorkspace {
             .collect();
 
         if FeatureFlag::FullSourceCodeEmbedding.is_enabled() {
-            ctx.subscribe_to_model(
-                &CodebaseIndexManager::handle(ctx),
-                |me, event, ctx| match event {
+            ctx.subscribe_to_model(&CodebaseIndexManager::handle(ctx), |me, _, event, ctx| {
+                match event {
                     CodebaseIndexManagerEvent::IndexMetadataUpdated { root_path, event } => {
                         me.handle_index_metadata_event(root_path, *event);
                     }
-                    CodebaseIndexManagerEvent::NewIndexCreated => {
+                    CodebaseIndexManagerEvent::NewIndexCreated { .. } => {
                         send_active_indexed_repos_changed_telemetry(ctx);
                     }
                     CodebaseIndexManagerEvent::RemoveExpiredIndexMetadata { expired_metadata } => {
@@ -249,26 +253,30 @@ impl PersistedWorkspace {
                         send_active_indexed_repos_changed_telemetry(ctx);
                     }
                     _ => {}
-                },
-            );
-
-            // Subscribe to AI conversation events to trigger incremental sync
-            ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, event, ctx| {
-                if let BlocklistAIHistoryEvent::StartedNewConversation {
-                    terminal_view_id, ..
-                } = event
-                {
-                    #[cfg(feature = "local_fs")]
-                    me.clean_up_deleted_indices(ctx);
-
-                    me.trigger_incremental_sync_for_conversation(*terminal_view_id, ctx);
                 }
             });
+
+            // Subscribe to AI conversation events to trigger incremental sync
+            ctx.subscribe_to_model(
+                &BlocklistAIHistoryModel::handle(ctx),
+                |me, _, event, ctx| {
+                    if let BlocklistAIHistoryEvent::StartedNewConversation {
+                        terminal_view_id,
+                        ..
+                    } = event
+                    {
+                        #[cfg(feature = "local_fs")]
+                        me.clean_up_deleted_indices(ctx);
+
+                        me.trigger_incremental_sync_for_conversation(*terminal_view_id, ctx);
+                    }
+                },
+            );
 
             // Subscribe to changes in workspace settings.
             ctx.subscribe_to_model(
                 &UserWorkspaces::handle(ctx),
-                |me, user_workspaces_event, ctx| {
+                |me, _, user_workspaces_event, ctx| {
                     if let UserWorkspacesEvent::CodebaseContextEnablementChanged =
                         user_workspaces_event
                     {
@@ -278,7 +286,7 @@ impl PersistedWorkspace {
             );
 
             // Subscribe to ProjectContextModel events to persist rule changes
-            ctx.subscribe_to_model(&ProjectContextModel::handle(ctx), |me, event, _ctx| {
+            ctx.subscribe_to_model(&ProjectContextModel::handle(ctx), |me, _, event, _ctx| {
                 if let ProjectContextModelEvent::KnownRulesChanged(delta) = event {
                     let mut events = vec![];
 
@@ -306,8 +314,9 @@ impl PersistedWorkspace {
             test,
             feature = "fast_dev",
             feature = "integration_tests"
-        )) {
-            ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, event, ctx| {
+        )) && CodebaseIndexManager::as_ref(ctx).is_indexing_enabled()
+        {
+            ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, _, event, ctx| {
                 let DetectedRepositoriesEvent::DetectedGitRepo { repository, .. } = event;
                 let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();
 
@@ -625,7 +634,12 @@ impl PersistedWorkspace {
     /// Enables or disables codebase indexing according to the setting.
     fn maybe_enable_codebase_indexing(ctx: &mut ModelContext<Self>) {
         CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
-            if UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx) {
+            if !manager.is_indexing_enabled() {
+                return;
+            }
+            let codebase_context_enabled =
+                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx);
+            if codebase_context_enabled {
                 Self::enable_codebase_indexing(manager, ctx);
             } else {
                 manager.reset_codebase_indexing(ctx);
@@ -647,14 +661,14 @@ impl PersistedWorkspace {
         );
 
         #[cfg(feature = "local_fs")]
-        for dir in all_working_directories(ctx) {
-            // Auto-index working directory ONLY if the user has "Read files" set to "Always allow" OR this directory is in the allowlist.
-            let auto_indexing_enabled = *CodeSettings::as_ref(ctx).auto_indexing_enabled;
-
-            if auto_indexing_enabled {
-                if let Some(root) = DetectedRepositories::as_ref(ctx).get_root_for_path(&dir) {
-                    manager.index_directory(root, ctx);
-                }
+        if should_auto_index_codebase(CodebaseAutoIndexingSurface::Local, ctx) {
+            let roots = all_working_directories(ctx).into_iter().filter_map(|dir| {
+                DetectedRepositories::as_ref(ctx)
+                    .get_root_for_path(&LocalOrRemotePath::Local(dir))
+                    .and_then(|root| root.to_local_path().map(Path::to_path_buf))
+            });
+            for root in auto_index_candidate_roots(roots, |_| true) {
+                manager.index_directory(root, ctx);
             }
         }
     }
@@ -662,26 +676,27 @@ impl PersistedWorkspace {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn index_repo(&self, directory_path: PathBuf, ctx: &mut ModelContext<Self>) {
         ProjectContextModel::handle(ctx).update(ctx, |model, ctx| {
-            let _ = model.index_and_store_rules(directory_path.clone(), ctx);
+            let _ = model.index_and_store_rules(
+                directory_path.clone(),
+                read_project_rule_contents,
+                ctx,
+            );
         });
-
-        if FeatureFlag::FullSourceCodeEmbedding.is_enabled() {
-            let auto_indexing_enabled = UserWorkspaces::as_ref(ctx)
-                .is_codebase_context_enabled(ctx)
-                && *CodeSettings::as_ref(ctx).auto_indexing_enabled;
-
-            if auto_indexing_enabled {
-                CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.index_directory(directory_path, ctx);
-                });
-            }
+        if FeatureFlag::FullSourceCodeEmbedding.is_enabled()
+            && UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx)
+            && *CodeSettings::as_ref(ctx).auto_indexing_enabled
+        {
+            CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.index_directory(directory_path, ctx);
+            });
         }
     }
 
     /// Explicitly registers a directory as a workspace, as if the user had navigated there.
     ///
     /// Creates or updates the entry with `navigated_ts = now`, persists to SQLite,
-    /// triggers project-rules and codebase-index scanning, and emits
+    /// starts full repo-metadata indexing before triggering project-rules and codebase-index
+    /// scanning, and emits
     /// [`PersistedWorkspaceEvent::WorkspaceAdded`] so subscribers can refresh their UI.
     pub fn user_added_workspace(&mut self, path: PathBuf, ctx: &mut ModelContext<Self>) {
         let now = Utc::now();
@@ -707,6 +722,22 @@ impl PersistedWorkspace {
         }
 
         self.persist_metadata_for_index(&path);
+        #[cfg(feature = "local_fs")]
+        match StandardizedPath::from_local_canonicalized(&path) {
+            Ok(path) => {
+                if let Err(error) = RepoMetadataModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.index_local_directory_path(&path, ctx)
+                }) {
+                    log::warn!("Failed to start full repo metadata indexing for {path}: {error}");
+                }
+            }
+            Err(error) => {
+                log::warn!(
+                    "Failed to canonicalize user-added workspace {} for full repo metadata indexing: {error}",
+                    path.display()
+                );
+            }
+        }
         self.index_repo(path.clone(), ctx);
         ctx.emit(PersistedWorkspaceEvent::WorkspaceAdded { path });
     }
@@ -807,13 +838,21 @@ impl PersistedWorkspace {
             for terminal_view in terminal_views.into_iter().flatten() {
                 let terminal_view_ref = terminal_view.as_ref(ctx);
                 if terminal_view_ref.view_id() == terminal_view_id {
-                    if let Some(pwd) = terminal_view_ref.pwd() {
-                        let directory_path = Path::new(&pwd);
+                    if terminal_view_ref.active_session_is_local(ctx) != Some(true) {
+                        log::info!(
+                            "Skipping local codebase incremental sync for non-local agent conversation"
+                        );
+                        return;
+                    }
+
+                    let pwd = terminal_view_ref.pwd();
+                    if let Some(pwd) = pwd {
+                        let directory_path = PathBuf::from(pwd);
 
                         // Trigger an incremental sync through the CodebaseIndexManager
                         CodebaseIndexManager::handle(ctx).update(ctx, |codebase_manager, ctx| {
                             if let Err(e) = codebase_manager
-                                .trigger_incremental_sync_for_path(directory_path, ctx)
+                                .trigger_incremental_sync_for_path(&directory_path, ctx)
                             {
                                 log::warn!("Failed to trigger incremental sync {e}");
                             }
@@ -1075,7 +1114,7 @@ impl PersistedWorkspace {
         for server in servers {
             let workspace_root_display = workspace_root_display.clone();
             let server_type_name = server.as_ref(ctx).server_name();
-            ctx.subscribe_to_model(&server, move |_me, event, ctx| match event {
+            ctx.subscribe_to_model(&server, move |_me, _, event, ctx| match event {
                 LspEvent::Started => {
                     send_telemetry_from_ctx!(
                         LspTelemetryEvent::ServerStarted {

@@ -1,11 +1,11 @@
-use crate::completer::{CommandExitStatus, CompletionContext, TopLevelCommandCaseSensitivity};
-use crate::parsers::SignatureAtTokenIndex;
+use std::collections::HashMap;
 
 use itertools::Itertools;
 use memo_map::MemoMap;
-
-use std::collections::HashMap;
 use warp_command_signatures::{Argument, DynamicCompletionData, IsArgumentOptional, Signature};
+
+use crate::completer::{CommandExitStatus, CompletionContext, TopLevelCommandCaseSensitivity};
+use crate::parsers::SignatureAtTokenIndex;
 
 pub enum SignatureResult<'a> {
     /// Successfully parsed the signature. We are returning the signature at the token to complete on.
@@ -514,5 +514,5 @@ fn should_complete_on_subcmd(
 }
 
 #[cfg(test)]
-#[path = "registry_test.rs"]
+#[path = "registry_tests.rs"]
 mod tests;

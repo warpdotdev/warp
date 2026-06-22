@@ -1,25 +1,25 @@
-use crate::actions::StandardAction;
-use crate::AppContext;
-use crate::{Action, Tracked};
+use std::any::Any;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 use anyhow::anyhow;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{
-    any::Any,
-    collections::{HashMap, HashSet},
-    fmt,
-    sync::Arc,
-};
 use titlecase::titlecase;
+
+use crate::actions::StandardAction;
+use crate::{Action, AppContext, Tracked};
 
 mod context;
 mod matcher;
 
-use crate::platform::OperatingSystem;
 pub use context::{macros, Context, ContextPredicate};
 pub use matcher::{IsBindingValid, MatchResult, Matcher};
+
+use crate::platform::OperatingSystem;
 
 #[derive(Default)]
 pub struct Keymap {
@@ -229,7 +229,7 @@ impl<S: Into<String>> From<S> for BindingDescription {
 /// its context predicate is false, the binding is still registered in the total set of bindings.
 ///
 /// Enabled predicates dynamically decide if a binding is registered or not. They're similar to
-/// conditionally calling [`warpui::app::AppContext::register_editable_bindings`], except
+/// conditionally calling [`warpui_core::app::AppContext::register_editable_bindings`], except
 /// that the condition is re-evaluated at runtime. The main use for enabled predicates is to check
 /// feature flags that might change post-initialization. If a feature is disabled, any bindings
 /// related to it should be as well. Once the feature is enabled, the UI framework will start
@@ -1066,5 +1066,5 @@ impl Keystroke {
 }
 
 #[cfg(test)]
-#[path = "keymap_test.rs"]
+#[path = "keymap_tests.rs"]
 mod tests;

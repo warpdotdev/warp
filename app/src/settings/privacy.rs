@@ -3,10 +3,15 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
+use settings::macros::{define_settings_group, maybe_define_setting, register_settings_events};
+use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
 use warp_core::features::FeatureFlag;
 use warp_core::report_if_error;
+use warp_graphql::mutations::update_user_settings::UpdateUserSettingsInput;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
 
+use super::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::auth::auth_state::AuthState;
 use crate::auth::AuthStateProvider;
@@ -18,15 +23,6 @@ use crate::server::server_api::auth::MockAuthClient;
 use crate::server::server_api::auth::{AuthClient, SyncedUserSettings};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::safe_mode_settings::SafeModeSettings;
-
-use settings::{
-    macros::{define_settings_group, maybe_define_setting, register_settings_events},
-    RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
-
-use serde::{Deserialize, Serialize};
-
-use super::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::workspaces::workspace::EnterpriseSecretRegex;
 
 pub trait RegexDisplayInfo {
@@ -257,33 +253,36 @@ impl PrivacySettings {
             .value();
 
         // Listen for changes to the cloud model and update ourselves when they happen.
-        ctx.subscribe_to_model(&WarpDrivePrivacySettings::handle(ctx), |me, event, ctx| {
-            let privacy_settings = WarpDrivePrivacySettings::as_ref(ctx);
-            match event {
-                WarpDrivePrivacySettingsChangedEvent::IsTelemetryEnabled { .. } => {
-                    me.set_is_telemetry_enabled(
-                        *privacy_settings.is_telemetry_enabled.value(),
-                        ctx,
-                    );
+        ctx.subscribe_to_model(
+            &WarpDrivePrivacySettings::handle(ctx),
+            |me, _, event, ctx| {
+                let privacy_settings = WarpDrivePrivacySettings::as_ref(ctx);
+                match event {
+                    WarpDrivePrivacySettingsChangedEvent::IsTelemetryEnabled { .. } => {
+                        me.set_is_telemetry_enabled(
+                            *privacy_settings.is_telemetry_enabled.value(),
+                            ctx,
+                        );
+                    }
+                    WarpDrivePrivacySettingsChangedEvent::IsCrashReportingEnabled { .. } => {
+                        me.set_is_crash_reporting_enabled(
+                            *privacy_settings.is_crash_reporting_enabled.value(),
+                            ctx,
+                        );
+                    }
+                    WarpDrivePrivacySettingsChangedEvent::IsCloudConversationStorageEnabled {
+                        ..
+                    } => {
+                        me.set_is_cloud_conversation_storage_enabled(
+                            *privacy_settings
+                                .is_cloud_conversation_storage_enabled
+                                .value(),
+                            ctx,
+                        );
+                    }
                 }
-                WarpDrivePrivacySettingsChangedEvent::IsCrashReportingEnabled { .. } => {
-                    me.set_is_crash_reporting_enabled(
-                        *privacy_settings.is_crash_reporting_enabled.value(),
-                        ctx,
-                    );
-                }
-                WarpDrivePrivacySettingsChangedEvent::IsCloudConversationStorageEnabled {
-                    ..
-                } => {
-                    me.set_is_cloud_conversation_storage_enabled(
-                        *privacy_settings
-                            .is_cloud_conversation_storage_enabled
-                            .value(),
-                        ctx,
-                    );
-                }
-            }
-        });
+            },
+        );
 
         let user_secret_regex_list: CustomSecretRegexList =
             CustomSecretRegexList::new_from_storage(ctx);
@@ -679,7 +678,14 @@ impl PrivacySettings {
             let snapshot = self.get_snapshot(ctx);
             let _ = ctx.spawn(
                 async move {
-                    let result = auth_client.update_user_settings(snapshot).await;
+                    let result = auth_client
+                        .update_user_settings(UpdateUserSettingsInput {
+                            telemetry_enabled: Some(snapshot.is_telemetry_enabled()),
+                            crash_reporting_enabled: Some(snapshot.is_crash_reporting_enabled()),
+                            cloud_conversation_storage_enabled: snapshot
+                                .cloud_conversation_storage_enabled(),
+                        })
+                        .await;
                     if let Err(err) = result {
                         report_error!(
                             err.context("Failed to update server with local privacy settings.")

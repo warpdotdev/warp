@@ -1,18 +1,20 @@
 //! Manages how we write to and read from our SQLite database for our AI features.
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::{Local, NaiveDateTime, TimeZone};
-use diesel::{prelude::*, result::Error, sqlite::SqliteConnection};
-
+use diesel::prelude::*;
+use diesel::result::Error;
+use diesel::sqlite::SqliteConnection;
 use itertools::Itertools;
-
-use crate::ai::blocklist::{PersistedAIInput, SerializedBlockListItem};
-use crate::terminal::model::block::{SerializedAgentViewVisibility, SerializedBlock};
-use crate::{app_state::PaneUuid, persistence::schema::ai_queries};
 
 use super::model::Block;
 use super::{model, schema};
+use crate::ai::blocklist::{PersistedAIInput, SerializedBlockListItem};
+use crate::app_state::PaneUuid;
+use crate::persistence::schema::ai_queries;
+use crate::terminal::model::block::{SerializedAgentViewVisibility, SerializedBlock};
 
 const MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION: i64 = 100;
 
@@ -104,15 +106,53 @@ pub(super) fn read_ai_queries(
         .collect_vec())
 }
 
+const AI_QUERIES_COUNT_LIMIT: i64 = 10_000;
+
 pub(super) fn upsert_ai_query(
     conn: &mut SqliteConnection,
     query: Arc<PersistedAIInput>,
+) -> anyhow::Result<()> {
+    upsert_ai_query_with_limit(conn, query, AI_QUERIES_COUNT_LIMIT)
+}
+
+/// Upserts an AI query while keeping the `ai_queries` table capped at `limit` rows by evicting
+/// the oldest queries (FIFO by `id`). Split out from [`upsert_ai_query`] so tests can exercise the
+/// eviction path with a small limit instead of inserting `AI_QUERIES_COUNT_LIMIT` rows.
+fn upsert_ai_query_with_limit(
+    conn: &mut SqliteConnection,
+    query: Arc<PersistedAIInput>,
+    limit: i64,
 ) -> anyhow::Result<()> {
     use schema::ai_queries::dsl::*;
 
     let new_ai_query = NewAIQuery::try_from(query.as_ref())?;
 
     Ok(conn.transaction::<_, Error, _>(|conn| {
+        // Only a genuinely new exchange grows the table.
+        let is_new_exchange = ai_queries
+            .filter(exchange_id.eq(&new_ai_query.exchange_id))
+            .count()
+            .first::<i64>(conn)?
+            == 0;
+        if is_new_exchange {
+            let query_count: i64 = ai_queries.count().first(conn)?;
+            // add 1 because we are about to insert a new row.
+            let diff = query_count - limit + 1;
+            if diff > 0 {
+                // Find the oldest row to keep and evict everything older (FIFO).
+                let last_kept_id: Option<i32> = ai_queries
+                    .select(id)
+                    .order(id.asc())
+                    .offset(diff)
+                    .limit(1)
+                    .first(conn)
+                    .optional()?;
+                if let Some(last_kept_id) = last_kept_id {
+                    diesel::delete(ai_queries.filter(id.lt(last_kept_id))).execute(conn)?;
+                }
+            }
+        }
+
         diesel::insert_into(ai_queries)
             .values(&new_ai_query)
             .on_conflict(exchange_id)
@@ -290,3 +330,7 @@ pub(super) fn delete_ai_conversation(
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "block_list_tests.rs"]
+mod tests;

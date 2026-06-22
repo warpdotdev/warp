@@ -2,13 +2,10 @@
 //! plugin host process to the main app process.
 use async_trait::async_trait;
 
+use super::plugin::{PluginRequest, PluginResponse};
+use super::plugin_caller::PluginCaller;
 use crate::plugin::service::{
     CallJsFunctionRequest, CallJsFunctionResponse, CallJsFunctionService,
-};
-
-use super::{
-    plugin::{PluginRequest, PluginResponse},
-    plugin_caller::PluginCaller,
 };
 
 #[derive(Clone, Debug)]

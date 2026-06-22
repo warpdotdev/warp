@@ -1,3 +1,8 @@
+use ordered_float::OrderedFloat;
+use warpui::elements::{Container, Flex, Highlight, ParentElement, Text};
+use warpui::fonts::{Properties, Weight};
+use warpui::{AppContext, Element, SingletonEntity};
+
 use crate::appearance::Appearance;
 use crate::cloud_object::CloudObject;
 use crate::drive::cloud_object_styling::warp_drive_icon_color;
@@ -12,10 +17,6 @@ use crate::search::notebooks::fuzzy_match::{
 };
 use crate::search::result_renderer::ItemHighlightState;
 use crate::ui_components::icons::Icon;
-use ordered_float::OrderedFloat;
-use warpui::elements::{Container, Flex, Highlight, ParentElement, Text};
-use warpui::fonts::{Properties, Weight};
-use warpui::{AppContext, Element, SingletonEntity};
 
 /// Search item result for a cloud notebook.
 #[derive(Debug)]

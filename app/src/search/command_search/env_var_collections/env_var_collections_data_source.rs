@@ -1,9 +1,8 @@
 use itertools::Itertools;
 use warpui::{AppContext, SingletonEntity};
 
-use crate::cloud_object::model::persistence::CloudModel;
-
 use super::EnvVarCollectionSearchItem;
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::search::command_search::searcher::CommandSearchItemAction;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::env_var_collections::fuzzy_match::FuzzyMatchEnvVarCollectionResult;

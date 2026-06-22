@@ -17,7 +17,7 @@ instant = { workspace = true }
 log = { workspace = true }
 parking_lot = { workspace = true }
 rubato = "0.16.1"
-warpui.workspace = true
+warpui_core.workspace = true
 
 [features]
 # No features; compiled when the app enables its `voice` feature which depends on this crate

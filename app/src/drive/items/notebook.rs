@@ -1,19 +1,15 @@
-use warpui::{
-    elements::{Flex, MouseStateHandle, ParentElement},
-    fonts::Weight,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    AppContext, Element,
-};
-
-use crate::{
-    appearance::Appearance,
-    cloud_object::CloudObjectMetadata,
-    drive::{index::DriveIndexAction, CloudObjectTypeAndId, DriveObjectType},
-    notebooks::CloudNotebook,
-    themes::theme::Fill,
-};
+use warpui::elements::{Flex, MouseStateHandle, ParentElement};
+use warpui::fonts::Weight;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, Element};
 
 use super::{WarpDriveItem, WarpDriveItemId};
+use crate::appearance::Appearance;
+use crate::cloud_object::CloudObjectMetadata;
+use crate::drive::index::DriveIndexAction;
+use crate::drive::{CloudObjectTypeAndId, DriveObjectType};
+use crate::notebooks::CloudNotebook;
+use crate::themes::theme::Fill;
 
 #[derive(Clone)]
 pub struct WarpDriveNotebook {

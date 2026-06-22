@@ -1,23 +1,17 @@
 use std::borrow::Cow;
 
 use pathfinder_color::ColorU;
-use warpui::{
-    elements::{
-        Align, Border, ConstrainedBox, Container, CornerRadius, Flex, ParentElement, Shrinkable,
-    },
-    ui_components::{
-        components::{UiComponent, UiComponentStyles},
-        text::Span,
-    },
-    AppContext, Element, SingletonEntity as _,
+use warpui::elements::{
+    Align, Border, ConstrainedBox, Container, CornerRadius, Flex, ParentElement, Shrinkable,
 };
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::ui_components::text::Span;
+use warpui::{AppContext, Element, SingletonEntity as _};
 
-use crate::{
-    appearance::Appearance,
-    modal::MODAL_CORNER_RADIUS,
-    root_view::unthemed_window_border,
-    themes::theme::{Blend, Fill},
-};
+use crate::appearance::Appearance;
+use crate::modal::MODAL_CORNER_RADIUS;
+use crate::root_view::unthemed_window_border;
+use crate::themes::theme::{Blend, Fill};
 
 /// A full-window login error.
 ///

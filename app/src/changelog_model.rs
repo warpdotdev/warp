@@ -1,20 +1,18 @@
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
 
 use channel_versions::{Changelog, MarkdownSection};
 use itertools::Itertools;
 use markdown_parser::{parse_markdown, FormattedText};
-use warpui::{
-    assets::asset_cache::{AssetCache, AssetSource},
-    image_cache::ImageType,
-    Entity, ModelContext, SingletonEntity,
-};
+use warpui::assets::asset_cache::{AssetCache, AssetSource};
+use warpui::image_cache::ImageType;
+use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::{
-    autoupdate::{self},
-    channel::{Channel, ChannelState},
-    features::{FeatureFlag, PREVIEW_FLAGS},
-    server::server_api::ServerApi,
-};
+use crate::autoupdate::{self};
+use crate::channel::{Channel, ChannelState};
+use crate::features::{FeatureFlag, PREVIEW_FLAGS};
+use crate::server::server_api::ServerApi;
 
 pub struct ChangelogModel {
     pub changelog: ChangelogState,

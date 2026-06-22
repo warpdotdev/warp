@@ -1,10 +1,9 @@
-#[allow(unused_imports)]
-use crate::clipboard::{Clipboard, ClipboardContent};
-
+use itertools::Itertools;
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
 use {arboard, image::ImageEncoder};
 
-use itertools::Itertools;
+#[allow(unused_imports)]
+use crate::clipboard::{Clipboard, ClipboardContent};
 
 /// Supported image file extensions for clipboard operations.
 pub const IMAGE_EXTENSIONS: &[&str] = &[".png", ".jpg", ".jpeg", ".gif", ".webp"];

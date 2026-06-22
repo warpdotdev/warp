@@ -61,4 +61,6 @@ elif [ "$libc_family" = "musl" ] || [ "$libc_family" = "bionic" ] || [ "$libc_fa
 fi
 
 echo "status=${status}"
-[ -n "$reason" ] && echo "reason=${reason}"
+if [ -n "$reason" ]; then
+    echo "reason=${reason}"
+fi

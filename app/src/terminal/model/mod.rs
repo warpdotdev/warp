@@ -22,7 +22,6 @@ pub mod bootstrap;
 pub mod completions;
 pub mod header_grid;
 pub mod rich_content;
-pub mod tmux;
 
 pub mod early_output;
 pub mod find;
@@ -42,4 +41,5 @@ pub use secrets::{
     set_user_and_enterprise_secret_regexes, ObfuscateSecrets, RespectObfuscatedSecrets, Secret,
     SecretHandle,
 };
-pub use warp_terminal::model::{char_or_str, escape_sequences, grid::cell, mouse, BlockId};
+pub use warp_terminal::model::grid::cell;
+pub use warp_terminal::model::{char_or_str, escape_sequences, mouse, BlockId};

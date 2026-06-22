@@ -1,30 +1,34 @@
+use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
-use std::{collections::BTreeMap, ffi::OsString};
 
-use crate::terminal::cli_agent_sessions::event::current_protocol_version;
-use crate::terminal::local_tty::shell::{extra_path_entries, ssh_socket_dir};
 use itertools::Itertools;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
+use winreg::enums::{RegType, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 use winreg::types::FromRegValue;
-use winreg::{
-    enums::{RegType, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
-    RegKey, RegValue,
-};
+use winreg::{RegKey, RegValue};
 
 use crate::safe_info;
-use crate::terminal::local_tty::{shell::ShellStarter, PtyOptions};
+use crate::terminal::cli_agent_sessions::event::current_protocol_version;
+use crate::terminal::focus_env::{FOCUS_URL_ENV, TERMINAL_SESSION_UUID_ENV};
+use crate::terminal::local_tty::shell::{extra_path_entries, ssh_socket_dir, ShellStarter};
+use crate::terminal::local_tty::PtyOptions;
 
 const HONOR_PS1_NAME: &str = "WARP_HONOR_PS1";
+const PROMPT_NODE_VERSION_ENABLED_NAME: &str = "WARP_PROMPT_NODE_VERSION_ENABLED";
 const INITIAL_WORKING_DIR_NAME: &str = "WARP_INITIAL_WORKING_DIR";
 const USE_SSH_WRAPPER_NAME: &str = "WARP_USE_SSH_WRAPPER";
+const SSH_REUSE_CONTROL_MASTER_NAME: &str = "WARP_SSH_REUSE_CONTROL_MASTER";
 const SHELL_DEBUG_MODE_NAME: &str = "WARP_SHELL_DEBUG_MODE";
 const TERM_PROGRAM_NAME: &str = "TERM_PROGRAM";
 const IS_LOCAL_SESSION_NAME: &str = "WARP_IS_LOCAL_SHELL_SESSION";
 const SSH_SOCKET_DIR: &str = "SSH_SOCKET_DIR";
 const PATH_APPEND_NAME: &str = "WARP_PATH_APPEND";
+const CLIENT_VERSION_NAME: &str = "WARP_CLIENT_VERSION";
+const CLI_AGENT_PROTOCOL_VERSION_NAME: &str = "WARP_CLI_AGENT_PROTOCOL_VERSION";
 const WSLENV: &str = "WSLENV";
 const HISTIGNORE: &str = "HISTIGNORE";
 
@@ -60,6 +64,19 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
         },
     );
 
+    // Gate the shell's per-prompt `node --version` detection on whether the
+    // Node.js Version chip is enabled. The bootstrap treats any value other
+    // than "0" as enabled.
+    env.insert(
+        map_key(PROMPT_NODE_VERSION_ENABLED_NAME.into()),
+        EnvEntry {
+            preferred_key: PROMPT_NODE_VERSION_ENABLED_NAME.into(),
+            value: (options.node_version_chip_enabled as usize)
+                .to_string()
+                .into(),
+        },
+    );
+
     if let Some(start_dir) = &options.start_dir {
         env.insert(
             map_key(INITIAL_WORKING_DIR_NAME.into()),
@@ -74,6 +91,15 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
         EnvEntry {
             preferred_key: USE_SSH_WRAPPER_NAME.into(),
             value: (options.enable_ssh_wrapper as usize).to_string().into(),
+        },
+    );
+    env.insert(
+        map_key(SSH_REUSE_CONTROL_MASTER_NAME.into()),
+        EnvEntry {
+            preferred_key: SSH_REUSE_CONTROL_MASTER_NAME.into(),
+            value: (options.reuse_ssh_control_master as usize)
+                .to_string()
+                .into(),
         },
     );
     env.insert(
@@ -102,18 +128,18 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
 
     let client_version = ChannelState::app_version().unwrap_or("local");
     env.insert(
-        map_key("WARP_CLIENT_VERSION".into()),
+        map_key(CLIENT_VERSION_NAME.into()),
         EnvEntry {
-            preferred_key: "WARP_CLIENT_VERSION".into(),
+            preferred_key: CLIENT_VERSION_NAME.into(),
             value: client_version.into(),
         },
     );
 
     if FeatureFlag::HOANotifications.is_enabled() {
         env.insert(
-            map_key("WARP_CLI_AGENT_PROTOCOL_VERSION".into()),
+            map_key(CLI_AGENT_PROTOCOL_VERSION_NAME.into()),
             EnvEntry {
-                preferred_key: "WARP_CLI_AGENT_PROTOCOL_VERSION".into(),
+                preferred_key: CLI_AGENT_PROTOCOL_VERSION_NAME.into(),
                 value: current_protocol_version().to_string().into(),
             },
         );
@@ -153,19 +179,8 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
             );
         }
         ShellStarter::Wsl(_) => {
-            // See https://devblogs.microsoft.com/commandline/share-environment-vars-between-wsl-and-windows/
-            // for more on how WSLENV should be formatted.
             // TODO(CORE-3107): Hook this up to a new setting "Working directory for new sessions" setting for WSL.
-            let mut wslenv = format!(
-                "{HONOR_PS1_NAME}/u:{USE_SSH_WRAPPER_NAME}/u:{SHELL_DEBUG_MODE_NAME}/u:\
-                {TERM_PROGRAM_NAME}/u:{IS_LOCAL_SESSION_NAME}/u:{SSH_SOCKET_DIR}/u"
-            );
-            if options.start_dir.is_some() {
-                wslenv.push(':');
-                wslenv.push_str(INITIAL_WORKING_DIR_NAME);
-                wslenv.push_str("/pu");
-            }
-            let mut wslenv = OsString::from(wslenv);
+            let mut wslenv = wsl_env_allowlist(options.start_dir.is_some());
             if let Some(user_val) = env.get(&map_key(WSLENV.into())) {
                 wslenv.push(":");
                 wslenv.push(&user_val.value);
@@ -193,6 +208,36 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
     }
 
     environment_block(env.into_iter())
+}
+
+/// Build the WSLENV allowlist for variables that Windows should forward into WSL.
+///
+/// See https://devblogs.microsoft.com/commandline/share-environment-vars-between-wsl-and-windows/
+/// for more on how WSLENV should be formatted.
+fn wsl_env_allowlist(include_initial_working_dir: bool) -> OsString {
+    let mut entries = vec![
+        format!("{HONOR_PS1_NAME}/u"),
+        format!("{USE_SSH_WRAPPER_NAME}/u"),
+        format!("{SSH_REUSE_CONTROL_MASTER_NAME}/u"),
+        format!("{SHELL_DEBUG_MODE_NAME}/u"),
+        format!("{TERM_PROGRAM_NAME}/u"),
+        format!("{IS_LOCAL_SESSION_NAME}/u"),
+        format!("{SSH_SOCKET_DIR}/u"),
+        format!("{CLIENT_VERSION_NAME}/u"),
+        format!("{TERMINAL_SESSION_UUID_ENV}/u"),
+        format!("{FOCUS_URL_ENV}/u"),
+        format!("{PROMPT_NODE_VERSION_ENABLED_NAME}/u"),
+    ];
+
+    if FeatureFlag::HOANotifications.is_enabled() {
+        entries.push(format!("{CLI_AGENT_PROTOCOL_VERSION_NAME}/u"));
+    }
+
+    if include_initial_working_dir {
+        entries.push(format!("{INITIAL_WORKING_DIR_NAME}/pu"));
+    }
+
+    OsString::from(entries.join(":"))
 }
 
 /// Merges the local machine and user env var scopes
@@ -278,6 +323,15 @@ fn add_user_env(env: &mut BTreeMap<OsString, EnvEntry>) {
 }
 
 fn reg_value_to_string(value: &RegValue, key: &str) -> anyhow::Result<OsString> {
+    // Only REG_SZ and REG_EXPAND_SZ are valid for environment variables.
+    // https://github.com/microsoft/terminal/blob/1ba28b298f677d838c3a2e457a8a1f569bff6299/src/inc/til/env.h#L247-L259
+    if value.vtype != RegType::REG_SZ && value.vtype != RegType::REG_EXPAND_SZ {
+        anyhow::bail!(
+            "Unsupported registry type {:?} for env var {key:?}",
+            value.vtype
+        );
+    }
+
     let key_lower = key.to_ascii_lowercase();
     // RegType::REG_EXPAND_SZ requires expansion of nested env vars, e.g. %USERPROFILE%\AppData to
     // C:\Users\andy\AppData
@@ -310,7 +364,13 @@ fn reg_value_to_string(value: &RegValue, key: &str) -> anyhow::Result<OsString> 
     };
 
     // These are null-terminated, but we don't want the terminator here. We add it back later.
-    os_str.map(|v| v.to_string_lossy().trim_end_matches('\0').into())
+    os_str.map(|v| {
+        let s = v.to_string_lossy();
+        match s.find('\0') {
+            Some(pos) => s[..pos].into(),
+            None => v,
+        }
+    })
 }
 
 /// Best-effort lowercase transformation of an OsString.
@@ -345,3 +405,7 @@ fn environment_block(env: impl Iterator<Item = (OsString, EnvEntry)>) -> Vec<u16
 
     block
 }
+
+#[cfg(test)]
+#[path = "environment_tests.rs"]
+mod tests;

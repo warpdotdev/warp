@@ -1,9 +1,6 @@
-use crate::elements::{ChildView, Clipped};
-use crate::{
-    elements::{Border, ConstrainedBox, Container, Element},
-    ui_components::components::{UiComponent, UiComponentStyles},
-    View, ViewHandle,
-};
+use crate::elements::{Border, ChildView, Clipped, ConstrainedBox, Container, Element};
+use crate::ui_components::components::{UiComponent, UiComponentStyles};
+use crate::{View, ViewHandle};
 
 pub struct TextInput<T: View> {
     editor: ViewHandle<T>,

@@ -2,9 +2,10 @@
 //!
 //! This calls out to the `CallJsFunctionService` IPC service, which is served by the plugin host
 //! process where JS plugins are loaded and executed.
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use ipc::ServiceCaller;
-use std::sync::Arc;
 use warp_completer::completer::{JsExecutionContext, JsExecutionError};
 use warp_js::{JsFunctionId, SerializedJsValue};
 

@@ -5,14 +5,12 @@ use anyhow::anyhow;
 use chrono::{DateTime, Local, Timelike};
 use warp_multi_agent_api as api;
 
-use crate::ai::{
-    agent::{
-        AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext,
-        AIAgentInput, DriveObjectPayload, MCPContext, PassiveSuggestionResultType,
-        PassiveSuggestionTrigger, RunningCommand, StaticQueryType, Suggestions, UserQueryMode,
-    },
-    block_context::BlockContext,
+use crate::ai::agent::{
+    AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput,
+    DriveObjectPayload, MCPContext, PassiveSuggestionResultType, PassiveSuggestionTrigger,
+    RunningCommand, StaticQueryType, Suggestions, UserQueryMode,
 };
+use crate::ai::block_context::BlockContext;
 
 fn local_datetime_to_timestamp(timestamp: DateTime<Local>) -> prost_types::Timestamp {
     prost_types::Timestamp {
@@ -209,9 +207,9 @@ pub(super) fn convert_input(
                     )),
                 });
             }
-            AIAgentInput::SummarizeConversation { prompt } => {
+            AIAgentInput::SummarizeConversation { prompt, context } => {
                 return Ok(api::request::Input {
-                    context: None,
+                    context: Some(convert_context(context.as_ref())),
                     r#type: Some(api::request::input::Type::SummarizeConversation(
                         api::request::input::SummarizeConversation {
                             prompt: prompt.unwrap_or_default(),
@@ -435,6 +433,19 @@ fn convert_input_to_user_input(
                 ),
             )
         }
+        AIAgentInput::OrchestrationConfigUpdate {
+            plan_id,
+            config,
+            status,
+        } => Ok(
+            api::request::input::user_inputs::user_input::Input::OrchestrationConfigUpdate(
+                api::OrchestrationConfigUpdate {
+                    plan_id,
+                    config: Some(config.to_proto()),
+                    status: status.to_proto(),
+                },
+            ),
+        ),
         AIAgentInput::ResumeConversation { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::InitProjectRules { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::CodeReview { .. } => Err(ConvertToAPITypeError::Ignore),
@@ -692,6 +703,12 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
             AIAgentActionResultType::AskUserQuestion(ask_user_question_result) => {
                 Some(ask_user_question_result.into())
             }
+            AIAgentActionResultType::RunAgents(orchestrate_result) => {
+                Some(orchestrate_result.try_into()?)
+            }
+            AIAgentActionResultType::WaitForEvents(wait_for_events_result) => {
+                Some(wait_for_events_result.try_into()?)
+            }
         };
         Ok(
             api::request::input::user_inputs::user_input::Input::ToolCallResult(
@@ -706,6 +723,7 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
 
 fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
     let mut api_context = api::InputContext::default();
+    let mut git_context = None;
     for context in context.iter().cloned() {
         match context {
             AIAgentContext::Block(block) => {
@@ -789,10 +807,39 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                 }
             }
             AIAgentContext::Git { head, branch } => {
-                api_context.git = Some(api::input_context::Git {
-                    head,
-                    branch: branch.unwrap_or_default(),
+                let api_git_context =
+                    git_context.get_or_insert_with(api::input_context::Git::default);
+                api_git_context.head = head;
+                api_git_context.branch = branch.unwrap_or_default();
+            }
+            AIAgentContext::Repository { name, owner } => {
+                let api_git_context =
+                    git_context.get_or_insert_with(api::input_context::Git::default);
+                api_git_context.repository = Some(api::input_context::git::Repository {
+                    name,
+                    owner: owner.unwrap_or_default(),
                 });
+            }
+            AIAgentContext::PullRequest {
+                number,
+                state,
+                draft,
+                base_branch,
+            } => {
+                if number <= 0 {
+                    continue;
+                }
+                let Some(state) = api_pull_request_state(&state, draft) else {
+                    continue;
+                };
+                let pull_request = api::input_context::git::PullRequest {
+                    number,
+                    state: state as i32,
+                    base_branch,
+                };
+                let api_git_context =
+                    git_context.get_or_insert_with(api::input_context::Git::default);
+                api_git_context.pull_request = Some(pull_request);
             }
             AIAgentContext::Skills { skills } => {
                 api_context.updated_skills_context = Some(api::input_context::SkillsContext {
@@ -810,7 +857,32 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
             }
         }
     }
+    api_context.git = git_context;
     api_context
+}
+
+/// Maps a GitHub PR state plus draft flag to the proto `State` enum.
+///
+/// Returns `None` for unknown states so the caller can skip emitting a
+/// `pull_request` sub-message rather than sending `STATE_UNSPECIFIED` to the
+/// server.
+fn api_pull_request_state(
+    state: &str,
+    draft: bool,
+) -> Option<api::input_context::git::pull_request::State> {
+    use api::input_context::git::pull_request::State;
+    match state.to_ascii_uppercase().as_str() {
+        "OPEN" => {
+            if draft {
+                Some(State::OpenDraft)
+            } else {
+                Some(State::Open)
+            }
+        }
+        "CLOSED" => Some(State::Closed),
+        "MERGED" => Some(State::Merged),
+        _ => None,
+    }
 }
 
 impl From<Suggestions> for api::Suggestions {
@@ -943,9 +1015,10 @@ impl From<BlockContext> for api::ExecutedShellCommand {
 /// Tries to convert a [`serde_json::Value`] to a [`prost_types::Value`].
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 fn serde_json_to_prost(value: serde_json::Value) -> Result<prost_types::Value, String> {
+    use std::collections::BTreeMap;
+
     use prost_types::value::Kind::*;
     use serde_json::Value::*;
-    use std::collections::BTreeMap;
 
     Ok(prost_types::Value {
         kind: Some(match value {

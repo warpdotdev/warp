@@ -123,7 +123,7 @@ fn all_filter_flags_parse() {
     );
     assert_eq!(args.query.as_deref(), Some("oz run"));
     assert_eq!(args.sort_by, Some(RunSortByArg::CreatedAt));
-    assert_eq!(args.sort_order, Some(RunSortOrderArg::Asc));
+    assert_eq!(args.sort_order, Some(SortOrderArg::Asc));
     assert_eq!(args.cursor.as_deref(), Some("abcd=="));
 }
 

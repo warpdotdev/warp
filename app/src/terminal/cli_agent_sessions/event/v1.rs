@@ -1,8 +1,7 @@
 use serde::Deserialize;
 
+use super::{CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType};
 use crate::terminal::CLIAgent;
-
-use super::{CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType};
 
 /// Resolves a CLI agent from the `"agent"` string in a CLI agent event.
 /// Returns `None` if the string doesn't match any known agent.
@@ -55,6 +54,7 @@ pub(super) fn parse(body: &str) -> Option<CLIAgentEvent> {
             tool_input_preview,
             plugin_version: raw.plugin_version,
         },
+        source: CLIAgentEventSource::RichPlugin,
     })
 }
 

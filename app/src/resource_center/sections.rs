@@ -1,4 +1,5 @@
-use warp_core::{context_flag::ContextFlag, features::FeatureFlag};
+use warp_core::context_flag::ContextFlag;
+use warp_core::features::FeatureFlag;
 use warpui::ViewContext;
 
 use super::{

@@ -1,5 +1,20 @@
 //! This module contains the code for the editable accept autosuggestion keybinding
 //! shown inline in the input.
+use lazy_static::lazy_static;
+use pathfinder_geometry::vector::vec2f;
+use warp_core::ui::theme::Fill;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Element, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, Stack, DEFAULT_UI_LINE_HEIGHT_RATIO,
+};
+use warpui::keymap::Keystroke;
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::ui_components::keyboard_shortcut::KeyboardShortcut;
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+
+use super::EditorElement;
 use crate::appearance::Appearance;
 use crate::editor::ACCEPT_AUTOSUGGESTION_KEYBINDING_NAME;
 use crate::menu::{Menu, MenuItemFields};
@@ -11,28 +26,6 @@ use crate::util::bindings::{
     keybinding_name_to_keystroke, reset_keybinding_to_default, set_custom_keybinding,
 };
 use crate::workspace::WorkspaceAction;
-use lazy_static::lazy_static;
-use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{Border, ChildView, Flex, ParentElement};
-use warpui::elements::{
-    ConstrainedBox, Container, CrossAxisAlignment, Radius, DEFAULT_UI_LINE_HEIGHT_RATIO,
-};
-use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::ui_components::keyboard_shortcut::KeyboardShortcut;
-use warpui::ViewContext;
-use warpui::{
-    elements::{
-        ChildAnchor, CornerRadius, Element, Hoverable, MouseStateHandle, OffsetPositioning,
-        ParentAnchor, ParentOffsetBounds, Stack,
-    },
-    AppContext, SingletonEntity,
-};
-use warpui::{Entity, TypedActionView, View, ViewHandle};
-
-use super::EditorElement;
 
 pub const AUTOSUGGESTION_HINT_MINIMUM_HEIGHT: f32 = 12.;
 

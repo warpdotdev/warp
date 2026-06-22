@@ -3,28 +3,24 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp_core::ui::appearance::Appearance;
 use warp_terminal::model::BlockId;
+use warpui::prelude::{Container, Empty, MouseStateHandle};
+use warpui::scene::{CornerRadius, Radius};
 use warpui::{
-    prelude::{Container, Empty, MouseStateHandle},
-    scene::{CornerRadius, Radius},
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::{
-    ai::{
-        agent::icons::{failed_icon, yellow_running_icon},
-        blocklist::inline_action::{
-            inline_action_header::{ExpandedConfig, HeaderConfig, InteractionMode},
-            inline_action_icons::green_check_icon,
-            requested_command::VIEWING_COMMAND_DETAIL_MESSAGE,
-        },
-    },
-    terminal::{
-        event::BlockCompletedEvent,
-        model_events::{ModelEvent, ModelEventDispatcher},
-        view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent},
-        TerminalModel,
-    },
+use crate::ai::agent::icons::{failed_icon, yellow_running_icon};
+use crate::ai::blocklist::inline_action::inline_action_header::{
+    ExpandedConfig, HeaderConfig, InteractionMode,
 };
+use crate::ai::blocklist::inline_action::inline_action_icons::green_check_icon;
+use crate::ai::blocklist::inline_action::requested_command::VIEWING_COMMAND_DETAIL_MESSAGE;
+use crate::terminal::event::BlockCompletedEvent;
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::view::ambient_agent::{
+    AmbientAgentViewModel, AmbientAgentViewModelEvent, SetupCommandGroupId,
+};
+use crate::terminal::TerminalModel;
 
 enum Status {
     Running,
@@ -32,6 +28,7 @@ enum Status {
 }
 
 pub struct CloudModeSetupCommandBlock {
+    group_id: SetupCommandGroupId,
     block_id: BlockId,
     command: String,
     status: Status,
@@ -43,6 +40,7 @@ pub struct CloudModeSetupCommandBlock {
 
 impl CloudModeSetupCommandBlock {
     pub fn new(
+        group_id: SetupCommandGroupId,
         block_id: BlockId,
         ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
         model_events: &ModelHandle<ModelEventDispatcher>,
@@ -51,7 +49,10 @@ impl CloudModeSetupCommandBlock {
     ) -> Self {
         ctx.subscribe_to_model(&ambient_agent_view_model, |me, model, event, ctx| {
             if let AmbientAgentViewModelEvent::UpdatedSetupCommandVisibility = event {
-                if !model.as_ref(ctx).setup_command_state().should_expand()
+                if !model
+                    .as_ref(ctx)
+                    .setup_command_state()
+                    .should_expand(me.group_id)
                     && !me
                         .terminal_model
                         .lock()
@@ -94,6 +95,7 @@ impl CloudModeSetupCommandBlock {
             .map(|block| block.command_to_string())
             .unwrap_or_default();
         Self {
+            group_id,
             block_id,
             command,
             ambient_agent_view_model,
@@ -124,7 +126,7 @@ impl View for CloudModeSetupCommandBlock {
             .ambient_agent_view_model
             .as_ref(app)
             .setup_command_state()
-            .should_expand()
+            .should_expand(self.group_id)
         {
             return Empty::new().finish();
         }

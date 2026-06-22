@@ -1,27 +1,25 @@
+use std::any::Any;
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use parking_lot::FairMutex;
 use pathfinder_geometry::vector::Vector2F;
 use settings::Setting as _;
-use std::{any::Any, path::PathBuf, sync::Arc};
 use warpui::{AppContext, SingletonEntity, ViewHandle};
 
-use crate::PrivacySettings;
-use crate::{
-    ai::blocklist::{telemetry_banner::should_collect_ai_ugc_telemetry, SerializedBlockListItem},
-    appearance::Appearance,
-    settings::{BlockVisibilitySettings, DebugSettings, InputModeSettings},
-};
-
-use super::{
-    color,
-    event_listener::ChannelEventListener,
-    model::block::BlockSize,
-    safe_mode_settings::get_secret_obfuscation_mode,
-    session_settings::SessionSettings,
-    settings::TerminalSettings,
-    view::{create_size_info_for_blocklist, WARP_PROMPT_HEIGHT_LINES},
-    ShellLaunchState, SizeInfo, TerminalModel, TerminalView,
-};
+use super::event_listener::ChannelEventListener;
+use super::model::block::BlockSize;
+use super::safe_mode_settings::get_secret_obfuscation_mode;
+use super::session_settings::SessionSettings;
+use super::settings::TerminalSettings;
+use super::view::{create_size_info_for_blocklist, WARP_PROMPT_HEIGHT_LINES};
+use super::{color, ShellLaunchState, SizeInfo, TerminalModel, TerminalView};
+use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
+use crate::ai::blocklist::SerializedBlockListItem;
+use crate::appearance::Appearance;
 use crate::pane_group::pane::DetachType;
+use crate::settings::{BlockVisibilitySettings, DebugSettings, InputModeSettings};
+use crate::PrivacySettings;
 
 pub trait TerminalManager: Any {
     /// Returns the backing terminal model.
@@ -54,9 +52,9 @@ pub(super) fn compute_block_size(initial_size: Vector2F, ctx: &mut AppContext) -
         TerminalSettings::as_ref(ctx).terminal_spacing(appearance.line_height_ratio(), ctx);
     let size_info = if ctx.is_headless() {
         // In headless mode, we don't actually have a font since we aren't rendering anything.
-        // We skip the font-based size computation and hardcode a standard 80x24 terminal, so that
+        // We skip the font-based size computation and hardcode a terminal size, so that
         // viewers of the shared session see a reasonable terminal width.
-        SizeInfo::new_without_font_metrics(24, 80)
+        SizeInfo::new_without_font_metrics(24, 120)
     } else {
         let font_cache = ctx.font_cache();
         create_size_info_for_blocklist(

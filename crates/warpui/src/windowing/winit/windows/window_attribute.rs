@@ -1,10 +1,11 @@
-use std::{ffi::c_void, mem::size_of};
+use std::ffi::c_void;
+use std::mem::size_of;
+
 use thiserror::Error;
 use wgpu::rwh;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{self, DWMWINDOWATTRIBUTE};
-use winit::raw_window_handle::HasWindowHandle;
-use winit::raw_window_handle::RawWindowHandle;
+use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window as WinitWindow;
 
 #[derive(Debug, Error)]

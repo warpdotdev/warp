@@ -1,7 +1,7 @@
-use super::{
-    error::UserFacingError, object::ObjectMetadata, object_permissions::ObjectPermissions,
-    response_context::ResponseContext,
-};
+use super::error::UserFacingError;
+use super::object::ObjectMetadata;
+use super::object_permissions::ObjectPermissions;
+use super::response_context::ResponseContext;
 use crate::schema;
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

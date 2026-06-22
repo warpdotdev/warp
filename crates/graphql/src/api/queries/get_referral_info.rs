@@ -1,4 +1,5 @@
-use crate::{request_context::RequestContext, schema};
+use crate::request_context::RequestContext;
+use crate::schema;
 
 /*
 query GetReferralInfo($requestContext: RequestContext!) {

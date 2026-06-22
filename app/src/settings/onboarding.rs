@@ -1,3 +1,9 @@
+use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings};
+use onboarding::{SelectedSettings, SessionDefault, UICustomizationSettings};
+use settings::Setting as _;
+use warp_core::features::FeatureFlag;
+use warpui::{AppContext, SingletonEntity as _};
+
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{ActionPermission, WriteToPtyPermission};
 use crate::drive::settings::WarpDriveSettings;
@@ -6,11 +12,6 @@ use crate::settings::ai::DefaultSessionMode;
 use crate::settings::{AISettings, CodeSettings};
 use crate::workspace::tab_settings::TabSettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings};
-use onboarding::{SelectedSettings, SessionDefault, UICustomizationSettings};
-use settings::Setting as _;
-use warp_core::features::FeatureFlag;
-use warpui::{AppContext, SingletonEntity as _};
 
 /// Applies onboarding settings based on the user's selected mode.
 pub fn apply_onboarding_settings(selected_settings: &SelectedSettings, app: &mut AppContext) {

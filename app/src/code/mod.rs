@@ -1,7 +1,8 @@
-use pathfinder_geometry::rect::RectF;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::AddAssign;
+
+use pathfinder_geometry::rect::RectF;
 use warp_util::file::FileSaveError;
 use warpui::elements::DropTargetData;
 use warpui::AppContext;
@@ -15,6 +16,7 @@ pub mod language_server_extension;
 pub mod local_code_editor;
 #[cfg(not(target_family = "wasm"))]
 pub use local_code_editor::ShowFindReferencesCard;
+pub mod buffer_location;
 pub mod diff_viewer;
 pub mod editor;
 pub mod editor_management;
@@ -35,6 +37,8 @@ pub enum ImmediateSaveError {
     FailedToSave(#[from] FileSaveError),
     #[error("There is no file tab currently selected")]
     NoActiveFileTab,
+    #[error("Remote session disconnected")]
+    RemoteDisconnected,
 }
 
 /// Trait to determine whether we should show the comment editor based on state held

@@ -9,7 +9,8 @@ pub fn adjust_resource_limits() {
         /// normal usage of Warp for users who open lots of tabs.
         const TARGET_FD_LIMIT: u64 = 2560;
 
-        use nix::sys::resource::{getrlimit, setrlimit, Resource::RLIMIT_NOFILE};
+        use nix::sys::resource::Resource::RLIMIT_NOFILE;
+        use nix::sys::resource::{getrlimit, setrlimit};
 
         let (cur_limit, hard_limit) = match getrlimit(RLIMIT_NOFILE) {
             Ok(val) => val,

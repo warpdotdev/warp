@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+#
+# Builds the Integration-channel Oz CLI for Linux x86_64 (musl) and uploads it
+# to the SSH integration testing VM so that remote-server integration tests run
+# against the binary built from the current branch.
+#
+# This script is intended to be run once by CI before the integration test
+# suite, not by individual test functions. The binary is placed at the
+# versioned Integration channel path on the remote host, which is where the
+# Integration channel's `check_binary` looks.
+#
+# Prerequisites (same as script/deploy_remote_server):
+#   Linux: install an x86_64 musl cross toolchain that includes gcc and g++
+#          (CI uses cross-tools/musl-cross) and sudo apt-get install sshpass
+#   rustup target add x86_64-unknown-linux-musl
+#   gcloud CLI authenticated for the warp-ssh-integration-testing project
+#
+# Usage:
+#   script/deploy_remote_server_to_test_vm
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+TARGET="x86_64-unknown-linux-musl"
+CARGO_PROFILE="dev-remote"
+FEATURES="crash_reporting,standalone,agent_mode_debug,remote_codebase_indexing"
+WARP_BIN="integration"
+# The integration test runner uses Channel::Integration, which maps to
+# cli_command_name() = "oz-integration", remote_server_dir() = "~/.warp-dev/remote-server",
+# and remote_server_binary() = "oz-integration-${pinned_version}".
+# See crates/warp_core/src/channel/mod.rs, crates/remote_server/src/setup.rs,
+# and crates/integration/src/bin/integration.rs.
+#
+# We intentionally build app/src/bin/integration.rs instead of the normal
+# Local-channel app binary. The Local-channel release bundle requires
+# warp-channel-config to generate local_config.json at compile time, but this CI
+# path should not depend on private channel config. The Integration-channel
+# binary embeds a static non-secret config instead.
+REMOTE_DIR=".warp-dev/remote-server"
+
+# Dedicated remote-server test VM, configured similarly to the SSH integration
+# test VM but isolated from the general SSH integration suite.
+REMOTE_USERS=(bash zsh)
+REMOTE_HOST="ssh-remote-server-testing"
+REMOTE_PORT="22"
+PROXY_COMMAND="gcloud compute start-iap-tunnel ssh-remote-server-testing ${REMOTE_PORT} --listen-on-stdin --project=warp-ssh-integration-testing --zone=us-east4-b"
+
+# ── Helpers ───────────────────────────────────────────────────────
+
+install_musl_help() {
+  case "$(uname -s)" in
+    Linux)
+      echo "Install a musl cross toolchain that includes gcc and g++." >&2
+      ;;
+    *)
+      echo "Install an x86_64 musl C compiler for $TARGET." >&2
+      ;;
+  esac
+}
+
+detect_musl_linker() {
+  if command -v x86_64-linux-musl-gcc &>/dev/null; then
+    echo "x86_64-linux-musl-gcc"
+    return
+  fi
+  if command -v x86_64-unknown-linux-musl-gcc &>/dev/null; then
+    echo "x86_64-unknown-linux-musl-gcc"
+    return
+  fi
+
+  if command -v musl-gcc &>/dev/null; then
+    echo "musl-gcc"
+    return
+  fi
+
+  echo "Error: no musl linker found." >&2
+  install_musl_help
+  exit 1
+}
+detect_musl_cxx() {
+  local linker_cxx="${MUSL_LINKER%gcc}g++"
+  if [[ "$linker_cxx" != "$MUSL_LINKER" ]] && command -v "$linker_cxx" &>/dev/null; then
+    echo "$linker_cxx"
+    return
+  fi
+
+  if command -v x86_64-linux-musl-g++ &>/dev/null; then
+    echo "x86_64-linux-musl-g++"
+    return
+  fi
+
+  if command -v x86_64-unknown-linux-musl-g++ &>/dev/null; then
+    echo "x86_64-unknown-linux-musl-g++"
+    return
+  fi
+
+  echo "Error: no musl C++ compiler found." >&2
+  install_musl_help
+  exit 1
+}
+
+app_version() {
+  if [[ -n "${GIT_RELEASE_TAG:-}" ]]; then
+    echo "$GIT_RELEASE_TAG"
+    return
+  fi
+
+  cargo metadata --no-deps --format-version 1 \
+    | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "remote_server" and p["manifest_path"].endswith("/crates/remote_server/Cargo.toml")))'
+}
+
+# ── Preflight checks ──────────────────────────────────────────────
+
+MUSL_LINKER="$(detect_musl_linker)"
+MUSL_CXX="$(detect_musl_cxx)"
+
+if ! rustup target list --installed 2>/dev/null | grep -q "$TARGET"; then
+  echo "Error: $TARGET target not installed." >&2
+  echo "Install it with: rustup target add $TARGET" >&2
+  exit 1
+fi
+
+BUNDLE_VERSION="$(app_version)"
+BUNDLE_BINARY_NAME="oz-integration"
+BINARY_NAME="$BUNDLE_BINARY_NAME-$BUNDLE_VERSION"
+
+# ── Build ─────────────────────────────────────────────────────────
+
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT/target}"
+OUTPUT_DIR="$CARGO_TARGET_DIR/$TARGET/$CARGO_PROFILE"
+BUILT_BINARY="$OUTPUT_DIR/$WARP_BIN"
+LOCAL_BUNDLE_DIR="$OUTPUT_DIR/remote-server-integration-bundle"
+LOCAL_BUNDLE_TARBALL="$OUTPUT_DIR/remote-server-integration-bundle.tar.gz"
+
+echo "==> Building Integration-channel Oz CLI for $TARGET (profile=$CARGO_PROFILE)"
+
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$MUSL_LINKER" \
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C symbol-mangling-version=v0" \
+CC_x86_64_unknown_linux_musl="$MUSL_LINKER" \
+CXX_x86_64_unknown_linux_musl="$MUSL_CXX" \
+  cargo build \
+    -p warp \
+    --bin "$WARP_BIN" \
+    --target "$TARGET" \
+    --profile "$CARGO_PROFILE" \
+    --features "$FEATURES"
+
+if [[ ! -f "$BUILT_BINARY" ]]; then
+  echo "Error: Expected binary not found at $BUILT_BINARY" >&2
+  exit 1
+fi
+
+BINARY_SIZE=$(du -h "$BUILT_BINARY" | cut -f1)
+echo "==> Build complete ($BINARY_SIZE)"
+
+rm -rf "$LOCAL_BUNDLE_DIR"
+mkdir -p "$LOCAL_BUNDLE_DIR"
+cp "$BUILT_BINARY" "$LOCAL_BUNDLE_DIR/$BUNDLE_BINARY_NAME"
+"$WORKSPACE_ROOT/script/prepare_bundled_resources" \
+  "$LOCAL_BUNDLE_DIR/resources" \
+  integration \
+  "$CARGO_PROFILE"
+tar -czf "$LOCAL_BUNDLE_TARBALL" -C "$LOCAL_BUNDLE_DIR" .
+
+# ── Upload via SCP through GCP IAP tunnel ─────────────────────────
+# The test VM uses password auth (same as the SSH integration tests).
+# sshpass provides the password non-interactively for SSH/SCP.
+SSH_PASSWORD="password"
+SSH_OPTS=(-p "$REMOTE_PORT" -o "ProxyCommand=$PROXY_COMMAND" -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+
+if command -v sshpass &>/dev/null; then
+  export SSHPASS="$SSH_PASSWORD"
+  SSH_CMD=(sshpass -e ssh)
+  SCP_CMD=(sshpass -e scp)
+else
+  echo "Warning: sshpass not found, SSH/SCP will prompt for password interactively." >&2
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo "Install it with: brew install hudochenkov/sshpass/sshpass" >&2
+  elif [[ "$(uname -s)" == "Linux" ]]; then
+    echo "Install it with: sudo apt-get install sshpass" >&2
+  fi
+  SSH_CMD=(ssh)
+  SCP_CMD=(scp)
+fi
+
+for REMOTE_USER in "${REMOTE_USERS[@]}"; do
+  echo "==> Ensuring remote directory exists for ${REMOTE_USER}"
+  "${SSH_CMD[@]}" "${SSH_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p ~/$REMOTE_DIR"
+  echo "==> Stopping stale remote server daemons for ${REMOTE_USER}"
+  "${SSH_CMD[@]}" "${SSH_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "bash -s -- '$REMOTE_DIR'" <<'REMOTE_SCRIPT'
+set -euo pipefail
+
+REMOTE_ROOT="$HOME/$1"
+mkdir -p "$REMOTE_ROOT"
+
+shopt -s nullglob
+for PID_FILE in "$REMOTE_ROOT"/*/server.pid; do
+  DAEMON_DIR="$(dirname "$PID_FILE")"
+  PID="$(cat "$PID_FILE" 2>/dev/null || true)"
+
+  if [[ "$PID" =~ ^[0-9]+$ ]] && [[ -d "/proc/$PID" ]]; then
+    CMDLINE="$(tr '\0' ' ' < "/proc/$PID/cmdline" 2>/dev/null || true)"
+    if [[ "$CMDLINE" == *remote-server-daemon* ]]; then
+      echo "Stopping stale remote-server daemon pid $PID"
+      kill "$PID" 2>/dev/null || true
+
+      for _ in {1..50}; do
+        if ! kill -0 "$PID" 2>/dev/null; then
+          break
+        fi
+        sleep 0.1
+      done
+
+      if kill -0 "$PID" 2>/dev/null; then
+        echo "Force-stopping stale remote-server daemon pid $PID"
+        kill -9 "$PID" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  rm -f "$DAEMON_DIR/server.sock" "$DAEMON_DIR/server.pid"
+done
+
+rm -f "$REMOTE_ROOT"/remote-server-integration-bundle-*.tar.gz
+REMOTE_SCRIPT
+
+  TMP_BUNDLE_NAME="remote-server-integration-bundle-${GITHUB_RUN_ID:-local}-$$-${REMOTE_USER}.tar.gz"
+  echo "==> Uploading bundle to ${REMOTE_USER}@${REMOTE_HOST}:~/$REMOTE_DIR/$TMP_BUNDLE_NAME"
+  "${SCP_CMD[@]}" -P "$REMOTE_PORT" \
+    -o "ProxyCommand=$PROXY_COMMAND" \
+    -o PreferredAuthentications=password \
+    -o PubkeyAuthentication=no \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    "$LOCAL_BUNDLE_TARBALL" \
+    "${REMOTE_USER}@${REMOTE_HOST}:~/$REMOTE_DIR/$TMP_BUNDLE_NAME"
+
+  echo "==> Installing binary and resources for ${REMOTE_USER}"
+  # Args: <remote dir> <tarball name> <binary name in tarball> <installed name>.
+  # The tarball ships the unversioned binary beside its resources/ tree; the
+  # installed binary carries the version suffix the Integration channel
+  # launches. The resources tree lands at `bundled_resources`, the global
+  # version-independent location the daemon reads (must match
+  # BUNDLED_RESOURCES_DIR_NAME in crates/remote_server/src/setup.rs).
+  "${SSH_CMD[@]}" "${SSH_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" \
+    "bash -s -- '$REMOTE_DIR' '$TMP_BUNDLE_NAME' '$BUNDLE_BINARY_NAME' '$BINARY_NAME'" <<'REMOTE_SCRIPT'
+set -euo pipefail
+
+cd "$HOME/$1"
+tar -xzf "$2"
+rm -f "$2"
+
+rm -rf bundled_resources
+mv resources bundled_resources
+
+chmod 755 "$3"
+mv -f "$3" "$4"
+"./$4" --version
+REMOTE_SCRIPT
+done
+
+echo ""
+echo "==> Done! Binary deployed to ${REMOTE_HOST}:~/$REMOTE_DIR/$BINARY_NAME for users: ${REMOTE_USERS[*]}"
+echo "    Bundled resources: ~/$REMOTE_DIR/bundled_resources"

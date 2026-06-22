@@ -217,5 +217,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "meta_test.rs"]
+#[path = "meta_tests.rs"]
 mod tests;

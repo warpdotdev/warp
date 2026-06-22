@@ -1,18 +1,15 @@
 use serde::Serialize;
 use warpui::{AppContext, SingletonEntity};
 
-use crate::ai::llms::LLMId;
-use crate::CloudModel;
-use crate::{
-    server::telemetry::AgentModeCitation as CitationForTelemetry,
-    terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType,
-};
-
 use super::conversation::AIConversationId;
 use super::{
     AIAgentCitation, AIAgentExchangeId, EntrypointType, PassiveSuggestionTriggerType,
     ServerOutputId,
 };
+use crate::ai::llms::LLMId;
+use crate::server::telemetry::AgentModeCitation as CitationForTelemetry;
+use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
+use crate::CloudModel;
 
 pub trait ForTelemetry {
     type Output;

@@ -2,14 +2,12 @@ use std::path::PathBuf;
 
 use futures_util::future::LocalBoxFuture;
 
+use super::menu::MenuItemPropertyChanges;
+use crate::keymap::Keystroke;
 use crate::modals::ModalId;
 use crate::windowing::state::ApplicationStage;
 use crate::windowing::{WindowCallbackDispatcher, WindowManager};
-use crate::{
-    keymap::Keystroke, notification, AppContext, ClosedWindowData, SingletonEntity, WindowId,
-};
-
-use super::menu::MenuItemPropertyChanges;
+use crate::{notification, AppContext, ClosedWindowData, SingletonEntity, WindowId};
 
 pub type AppInitCallbackFn =
     Box<dyn FnOnce(&mut crate::AppContext, LocalBoxFuture<'static, crate::App>)>;

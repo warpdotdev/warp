@@ -3,17 +3,14 @@ use std::collections::HashSet;
 use chrono::Local;
 use uuid::Uuid;
 
-use crate::ai::{
-    agent::{
-        task::{Task, TaskId},
-        AIAgentExchange, AIAgentExchangeId, AIAgentOutput, AIAgentOutputMessage,
-        AIAgentOutputMessageType, AIAgentOutputStatus, FinishedAIAgentOutput, MessageId, Shared,
-        SubagentCall,
-    },
-    llms::LLMId,
-};
-
 use super::TaskStore;
+use crate::ai::agent::task::{Task, TaskId};
+use crate::ai::agent::{
+    AIAgentExchange, AIAgentExchangeId, AIAgentOutput, AIAgentOutputMessage,
+    AIAgentOutputMessageType, AIAgentOutputStatus, FinishedAIAgentOutput, MessageId, Shared,
+    SubagentCall,
+};
+use crate::ai::llms::LLMId;
 
 fn create_test_exchange() -> AIAgentExchange {
     AIAgentExchange {
@@ -216,7 +213,8 @@ fn test_set_root_task_replaces_old() {
 
     assert_eq!(store.task_count(), 1);
     assert_eq!(store.exchange_count(), 3);
-    assert!(store.get(&task1_id).is_none());
+    // task1_id is now aliased to the new root task via optimistic_root_task_id
+    assert!(store.get(&task1_id).is_some());
     assert!(store.get(&task2_id).is_some());
     assert_eq!(store.root_task_id(), &task2_id);
 

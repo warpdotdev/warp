@@ -1,4 +1,4 @@
-use warpui::event::ModifiersState;
+use warpui_core::event::ModifiersState;
 
 use super::indexing::Point;
 

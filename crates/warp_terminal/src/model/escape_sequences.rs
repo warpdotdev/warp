@@ -1,13 +1,11 @@
 use std::collections::HashMap;
 
 use lazy_static::lazy_static;
-use warpui::keymap::Keystroke;
-use warpui::platform::OperatingSystem;
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::OperatingSystem;
 
-use super::{
-    mouse::{MouseAction, MouseButton, MouseState},
-    TermMode,
-};
+use super::mouse::{MouseAction, MouseButton, MouseState};
+use super::TermMode;
 
 mod kitty_keyboard_protocol;
 
@@ -249,6 +247,7 @@ impl<T: ModeProvider> ToEscapeSequence<T> for KeystrokeWithDetails<'_> {
             .or_else(|| keystroke_to_c0_control_code(keystroke, mode_provider))
             .or_else(|| cursor_movement_keystroke_to_escape_sequence(keystroke, mode_provider))
             .or_else(|| meta_keystroke_to_escape_sequence(keystroke, mode_provider))
+            .or_else(|| backspace_keystroke_to_escape_sequence(keystroke))
     }
 }
 
@@ -595,6 +594,19 @@ fn meta_keystroke_to_escape_sequence(
     }
 }
 
+/// Returns DEL (0x7f) for an unmodified or Shift-only Backspace.
+/// Guards against winit on Windows reporting `\x08` (Ctrl+H) for Shift+Backspace,
+/// which readline-style TUIs interpret as `backward-kill-word`. See GH#11342.
+fn backspace_keystroke_to_escape_sequence(keystroke: &Keystroke) -> Option<Vec<u8>> {
+    if keystroke.ctrl || keystroke.alt || keystroke.meta || keystroke.cmd {
+        return None;
+    }
+    match keystroke.key.as_str() {
+        "backspace" => Some(vec![C0::DEL]),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
-#[path = "escape_sequences_test.rs"]
+#[path = "escape_sequences_tests.rs"]
 mod tests;

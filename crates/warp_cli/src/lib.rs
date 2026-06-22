@@ -1,10 +1,10 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code))]
 
-use std::{env, fmt, path::Path};
+use std::path::Path;
+use std::{env, fmt};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use url::Url;
-
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 
@@ -16,15 +16,20 @@ mod process_handle;
 pub mod artifact;
 pub mod scope;
 pub mod skill;
+mod sort_order;
+pub use sort_order::SortOrderArg;
 
 pub mod agent;
+pub mod api_key;
 pub mod completions;
 pub mod config_file;
+mod date_time;
 pub mod environment;
 pub mod federate;
 pub mod harness_support;
 pub mod integration;
 pub mod json_filter;
+pub mod local_control;
 pub mod mcp;
 pub mod model;
 pub mod provider;
@@ -88,7 +93,11 @@ pub struct GlobalOptions {
     pub output_format: OutputFormat,
 }
 
-/// Command-line argument parser for the main Warp binary. This is used across all channels.
+/// Normal argument parser for the shared Warp executable across all channels.
+///
+/// Oz commands are subcommands of this parser, so invoking an `oz` symlink does
+/// not require a mode flag. Warp Control uses its separate [`local_control::ControlArgs`]
+/// parser, selected before this parser sees the arguments.
 #[derive(Debug, Default, Parser, Clone)]
 #[command(
     name = "oz",
@@ -243,6 +252,15 @@ impl Args {
                     }
                 }
 
+                if !FeatureFlag::APIKeyManagement.is_enabled() {
+                    let args: Vec<String> = env::args().collect();
+                    if args.len() > 1 && args[1] == "api-key" {
+                        eprintln!("error: unrecognized subcommand 'api-key'\n");
+                        eprintln!("For more information, try '--help'");
+                        std::process::exit(2);
+                    }
+                }
+
                 let command = Self::clap_command();
 
                 command.try_get_matches()
@@ -337,16 +355,15 @@ impl Args {
                     })
             });
         }
-        // Hide the message subcommand from help text.
-        if !FeatureFlag::OrchestrationV2.is_enabled() {
-            command = command.mut_subcommand("run", |run_cmd| {
-                run_cmd.mut_subcommand("message", |c| c.hide(true))
-            });
-        }
 
         // Hide the artifact subcommand from help text.
         if !FeatureFlag::ArtifactCommand.is_enabled() {
             command = command.mut_subcommand("artifact", |c| c.hide(true));
+        }
+
+        // Hide the api-key subcommand from help text.
+        if !FeatureFlag::APIKeyManagement.is_enabled() {
+            command = command.mut_subcommand("api-key", |c| c.hide(true));
         }
 
         // Wire up `--version` / `-V` using the same version metadata used elsewhere in the
@@ -535,6 +552,34 @@ pub enum CliCommand {
     /// Manage artifacts.
     #[command(subcommand)]
     Artifact(crate::artifact::ArtifactCommand),
+
+    /// Manage API keys.
+    #[command(subcommand)]
+    ApiKey(crate::api_key::ApiKeyCommand),
+}
+
+impl CliCommand {
+    /// Returns the command path used to identify this invocation in tracing.
+    pub fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            CliCommand::Agent(command) => command.as_str_for_tracing(),
+            CliCommand::Environment(command) => command.as_str_for_tracing(),
+            CliCommand::MCP(command) => command.as_str_for_tracing(),
+            CliCommand::Run(command) => command.as_str_for_tracing(),
+            CliCommand::Model(command) => command.as_str_for_tracing(),
+            CliCommand::Login => "login",
+            CliCommand::Logout => "logout",
+            CliCommand::Whoami => "whoami",
+            CliCommand::Provider(command) => command.as_str_for_tracing(),
+            CliCommand::Integration(command) => command.as_str_for_tracing(),
+            CliCommand::Schedule(command) => command.as_str_for_tracing(),
+            CliCommand::Secret(command) => command.as_str_for_tracing(),
+            CliCommand::Federate(command) => command.as_str_for_tracing(),
+            CliCommand::HarnessSupport(args) => args.command.as_str_for_tracing(),
+            CliCommand::Artifact(command) => command.as_str_for_tracing(),
+            CliCommand::ApiKey(command) => command.as_str_for_tracing(),
+        }
+    }
 }
 
 /// A subcommand of the main Warp application. This includes all [`WorkerCommand`]s as well as app-specific debugging tools.

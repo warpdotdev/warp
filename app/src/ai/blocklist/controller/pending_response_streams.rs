@@ -3,15 +3,11 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::{
-    ai::agent::{conversation::AIConversationId, CancellationReason},
-    BlocklistAIHistoryModel,
-};
-
-use super::{
-    response_stream::{ResponseStream, ResponseStreamId},
-    BlocklistAIController,
-};
+use super::response_stream::{ResponseStream, ResponseStreamId};
+use super::BlocklistAIController;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::CancellationReason;
+use crate::BlocklistAIHistoryModel;
 
 pub(super) struct PendingResponseStreams {
     streams: HashMap<ResponseStreamId, ModelHandle<ResponseStream>>,
@@ -99,6 +95,11 @@ impl PendingResponseStreams {
             false
         } else {
             for response_stream in streams_to_cancel.into_iter() {
+                log::info!(
+                    "Canceling active stream for conversation_id={conversation_id:?}, \
+                     reason={reason}, backtrace=\n{}",
+                    std::backtrace::Backtrace::force_capture()
+                );
                 response_stream.update(ctx, |stream, ctx| {
                     stream.cancel(reason, conversation_id, ctx)
                 });

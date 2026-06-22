@@ -1,23 +1,20 @@
-use std::{borrow::Cow, rc::Rc};
+use std::borrow::Cow;
+use std::rc::Rc;
 
-use crate::{elements::FormattedTextElement, platform::Cursor, AppContext, EventContext};
-
+use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 
-use crate::{
-    elements::{
-        ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable,
-        MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Rect,
-        Stack,
-    },
-    scene::{Border, CornerRadius, Radius},
-    Element,
-};
-
 use super::components::{Coords, UiComponent, UiComponentStyles};
-use lazy_static::lazy_static;
+use crate::elements::{
+    ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex, FormattedTextElement,
+    Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Rect, Stack,
+};
+use crate::platform::Cursor;
+use crate::scene::{Border, CornerRadius, Radius};
+use crate::{AppContext, Element, EventContext};
 
 const LABEL_LEFT_MARGIN: f32 = 8.;
 const BORDER_WIDTH: f32 = 1.5;

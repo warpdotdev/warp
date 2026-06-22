@@ -1,16 +1,15 @@
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::AIConversation;
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::history_model::AIConversationMetadata;
-use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
-use crate::terminal::view::blocklist_filter;
-use crate::undo_close::UndoCloseStack;
-use crate::workspace::PaneViewLocator;
-use crate::workspace::WorkspaceRegistry;
-use chrono::TimeZone;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+
+use chrono::TimeZone;
 use warpui::{AppContext, EntityId, SingletonEntity, WindowId};
+
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
+use crate::terminal::view::blocklist_filter;
+use crate::undo_close::UndoCloseStack;
+use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
 
 /// Result from matching a conversation.
 /// terminal_view_id and window_id are optional because, when we add restored conversations,

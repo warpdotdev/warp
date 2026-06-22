@@ -1,25 +1,19 @@
+use pathfinder_color::ColorU;
+use warp_core::ui::theme::Fill;
+use warpui::elements::{
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MouseStateHandle,
+    ParentElement, Radius, Shrinkable,
+};
+use warpui::fonts::Weight;
+use warpui::platform::Cursor;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::text_input::TextInput;
+use warpui::{Action, AppContext, Element, SingletonEntity, ViewHandle};
+
 use crate::appearance::Appearance;
 use crate::editor::EditorView;
 use crate::ui_components::icons::Icon;
-use pathfinder_color::ColorU;
-use warp_core::ui::theme::Fill;
-use warpui::elements::{Flex, ParentElement};
-use warpui::ui_components::components::Coords;
-use warpui::ui_components::text_input::TextInput;
-use warpui::{
-    elements::{
-        ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, MouseStateHandle, Radius,
-        Shrinkable,
-    },
-    fonts::Weight,
-    platform::Cursor,
-    ui_components::{
-        button::ButtonVariant,
-        components::{UiComponent, UiComponentStyles},
-    },
-    Action, AppContext, Element,
-};
-use warpui::{SingletonEntity, ViewHandle};
 
 pub const INPUT_BOX_FONT_SIZE: f32 = 14.;
 pub const TEAM_BLOCK_INITIAL_HEIGHT: f32 = 92.;

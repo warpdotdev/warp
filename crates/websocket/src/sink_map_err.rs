@@ -1,8 +1,9 @@
 use core::pin::Pin;
+use std::task::{Context, Poll};
+
 use futures::{Sink, Stream};
 use futures_util::stream::FusedStream;
 use pin_project::pin_project;
-use std::task::{Context, Poll};
 
 /// Maps the error returned by the [`Sink`] using the provided `err` function.
 pub fn map_err<S, I, E>(sink: S, err: impl FnMut(S::Error) -> E) -> impl Sink<I, Error = E>

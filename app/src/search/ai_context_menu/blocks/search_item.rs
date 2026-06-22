@@ -1,3 +1,13 @@
+use chrono::{DateTime, Local};
+use fuzzy_match::FuzzyMatchResult;
+use ordered_float::OrderedFloat;
+use warp_core::command::ExitCode;
+use warpui::elements::{
+    ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, Icon, ParentElement, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::{AppContext, Element, SingletonEntity};
+
 use crate::appearance::Appearance;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::ai_context_menu::styles;
@@ -5,17 +15,6 @@ use crate::search::item::SearchItem;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::terminal::model::block::BlockId;
 use crate::util::truncation::truncate_from_end;
-use fuzzy_match::FuzzyMatchResult;
-use ordered_float::OrderedFloat;
-use warpui::elements::Highlight;
-use warpui::fonts::{Properties, Weight};
-use warpui::{
-    elements::{ConstrainedBox, Container, CrossAxisAlignment, Flex, Icon, ParentElement, Text},
-    AppContext, Element, SingletonEntity,
-};
-
-use chrono::{DateTime, Local};
-use warp_core::command::ExitCode;
 
 /// Calculate how long ago a timestamp was
 fn time_ago_string(timestamp: Option<&DateTime<Local>>) -> String {

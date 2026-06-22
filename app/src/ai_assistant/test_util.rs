@@ -1,7 +1,8 @@
+use markdown_parser::{CodeBlockText, FormattedText};
+
 use crate::ai_assistant::utils::{
     AssistantTranscriptPart, CodeBlockIndex, FormattedTranscriptMessage, MarkdownSegment,
 };
-use markdown_parser::{CodeBlockText, FormattedText};
 
 pub fn default_code_block_segment(code_block_index: CodeBlockIndex) -> MarkdownSegment {
     MarkdownSegment::CodeBlock {

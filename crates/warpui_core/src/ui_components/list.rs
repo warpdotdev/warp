@@ -1,9 +1,7 @@
 use pathfinder_color::ColorU;
 
-use crate::{
-    elements::{Container, Element, Flex, ParentElement, Text},
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
-};
+use crate::elements::{Container, Element, Flex, ParentElement, Text};
+use crate::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 
 const BULLET: &str = "•";
 

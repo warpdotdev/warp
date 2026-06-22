@@ -1,9 +1,6 @@
-use super::{
-    AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram,
-    AgentOutputTable, ProgrammingLanguage,
-};
-use crate::code::editor_management::CodeSource;
-use crate::features::FeatureFlag;
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use ai::gfm_table::{format_gfm_table, maybe_collect_gfm_table_lines};
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -12,8 +9,14 @@ use markdown_parser::{
 };
 use mermaid_to_svg::is_mermaid_diagram;
 use regex::Regex;
-use std::{collections::HashMap, path::PathBuf};
 use warp_util::path::LineAndColumnArg;
+
+use super::{
+    AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram,
+    AgentOutputTable, ProgrammingLanguage,
+};
+use crate::code::editor_management::CodeSource;
+use crate::features::FeatureFlag;
 
 lazy_static! {
     /// Markdown prefix for code blocks. Matches on triple backticks followed by a language.

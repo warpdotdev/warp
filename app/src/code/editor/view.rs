@@ -1,88 +1,85 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
 // Adding this file level gate as some of the code around editability is not used in WASM yet.
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::ops::Range;
+use std::path::Path;
+use std::rc::Rc;
 
-use crate::code::editor::{
-    comment_editor::{CommentEditor, CommentEditorEvent},
-    comments::PendingComment,
-    diff::DiffStatus,
-    element::{
-        AddAsContextButton, CommentButton, EditorWrapper, EditorWrapperStateHandle,
-        GutterHoverTarget, GutterRange, InnerEditor, LineNumberConfig, RevertHunkButton,
-    },
-    find::view::{CodeEditorFind as Find, Event as FindViewEvent},
-    goto_line::view::{Event as GoToLineEvent, GoToLineView},
-    line::EditorLineLocation,
-    model::{CodeEditorModel, CodeEditorModelEvent, HoverableLink, LineBound, StableEditorLine},
-    nav_bar::{NavBar, NavBarBehavior, NavBarEvent},
-    scroll::{ScrollPosition, ScrollTrigger, ScrollWheelBehavior},
-};
-use crate::code::{
-    editor::EditorReviewComment, DiffResult, NoopCommentEditorProvider,
-    NoopFindReferencesCardProvider, ShowCommentEditorProvider, ShowFindReferencesCardProvider,
-};
-use crate::{
-    appearance::Appearance,
-    code_review::comments::{CommentId, CommentOrigin},
-    editor::InteractionState,
-    features::FeatureFlag,
-    notebooks::editor::rich_text_styles,
-    settings::{AppEditorSettings, FontSettings},
-    view_components::find::FindDirection,
-};
 use ai::diff_validation::DiffDelta;
 use lazy_static::lazy_static;
 use num_traits::SaturatingSub;
 use pathfinder_geometry::vector::vec2f;
-use std::fmt::Debug;
-use std::rc::Rc;
-use std::{collections::HashMap, ops::Range};
-use std::{collections::HashSet, path::Path};
+use settings::Setting as _;
 use string_offset::CharOffset;
 use vec1::{vec1, Vec1};
 use vim::vim::{Direction, InsertPosition, VimMode, VimModel, VimState, VimSubscriber};
 use warp_core::platform::SessionPlatform;
-use warp_editor::{
-    content::{
-        buffer::{
-            Buffer, BufferEditAction, EditOrigin, InitialBufferState, ToBufferCharOffset as _,
-            ToBufferPoint,
-        },
-        text::IndentUnit,
-        version::BufferVersion,
-    },
-    model::{CoreEditorModel, PlainTextEditorModel},
-    multiline::AnyMultilineString,
-    render::{
-        element::{
-            lens_element::RichTextElementLens, DisplayOptions, DisplayStateHandle, RichTextElement,
-            VerticalExpansionBehavior,
-        },
-        model::{
-            AutoScrollMode, BlockSpacing, Decoration, ExpansionType, LineCount, ParagraphStyles,
-            RichTextStyles, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES,
-        },
-    },
-    search::{SearchEvent, Searcher, MATCH_FILL, SELECTED_MATCH_FILL},
+use warp_editor::content::buffer::{
+    Buffer, BufferEditAction, EditOrigin, InitialBufferState, ToBufferCharOffset as _,
+    ToBufferPoint,
 };
+use warp_editor::content::text::IndentUnit;
+use warp_editor::content::version::BufferVersion;
+use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
+use warp_editor::multiline::AnyMultilineString;
+use warp_editor::render::element::lens_element::RichTextElementLens;
+use warp_editor::render::element::{
+    DisplayOptions, DisplayStateHandle, RichTextElement, VerticalExpansionBehavior,
+};
+use warp_editor::render::model::{
+    AutoScrollMode, BlockSpacing, Decoration, ExpansionType, LineCount, ParagraphStyles,
+    RichTextStyles, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES,
+};
+use warp_editor::search::{SearchEvent, Searcher, MATCH_FILL, SELECTED_MATCH_FILL};
 use warp_util::content_version::ContentVersion;
+use warp_util::standardized_path::StandardizedPath;
+use warpui::elements::new_scrollable::{
+    AxisConfiguration, DualAxisConfig, NewScrollableElement, ScrollableAppearance,
+};
+use warpui::elements::{
+    ChildAnchor, ChildView, Dismiss, Fill, Flex, Margin, MouseStateHandle, NewScrollable,
+    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds, ScrollStateHandle,
+    Shrinkable, Stack,
+};
+use warpui::event::ModifiersState;
+use warpui::keymap::Keystroke;
+use warpui::platform::Cursor;
+use warpui::prelude::RectF;
+use warpui::text::point::Point;
+use warpui::units::Pixels;
 use warpui::{
-    elements::{
-        new_scrollable::{
-            AxisConfiguration, DualAxisConfig, NewScrollableElement, ScrollableAppearance,
-        },
-        ChildAnchor, ChildView, Dismiss, Fill, Flex, Margin, MouseStateHandle, NewScrollable,
-        OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
-        ScrollStateHandle, Shrinkable, Stack,
-    },
-    event::ModifiersState,
-    keymap::Keystroke,
-    platform::Cursor,
-    prelude::RectF,
-    text::point::Point,
-    units::Pixels,
     AppContext, BlurContext, CursorInfo, Element, Entity, FocusContext, ModelHandle,
     SingletonEntity, View, ViewContext, ViewHandle, WeakViewHandle, WindowId,
 };
+
+use crate::appearance::Appearance;
+use crate::code::editor::comment_editor::{CommentEditor, CommentEditorEvent};
+use crate::code::editor::comments::PendingComment;
+use crate::code::editor::diff::DiffStatus;
+use crate::code::editor::element::{
+    AddAsContextButton, CommentButton, EditorWrapper, EditorWrapperStateHandle, GutterHoverTarget,
+    GutterRange, InnerEditor, LineNumberConfig, RevertHunkButton,
+};
+use crate::code::editor::find::view::{CodeEditorFind as Find, Event as FindViewEvent};
+use crate::code::editor::goto_line::view::{Event as GoToLineEvent, GoToLineView};
+use crate::code::editor::line::EditorLineLocation;
+use crate::code::editor::model::{
+    CodeEditorModel, CodeEditorModelEvent, HoverableLink, LineBound, StableEditorLine,
+};
+use crate::code::editor::nav_bar::{NavBar, NavBarBehavior, NavBarEvent};
+use crate::code::editor::scroll::{ScrollPosition, ScrollTrigger, ScrollWheelBehavior};
+use crate::code::editor::EditorReviewComment;
+use crate::code::{
+    DiffResult, NoopCommentEditorProvider, NoopFindReferencesCardProvider,
+    ShowCommentEditorProvider, ShowFindReferencesCardProvider,
+};
+use crate::code_review::comments::{CommentId, CommentOrigin};
+use crate::editor::InteractionState;
+use crate::features::FeatureFlag;
+use crate::notebooks::editor::rich_text_styles;
+use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, FontSettings};
+use crate::view_components::find::FindDirection;
 
 mod actions;
 pub use actions::init;
@@ -123,6 +120,8 @@ pub enum CodeEditorEvent {
     },
     /// Emitted when a diff hunk is reverted
     DiffReverted,
+    /// Emitted when the inline comment editor is opened.
+    CommentEditorOpened,
     HiddenSectionExpanded,
     /// Emitted when a comment is saved. This gets propagated up so that it
     /// can be augmented with the file and repo paths and saved to the comment model.
@@ -308,6 +307,10 @@ impl CodeEditorView {
         });
         ctx.subscribe_to_model(&font_settings_handle, |me, _, _, ctx| {
             me.handle_appearance_or_font_change(ctx);
+        });
+        let app_editor_settings_handle = AppEditorSettings::handle(ctx);
+        ctx.subscribe_to_model(&app_editor_settings_handle, |_, _, _, ctx| {
+            ctx.notify();
         });
 
         let model = ctx.add_model(|ctx| {
@@ -1204,16 +1207,30 @@ impl CodeEditorView {
         let appearance = Appearance::as_ref(ctx);
         let theme = appearance.theme();
         if self.display_options.show_line_numbers {
+            let editor_settings = AppEditorSettings::as_ref(ctx);
             Some(LineNumberConfig {
                 font_family: appearance.monospace_font_family(),
                 font_size: appearance.monospace_font_size(),
                 text_color: theme.sub_text_color(theme.background()).into(),
                 highlight_text_color: theme.main_text_color(theme.background()).into(),
                 starting_line_number: self.display_options.starting_line_number,
+                mode: *editor_settings.code_editor_line_number_mode.value(),
+                active_line_number: self.active_cursor_line_for_line_numbers(ctx),
+                active_cursor_is_visible: self.is_focused(ctx) && self.is_editable(ctx),
             })
         } else {
             None
         }
+    }
+
+    fn active_cursor_line_for_line_numbers(&self, ctx: &AppContext) -> Option<LineCount> {
+        let model = self.model.as_ref(ctx);
+        let selection = *model.selections(ctx).first();
+        let buffer = model.content().as_ref(ctx);
+        let point = selection.head.to_buffer_point(buffer);
+        // `LineCount`s used by render blocks are zero-based, while buffer points report rows using
+        // the editor's one-based convention.
+        Some(LineCount::from(point.row.saturating_sub(1) as usize))
     }
 
     fn run_find(&mut self, query: &str, ctx: &mut ViewContext<Self>) {
@@ -1241,6 +1258,14 @@ impl CodeEditorView {
                 self.reset_for_editing_change();
                 self.vim_maybe_enforce_cursor_line_cap(ctx);
                 ctx.emit(CodeEditorEvent::SelectionChanged);
+                if *AppEditorSettings::as_ref(ctx)
+                    .code_editor_line_number_mode
+                    .value()
+                    == CodeEditorLineNumberMode::Relative
+                {
+                    // Repaint relative line-number gutters when the cursor origin changes.
+                    ctx.notify();
+                }
             }
             CodeEditorModelEvent::ContentChanged { origin } => {
                 if origin.from_user() {
@@ -1415,9 +1440,15 @@ impl CodeEditorView {
         });
     }
 
-    pub fn set_language_with_path(&mut self, path: &Path, ctx: &mut ViewContext<Self>) {
+    pub fn set_language_with_path(&mut self, path: &StandardizedPath, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |model, ctx| {
             model.set_language_with_path(path, ctx);
+        });
+    }
+
+    pub fn set_language_with_local_path(&mut self, path: &Path, ctx: &mut ViewContext<Self>) {
+        self.model.update(ctx, |model, ctx| {
+            model.set_language_with_local_path(path, ctx);
         });
     }
 
@@ -2105,6 +2136,7 @@ impl CodeEditorView {
         self.model.update(ctx, |editor_model, ctx| {
             editor_model.reopen_comment_line(id, location, comment_text, origin, ctx);
         });
+        ctx.emit(CodeEditorEvent::CommentEditorOpened);
 
         ctx.notify();
     }
@@ -2361,8 +2393,14 @@ impl View for CodeEditorView {
         }
         if let Some(vim_mode) = self.vim_mode(app) {
             context.set.insert("Vim");
-            if vim_mode == VimMode::Normal {
-                context.set.insert("VimNormalMode");
+            match vim_mode {
+                VimMode::Normal => {
+                    context.set.insert("VimNormalMode");
+                }
+                VimMode::Visual(_) => {
+                    context.set.insert("VimVisualMode");
+                }
+                _ => {}
             }
         }
         if self.find_bar.is_some() {
@@ -2412,6 +2450,17 @@ impl CodeEditorView {
             input: input.to_string(),
         };
         self.handle_goto_line_event(&event, ctx);
+    }
+
+    pub fn displayed_line_number_for_test(
+        &self,
+        one_based_line_number: usize,
+        ctx: &AppContext,
+    ) -> Option<usize> {
+        let line_number_config = self.line_number_config(ctx)?;
+        let line_count = LineCount::from(one_based_line_number.checked_sub(1)?);
+
+        Some(line_number_config.display_line_number(line_count))
     }
 }
 

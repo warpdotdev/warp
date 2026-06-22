@@ -1,10 +1,55 @@
 use serde::{Deserialize, Serialize};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
+use warp_core::features::FeatureFlag;
+use warpui::units::Pixels;
+use warpui::{AppContext, SingletonEntity};
 
 use crate::settings::{AISettings, InputSettings, TerminalSpacing};
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
-};
-use warpui::{units::Pixels, AppContext, SingletonEntity};
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Controls whether terminal programs can access the system clipboard via OSC 52 escape sequences.",
+    rename_all = "snake_case"
+)]
+pub enum Osc52ClipboardAccess {
+    #[default]
+    #[schemars(description = "Deny all OSC 52 clipboard access.")]
+    Deny,
+    #[schemars(description = "Allow terminal programs to write to the clipboard, but not read.")]
+    WriteOnly,
+    #[schemars(description = "Allow terminal programs to both read and write the clipboard.")]
+    ReadWrite,
+}
+
+impl Osc52ClipboardAccess {
+    pub fn allows_write(self) -> bool {
+        matches!(self, Self::WriteOnly | Self::ReadWrite)
+    }
+
+    pub fn allows_read(self) -> bool {
+        matches!(self, Self::ReadWrite)
+    }
+
+    pub fn as_dropdown_label(self) -> &'static str {
+        match self {
+            Self::Deny => "Deny",
+            Self::WriteOnly => "Write only",
+            Self::ReadWrite => "Read and write",
+        }
+    }
+}
 
 #[derive(
     Clone,
@@ -133,6 +178,27 @@ define_settings_group!(TerminalSettings, settings: [
         toml_path: "terminal.show_terminal_zero_state_block",
         description: "Whether to show the AI zero-state block in new terminal sessions.",
     },
+    osc52_clipboard_access: Osc52ClipboardAccessSetting {
+        type: Osc52ClipboardAccess,
+        default: Osc52ClipboardAccess::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "terminal.osc52_clipboard_access",
+        description: "Controls whether terminal programs can access the system clipboard via OSC 52 escape sequences. Options: deny (default), write_only, read_write.",
+    },
+    // Opt-in toggle for running terminal find on a background thread. Only consulted on
+    // channels where `FeatureFlag::AsyncFind` is off; channels with the flag on force the
+    // feature on and hide this toggle. See `is_async_find_enabled` for the composite check.
+    async_find_enabled: AsyncFindEnabled {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "experimental.async_find_enabled",
+        description: "Use an improved implementation of find to keep the UI responsive while searching for matches on large outputs.",
+    },
 ]);
 
 impl TerminalSettings {
@@ -148,6 +214,13 @@ impl TerminalSettings {
     /// Checks both the user setting and the global AI enablement.
     pub fn should_show_zero_state_block(&self, ctx: &AppContext) -> bool {
         *self.show_terminal_zero_state_block && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
+    }
+
+    /// Whether asynchronous terminal find should be used. On channels where
+    /// `FeatureFlag::AsyncFind` is on, the feature is force-enabled (no toggle shown).
+    /// On other channels, users opt in via the `async_find_enabled` setting.
+    pub fn is_async_find_enabled(&self) -> bool {
+        FeatureFlag::AsyncFind.is_enabled() || *self.async_find_enabled
     }
 
     /// Spacing for the input box.
@@ -167,3 +240,7 @@ impl TerminalSettings {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "settings_tests.rs"]
+mod tests;

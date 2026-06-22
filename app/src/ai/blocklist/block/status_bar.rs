@@ -1,89 +1,75 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
 
-use super::{
-    cli_controller::{CLISubagentController, CLISubagentEvent, UserTakeOverReason},
-    model::{AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus},
-    view_impl::common::{
-        render_switch_control_to_user_button, render_warping_indicator,
-        render_warping_indicator_base, ButtonProps, ForceRefreshButtonProps, MaybeShimmeringText,
-        WarpingIndicatorProps, WarpingProps, LOAD_OUTPUT_MESSAGE, WAITING_FOR_USER_INPUT_MESSAGE,
-    },
-};
-use crate::{
-    ai::agent_tips::AITipModel,
-    terminal::{
-        input::buffer_model::InputBufferUpdateEvent,
-        view::ambient_agent::is_cloud_agent_pre_first_exchange,
-    },
-};
-use crate::{
-    ai::blocklist::agent_view::{
-        agent_view_bg_fill, child_agent_status_card::ChildAgentStatusCard, AgentMessageBar,
-        AgentViewController, EphemeralMessageModel,
-    },
-    terminal::input::{
-        buffer_model::InputBufferModel,
-        message_bar::common::render_standard_message_bar,
-        message_bar::{Message, MessageItem},
-        slash_command_model::SlashCommandModel,
-        suggestions_mode_model::InputSuggestionsModeModel,
-    },
-};
-use warp_multi_agent_api as api;
-
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversationId, icons, AIAgentExchangeId, AIAgentOutput,
-            AIAgentOutputMessageType, CancellationReason, SummarizationType,
-        },
-        blocklist::{
-            agent_view::shortcuts::AgentShortcutViewModel,
-            ai_brand_color,
-            model::AIBlockModelHelper,
-            summarization_cancel_dialog::{
-                self, SummarizationCancelDialog, SummarizationCancelDialogEvent,
-            },
-            BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextEvent,
-            BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
-            BlocklistAIInputEvent, BlocklistAIInputModel, ResponseStreamId,
-        },
-        llms::LLMPreferences,
-        AgentTip,
-    },
-    send_telemetry_from_app_ctx,
-    server::telemetry::TelemetryEvent,
-    settings::{InputModeSettings, InputSettings},
-    settings_view::keybindings::KeybindingChangedNotifier,
-    terminal::{
-        input::SET_INPUT_MODE_TERMINAL_ACTION_NAME,
-        model::block::LONG_RUNNING_COMMAND_DURATION_MS,
-        model_events::{ModelEvent, ModelEventDispatcher},
-        view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent},
-        warpify::render::LEFT_STRIPE_WIDTH,
-        TerminalModel, CANCEL_COMMAND_KEYBINDING, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
-        TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING, TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING,
-    },
-    util::bindings::keybinding_name_to_keystroke,
-    BlocklistAIHistoryModel,
-};
 use instant::Instant;
+use markdown_parser::FormattedTextFragment;
 use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
-use warp_core::{
-    features::FeatureFlag,
-    ui::{appearance::Appearance, theme::Fill, Icon as CoreIcon},
-};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::Fill;
+use warp_core::ui::Icon as CoreIcon;
+use warp_multi_agent_api as api;
 use warpui::elements::shimmering_text::ShimmeringTextStateHandle;
+use warpui::elements::{Border, Container, Empty, Flex, MouseStateHandle, ParentElement, Text};
+use warpui::keymap::Keystroke;
+use warpui::presenter::ChildView;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
-    elements::{Border, Container, Empty, Flex, MouseStateHandle, ParentElement, Text},
-    keymap::Keystroke,
-    presenter::ChildView,
-    r#async::SpawnedFutureHandle,
-    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, View, ViewContext,
-    ViewHandle,
+    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
 };
-use warpui::{r#async::Timer, TypedActionView};
+
+use super::cli_controller::{CLISubagentController, CLISubagentEvent, UserTakeOverReason};
+use super::model::{AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus};
+use super::view_impl::common::{
+    render_switch_control_to_user_button, render_warping_indicator, render_warping_indicator_base,
+    AutoExecuteButtonProps, ButtonProps, ForceRefreshButtonProps, MaybeShimmeringText,
+    WarpingIndicatorProps, WarpingProps, LOAD_OUTPUT_MESSAGE, WAITING_FOR_USER_INPUT_MESSAGE,
+};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{
+    icons, AIAgentExchangeId, AIAgentOutput, AIAgentOutputMessageType, CancellationReason,
+    SummarizationType,
+};
+use crate::ai::agent_tips::AITipModel;
+use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
+use crate::ai::blocklist::agent_view::{
+    agent_view_bg_fill, is_in_cloud_context, AgentMessageBar, AgentViewController,
+    EphemeralMessageModel,
+};
+use crate::ai::blocklist::model::AIBlockModelHelper;
+use crate::ai::blocklist::summarization_cancel_dialog::{
+    self, SummarizationCancelDialog, SummarizationCancelDialogEvent,
+};
+use crate::ai::blocklist::{
+    ai_brand_color, BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextEvent,
+    BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent, BlocklistAIInputEvent,
+    BlocklistAIInputModel, QueuedQueryEvent, QueuedQueryModel, ResponseStreamId,
+};
+use crate::ai::llms::LLMPreferences;
+use crate::ai::AgentTip;
+use crate::server::telemetry::TelemetryEvent;
+use crate::settings::{InputModeSettings, InputSettings};
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
+use crate::terminal::input::message_bar::common::render_wrapping_standard_message_bar;
+use crate::terminal::input::slash_command_model::SlashCommandModel;
+use crate::terminal::input::suggestions_mode_model::InputSuggestionsModeModel;
+use crate::terminal::input::{HandoffComposeState, SET_INPUT_MODE_TERMINAL_ACTION_NAME};
+use crate::terminal::model::block::LONG_RUNNING_COMMAND_DURATION_MS;
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::view::ambient_agent::{
+    is_cloud_agent_pre_first_exchange, AmbientAgentViewModel, AmbientAgentViewModelEvent,
+};
+use crate::terminal::warpify::render::LEFT_STRIPE_WIDTH;
+use crate::terminal::{
+    TerminalModel, CANCEL_COMMAND_KEYBINDING, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
+    TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING, TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING,
+};
+use crate::util::bindings::keybinding_name_to_keystroke;
+use crate::{send_telemetry_from_app_ctx, BlocklistAIHistoryModel};
 
 pub fn init(app: &mut AppContext) {
     summarization_cancel_dialog::init(app);
@@ -96,7 +82,6 @@ struct StateHandles {
     stop_button: MouseStateHandle,
     take_over_button: MouseStateHandle,
     hide_cli_responses_button: MouseStateHandle,
-    github_auth_link: MouseStateHandle,
     /// Tracks hover/press state for the inline `Check now` affordance rendered next to
     /// `Last seen by agent ...` while the agent is polling a long-running command.
     force_refresh_button: MouseStateHandle,
@@ -139,7 +124,6 @@ pub struct BlocklistAIStatusBar {
 
     ephemeral_message_model: ModelHandle<EphemeralMessageModel>,
     agent_message_bar: ViewHandle<AgentMessageBar>,
-    child_agent_status_card: ViewHandle<ChildAgentStatusCard>,
 }
 
 impl BlocklistAIStatusBar {
@@ -159,6 +143,7 @@ impl BlocklistAIStatusBar {
         input_suggestions_model: ModelHandle<InputSuggestionsModeModel>,
         slash_command_model: ModelHandle<SlashCommandModel>,
         ephemeral_message_model: ModelHandle<EphemeralMessageModel>,
+        handoff_compose_state: ModelHandle<HandoffComposeState>,
         terminal_view_id: EntityId,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -225,10 +210,15 @@ impl BlocklistAIStatusBar {
             }
         });
         ctx.subscribe_to_model(&context_model, |_, _, event, ctx| {
+            if matches!(event, BlocklistAIContextEvent::PendingQueryStateUpdated) {
+                ctx.notify();
+            }
+        });
+        ctx.subscribe_to_model(&QueuedQueryModel::handle(ctx), |_, _, event, ctx| {
             if matches!(
                 event,
-                BlocklistAIContextEvent::PendingQueryStateUpdated
-                    | BlocklistAIContextEvent::QueueNextPromptToggled
+                QueuedQueryEvent::QueueNextPromptToggled { .. }
+                    | QueuedQueryEvent::DefaultModeChanged
             ) {
                 ctx.notify();
             }
@@ -294,6 +284,11 @@ impl BlocklistAIStatusBar {
             ctx.notify();
         });
 
+        ctx.observe(&AITipModel::handle(ctx), |me, tip_model, ctx| {
+            me.current_tip = tip_model.as_ref(ctx).current_tip().cloned();
+            ctx.notify();
+        });
+
         let summarization_cancel_dialog =
             ctx.add_typed_action_view(|_| SummarizationCancelDialog::default());
         ctx.subscribe_to_view(
@@ -348,14 +343,12 @@ impl BlocklistAIStatusBar {
                 input_suggestions_model,
                 slash_command_model,
                 context_model.clone(),
+                handoff_compose_state,
                 terminal_model.clone(),
                 ctx,
             )
         });
 
-        let child_agent_status_card = ctx.add_typed_action_view(|ctx| {
-            ChildAgentStatusCard::new(agent_view_controller.clone(), ctx)
-        });
         if let Some(ambient_agent_view_model) = ambient_agent_view_model.as_ref() {
             ctx.subscribe_to_model(ambient_agent_view_model, |me, _, event, ctx| match event {
                 AmbientAgentViewModelEvent::DispatchedAgent
@@ -399,7 +392,6 @@ impl BlocklistAIStatusBar {
             current_tip: None,
             ephemeral_message_model,
             agent_message_bar,
-            child_agent_status_card,
         }
     }
 
@@ -830,23 +822,28 @@ impl BlocklistAIStatusBar {
                 shimmering_text_handle: &self.shimmering_text_handle,
                 summarization_start_time: self.summarization_start_time,
                 auto_execute_button: (!model.request_type(app).is_passive_code_diff()).then_some(
-                    ButtonProps {
+                    AutoExecuteButtonProps {
                         button_handle: &self.state_handles.autoexecute_button,
                         keystroke: self.autoexecute_keystroke.as_ref(),
                         is_active: model
                             .conversation(app)
                             .map(|c| c.autoexecute_any_action())
                             .unwrap_or(false),
+                        is_locked: is_in_cloud_context(
+                            terminal_model.block_list().agent_view_state(),
+                            &terminal_model,
+                        ),
                     },
                 ),
                 queue_next_prompt_button: FeatureFlag::QueueSlashCommand.is_enabled().then_some(
                     ButtonProps {
                         button_handle: &self.state_handles.queue_next_prompt_button,
                         keystroke: self.queue_next_prompt_keystroke.as_ref(),
-                        is_active: self
-                            .context_model
-                            .as_ref(app)
-                            .is_queue_next_prompt_enabled(),
+                        is_active: QueuedQueryModel::as_ref(app).is_queue_next_prompt_enabled(
+                            conversation.id(),
+                            active_block,
+                            app,
+                        ),
                     },
                 ),
                 stop_button: Some(ButtonProps {
@@ -886,14 +883,16 @@ impl BlocklistAIStatusBar {
             .as_ref()
             .map(|ambient_agent_view_model| ambient_agent_view_model.as_ref(app))?;
 
+        // The step indicator is only meaningful while a spawn is in flight. Terminal states
+        // (`Failed`, `NeedsGithubAuth`, `Cancelled`) still carry an `AgentProgress` for
+        // telemetry purposes, so guard on `is_waiting_for_session()` rather than relying on
+        // `agent_progress()` being `None`.
+        if !ambient_agent_model.is_waiting_for_session() {
+            return None;
+        }
+
         let progress = ambient_agent_model.agent_progress()?;
-        let progress_text = if progress.harness_started_at.is_some() {
-            "Starting Environment (Step 3/3)"
-        } else if progress.claimed_at.is_some() {
-            "Creating Environment (Step 2/3)"
-        } else {
-            "Connecting to Host (Step 1/3)"
-        };
+        let progress_text = progress.setup_status_text();
         Some(render_warping_indicator_base(
             WarpingIndicatorProps {
                 icon: None,
@@ -911,7 +910,10 @@ impl BlocklistAIStatusBar {
         ))
     }
 
-    fn render_cloud_mode_setup_terminal_message(&self, app: &AppContext) -> Option<Message> {
+    fn render_cloud_mode_setup_terminal_message(
+        &self,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
         if !FeatureFlag::CloudModeSetupV2.is_enabled() {
             return None;
         }
@@ -924,48 +926,42 @@ impl BlocklistAIStatusBar {
         let error_color = theme.ansi_fg_red();
 
         if let Some(auth_url) = ambient_agent_model.github_auth_url() {
-            return Some(Message::new(vec![
-                MessageItem::Icon {
-                    icon: CoreIcon::Triangle,
-                    color: Some(error_color),
-                },
-                MessageItem::Text {
-                    content: "Missing GitHub authentication. ".into(),
-                    color: Some(error_color),
-                },
-                MessageItem::hyperlink(
-                    "Authenticate GitHub",
-                    auth_url.to_owned(),
-                    self.state_handles.github_auth_link.clone(),
-                ),
-            ]));
-        }
-
-        if let Some(error_message) = ambient_agent_model.error_message() {
-            return Some(Message::new(vec![
-                MessageItem::Icon {
-                    icon: CoreIcon::Triangle,
-                    color: Some(error_color),
-                },
-                MessageItem::Text {
-                    content: error_message.to_owned().into(),
-                    color: Some(error_color),
-                },
-            ]));
+            let error_message = ambient_agent_model
+                .github_auth_error_message()
+                .unwrap_or("Missing GitHub authentication.");
+            return Some(render_wrapping_standard_message_bar(
+                CoreIcon::Triangle,
+                error_color,
+                error_color,
+                vec![
+                    FormattedTextFragment::plain_text(format!("{error_message} ")),
+                    FormattedTextFragment::hyperlink("Authenticate GitHub", auth_url.to_owned()),
+                ],
+                app,
+            ));
         }
 
         if ambient_agent_model.is_cancelled() {
             let color = theme.disabled_text_color(theme.background()).into_solid();
-            return Some(Message::new(vec![
-                MessageItem::Icon {
-                    icon: CoreIcon::StopFilled,
-                    color: Some(color),
-                },
-                MessageItem::Text {
-                    content: "Cloud agent run cancelled".into(),
-                    color: Some(color),
-                },
-            ]));
+            return Some(render_wrapping_standard_message_bar(
+                CoreIcon::StopFilled,
+                color,
+                color,
+                vec![FormattedTextFragment::plain_text(
+                    "Cloud agent run cancelled",
+                )],
+                app,
+            ));
+        }
+
+        if let Some(error_message) = ambient_agent_model.error_message() {
+            return Some(render_wrapping_standard_message_bar(
+                CoreIcon::Triangle,
+                error_color,
+                error_color,
+                vec![FormattedTextFragment::plain_text(error_message.to_owned())],
+                app,
+            ));
         }
 
         None
@@ -996,9 +992,10 @@ fn latest_model_used_before_exchange<V: View>(
 }
 
 fn render_agent_tip(tip: &AgentTip, app: &AppContext) -> Box<dyn Element> {
-    use crate::ai::agent_tips::AITip;
     use markdown_parser::{FormattedTextFragment, FormattedTextLine};
     use warpui::text_layout::ClipConfig;
+
+    use crate::ai::agent_tips::AITip;
 
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
@@ -1144,7 +1141,7 @@ impl View for BlocklistAIStatusBar {
         if let Some(cloud_mode_setup_terminal_message) =
             self.render_cloud_mode_setup_terminal_message(app)
         {
-            return render_standard_message_bar(cloud_mode_setup_terminal_message, None, app);
+            return cloud_mode_setup_terminal_message;
         }
         let status_element =
             if let Some(cloud_mode_setup_status) = self.render_cloud_mode_setup_status(app) {
@@ -1154,9 +1151,11 @@ impl View for BlocklistAIStatusBar {
                     .ambient_agent_view_model
                     .as_ref()
                     .is_some_and(|ambient_agent_view_model| {
+                        let terminal_model = self.terminal_model.lock();
                         is_cloud_agent_pre_first_exchange(
                             Some(ambient_agent_view_model),
                             &self.agent_view_controller,
+                            &terminal_model,
                             app,
                         )
                     })
@@ -1229,8 +1228,10 @@ impl View for BlocklistAIStatusBar {
                 // Don't render warping indicator - the loading screen is shown in the main view
                 return Empty::new().finish();
             } else if agent_view_controller.is_active() {
+                // The orchestration pill bar in the agent view header
+                // replaces the legacy child-agent status card rows;
+                // render only the message bar here.
                 return Flex::column()
-                    .with_child(ChildView::new(&self.child_agent_status_card).finish())
                     .with_child(ChildView::new(&self.agent_message_bar).finish())
                     .finish();
             } else {
@@ -1294,16 +1295,6 @@ impl View for BlocklistAIStatusBar {
             }
         } else {
             container = container.with_vertical_padding(8.);
-        }
-
-        // When the agent view is active, keep the child agent status card
-        // visible above the warping/status indicator so it doesn't disappear
-        // while the agent is working.
-        if agent_view_controller.is_active() {
-            return Flex::column()
-                .with_child(ChildView::new(&self.child_agent_status_card).finish())
-                .with_child(container.finish())
-                .finish();
         }
 
         container.finish()

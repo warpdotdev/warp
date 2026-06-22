@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
+use serde::{Deserialize, Deserializer, Serialize};
+
 use crate::app_state::{
     AppState, LeafContents, PaneNodeSnapshot, SplitDirection as StateSplitDirection, TabSnapshot,
     WindowSnapshot,
 };
 use crate::themes::theme::AnsiColorIdentifier;
-use serde::{Deserialize, Deserializer, Serialize};
 
 #[cfg(test)]
 #[path = "launch_config_tests.rs"]
@@ -155,7 +156,6 @@ impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
                 | LeafContents::ExecutionProfileEditor
                 | LeafContents::GetStarted
                 | LeafContents::NetworkLog
-                | LeafContents::Welcome { .. }
                 | LeafContents::AIDocument(_)
                 | LeafContents::EnvironmentManagement(_)
                 | LeafContents::AmbientAgent(_) => {

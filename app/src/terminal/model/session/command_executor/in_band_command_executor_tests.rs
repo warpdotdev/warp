@@ -1,9 +1,8 @@
 use futures_util::future::{AbortHandle, Abortable, Aborted};
 use warpui::App;
 
-use crate::terminal::model::session::ExecuteCommandOptions;
-
 use super::*;
+use crate::terminal::model::session::ExecuteCommandOptions;
 
 impl InBandCommandExecutor {
     /// Returns an `Option` containing the ID of the actively running command.

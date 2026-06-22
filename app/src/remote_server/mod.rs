@@ -1,21 +1,52 @@
 #[cfg(not(target_family = "wasm"))]
-use crate::server::server_api::{ServerApiEvent, ServerApiProvider};
-#[cfg(not(target_family = "wasm"))]
 use remote_server::manager::RemoteServerManager;
-#[cfg(not(target_family = "wasm"))]
-use warpui::SingletonEntity;
 // Re-export everything from the `remote_server` crate so existing
 // `crate::remote_server::*` imports in `app` continue to work.
 pub use remote_server::*;
+#[cfg(not(target_family = "wasm"))]
+use warp_server_client::auth::AuthEvent;
+#[cfg(not(target_family = "wasm"))]
+use warpui::SingletonEntity as _;
+
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
+#[cfg(not(target_family = "wasm"))]
+use crate::server::server_api::ServerApiProvider;
 
 #[cfg(not(target_family = "wasm"))]
 pub mod auth_context;
+#[cfg(not(target_family = "wasm"))]
+pub mod codebase_index_model;
+#[cfg(not(target_family = "wasm"))]
+mod codebase_index_status;
+pub mod diff_state_proto;
+#[cfg(not(target_family = "wasm"))]
+pub mod diff_state_tracker;
+pub mod git_status_proto;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod handoff_snapshot;
+#[cfg(not(target_family = "wasm"))]
+mod ripgrep_search;
+#[cfg(not(target_family = "wasm"))]
+pub mod server_buffer_tracker;
 #[cfg(not(target_family = "wasm"))]
 pub mod server_model;
 #[cfg(not(target_family = "wasm"))]
 pub mod ssh_transport;
 #[cfg(unix)]
 pub mod unix;
+
+#[cfg(not(target_family = "wasm"))]
+fn current_codebase_index_limits(
+    ctx: &warpui::AppContext,
+) -> remote_server::proto::CodebaseIndexLimits {
+    let limits = AIRequestUsageModel::as_ref(ctx).codebase_context_limits();
+    remote_server::proto::CodebaseIndexLimits {
+        max_indices_allowed: limits.max_indices_allowed.map(|limit| limit as u64),
+        max_files_per_repo: limits.max_files_per_repo as u64,
+        embedding_generation_batch_size: limits.embedding_generation_batch_size as u64,
+    }
+}
 
 /// Run the `remote-server-proxy` subcommand.
 #[cfg(unix)]
@@ -39,64 +70,52 @@ pub fn run_daemon(_identity_key: String) -> anyhow::Result<()> {
     anyhow::bail!("remote-server-daemon is not supported on this platform")
 }
 
-/// Start the WarpUI headless app with all daemon singleton models.
-///
-/// This is the platform-agnostic core of every `run_daemon` implementation.
-/// Platform-specific code (Unix sockets, Windows named pipes, …) binds a
-/// listener and calls this function with the appropriate `ServerModel`
-/// constructor — everything else (DirectoryWatcher, DetectedRepositories,
-/// RepoMetadataModel, FileModel) is shared.
-///
-/// # Example
-/// ```ignore
-/// // In unix/mod.rs:
-/// super::run_daemon_app(move |ctx| ServerModel::new(unix_listener, ctx))
-/// ```
-#[cfg(not(target_family = "wasm"))]
-pub(super) fn run_daemon_app(
-    server_model_init: impl FnOnce(&mut warpui::ModelContext<server_model::ServerModel>) -> server_model::ServerModel
-        + 'static,
-) -> anyhow::Result<()> {
-    use warpui::platform::app::AppCallbacks;
-    use warpui::platform::AppBuilder;
-
-    AppBuilder::new_headless(AppCallbacks::default(), Box::new(()), None).run(|ctx| {
-        // Rotate log files from the previous daemon invocation in the background.
-        ctx.background_executor()
-            .spawn(warp_logging::rotate_log_files())
-            .detach();
-
-        use crate::server::telemetry::context_provider::NoopTelemetryContextProvider;
-        use repo_metadata::repositories::DetectedRepositories;
-        use repo_metadata::watcher::DirectoryWatcher;
-        use repo_metadata::RepoMetadataModel;
-
-        // Register a no-op telemetry context so that `send_telemetry_from_ctx!`
-        // calls (e.g. from RepoMetadataModel on ExceededMaxFileLimit) don't
-        // panic due to a missing TelemetryContextModel singleton.
-        ctx.add_singleton_model(NoopTelemetryContextProvider::new_context_provider);
-
-        // Order matters: DetectedRepositories must be registered before
-        // RepoMetadataModel because LocalRepoMetadataModel::new()
-        // subscribes to DetectedRepositories::handle(ctx).
-        ctx.add_singleton_model(DirectoryWatcher::new);
-        ctx.add_singleton_model(|_ctx| DetectedRepositories::default());
-        ctx.add_singleton_model(RepoMetadataModel::new_with_incremental_updates);
-        ctx.add_singleton_model(warp_files::FileModel::new);
-        ctx.add_singleton_model(server_model_init);
-    })?;
-    Ok(())
-}
-
-/// Forwards app auth-token rotation events to the remote-server manager.
+/// Forwards app auth-token rotation and privacy preference change events
+/// to the remote-server manager.
 #[cfg(not(target_family = "wasm"))]
 pub fn wire_auth_token_rotation(ctx: &mut warpui::AppContext) {
+    let codebase_index_limits = current_codebase_index_limits(ctx);
+    RemoteServerManager::handle(ctx).update(ctx, |manager, _| {
+        manager.update_codebase_index_limits(Some(codebase_index_limits));
+    });
     let server_api = ServerApiProvider::handle(ctx);
     let manager = RemoteServerManager::handle(ctx);
     ctx.subscribe_to_model(&server_api, move |_, event, ctx| {
-        if let ServerApiEvent::AccessTokenRefreshed { token } = event {
+        if let AuthEvent::AccessTokenRefreshed { token } = event {
             manager.update(ctx, |manager, _| {
                 manager.rotate_auth_token(token.clone());
+            });
+        }
+    });
+
+    // Forward crash reporting preference changes to all connected daemons.
+    use crate::settings::{PrivacySettings, PrivacySettingsChangedEvent};
+    let privacy_settings = PrivacySettings::handle(ctx);
+    let manager = RemoteServerManager::handle(ctx);
+    ctx.subscribe_to_model(&privacy_settings, move |_, event, ctx| {
+        if let &PrivacySettingsChangedEvent::UpdateIsCrashReportingEnabled { new_value, .. } = event
+        {
+            let codebase_index_limits = current_codebase_index_limits(ctx);
+            manager.update(ctx, |manager, _| {
+                manager.update_codebase_index_limits(Some(codebase_index_limits));
+            });
+            for client in manager.as_ref(ctx).all_connected_clients() {
+                client.update_preferences(new_value, Some(codebase_index_limits));
+            }
+        }
+    });
+
+    let request_usage = AIRequestUsageModel::handle(ctx);
+    let manager = RemoteServerManager::handle(ctx);
+    ctx.subscribe_to_model(&request_usage, move |_, event, ctx| {
+        if matches!(event, AIRequestUsageModelEvent::RequestUsageUpdated) {
+            let codebase_index_limits = current_codebase_index_limits(ctx);
+            let crash_reporting_enabled = PrivacySettings::as_ref(ctx).is_crash_reporting_enabled;
+            manager.update(ctx, |manager, _| {
+                manager.update_codebase_index_limits(Some(codebase_index_limits));
+                for client in manager.all_connected_clients() {
+                    client.update_preferences(crash_reporting_enabled, Some(codebase_index_limits));
+                }
             });
         }
     });

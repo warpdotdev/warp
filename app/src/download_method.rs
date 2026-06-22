@@ -1,10 +1,10 @@
-use crate::{
-    auth::auth_state::AuthState,
-    send_telemetry_on_executor,
-    server::telemetry::{DownloadSource, TelemetryEvent},
-};
 use std::sync::Arc;
+
 use warpui::r#async::executor::Background;
+
+use crate::auth::auth_state::AuthState;
+use crate::send_telemetry_on_executor;
+use crate::server::telemetry::{DownloadSource, TelemetryEvent};
 
 /// Determine the Warp download method (if possible) and send a telemetry event reporting that
 /// method
@@ -35,7 +35,8 @@ pub fn determine_and_report(auth_state: Arc<AuthState>, executor: Arc<Background
 /// as being from the Warp website.
 #[cfg(target_os = "macos")]
 async fn check_download_source() -> DownloadSource {
-    use std::{env, process::Stdio};
+    use std::env;
+    use std::process::Stdio;
 
     // By default when launching an app, the PATH is very limited and doesn't include the locations
     // into which Homebrew installs itself. To make sure we can accurately call `brew`, we need to

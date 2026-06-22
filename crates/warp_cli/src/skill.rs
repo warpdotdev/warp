@@ -1,5 +1,6 @@
+use std::fmt;
 use std::path::Path;
-use std::{fmt, str::FromStr};
+use std::str::FromStr;
 
 /// A skill specifier that can reference a skill in a specific repo or search the current directory.
 ///

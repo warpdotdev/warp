@@ -1,3 +1,16 @@
+use std::sync::Arc;
+
+use fuzzy_match::FuzzyMatchResult;
+use ordered_float::OrderedFloat;
+use pathfinder_color::ColorU;
+use warpui::elements::{
+    Align, ConstrainedBox, Container, Flex, Highlight, ParentElement, Shrinkable, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::{DescriptionContext, Keystroke};
+use warpui::ui_components::components::UiComponent;
+use warpui::{AppContext, Element, SingletonEntity};
+
 use crate::appearance::Appearance;
 use crate::drive::cloud_object_styling::warp_drive_icon_color;
 use crate::drive::DriveObjectType;
@@ -10,17 +23,6 @@ use crate::search::item::SearchItem;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::{BindingGroup, CommandBinding};
-use fuzzy_match::FuzzyMatchResult;
-use ordered_float::OrderedFloat;
-use pathfinder_color::ColorU;
-use std::sync::Arc;
-use warpui::elements::{
-    Align, ConstrainedBox, Container, Flex, Highlight, ParentElement, Shrinkable, Text,
-};
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::{DescriptionContext, Keystroke};
-use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, Element, SingletonEntity};
 
 /// A matched binding from a search query.
 #[derive(Debug)]

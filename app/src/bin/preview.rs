@@ -6,10 +6,8 @@
 mod channel_config;
 
 use anyhow::Result;
-use warp_core::{
-    channel::{Channel, ChannelState},
-    features,
-};
+use warp_core::channel::{Channel, ChannelState};
+use warp_core::features;
 
 // Simple wrapper around warp::run() for feature preview channel builds.
 fn main() -> Result<()> {

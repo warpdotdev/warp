@@ -1,4 +1,5 @@
-use crate::{error::UserFacingError, schema};
+use crate::error::UserFacingError;
+use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct ListWarpDevImagesVariables {}

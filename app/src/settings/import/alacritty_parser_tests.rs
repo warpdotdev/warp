@@ -1,12 +1,12 @@
 use async_io::block_on;
 use virtual_fs::{Stub, VirtualFS};
-use warp_core::ui::{color::hex_color::coloru_from_hex_string, theme::AnsiColor};
-
-use crate::settings::import::config::{ParseableConfig, ThemeType};
+use warp_core::ui::color::hex_color::coloru_from_hex_string;
+use warp_core::ui::theme::AnsiColor;
 
 use super::{
     AlacrittyColors, AlacrittyConfig, AlacrittyTheme, PrimaryAlacrittyColors, RecursivelyParseable,
 };
+use crate::settings::import::config::{ParseableConfig, ThemeType};
 
 #[test]
 fn test_parse_cobalt2() {

@@ -1,18 +1,17 @@
-use crate::server::server_api::ServerApiProvider;
 use futures::future;
-use warp_cli::{
-    integration::{CreateIntegrationArgs, IntegrationCommand, UpdateIntegrationArgs},
-    provider::ProviderType,
-    GlobalOptions,
-};
+use warp_cli::integration::{CreateIntegrationArgs, IntegrationCommand, UpdateIntegrationArgs};
+use warp_cli::provider::ProviderType;
+use warp_cli::GlobalOptions;
 use warp_graphql::mutations::create_simple_integration::CreateSimpleIntegrationOutput;
 use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
 use warp_graphql::queries::get_simple_integrations::SimpleIntegrationsOutput;
-use warpui::{platform::TerminationMode, AppContext, ModelContext, SingletonEntity};
+use warpui::platform::TerminationMode;
+use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::common::{EnvironmentChoice, ResolveConfigurationError};
 use super::integration_output;
 use super::oauth_flow::poll_oauth_until_terminal;
+use crate::server::server_api::ServerApiProvider;
 
 pub fn run(
     ctx: &mut AppContext,

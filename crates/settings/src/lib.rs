@@ -4,21 +4,21 @@ pub mod manager;
 pub mod schema;
 
 // Re-export commonly used types and traits
-pub use macros::SettingSection;
-pub use manager::SettingsManager;
+use std::fmt::Debug;
+use std::ops::Deref;
 
 // Re-export crates used by macro expansions in downstream crates.
 #[doc(hidden)]
 pub use inventory as _inventory;
+pub use macros::SettingSection;
+pub use manager::SettingsManager;
 #[doc(hidden)]
 pub use schemars as _schemars;
 #[doc(hidden)]
 pub use settings_value as _settings_value;
 pub use settings_value::SettingsValue;
-
-use std::fmt::Debug;
-use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, Ordering};
+// Re-export warpui_core for use by macros.
+pub use warpui_core;
 
 /// Extracts the storage key (last segment after the final `.`) from a toml_path.
 ///
@@ -59,31 +59,12 @@ pub const fn toml_path_hierarchy(path: &str) -> Option<&str> {
 }
 
 use anyhow::{Context, Result};
-use serde::{Serialize, de::DeserializeOwned};
-use warpui::{AppContext, Entity, ModelContext};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use warp_features::FeatureFlag;
+use warpui_core::{AppContext, Entity, ModelContext};
+use warpui_extras::secure_storage::{self, AppContextExt as _};
 use warpui_extras::user_preferences::UserPreferences;
-
-/// Whether the TOML-backed settings file is active.
-///
-/// Set once during startup via [`set_settings_file_enabled`]. When `false`,
-/// public settings fall back to the private (platform-native) backend so
-/// that all settings share a single instance.
-static SETTINGS_FILE_ENABLED: AtomicBool = AtomicBool::new(false);
-
-/// Records whether the TOML-backed settings file feature is active.
-///
-/// Call this once during startup after checking `FeatureFlag::SettingsFile`.
-/// The value is read by [`Setting::preferences_for_setting`] and
-/// [`SettingsManager::read_local_setting_value`] to decide which backend
-/// to use for public settings.
-pub fn set_settings_file_enabled(enabled: bool) {
-    SETTINGS_FILE_ENABLED.store(enabled, Ordering::Relaxed);
-}
-
-/// Returns whether the TOML-backed settings file is currently active.
-pub fn is_settings_file_enabled() -> bool {
-    SETTINGS_FILE_ENABLED.load(Ordering::Relaxed)
-}
 
 /// A newtype wrapper for the public preferences backend.
 ///
@@ -122,11 +103,11 @@ impl PublicPreferences {
     }
 }
 
-impl warpui::Entity for PublicPreferences {
+impl warpui_core::Entity for PublicPreferences {
     type Event = ();
 }
 
-impl warpui::SingletonEntity for PublicPreferences {}
+impl warpui_core::SingletonEntity for PublicPreferences {}
 
 /// A newtype wrapper for the private preferences backend.
 ///
@@ -150,11 +131,11 @@ impl Deref for PrivatePreferences {
     }
 }
 
-impl warpui::Entity for PrivatePreferences {
+impl warpui_core::Entity for PrivatePreferences {
     type Event = ();
 }
 
-impl warpui::SingletonEntity for PrivatePreferences {}
+impl warpui_core::SingletonEntity for PrivatePreferences {}
 
 /// An enum representing the different platforms a setting could apply to.
 #[derive(Debug, Clone)]
@@ -373,7 +354,7 @@ pub trait Setting {
     fn set_value_from_cloud_sync(
         &mut self,
         new_value: Self::Value,
-        ctx: &mut warpui::ModelContext<Self::Group>,
+        ctx: &mut warpui_core::ModelContext<Self::Group>,
     ) -> anyhow::Result<()>;
 
     /// Sets the value of the setting persisting it to storage.
@@ -389,7 +370,7 @@ pub trait Setting {
     /// Sets the value of the setting to its default and persists it to storage.
     fn set_value_to_default(
         &mut self,
-        ctx: &mut warpui::ModelContext<Self::Group>,
+        ctx: &mut warpui_core::ModelContext<Self::Group>,
     ) -> anyhow::Result<()> {
         self.set_value(Self::default_value(), ctx)
     }
@@ -399,11 +380,11 @@ pub trait Setting {
     /// Private settings use the platform-native store; public settings use
     /// the main preferences backend (which may be the TOML settings file).
     fn preferences_for_setting(ctx: &AppContext) -> &dyn UserPreferences {
-        use warpui::SingletonEntity;
+        use warpui_core::SingletonEntity;
 
         if Self::is_private() {
             <PrivatePreferences as SingletonEntity>::as_ref(ctx).deref()
-        } else if is_settings_file_enabled() {
+        } else if FeatureFlag::SettingsFile.is_enabled() {
             <PublicPreferences as SingletonEntity>::as_ref(ctx).as_preferences()
         } else {
             // When the settings file is disabled, fall back to the private
@@ -574,6 +555,89 @@ pub trait Setting {
 
     /// Returns true if this setting was explicitly set by the user (i.e., not using the default value).
     fn is_value_explicitly_set(&self) -> bool;
+}
+
+/// Shared persistence operations for typed settings backed by secure storage.
+///
+/// Implementors remain responsible for routing their [`Setting`] lifecycle
+/// methods through this trait and for keeping the setting private and
+/// non-synced when the value must not be exposed through ordinary settings
+/// storage.
+pub trait SecureSetting: Setting {
+    /// Writes this setting's serialized value through its selected secure-storage path.
+    fn write_secure_storage_value(
+        storage: &dyn secure_storage::SecureStorage,
+        key: &str,
+        value: &str,
+    ) -> Result<(), secure_storage::Error> {
+        storage.write_value(key, value)
+    }
+    /// Reads and deserializes this setting from secure storage.
+    ///
+    /// Missing, unreadable, or malformed values return `None`, allowing the
+    /// setting to fail closed to its default value.
+    fn read_from_secure_storage(ctx: &AppContext) -> Option<Self::Value> {
+        let value = match ctx.secure_storage().read_value(Self::storage_key()) {
+            Ok(value) => value,
+            Err(secure_storage::Error::NotFound) => return None,
+            Err(err) => {
+                log::error!(
+                    "Failed to read {} from secure storage: {err:#}",
+                    Self::setting_name()
+                );
+                return None;
+            }
+        };
+        match serde_json::from_str(&value) {
+            Ok(value) => Some(value),
+            Err(err) => {
+                log::error!(
+                    "Failed to deserialize {} from secure storage: {err:#}",
+                    Self::setting_name()
+                );
+                None
+            }
+        }
+    }
+
+    /// Persists this setting to secure storage if its typed value changed.
+    fn write_to_secure_storage(new_value: &Self::Value, ctx: &AppContext) -> Result<bool> {
+        let stored_value_matches = match ctx.secure_storage().read_value(Self::storage_key()) {
+            Ok(stored) => serde_json::from_str::<Self::Value>(&stored)
+                .is_ok_and(|stored| stored == *new_value),
+            Err(secure_storage::Error::NotFound) => false,
+            Err(err) => {
+                return Err(anyhow::anyhow!(err)).context(format!(
+                    "Failed to read existing {} from secure storage",
+                    Self::setting_name()
+                ));
+            }
+        };
+        if stored_value_matches {
+            return Ok(false);
+        }
+        let serialized = serde_json::to_string(new_value).context(format!(
+            "Failed to serialize {} for secure storage",
+            Self::setting_name()
+        ))?;
+        Self::write_secure_storage_value(ctx.secure_storage(), Self::storage_key(), &serialized)
+            .context(format!(
+                "Failed to write {} to secure storage",
+                Self::setting_name()
+            ))?;
+        Ok(true)
+    }
+
+    /// Removes this setting from secure storage.
+    fn clear_from_secure_storage(ctx: &AppContext) -> Result<()> {
+        match ctx.secure_storage().remove_value(Self::storage_key()) {
+            Ok(()) | Err(secure_storage::Error::NotFound) => Ok(()),
+            Err(err) => Err(anyhow::anyhow!(err)).context(format!(
+                "Failed to clear {} from secure storage",
+                Self::setting_name()
+            )),
+        }
+    }
 }
 
 /// A trait for settings that can be toggled between two values.

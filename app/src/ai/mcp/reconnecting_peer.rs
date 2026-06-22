@@ -120,7 +120,7 @@ impl ReconnectingPeer {
     /// Calls a tool on the MCP server.
     pub async fn call_tool(
         &self,
-        params: rmcp::model::CallToolRequestParam,
+        params: rmcp::model::CallToolRequestParams,
     ) -> Result<rmcp::model::CallToolResult, rmcp::ServiceError> {
         self.with_reconnect_retry(params, |peer, p| async move { peer.call_tool(p).await })
             .await
@@ -129,7 +129,7 @@ impl ReconnectingPeer {
     /// Reads a resource from the MCP server.
     pub async fn read_resource(
         &self,
-        params: rmcp::model::ReadResourceRequestParam,
+        params: rmcp::model::ReadResourceRequestParams,
     ) -> Result<rmcp::model::ReadResourceResult, rmcp::ServiceError> {
         self.with_reconnect_retry(params, |peer, p| async move { peer.read_resource(p).await })
             .await

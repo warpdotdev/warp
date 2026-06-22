@@ -1,10 +1,11 @@
 use std::io;
 
+use windows_registry::{Key, CURRENT_USER};
+use windows_result::HRESULT;
+
 /// Store user preferences in the Windows Registry.
 /// Modeled after https://github.com/neovide/neovide/blob/main/src/windows_utils.rs .
 use super::UserPreferences;
-use windows_registry::{Key, CURRENT_USER};
-use windows_result::HRESULT;
 
 pub struct RegistryBackedPreferences {
     app_key_path: String,

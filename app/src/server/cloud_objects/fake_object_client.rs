@@ -14,45 +14,36 @@
 //! that hit one of these panics have likely wired a non-preferences
 //! code path through the fake by mistake.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Result};
 use async_channel::Sender;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use cloud_object_client::ObjectPermissionUpdateResult;
 use warp_graphql::object_permissions::AccessLevel;
 
-use crate::{
-    cloud_object::{
-        model::{
-            actions::{ObjectActionHistory, ObjectActionType},
-            generic_string_model::GenericStringObjectId,
-        },
-        BulkCreateCloudObjectResult, BulkCreateGenericStringObjectsRequest,
-        CreateCloudObjectResult, CreateObjectRequest, CreatedCloudObject,
-        GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
-        ObjectDeleteResult, ObjectIdType, ObjectMetadataUpdateResult, ObjectPermissionUpdateResult,
-        ObjectPermissionsUpdateData, ObjectType, ObjectsToUpdate, Owner, Revision,
-        RevisionAndLastEditor, ServerFolder, ServerMetadata, ServerNotebook, ServerObject,
-        ServerPermissions, ServerPreference, ServerWorkflow, UpdateCloudObjectResult,
-    },
-    drive::{folders::FolderId, sharing::SharingAccessLevel},
-    notebooks::NotebookId,
-    server::{
-        cloud_objects::{
-            listener::ObjectUpdateMessage,
-            update_manager::{GetCloudObjectResponse, InitialLoadResponse},
-        },
-        ids::{ServerId, ServerIdAndType, SyncId},
-        server_api::object::{GuestIdentifier, ObjectClient},
-        sync_queue::SerializedModel,
-    },
-    settings::cloud_preferences::{CloudPreferenceModel, Platform, Preference},
-    workflows::WorkflowId,
+use crate::cloud_object::model::actions::{ObjectActionHistory, ObjectActionType};
+use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::{
+    BulkCreateCloudObjectResult, BulkCreateGenericStringObjectsRequest, CreateCloudObjectResult,
+    CreateObjectRequest, CreatedCloudObject, GenericStringObjectFormat,
+    GenericStringObjectUniqueKey, JsonObjectType, ObjectDeleteResult, ObjectIdType,
+    ObjectMetadataUpdateResult, ObjectPermissionsUpdateData, ObjectType, ObjectsToUpdate, Owner,
+    Revision, RevisionAndLastEditor, ServerFolder, ServerMetadata, ServerNotebook, ServerObject,
+    ServerPermissions, ServerPreference, ServerWorkflow, UpdateCloudObjectResult,
 };
+use crate::drive::folders::FolderId;
+use crate::drive::sharing::SharingAccessLevel;
+use crate::notebooks::NotebookId;
+use crate::server::cloud_objects::listener::ObjectUpdateMessage;
+use crate::server::cloud_objects::update_manager::{GetCloudObjectResponse, InitialLoadResponse};
+use crate::server::ids::{ServerId, ServerIdAndType, SyncId};
+use crate::server::server_api::object::{GuestIdentifier, ObjectClient};
+use crate::server::sync_queue::SerializedModel;
+use crate::settings::cloud_preferences::{CloudPreferenceModel, Platform, Preference};
+use crate::workflows::WorkflowId;
 
 /// A stateful fake cloud preferences backend.
 #[derive(Clone, Default)]
@@ -153,12 +144,12 @@ impl FakeObjectClient {
                     anyone_link_sharing: None,
                     permissions_last_updated_ts: stored.metadata_ts.into(),
                 };
-                let server_pref = ServerPreference {
-                    id: SyncId::ServerId(ServerId::from(*id)),
-                    model: stored.model.clone(),
+                let server_pref = ServerPreference::new(
+                    SyncId::ServerId(ServerId::from(*id)),
+                    stored.model.clone(),
                     metadata,
                     permissions,
-                };
+                );
                 Box::new(server_pref) as Box<dyn ServerObject>
             })
             .collect();

@@ -1,9 +1,9 @@
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
 use warpui::{AppContext, SingletonEntity};
 
-use crate::{terminal::model::ObfuscateSecrets, workspaces::user_workspaces::UserWorkspaces};
+use crate::terminal::model::ObfuscateSecrets;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// How secrets should be displayed in the block list
 #[derive(

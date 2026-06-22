@@ -1,14 +1,12 @@
 use warpui::{AppContext, ModelHandle, SingletonEntity, View, ViewContext, ViewHandle};
 
-use crate::{
-    ai::facts::{AIFactManager, AIFactView, AIFactViewEvent},
-    app_state::{AIFactPaneSnapshot, LeafContents},
-};
-
+use super::view::PaneView;
 use super::{
-    view::PaneView, DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
+    DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
     ShareableLinkError,
 };
+use crate::ai::facts::{AIFactManager, AIFactView, AIFactViewEvent};
+use crate::app_state::{AIFactPaneSnapshot, LeafContents};
 
 pub struct AIFactPane {
     view: ViewHandle<PaneView<AIFactView>>,

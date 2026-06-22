@@ -3,20 +3,16 @@
 use itertools::Itertools;
 use warp_command_signatures::{DynamicCompletionData, IsArgumentOptional, Opt, Signature};
 
-use crate::{
-    completer::TopLevelCommandCaseSensitivity,
-    meta::{HasSpan, Span, Spanned, SpannedItem},
-    parsers::{
-        hir::Flags, parse_arg, parse_dollar_expr, ArgumentError, FlagArgumentsCardinality,
-        FlagSignature, ParsedExpression, ParsedToken,
-    },
-    signatures::CommandRegistry,
+use super::hir::{Command, Expression, ShellCommand};
+use super::{parse_unclassified_command, LiteCommand, ParseError};
+use crate::completer::TopLevelCommandCaseSensitivity;
+use crate::meta::{HasSpan, Span, Spanned, SpannedItem};
+use crate::parsers::hir::Flags;
+use crate::parsers::{
+    parse_arg, parse_dollar_expr, ArgumentError, FlagArgumentsCardinality, FlagSignature,
+    ParsedExpression, ParsedToken,
 };
-
-use super::{
-    hir::{Command, Expression, ShellCommand},
-    parse_unclassified_command, LiteCommand, ParseError,
-};
+use crate::signatures::CommandRegistry;
 
 #[derive(Clone, Copy)]
 /// A `Signature` (and its corresponding generator) contained at a given index.

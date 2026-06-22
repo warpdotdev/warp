@@ -5,31 +5,28 @@ use std::cmp;
 use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
 use warp_core::ui::theme::Fill;
 use warp_editor::editor::NavigationKey;
+use warpui::color::ColorU;
+use warpui::elements::{
+    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
+    DispatchEventResult, DropShadow, Element, Empty, EventHandler, Flex, Highlight, MainAxisSize,
+    MouseInBehavior, ParentElement, Radius, ScrollStateHandle, Scrollable, ScrollableElement,
+    ScrollbarWidth, Text, UniformList, UniformListState,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::FixedBinding;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    color::ColorU,
-    elements::{
-        Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
-        DispatchEventResult, DropShadow, Element, Empty, EventHandler, Flex, Highlight,
-        MainAxisSize, MouseInBehavior, ParentElement, Radius, ScrollStateHandle, Scrollable,
-        ScrollableElement, ScrollbarWidth, Text, UniformList, UniformListState,
-    },
-    fonts::{Properties, Weight},
-    id,
-    keymap::FixedBinding,
-    ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    AppContext, Entity, FocusContext, SingletonEntity as _, TypedActionView, View, ViewContext,
+    id, AppContext, Entity, FocusContext, SingletonEntity as _, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::{
-    appearance::Appearance,
-    code_review::{diff_selector::DiffTarget, diff_state::DiffMode},
-    editor::{
-        EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys,
-        TextOptions,
-    },
-    ui_components::icons::Icon,
+use crate::appearance::Appearance;
+use crate::code_review::diff_selector::DiffTarget;
+use crate::code_review::diff_state::DiffMode;
+use crate::editor::{
+    EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, TextOptions,
 };
+use crate::ui_components::icons::Icon;
 
 const MENU_WIDTH: f32 = 280.;
 const MENU_MAX_LIST_HEIGHT: f32 = 200.;

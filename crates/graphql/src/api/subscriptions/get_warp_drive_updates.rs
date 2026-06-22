@@ -1,11 +1,9 @@
-use crate::{
-    object::{CloudObject, ObjectMetadata},
-    object_actions::ObjectActionHistory,
-    object_permissions::ObjectPermissions,
-    scalars::Time,
-    schema,
-    user::PublicUserProfile,
-};
+use crate::object::{CloudObject, ObjectMetadata};
+use crate::object_actions::ObjectActionHistory;
+use crate::object_permissions::ObjectPermissions;
+use crate::scalars::Time;
+use crate::schema;
+use crate::user::PublicUserProfile;
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "RootSubscription")]

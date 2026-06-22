@@ -1,7 +1,5 @@
-use wgpu::{
-    util::{BufferInitDescriptor, DeviceExt},
-    Buffer, RenderPass,
-};
+use wgpu::util::{BufferInitDescriptor, DeviceExt};
+use wgpu::{Buffer, RenderPass};
 
 use crate::rendering::wgpu::shader_types;
 

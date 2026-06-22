@@ -1,11 +1,12 @@
 use std::net::SocketAddr;
 
 use tower_http::trace::TraceLayer;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warp_core::channel::{Channel, ChannelState};
+use warpui_core::{Entity, ModelContext, SingletonEntity};
 
 // Spells "Warp" - should hopefully not conflict with other ports.
 // Does not conflict with known ports on https://en.wikipedia.org/wiki/List_of_TCP_and_UDP_port_numbers
-const PORT: u16 = 9277;
+const PORT_BASE: u16 = 9277;
 
 /// A singleton model for the small HTTP server that is run by the Warp client.
 pub struct HttpServer {
@@ -46,13 +47,32 @@ impl HttpServer {
         }
 
         runtime.spawn(async move {
-            let addr = SocketAddr::from(([127, 0, 0, 1], PORT));
-            let listener = tokio::net::TcpListener::bind(addr).await?;
+            let addr = SocketAddr::from(([127, 0, 0, 1], Self::port()));
+            let listener = match tokio::net::TcpListener::bind(addr).await {
+                Ok(listener) => listener,
+                Err(err) => {
+                    log::error!("Failed to bind local HTTP server to {addr}: {err}");
+                    return;
+                }
+            };
 
-            axum::serve(listener, root.layer(TraceLayer::new_for_http())).await
+            if let Err(err) = axum::serve(listener, root.layer(TraceLayer::new_for_http())).await {
+                log::error!("Local HTTP server exited with error: {err}");
+            }
         });
 
         Ok(runtime)
+    }
+
+    pub fn port() -> u16 {
+        match ChannelState::channel() {
+            Channel::Stable => PORT_BASE,
+            Channel::Preview => PORT_BASE + 1,
+            Channel::Dev => PORT_BASE + 2,
+            Channel::Local => PORT_BASE + 3,
+            Channel::Integration => PORT_BASE + 4,
+            Channel::Oss => PORT_BASE + 5,
+        }
     }
 }
 

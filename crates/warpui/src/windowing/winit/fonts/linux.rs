@@ -6,14 +6,8 @@
 //! Handles can be converted to owned_ttf_parser::OwnedFace objects
 //! by loading the fonts into memory.
 
-use std::ffi::c_int;
-use std::{collections::HashMap, ffi::CString};
-
-use super::{
-    font_handle::{Error as FontDataError, FontHandle},
-    FontFamily, ValidateFontSupportsEn,
-};
-use crate::fonts::{FontInfo, Properties, Style, Weight};
+use std::collections::HashMap;
+use std::ffi::{c_int, CString};
 
 use fontconfig::{
     list_fonts, sort_fonts, FontSet, Fontconfig, ObjectSet, Pattern, FC_FAMILY, FC_FILE,
@@ -23,6 +17,10 @@ use fontconfig::{
     FC_WEIGHT_THIN,
 };
 use itertools::Itertools;
+
+use super::font_handle::{Error as FontDataError, FontHandle};
+use super::{FontFamily, ValidateFontSupportsEn};
+use crate::fonts::{FontInfo, Properties, Style, Weight};
 
 /// Manages font detection and handle generation.
 ///

@@ -1,6 +1,8 @@
-use warp_core::ui::{appearance::Appearance, theme::AnsiColorIdentifier};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::AnsiColorIdentifier;
 
-use crate::ui_components::{blended_colors, icons::Icon};
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
 
 pub fn todo_list_icon(appearance: &Appearance) -> warpui::elements::Icon {
     warpui::elements::Icon::new(

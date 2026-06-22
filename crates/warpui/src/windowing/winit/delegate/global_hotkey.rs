@@ -1,14 +1,16 @@
-use std::{collections::HashMap, rc::Rc, str::FromStr, sync::Arc, thread};
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::thread;
 
-use crate::keymap;
-use crate::windowing::winit::app::CustomEvent;
+use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use parking_lot::Mutex;
 use winit::event_loop::EventLoopProxy;
 
-use global_hotkey::{
-    hotkey::{Code, HotKey, Modifiers},
-    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
-};
+use crate::keymap;
+use crate::windowing::winit::app::CustomEvent;
 
 /// Responsible for registering system-wide (global) hotkeys with the platform.
 pub struct GlobalHotKeyHandler {

@@ -5,12 +5,31 @@
 
 set -e
 
-if ! [ -d "/Applications/Xcode.app" ]; then
-    echo "Please install Xcode from the App Store before continuing."
-    exit 1
-fi
+. "$PWD/script/warp_sudo"
 
-sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+DEVELOPER_DIR="$(xcode-select -p 2>/dev/null || true)"
+if [ -z "$DEVELOPER_DIR" ] || [ ! -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ] || [ "$DEVELOPER_DIR" = "/Library/Developer/CommandLineTools" ]; then
+    XCODE_APP=""
+    # Prefer the stable /Applications/Xcode.app when present so users with
+    # both stable and beta/versioned installs aren't switched away from it.
+    if [ -x "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild" ]; then
+        XCODE_APP="/Applications/Xcode.app"
+    else
+        for candidate in /Applications/Xcode*.app; do
+            if [ -x "$candidate/Contents/Developer/usr/bin/xcodebuild" ]; then
+                XCODE_APP="$candidate"
+                break
+            fi
+        done
+    fi
+    if [ -z "$XCODE_APP" ]; then
+        echo "Please install Xcode before continuing."
+        exit 1
+    fi
+    echo "Selected Xcode at $XCODE_APP"
+    echo "You may be prompted for your password so bootstrap can set Xcode as the active developer directory."
+    warp_sudo xcode-select --switch "$XCODE_APP/Contents/Developer"
+fi
 # Mimic actually launching XCode, which performs some necessary set-up of the
 # development environment.
 xcodebuild -runFirstLaunch

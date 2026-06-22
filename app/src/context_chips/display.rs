@@ -1,34 +1,30 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::ai::blocklist::agent_view::AgentViewController;
-use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
-use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
-use crate::context_chips::display_chip::format_git_branch_command;
-use crate::settings::InputSettings;
-use crate::terminal::model_events::ModelEventDispatcher;
-use crate::{
-    ai::blocklist::{BlocklistAIContextModel, BlocklistAIInputEvent, BlocklistAIInputModel},
-    completer::SessionContext,
-    context_chips::display_chip::DisplayChipAction,
-    terminal::input::MenuPositioningProvider,
-};
-use std::path::PathBuf;
 use warp_core::features::FeatureFlag;
+use warpui::elements::{
+    ChildView, Clipped, Container, CrossAxisAlignment, Element, Flex, MainAxisAlignment,
+    MainAxisSize, ParentElement, Wrap,
+};
 use warpui::{
-    elements::{
-        ChildView, Clipped, Container, CrossAxisAlignment, Element, Flex, MainAxisAlignment,
-        MainAxisSize, ParentElement, Wrap,
-    },
     AppContext, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity, TypedActionView,
     View, ViewContext, ViewHandle,
 };
 
-use super::{
-    display_chip::{DisplayChip, DisplayChipConfig, PromptDisplayChipEvent},
-    git_line_changes_from_chips,
-    prompt_type::PromptType,
-    ChipResult, ContextChipKind,
+use super::display_chip::{DisplayChip, DisplayChipConfig, PromptDisplayChipEvent};
+use super::prompt_type::PromptType;
+use super::{git_line_changes_from_chips, ChipResult, ContextChipKind};
+use crate::ai::blocklist::agent_view::AgentViewController;
+use crate::ai::blocklist::{
+    BlocklistAIContextModel, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    BlocklistAIInputEvent, BlocklistAIInputModel,
 };
+use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
+use crate::completer::SessionContext;
+use crate::context_chips::display_chip::{DisplayChipAction, PromptChipShellCommand};
+use crate::settings::InputSettings;
+use crate::terminal::input::MenuPositioningProvider;
+use crate::terminal::model_events::ModelEventDispatcher;
 
 /// Enum introduced to abstract over the different row types we use for the prompt display,
 /// between the non-UDI and UDI cases.
@@ -91,7 +87,7 @@ pub enum PromptDisplayEvent {
     OpenConversationHistory,
     OpenCommandPaletteFiles,
     RunAgentQuery(String),
-    TryExecuteCommand(String),
+    TryExecuteCommand(PromptChipShellCommand),
     OpenAIDocument {
         document_id: AIDocumentId,
         document_version: AIDocumentVersion,
@@ -174,15 +170,9 @@ impl PromptDisplay {
             || new_chips.iter().enumerate().any(|(i, chip_result)| {
                 let existing_chip = &self.display_chips[i];
                 existing_chip.read(ctx, |chip, _| {
-                    chip.text()
-                        != chip_result
-                            .value
-                            .as_ref()
-                            .map(|v| v.to_string())
-                            .unwrap_or_default()
+                    chip.value() != chip_result.value.as_ref()
                         || chip.chip_kind() != &chip_result.kind
-                        // I'm only comparing the first on-click values for efficiency, but we may need to change this in the future.
-                        || chip.first_on_click_value() != chip_result.on_click_values.first()
+                        || chip.on_click_values() != chip_result.on_click_values.as_slice()
                 })
             })
     }
@@ -294,7 +284,9 @@ impl PromptDisplay {
     pub fn on_pane_focus_changed(&mut self, focused: bool, ctx: &mut ViewContext<Self>) {
         self.pane_is_focused = focused;
         let new_chips = self.collect_chips(ctx);
-        self.reset_chips(&new_chips, ctx);
+        if self.check_if_chip_values_have_changed(&new_chips, ctx) {
+            self.reset_chips(&new_chips, ctx);
+        }
         ctx.notify();
     }
 
@@ -359,7 +351,9 @@ impl PromptDisplay {
     pub fn update_repo_path(&mut self, repo_path: Option<PathBuf>, ctx: &mut ViewContext<Self>) {
         self.current_repo_path = repo_path;
         let new_chips = self.collect_chips(ctx);
-        self.reset_chips(&new_chips, ctx);
+        if self.check_if_chip_values_have_changed(&new_chips, ctx) {
+            self.reset_chips(&new_chips, ctx);
+        }
         ctx.notify();
     }
 }
@@ -375,7 +369,9 @@ impl TypedActionView for PromptDisplay {
         match action {
             PromptDisplayAction::SelectGitBranch { value } => {
                 ctx.emit(PromptDisplayEvent::TryExecuteCommand(
-                    format_git_branch_command(value),
+                    PromptChipShellCommand::GitCheckout {
+                        branch_name: value.clone(),
+                    },
                 ));
             }
         }

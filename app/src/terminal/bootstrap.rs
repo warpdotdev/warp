@@ -3,18 +3,18 @@ use std::borrow::Cow;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use memo_map::MemoMap;
+use rand::Rng;
+use warp_core::session_id::SessionId;
 use warpui::{AppContext, AssetProvider, SingletonEntity};
-
-use crate::{
-    env_vars::EnvVar,
-    terminal::{session_settings::SessionSettings, shell::ShellType},
-};
 
 #[cfg(feature = "local_fs")]
 use super::{
     model::session::{BootstrapSessionType, SessionInfo},
     warpify::settings::{PIPENV_SUBSHELL_COMMAND_REGEX, POETRY_SUBSHELL_COMMAND_REGEX},
 };
+use crate::env_vars::{EnvVar, EnvVarExt};
+use crate::terminal::session_settings::SessionSettings;
+use crate::terminal::shell::ShellType;
 
 lazy_static! {
     /// A memoized cache of the fully-interpolated bootstrap script for each
@@ -26,6 +26,18 @@ lazy_static! {
 /// This can sometimes appear in the beginning of files. If it gets written into the PTY, it causes
 /// errors
 const BYTE_ORDER_MARK: &str = "\u{FEFF}";
+
+#[cfg(feature = "local_fs")]
+pub fn is_container_subshell(session_info: &SessionInfo) -> bool {
+    session_info.subshell_info.as_ref().is_some_and(|info| {
+        let first_token = info
+            .spawning_command
+            .split_ascii_whitespace()
+            .next()
+            .unwrap_or("");
+        first_token == "docker" || first_token == "podman"
+    })
+}
 
 /// Returns `true` if Warp should use an RC-file based bootstrap (e.g. dump the bootstrap script to
 /// a temp file and `source` it) for a newly spawned session with the given `shell_type`, and
@@ -56,6 +68,12 @@ pub fn should_use_rc_file_bootstrap_method(
     session_info: &SessionInfo,
 ) -> bool {
     use super::ShellLaunchData;
+
+    // Container subshells cannot access host temp files, so the RC-file
+    // method is never viable for them.
+    if is_container_subshell(session_info) {
+        return false;
+    }
 
     let session_type = &session_info.session_type;
     match session_type {
@@ -187,18 +205,38 @@ pub fn script_for_shell(shell_type: ShellType, assets: &dyn AssetProvider) -> Co
         .into()
 }
 
+/// Generates a cryptographically random session ID for use as both a session
+/// identifier and an integrity token for DCS hook validation.
+pub fn generate_session_id() -> SessionId {
+    let mut rng = rand::thread_rng();
+    loop {
+        let session_id = rng.gen::<u64>();
+        if session_id != 0 {
+            return SessionId::from(session_id);
+        }
+    }
+}
+
+/// Placeholder in init shell scripts that gets replaced with the client-generated session ID.
+pub(crate) const SESSION_ID_PLACEHOLDER: &str = "@@WARP_SESSION_ID@@";
+
 /// Returns the init shell script for the given `shell_type` (e.g. the script that emits the
 /// InitShell DCS hook).
 ///
 /// The returned script is one line and, for shells that need it, has escaped single-quotes for the
 /// purposes of being passed as a single-quoted argument to 'eval'.
-pub fn init_shell_script_for_shell(shell_type: ShellType, assets: &dyn AssetProvider) -> String {
-    match shell_type {
+pub fn init_shell_script_for_shell(
+    shell_type: ShellType,
+    assets: &dyn AssetProvider,
+    session_id: SessionId,
+) -> String {
+    let script = match shell_type {
         ShellType::Zsh => load_and_escape_script("bundled/bootstrap/zsh_init_shell.sh", assets),
         ShellType::Bash => load_and_escape_script("bundled/bootstrap/bash_init_shell.sh", assets),
         ShellType::Fish => load_and_escape_script("bundled/bootstrap/fish_init_shell.sh", assets),
         ShellType::PowerShell => load_script("bundled/bootstrap/pwsh_init_shell.ps1", assets),
-    }
+    };
+    script.replace(SESSION_ID_PLACEHOLDER, &session_id.as_u64().to_string())
 }
 
 /// Returns the command to be used to emit the InitShell hook for a new subshell session.
@@ -209,15 +247,16 @@ pub fn init_shell_script_for_shell(shell_type: ShellType, assets: &dyn AssetProv
 pub fn init_subshell_command(
     shell_type: Option<ShellType>,
     vars: &[EnvVar],
+    session_id: SessionId,
     ctx: &AppContext,
 ) -> String {
     match shell_type {
         Some(shell_type) => {
             let subshell_script =
-                init_subshell_script_for_shell(shell_type, &crate::ASSETS, vars, ctx);
+                init_subshell_script_for_shell(shell_type, &crate::ASSETS, vars, session_id, ctx);
             format!(r#" [ -z $WARP_BOOTSTRAPPED ] && eval '{subshell_script}'"#)
         }
-        None => init_subshell_script_for_unknown_shell(&crate::ASSETS),
+        None => init_subshell_script_for_unknown_shell(&crate::ASSETS, session_id),
     }
 }
 
@@ -230,6 +269,7 @@ fn init_subshell_script_for_shell(
     shell_type: ShellType,
     assets: &dyn AssetProvider,
     env_vars: &[EnvVar],
+    session_id: SessionId,
     ctx: &AppContext,
 ) -> String {
     let honor_ps1 = *SessionSettings::as_ref(ctx).honor_ps1;
@@ -258,6 +298,8 @@ fn init_subshell_script_for_shell(
         // TODO(PLAT-750)
         ShellType::PowerShell => todo!(),
     };
+    let shell_init_script =
+        shell_init_script.replace(SESSION_ID_PLACEHOLDER, &session_id.as_u64().to_string());
 
     // Combine the environment setup script with the shell-specific init script
     format!("{env_setup_script} {shell_init_script}")
@@ -267,10 +309,14 @@ fn init_subshell_script_for_shell(
 ///
 /// The returned script is one line and has escaped single-quotes for the purposes of being passed
 /// as a single-quoted argument to 'eval'.
-fn init_subshell_script_for_unknown_shell(assets: &dyn AssetProvider) -> String {
+fn init_subshell_script_for_unknown_shell(
+    assets: &dyn AssetProvider,
+    session_id: SessionId,
+) -> String {
     // Load and escape the shell-specific init script
     load_and_escape_script("bundled/bootstrap/unknown_init_subshell.sh", assets)
         .replace("HOOK_NAME", "InitSubshell")
+        .replace(SESSION_ID_PLACEHOLDER, &session_id.as_u64().to_string())
 }
 
 /// Returns the raw init shell script for the given `shell_type`, without
@@ -284,6 +330,7 @@ fn init_subshell_script_for_unknown_shell(assets: &dyn AssetProvider) -> String 
 pub fn raw_init_shell_script_for_shell(
     shell_type: ShellType,
     assets: &dyn AssetProvider,
+    session_id: SessionId,
 ) -> String {
     let file = match shell_type {
         ShellType::Bash => "bundled/bootstrap/bash_init_shell.sh",
@@ -291,7 +338,9 @@ pub fn raw_init_shell_script_for_shell(
         ShellType::Fish => "bundled/bootstrap/fish_init_shell.sh",
         ShellType::PowerShell => "bundled/bootstrap/pwsh_init_shell.ps1",
     };
-    load_script(file, assets).replace("@@USING_CON_PTY_BOOLEAN@@", &(cfg!(windows).to_string()))
+    load_script(file, assets)
+        .replace("@@USING_CON_PTY_BOOLEAN@@", &(cfg!(windows).to_string()))
+        .replace(SESSION_ID_PLACEHOLDER, &session_id.as_u64().to_string())
 }
 
 /// Returns the script in the file at `file_path` to be passed as a single-quoted argument in the
@@ -323,5 +372,5 @@ fn load_script(file_path: &str, assets: &dyn AssetProvider) -> String {
 }
 
 #[cfg(test)]
-#[path = "bootstrap_test.rs"]
+#[path = "bootstrap_tests.rs"]
 mod tests;

@@ -1,10 +1,8 @@
-use crate::{
-    error::UserFacingError,
-    full_source_code_embedding::{EmbeddingConfig, NodeHash},
-    request_context::RequestContext,
-    response_context::ResponseContext,
-    schema,
-};
+use crate::error::UserFacingError;
+use crate::full_source_code_embedding::{EmbeddingConfig, NodeHash};
+use crate::request_context::RequestContext;
+use crate::response_context::ResponseContext;
+use crate::schema;
 
 #[derive(cynic::InputObject, Debug)]
 pub struct SyncMerkleTreeInput {

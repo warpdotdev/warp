@@ -1,6 +1,5 @@
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
-};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 
 // Settings for visibility of non-user command blocks like the bootstrap block
 // and in-band command blocks.

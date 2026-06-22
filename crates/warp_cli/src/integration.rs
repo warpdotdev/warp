@@ -1,12 +1,10 @@
 use clap::{Args, Subcommand};
 
-use crate::{
-    config_file::ConfigFileArgs,
-    environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs},
-    mcp::MCPSpec,
-    model::ModelArgs,
-    provider::ProviderType,
-};
+use crate::config_file::ConfigFileArgs;
+use crate::environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs};
+use crate::mcp::MCPSpec;
+use crate::model::ModelArgs;
+use crate::provider::ProviderType;
 
 /// Integration-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
@@ -18,6 +16,16 @@ pub enum IntegrationCommand {
     Update(UpdateIntegrationArgs),
     /// List simple integrations and their connection status.
     List,
+}
+
+impl IntegrationCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            IntegrationCommand::Create(_) => "integration create",
+            IntegrationCommand::Update(_) => "integration update",
+            IntegrationCommand::List => "integration list",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Args)]

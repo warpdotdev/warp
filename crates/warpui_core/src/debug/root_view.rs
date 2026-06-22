@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
-use crate::{
-    elements::ChildView, AppContext, Element, Entity, EntityId, TypedActionView, View, ViewContext,
-    ViewHandle, WindowId,
-};
-
 use super::view_tree_debug_view::ViewTreeDebugView;
+use crate::elements::ChildView;
+use crate::{
+    AppContext, Element, Entity, EntityId, TypedActionView, View, ViewContext, ViewHandle, WindowId,
+};
 
 /// A root view for a window that provides debugging tools for the UI framework.
 pub(crate) struct DebugRootView {

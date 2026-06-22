@@ -1,4 +1,5 @@
-use super::{object::ObjectMetadata, object_permissions::ObjectPermissions};
+use super::object::ObjectMetadata;
+use super::object_permissions::ObjectPermissions;
 use crate::schema;
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

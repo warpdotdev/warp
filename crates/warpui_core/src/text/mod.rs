@@ -2,11 +2,9 @@ use anyhow::{anyhow, Result};
 use itertools::Itertools;
 use string_offset::{ByteOffset, CharCounter, CharOffset};
 
-use crate::event::ModifiersState;
-
 use self::point::Point;
-
 use self::word_boundaries::WordBoundaries;
+use crate::event::ModifiersState;
 
 pub mod header;
 pub mod point;

@@ -1,20 +1,21 @@
-use crate::server::telemetry::TelemetryEvent;
-use anyhow::anyhow;
-use anyhow::{bail, Result};
+use std::fs::File;
+use std::io::Write as _;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+use std::{fs, io};
+
+use anyhow::{anyhow, bail, Result};
 use channel_versions::VersionInfo;
 use command::blocking::Command;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
-use std::fs::File;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::{fs, io};
-use std::{io::Write as _, time::Duration};
 use tempfile::TempPath;
 use warp_core::channel::{Channel, ChannelState};
 use warpui::AppContext;
 
 use super::{release_assets_directory_url, DownloadReady};
+use crate::server::telemetry::TelemetryEvent;
 use crate::util::windows::install_dir;
 
 lazy_static! {
@@ -77,6 +78,47 @@ fn autoupdate_log_file() -> Result<PathBuf> {
     warp_logging::log_directory().map(|dir| dir.join(UPDATE_LOG_FILENAME))
 }
 
+fn parse_exit_code_after_marker(contents_lowercase: &[u8], failed_marker: &[u8]) -> Option<i32> {
+    const EXIT_CODE_MARKER: &[u8] = b"exit code: ";
+
+    let failed_pos = memchr::memmem::find(contents_lowercase, failed_marker)?;
+    let after_failed = &contents_lowercase[failed_pos..];
+    let marker_pos = memchr::memmem::find(after_failed, EXIT_CODE_MARKER)?;
+    let after_marker = &after_failed[marker_pos + EXIT_CODE_MARKER.len()..];
+    let sign_len = if after_marker.first() == Some(&b'-') {
+        1
+    } else {
+        0
+    };
+    let digit_len = after_marker[sign_len..]
+        .iter()
+        .take_while(|b| b.is_ascii_digit())
+        .count();
+    if digit_len == 0 {
+        return None;
+    }
+    std::str::from_utf8(&after_marker[..sign_len + digit_len])
+        .ok()?
+        .parse()
+        .ok()
+}
+
+/// Parses the taskkill exit code from an Inno Setup log containing a
+/// "force-kill failed for" line. Returns `None` if no such line is found or
+/// the exit code cannot be parsed.
+fn parse_forcekill_exit_code(contents_lowercase: &[u8]) -> Option<i32> {
+    const FAILED_MARKER: &[u8] = b"force-kill failed for";
+    parse_exit_code_after_marker(contents_lowercase, FAILED_MARKER)
+}
+
+/// Parses the PowerShell exit code from an Inno Setup log containing a
+/// "minidump-server cleanup failed" line. Returns `None` if no such line is
+/// found or the exit code cannot be parsed.
+fn parse_minidump_cleanup_exit_code(contents_lowercase: &[u8]) -> Option<i32> {
+    const FAILED_MARKER: &[u8] = b"minidump-server cleanup failed";
+    parse_exit_code_after_marker(contents_lowercase, FAILED_MARKER)
+}
+
 /// Checks the autoupdate log file from a previous update attempt.
 /// Sends telemetry for specific known issues, and sends a Sentry event if errors are found.
 /// The log file is renamed after processing to avoid duplicate reports on subsequent launches.
@@ -134,10 +176,24 @@ pub(super) fn check_and_report_update_errors(ctx: &mut AppContext) {
     }
 
     // Fired when taskkill returned non-zero after the mutex timeout.
-    let has_forcekill_failed =
-        memchr::memmem::find(&contents_lowercase, b"force-kill failed for").is_some();
-    if has_forcekill_failed {
-        crate::send_telemetry_sync_from_app_ctx!(TelemetryEvent::AutoupdateForcekillFailed, ctx);
+    // Exit code 128 means "no matching process found" — the process was already
+    // gone when taskkill ran — so suppress that harmless race condition.
+    if let Some(exit_code) = parse_forcekill_exit_code(&contents_lowercase) {
+        if exit_code != 128 {
+            crate::send_telemetry_sync_from_app_ctx!(
+                TelemetryEvent::AutoupdateForcekillFailed { exit_code },
+                ctx
+            );
+        }
+    }
+
+    // Fired when the PowerShell cleanup of the orphaned minidump server process
+    // returned a non-zero exit code.
+    if let Some(exit_code) = parse_minidump_cleanup_exit_code(&contents_lowercase) {
+        crate::send_telemetry_sync_from_app_ctx!(
+            TelemetryEvent::AutoupdateMinidumpCleanupFailed { exit_code },
+            ctx
+        );
     }
 
     #[cfg(feature = "crash_reporting")]
@@ -193,7 +249,11 @@ pub(super) fn check_and_report_update_errors(ctx: &mut AppContext) {
 
 pub(super) fn relaunch() -> Result<()> {
     let install_dir = install_dir()?;
-    let Some(installer_path) = INSTALLER_PATH.lock().take() else {
+    let Some(installer_path) = INSTALLER_PATH
+        .lock()
+        .as_ref()
+        .map(|path| path.to_path_buf())
+    else {
         bail!("No installer path");
     };
 
@@ -229,14 +289,6 @@ pub(super) fn relaunch() -> Result<()> {
         ])
         .spawn()?;
 
-    // DEV ONLY: Sleep after spawning the installer so this process is still alive
-    // when Inno Setup tries to overwrite files. This reliably reproduces the
-    // auto-update race condition (APP-3702) for testing.
-    if matches!(ChannelState::channel(), Channel::Dev) {
-        log::info!("DEV: Sleeping 10s after spawning installer to reproduce update race");
-        std::thread::sleep(Duration::from_secs(10));
-    }
-
     Ok(())
 }
 
@@ -266,3 +318,7 @@ fn app_name_prefix(channel: Channel) -> &'static str {
         Channel::Oss => "warp-oss",
     }
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;

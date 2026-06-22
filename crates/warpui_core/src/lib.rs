@@ -37,12 +37,12 @@ pub mod util;
 pub mod windowing;
 pub mod zoom;
 
-pub use crate::core::*;
 pub use assets::AssetProvider;
 pub use clipboard::Clipboard;
 pub use elements::Element;
 pub use event::Event;
 pub use pathfinder_color as color;
+// Keep `geometry` as its own public module alias alongside `color`.
 pub use pathfinder_geometry as geometry;
 pub use presenter::{
     AfterLayoutContext, EventContext, LayoutContext, PaintContext, Presenter, SizeConstraint,
@@ -50,10 +50,10 @@ pub use presenter::{
 pub use scene::{ClipBounds, Scene};
 pub use zoom::ZoomFactor;
 
-use pathfinder_color::ColorU;
+pub use crate::core::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Gradient {
-    pub start: ColorU,
-    pub end: ColorU,
+    pub start: color::ColorU,
+    pub end: color::ColorU,
 }

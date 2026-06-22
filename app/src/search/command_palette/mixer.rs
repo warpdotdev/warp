@@ -1,3 +1,10 @@
+use std::sync::Arc;
+
+use strum_macros::IntoStaticStr;
+use warp_util::path::LineAndColumnArg;
+use warpui::keymap::BindingId;
+use warpui::{EntityId, WindowId};
+
 use crate::ai::agent::conversation::AIConversationId;
 use crate::drive::CloudObjectTypeAndId;
 use crate::launch_configs::launch_config::LaunchConfig;
@@ -6,11 +13,6 @@ use crate::search::mixer::SearchMixer;
 use crate::server::ids::SyncId;
 use crate::util::bindings::CommandBinding;
 use crate::workspace::PaneViewLocator;
-use std::sync::Arc;
-use strum_macros::IntoStaticStr;
-use warp_util::path::LineAndColumnArg;
-use warpui::keymap::BindingId;
-use warpui::{EntityId, WindowId};
 
 pub type CommandPaletteMixer = SearchMixer<CommandPaletteItemAction>;
 
@@ -35,6 +37,11 @@ pub enum CommandPaletteItemAction {
     /// Navigate to the session identified by `pane_view`.
     NavigateToSession {
         pane_view_locator: PaneViewLocator,
+        window_id: WindowId,
+    },
+    /// Navigate to a specific tab identified by its pane_group EntityId.
+    NavigateToTab {
+        pane_group_id: EntityId,
         window_id: WindowId,
     },
     /// Navigate to a specific conversation.
@@ -93,6 +100,9 @@ impl CommandPaletteItemAction {
                 pane_view_locator, ..
             } => ItemSummary::Session {
                 pane_view_locator: *pane_view_locator,
+            },
+            CommandPaletteItemAction::NavigateToTab { pane_group_id, .. } => ItemSummary::Tab {
+                pane_group_id: *pane_group_id,
             },
             CommandPaletteItemAction::NavigateToConversation {
                 conversation_id, ..
@@ -168,6 +178,9 @@ pub enum ItemSummary {
     },
     Session {
         pane_view_locator: PaneViewLocator,
+    },
+    Tab {
+        pane_group_id: EntityId,
     },
     NewSession {
         id: NewSessionOptionId,

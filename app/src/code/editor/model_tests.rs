@@ -1,17 +1,17 @@
-use futures::channel::oneshot;
 use std::path::Path;
+
+use futures::channel::oneshot;
 use vec1::vec1;
 use warp_editor::content::buffer::{InitialBufferState, SelectionOffsets};
 use warp_editor::multiline::MultilineString;
 use warp_util::content_version::ContentVersion;
 use warpui::App;
 
-use crate::{
-    code::editor::line::EditorLineLocation, code::editor::view::code_text_styles,
-    settings::FontSettings, test_util::settings::initialize_settings_for_tests,
-};
-
 use super::*;
+use crate::code::editor::line::EditorLineLocation;
+use crate::code::editor::view::code_text_styles;
+use crate::settings::FontSettings;
+use crate::test_util::settings::initialize_settings_for_tests;
 
 fn initialize_deps(app: &mut App) {
     app.add_singleton_model(|_| Appearance::mock());
@@ -24,7 +24,7 @@ fn mock_model(app: &mut App, text: &str, version: ContentVersion) -> ModelHandle
         let mut model = CodeEditorModel::new(styles, None, false, None, ctx);
         let state = InitialBufferState::plain_text(text).with_version(version);
         model.reset_content(state, ctx);
-        model.set_language_with_path(Path::new("test.rs"), ctx);
+        model.set_language_with_local_path(Path::new("/test.rs"), ctx);
         model
     })
 }
@@ -40,7 +40,7 @@ fn mock_model_with_diff(
         let mut model = CodeEditorModel::new(styles, None, false, None, ctx);
         let state = InitialBufferState::plain_text(current_text).with_version(version);
         model.reset_content(state, ctx);
-        model.set_language_with_path(Path::new("test.rs"), ctx);
+        model.set_language_with_local_path(Path::new("/test.rs"), ctx);
 
         // Set up diff model with base text
         model.diff().update(ctx, |diff, _| {

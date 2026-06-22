@@ -1,43 +1,43 @@
-use crate::{
-    ai::agent::icons::{yellow_running_icon, yellow_stop_icon},
-    view_components::compactible_action_button::{
-        CompactibleActionButton, RenderCompactibleActionButton, SMALL_SIZE_SWITCH_THRESHOLD,
-    },
-};
-use lazy_static::lazy_static;
-use parking_lot::RwLock;
-use settings::Setting as _;
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::Arc;
+
+use lazy_static::lazy_static;
+use parking_lot::RwLock;
+use settings::Setting as _;
+use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
-use warp_core::{features::FeatureFlag, ui::Icon};
+use warp_core::ui::Icon;
+use warpui::elements::{
+    get_rich_content_position_id, Border, Clipped, Container, CornerRadius, CrossAxisAlignment,
+    Flex, FormattedTextElement, MouseStateHandle, ParentElement, Radius, SavePosition,
+    SelectableArea, SelectionHandle,
+};
+use warpui::keymap::{FixedBinding, Keystroke};
 use warpui::{
-    elements::{
-        get_rich_content_position_id, Border, Clipped, Container, CornerRadius, CrossAxisAlignment,
-        Flex, FormattedTextElement, MouseStateHandle, ParentElement, Radius, SavePosition,
-        SelectableArea, SelectionHandle,
-    },
-    keymap::{FixedBinding, Keystroke},
     AppContext, Element, Entity, EntityId, FocusContext, SingletonEntity, TypedActionView, View,
     ViewContext,
 };
 
-use crate::{
-    ai::blocklist::block::view_impl::{CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN},
-    ai::blocklist::inline_action::inline_action_header::INLINE_ACTION_HORIZONTAL_PADDING,
-    ai::blocklist::inline_action::inline_action_header::{
-        ExpandedConfig, HeaderConfig, InteractionMode,
-    },
-    ai::blocklist::inline_action::inline_action_icons::{self},
-    appearance::Appearance,
-    settings::InputModeSettings,
-    terminal::{
-        block_list_element::BlockListMenuSource, block_list_viewport::InputMode,
-        view::TerminalAction,
-    },
-    ui_components::blended_colors,
-    view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme},
+use crate::ai::agent::icons::{yellow_running_icon, yellow_stop_icon};
+use crate::ai::blocklist::block::view_impl::{
+    CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN,
+};
+use crate::ai::blocklist::inline_action::inline_action_header::{
+    ExpandedConfig, HeaderConfig, InteractionMode, INLINE_ACTION_HORIZONTAL_PADDING,
+};
+use crate::ai::blocklist::inline_action::inline_action_icons::{self};
+use crate::appearance::Appearance;
+use crate::settings::InputModeSettings;
+use crate::terminal::block_list_element::BlockListMenuSource;
+use crate::terminal::block_list_viewport::InputMode;
+use crate::terminal::view::TerminalAction;
+use crate::ui_components::blended_colors;
+use crate::view_components::action_button::{
+    ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
+};
+use crate::view_components::compactible_action_button::{
+    CompactibleActionButton, RenderCompactibleActionButton, SMALL_SIZE_SWITCH_THRESHOLD,
 };
 
 /// The vertical padding applied to the env var collection block's content body.

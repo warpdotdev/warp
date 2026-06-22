@@ -1,7 +1,8 @@
-use crate::{
-    error::UserFacingError, request_context::RequestContext, response_context::ResponseContext,
-    schema, workspace::WorkspaceSettings,
-};
+use crate::error::UserFacingError;
+use crate::request_context::RequestContext;
+use crate::response_context::ResponseContext;
+use crate::schema;
+use crate::workspace::WorkspaceSettings;
 
 // Note that `isInviteLinkEnabled` and `IsDiscoverable` aren't fetchable from this mutation;
 // they don't come from the same code path as fetching org settings. We could change this

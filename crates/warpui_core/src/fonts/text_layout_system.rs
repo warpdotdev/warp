@@ -1,8 +1,9 @@
+use std::ops::Range;
+
 use crate::fonts::{FontFallbackCache, RequestedFallbackFontSource};
 use crate::platform;
 use crate::platform::LineStyle;
 use crate::text_layout::{ClipConfig, Line, StyleAndFont, TextAlignment, TextFrame};
-use std::ops::Range;
 
 /// Struct to layout text, updating cached font fallback state as needed.
 /// See [fonts::Cache::text_layout_system].

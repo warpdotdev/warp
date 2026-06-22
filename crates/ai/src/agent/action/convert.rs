@@ -1,26 +1,21 @@
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
+use std::time::Duration;
 
 use itertools::Itertools as _;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
-use crate::{
-    agent::{
-        action::{
-            AIAgentActionType, AIAgentPtyWriteMode, CommentSide, FileEdit, InsertReviewComment,
-            InsertedCommentLine, InsertedCommentLocation, ReadFilesRequest, ReadSkillRequest,
-            SearchCodebaseRequest, ShellCommandDelay, SuggestPromptRequest, UploadArtifactRequest,
-            UseComputerRequest,
-        },
-        action_result::{AnyFileContent, FileContext},
-        convert::ToolToAIAgentActionError,
-        FileLocations,
-    },
-    diff_validation::{ParsedDiff, V4AHunk},
-    document::AIDocumentId,
-    skills::SkillReference,
+use crate::agent::action::{
+    AIAgentActionType, AIAgentPtyWriteMode, CommentSide, FileEdit, InsertReviewComment,
+    InsertedCommentLine, InsertedCommentLocation, ReadFilesRequest, SearchCodebaseRequest,
+    ShellCommandDelay, SuggestPromptRequest, UploadArtifactRequest, UseComputerRequest,
 };
+use crate::agent::action_result::{AnyFileContent, FileContext};
+use crate::agent::convert::ToolToAIAgentActionError;
+use crate::agent::FileLocations;
+use crate::diff_validation::{ParsedDiff, V4AHunk};
+use crate::document::AIDocumentId;
 
 impl From<api::message::tool_call::RunShellCommand> for AIAgentActionType {
     fn from(value: api::message::tool_call::RunShellCommand) -> Self {
@@ -505,35 +500,10 @@ impl From<api::message::tool_call::RequestComputerUse> for AIAgentActionType {
     }
 }
 
-impl TryFrom<api::message::tool_call::ReadSkill> for AIAgentActionType {
-    type Error = ToolToAIAgentActionError;
-
-    fn try_from(value: api::message::tool_call::ReadSkill) -> Result<Self, Self::Error> {
-        match value.skill_reference {
-            Some(reference) => Ok(AIAgentActionType::ReadSkill(ReadSkillRequest {
-                skill: SkillReference::from(reference),
-            })),
-            None => Err(ToolToAIAgentActionError::MissingSkillReference),
-        }
-    }
-}
-
 impl From<api::message::tool_call::FetchConversation> for AIAgentActionType {
     fn from(value: api::message::tool_call::FetchConversation) -> Self {
         AIAgentActionType::FetchConversation {
             conversation_id: value.conversation_id,
-        }
-    }
-}
-
-impl From<api::message::tool_call::read_skill::SkillReference> for SkillReference {
-    fn from(value: api::message::tool_call::read_skill::SkillReference) -> Self {
-        use warp_multi_agent_api::message::tool_call::read_skill::SkillReference as ApiSkillReference;
-        match value {
-            ApiSkillReference::SkillPath(skill_path) => {
-                SkillReference::Path(PathBuf::from(skill_path))
-            }
-            ApiSkillReference::BundledSkillId(id) => SkillReference::BundledSkillId(id),
         }
     }
 }

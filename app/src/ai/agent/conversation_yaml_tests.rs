@@ -3,11 +3,10 @@ use std::path::Path;
 
 use warp_multi_agent_api as api;
 
+use super::{base_dir, materialize_tasks_to_yaml};
 use crate::test_util::ai_agent_tasks::{
     create_api_subtask, create_api_task, create_message, create_subagent_tool_call_message,
 };
-
-use super::{base_dir, materialize_tasks_to_yaml};
 
 /// Lists filenames (not full paths) in a directory, sorted.
 fn list_dir_sorted(dir: &Path) -> Vec<String> {
@@ -129,6 +128,70 @@ fn mixed_message_types_produce_sequentially_indexed_files() {
     let content = fs::read_to_string(Path::new(&dir).join(&files[0])).unwrap();
     assert!(content.contains("type: user_query"));
     assert!(content.contains("hello"));
+
+    cleanup_dir(&dir);
+}
+
+#[test]
+fn run_agents_result_serializes_agent_ids() {
+    let task_id = "root";
+    let tasks = vec![create_api_task(
+        task_id,
+        vec![make_tool_call_result_message(
+            "m1",
+            task_id,
+            "tc_run_agents",
+            api::message::tool_call_result::Result::RunAgentsResult(api::RunAgentsResult {
+                outcome: Some(api::run_agents_result::Outcome::Launched(
+                    api::run_agents_result::Launched {
+                        resolved_model_id: "auto".to_string(),
+                        resolved_harness: Some(api::Harness {
+                            variant: Some(api::harness::Variant::Oz(api::harness::Oz {})),
+                        }),
+                        resolved_execution_mode: Some(
+                            api::run_agents_result::launched::ResolvedExecutionMode::Local(
+                                api::run_agents::Local {},
+                            ),
+                        ),
+                        agents: vec![
+                            api::run_agents_result::AgentOutcome {
+                                name: "child".to_string(),
+                                result: Some(
+                                    api::run_agents_result::agent_outcome::Result::Launched(
+                                        api::run_agents_result::LaunchedAgent {
+                                            agent_id: "agent-123".to_string(),
+                                        },
+                                    ),
+                                ),
+                            },
+                            api::run_agents_result::AgentOutcome {
+                                name: "other".to_string(),
+                                result: Some(
+                                    api::run_agents_result::agent_outcome::Result::Failed(
+                                        api::run_agents_result::FailedAgent {
+                                            error: "failed to start".to_string(),
+                                        },
+                                    ),
+                                ),
+                            },
+                        ],
+                    },
+                )),
+            }),
+        )],
+    )];
+
+    let dir = materialize_tasks_to_yaml(&tasks).unwrap();
+    let files = list_dir_sorted(Path::new(&dir));
+    let content = fs::read_to_string(Path::new(&dir).join(&files[0])).unwrap();
+
+    assert!(content.contains("status: launched"));
+    assert!(content.contains("agent_count: 2"));
+    assert!(content.contains("name: \"child\""));
+    assert!(content.contains("agent_id: agent-123"));
+    assert!(content.contains("name: \"other\""));
+    assert!(content.contains("error: \"failed to start\""));
+    assert!(content.contains("Use send_message_to_agent with the existing agent_id"));
 
     cleanup_dir(&dir);
 }

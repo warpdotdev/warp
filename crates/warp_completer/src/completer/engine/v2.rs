@@ -1,7 +1,5 @@
-use crate::{
-    completer::TopLevelCommandCaseSensitivity,
-    signatures::{get_matching_signature_for_input, CommandRegistry},
-};
+use crate::completer::TopLevelCommandCaseSensitivity;
+use crate::signatures::{get_matching_signature_for_input, CommandRegistry};
 
 /// Returns the name of the argument that should be given at `idx` for the given command.
 pub(super) fn argument_name_at_index_for_command(

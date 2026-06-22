@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Deserializer, Serialize};
-use warp_multi_agent_api::{self as api, response_event::stream_finished};
+use warp_multi_agent_api::response_event::stream_finished;
+use warp_multi_agent_api::{self as api};
 
 use super::schema::{
     active_mcp_servers, agent_conversations, agent_tasks, ai_document_panes, ai_memory_panes,
@@ -14,8 +15,8 @@ use super::schema::{
     generic_string_objects, ignored_suggestions, mcp_environment_variables,
     mcp_server_installations, mcp_server_panes, notebook_panes, notebooks, object_actions,
     object_metadata, object_permissions, pane_branches, pane_leaves, pane_nodes, panels,
-    project_rules, projects, server_experiments, settings_panes, tabs, team_members, team_settings,
-    teams, terminal_panes, user_profiles, welcome_panes, windows, workflow_panes, workflows,
+    project_rules, projects, server_experiments, settings_panes, tab_groups, tabs, team_members,
+    team_settings, teams, terminal_panes, user_profiles, windows, workflow_panes, workflows,
     workspace_language_server, workspace_metadata, workspace_teams, workspaces,
 };
 
@@ -348,6 +349,8 @@ pub struct Tab {
     pub window_id: i32,
     pub custom_title: Option<String>,
     pub color: Option<String>,
+    pub tab_group_id: Option<i32>,
+    pub pinned: bool,
 }
 
 #[derive(Insertable)]
@@ -356,6 +359,32 @@ pub struct NewTab {
     pub window_id: i32,
     pub custom_title: Option<String>,
     pub color: Option<String>,
+    pub tab_group_id: Option<i32>,
+    pub pinned: bool,
+}
+
+/// Persisted form of a tab group. `name` is optional — untitled groups omit
+/// it and the UI falls back to a default label.
+#[derive(Identifiable, Queryable, Associations)]
+#[diesel(belongs_to(Window))]
+#[diesel(table_name = tab_groups)]
+pub struct TabGroup {
+    pub id: i32,
+    pub window_id: i32,
+    pub name: Option<String>,
+    pub color: Option<String>,
+    pub collapsed: bool,
+    pub pinned: bool,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = tab_groups)]
+pub struct NewTabGroup {
+    pub window_id: i32,
+    pub name: Option<String>,
+    pub color: Option<String>,
+    pub collapsed: bool,
+    pub pinned: bool,
 }
 
 /// The panes data model includes pane_nodes, pane_leaves and pane_branches.
@@ -466,15 +495,6 @@ pub struct SettingsPane {
     pub current_page: String,
 }
 
-#[derive(Identifiable, Queryable, Selectable)]
-#[diesel(table_name = welcome_panes)]
-#[diesel(primary_key(id))]
-pub struct WelcomePane {
-    pub id: i32,
-    pub kind: String,
-    pub startup_directory: Option<String>,
-}
-
 /// Maps to the `ai_memory_panes` table
 /// (where table name is historical and not worth a migration to change).
 #[derive(Identifiable, Queryable, Selectable)]
@@ -556,9 +576,6 @@ pub const CODE_REVIEW_PANE_KIND: &str = "code_review";
 
 /// The [`pane_leaves::kind`] value for execution profile editor panes.
 pub const EXECUTION_PROFILE_EDITOR_PANE_KIND: &str = "execution_profile_editor";
-
-/// The [`pane_leaves::kind`] value for the welcome pane.
-pub const WELCOME_PANE_KIND: &str = "welcome";
 
 /// The [`pane_leaves::kind`] value for the get-started pane.
 pub const GET_STARTED_PANE_KIND: &str = "get_started";
@@ -651,13 +668,6 @@ pub struct NewAIFactPane {
 #[diesel(table_name = mcp_server_panes)]
 pub struct NewMCPServerPane {
     pub id: i32,
-}
-
-#[derive(Insertable)]
-#[diesel(table_name = welcome_panes)]
-pub struct NewWelcomePane {
-    pub id: i32,
-    pub startup_directory: Option<String>,
 }
 
 #[derive(Identifiable, Queryable, Selectable)]
@@ -942,13 +952,24 @@ impl AgentConversation {
     ///
     /// A conversation is restorable if:
     /// - It contains a single task or fewer, OR
-    /// - It contains multiple tasks where every task other than the root task has a parent task ID.
+    /// - It has exactly one parentless (root) task, OR
+    /// - It has multiple parentless tasks but exactly one of them has
+    ///   non-empty `messages`. This permits restoring conversations whose
+    ///   persisted state was corrupted by the pre-QUALITY-774 optimistic-root
+    ///   writer bug, where a stub root row co-existed with the real server
+    ///   root row. `AIConversation::new_restored` deterministically picks
+    ///   the real root in that shape via its restore-side dedupe.
+    ///
+    /// Non-root tasks need not be validated here: any task that does not
+    /// match the parentless predicate has, by construction, a non-empty
+    /// `parent_task_id`.
     pub fn is_restorable(&self) -> bool {
         if self.tasks.len() <= 1 {
             return true;
         }
 
-        // Find the root task(s) - tasks with no parent_task_id or empty parent_task_id
+        // Find parentless (root) tasks - tasks with no dependencies or with an
+        // empty parent_task_id.
         let root_tasks: Vec<_> = self
             .tasks
             .iter()
@@ -960,28 +981,18 @@ impl AgentConversation {
             })
             .collect();
 
-        // Must have exactly one root task
-        if root_tasks.len() != 1 {
-            return false;
+        match root_tasks.len() {
+            // Malformed: no parentless task means no root to anchor restore on.
+            0 => false,
+            // Single root: the normal happy path.
+            1 => true,
+            // Multi-root: only permit the specific [stub + real] shape
+            // produced by the pre-QUALITY-774 optimistic-root writer bug,
+            // where exactly one parentless row carries the real conversation
+            // content. The restore-side dedupe in
+            // `AIConversation::new_restored` will pick that real root.
+            _ => root_tasks.iter().filter(|t| !t.messages.is_empty()).count() == 1,
         }
-
-        // All non-root tasks must have a non-empty parent_task_id
-        self.tasks.iter().all(|task| {
-            // Root task is always valid
-            if task
-                .dependencies
-                .as_ref()
-                .map(|deps| deps.parent_task_id.is_empty())
-                .unwrap_or(true)
-            {
-                return true;
-            }
-
-            // Non-root tasks must have a non-empty parent_task_id
-            task.dependencies
-                .as_ref()
-                .is_some_and(|deps| !deps.parent_task_id.is_empty())
-        })
     }
 }
 
@@ -1030,6 +1041,13 @@ pub struct AgentConversationData {
     /// The display name for this agent, assigned by the orchestrator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// Harness type used to render the child agent's shared icon in orchestration UI.
+    #[serde(
+        default,
+        alias = "orchestration_avatar_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub orchestration_harness_type: Option<String>,
     /// The local conversation ID of the parent conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_conversation_id: Option<String>,
@@ -1037,6 +1055,15 @@ pub struct AgentConversationData {
     /// agent executing on a remote worker.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_remote_child: bool,
+    /// Legacy marker that previously recorded whether the root task was still
+    /// optimistic when this conversation was persisted. Retained on the struct
+    /// for backward-compatible deserialization of rows written by older builds;
+    /// new writes always emit `None` and restore code ignores the value.
+    ///
+    // TODO: Remove this field once no live local DBs still contain
+    // `Some(true)` rows that legacy code paths might trip over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_task_is_optimistic: Option<bool>,
     /// The server-assigned run identifier (`ai_tasks.id`) for v2 orchestration.
     /// For local agents this arrives via StreamInit; for cloud agents it will
     /// come from SpawnAgentResponse once the local→cloud spawn path is wired.
@@ -1049,6 +1076,10 @@ pub struct AgentConversationData {
     /// delivery without re-delivering already-processed events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_event_sequence: Option<i64>,
+    /// Whether the user has pinned this child agent in the orchestration
+    /// pill bar. Orchestrator conversations always serialize as `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1075,6 +1106,10 @@ pub fn token_usage_category_display_name(category: &str) -> String {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ModelTokenUsage {
+    /// Identifier used for both display and replay. For warp/byok rows this is the
+    /// server-known model id; for custom endpoint rows this is the resolved alias
+    /// (or fallback label) — the upstream `config_key` is translated into this
+    /// label once at ingestion time and is not retained separately.
     pub model_id: String,
     /// Alias for backward compat: old persisted data used `total_tokens` for warp usage.
     #[serde(default, alias = "total_tokens")]
@@ -1082,9 +1117,13 @@ pub struct ModelTokenUsage {
     #[serde(default)]
     pub byok_tokens: u32,
     #[serde(default)]
+    pub custom_endpoint_tokens: u32,
+    #[serde(default)]
     pub warp_token_usage_by_category: HashMap<TokenUsageCategory, u32>,
     #[serde(default)]
     pub byok_token_usage_by_category: HashMap<TokenUsageCategory, u32>,
+    #[serde(default)]
+    pub custom_endpoint_token_usage_by_category: HashMap<TokenUsageCategory, u32>,
 }
 
 impl ModelTokenUsage {
@@ -1117,16 +1156,37 @@ impl ModelTokenUsage {
     pub fn to_proto_byok_usage(&self) -> Option<(String, stream_finished::ModelTokenUsage)> {
         self.to_proto_usage(self.byok_tokens, &self.byok_token_usage_by_category)
     }
+    #[allow(deprecated)]
+    pub fn to_proto_custom_endpoint_usage(
+        &self,
+    ) -> Option<(String, stream_finished::ModelTokenUsage)> {
+        if self.custom_endpoint_tokens == 0 {
+            return None;
+        }
+        Some((
+            self.model_id.clone(),
+            stream_finished::ModelTokenUsage {
+                model_id: self.model_id.clone(),
+                total_tokens: self.custom_endpoint_tokens,
+                token_usage_by_category: self
+                    .custom_endpoint_token_usage_by_category
+                    .iter()
+                    .map(|(cat, tokens)| (cat.clone(), *tokens))
+                    .collect(),
+            },
+        ))
+    }
 
     #[allow(deprecated)]
     pub fn to_proto_combined(&self) -> stream_finished::ModelTokenUsage {
         stream_finished::ModelTokenUsage {
             model_id: self.model_id.clone(),
-            total_tokens: self.warp_tokens + self.byok_tokens,
+            total_tokens: self.warp_tokens + self.byok_tokens + self.custom_endpoint_tokens,
             token_usage_by_category: self
                 .warp_token_usage_by_category
                 .iter()
                 .chain(self.byok_token_usage_by_category.iter())
+                .chain(self.custom_endpoint_token_usage_by_category.iter())
                 .fold(HashMap::new(), |mut acc, (cat, tokens)| {
                     *acc.entry(cat.clone()).or_insert(0) += tokens;
                     acc
@@ -1307,6 +1367,8 @@ pub struct ConversationUsageMetadata {
     pub context_window_usage: f32,
     pub credits_spent: f32,
     #[serde(default)]
+    pub platform_credits_spent: f32,
+    #[serde(default)]
     pub credits_spent_for_last_block: Option<f32>,
     #[serde(default)]
     pub token_usage: Vec<ModelTokenUsage>,
@@ -1341,85 +1403,8 @@ pub struct NewMCPServerInstallation {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::AgentConversationData;
-
-    #[test]
-    fn agent_conversation_data_roundtrips_last_event_sequence() {
-        let data = AgentConversationData {
-            server_conversation_token: None,
-            conversation_usage_metadata: None,
-            reverted_action_ids: None,
-            forked_from_server_conversation_token: None,
-            artifacts_json: None,
-            parent_agent_id: None,
-            agent_name: None,
-            parent_conversation_id: None,
-            is_remote_child: false,
-            run_id: None,
-            autoexecute_override: None,
-            last_event_sequence: Some(42),
-        };
-        let json = serde_json::to_string(&data).expect("serialize");
-        let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(roundtripped.last_event_sequence, Some(42));
-    }
-
-    #[test]
-    fn agent_conversation_data_roundtrips_remote_child_marker() {
-        let data = AgentConversationData {
-            server_conversation_token: None,
-            conversation_usage_metadata: None,
-            reverted_action_ids: None,
-            forked_from_server_conversation_token: None,
-            artifacts_json: None,
-            parent_agent_id: None,
-            agent_name: None,
-            parent_conversation_id: None,
-            is_remote_child: true,
-            run_id: None,
-            autoexecute_override: None,
-            last_event_sequence: None,
-        };
-        let json = serde_json::to_string(&data).expect("serialize");
-        let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
-        assert!(roundtripped.is_remote_child);
-    }
-
-    #[test]
-    fn agent_conversation_data_deserializes_legacy_payload_without_last_event_sequence() {
-        // Legacy rows persisted before this feature landed omit the field
-        // entirely. `#[serde(default)]` must accept them as `None`.
-        let legacy_json = r#"{"server_conversation_token":null}"#;
-        let data: AgentConversationData =
-            serde_json::from_str(legacy_json).expect("legacy rows must deserialize");
-        assert_eq!(data.last_event_sequence, None);
-        assert!(!data.is_remote_child);
-    }
-
-    #[test]
-    fn agent_conversation_data_skips_serializing_none_last_event_sequence() {
-        let data = AgentConversationData {
-            server_conversation_token: None,
-            conversation_usage_metadata: None,
-            reverted_action_ids: None,
-            forked_from_server_conversation_token: None,
-            artifacts_json: None,
-            parent_agent_id: None,
-            agent_name: None,
-            parent_conversation_id: None,
-            is_remote_child: false,
-            run_id: None,
-            autoexecute_override: None,
-            last_event_sequence: None,
-        };
-        let json = serde_json::to_string(&data).expect("serialize");
-        assert!(
-            !json.contains("last_event_sequence"),
-            "None should be skipped in serialized output: {json}"
-        );
-    }
-}
+#[path = "model_tests.rs"]
+mod tests;
 
 #[derive(Insertable)]
 #[diesel(table_name = panels)]

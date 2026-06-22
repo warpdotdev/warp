@@ -1,16 +1,13 @@
 use warpui::{AppContext, ModelHandle, SingletonEntity, View, ViewContext, ViewHandle, WindowId};
 
-use crate::{
-    app_state::{LeafContents, SettingsPaneSnapshot},
-    settings_view::{
-        pane_manager::SettingsPaneManager, SettingsSection, SettingsView, SettingsViewEvent,
-    },
-};
-
+use super::view::PaneView;
 use super::{
-    view::PaneView, DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
+    DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
     ShareableLinkError,
 };
+use crate::app_state::{LeafContents, SettingsPaneSnapshot};
+use crate::settings_view::pane_manager::SettingsPaneManager;
+use crate::settings_view::{SettingsSection, SettingsView, SettingsViewEvent};
 
 pub struct SettingsPane {
     view: ViewHandle<PaneView<SettingsView>>,

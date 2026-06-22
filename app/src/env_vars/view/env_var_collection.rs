@@ -1,72 +1,61 @@
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-
 use warp_core::features::FeatureFlag;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::{
+    Align, AnchorPair, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CrossAxisAlignment, DispatchEventResult, EventHandler, Fill, Flex,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType, ParentAnchor,
+    ParentElement, ParentOffsetBounds, PositioningAxis, SavePosition, ScrollbarWidth, Shrinkable,
+    Stack, XAxisAnchor, YAxisAnchor,
+};
+use warpui::keymap::EditableBinding;
+use warpui::platform::Cursor;
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        Align, AnchorPair, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable,
-        ConstrainedBox, Container, CrossAxisAlignment, DispatchEventResult, EventHandler, Fill,
-        Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType,
-        ParentAnchor, ParentElement, ParentOffsetBounds, PositioningAxis, SavePosition,
-        ScrollbarWidth, Shrinkable, Stack, XAxisAnchor, YAxisAnchor,
-    },
-    id,
-    keymap::EditableBinding,
-    platform::Cursor,
-    presenter::ChildView,
-    ui_components::components::UiComponent,
-    AppContext, BlurContext, Element, Entity, FocusContext, ModelAsRef, ModelHandle,
+    id, AppContext, BlurContext, Element, Entity, FocusContext, ModelAsRef, ModelHandle,
     SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
 };
 
-use crate::{
-    ai::blocklist::block::secret_redaction::find_secrets_in_text_with_levels,
-    cloud_object::{
-        breadcrumbs::ContainingObject,
-        model::persistence::{CloudModel, CloudModelEvent},
-        CloudObjectEventEntrypoint, Owner,
-    },
-    drive::{
-        items::WarpDriveItemId,
-        sharing::{ContentEditability, ShareableObject},
-    },
-    editor::EditorView,
-    env_vars::{
-        active_env_var_collection_data::{
-            ActiveEnvVarCollection, ActiveEnvVarCollectionData, ActiveEnvVarCollectionDataEvent,
-            SavingStatus, TrashStatus,
-        },
-        CloudEnvVarCollection, CloudEnvVarCollectionModel, EnvVar, EnvVarCollection,
-        EnvVarCollectionType, EnvVarValue,
-    },
-    external_secrets::SecretManager,
-    menu::MenuItem,
-    network::{NetworkStatus, NetworkStatusEvent},
-    pane_group::{
-        focus_state::PaneFocusHandle, pane::view, BackingView, PaneConfiguration, PaneEvent,
-    },
-    search::external_secrets::view::ExternalSecretsMenu,
-    send_telemetry_from_ctx,
-    server::{
-        cloud_objects::update_manager::{FetchSingleObjectOption, UpdateManager},
-        ids::{ServerId, SyncId},
-    },
-    terminal::{model::secrets::SecretLevel, safe_mode_settings::get_secret_obfuscation_mode},
-    ui_components::{
-        breadcrumb::{render_breadcrumbs, BreadcrumbState},
-        buttons::icon_button,
-        icons::Icon,
-        menu_button::{
-            highlight_icon_button_with_context_menu, icon_button_with_context_menu, MenuDirection,
-        },
-    },
-    util::bindings::CustomAction,
-    view_components::{alert::AlertConfig, Alert, DismissibleToast, ToastType},
-    workspace::ToastStack,
-    Appearance, CloudObjectTypeAndId, TelemetryEvent,
+use super::command_dialog::EnvVarCommandDialog;
+use super::menus::Menus;
+use crate::ai::blocklist::block::secret_redaction::find_secrets_in_text_with_levels;
+use crate::cloud_object::breadcrumbs::ContainingObject;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::{CloudObjectEventEntrypoint, Owner};
+use crate::drive::items::WarpDriveItemId;
+use crate::drive::sharing::{ContentEditability, ShareableObject};
+use crate::editor::EditorView;
+use crate::env_vars::active_env_var_collection_data::{
+    ActiveEnvVarCollection, ActiveEnvVarCollectionData, ActiveEnvVarCollectionDataEvent,
+    SavingStatus, TrashStatus,
 };
-
-use super::{command_dialog::EnvVarCommandDialog, menus::Menus};
+use crate::env_vars::{
+    CloudEnvVarCollection, CloudEnvVarCollectionModel, EnvVar, EnvVarCollection,
+    EnvVarCollectionType, EnvVarValue,
+};
+use crate::external_secrets::SecretManager;
+use crate::menu::MenuItem;
+use crate::network::{NetworkStatus, NetworkStatusEvent};
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view;
+use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
+use crate::search::external_secrets::view::ExternalSecretsMenu;
+use crate::server::cloud_objects::update_manager::{FetchSingleObjectOption, UpdateManager};
+use crate::server::ids::{ServerId, SyncId};
+use crate::terminal::model::secrets::SecretLevel;
+use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::ui_components::breadcrumb::{render_breadcrumbs, BreadcrumbState};
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::ui_components::menu_button::{
+    highlight_icon_button_with_context_menu, icon_button_with_context_menu, MenuDirection,
+};
+use crate::util::bindings::CustomAction;
+use crate::view_components::alert::AlertConfig;
+use crate::view_components::{Alert, DismissibleToast, ToastType};
+use crate::workspace::ToastStack;
+use crate::{send_telemetry_from_ctx, Appearance, CloudObjectTypeAndId, TelemetryEvent};
 
 // Universal
 pub(super) const CORE_HORIZONATAL_MARGIN: f32 = 24.;

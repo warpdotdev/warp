@@ -1,5 +1,3 @@
-use crate::ai::blocklist::inline_action::inline_action_icons;
-use crate::ui_components::blended_colors;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
@@ -12,12 +10,13 @@ use warpui::elements::{
     Text,
 };
 use warpui::fonts::{FamilyId, Properties, Weight};
-use warpui::ui_components::components::UiComponent as _;
-use warpui::ui_components::components::UiComponentStyles;
+use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
 use warpui::{AppContext, Element, EventContext, PaintContext, SingletonEntity as _};
 
 use super::settings::WarpifySettings;
 use super::SubshellSource;
+use crate::ai::blocklist::inline_action::inline_action_icons;
+use crate::ui_components::blended_colors;
 
 /// The flag font size varies with the monospace font width, but if it gets too big it will start
 /// to overlap with the prompt grid. This should eventually be fixed by growing the block height to

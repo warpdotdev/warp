@@ -1,43 +1,40 @@
-pub(super) mod user_persistence;
-
 use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use settings::Setting as _;
+#[cfg(target_family = "wasm")]
+use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUserResult,
 };
-use warpui::{clipboard::ClipboardContent, Entity, ModelContext, SingletonEntity, UpdateModel};
+use warp_server_auth::user::persistence::PersistedUser;
+use warpui::clipboard::ClipboardContent;
+use warpui::{Entity, ModelContext, SingletonEntity, UpdateModel};
 
 use super::auth_state::{AuthState, PersistAction};
 use super::auth_view_modal::{AuthRedirectPayload, AuthViewVariant};
 use super::credentials::{Credentials, FirebaseToken, LoginToken};
 use super::user::User;
-use super::AuthStateProvider;
-use super::UserUid;
+use super::user_properties::UserProperties;
+use super::{AuthStateProvider, UserUid};
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::AIRequestUsageModel;
 use crate::autoupdate::AutoupdateState;
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::server_api::auth::FetchUserResult;
-use crate::server::server_api::ServerApiProvider;
-use crate::server::{
-    graphql::get_user_facing_error_message,
-    server_api::{
-        auth::{
-            AnonymousUserCreationError, AuthClient, MintCustomTokenError, UserAuthenticationError,
-        },
-        ServerApi,
-    },
-    telemetry::AnonymousUserSignupEntrypoint,
+use crate::server::graphql::get_user_facing_error_message;
+use crate::server::server_api::auth::{
+    AnonymousUserCreationError, AuthClient, FetchUserResult, MintCustomTokenError,
+    UserAuthenticationError,
 };
+use crate::server::server_api::{ServerApi, ServerApiProvider};
+use crate::server::telemetry::AnonymousUserSignupEntrypoint;
 use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::settings::initializer::SettingsInitializer;
 use crate::settings::PrivacySettings;
@@ -50,9 +47,6 @@ use crate::{
     persistence, report_error, report_if_error, send_telemetry_from_ctx,
     send_telemetry_sync_from_ctx, GlobalResourceHandlesProvider, TelemetryEvent,
 };
-#[cfg(target_family = "wasm")]
-use url::Url;
-use user_persistence::PersistedUser;
 
 #[derive(Debug)]
 pub enum AuthManagerEvent {
@@ -124,13 +118,15 @@ impl AuthManager {
     pub fn new_for_test(ctx: &mut ModelContext<Self>) -> Self {
         use crate::server::server_api::ServerApiProvider;
 
-        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let server_api_provider = ServerApiProvider::as_ref(ctx);
+        let server_api = server_api_provider.get();
+        let auth_client = server_api_provider.get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
 
         Self {
             auth_state,
-            server_api: server_api.clone(),
-            auth_client: server_api,
+            server_api,
+            auth_client,
             pending_auth_state: None,
         }
     }
@@ -331,12 +327,15 @@ impl AuthManager {
         match fetch_user_result {
             Ok(fetch_user_result) => {
                 let FetchUserResult {
-                    user,
+                    user_output,
                     credentials,
-                    server_experiments,
                     from_refresh,
-                    llms,
                 } = fetch_user_result;
+                let UserProperties {
+                    user,
+                    server_experiments,
+                    llms,
+                } = user_output.into();
 
                 self.set_and_persist(Some(user.clone()), Some(credentials), ctx);
 
@@ -884,5 +883,5 @@ impl Entity for AuthManager {
 impl SingletonEntity for AuthManager {}
 
 #[cfg(test)]
-#[path = "auth_manager_test.rs"]
+#[path = "auth_manager_tests.rs"]
 mod auth_manager_test;

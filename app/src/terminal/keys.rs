@@ -1,14 +1,14 @@
 //! Utilities for terminal keybindings.
 
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::{
-    settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier},
-    terminal::input::{
-        SET_INPUT_MODE_AGENT_ACTION_NAME, SET_INPUT_MODE_TERMINAL_ACTION_NAME,
-        SET_INPUT_MODE_UNLOCKED_AGENT_ACTION_NAME, SET_INPUT_MODE_UNLOCKED_TERMINAL_ACTION_NAME,
-    },
-    util::bindings::{custom_tag_to_keystroke, keybinding_name_to_display_string, CustomAction},
+use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
+use crate::terminal::input::{
+    SET_INPUT_MODE_AGENT_ACTION_NAME, SET_INPUT_MODE_TERMINAL_ACTION_NAME,
+    SET_INPUT_MODE_UNLOCKED_AGENT_ACTION_NAME, SET_INPUT_MODE_UNLOCKED_TERMINAL_ACTION_NAME,
+};
+use crate::util::bindings::{
+    custom_tag_to_keystroke, keybinding_name_to_display_string, CustomAction,
 };
 
 /// Cache of keybindings used in terminal.
@@ -72,6 +72,7 @@ impl TerminalKeybindings {
 
     fn handle_keybinding_change(
         &mut self,
+        _: ModelHandle<KeybindingChangedNotifier>,
         event: &KeybindingChangedEvent,
         ctx: &mut ModelContext<Self>,
     ) {

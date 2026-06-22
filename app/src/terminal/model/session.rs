@@ -1,52 +1,47 @@
 pub mod active_session;
 pub mod command_executor;
 
-use async_channel::Sender;
-pub use command_executor::*;
-
-use anyhow::Result;
-use futures::future::{BoxFuture, Shared};
-use futures::FutureExt;
-use instant::Instant;
-use once_cell::sync::OnceCell;
-use smol_str::SmolStr;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use typed_path::{TypedPath, TypedPathBuf, WindowsPath};
-use warp_util::path::{
-    convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
-    ShellFamily,
-};
 
+use anyhow::Result;
+use async_channel::Sender;
+#[cfg(feature = "local_tty")]
+use command_executor::remote_server_executor::RemoteServerCommandExecutor;
+pub use command_executor::*;
+use futures::future::{BoxFuture, Shared};
+use futures::FutureExt;
+use instant::Instant;
+use once_cell::sync::OnceCell;
+use parking_lot::{Mutex, RwLock};
+use smol_str::SmolStr;
+use typed_path::{TypedPath, TypedPathBuf, WindowsPath};
 use version_compare::Version;
 use warp_completer::completer::{
     CommandExitStatus, CommandOutput, PathSeparators, TopLevelCommandCaseSensitivity,
 };
-use warpui::{platform::OperatingSystem, Entity, ModelContext, SingletonEntity};
+use warp_util::path::{
+    convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
+    ShellFamily,
+};
+use warpui::platform::OperatingSystem;
+use warpui::{Entity, ModelContext, SingletonEntity};
 
+use super::ansi::{BootstrappedValue, InitShellValue, SSHValue};
+use super::terminal_model::{HistoryEntry, SubshellInitializationInfo};
 #[cfg(feature = "local_tty")]
 use crate::features::FeatureFlag;
 #[cfg(feature = "local_tty")]
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::server::telemetry::{BootstrappingInfo, TelemetryEvent};
-use crate::terminal::event::ExecutedExecutorCommandEvent;
-use crate::terminal::ShellHost;
-use crate::terminal::ShellLaunchData;
-#[cfg(feature = "local_tty")]
-use command_executor::remote_server_executor::RemoteServerCommandExecutor;
-use parking_lot::{Mutex, RwLock};
-
+use crate::terminal::event::{ExecutedExecutorCommandEvent, RemoteServerSetupState};
 use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::warpify::SubshellSource;
-use crate::terminal::History;
-
-use super::ansi::{BootstrappedValue, InitShellValue, SSHValue};
-use super::terminal_model::{HistoryEntry, SubshellInitializationInfo};
-use crate::terminal::event::RemoteServerSetupState;
+use crate::terminal::{History, ShellHost, ShellLaunchData};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ReadHistoryContentsError {
@@ -145,7 +140,7 @@ impl Sessions {
         #[cfg(feature = "local_tty")]
         if FeatureFlag::SshRemoteServer.is_enabled() {
             let mgr = RemoteServerManager::handle(ctx);
-            ctx.subscribe_to_model(&mgr, |sessions, event, ctx| match event {
+            ctx.subscribe_to_model(&mgr, |sessions, _, event, ctx| match event {
                 RemoteServerManagerEvent::SessionConnected {
                     session_id: sid,
                     host_id,
@@ -165,19 +160,39 @@ impl Sessions {
                     sessions.set_remote_server_setup_state(*session_id, state.clone());
                     ctx.notify();
                 }
+                RemoteServerManagerEvent::BufferUpdated { .. }
+                | RemoteServerManagerEvent::BufferConflictDetected { .. } => {
+                    // Handled directly by GlobalBufferModel's subscription.
+                }
                 RemoteServerManagerEvent::SessionConnecting { .. }
                 | RemoteServerManagerEvent::SessionDeregistered { .. }
                 | RemoteServerManagerEvent::SessionConnectionFailed { .. }
                 | RemoteServerManagerEvent::HostConnected { .. }
                 | RemoteServerManagerEvent::HostDisconnected { .. }
+                | RemoteServerManagerEvent::RemoteAgentContextSnapshot { .. }
                 | RemoteServerManagerEvent::NavigatedToDirectory { .. }
                 | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
                 | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
                 | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
+                | RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { .. }
+                | RemoteServerManagerEvent::CodebaseIndexStatusUpdated { .. }
+                | RemoteServerManagerEvent::CodebaseIndexMutationFailed { .. }
                 | RemoteServerManagerEvent::BinaryCheckComplete { .. }
                 | RemoteServerManagerEvent::BinaryInstallComplete { .. }
                 | RemoteServerManagerEvent::ClientRequestFailed { .. }
-                | RemoteServerManagerEvent::ServerMessageDecodingError { .. } => {}
+                | RemoteServerManagerEvent::ServerMessageDecodingError { .. }
+                | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
+                | RemoteServerManagerEvent::DiffStateMetadataUpdateReceived { .. }
+                | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. }
+                | RemoteServerManagerEvent::GetBranchesResponse { .. }
+                | RemoteServerManagerEvent::CommitChainResponse { .. }
+                | RemoteServerManagerEvent::GitPushResponse { .. }
+                | RemoteServerManagerEvent::CreatePrResponse { .. }
+                | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
+                | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. }
+                | RemoteServerManagerEvent::GitStatusPushReceived { .. }
+                | RemoteServerManagerEvent::GitHubPrInfoPushReceived { .. }
+                | RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived { .. } => {}
                 RemoteServerManagerEvent::SessionReconnected {
                     session_id: sid,
                     client,
@@ -381,7 +396,7 @@ impl Sessions {
             TelemetryEvent::BootstrappingSucceeded(BootstrappingInfo {
                 shell: session.shell().shell_type().name(),
                 shell_version: session.shell().version().clone(),
-                is_ssh: session.is_legacy_ssh_session(),
+                is_ssh: session.is_ssh_wrapper_session(),
                 was_triggered_by_rc_file,
                 is_subshell: session.subshell_info().is_some(),
                 is_wsl: session.is_wsl(),
@@ -518,9 +533,27 @@ impl From<&SessionType> for command_corrections::SessionType {
     }
 }
 
+/// Whether a session was established by Warp's in-band SSH wrapper — the shell function our
+/// bootstrap injects that intercepts `ssh`, sets up a ControlMaster connection, and bootstraps
+/// the remote shell. This applies to all SSH warpification today: the remote-server SSH
+/// extension also runs on top of a wrapper session (reusing the ControlMaster socket for its
+/// proxy and for the `RemoteCommandExecutor` fallback).
+///
+/// `No` covers local sessions, subshells, and remote sessions warpified *without* the wrapper
+/// (e.g. via the auto-warpify RC snippet inside an unwrapped `ssh` session), which carry no
+/// ControlMaster socket.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IsLegacySSHSession {
-    Yes { socket_path: PathBuf },
+pub enum IsSSHWrapperSession {
+    /// The session was established by the SSH wrapper; `socket_path` is the ControlMaster
+    /// socket for the underlying connection.
+    Yes {
+        socket_path: PathBuf,
+        /// `true` when `socket_path` points at a ControlMaster the user
+        /// already had running (the SSH wrapper attached to it instead of
+        /// creating a Warp-owned one). Warp must not tear down such a
+        /// master on session exit.
+        external_control_master: bool,
+    },
     No,
 }
 
@@ -573,12 +606,12 @@ pub struct SessionInfo {
     pub function_names: HashSet<SmolStr>,
     pub builtins: HashSet<SmolStr>,
     pub keywords: Vec<SmolStr>,
-    pub is_legacy_ssh_session: IsLegacySSHSession,
+    pub is_ssh_wrapper_session: IsSSHWrapperSession,
     pub home_dir: Option<String>,
+    pub cdpath: Option<String>,
     pub editor: Option<String>,
     pub session_type: BootstrapSessionType,
     pub host_info: HostInfo,
-    pub tmux_control_mode: bool,
     pub wsl_name: Option<String>,
     /// If this is a subshell or remote session, e.g. ssh, store the parent session ID here.
     pub spawning_session_id: Option<SessionId>,
@@ -596,18 +629,18 @@ impl SessionInfo {
         init_shell_value: InitShellValue,
         subshell_info: Option<SubshellInitializationInfo>,
         launch_data: Option<ShellLaunchData>,
-        legacy_ssh_session: Option<SSHValue>,
-        is_warpified_ssh_session: bool,
+        ssh_wrapper_session: Option<SSHValue>,
         active_block_session_id: Option<SessionId>,
     ) -> Self {
-        let is_legacy_ssh_session = match legacy_ssh_session {
-            Some(ssh_value) => IsLegacySSHSession::Yes {
+        let is_ssh_wrapper_session = match ssh_wrapper_session {
+            Some(ssh_value) => IsSSHWrapperSession::Yes {
                 socket_path: ssh_value.socket_path,
+                external_control_master: ssh_value.external_control_master,
             },
-            None => IsLegacySSHSession::No,
+            None => IsSSHWrapperSession::No,
         };
 
-        if launch_data.is_none() && is_legacy_ssh_session == IsLegacySSHSession::No {
+        if launch_data.is_none() && is_ssh_wrapper_session == IsSSHWrapperSession::No {
             log::warn!("pending_local_shell_path was None for a local session");
         }
 
@@ -615,8 +648,7 @@ impl SessionInfo {
         // to determine if this is a local or remote session.
         let session_type = Self::determine_session_type(
             &init_shell_value,
-            is_warpified_ssh_session
-                || matches!(&is_legacy_ssh_session, IsLegacySSHSession::Yes { .. }),
+            matches!(&is_ssh_wrapper_session, IsSSHWrapperSession::Yes { .. }),
         );
 
         let spawning_session_id = if matches!(session_type, BootstrapSessionType::WarpifiedRemote)
@@ -635,10 +667,11 @@ impl SessionInfo {
             hostname: init_shell_value.hostname,
             session_type,
             subshell_info,
-            is_legacy_ssh_session,
+            is_ssh_wrapper_session,
             environment_variable_names: Default::default(),
             path: None,
             home_dir: None,
+            cdpath: None,
             editor: None,
             histfile: None,
             aliases: Default::default(),
@@ -647,7 +680,6 @@ impl SessionInfo {
             builtins: Default::default(),
             keywords: Default::default(),
             host_info: Default::default(),
-            tmux_control_mode: false,
             wsl_name: init_shell_value.wsl_name,
             spawning_session_id,
         }
@@ -656,14 +688,14 @@ impl SessionInfo {
     #[cfg(not(feature = "remote_tty"))]
     fn determine_session_type(
         init_shell_value: &InitShellValue,
-        is_warpified_ssh_session: bool,
+        is_ssh_session: bool,
     ) -> BootstrapSessionType {
         match get_local_hostname() {
             Ok(local_hostname) => {
                 // Ensures subshells are treated as local
                 if local_hostname == init_shell_value.hostname &&
                 // Ensures `ssh localhost` is treated as remote
-                !is_warpified_ssh_session
+                !is_ssh_session
                 {
                     BootstrapSessionType::Local
                 } else {
@@ -680,7 +712,7 @@ impl SessionInfo {
     #[cfg(feature = "remote_tty")]
     fn determine_session_type(
         _init_shell_value: &InitShellValue,
-        _is_warpified_ssh_session: bool,
+        _is_ssh_session: bool,
     ) -> BootstrapSessionType {
         // When the `remote_tty` feature is enabled--the session is always considered remote.
         BootstrapSessionType::WarpifiedRemote
@@ -692,11 +724,7 @@ impl SessionInfo {
     ///
     /// This should be called on the pending `SessionInfo` after the session is bootstrapped and
     /// used to create the canonical `Session` object for the newly bootstrapped session.
-    pub fn merge_from_bootstrapped_value(
-        mut self,
-        bootstrapped_value: BootstrappedValue,
-        tmux_control_mode: bool,
-    ) -> Self {
+    pub fn merge_from_bootstrapped_value(mut self, bootstrapped_value: BootstrappedValue) -> Self {
         // Determine the value from the bootstrap message, falling back to the cached shell type
         // (from the `InitShell` payload) if unable to parse.
         let shell_type = match ShellType::from_name(bootstrapped_value.shell.as_str()) {
@@ -775,14 +803,14 @@ impl SessionInfo {
             builtins: builtins.unwrap_or_default(),
             keywords: keywords.unwrap_or_default(),
             home_dir,
+            cdpath: bootstrapped_value.cdpath,
             editor: bootstrapped_value.editor,
-            is_legacy_ssh_session: self.is_legacy_ssh_session,
+            is_ssh_wrapper_session: self.is_ssh_wrapper_session,
             subshell_info: self.subshell_info.take(),
             host_info: HostInfo {
                 os_category: bootstrapped_value.os_category,
                 linux_distribution: bootstrapped_value.linux_distribution,
             },
-            tmux_control_mode,
             wsl_name: bootstrapped_value.wsl_name,
             spawning_session_id: self.spawning_session_id,
         }
@@ -873,10 +901,13 @@ impl From<BootstrapSessionType> for SessionType {
 pub struct Session {
     info: SessionInfo,
     external_commands: Arc<OnceCell<HashSet<SmolStr>>>,
+    /// Function names collected asynchronously after bootstrap via an in-band command.
+    additional_function_names: Arc<OnceCell<HashSet<SmolStr>>>,
     /// The command executor for this session. Behind a `RwLock` so it can be
     /// swapped after a remote server reconnect (via `set_command_executor`).
     command_executor: RwLock<Arc<dyn CommandExecutor>>,
     load_external_commands_future: OnceCell<Shared<BoxFuture<'static, ()>>>,
+    load_all_function_names_future: OnceCell<Shared<BoxFuture<'static, ()>>>,
     command_case_sensitivity: TopLevelCommandCaseSensitivity,
     /// The authoritative session type, initially derived from the
     /// [`BootstrapSessionType`] in `SessionInfo` and updated by [`Sessions`]
@@ -901,8 +932,10 @@ impl Session {
         Self {
             info: session_info,
             external_commands: Arc::new(OnceCell::new()),
+            additional_function_names: Arc::new(OnceCell::new()),
             command_executor: RwLock::new(command_executor),
             load_external_commands_future: Default::default(),
+            load_all_function_names_future: Default::default(),
             command_case_sensitivity,
             session_type: Mutex::new(session_type),
         }
@@ -964,20 +997,27 @@ impl Session {
         self.info.editor.as_deref()
     }
 
+    pub fn cdpath(&self) -> Option<&str> {
+        self.info.cdpath.as_deref()
+    }
+
     pub fn host_info(&self) -> HostInfo {
         self.info.host_info.clone()
     }
 
-    pub fn is_legacy_ssh_session(&self) -> bool {
+    /// Returns whether this session was established by Warp's in-band SSH wrapper (see
+    /// [`IsSSHWrapperSession`]). Note this stays `false` for remote sessions warpified via
+    /// the auto-warpify RC snippet inside an unwrapped `ssh` session.
+    pub fn is_ssh_wrapper_session(&self) -> bool {
         matches!(
-            self.info.is_legacy_ssh_session,
-            IsLegacySSHSession::Yes { .. }
+            self.info.is_ssh_wrapper_session,
+            IsSSHWrapperSession::Yes { .. }
         )
     }
 
     pub fn is_subshell_or_ssh(&self) -> bool {
         matches!(self.session_type(), SessionType::WarpifiedRemote { .. })
-            || self.is_legacy_ssh_session()
+            || self.is_ssh_wrapper_session()
             || self.subshell_info().is_some()
     }
 
@@ -1014,7 +1054,11 @@ impl Session {
     }
 
     pub fn function_names(&self) -> impl Iterator<Item = &str> {
-        self.info.function_names.iter().map(Deref::deref)
+        self.info
+            .function_names
+            .iter()
+            .chain(self.additional_function_names.get().into_iter().flatten())
+            .map(Deref::deref)
     }
 
     pub fn executable_names(&self) -> impl Iterator<Item = &str> {
@@ -1078,6 +1122,66 @@ impl Session {
     /// Returns `true` if external commands have finished loading for this `Session`.
     pub fn has_loaded_external_commands(&self) -> bool {
         self.external_commands.get().is_some()
+    }
+
+    /// Asynchronously collects all function names via an in-band shell command.
+    pub async fn load_all_function_names(&self) {
+        let Some(command) = self
+            .info
+            .shell
+            .shell_type()
+            .shell_command_to_get_all_functions()
+        else {
+            return;
+        };
+
+        let (load_future, receiver) = (async {
+            let additional_function_names = self.additional_function_names.clone();
+            let existing = &self.info.function_names;
+
+            let result = self
+                .execute_command(command, None, None, ExecuteCommandOptions::default())
+                .await;
+
+            let new_names: HashSet<SmolStr> = match result {
+                Ok(output) if output.status == CommandExitStatus::Success => {
+                    match output.to_string() {
+                        Ok(output_string) => output_string
+                            .lines()
+                            .filter(|name| !name.is_empty() && !existing.contains(*name))
+                            .map(Into::into)
+                            .collect(),
+                        Err(e) => {
+                            log::warn!("Failed to decode all function names output: {e:#}");
+                            HashSet::new()
+                        }
+                    }
+                }
+                Ok(_) => {
+                    log::warn!(
+                        "In-band command for all function names returned non-success status"
+                    );
+                    HashSet::new()
+                }
+                Err(e) => {
+                    log::warn!("Failed to load all function names: {e:#}");
+                    HashSet::new()
+                }
+            };
+
+            if additional_function_names.set(new_names).is_err() {
+                log::warn!("Additional function names were already set for this session.");
+            }
+        })
+        .remote_handle();
+
+        match self
+            .load_all_function_names_future
+            .try_insert(receiver.boxed().shared())
+        {
+            Ok(_) => load_future.await,
+            Err((existing_receiver, _)) => existing_receiver.clone().await,
+        };
     }
 
     /// Asynchronously loads the external commands.
@@ -1175,6 +1279,7 @@ impl Session {
             .into_iter()
             .flatten()
             .chain(&self.info.function_names)
+            .chain(self.additional_function_names.get().into_iter().flatten())
             .chain(self.info.aliases.keys())
             .chain(self.info.abbreviations.keys())
             .chain(&self.info.builtins)
@@ -1383,9 +1488,11 @@ impl Session {
             .as_deref()
             .map(|path| HashMap::from_iter([("PATH".to_string(), path.to_string())]));
 
+        let escaped_history_file =
+            shell_escape_single_quotes(history_file, self.info.shell.shell_type());
         let output_in_bytes = self
             .execute_command(
-                format!("cat {history_file}").as_str(),
+                format!("cat '{escaped_history_file}'").as_str(),
                 None,
                 env_vars,
                 ExecuteCommandOptions::default(),
@@ -1427,6 +1534,13 @@ impl Session {
     #[cfg(feature = "integration_tests")]
     pub fn external_commands(&self) -> Arc<OnceCell<HashSet<SmolStr>>> {
         self.external_commands.clone()
+    }
+
+    /// Returns a reference to the session's command executor for integration
+    /// test assertions (e.g. to verify `RemoteServerCommandExecutor` is wired).
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn command_executor(&self) -> Arc<dyn CommandExecutor> {
+        self.command_executor.read().clone()
     }
 
     pub async fn execute_command(
@@ -1560,7 +1674,8 @@ pub fn get_local_hostname() -> Result<String> {
 
 #[cfg(test)]
 pub mod testing {
-    use super::{command_executor::testing::TestCommandExecutor, *};
+    use super::command_executor::testing::TestCommandExecutor;
+    use super::*;
 
     /// Builder methods for constructing `SessionInfo` in tests.
     impl SessionInfo {
@@ -1589,10 +1704,10 @@ pub mod testing {
                 function_names: HashSet::new(),
                 builtins: HashSet::new(),
                 keywords: Vec::new(),
-                is_legacy_ssh_session: IsLegacySSHSession::No,
+                is_ssh_wrapper_session: IsSSHWrapperSession::No,
                 home_dir: None,
+                cdpath: None,
                 host_info: Default::default(),
-                tmux_control_mode: false,
                 wsl_name: None,
                 spawning_session_id: None,
             }
@@ -1643,6 +1758,11 @@ pub mod testing {
             self
         }
 
+        pub fn with_cdpath(mut self, cdpath: String) -> Self {
+            self.cdpath = Some(cdpath);
+            self
+        }
+
         pub fn with_id(mut self, id: impl Into<SessionId>) -> Self {
             self.session_id = id.into();
             self
@@ -1652,7 +1772,10 @@ pub mod testing {
             if let BootstrapSessionType::Local = self.session_type {
                 self.session_type = BootstrapSessionType::WarpifiedRemote;
             }
-            self.is_legacy_ssh_session = IsLegacySSHSession::Yes { socket_path };
+            self.is_ssh_wrapper_session = IsSSHWrapperSession::Yes {
+                socket_path,
+                external_control_master: false,
+            };
             self
         }
 
@@ -1708,6 +1831,8 @@ pub mod testing {
                 load_external_commands_future: Default::default(),
                 command_case_sensitivity: TopLevelCommandCaseSensitivity::CaseSensitive,
                 session_type: Mutex::new(session_type),
+                additional_function_names: Default::default(),
+                load_all_function_names_future: Default::default(),
             }
         }
 
@@ -1723,6 +1848,8 @@ pub mod testing {
                 load_external_commands_future: Default::default(),
                 command_case_sensitivity: TopLevelCommandCaseSensitivity::CaseSensitive,
                 session_type: Mutex::new(session_type),
+                additional_function_names: Default::default(),
+                load_all_function_names_future: Default::default(),
             }
         }
 
@@ -1771,5 +1898,5 @@ pub mod testing {
 }
 
 #[cfg(test)]
-#[path = "session_test.rs"]
+#[path = "session_tests.rs"]
 mod test;

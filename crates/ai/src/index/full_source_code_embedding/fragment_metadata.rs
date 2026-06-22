@@ -1,4 +1,6 @@
-use std::{collections::HashMap, ops::Range, path::PathBuf};
+use std::collections::HashMap;
+use std::ops::Range;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use string_offset::ByteOffset;

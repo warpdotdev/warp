@@ -1,19 +1,22 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::mem;
 
 use pathfinder_color::ColorU;
 use string_offset::CharOffset;
-
-use crate::safe_debug;
-use crate::terminal::view::CONTROL_MASTER_ERROR_REGEX;
-use crate::terminal::{event::Event as TerminalEvent, event_listener::ChannelEventListener};
+use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 
 use super::ansi;
 use super::block::Block;
 use super::blocks::BlockList;
+use super::image_map::StoredImageMetadata;
+use super::iterm_image::ITermImage;
+use super::kitty::{KittyAction, KittyResponse};
 use super::selection::ScrollDelta;
 use super::session::SessionInfo;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use crate::safe_debug;
+use crate::terminal::event::Event as TerminalEvent;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::view::CONTROL_MASTER_ERROR_REGEX;
 
 #[cfg(test)]
 #[path = "early_output_tests.rs"]
@@ -670,5 +673,34 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
 
     fn query_keyboard_enhancement_flags<W: std::io::Write>(&mut self, writer: &mut W) {
         delegate!(self.query_keyboard_enhancement_flags(writer));
+    }
+
+    fn handle_completed_iterm_image(&mut self, image: ITermImage) {
+        let session_id = self.block_list.active_block().session_id();
+        self.with_background_output(|block| {
+            let had_visible_content = block.output_grid().has_visible_content();
+            block.handle_completed_iterm_image(image);
+            if !had_visible_content && block.output_grid().has_visible_content() && !block.started()
+            {
+                block.start_background(session_id);
+            }
+        });
+    }
+
+    fn handle_completed_kitty_action(
+        &mut self,
+        action: KittyAction,
+        metadata: &mut HashMap<u32, StoredImageMetadata>,
+    ) -> Option<KittyResponse> {
+        let session_id = self.block_list.active_block().session_id();
+        self.with_background_output(|block| {
+            let had_visible_content = block.output_grid().has_visible_content();
+            let retval = block.handle_completed_kitty_action(action, metadata);
+            if !had_visible_content && block.output_grid().has_visible_content() && !block.started()
+            {
+                block.start_background(session_id);
+            }
+            retval
+        })
     }
 }

@@ -19,7 +19,6 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::json_utils::entries_to_jsonl;
-
 use crate::ai::agent::conversation::AIConversationId;
 
 /// Env var codex honors to override `~/.codex` (see codex `core/src/config/mod.rs`).

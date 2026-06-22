@@ -5,42 +5,51 @@ pub mod web_intent_parser;
 #[cfg(target_family = "wasm")]
 pub mod browser_url_handler;
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+use anyhow::{anyhow, ensure, Result};
+use itertools::Itertools;
+use session_sharing_protocol::common::SessionId;
+use url::Url;
+use warp_util::path::LineAndColumnArg;
+use warpui::notification::UserNotification;
+use warpui::platform::TerminationMode;
+use warpui::{AppContext, EntityId, SingletonEntity as _, TypedActionView, ViewHandle, WindowId};
+
+use self::docker::open_docker_container;
 use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
 use crate::ai::agent::api::ServerConversationToken;
-use crate::drive::OpenWarpDriveObjectSettings;
+use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
+use crate::cloud_object::ObjectType;
+use crate::drive::{OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings};
+use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::linear::{LinearAction, LinearIssueWork};
-use crate::root_view::{open_new_window_get_handles, OpenLaunchConfigArg};
+use crate::root_view::{
+    open_new_window_get_handles, open_new_with_workspace_source, NewWorkspaceSource,
+    OpenLaunchConfigArg,
+};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
+use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection};
+use crate::tab_configs::TabConfig;
+use crate::user_config::{load_launch_configs, load_tab_configs, tab_configs_dir};
 use crate::util::openable_file_type::{
     is_file_openable_in_warp, is_markdown_file, is_runnable_shell_script, starts_with_shebang,
 };
-use crate::workspace::{Workspace, WorkspaceAction, WorkspaceRegistry};
-use crate::{cloud_object::ObjectType, workspace::ToastStack};
-use crate::{drive::OpenWarpDriveObjectArgs, view_components::DismissibleToast};
-use crate::{features::FeatureFlag, workspace::active_terminal_in_window};
-
-use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
-use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection};
-use crate::user_config::load_launch_configs;
+use crate::view_components::DismissibleToast;
+use crate::workspace::auto_handoff::trigger_auto_handoff_to_cloud;
+use crate::workspace::util::PaneViewLocator;
+use crate::workspace::{
+    active_terminal_in_window, AutoCloudHandoffTrigger, ToastStack, Workspace, WorkspaceAction,
+    WorkspaceRegistry,
+};
 use crate::{
     quake_mode_window_id, quake_mode_window_is_open, safe_info, send_telemetry_from_app_ctx,
     ChannelState, OpenPath,
 };
-use anyhow::{anyhow, ensure, Result};
-use itertools::Itertools;
-use session_sharing_protocol::common::SessionId;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use url::Url;
-use warpui::notification::UserNotification;
-use warpui::{platform::TerminationMode, SingletonEntity as _, TypedActionView};
-
-use warpui::{AppContext, EntityId, ViewHandle, WindowId};
-
-use self::docker::open_docker_container;
 
 const DESKTOP_REDIRECT_URI_PATH: &str = "/desktop_redirect";
 
@@ -80,6 +89,10 @@ pub enum UriHost {
     Codex,
     /// Actions triggered from Linear integrations (e.g. work on issue).
     Linear,
+    /// Opens a saved tab config in an existing window or a new one.
+    TabConfig,
+    /// Focuses a specific terminal pane by its persistent session UUID.
+    Session,
 }
 
 impl FromStr for UriHost {
@@ -101,6 +114,8 @@ impl FromStr for UriHost {
             "mcp" => Ok(Self::Mcp),
             "codex" => Ok(Self::Codex),
             "linear" => Ok(Self::Linear),
+            "tab_config" if FeatureFlag::TabConfigs.is_enabled() => Ok(Self::TabConfig),
+            "session" => Ok(Self::Session),
             _ => Err(anyhow!("Received url with unexpected host: {}", s)),
         }
     }
@@ -185,6 +200,9 @@ impl UriHost {
                 } else {
                     log::warn!("couldn't turn launch link '{}' into path", url.path());
                 }
+            }
+            UriHost::TabConfig => {
+                handle_tab_config_uri(primary_window_id, url, ctx);
             }
             UriHost::SharedSession => {
                 // We expect the uri to have the ID of the session to join as the last segment.
@@ -325,6 +343,7 @@ impl UriHost {
                 // - warp://settings/mcp - opens MCP servers settings page
                 // - warp://settings/platform - opens platform settings page
                 // - warp://settings/appearance - opens appearance settings page (themes, fonts, etc.)
+                // - warp://settings/warp_agent - opens the Warp Agent settings page (inference / API keys)
                 let settings_sub_page: Option<String> = url
                     .path_segments()
                     .into_iter()
@@ -343,15 +362,6 @@ impl UriHost {
                                 "root_view:open_team_settings_with_email_invite_in_existing_window",
                                 "root_view:open_team_settings_with_email_invite_in_new_window",
                                 &args,
-                                ctx,
-                            );
-                        }
-                        "billing_and_usage" => {
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_settings_page_in_existing_window",
-                                "root_view:open_settings_page_in_new_window",
-                                &SettingsSection::BillingAndUsage,
                                 ctx,
                             );
                         }
@@ -389,26 +399,21 @@ impl UriHost {
                                 ctx,
                             );
                         }
-                        "platform" => {
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_settings_page_in_existing_window",
-                                "root_view:open_settings_page_in_new_window",
-                                &SettingsSection::OzCloudAPIKeys,
-                                ctx,
-                            );
-                        }
-                        "appearance" => {
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_settings_page_in_existing_window",
-                                "root_view:open_settings_page_in_new_window",
-                                &SettingsSection::Appearance,
-                                ctx,
-                            );
-                        }
-                        _ => {
-                            log::warn!("Failed to open settings pane with uri={url}");
+                        // Subpages that open a settings section directly with no extra
+                        // parameters (e.g. billing_and_usage, platform, appearance,
+                        // warp_agent) are resolved via `settings_section_for_simple_subpage`.
+                        other => {
+                            if let Some(section) = settings_section_for_simple_subpage(other) {
+                                dispatch_action_in_new_or_existing_window(
+                                    primary_window_id,
+                                    "root_view:open_settings_page_in_existing_window",
+                                    "root_view:open_settings_page_in_new_window",
+                                    &section,
+                                    ctx,
+                                );
+                            } else {
+                                log::warn!("Failed to open settings pane with uri={url}");
+                            }
                         }
                     }
                 } else {
@@ -452,6 +457,54 @@ impl UriHost {
                     log::warn!("{err}");
                 }
             },
+            UriHost::Session => {
+                let uuid_hex = url
+                    .path_segments()
+                    .into_iter()
+                    .flatten()
+                    .last()
+                    .unwrap_or("");
+
+                let Some(uuid_bytes) = decode_uuid_hex(uuid_hex) else {
+                    log::warn!(
+                        "session deep link received invalid UUID hex (safe: len={})",
+                        uuid_hex.len()
+                    );
+                    return;
+                };
+
+                let result = WorkspaceRegistry::as_ref(ctx)
+                    .all_workspaces(ctx)
+                    .iter()
+                    .find_map(|(win_id, workspace)| {
+                        workspace.as_ref(ctx).tab_views().find_map(|pane_group| {
+                            let pane_id = pane_group
+                                .as_ref(ctx)
+                                .find_terminal_pane_by_session_uuid(&uuid_bytes)?;
+                            Some((
+                                *win_id,
+                                PaneViewLocator {
+                                    pane_group_id: pane_group.id(),
+                                    pane_id,
+                                },
+                            ))
+                        })
+                    });
+
+                if let Some((window_id, locator)) = result {
+                    ctx.windows().show_window_and_focus_app(window_id);
+                    if let Some(root_view_id) = ctx.root_view_id(window_id) {
+                        ctx.dispatch_action_for_view(
+                            window_id,
+                            root_view_id,
+                            "root_view:handle_pane_navigation_event",
+                            &locator,
+                        );
+                    }
+                } else {
+                    log::warn!("session deep link could not find pane with given UUID");
+                }
+            }
         }
     }
 
@@ -474,6 +527,9 @@ impl UriHost {
             Self::Codex => W::default(),
             // Linear deeplink opens a new tab with agent view
             Self::Linear => W::default(),
+            // Handler picks the window itself based on `?new_window=true`.
+            Self::TabConfig => W::Nothing,
+            Self::Session => W::Nothing,
         }
     }
 }
@@ -659,6 +715,80 @@ fn find_matching_config_name<'a>(
         .find(|&config| config.name.to_lowercase() == target_name_lower)
 }
 
+/// Handles `warp://tab_config/<name>` deeplinks.
+///
+/// Resolution rules:
+/// - `<name>` is matched case-insensitively against each tab config's file
+///   stem, so both `warp://tab_config/my_tab` and
+///   `warp://tab_config/my_tab.toml` work.
+/// - When `?new_window=true` (or no Warp window is open) the tab config opens
+///   in a brand-new window. Otherwise it opens as a new tab in the active
+///   window.
+fn handle_tab_config_uri(primary_window_id: Option<WindowId>, url: &Url, ctx: &mut AppContext) {
+    let Some(desired) = get_launch_config_path(url.path()) else {
+        log::warn!("couldn't turn tab config link '{}' into name", url.path());
+        return;
+    };
+
+    let (configs, _errors) = load_tab_configs(&tab_configs_dir());
+    let Some(config) = find_matching_tab_config(desired.as_str(), configs) else {
+        log::warn!("couldn't find a tab config matching '{}'", desired);
+        return;
+    };
+
+    let force_new_window = url
+        .query_pairs()
+        .any(|(k, v)| k == "new_window" && matches!(v.as_ref(), "1" | "true"));
+
+    let target_window_id = if force_new_window {
+        None
+    } else {
+        primary_window_id.filter(|id| WorkspaceRegistry::as_ref(ctx).get(*id, ctx).is_some())
+    };
+
+    let workspace = match target_window_id {
+        Some(window_id) => WorkspaceRegistry::as_ref(ctx).get(window_id, ctx),
+        None => {
+            let new_window_id = open_new_window_get_handles(None, ctx).0;
+            WorkspaceRegistry::as_ref(ctx).get(new_window_id, ctx)
+        }
+    };
+
+    let Some(workspace) = workspace else {
+        log::warn!(
+            "no workspace available to open tab config '{}'",
+            config.name
+        );
+        return;
+    };
+
+    workspace.update(ctx, |workspace, ctx| {
+        workspace.open_tab_config(config, ctx);
+    });
+}
+
+/// Case-insensitive match against each tab config's file stem. Tab config
+/// `name` fields are not unique across files, so we key off the filename.
+///
+/// Tries the target as-is first, then with the extension stripped, so both
+/// `my_tab` and `my_tab.toml` resolve to `my_tab.toml` and dotted stems like
+/// `foo.bar` (from `foo.bar.toml`) still work when written without `.toml`.
+fn find_matching_tab_config(target: &str, configs: Vec<TabConfig>) -> Option<TabConfig> {
+    let raw = target.to_lowercase();
+    let stripped = remove_extension(target).map(str::to_lowercase);
+    configs.into_iter().find(|c| {
+        c.source_path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .map(|s| {
+                let stem = s.to_lowercase();
+                stem == raw || Some(stem.as_str()) == stripped.as_deref()
+            })
+            .unwrap_or(false)
+    })
+}
+
 /// Extract the `path` query parameter, expanding a leading `~` to the
 /// user's home directory.
 fn parse_tab_path(url: &Url) -> Option<PathBuf> {
@@ -666,17 +796,77 @@ fn parse_tab_path(url: &Url) -> Option<PathBuf> {
     Some(PathBuf::from(shellexpand::tilde(&raw).into_owned()))
 }
 
+fn parse_positive_usize_query_param(url: &Url, name: &str) -> Result<Option<usize>> {
+    let Some(raw) = url.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v) else {
+        return Ok(None);
+    };
+
+    let value = raw.parse::<usize>()?;
+    ensure!(value > 0, "`{name}` must be greater than 0");
+    Ok(Some(value))
+}
+
+fn parse_open_file_editor_url(url: &Url) -> Result<(PathBuf, Option<LineAndColumnArg>)> {
+    let raw_path = url
+        .query_pairs()
+        .find(|(k, _)| k == "path")
+        .map(|(_, v)| v)
+        .ok_or_else(|| anyhow!("missing path for open_file_editor action"))?;
+    let path = PathBuf::from(shellexpand::tilde(&raw_path).into_owned());
+    ensure!(
+        path.is_absolute(),
+        "`path` must be absolute for open_file_editor action"
+    );
+
+    let line = parse_positive_usize_query_param(url, "line")?;
+    let column = parse_positive_usize_query_param(url, "column")?;
+    ensure!(
+        line.is_some() || column.is_none(),
+        "`column` requires `line` for open_file_editor action"
+    );
+
+    Ok((
+        path,
+        line.map(|line_num| LineAndColumnArg {
+            line_num,
+            column_num: column,
+        }),
+    ))
+}
+
+fn parse_auto_handoff_trigger(url: &Url) -> AutoCloudHandoffTrigger {
+    match url
+        .query_pairs()
+        .find(|(k, _)| k == "trigger")
+        .map(|(_, v)| v)
+    {
+        Some(trigger) if matches!(trigger.as_ref(), "sleep" | "macos_sleep" | "macos-sleep") => {
+            AutoCloudHandoffTrigger::MacOsSleep
+        }
+        Some(_) | None => AutoCloudHandoffTrigger::Uri,
+    }
+}
+
 #[derive(Debug)]
 enum Action {
     NewTab,
     NewWindow,
+    OpenFileEditor {
+        path: PathBuf,
+        line_col: Option<LineAndColumnArg>,
+    },
     Docker,
     OpenRepo,
     CloudAgentSetup,
     NewCloudAgentConversation,
     NewAgentConversation,
-    CreateEnvironment { repos: Vec<String> },
+    CreateEnvironment {
+        repos: Vec<String>,
+    },
     FocusCloudMode,
+    AutoHandoffToCloud {
+        trigger: AutoCloudHandoffTrigger,
+    },
 }
 
 impl Action {
@@ -684,6 +874,10 @@ impl Action {
         match url.path() {
             "/new_tab" => Ok(Self::NewTab),
             "/new_window" => Ok(Self::NewWindow),
+            "/open_file_editor" => {
+                let (path, line_col) = parse_open_file_editor_url(url)?;
+                Ok(Self::OpenFileEditor { path, line_col })
+            }
             "/docker/open_subshell" => Ok(Self::Docker),
             "/open-repo" => Ok(Self::OpenRepo),
             "/cloud_agent_setup" => Ok(Self::CloudAgentSetup),
@@ -698,6 +892,9 @@ impl Action {
                 Ok(Self::CreateEnvironment { repos })
             }
             "/focus_cloud_mode" => Ok(Self::FocusCloudMode),
+            "/auto_handoff_to_cloud" | "/auto-handoff-to-cloud" => Ok(Self::AutoHandoffToCloud {
+                trigger: parse_auto_handoff_trigger(url),
+            }),
             _ => Err(anyhow!(
                 "Received \"action\" intent with unexpected action: {}",
                 url.path()
@@ -720,6 +917,15 @@ impl Action {
                     return;
                 };
                 open_file(window_id, path, ctx);
+            }
+            Self::OpenFileEditor { path, line_col } => {
+                #[cfg(feature = "local_fs")]
+                open_file_editor(primary_window_id, path.clone(), *line_col, ctx);
+                #[cfg(not(feature = "local_fs"))]
+                {
+                    let _ = (path, line_col);
+                    log::warn!("open_file_editor action requires local_fs support");
+                }
             }
             Action::Docker => {
                 if let Err(err) = open_docker_container(url, ctx) {
@@ -784,13 +990,8 @@ impl Action {
                 }
             }
             Action::NewCloudAgentConversation => {
-                let window_id =
-                    primary_window_id.or_else(|| Some(open_new_window_get_handles(None, ctx).0));
-
-                let Some(window_id) = window_id else {
-                    log::warn!(
-                        "unable to determine window for new cloud agent conversation action"
-                    );
+                let Some(window_id) = primary_window_id else {
+                    open_new_with_workspace_source(NewWorkspaceSource::AmbientAgent, ctx);
                     return;
                 };
 
@@ -856,11 +1057,6 @@ impl Action {
                 }
             }
             Action::FocusCloudMode => {
-                // Notify that GitHub auth completed so views can refresh
-                GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
-                    notifier.notify_auth_completed(ctx);
-                });
-
                 let active_agent_views = ActiveAgentViewsModel::as_ref(ctx);
                 let focused_conversation = primary_window_id
                     .and_then(|wid| active_agent_views.get_focused_conversation(wid));
@@ -896,10 +1092,17 @@ impl Action {
                                 ctx,
                             );
                         });
+                        // Notify after focusing so Cloud Mode panes can retry in the selected pane.
+                        GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
+                            notifier.notify_auth_completed(ctx);
+                        });
                         return;
                     }
                 }
 
+                GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
+                    notifier.notify_auth_completed(ctx);
+                });
                 dispatch_action_in_new_or_existing_window(
                     primary_window_id,
                     "root_view:open_settings_page_in_existing_window",
@@ -907,6 +1110,9 @@ impl Action {
                     &SettingsSection::CloudEnvironments,
                     ctx,
                 );
+            }
+            Action::AutoHandoffToCloud { trigger } => {
+                trigger_auto_handoff_to_cloud(*trigger, ctx);
             }
         }
     }
@@ -917,12 +1123,14 @@ impl Action {
         use WindowBehaviorHint as W;
         match self {
             Self::Docker
+            | Self::OpenFileEditor { .. }
             | Self::CreateEnvironment { .. }
             | Self::OpenRepo
             | Self::CloudAgentSetup
             | Self::NewCloudAgentConversation
             | Self::NewAgentConversation
-            | Self::FocusCloudMode => W::default(),
+            | Self::FocusCloudMode
+            | Self::AutoHandoffToCloud { .. } => W::default(),
             Self::NewTab => W::ShowPrimaryWindow(WindowActivationFallbackBehavior::Notify {
                 title: "New tab created".to_owned(),
                 description: "Go to Warp to see your new tab.".to_owned(),
@@ -935,13 +1143,8 @@ impl Action {
 /// Handles all incoming urls. These urls are file urls, auth urls for login,
 /// and team urls for opening team settings.
 pub fn handle_incoming_uri(url: &Url, ctx: &mut AppContext) {
-    // Non-dogfood builds must never log the full URL here: URLs routed to this
-    // handler can carry secrets in their query string (for example, the
-    // Firebase `refresh_token` on `warp://auth/desktop_redirect?...`). Log
-    // only the non-sensitive components (scheme, host, path) on release
-    // channels; dogfood builds retain the full URL for local debugging.
     safe_info!(
-        safe: ("received url {}", safe_url_log_fields(url)),
+        safe: ("received url"),
         full: ("received url {:?}", &url)
     );
 
@@ -1022,21 +1225,21 @@ enum OpenFileAction {
 /// standing up a full `AppContext`.
 fn classify_open_file_action(path: &Path) -> OpenFileAction {
     if is_markdown_file(path) {
-        return OpenFileAction::Notebook;
+        OpenFileAction::Notebook
+    } else if is_runnable_shell_script(path) {
+        OpenFileAction::ExecuteInSession
+    } else if path.is_file()
+        && (is_file_openable_in_warp(path).is_some() || starts_with_shebang(path))
+    {
+        OpenFileAction::Editor
+    } else {
+        OpenFileAction::ExecuteInSession
     }
-    if path.is_file() {
-        if is_runnable_shell_script(path) {
-            return OpenFileAction::ExecuteInSession;
-        }
-        // Anything we can show in the editor opens there. The second branch catches
-        // shebang scripts that `is_file_openable_in_warp` rejects on extension alone
-        // (e.g. an extensionless `#!/bin/sh` file without the user-execute bit) so
-        // they don't fall through to the executor and produce a `permission denied`.
-        if is_file_openable_in_warp(path).is_some() || starts_with_shebang(path) {
-            return OpenFileAction::Editor;
-        }
-    }
-    OpenFileAction::ExecuteInSession
+}
+
+#[cfg(feature = "local_fs")]
+fn can_open_file_editor_path(path: &Path) -> bool {
+    path.is_file() && is_file_openable_in_warp(path).is_some()
 }
 
 /// Handle an incoming `file://` URL.
@@ -1051,6 +1254,7 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
     });
 
     let action = classify_open_file_action(&path);
+
     if action == OpenFileAction::Notebook {
         if let Some((primary_window_id, root_view_id)) = primary_window_and_view {
             ctx.dispatch_action(
@@ -1068,10 +1272,8 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
         {
             use crate::code::editor_management::CodeSource;
             use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
-            use crate::util::{
-                file::external_editor::EditorSettings,
-                openable_file_type::resolve_file_target_to_open_in_warp,
-            };
+            use crate::util::file::external_editor::EditorSettings;
+            use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
 
             // Open text/code files in Warp's code editor, respecting the user's layout preference.
             let editor_settings = EditorSettings::as_ref(ctx);
@@ -1143,6 +1345,60 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
         }
 
         send_telemetry_from_app_ctx!(TelemetryEvent::OpenNewSessionFromFilePath, ctx);
+    }
+}
+
+#[cfg(feature = "local_fs")]
+fn open_file_editor(
+    primary_window_id: Option<WindowId>,
+    path: PathBuf,
+    line_col: Option<LineAndColumnArg>,
+    ctx: &mut AppContext,
+) {
+    #[cfg(feature = "local_fs")]
+    {
+        use crate::code::editor_management::CodeSource;
+        use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+        use crate::util::file::external_editor::EditorSettings;
+        use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
+
+        if !can_open_file_editor_path(&path) {
+            log::warn!("open_file_editor action rejected non-openable path: {path:?}");
+            return;
+        }
+
+        let editor_settings = EditorSettings::as_ref(ctx);
+        let target = resolve_file_target_to_open_in_warp(&path, editor_settings, None);
+
+        let window_id = if let Some((wid, _)) = primary_window_id.and_then(|window_id| {
+            ctx.root_view_id(window_id)
+                .map(|view_id| (window_id, view_id))
+        }) {
+            wid
+        } else {
+            open_new_with_workspace_source(
+                NewWorkspaceSource::Session {
+                    options: Box::default(),
+                },
+                ctx,
+            )
+            .0
+        };
+
+        ctx.windows().show_window_and_focus_app(window_id);
+
+        if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
+            if let Some(workspace) = workspaces.into_iter().next() {
+                workspace.update(ctx, |workspace, ctx| {
+                    let source = CodeSource::Link {
+                        path: path.clone(),
+                        range_start: line_col,
+                        range_end: None,
+                    };
+                    workspace.open_file_with_target(path, target, line_col, source, ctx);
+                });
+            }
+        }
     }
 }
 
@@ -1313,6 +1569,16 @@ fn dispatch_action_in_new_or_existing_window<T: 'static>(
     }
 }
 
+fn settings_section_for_simple_subpage(subpage: &str) -> Option<SettingsSection> {
+    match subpage {
+        "billing_and_usage" => Some(SettingsSection::BillingAndUsage),
+        "platform" => Some(SettingsSection::OzCloudAPIKeys),
+        "appearance" => Some(SettingsSection::Appearance),
+        "warp_agent" => Some(SettingsSection::WarpAgent),
+        _ => None,
+    }
+}
+
 /// Validates an incoming custom URI for security and returns the host.
 fn validate_custom_uri(url: &Url) -> Result<UriHost> {
     // For now the only scheme we support is `[scheme_name]://[host_str]/...
@@ -1341,7 +1607,9 @@ fn validate_custom_uri(url: &Url) -> Result<UriHost> {
         | UriHost::Settings
         | UriHost::Mcp
         | UriHost::Codex
-        | UriHost::Linear => true,
+        | UriHost::Linear
+        | UriHost::TabConfig
+        | UriHost::Session => true,
         // Auth and Home only allow the desktop redirect path
         UriHost::Auth | UriHost::Home => false,
     };
@@ -1355,28 +1623,21 @@ fn validate_custom_uri(url: &Url) -> Result<UriHost> {
     Ok(host)
 }
 
-/// Formats the non-sensitive components of an incoming URL for logging on
-/// release channels.
-///
-/// The returned string contains only the URL's scheme, host, and path — never
-/// its query string, fragment, or userinfo component. URLs that reach
-/// [`handle_incoming_uri`] can carry secrets in their query (for example, the
-/// Firebase refresh token in `warp://auth/desktop_redirect?refresh_token=...`),
-/// so this helper exists to give [`safe_info!`] a redacted representation that
-/// still preserves enough signal for triage.
-///
-/// `url.host_str()` can return `None` for schemes that don't require a host
-/// (e.g. some `file://` URLs on certain platforms); the literal `-` is used
-/// as a placeholder in that case so the formatter never panics.
-fn safe_url_log_fields(url: &Url) -> String {
-    format!(
-        "scheme={} host={} path={}",
-        url.scheme(),
-        url.host_str().unwrap_or("-"),
-        url.path(),
-    )
+fn decode_uuid_hex(hex: &str) -> Option<Vec<u8>> {
+    let hex = hex.as_bytes();
+    if hex.len() != 32 {
+        return None;
+    }
+
+    hex.chunks_exact(2)
+        .map(|pair| {
+            let high = (pair[0] as char).to_digit(16)?;
+            let low = (pair[1] as char).to_digit(16)?;
+            Some(((high << 4) | low) as u8)
+        })
+        .collect()
 }
 
 #[cfg(test)]
-#[path = "uri_test.rs"]
+#[path = "uri_tests.rs"]
 mod tests;

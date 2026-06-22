@@ -1,10 +1,9 @@
 use std::ops::Not;
 
-use warpui::{clipboard::ClipboardContent, AppContext};
-
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
+use warpui::clipboard::ClipboardContent;
+use warpui::AppContext;
 
 define_settings_group!(SelectionSettings, settings: [
     copy_on_select: CopyOnSelect {

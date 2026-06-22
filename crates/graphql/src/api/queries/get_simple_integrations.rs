@@ -1,4 +1,7 @@
-use crate::{error::UserFacingError, request_context::RequestContext, scalars::Time, schema};
+use crate::error::UserFacingError;
+use crate::request_context::RequestContext;
+use crate::scalars::Time;
+use crate::schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct SimpleIntegrationsVariables {

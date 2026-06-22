@@ -1,17 +1,13 @@
 use warpui::{AppContext, EntityId, ModelHandle, SingletonEntity};
 
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversation, AIAgentAction, AIAgentActionId, AIAgentActionType,
-            AIAgentInput, AIAgentOutputMessageType, SummarizationType,
-        },
-        blocklist::BlocklistAIActionModel,
-    },
-    BlocklistAIHistoryModel,
-};
-
 use super::AIBlockModel;
+use crate::ai::agent::conversation::AIConversation;
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType,
+    SummarizationType,
+};
+use crate::ai::blocklist::BlocklistAIActionModel;
+use crate::BlocklistAIHistoryModel;
 
 // Helper methods for accessing data on an impl of `AIBlockModel`.
 //
@@ -27,7 +23,7 @@ pub trait AIBlockModelHelper {
 
     fn contains_update_document_action(&self, app: &AppContext) -> bool;
 
-    fn is_latest_non_passive_exchange_in_root_task(&self, app: &AppContext) -> bool;
+    fn is_latest_visible_exchange_in_root_task(&self, app: &AppContext) -> bool;
 
     fn is_latest_exchange_in_terminal_pane(
         &self,
@@ -100,10 +96,10 @@ impl<T: ?Sized + AIBlockModel> AIBlockModelHelper for T {
         }
     }
 
-    fn is_latest_non_passive_exchange_in_root_task(&self, app: &AppContext) -> bool {
+    fn is_latest_visible_exchange_in_root_task(&self, app: &AppContext) -> bool {
         self.conversation(app).is_some_and(|conversation| {
             match (
-                conversation.last_non_passive_exchange(),
+                conversation.latest_visible_exchange(),
                 self.exchange_id(app),
             ) {
                 (Some(latest_exchange), Some(id)) => latest_exchange.id == id,

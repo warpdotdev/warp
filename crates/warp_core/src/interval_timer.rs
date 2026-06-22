@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use instant::Instant;
 use serde::{Deserialize, Serialize};
-use warpui::{Entity, SingletonEntity};
+use warpui_core::{Entity, SingletonEntity};
 
 /// This represents one interval, i.e. one stage in a multiple-stage timer.
 struct TimingInterval {
@@ -37,8 +37,10 @@ impl IntervalTimer {
     }
 
     pub fn mark_interval_end(&mut self, name: impl Into<String>) {
+        let name = name.into();
+        tracing::info!(name);
         self.intervals
-            .push(TimingInterval::new(name.into(), Instant::now()))
+            .push(TimingInterval::new(name, Instant::now()))
     }
 
     pub fn compute_duration_for_interval(&self, name: &str) -> Option<Duration> {

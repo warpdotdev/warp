@@ -1,18 +1,23 @@
-use std::{fs::read, io::Cursor, path::Path, time::Duration};
+use std::fs::read;
+use std::io::Cursor;
+use std::path::Path;
+use std::time::Duration;
 
 use prost::Message;
-use warpui::{async_assert, integration::TestStep, SingletonEntity};
+use warpui::integration::TestStep;
+use warpui::{async_assert, SingletonEntity};
 
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::ActionPermission;
 use crate::ai::llms::{LLMId, LLMPreferences};
-use crate::integration_testing::agent_mode::ConversationTarget;
-use crate::integration_testing::{
-    agent_mode::{assert_latest_task_succeeds_or_blocked, assert_task_is_blocked},
-    step::{new_step_with_default_assertions, new_step_with_default_assertions_for_pane},
-    terminal::assert_input_is_focused,
-    view_getters::terminal_view,
+use crate::integration_testing::agent_mode::{
+    assert_latest_task_succeeds_or_blocked, assert_task_is_blocked, ConversationTarget,
 };
+use crate::integration_testing::step::{
+    new_step_with_default_assertions, new_step_with_default_assertions_for_pane,
+};
+use crate::integration_testing::terminal::assert_input_is_focused;
+use crate::integration_testing::view_getters::terminal_view;
 
 pub const AGENT_MODE_RUNNING_STEP_GROUP_NAME: &str = "Agent mode running";
 
@@ -162,8 +167,9 @@ pub fn submit_ai_query(query: &str, timeout: Duration) -> TestStep {
 fn print_conversation_id_assertion(
 ) -> impl FnMut(&mut warpui::App, warpui::WindowId) -> warpui::integration::AssertionOutcome {
     |app, window_id| {
-        use crate::BlocklistAIHistoryModel;
         use warpui::integration::AssertionOutcome;
+
+        use crate::BlocklistAIHistoryModel;
         let terminal_view = terminal_view(app, window_id, 0, 0);
         BlocklistAIHistoryModel::handle(app).read(app, |history_model, _| {
             if let Some(conversation) = history_model.active_conversation(terminal_view.id()) {

@@ -1,22 +1,16 @@
 use std::ops::Deref;
 
 use serde::{Serialize, Serializer};
+use warpui::platform::Cursor;
+use warpui::ViewContext;
 
-use warpui::{platform::Cursor, ViewContext};
-
-use crate::{
-    send_telemetry_from_ctx,
-    server::telemetry::{LinkOpenMethod, TelemetryEvent},
-    terminal::{
-        model::{
-            grid::grid_handler::Link,
-            index::Point,
-            terminal_model::{WithinBlock, WithinModel},
-            RespectObfuscatedSecrets,
-        },
-        TerminalModel,
-    },
-};
+use crate::send_telemetry_from_ctx;
+use crate::server::telemetry::{LinkOpenMethod, TelemetryEvent};
+use crate::terminal::model::grid::grid_handler::Link;
+use crate::terminal::model::index::Point;
+use crate::terminal::model::terminal_model::{WithinBlock, WithinModel};
+use crate::terminal::model::RespectObfuscatedSecrets;
+use crate::terminal::TerminalModel;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {

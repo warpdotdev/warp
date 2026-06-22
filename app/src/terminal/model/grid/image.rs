@@ -1,7 +1,7 @@
-use crate::terminal::model::image_map::ImagePlacementData;
+use warp_terminal::model::Point;
 
 use super::{AbsolutePoint, AbsoluteRectangle, GridHandler};
-use warp_terminal::model::Point;
+use crate::terminal::model::image_map::ImagePlacementData;
 
 impl GridHandler {
     pub fn get_image_ids_in_range(
@@ -44,6 +44,10 @@ impl GridHandler {
         }
         let absolute_row = AbsolutePoint::from_point(Point::new(displayed_row, 0), self).row;
         self.images.has_image_in_row(absolute_row)
+    }
+
+    pub(in crate::terminal::model) fn has_visible_images(&self) -> bool {
+        !self.has_displayed_output() && !self.images.is_empty()
     }
 
     pub fn get_image_placement_data(

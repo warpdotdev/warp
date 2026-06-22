@@ -1,25 +1,12 @@
-use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::SizeInfo;
-
-use crate::terminal::model::ansi::{
-    self, Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, LineClearMode, Mode,
-    PrecmdValue, PreexecValue, StandardCharset, TabulationClearMode,
-};
-use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks, RegexIter};
-use crate::terminal::model::index::{Point, VisibleRow};
-use crate::terminal::model::iterm_image::ITermImage;
-
-use crate::terminal::model::grid::Dimensions;
-use crate::terminal::model::GridStorage;
-
-use crate::terminal::model::secrets::ObfuscateSecrets;
-use instant::Instant;
-use pathfinder_color::ColorU;
 use std::collections::HashMap;
 use std::io;
 use std::num::NonZeroUsize;
 use std::ops::{Range, RangeInclusive};
 use std::sync::{Arc, OnceLock};
+
+use instant::Instant;
+use pathfinder_color::ColorU;
+use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 
 use super::find::RegexDFAs;
 use super::grid::RespectDisplayedOutput;
@@ -27,7 +14,18 @@ use super::image_map::StoredImageMetadata;
 use super::kitty::{KittyAction, KittyResponse};
 use super::secrets::RespectObfuscatedSecrets;
 use super::selection::ScrollDelta;
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ansi::{
+    self, Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, LineClearMode, Mode,
+    PrecmdValue, PreexecValue, StandardCharset, TabulationClearMode,
+};
+use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks, RegexIter};
+use crate::terminal::model::grid::Dimensions;
+use crate::terminal::model::index::{Point, VisibleRow};
+use crate::terminal::model::iterm_image::ITermImage;
+use crate::terminal::model::secrets::ObfuscateSecrets;
+use crate::terminal::model::GridStorage;
+use crate::terminal::SizeInfo;
 
 #[derive(Clone)]
 pub struct BlockGrid {
@@ -249,8 +247,11 @@ impl BlockGrid {
     /// grid-finish time (precmd or preexec), leaving the grid contentless. If the grid_cursor
     /// is not at (0,0), we can assume the grid contains content that will persist through finish.
     pub fn should_show_as_empty_when_finished(&self) -> bool {
-        self.finished_len() == 0
-            || !self.has_visible_chars()
+        // Non-moving Kitty placements can render an image while leaving the cursor at the origin.
+        let has_visible_images = self.grid_handler().has_visible_images();
+
+        (self.finished_len() == 0 && !has_visible_images)
+            || !self.has_visible_content()
             || self.contains_only_input_buffer_sequence()
     }
 
@@ -299,6 +300,10 @@ impl BlockGrid {
         self.grid_handler.set_track_content_length(trim);
     }
 
+    pub(in crate::terminal) fn enable_full_grid_clear_behavior(&mut self) {
+        self.grid_handler.enable_full_grid_clear_behavior();
+    }
+
     /// Returns a freshly-computed value of rightmost_nonempty_cell if this grid isn't
     /// finished yet. Otherwise, return a memoized value since the grid won't be mutated anymore.
     pub fn rightmost_visible_nonempty_cell(&self) -> Option<usize> {
@@ -319,6 +324,10 @@ impl BlockGrid {
         } else {
             self.grid_handler().has_visible_chars()
         }
+    }
+
+    pub(super) fn has_visible_content(&self) -> bool {
+        self.has_visible_chars() || self.grid_handler().has_visible_images()
     }
 
     fn calculate_if_grid_contains_only_input_buffer_sequence(&self) -> bool {
@@ -995,5 +1004,5 @@ impl ansi::Handler for BlockGrid {
 }
 
 #[cfg(test)]
-#[path = "blockgrid_test.rs"]
+#[path = "blockgrid_tests.rs"]
 mod tests;

@@ -1,11 +1,6 @@
-use crate::appearance::Appearance;
-use crate::util::color::lighten;
 use warp_core::ui::builder::UiBuilder;
-use warp_core::ui::color::darken;
-use warpui::keymap::FixedBinding;
-
-use crate::modal::MODAL_CORNER_RADIUS;
 use warp_core::ui::color::blend::Blend;
+use warp_core::ui::color::darken;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::color::ColorU;
 use warpui::elements::{
@@ -13,11 +8,16 @@ use warpui::elements::{
     MouseStateHandle, ParentElement, Radius, Shrinkable,
 };
 use warpui::fonts::Weight;
+use warpui::keymap::FixedBinding;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
 };
+
+use crate::appearance::Appearance;
+use crate::modal::MODAL_CORNER_RADIUS;
+use crate::util::color::lighten;
 
 const MODAL_PADDING: f32 = 32.;
 

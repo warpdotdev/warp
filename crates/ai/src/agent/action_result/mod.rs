@@ -1,17 +1,18 @@
 mod convert;
 
-use std::{fmt::Display, ops::Range, time::SystemTime};
+use std::fmt::Display;
+use std::ops::Range;
+use std::time::SystemTime;
 
+use chrono::{DateTime, Local};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use warp_core::command::ExitCode;
 use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
 use warp_terminal::model::BlockId;
 
-use crate::{
-    agent::FileLocations,
-    document::{AIDocumentId, AIDocumentVersion},
-};
+use crate::agent::FileLocations;
+use crate::document::{AIDocumentId, AIDocumentVersion};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AIAgentActionResultType {
@@ -95,6 +96,14 @@ pub enum AIAgentActionResultType {
     TransferShellCommandControlToUser(TransferShellCommandControlToUserResult),
     /// The result of asking the user a question.
     AskUserQuestion(AskUserQuestionResult),
+
+    /// The result of an orchestrate tool call: launched (with per-agent
+    /// outcomes), launch denied (Stage 2), failure, or cancelled.
+    RunAgents(RunAgentsResult),
+
+    /// Result of the client-side wait_for_events watchdog or inbound
+    /// resume.
+    WaitForEvents(WaitForEventsResult),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -161,6 +170,8 @@ impl Display for AIAgentActionResultType {
             AIAgentActionResultType::SendMessageToAgent(result) => result.fmt(f),
             AIAgentActionResultType::TransferShellCommandControlToUser(result) => result.fmt(f),
             AIAgentActionResultType::AskUserQuestion(result) => result.fmt(f),
+            AIAgentActionResultType::RunAgents(result) => result.fmt(f),
+            AIAgentActionResultType::WaitForEvents(result) => result.fmt(f),
             AIAgentActionResultType::OpenCodeReview | AIAgentActionResultType::InitProject => {
                 Ok(())
             }
@@ -175,6 +186,8 @@ pub enum RequestCommandOutputResult {
         command: String,
         output: String,
         exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
     },
     LongRunningCommandSnapshot {
         block_id: BlockId,
@@ -256,6 +269,8 @@ pub enum WriteToLongRunningShellCommandResult {
         block_id: BlockId,
         output: String,
         exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
     },
     Cancelled,
     Error(ShellCommandError),
@@ -545,6 +560,8 @@ pub enum ReadShellCommandOutputResult {
         block_id: BlockId,
         output: String,
         exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
     },
     LongRunningCommandSnapshot {
         command: String,
@@ -753,6 +770,12 @@ impl AIAgentActionResultType {
             AIAgentActionResultType::AskUserQuestion(_) => {
                 "The user's answers to clarifying questions"
             }
+            AIAgentActionResultType::RunAgents(_) => {
+                "The result of an orchestrate batch of child agents"
+            }
+            AIAgentActionResultType::WaitForEvents(_) => {
+                "The local watchdog timed out while waiting for inbound events"
+            }
         }
     }
 
@@ -790,6 +813,8 @@ impl AIAgentActionResultType {
                 | TransferShellCommandControlToUserResult::CommandFinished { .. },
             ) => true,
             Self::AskUserQuestion(AskUserQuestionResult::Success { .. }) => true,
+            Self::RunAgents(RunAgentsResult::Launched { .. }) => true,
+            Self::WaitForEvents(WaitForEventsResult::Completed) => true,
             _ => false,
         }
     }
@@ -818,7 +843,10 @@ impl AIAgentActionResultType {
             | Self::AskUserQuestion(AskUserQuestionResult::Error(_))
             | Self::TransferShellCommandControlToUser(
                 TransferShellCommandControlToUserResult::Error(_),
-            ) => true,
+            )
+            | Self::RunAgents(RunAgentsResult::Failure { .. } | RunAgentsResult::Denied { .. }) => {
+                true
+            }
             _ => false,
         }
     }
@@ -860,7 +888,9 @@ impl AIAgentActionResultType {
             | Self::StartAgent(StartAgentResult::Cancelled { .. })
             | Self::SendMessageToAgent(SendMessageToAgentResult::Cancelled)
             // SkippedByAutoApprove is intentionally excluded: the agent should continue.
-            | Self::AskUserQuestion(AskUserQuestionResult::Cancelled) => true,
+            | Self::AskUserQuestion(AskUserQuestionResult::Cancelled)
+            | Self::RunAgents(RunAgentsResult::Cancelled)
+            | Self::WaitForEvents(WaitForEventsResult::Cancelled) => true,
             _ => false,
         }
     }
@@ -1188,6 +1218,9 @@ impl Display for FetchConversationResult {
     }
 }
 
+// TODO(QUALITY-788): Delete legacy start_agent/start_agent_v2 result support once
+// old preview orchestration history no longer needs parse/display/result compatibility.
+// Linear issue: QUALITY-788.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum StartAgentResult {
     Success {
@@ -1229,6 +1262,83 @@ impl Display for StartAgentResult {
     }
 }
 
+/// The terminal outcome of an orchestrate tool call.
+///
+/// Mirrors the proto `RunAgentsResult` oneof, with an additional
+/// `Cancelled` variant used internally by the action machinery when the
+/// user clicks Reject. The proto wire form for cancellation is the
+/// generic `ToolCallResult.Cancel` marker; the conversion code emits
+/// `ConvertToAPITypeError::Ignore` for `Cancelled` so the input
+/// interceptor can synthesize the marker on the next outbound input.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RunAgentsResult {
+    /// Orchestration launched. Carries the resolved configuration and one
+    /// `AgentOutcome` per `agent_run_configs[]` entry, in input order.
+    Launched {
+        model_id: String,
+        harness_type: String,
+        execution_mode: RunAgentsLaunchedExecutionMode,
+        agents: Vec<RunAgentsAgentOutcome>,
+    },
+    /// Declined for a non-error reason (currently disapproval).
+    Denied { reason: String },
+    /// Actual error path: server-side validation rejected the call, or the
+    /// client could not begin the launch sequence at all.
+    Failure { error: String },
+    /// User rejected via the Reject button. Wire form is the generic
+    /// `ToolCallResult.Cancel` marker, synthesized by the server's input
+    /// interceptor on the next user input.
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RunAgentsLaunchedExecutionMode {
+    Local,
+    Remote {
+        environment_id: String,
+        worker_host: String,
+        computer_use_enabled: bool,
+    },
+}
+
+/// Per-agent outcome reported in `RunAgentsResult::Launched.agents`.
+/// Order mirrors the input order of `RunAgents.agent_run_configs[]`,
+/// regardless of which `CreateAgentTask` call returned first.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunAgentsAgentOutcome {
+    pub name: String,
+    pub kind: RunAgentsAgentOutcomeKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RunAgentsAgentOutcomeKind {
+    Launched { agent_id: String },
+    Failed { error: String },
+}
+
+impl Display for RunAgentsResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunAgentsResult::Launched { agents, .. } => {
+                let launched = agents
+                    .iter()
+                    .filter(|a| matches!(a.kind, RunAgentsAgentOutcomeKind::Launched { .. }))
+                    .count();
+                write!(
+                    f,
+                    "Orchestrate launched ({launched}/{} agents started)",
+                    agents.len()
+                )
+            }
+            RunAgentsResult::Denied { reason } => {
+                write!(f, "Orchestrate launch denied: {reason}")
+            }
+            RunAgentsResult::Failure { error } => write!(f, "Orchestrate failure: {error}"),
+            RunAgentsResult::Cancelled => write!(f, "Orchestrate cancelled"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SendMessageToAgentResult {
     Success { message_id: String },
@@ -1261,6 +1371,8 @@ pub enum TransferShellCommandControlToUserResult {
         block_id: BlockId,
         output: String,
         exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
     },
     Cancelled,
     Error(ShellCommandError),
@@ -1352,6 +1464,27 @@ impl Display for AskUserQuestionResult {
                     question_ids.len()
                 )
             }
+        }
+    }
+}
+
+/// Result of a client-side wait_for_events action.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum WaitForEventsResult {
+    /// Watchdog fired or an inbound resume signal closed the wait. The
+    /// agent's next turn observes an empty WaitForEvents result on the
+    /// wire and decides how to proceed.
+    Completed,
+    /// User cancelled the conversation while waiting. Mirrors
+    /// RunAgents::Cancelled: no tool-call result is sent on the wire.
+    Cancelled,
+}
+
+impl Display for WaitForEventsResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Completed => write!(f, "Wait for events completed"),
+            Self::Cancelled => write!(f, "Wait for events cancelled"),
         }
     }
 }

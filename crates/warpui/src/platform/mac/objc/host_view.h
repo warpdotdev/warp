@@ -13,5 +13,6 @@
              enableTitlebarDrag:(BOOL)enableTitlebarDrag
                        testMode:(BOOL)testMode;
 - (void)setAsyncCallback:(BOOL)shouldAsync;
+- (void)setPresentsWithTransaction:(BOOL)presentsWithTransaction;
 - (BOOL)keyDownImpl:(NSEvent *)event;
 @end

@@ -1,25 +1,24 @@
-use crate::appearance::Appearance;
-use crate::send_telemetry_from_ctx;
-use crate::server::telemetry::TelemetryEvent;
-use crate::settings::{active_theme_kind, ThemeSettings};
-use crate::themes::theme::{ThemeKind, WarpTheme};
-use crate::user_config;
-use crate::user_config::util::from_yaml;
 use std::default::Default;
 use std::fs;
 use std::fs::remove_file;
+
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
     Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisSize, MouseStateHandle,
     ParentElement, Radius, SavePosition, Shrinkable, Text,
 };
 use warpui::fonts::Weight;
+use warpui::platform::Cursor;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{
-    platform::Cursor, AppContext, Element, Entity, SingletonEntity, TypedActionView, View,
-    ViewContext,
-};
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+
+use crate::appearance::Appearance;
+use crate::server::telemetry::TelemetryEvent;
+use crate::settings::{active_theme_kind, ThemeSettings};
+use crate::themes::theme::{ThemeKind, WarpTheme};
+use crate::user_config::util::from_yaml;
+use crate::{send_telemetry_from_ctx, user_config};
 
 const BUTTON_PADDING: f32 = 12.;
 const BUTTON_FONT_SIZE: f32 = 14.;

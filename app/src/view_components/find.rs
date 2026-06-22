@@ -1,3 +1,22 @@
+use pathfinder_color::ColorU;
+use serde::Serialize;
+pub use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
+use warpui::elements::{
+    Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, DropShadow, Element, Flex, Hoverable, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentOffsetBounds, Radius, SavePosition, Shrinkable, Text,
+};
+pub use warpui::elements::{ParentElement as _, Stack};
+pub use warpui::geometry::vector::vec2f;
+use warpui::keymap::EditableBinding;
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::UiComponent;
+pub use warpui::AppContext;
+use warpui::{
+    Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
+
 use crate::appearance::Appearance;
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
@@ -6,30 +25,9 @@ use crate::editor::{
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{FindOption, TelemetryEvent};
 use crate::settings::InputModeSettings;
-use crate::ui_components::{blended_colors, icons::Icon};
-use serde::Serialize;
-
 use crate::themes::theme::Fill;
-use pathfinder_color::ColorU;
-use warpui::elements::{ChildAnchor, OffsetPositioning, Radius, SavePosition, Shrinkable};
-use warpui::keymap::EditableBinding;
-use warpui::ui_components::components::UiComponent;
-pub use warpui::{
-    accessibility::{AccessibilityContent, WarpA11yRole},
-    elements::{ParentElement as _, Stack},
-    geometry::vector::vec2f,
-    AppContext,
-};
-use warpui::{
-    elements::{
-        Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DropShadow, Element, Flex, Hoverable, MouseStateHandle, ParentAnchor, ParentOffsetBounds,
-        Text,
-    },
-    Entity, SingletonEntity, TypedActionView, View,
-};
-use warpui::{presenter::ChildView, ViewContext, ViewHandle};
-use warpui::{FocusContext, ModelHandle};
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
 
 pub const FIND_BAR_WIDTH: f32 = 500.;
 const ICON_PADDING: f32 = 4.;
@@ -68,6 +66,12 @@ pub trait FindModel {
             FindDirection::Up => FindDirection::Down,
             FindDirection::Down => FindDirection::Up,
         }
+    }
+
+    /// Returns true if a find operation is currently in progress (scanning).
+    /// Default implementation returns false for synchronous find implementations.
+    fn is_scanning(&self) -> bool {
+        false
     }
 }
 
@@ -317,13 +321,31 @@ impl<T: FindModel + Entity<Event = FindEvent> + 'static> Find<T> {
     }
 
     fn render_match_index(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+        let model = self.model.as_ref(app);
+
+        // Show scanning indicator if async find is in progress.
+        if model.is_scanning() {
+            let match_count = model.match_count();
+            let label = if match_count > 0 {
+                format!("{}+ ...", match_count)
+            } else {
+                "Scanning...".to_string()
+            };
+            return Text::new_inline(label, appearance.ui_font_family(), FIND_EDITOR_FONT_SIZE)
+                .with_color(blended_colors::text_sub(
+                    appearance.theme(),
+                    appearance.theme().surface_1(),
+                ))
+                .finish();
+        }
+
         // If there is some match index, we add 1 to it since the UI is 1-indexed
         // (i.e. first match starts at index 1 out of the total number of matches).
-        let index = match self.model.as_ref(app).focused_match_index() {
+        let index = match model.focused_match_index() {
             None => 0,
             Some(idx) => idx + 1,
         };
-        let label = format!("{}/{}", index, self.model.as_ref(app).match_count());
+        let label = format!("{}/{}", index, model.match_count());
         Text::new_inline(label, appearance.ui_font_family(), FIND_EDITOR_FONT_SIZE)
             .with_color(blended_colors::text_sub(
                 appearance.theme(),

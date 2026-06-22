@@ -1,19 +1,19 @@
-use std::{io::Cursor, sync::Arc, time::Duration};
+use std::io::Cursor;
+use std::sync::Arc;
+use std::time::Duration;
 
 use base64::Engine;
-use cpal::{
-    Sample, StreamConfig,
-    traits::{DeviceTrait, HostTrait},
-};
+use cpal::traits::{DeviceTrait, HostTrait};
+use cpal::{Sample, StreamConfig};
 use futures::channel::oneshot;
 use parking_lot::Mutex;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use thiserror::Error;
-
-use warpui::event::KeyState;
-use warpui::{Entity, ModelContext, SingletonEntity, platform::MicrophoneAccessState};
+use warpui_core::event::KeyState;
+use warpui_core::platform::MicrophoneAccessState;
+use warpui_core::{Entity, ModelContext, SingletonEntity};
 
 const DEFAULT_CHUNK_SIZE: u32 = 512;
 // We only support mono for now.
@@ -217,7 +217,7 @@ impl VoiceInput {
                         .collect();
 
                     // This is blocking, but we aren't on the main thread.
-                    let _ = warpui::r#async::block_on(audio_frame_tx.send(mono_samples));
+                    let _ = warpui_core::r#async::block_on(audio_frame_tx.send(mono_samples));
                 },
                 |err| {
                     log::error!("Error in voice input stream: {err}");

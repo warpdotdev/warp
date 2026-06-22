@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use blocking::unblock;
-use mime_guess::from_path;
 use warp_cli::artifact::UploadArtifactArgs;
 
 use super::common::parse_ambient_task_id;
@@ -17,10 +16,11 @@ use crate::server::server_api::ai::{
     AIClient, CreateFileArtifactUploadRequest, CreateFileArtifactUploadResponse,
     FileArtifactRecord, FileArtifactUploadTargetInfo,
 };
+use crate::server::server_api::harness_support::FileUploadBody;
 use crate::server::server_api::presigned_upload::upload_file_to_target;
 use crate::server::server_api::ServerApi;
+use crate::util::image::{infer_mime_type, MIME_SNIFF_BYTES};
 
-const MIME_SNIFF_BYTES: usize = 8 * 1024;
 const OZ_RUN_ID_ENV_VAR: &str = "OZ_RUN_ID";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -165,8 +165,7 @@ impl FileArtifactUploader {
         upload_file_to_target(
             self.server_api.http_client(),
             target,
-            &artifact.path,
-            artifact.file_size,
+            FileUploadBody::new(artifact.path.clone()),
         )
         .await
     }
@@ -232,12 +231,6 @@ impl FileArtifactUploader {
 
 fn normalize_artifact_filepath(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
-}
-
-fn infer_mime_type(path: &Path, file_bytes: &[u8]) -> String {
-    infer::get(file_bytes)
-        .map(|kind| kind.mime_type().to_string())
-        .unwrap_or_else(|| from_path(path).first_or_octet_stream().to_string())
 }
 
 fn file_size_and_prefix_for_path(path: &Path, max_bytes: usize) -> Result<(u64, Vec<u8>)> {

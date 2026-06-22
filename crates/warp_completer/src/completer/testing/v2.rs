@@ -1,13 +1,9 @@
 use async_trait::async_trait;
 use warp_js::{JsFunctionId, SerializedJsValue};
 
-use crate::{
-    completer::context::{JsExecutionContext, JsExecutionError},
-    signatures::{
-        testing::{TEST_GENERATOR_1_JS_FUNCTION, TEST_GENERATOR_2_JS_FUNCTION},
-        GeneratorResults, Suggestion,
-    },
-};
+use crate::completer::context::{JsExecutionContext, JsExecutionError};
+use crate::signatures::testing::{TEST_GENERATOR_1_JS_FUNCTION, TEST_GENERATOR_2_JS_FUNCTION};
+use crate::signatures::{GeneratorResults, Suggestion};
 
 pub struct FakeJsExecutionContext {}
 

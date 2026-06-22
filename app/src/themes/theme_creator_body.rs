@@ -1,18 +1,11 @@
-use crate::appearance::{Appearance, AppearanceManager};
-use crate::editor::{EditorView, Event as EditorEvent};
-use crate::themes::theme::{InMemoryThemeOptions, ThemeKind};
-use crate::user_config;
-#[cfg(feature = "local_fs")]
-use crate::{
-    send_telemetry_from_ctx, server::telemetry::TelemetryEvent, themes::theme::CustomTheme,
-};
-use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::vec2f;
 use std::default::Default;
 use std::fmt;
 use std::path::PathBuf;
 #[cfg(feature = "local_fs")]
 use std::{fs::copy, io::Write};
+
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
 #[cfg(feature = "local_fs")]
 use warp_core::ui::theme::WarpTheme;
 use warpui::elements::{
@@ -21,13 +14,21 @@ use warpui::elements::{
     ParentElement, Radius, Rect, SavePosition, Shrinkable, Text,
 };
 use warpui::fonts::Weight;
+use warpui::platform::Cursor;
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
-use warpui::ViewHandle;
 use warpui::{
-    platform::Cursor, AppContext, Element, Entity, SingletonEntity, TypedActionView, View,
-    ViewContext,
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+};
+
+use crate::appearance::{Appearance, AppearanceManager};
+use crate::editor::{EditorView, Event as EditorEvent};
+use crate::themes::theme::{InMemoryThemeOptions, ThemeKind};
+use crate::user_config;
+#[cfg(feature = "local_fs")]
+use crate::{
+    send_telemetry_from_ctx, server::telemetry::TelemetryEvent, themes::theme::CustomTheme,
 };
 
 const BUTTON_PADDING: f32 = 12.;

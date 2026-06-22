@@ -1,10 +1,11 @@
 use vim::vim::VimMode;
 use warp_core::features::FeatureFlag;
-use warpui::{keymap::Keystroke, platform::WindowStyle, App};
-
-use crate::editor::{DisplayPoint, EditorOptions, EditorView};
+use warpui::keymap::Keystroke;
+use warpui::platform::WindowStyle;
+use warpui::App;
 
 use super::initialize_app;
+use crate::editor::{DisplayPoint, EditorOptions, EditorView};
 
 #[test]
 fn test_set_marked_text() {

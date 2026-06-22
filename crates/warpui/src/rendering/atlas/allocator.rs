@@ -1,6 +1,7 @@
-use crate::rendering::atlas::{AllocatedRegion, AllocationError};
 use pathfinder_geometry::rect::{RectF, RectI};
 use pathfinder_geometry::vector::{vec2f, vec2i, Vector2I};
+
+use crate::rendering::atlas::{AllocatedRegion, AllocationError};
 
 /// The number of pixels of padding that should be applied between elements
 /// in an atlas row.

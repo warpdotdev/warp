@@ -1,34 +1,29 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::server::telemetry::{CLISubagentControlState, TelemetryEvent};
 use instant::Instant;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize};
 use warp_core::send_telemetry_from_ctx;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::ai::blocklist::context_model::block_context_from_terminal_model;
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversationId, task::TaskId, AIAgentActionId, AIAgentActionResultType,
-            AIAgentContext, CancellationReason, ReadShellCommandOutputResult,
-            RequestCommandOutputResult, TransferShellCommandControlToUserResult,
-            WriteToLongRunningShellCommandResult,
-        },
-        blocklist::{
-            agent_view::{AgentViewController, AgentViewEntryOrigin},
-            BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIController,
-            BlocklistAIHistoryEvent,
-        },
-    },
-    terminal::{
-        model::block::BlockId,
-        model_events::{ModelEvent, ModelEventDispatcher},
-        TerminalModel,
-    },
-    BlocklistAIHistoryModel,
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentActionId, AIAgentActionResultType, AIAgentContext, CancellationReason,
+    ReadShellCommandOutputResult, RequestCommandOutputResult,
+    TransferShellCommandControlToUserResult, WriteToLongRunningShellCommandResult,
 };
+use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewEntryOrigin};
+use crate::ai::blocklist::context_model::block_context_from_terminal_model;
+use crate::ai::blocklist::{
+    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryEvent,
+};
+use crate::server::telemetry::{CLISubagentControlState, TelemetryEvent};
+use crate::terminal::model::block::BlockId;
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::TerminalModel;
+use crate::BlocklistAIHistoryModel;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum UserTakeOverReason {
@@ -147,7 +142,7 @@ impl CLISubagentController {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         ctx.subscribe_to_model(&history_model, Self::handle_history_model_event);
 
-        ctx.subscribe_to_model(action_model, |me, event, ctx| match event {
+        ctx.subscribe_to_model(action_model, |me, _, event, ctx| match event {
             BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_) => {
                 let mut terminal_model = me.terminal_model.lock();
                 let active_block = terminal_model.block_list_mut().active_block_mut();
@@ -202,7 +197,7 @@ impl CLISubagentController {
             _ => (),
         });
 
-        ctx.subscribe_to_model(model_event_dispatcher, |me, event, ctx| {
+        ctx.subscribe_to_model(model_event_dispatcher, |me, _, event, ctx| {
             if let ModelEvent::BlockCompleted(block_completed_event) = event {
                 let terminal_model = me.terminal_model.lock();
                 let Some(block) = terminal_model
@@ -317,8 +312,14 @@ impl CLISubagentController {
 
         let active_block = terminal_model.block_list_mut().active_block_mut();
         let block_id = active_block.id().clone();
-        if let Err(e) = active_block.take_over_control_for_user(reason) {
-            log::error!("Failed to take control for user: {e:?}");
+        let interaction_mode_debug = format!("{:?}", active_block.interaction_mode());
+        let lrc_state_debug = format!("{:?}", active_block.long_running_control_state());
+        if let Err(e) = active_block.take_over_control_for_user(reason.clone()) {
+            log::error!(
+                "Failed to take control for user: {e:?}, reason={reason:?}, \
+                 block_id={block_id:?}, interaction_mode={interaction_mode_debug}, \
+                 lrc_state={lrc_state_debug}"
+            );
             return;
         }
 
@@ -330,13 +331,18 @@ impl CLISubagentController {
         // model lock before actually cancelling the conversation.
         drop(terminal_model);
 
-        // Only cancel conversation if user manually took control (not when agent transfers control).
+        // Cancel the in-flight stream to stop the CLI subagent monitoring loop.
+        // When the user manually takes over, we use CLISubagentUserTakeover so the
+        // conversation status stays InProgress — the agent will resume once the command
+        // finishes or the user hands control back. We do NOT use ManuallyCancelled here
+        // because that would mark the conversation (and ambient task) as cancelled,
+        // which is incorrect since the conversation is still proceeding.
         if should_cancel_conversation {
             if let Some(conversation_id) = conversation_id {
                 self.controller.update(ctx, |controller, ctx| {
                     controller.cancel_conversation_progress(
                         conversation_id,
-                        CancellationReason::ManuallyCancelled,
+                        CancellationReason::CLISubagentUserTakeover,
                         ctx,
                     );
                 });
@@ -365,15 +371,23 @@ impl CLISubagentController {
         let active_block = terminal_model.block_list_mut().active_block_mut();
         let conversation_id = active_block.ai_conversation_id();
         let block_id = active_block.id().clone();
+        let lrc_state_debug = format!("{:?}", active_block.long_running_control_state());
         // Check if control was transferred from agent before handoff.
         let was_transfer_from_agent = active_block
             .long_running_control_state()
             .and_then(|state| state.user_take_over_reason())
             .is_some_and(|reason| reason.is_transfer_from_agent());
         if let Err(e) = active_block.handoff_control_to_agent() {
-            log::error!("Failed to handoff control to agent: {e:?}");
+            log::error!(
+                "Failed to handoff control to agent: {e:?}, \
+                 block_id={block_id:?}, lrc_state={lrc_state_debug}"
+            );
             return;
         }
+        log::info!(
+            "handoff_active_command_control_to_agent: block_id={block_id:?}, \
+             conversation_id={conversation_id:?}, lrc_state={lrc_state_debug}"
+        );
         let action_id = active_block.requested_command_action_id().cloned();
         let agent_has_control = active_block.is_agent_in_control();
         drop(terminal_model);
@@ -464,6 +478,7 @@ impl CLISubagentController {
 
     fn handle_history_model_event(
         &mut self,
+        _: ModelHandle<BlocklistAIHistoryModel>,
         event: &BlocklistAIHistoryEvent,
         ctx: &mut ModelContext<Self>,
     ) {

@@ -1,31 +1,27 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
 // Adding this file level gate as some of the code around editability is not used in WASM yet.
 
-use warp_core::ui::{appearance::Appearance, theme::Fill};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::Fill;
 use warp_editor::model::CoreEditorModel;
+use warpui::elements::{
+    Align, Border, ConstrainedBox, Container, CrossAxisAlignment, Flex, MouseStateHandle,
+    ParentElement, Shrinkable,
+};
+use warpui::presenter::ChildView;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::units::IntoPixels;
 use warpui::{
-    elements::{
-        Align, Border, ConstrainedBox, Container, CrossAxisAlignment, Flex, MouseStateHandle,
-        ParentElement, Shrinkable,
-    },
-    presenter::ChildView,
-    ui_components::{
-        button::ButtonVariant,
-        components::{UiComponent, UiComponentStyles},
-    },
-    units::IntoPixels,
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::{
-    editor::InteractionState,
-    ui_components::icons::Icon,
-    view_components::action_button::{ActionButton, ButtonSize, NakedTheme},
-    view_components::find::FIND_BAR_PADDING,
-};
-
 use super::model::{CodeEditorModel, CodeEditorModelEvent};
+use crate::editor::InteractionState;
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
+use crate::view_components::find::FIND_BAR_PADDING;
 
 const NAV_BAR_HEIGHT: f32 = 40.;
 const NAV_BAR_ICON_SIZE: f32 = 16.;

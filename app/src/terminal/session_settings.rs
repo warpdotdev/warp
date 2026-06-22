@@ -7,11 +7,9 @@ use lazy_static::lazy_static;
 pub use new_session_shell::*;
 use serde::{Deserialize, Serialize};
 pub use startup_shell::*;
+use warp_core::settings::macros::define_settings_group;
+use warp_core::settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 pub use working_directory_config::*;
-
-use warp_core::settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
-};
 
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::context_chips::prompt::PromptSelection;
@@ -396,14 +394,24 @@ define_settings_group!(SessionSettings, settings: [
         toml_path: "notifications.toast_duration_secs",
         description: "How long notification toasts are displayed, in seconds.",
     },
-    // Tracks whether the `gh` CLI is installed and authenticated on this machine,
-    // used to decide if the GitHub PR chip should be included by default.
+    // Tracks whether the `gh` CLI is installed and authenticated on this machine.
     // Not synced because `gh` CLI availability is machine-specific.
     github_pr_chip_default_validation: GithubPrChipDefaultValidation {
         type: GithubPrPromptChipDefaultValidation,
         default: GithubPrPromptChipDefaultValidation::Unvalidated,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        private: true,
+    },
+    // One-time flag: whether we've already migrated the handoff-to-cloud chip
+    // into a user's custom agent toolbar layout. When `Default`, the chip is
+    // already present via `AgentToolbarItemKind::default_right()`, so this
+    // only matters for `Custom` layouts that were saved before the chip existed.
+    did_add_handoff_chip_to_toolbar: DidAddHandoffChipToToolbar {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
         private: true,
     },
 ]);

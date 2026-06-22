@@ -1,0 +1,967 @@
+//! Unit tests for [`super::QueuedQueryModel`].
+//!
+//! Covers FIFO ordering, append from each origin, edit semantics, reorder semantics, the
+//! per-conversation auto-queue toggle, and history-driven cleanup.
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use warpui::{App, SingletonEntity};
+
+use super::{
+    AutofireAction, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
+    QueuedQueryOrigin,
+};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::ImageContext;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, PendingAttachment};
+use crate::test_util::settings::initialize_history_persistence_for_tests;
+
+/// Helper to drive the singleton `QueuedQueryModel` (plus its required `BlocklistAIHistoryModel`
+/// singleton) inside a test app and capture emitted events.
+fn with_model<F>(test: F)
+where
+    F: FnOnce(App, warpui::ModelHandle<QueuedQueryModel>, Rc<RefCell<Vec<QueuedQueryEvent>>>)
+        + 'static,
+{
+    App::test((), |mut app| async move {
+        // Initializes settings (incl. `PrivatePreferences`) and registers
+        // `GlobalResourceHandlesProvider`. The provider is required because
+        // `BlocklistAIHistoryModel::delete_conversation` reads the global
+        // model-event sender to enqueue a sqlite delete.
+        initialize_history_persistence_for_tests(&mut app);
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let model = app.add_singleton_model(QueuedQueryModel::new);
+        let events: Rc<RefCell<Vec<QueuedQueryEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let events_clone = events.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&model, move |_, event: &QueuedQueryEvent, _| {
+                events_clone.borrow_mut().push(event.clone());
+            });
+        });
+        test(app, model, events);
+    });
+}
+
+fn user_query(text: &str) -> QueuedQuery {
+    QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::QueueSlashCommand)
+}
+
+fn initial_cloud_mode_query(text: &str) -> QueuedQuery {
+    QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::InitialCloudMode)
+}
+
+fn command_query(text: &str) -> QueuedQuery {
+    QueuedQuery::new_command(text.to_owned(), QueuedQueryOrigin::AutoQueueToggle)
+}
+
+fn image_attachment(file_name: &str) -> PendingAttachment {
+    PendingAttachment::Image(ImageContext {
+        data: String::new(),
+        mime_type: "image/png".to_owned(),
+        file_name: file_name.to_owned(),
+        is_figma: false,
+    })
+}
+
+fn append_user(
+    model: &warpui::ModelHandle<QueuedQueryModel>,
+    app: &mut App,
+    conversation_id: AIConversationId,
+    text: &str,
+) -> QueuedQueryId {
+    model.update(app, |model, ctx| {
+        model.append(conversation_id, user_query(text), ctx)
+    })
+}
+
+#[test]
+fn initial_cloud_mode_head_rejects_user_mutations_and_autofire() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let initial_id = model.update(&mut app, |model, ctx| {
+            model.append(conv, initial_cloud_mode_query("initial"), ctx)
+        });
+        let followup_id = append_user(&model, &mut app, conv, "follow up");
+
+        let removed = model.update(&mut app, |model, ctx| {
+            model.remove_by_id(conv, initial_id, ctx)
+        });
+        assert!(removed.is_none());
+
+        model.update(&mut app, |model, ctx| {
+            model.enter_edit_mode(conv, initial_id, ctx);
+            model.reorder(conv, initial_id, 1, ctx);
+            model.reorder(conv, followup_id, 0, ctx);
+        });
+
+        let action = model.read(&app, |model, _| model.peek_autofire(conv));
+        assert!(action.is_none());
+
+        model.read(&app, |model, _| {
+            let queue = model.queue(conv);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].id(), initial_id);
+            assert_eq!(queue[0].origin(), QueuedQueryOrigin::InitialCloudMode);
+            assert_eq!(queue[1].id(), followup_id);
+            assert_eq!(model.editing_row(conv), None);
+        });
+    });
+}
+
+#[test]
+fn pop_front_no_ops_when_head_is_locked() {
+    // The Error/Cancelled drain path calls `pop_front` to restore a row to the editor. A locked
+    // initial Cloud Mode head must not be popped even if a status-transition arrives before the
+    // ambient-agent cleanup events fire `remove_initial_cloud_mode_row`.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let initial_id = model.update(&mut app, |model, ctx| {
+            model.append(conv, initial_cloud_mode_query("locked initial"), ctx)
+        });
+        let followup_id = append_user(&model, &mut app, conv, "follow up");
+
+        let popped = model.update(&mut app, |model, ctx| model.pop_front(conv, ctx));
+        assert!(popped.is_none());
+
+        model.read(&app, |model, _| {
+            let queue = model.queue(conv);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].id(), initial_id);
+            assert_eq!(queue[1].id(), followup_id);
+        });
+    });
+}
+
+#[test]
+fn remove_initial_cloud_mode_row_only_removes_the_locked_head() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+        let initial_id = model.update(&mut app, |model, ctx| {
+            model.append(conv, initial_cloud_mode_query("initial"), ctx)
+        });
+        append_user(&model, &mut app, conv, "follow up");
+        events.borrow_mut().clear();
+
+        let removed = model.update(&mut app, |model, ctx| {
+            model.remove_initial_cloud_mode_row(conv, ctx)
+        });
+        assert_eq!(
+            removed.map(|query| query.text().to_owned()),
+            Some("initial".to_owned())
+        );
+
+        let removed_again = model.update(&mut app, |model, ctx| {
+            model.remove_initial_cloud_mode_row(conv, ctx)
+        });
+        assert!(removed_again.is_none());
+
+        let action = model.read(&app, |model, _| model.peek_autofire(conv));
+        match action {
+            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "follow up"),
+            other => panic!("expected Submit, got {other:?}"),
+        }
+
+        let evts = events.borrow();
+        assert!(matches!(
+            evts.first(),
+            Some(QueuedQueryEvent::Removed { query_id, .. }) if *query_id == initial_id
+        ));
+    });
+}
+
+#[test]
+fn append_preserves_fifo_order() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id_a = append_user(&model, &mut app, conv, "first");
+        let id_b = append_user(&model, &mut app, conv, "second");
+        let id_c = append_user(&model, &mut app, conv, "third");
+
+        model.read(&app, |model, _| {
+            let queue = model.queue(conv);
+            assert_eq!(queue.len(), 3);
+            assert_eq!(queue[0].id(), id_a);
+            assert_eq!(queue[0].text(), "first");
+            assert_eq!(queue[1].id(), id_b);
+            assert_eq!(queue[1].text(), "second");
+            assert_eq!(queue[2].id(), id_c);
+            assert_eq!(queue[2].text(), "third");
+        });
+    });
+}
+
+#[test]
+fn append_from_each_user_origin_lands_in_the_queue() {
+    // /queue and the auto-queue toggle both land in the queue.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let origins = [
+            QueuedQueryOrigin::QueueSlashCommand,
+            QueuedQueryOrigin::AutoQueueToggle,
+        ];
+        for (i, origin) in origins.iter().enumerate() {
+            let text = format!("p{i}");
+            model.update(&mut app, |m, ctx| {
+                m.append(conv, QueuedQuery::new(text, *origin), ctx)
+            });
+        }
+        model.read(&app, |model, _| {
+            let queue = model.queue(conv);
+            assert_eq!(queue.len(), 2);
+            for (i, origin) in origins.iter().enumerate() {
+                assert_eq!(queue[i].origin(), *origin);
+            }
+        });
+    });
+}
+
+#[test]
+fn queue_next_prompt_toggle_defaults_false_and_emits_event() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+        model.read(&app, |model, _| {
+            assert!(!model.is_queue_next_prompt_toggle_enabled(conv));
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.toggle_queue_next_prompt(conv, ctx);
+        });
+
+        model.read(&app, |model, _| {
+            assert!(model.is_queue_next_prompt_toggle_enabled(conv));
+        });
+
+        let evts = events.borrow();
+        assert!(matches!(
+            evts.as_slice(),
+            [QueuedQueryEvent::QueueNextPromptToggled { conversation_id }] if *conversation_id == conv
+        ));
+    });
+}
+
+#[test]
+fn toggle_state_is_isolated_per_conversation() {
+    // Toggling for conversation A must not affect conversation B's toggle state.
+    with_model(|mut app, model, _events| {
+        let conv_a = AIConversationId::new();
+        let conv_b = AIConversationId::new();
+
+        model.update(&mut app, |m, ctx| m.toggle_queue_next_prompt(conv_a, ctx));
+        model.read(&app, |m, _| {
+            assert!(m.is_queue_next_prompt_toggle_enabled(conv_a));
+            assert!(!m.is_queue_next_prompt_toggle_enabled(conv_b));
+        });
+    });
+}
+
+#[test]
+fn lrc_auto_queue_enables_queueing_by_default() {
+    // While an eligible LRC is active, queueing is on even though the conversation
+    // has no persistent override; outside the LRC it is off.
+    with_model(|app, model, _events| {
+        let conv = AIConversationId::new();
+        model.read(&app, |m, _| {
+            assert!(m.is_queue_next_prompt_enabled_during_lrc(conv));
+            assert!(!m.is_queue_next_prompt_toggle_enabled(conv));
+        });
+    });
+}
+
+#[test]
+fn lrc_toggle_flips_only_the_lrc_override() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+
+        // Toggle off during the LRC: only the LRC-scoped state flips; the persistent
+        // per-conversation state is untouched.
+        model.update(&mut app, |m, ctx| {
+            m.toggle_queue_next_prompt_during_lrc(conv, ctx)
+        });
+        model.read(&app, |m, _| {
+            assert!(!m.is_queue_next_prompt_enabled_during_lrc(conv));
+            assert!(!m.is_queue_next_prompt_toggle_enabled(conv));
+        });
+
+        // Toggling back on re-enables for the remainder of the command.
+        model.update(&mut app, |m, ctx| {
+            m.toggle_queue_next_prompt_during_lrc(conv, ctx)
+        });
+        model.read(&app, |m, _| {
+            assert!(m.is_queue_next_prompt_enabled_during_lrc(conv));
+        });
+
+        let evts = events.borrow();
+        assert_eq!(evts.len(), 2);
+        assert!(evts.iter().all(|e| matches!(
+            e,
+            QueuedQueryEvent::QueueNextPromptToggled { conversation_id } if *conversation_id == conv
+        )));
+    });
+}
+
+#[test]
+fn clearing_lrc_override_restores_auto_queue_for_the_next_command() {
+    // The LRC override is cleared when the command ends, so the next eligible LRC
+    // auto-enables again. Clearing an existing override emits a toggle event; clearing
+    // when none exists does not.
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+
+        model.update(&mut app, |m, ctx| {
+            m.toggle_queue_next_prompt_during_lrc(conv, ctx)
+        });
+        model.update(&mut app, |m, ctx| {
+            m.clear_queue_next_lrc_prompt_override(conv, ctx)
+        });
+        model.read(&app, |m, _| {
+            assert!(m.is_queue_next_prompt_enabled_during_lrc(conv));
+        });
+        assert_eq!(events.borrow().len(), 2);
+
+        model.update(&mut app, |m, ctx| {
+            m.clear_queue_next_lrc_prompt_override(conv, ctx)
+        });
+        assert_eq!(events.borrow().len(), 2);
+    });
+}
+
+#[test]
+fn lrc_toggle_leaves_persistent_toggle_state_intact() {
+    // A conversation already in queue mode keeps that state after the LRC ends, regardless
+    // of toggles made during the command.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+
+        model.update(&mut app, |m, ctx| m.toggle_queue_next_prompt(conv, ctx));
+        model.update(&mut app, |m, ctx| {
+            m.toggle_queue_next_prompt_during_lrc(conv, ctx)
+        });
+
+        model.read(&app, |m, _| {
+            assert!(!m.is_queue_next_prompt_enabled_during_lrc(conv));
+            // After the LRC ends, the persistent toggle still applies.
+            assert!(m.is_queue_next_prompt_toggle_enabled(conv));
+        });
+    });
+}
+
+#[test]
+fn append_state_is_isolated_per_conversation() {
+    // Appending to one conversation's queue must not show up in another's.
+    with_model(|mut app, model, _events| {
+        let conv_a = AIConversationId::new();
+        let conv_b = AIConversationId::new();
+
+        append_user(&model, &mut app, conv_a, "a-first");
+        append_user(&model, &mut app, conv_b, "b-first");
+        append_user(&model, &mut app, conv_a, "a-second");
+
+        model.read(&app, |m, _| {
+            let a = m.queue(conv_a);
+            assert_eq!(a.len(), 2);
+            assert_eq!(a[0].text(), "a-first");
+            assert_eq!(a[1].text(), "a-second");
+            let b = m.queue(conv_b);
+            assert_eq!(b.len(), 1);
+            assert_eq!(b[0].text(), "b-first");
+        });
+    });
+}
+
+#[test]
+fn pop_front_removes_head_and_emits_removed() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+        let id_a = append_user(&model, &mut app, conv, "first");
+        let _id_b = append_user(&model, &mut app, conv, "second");
+        events.borrow_mut().clear();
+
+        let popped = model.update(&mut app, |m, ctx| m.pop_front(conv, ctx));
+        let popped = popped.expect("queue had a head");
+        assert_eq!(popped.id(), id_a);
+        assert_eq!(popped.text(), "first");
+
+        model.read(&app, |model, _| {
+            assert_eq!(model.queue(conv).len(), 1);
+        });
+
+        let evts = events.borrow();
+        assert!(matches!(
+            evts.as_slice(),
+            [QueuedQueryEvent::Removed { conversation_id, query_id }]
+                if *conversation_id == conv && *query_id == id_a
+        ));
+    });
+}
+
+#[test]
+fn peek_autofire_leaves_row_until_remove_fired_row_drops_it() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let first_id = append_user(&model, &mut app, conv, "first");
+        append_user(&model, &mut app, conv, "second");
+
+        // peek_autofire reports the head's Submit action WITHOUT removing the row, so the send
+        // path can still read its attachments by id.
+        let action = model.read(&app, |model, _| model.peek_autofire(conv));
+        match action {
+            Some(AutofireAction::Submit { query_id, text }) => {
+                assert_eq!(query_id, first_id);
+                assert_eq!(text, "first");
+            }
+            other => panic!("expected Submit, got {other:?}"),
+        }
+        model.read(&app, |model, _| assert_eq!(model.queue(conv).len(), 2));
+
+        // remove_fired_row drops the fired head once the synchronous send completes.
+        model.update(&mut app, |model, ctx| {
+            model.remove_fired_row(conv, first_id, ctx)
+        });
+        model.read(&app, |model, _| {
+            let queue = model.queue(conv);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].text(), "second");
+        });
+    });
+}
+
+#[test]
+fn restore_fired_row_reinserts_removed_row_for_retry() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+        let first_id = model.update(&mut app, |model, ctx| {
+            model.append(
+                conv,
+                QueuedQuery::new_with_attachments(
+                    "first".to_owned(),
+                    QueuedQueryOrigin::QueueSlashCommand,
+                    vec![image_attachment("a.png")],
+                ),
+                ctx,
+            )
+        });
+        append_user(&model, &mut app, conv, "second");
+
+        let (retry_index, retry_query) = model.read(&app, |model, _| {
+            model
+                .queue(conv)
+                .iter()
+                .enumerate()
+                .find(|(_, query)| query.id() == first_id)
+                .map(|(index, query)| (index, query.clone()))
+                .expect("queued row should exist")
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.remove_fired_row(conv, first_id, ctx);
+        });
+        events.borrow_mut().clear();
+
+        model.update(&mut app, |model, ctx| {
+            model.restore_fired_row(conv, retry_index, retry_query, ctx);
+        });
+
+        model.read(&app, |model, _| {
+            let queue = model.queue(conv);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].id(), first_id);
+            assert_eq!(queue[0].text(), "first");
+            assert_eq!(queue[0].attachments()[0].file_name(), "a.png");
+            assert_eq!(queue[1].text(), "second");
+        });
+        let evts = events.borrow();
+        assert!(matches!(
+            evts.as_slice(),
+            [QueuedQueryEvent::Appended {
+                conversation_id,
+                query_id
+            }] if *conversation_id == conv && *query_id == first_id
+        ));
+    });
+}
+
+#[test]
+fn peek_autofire_returns_pop_from_edit_mode_with_committed_text_and_attachments() {
+    // Per spec: when the first row is in edit mode, peek_autofire's PopFromEditMode action
+    // carries the row's last-committed text and its stored attachments (NOT any uncommitted
+    // live-editor buffer text). peek leaves edit state intact; remove_fired_row clears it.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id_a = model.update(&mut app, |m, ctx| {
+            m.append(
+                conv,
+                QueuedQuery::new_with_attachments(
+                    "first".to_owned(),
+                    QueuedQueryOrigin::QueueSlashCommand,
+                    vec![image_attachment("a.png")],
+                ),
+                ctx,
+            )
+        });
+        append_user(&model, &mut app, conv, "second");
+        model.update(&mut app, |m, ctx| m.enter_edit_mode(conv, id_a, ctx));
+
+        let action = model.read(&app, |m, _| m.peek_autofire(conv));
+        match action {
+            Some(AutofireAction::PopFromEditMode {
+                query_id,
+                text,
+                attachments,
+                is_command,
+            }) => {
+                assert_eq!(query_id, id_a);
+                assert_eq!(text, "first");
+                assert_eq!(attachments.len(), 1);
+                assert_eq!(attachments[0].file_name(), "a.png");
+                assert!(!is_command);
+            }
+            other => panic!("expected PopFromEditMode, got {other:?}"),
+        }
+        // peek does not mutate: the row is still in edit mode.
+        model.read(&app, |m, _| assert_eq!(m.editing_row(conv), Some(id_a)));
+
+        model.update(&mut app, |m, ctx| m.remove_fired_row(conv, id_a, ctx));
+        model.read(&app, |m, _| {
+            assert_eq!(m.editing_row(conv), None);
+            assert_eq!(m.queue(conv).len(), 1);
+        });
+    });
+}
+
+#[test]
+fn first_row_is_in_edit_mode_only_when_the_head_row_is_being_edited() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id_a = append_user(&model, &mut app, conv, "first");
+        let id_b = append_user(&model, &mut app, conv, "second");
+
+        model.update(&mut app, |m, ctx| m.enter_edit_mode(conv, id_b, ctx));
+        model.read(&app, |m, _| {
+            assert!(!m.first_row_is_in_edit_mode(conv));
+        });
+
+        model.update(&mut app, |m, ctx| m.enter_edit_mode(conv, id_a, ctx));
+        model.read(&app, |m, _| {
+            assert!(m.first_row_is_in_edit_mode(conv));
+        });
+    });
+}
+
+#[test]
+fn enter_edit_mode_locks_to_one_row_at_a_time() {
+    // Entering edit mode on one row cancels the prior edit state.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id_a = append_user(&model, &mut app, conv, "first");
+        let id_b = append_user(&model, &mut app, conv, "second");
+
+        model.update(&mut app, |m, ctx| m.enter_edit_mode(conv, id_a, ctx));
+        model.read(&app, |m, _| assert_eq!(m.editing_row(conv), Some(id_a)));
+
+        // Entering edit mode on a different row replaces the prior edit.
+        model.update(&mut app, |m, ctx| m.enter_edit_mode(conv, id_b, ctx));
+        model.read(&app, |m, _| assert_eq!(m.editing_row(conv), Some(id_b)));
+    });
+}
+
+#[test]
+fn commit_edit_with_text_replaces_row_and_clears_edit_state() {
+    // Non-empty edits replace the queued row's text.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id_a = append_user(&model, &mut app, conv, "first");
+        model.update(&mut app, |m, ctx| m.enter_edit_mode(conv, id_a, ctx));
+
+        model.update(&mut app, |m, ctx| {
+            m.commit_edit(conv, "first updated".to_owned(), ctx)
+        });
+
+        model.read(&app, |m, _| {
+            let queue = m.queue(conv);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].id(), id_a);
+            assert_eq!(queue[0].text(), "first updated");
+            assert_eq!(m.editing_row(conv), None);
+        });
+    });
+}
+
+#[test]
+fn commit_edit_with_empty_text_restores_original_text() {
+    // Empty edits restore the original text.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id_a = append_user(&model, &mut app, conv, "first");
+        append_user(&model, &mut app, conv, "second");
+        model.update(&mut app, |m, ctx| m.enter_edit_mode(conv, id_a, ctx));
+
+        model.update(&mut app, |m, ctx| m.commit_edit(conv, String::new(), ctx));
+
+        model.read(&app, |m, _| {
+            let queue = m.queue(conv);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].id(), id_a);
+            assert_eq!(queue[0].text(), "first");
+            assert_eq!(queue[1].text(), "second");
+            assert_eq!(m.editing_row(conv), None);
+        });
+    });
+}
+
+#[test]
+fn cancel_edit_leaves_row_unchanged_and_clears_edit_state() {
+    // Canceling an edit leaves the row unchanged.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id_a = append_user(&model, &mut app, conv, "first");
+        model.update(&mut app, |m, ctx| m.enter_edit_mode(conv, id_a, ctx));
+
+        model.update(&mut app, |m, ctx| m.cancel_edit(conv, ctx));
+
+        model.read(&app, |m, _| {
+            let queue = m.queue(conv);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].text(), "first");
+            assert_eq!(m.editing_row(conv), None);
+        });
+    });
+}
+
+#[test]
+fn remove_by_id_removes_only_the_targeted_row() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id_a = append_user(&model, &mut app, conv, "first");
+        let _id_b = append_user(&model, &mut app, conv, "second");
+        let _id_c = append_user(&model, &mut app, conv, "third");
+
+        let removed = model.update(&mut app, |m, ctx| m.remove_by_id(conv, id_a, ctx));
+        assert_eq!(
+            removed.map(|r| r.text().to_owned()),
+            Some("first".to_owned())
+        );
+        model.read(&app, |m, _| {
+            let queue = m.queue(conv);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].text(), "second");
+            assert_eq!(queue[1].text(), "third");
+        });
+    });
+}
+
+#[test]
+fn reorder_moves_user_managed_rows_to_target_index() {
+    // Reordering moves user-managed rows to the requested target index.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id_a = append_user(&model, &mut app, conv, "a");
+        let id_b = append_user(&model, &mut app, conv, "b");
+        let id_c = append_user(&model, &mut app, conv, "c");
+
+        // Move a (index 0) to the end (post-removal index 2).
+        model.update(&mut app, |m, ctx| m.reorder(conv, id_a, 2, ctx));
+
+        model.read(&app, |m, _| {
+            let queue = m.queue(conv);
+            assert_eq!(queue[0].id(), id_b);
+            assert_eq!(queue[1].id(), id_c);
+            assert_eq!(queue[2].id(), id_a);
+        });
+    });
+}
+
+#[test]
+fn reorder_preserves_every_row_when_moving_last_to_front() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id_a = append_user(&model, &mut app, conv, "a");
+        let id_b = append_user(&model, &mut app, conv, "b");
+        let id_c = append_user(&model, &mut app, conv, "c");
+        let id_d = append_user(&model, &mut app, conv, "d");
+
+        model.update(&mut app, |m, ctx| m.reorder(conv, id_d, 0, ctx));
+
+        model.read(&app, |m, _| {
+            let ids: Vec<_> = m.queue(conv).iter().map(|q| q.id()).collect();
+            assert_eq!(ids, vec![id_d, id_a, id_b, id_c]);
+        });
+    });
+}
+
+#[test]
+fn reorder_clamps_target_index_to_queue_len() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id_a = append_user(&model, &mut app, conv, "a");
+        let id_b = append_user(&model, &mut app, conv, "b");
+
+        // Target index >= len after removal should clamp to the end.
+        model.update(&mut app, |m, ctx| m.reorder(conv, id_a, 99, ctx));
+        model.read(&app, |m, _| {
+            let queue = m.queue(conv);
+            assert_eq!(queue[0].id(), id_b);
+            assert_eq!(queue[1].id(), id_a);
+        });
+    });
+}
+
+#[test]
+fn delete_conversation_drops_only_that_conversation_state() {
+    // Removing one conversation from history should drop its queue + toggle but leave others.
+    with_model(|mut app, model, _events| {
+        let history = BlocklistAIHistoryModel::handle(&app);
+        let terminal_view_id = warpui::EntityId::new();
+        let conv_a = history.update(&mut app, |h, ctx| {
+            h.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let conv_b = history.update(&mut app, |h, ctx| {
+            h.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        append_user(&model, &mut app, conv_a, "a1");
+        append_user(&model, &mut app, conv_b, "b1");
+        model.update(&mut app, |m, ctx| m.toggle_queue_next_prompt(conv_a, ctx));
+
+        history.update(&mut app, |h, ctx| {
+            h.delete_conversation(conv_a, Some(terminal_view_id), ctx);
+        });
+
+        model.read(&app, |m, _| {
+            assert!(!m.has_queue(conv_a));
+            assert!(!m.is_queue_next_prompt_toggle_enabled(conv_a));
+            let b = m.queue(conv_b);
+            assert_eq!(b.len(), 1);
+            assert_eq!(b[0].text(), "b1");
+        });
+    });
+}
+
+#[test]
+fn command_rows_are_commands_without_attachments_and_prompts_are_not() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        model.update(&mut app, |m, ctx| {
+            m.append(conv, command_query("echo 1"), ctx)
+        });
+        model.update(&mut app, |m, ctx| {
+            m.append(
+                conv,
+                QueuedQuery::new_with_attachments(
+                    "a prompt".to_owned(),
+                    QueuedQueryOrigin::AutoQueueToggle,
+                    vec![image_attachment("a.png")],
+                ),
+                ctx,
+            )
+        });
+        model.read(&app, |m, _| {
+            let queue = m.queue(conv);
+            assert!(queue[0].is_command());
+            assert!(queue[0].attachments().is_empty());
+            assert!(!queue[1].is_command());
+            assert_eq!(queue[1].attachments().len(), 1);
+        });
+    });
+}
+
+#[test]
+fn peek_autofire_returns_execute_command_for_a_command_head() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id = model.update(&mut app, |m, ctx| {
+            m.append(conv, command_query("echo 1"), ctx)
+        });
+        append_user(&model, &mut app, conv, "a prompt");
+
+        match model.read(&app, |m, _| m.peek_autofire(conv)) {
+            Some(AutofireAction::ExecuteCommand { query_id, command }) => {
+                assert_eq!(query_id, id);
+                assert_eq!(command, "echo 1");
+            }
+            other => panic!("expected ExecuteCommand, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn editing_a_command_head_pops_to_edit_mode_instead_of_executing() {
+    // Edit mode takes precedence over command execution so the drain restores the row's text.
+    // `is_command` rides along so the drain can keep the restored row in shell mode.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id = model.update(&mut app, |m, ctx| {
+            m.append(conv, command_query("echo 1"), ctx)
+        });
+        model.update(&mut app, |m, ctx| m.enter_edit_mode(conv, id, ctx));
+
+        match model.read(&app, |m, _| m.peek_autofire(conv)) {
+            Some(AutofireAction::PopFromEditMode {
+                query_id,
+                text,
+                is_command,
+                ..
+            }) => {
+                assert_eq!(query_id, id);
+                assert_eq!(text, "echo 1");
+                assert!(is_command);
+            }
+            other => panic!("expected PopFromEditMode, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn editing_a_prompt_head_pops_to_edit_mode_with_is_command_false() {
+    // The prompt counterpart: an edited prompt head pops with `is_command` false so the drain
+    // restores it as an agent prompt (and re-stages its attachments).
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let id = append_user(&model, &mut app, conv, "a prompt");
+        model.update(&mut app, |m, ctx| m.enter_edit_mode(conv, id, ctx));
+
+        match model.read(&app, |m, _| m.peek_autofire(conv)) {
+            Some(AutofireAction::PopFromEditMode {
+                query_id,
+                is_command,
+                ..
+            }) => {
+                assert_eq!(query_id, id);
+                assert!(!is_command);
+            }
+            other => panic!("expected PopFromEditMode, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn command_rows_are_mutable_like_prompts() {
+    // Commands are not locked: they can be reordered, edited, and deleted.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let cmd_id = model.update(&mut app, |m, ctx| {
+            m.append(conv, command_query("echo 1"), ctx)
+        });
+        let prompt_id = append_user(&model, &mut app, conv, "a prompt");
+
+        model.update(&mut app, |m, ctx| m.reorder(conv, cmd_id, 1, ctx));
+        model.read(&app, |m, _| {
+            assert_eq!(m.queue(conv)[0].id(), prompt_id);
+            assert_eq!(m.queue(conv)[1].id(), cmd_id);
+        });
+
+        model.update(&mut app, |m, ctx| m.enter_edit_mode(conv, cmd_id, ctx));
+        model.update(&mut app, |m, ctx| {
+            m.commit_edit(conv, "echo 2".to_owned(), ctx)
+        });
+        model.read(&app, |m, _| {
+            let command = m.queue(conv).iter().find(|q| q.id() == cmd_id).unwrap();
+            assert_eq!(command.text(), "echo 2");
+        });
+
+        let removed = model.update(&mut app, |m, ctx| m.remove_by_id(conv, cmd_id, ctx));
+        assert_eq!(
+            removed.map(|q| q.text().to_owned()),
+            Some("echo 2".to_owned())
+        );
+    });
+}
+
+#[test]
+fn command_in_flight_flag_arms_and_clears() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        model.read(&app, |m, _| assert!(!m.has_command_in_flight(conv)));
+
+        // Arming works even with an empty queue (the gate keeps queueing while a command runs).
+        model.update(&mut app, |m, _| m.arm_command_in_flight(conv));
+        model.read(&app, |m, _| assert!(m.has_command_in_flight(conv)));
+
+        model.update(&mut app, |m, _| m.clear_command_in_flight(conv));
+        model.read(&app, |m, _| assert!(!m.has_command_in_flight(conv)));
+    });
+}
+
+#[test]
+fn delete_conversation_clears_in_flight_command() {
+    with_model(|mut app, model, _events| {
+        let history = BlocklistAIHistoryModel::handle(&app);
+        let terminal_view_id = warpui::EntityId::new();
+        let conv = history.update(&mut app, |h, ctx| {
+            h.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        model.update(&mut app, |m, _| m.arm_command_in_flight(conv));
+        model.read(&app, |m, _| assert!(m.has_command_in_flight(conv)));
+
+        history.update(&mut app, |h, ctx| {
+            h.delete_conversation(conv, Some(terminal_view_id), ctx);
+        });
+        model.read(&app, |m, _| assert!(!m.has_command_in_flight(conv)));
+    });
+}
+
+#[test]
+fn clear_conversations_in_terminal_view_drops_every_listed_conversation() {
+    // ClearedConversationsInTerminalView with multiple ids must drop each listed conversation's queue.
+    with_model(|mut app, model, _events| {
+        let history = BlocklistAIHistoryModel::handle(&app);
+        let terminal_view_id = warpui::EntityId::new();
+        let conv_a = history.update(&mut app, |h, ctx| {
+            h.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let conv_b = history.update(&mut app, |h, ctx| {
+            h.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        append_user(&model, &mut app, conv_a, "a1");
+        append_user(&model, &mut app, conv_b, "b1");
+
+        history.update(&mut app, |h, ctx| {
+            h.clear_conversations_in_terminal_view(terminal_view_id, ctx)
+        });
+
+        model.read(&app, |m, _| {
+            assert!(!m.has_queue(conv_a));
+            assert!(!m.has_queue(conv_b));
+        });
+    });
+}
+
+#[test]
+fn has_autofireable_prompt_is_false_for_an_empty_queue() {
+    with_model(|app, model, _events| {
+        let conv = AIConversationId::new();
+        model.read(&app, |m, _| assert!(!m.has_autofireable_prompt(conv)));
+    });
+}
+
+#[test]
+fn has_autofireable_prompt_is_true_for_a_queued_prompt() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        append_user(&model, &mut app, conv, "follow up");
+        model.read(&app, |m, _| assert!(m.has_autofireable_prompt(conv)));
+    });
+}
+
+#[test]
+fn has_autofireable_prompt_is_false_when_only_a_locked_head_is_queued() {
+    // A locked initial Cloud Mode head never auto-fires on finish, so it must not count.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        model.update(&mut app, |m, ctx| {
+            m.append(conv, initial_cloud_mode_query("initial"), ctx)
+        });
+        model.read(&app, |m, _| assert!(!m.has_autofireable_prompt(conv)));
+    });
+}
+
+#[test]
+fn has_autofireable_prompt_is_false_when_a_locked_head_precedes_a_prompt() {
+    // The head row gates auto-fire; a locked head blocks the trailing prompt from firing.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        model.update(&mut app, |m, ctx| {
+            m.append(conv, initial_cloud_mode_query("initial"), ctx)
+        });
+        append_user(&model, &mut app, conv, "follow up");
+        model.read(&app, |m, _| assert!(!m.has_autofireable_prompt(conv)));
+    });
+}

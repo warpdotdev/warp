@@ -1,33 +1,63 @@
 use std::fmt::Debug;
+use std::marker::PhantomData;
 
 use pathfinder_color::ColorU;
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, Element, Fill, Icon,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, SavePosition, Stack,
+};
+use warpui::fonts::FamilyId;
+use warpui::geometry::vector::vec2f;
+use warpui::scene::DropShadow;
+use warpui::text_layout::ClipConfig;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, ConstrainedBox, Container, Element, Icon,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
-        PositionedElementAnchor, PositionedElementOffsetBounds, SavePosition, Stack,
-    },
-    fonts::FamilyId,
-    geometry::vector::vec2f,
-    scene::DropShadow,
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
     Action, AppContext, BlurContext, Entity, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WeakViewHandle,
 };
 
-use crate::{
-    appearance::Appearance,
-    menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant},
-};
+use crate::appearance::Appearance;
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
 
 pub const TOP_MENU_BAR_HEIGHT: f32 = 30.;
 pub const TOP_MENU_BAR_MAX_WIDTH: f32 = 190.;
 pub const DROPDOWN_PADDING: f32 = 6.;
 
 pub type MenuHeaderTextFormatter = Box<dyn Fn(&str) -> String>;
+pub trait DropdownItemAction: Action {
+    fn clone_box(&self) -> Box<dyn DropdownItemAction>;
+    fn eq_action(&self, other: &dyn DropdownItemAction) -> bool;
+}
+
+impl<T> DropdownItemAction for T
+where
+    T: Action + Clone + PartialEq + 'static,
+{
+    fn clone_box(&self) -> Box<dyn DropdownItemAction> {
+        Box::new(self.clone())
+    }
+
+    fn eq_action(&self, other: &dyn DropdownItemAction) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<T>()
+            .is_some_and(|other| self == other)
+    }
+}
+
+impl Clone for Box<dyn DropdownItemAction> {
+    fn clone(&self) -> Self {
+        self.as_ref().clone_box()
+    }
+}
+
+impl PartialEq for Box<dyn DropdownItemAction> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref().eq_action(other.as_ref())
+    }
+}
 
 #[derive(Clone, Default)]
 pub enum DropdownStyle {
@@ -63,7 +93,12 @@ impl DropdownStyle {
 
 /// A dropdown menu view. The view renders each DropdownItem. When a menu item is clicked,
 /// on_click_action_name is dispatched, with the value of the corresponding menu item.
-pub struct Dropdown<A: Action + Clone> {
+///
+/// The item action type powers typed item helpers like `set_items` and
+/// `set_selected_by_action`. Callers that populate the menu with already-erased rich
+/// [`MenuItem<DropdownAction>`] values through `set_rich_items` do not need to name a concrete
+/// item action type.
+pub struct Dropdown<A: DropdownItemAction = ()> {
     is_expanded: bool,
     disabled: bool,
     top_bar_mouse_state: MouseStateHandle,
@@ -72,8 +107,8 @@ pub struct Dropdown<A: Action + Clone> {
     child_anchor: ChildAnchor,
     main_axis_size: MainAxisSize,
 
-    dropdown: ViewHandle<Menu<DropdownAction<A>>>,
-    selected_item: Option<MenuItem<DropdownAction<A>>>,
+    dropdown: ViewHandle<Menu<DropdownAction>>,
+    selected_item: Option<MenuItem<DropdownAction>>,
     // Function for overriding the default closed-state text (the selected item)
     menu_header_text_override: Option<MenuHeaderTextFormatter>,
     self_handle: WeakViewHandle<Self>,
@@ -82,23 +117,60 @@ pub struct Dropdown<A: Action + Clone> {
     font_color: Option<ColorU>,
     font_size: Option<f32>,
     padding: Option<Coords>,
+    /// Optional override for the top-bar background fill, applied on top
+    /// of the variant's default style. Used by callers that need a
+    /// per-call appearance distinct from the shared `DropdownStyle`
+    /// variants (e.g. orchestrate confirmation card pickers per Figma
+    /// 4340:117057).
+    background: Option<Fill>,
+    /// Optional override for the top-bar border fill. See `background`.
+    border_color: Option<Fill>,
+    /// Optional override for the top-bar border width.
+    border_width: Option<f32>,
+    /// Optional override for the top-bar corner radius.
+    border_radius: Option<CornerRadius>,
     vertical_margin: f32,
     top_bar_height: f32,
+    /// When true (default), the open menu is attached to the dropdown's
+    /// stack via `add_positioned_overlay_child`, painting it in an
+    /// `Overlay` layer that escapes parent clip bounds. When false, the
+    /// menu is attached via `add_positioned_child` and paints in the
+    /// parent's Normal layer, the same way other AIBlock-internal
+    /// menus (e.g. the accept-and-autoexecute split-button menu in
+    /// `requested_command.rs` / `code_diff_view.rs`) do.
+    ///
+    /// Setting this to `false` is required for dropdowns rendered
+    /// inside a `SelectableArea` whose menu items would otherwise lose
+    /// `LeftMouseDown` / `LeftMouseUp` (hover still works) due to an
+    /// interaction between `Menu`'s `prevent_interaction_with_other_elements`
+    /// full-window hit-recording rect and the surrounding
+    /// `SelectableArea`. Tracked as P1.1 for the orchestrate
+    /// confirmation card pickers.
+    use_overlay_layer: bool,
+    match_menu_width_to_top_bar: bool,
+    // The menu stores erased `DropdownAction`s internally, but the public API remains generic over
+    // the caller's concrete item action type (`set_items`, `set_selected_by_action`, etc.).
+    _item_action_type: PhantomData<A>,
 }
 
 #[derive(Clone)]
-pub struct DropdownItem<A: Action + Clone> {
+pub struct DropdownItem<A: DropdownItemAction = ()> {
     /// Text to display for the item
     pub display_text: String,
     /// Constructor for the typed action object
     action: A,
     /// Custom font for the dropdown item
     family_id: Option<FamilyId>,
+    /// Optional hover tooltip shown over the row.
+    tooltip: Option<String>,
+    /// Optional clip config controlling how `display_text` is clipped when it
+    /// would overflow the row width. Forwarded to [`MenuItemFields`].
+    clip_config: Option<ClipConfig>,
 }
 
 impl<A> DropdownItem<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
     pub fn new<S>(display_text: S, action: A) -> Self
     where
@@ -108,6 +180,8 @@ where
             display_text: display_text.into(),
             action,
             family_id: None,
+            tooltip: None,
+            clip_config: None,
         }
     }
 
@@ -117,17 +191,38 @@ where
         self.family_id = Some(family_id);
         self
     }
+
+    /// Set a hover tooltip for this row. Useful when `display_text` is a
+    /// shortened form of richer underlying data (e.g. a truncated path).
+    pub fn with_tooltip(mut self, tooltip: impl Into<String>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    /// Set a [`ClipConfig`] for this row. When set, the dropdown's text-layout
+    /// layer clips `display_text` at the actual rendered width instead of
+    /// callers having to pre-shrink the string.
+    pub fn with_clip_config(mut self, config: ClipConfig) -> Self {
+        self.clip_config = Some(config);
+        self
+    }
 }
 
-impl<A> From<&DropdownItem<A>> for MenuItem<DropdownAction<A>>
+impl<A> From<&DropdownItem<A>> for MenuItem<DropdownAction>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
-    fn from(dropdown_item: &DropdownItem<A>) -> MenuItem<DropdownAction<A>> {
-        let menu_item = MenuItemFields::new(dropdown_item.display_text.clone())
+    fn from(dropdown_item: &DropdownItem<A>) -> MenuItem<DropdownAction> {
+        let mut menu_item = MenuItemFields::new(dropdown_item.display_text.clone())
             .with_on_select_action(DropdownAction::SelectActionAndClose(
-                dropdown_item.action.clone(),
+                dropdown_item.action.clone_box(),
             ));
+        if let Some(tooltip) = &dropdown_item.tooltip {
+            menu_item = menu_item.with_tooltip(tooltip.clone());
+        }
+        if let Some(clip_config) = dropdown_item.clip_config {
+            menu_item = menu_item.with_clip_config(clip_config);
+        }
         if let Some(family_id) = dropdown_item.family_id {
             menu_item.with_font_override(family_id).into_item()
         } else {
@@ -136,21 +231,27 @@ where
     }
 }
 
-impl<A> From<A> for DropdownAction<A>
-where
-    A: Action + Clone,
-{
-    fn from(action: A) -> DropdownAction<A> {
-        DropdownAction::SelectActionAndClose(action)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
-pub enum DropdownAction<A: Action + Clone> {
+pub enum DropdownAction {
     Focus(usize),
     Close,
-    SelectActionAndClose(A),
+    SelectActionAndClose(Box<dyn DropdownItemAction>),
     ToggleExpanded,
+}
+
+impl DropdownAction {
+    /// Wraps a caller item action so menu selection can close the dropdown before dispatching the
+    /// typed action.
+    ///
+    /// This is an inherent constructor instead of `From<A>` because a blanket
+    /// `impl<A> From<A> for DropdownAction` would overlap with Rust's `impl<T> From<T> for T`
+    /// when `A = DropdownAction`.
+    pub fn select_action_and_close<A>(action: A) -> Self
+    where
+        A: DropdownItemAction,
+    {
+        Self::SelectActionAndClose(Box::new(action))
+    }
 }
 
 pub enum DropdownEvent {
@@ -160,7 +261,7 @@ pub enum DropdownEvent {
 
 impl<A> Dropdown<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let dropdown = ctx.add_typed_action_view(|ctx| {
@@ -191,9 +292,40 @@ where
             font_color: None,
             font_size: None,
             padding: None,
+            background: None,
+            border_color: None,
+            border_width: None,
+            border_radius: None,
             vertical_margin: DROPDOWN_PADDING,
             top_bar_height: TOP_MENU_BAR_HEIGHT,
+            use_overlay_layer: true,
+            match_menu_width_to_top_bar: false,
+            _item_action_type: PhantomData,
         }
+    }
+
+    /// Controls whether the open menu is rendered in an `Overlay`
+    /// layer (default) or attached as a positioned child in the
+    /// dropdown stack's Normal layer. See the field-level docs on
+    /// `use_overlay_layer` for when each is appropriate.
+    pub fn set_use_overlay_layer(&mut self, use_overlay_layer: bool, ctx: &mut ViewContext<Self>) {
+        self.use_overlay_layer = use_overlay_layer;
+        ctx.notify();
+    }
+
+    pub fn set_background(&mut self, background: Fill, ctx: &mut ViewContext<Self>) {
+        self.background = Some(background);
+        ctx.notify();
+    }
+
+    pub fn set_border_width(&mut self, border_width: f32, ctx: &mut ViewContext<Self>) {
+        self.border_width = Some(border_width);
+        ctx.notify();
+    }
+
+    pub fn set_border_radius(&mut self, border_radius: CornerRadius, ctx: &mut ViewContext<Self>) {
+        self.border_radius = Some(border_radius);
+        ctx.notify();
     }
 
     pub fn with_drop_shadow(mut self) -> Self {
@@ -263,6 +395,22 @@ where
         ctx.notify();
     }
 
+    /// When enabled, the open menu sizes itself to the last rendered width of
+    /// the dropdown's top bar. This is useful for flexible dropdowns whose
+    /// trigger width is determined by parent layout rather than a fixed max.
+    pub fn set_match_menu_width_to_top_bar(
+        &mut self,
+        match_width: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.match_menu_width_to_top_bar = match_width;
+        let top_bar_label = self.top_bar_label();
+        self.dropdown.update(ctx, |menu, _ctx| {
+            menu.set_width_match_position_id(match_width.then_some(top_bar_label));
+        });
+        ctx.notify();
+    }
+
     pub fn add_items(&mut self, items: Vec<DropdownItem<A>>, ctx: &mut ViewContext<Self>) {
         self.dropdown.update(ctx, |dropdown, ctx| {
             dropdown.add_items(items.iter().map(|item| item.into()));
@@ -294,11 +442,14 @@ where
         ctx.notify();
     }
 
-    // Most dropdowns don't need to use rich menu features like separators, indents, and submenus.
-    // But some do and, for those, we expose a "rich" item API.
+    /// Set items from rich menu items.
+    ///
+    /// Rich menu items already carry erased [`DropdownAction`]s. The dropdown dispatches selected
+    /// item actions through normal action propagation, so callers should ensure each action is
+    /// handled by an appropriate view in the containing view hierarchy.
     pub fn set_rich_items(
         &mut self,
-        items: impl IntoIterator<Item = MenuItem<DropdownAction<A>>>,
+        items: impl IntoIterator<Item = MenuItem<DropdownAction>>,
         ctx: &mut ViewContext<Self>,
     ) {
         self.dropdown.update(ctx, |dropdown, ctx| {
@@ -345,12 +496,10 @@ where
     /// this clears the selection.
     ///
     /// This is primarily useful when items are dynamically generated and correspond to some backing data that's captured by the action.
-    pub fn set_selected_by_action(&mut self, action: A, ctx: &mut ViewContext<Self>)
-    where
-        A: PartialEq,
-    {
+    pub fn set_selected_by_action(&mut self, action: A, ctx: &mut ViewContext<Self>) {
+        let action = DropdownAction::SelectActionAndClose(Box::new(action));
         self.dropdown.update(ctx, |dropdown, ctx| {
-            dropdown.set_selected_by_action(&DropdownAction::SelectActionAndClose(action), ctx);
+            dropdown.set_selected_by_action(&action, ctx);
             ctx.notify();
         });
         self.selected_item = self.selected_item(ctx);
@@ -380,7 +529,7 @@ where
         })
     }
 
-    fn selected_item(&self, ctx: &mut ViewContext<Self>) -> Option<MenuItem<DropdownAction<A>>> {
+    fn selected_item(&self, ctx: &mut ViewContext<Self>) -> Option<MenuItem<DropdownAction>> {
         self.dropdown
             .read(ctx, |dropdown, _| dropdown.selected_item())
     }
@@ -390,7 +539,11 @@ where
         ctx.notify();
     }
 
-    fn select_action_and_close(&mut self, action: &A, ctx: &mut ViewContext<Self>) {
+    fn select_action_and_close(
+        &mut self,
+        action: &dyn DropdownItemAction,
+        ctx: &mut ViewContext<Self>,
+    ) {
         ctx.dispatch_typed_action(action);
         self.close(ctx);
     }
@@ -404,6 +557,11 @@ where
     pub fn toggle_expanded(&mut self, ctx: &mut ViewContext<Self>) {
         self.is_expanded = !self.is_expanded;
         if self.is_expanded {
+            if self.match_menu_width_to_top_bar {
+                if let Some(bounds) = ctx.element_position_by_id(self.top_bar_label()) {
+                    self.set_menu_width(bounds.width(), ctx);
+                }
+            }
             ctx.focus(&self.dropdown);
             ctx.emit(DropdownEvent::ToggleExpanded);
         }
@@ -458,6 +616,10 @@ where
                 font_color: self.font_color,
                 font_size: self.font_size,
                 padding: self.padding,
+                background: self.background,
+                border_color: self.border_color,
+                border_width: self.border_width,
+                border_radius: self.border_radius,
                 ..Default::default()
             })
             .set_clicked_styles(None);
@@ -472,7 +634,7 @@ where
         }
 
         let top_bar_element = top_bar.build().on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(DropdownAction::<A>::ToggleExpanded);
+            ctx.dispatch_typed_action(DropdownAction::ToggleExpanded);
         });
 
         SavePosition::new(
@@ -506,23 +668,23 @@ where
 
 impl<A> Entity for Dropdown<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
     type Event = DropdownEvent;
 }
 
 impl<A> TypedActionView for Dropdown<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
-    type Action = DropdownAction<A>;
+    type Action = DropdownAction;
 
-    fn handle_action(&mut self, action: &DropdownAction<A>, ctx: &mut ViewContext<Self>) {
+    fn handle_action(&mut self, action: &DropdownAction, ctx: &mut ViewContext<Self>) {
         match action {
             DropdownAction::Focus(delta) => self.focus(*delta, ctx),
             DropdownAction::Close => self.close(ctx),
             DropdownAction::SelectActionAndClose(action) => {
-                self.select_action_and_close(action, ctx)
+                self.select_action_and_close(action.as_ref(), ctx)
             }
             DropdownAction::ToggleExpanded => self.toggle_expanded(ctx),
         }
@@ -531,7 +693,7 @@ where
 
 impl<A> View for Dropdown<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
     fn ui_name() -> &'static str {
         "Dropdown"
@@ -547,16 +709,18 @@ where
                     .with_drop_shadow(DropShadow::default())
                     .finish();
             }
-            dropdown_stack.add_positioned_overlay_child(
-                menu,
-                OffsetPositioning::offset_from_save_position_element(
-                    self.top_bar_label(),
-                    vec2f(0., 0.),
-                    PositionedElementOffsetBounds::WindowByPosition,
-                    self.element_anchor,
-                    self.child_anchor,
-                ),
+            let positioning = OffsetPositioning::offset_from_save_position_element(
+                self.top_bar_label(),
+                vec2f(0., 0.),
+                PositionedElementOffsetBounds::WindowByPosition,
+                self.element_anchor,
+                self.child_anchor,
             );
+            if self.use_overlay_layer {
+                dropdown_stack.add_positioned_overlay_child(menu, positioning);
+            } else {
+                dropdown_stack.add_positioned_child(menu, positioning);
+            }
         }
         Container::new(dropdown_stack.finish())
             .with_margin_top(self.vertical_margin)

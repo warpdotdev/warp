@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use pathfinder_color::ColorU;
+use warp_core::ui::appearance::Appearance as CoreAppearance;
 use warp_core::ui::icons::Icon;
+use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
@@ -12,9 +14,6 @@ use warpui::elements::{
 use warpui::fonts::Weight;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{View, ViewContext, ViewHandle};
-
-use warp_core::ui::appearance::Appearance as CoreAppearance;
-use warp_core::ui::theme::color::internal_colors;
 
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent_management::notifications::item::NotificationSourceAgent;

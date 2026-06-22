@@ -1,8 +1,9 @@
 use warp_core::ui::theme::Fill;
 
-use crate::render::model::{BlockItem, Decoration, RenderState, viewport::ViewportItem};
-
-use super::{RenderableBlock, paint::RenderContext};
+use super::RenderableBlock;
+use super::paint::RenderContext;
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, Decoration, RenderState};
 
 pub struct RenderableTemporaryBlock {
     viewport_item: ViewportItem,
@@ -36,12 +37,17 @@ impl RenderableBlock for RenderableTemporaryBlock {
     fn layout(
         &mut self,
         _model: &RenderState,
-        _ctx: &mut warpui::LayoutContext,
-        _app: &warpui::AppContext,
+        _ctx: &mut warpui_core::LayoutContext,
+        _app: &warpui_core::AppContext,
     ) {
     }
 
-    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, _app: &warpui::AppContext) {
+    fn paint(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut RenderContext,
+        _app: &warpui_core::AppContext,
+    ) {
         // We cannot use `extract_block` macro here since we need to locate the viewport item by content height instead of charoffset
         // (temporary block has an offset of zero).
         let content = model.content();

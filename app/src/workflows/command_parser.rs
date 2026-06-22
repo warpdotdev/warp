@@ -1,19 +1,16 @@
 //! This module contains utilities for computing helper data structures used to render and
 //! implement the Workflows UI in the info box and the terminal input.
 
-use std::{
-    collections::{HashMap, VecDeque},
-    ops::Range,
-};
+use std::collections::{HashMap, VecDeque};
+use std::ops::Range;
 
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
 use string_offset::{ByteOffset, CharCounter, CharOffset};
 
-use crate::server::ids::SyncId;
-
 use super::workflow::{ArgumentType, Workflow};
+use crate::server::ids::SyncId;
 
 lazy_static! {
     /// Regex for escaped arguments in workflow command.
@@ -534,5 +531,5 @@ pub fn command_matches_workflow(command: &str, workflow: &Workflow) -> bool {
 }
 
 #[cfg(test)]
-#[path = "command_parser_test.rs"]
+#[path = "command_parser_tests.rs"]
 mod tests;
