@@ -27465,6 +27465,14 @@ impl Workspace {
                         self.calculate_updated_tab_index(current_index, position, ctx)
                     };
                     if new_index != current_index {
+                        // Do not allow the placeholder to cross the pinned/unpinned
+                        // boundary, matching the constraint enforced by the normal
+                        // in-window reorder path.
+                        if self.is_tab_effectively_pinned(&self.tabs[current_index])
+                            != self.is_tab_effectively_pinned(&self.tabs[new_index])
+                        {
+                            return;
+                        }
                         self.tabs.swap(new_index, current_index);
                         if current_index == self.active_tab_index {
                             self.set_active_tab_index(new_index, ctx);
