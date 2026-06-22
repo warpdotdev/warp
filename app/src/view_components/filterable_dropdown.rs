@@ -255,7 +255,6 @@ where
         self.items.len()
     }
 
-    #[expect(dead_code)]
     pub fn reset_selection(&mut self, ctx: &mut ViewContext<Self>) {
         self.dropdown.update(ctx, |dropdown, ctx| {
             dropdown.reset_selection(ctx);
