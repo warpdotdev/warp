@@ -35,19 +35,17 @@ dylint_linting::declare_late_lint! {
     /// strong `ModelHandle`, a reference cycle can form that prevents entities
     /// from being freed when they should be.
     ///
-    /// **Two sub-cases:**
+    /// **Same-entity captures are always flagged.**  The subscribed entity's handle
+    /// is already provided as a callback parameter in all three context types:
     ///
-    /// 1. *Same-entity capture in a `ViewContext` subscription* (4-param callback):
-    ///    The subscribed entity's handle is **already provided as the second callback
-    ///    parameter** — capturing a clone is redundant and creates a cycle.
+    /// - `ViewContext` / `ModelContext` (4-param): handle is the **second** param.
+    /// - `AppContext` (3-param): handle is the **first** param.
     ///
-    /// 2. *Any-entity capture in a `ViewContext` or same-entity capture in a
-    ///    `ModelContext` subscription*: Holding a strong handle extends the entity's
-    ///    lifetime unnecessarily.  Prefer `WeakModelHandle` / `WeakViewHandle`.
+    /// Capturing a clone of it is redundant.  Use the provided parameter instead.
     ///
-    /// Cross-entity captures in 3-param (`ModelContext` / `AppContext`) callbacks
-    /// are intentionally skipped: those are typically deliberate lifetime associations
-    /// (e.g. a manager being updated in response to events from a different model).
+    /// Cross-entity captures are intentionally skipped: those are typically
+    /// deliberate lifetime associations (e.g. a manager being updated in response
+    /// to events from a different model).
     ///
     /// **Example (bad):**
     /// ```rust
@@ -93,12 +91,30 @@ impl<'tcx> LateLintPass<'tcx> for ModelHandleInSubscription {
             return;
         };
 
-        // ── 2. Distinguish ViewContext (4-param) vs ModelContext/AppContext (≤3) ──
+        // ── 2. Distinguish ViewContext/ModelContext vs AppContext by inspecting the
+        //    last parameter's inferred type rather than counting parameters.
         //
-        // ViewContext callbacks: (&mut T, ModelHandle<E>, &Event, &mut ViewContext<T>) — 4 params
-        // ModelContext callbacks: (&mut T, &Event, &mut ModelContext<T>)              — 3 params
-        // AppContext callbacks:   (&mut T, &Event, &mut AppContext) or similar        — ≤3 params
-        let is_view_ctx = closure.fn_decl.inputs.len() == 4;
+        // All three context types take the context as their last parameter:
+        //   ViewContext<T>  → last param is &mut ViewContext<T>  → handle is 2nd param
+        //   ModelContext<T> → last param is &mut ModelContext<T> → handle is 2nd param
+        //   AppContext      → last param is &mut AppContext       → handle is 1st param
+        let is_entity_ctx = {
+            let closure_ty = cx.typeck_results().expr_ty(callback_expr);
+            if let ty::Closure(_, args) = closure_ty.kind() {
+                let last_input = args.as_closure().sig().skip_binder().inputs().last().copied();
+                last_input.is_some_and(|t| {
+                    let ty::Adt(def, _) = t.peel_refs().kind() else {
+                        return false;
+                    };
+                    matches!(
+                        cx.tcx.item_name(def.did()).as_str(),
+                        "ViewContext" | "ModelContext"
+                    )
+                })
+            } else {
+                false
+            }
+        };
 
         // ── 3. Extract the subscribed entity's inner type E from &ModelHandle<E> ──
         //
@@ -114,7 +130,10 @@ impl<'tcx> LateLintPass<'tcx> for ModelHandleInSubscription {
         // `self.some_handle.clone()` where the root variable type is not ModelHandle.
         // `closure_min_captures` records the actually-captured place, so it catches
         // field projections too.
-        let min_caps = cx.typeck_results().closure_min_captures.get(&closure_def_id);
+        let min_caps = cx
+            .typeck_results()
+            .closure_min_captures
+            .get(&closure_def_id);
 
         // Fall back to an empty iterator if there are no captures at all.
         let captures: Vec<_> = min_caps
@@ -137,38 +156,28 @@ impl<'tcx> LateLintPass<'tcx> for ModelHandleInSubscription {
                 _ => false,
             };
 
-            // Skip cross-entity captures in non-ViewContext subscriptions.
-            // Those are typically intentional associations (e.g. updating a manager
-            // in response to events from a different model) and produce mostly noise.
-            if !is_view_ctx && !same_entity {
+            // Skip cross-entity captures: those are typically intentional
+            // lifetime associations (e.g. a manager updated by another model's
+            // events) and produce mostly noise.
+            if !same_entity {
                 continue;
             }
 
-            let msg = if same_entity && is_view_ctx {
-                format!(
-                    "closure captures `{captured_ty}` — \
-                     the subscribed entity's handle is already the second callback parameter; \
-                     use that instead of capturing a clone"
-                )
-            } else if same_entity {
-                // ModelContext subscription, same entity: capture is necessary but creates a cycle.
-                format!(
-                    "closure captures `{captured_ty}` — \
-                     creates a reference cycle; use `WeakModelHandle` to break it"
-                )
-            } else {
-                // ViewContext subscription, different entity.
-                format!(
-                    "closure captures `{captured_ty}` — \
-                     consider using `WeakModelHandle` to avoid retaining it \
-                     beyond the subscription's lifetime"
-                )
-            };
+            let param_position = if is_entity_ctx { "second" } else { "first" };
+            let msg = format!(
+                "closure captures `{captured_ty}` — \
+                 the subscribed entity's handle is already the {param_position} callback parameter; \
+                 use that instead of capturing an owned handle"
+            );
 
             let span = captured_place.get_capture_kind_span(cx.tcx);
-            cx.span_lint(MODEL_HANDLE_IN_SUBSCRIPTION, span, |diag: &mut Diag<'_, ()>| {
-                diag.primary_message(msg.clone());
-            });
+            cx.span_lint(
+                MODEL_HANDLE_IN_SUBSCRIPTION,
+                span,
+                |diag: &mut Diag<'_, ()>| {
+                    diag.primary_message(msg.clone());
+                },
+            );
         }
     }
 }

@@ -637,6 +637,12 @@ jobs:
           # Sentry SDK binary releases).
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cargo-dylint
+        run: cargo install cargo-dylint dylint-link
+
+      - name: Run dylint
+        run: cargo dylint --path ./lints -p warp
+
       - name: Run clang-format
         if: ${{ matrix.os == 'macos' }}
         run: |

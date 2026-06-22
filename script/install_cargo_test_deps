@@ -13,3 +13,6 @@ cargo install --git https://github.com/wgsl-analyzer/wgsl-analyzer --tag "2025-0
 
 # Install nextest, which we use as our test execution harness.
 cargo binstall --secure --no-confirm --no-discover-github-token cargo-nextest
+
+# Install dylint, used to run our custom defined lint rules in ./lints
+cargo install cargo-dylint dylint-link
