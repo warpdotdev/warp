@@ -1595,6 +1595,28 @@ fn test_erase_chars_at_wide_char_end_boundary() {
 }
 
 #[test]
+fn test_delete_chars_count_exceeding_end_of_line_preserves_cells_before_cursor() {
+    // DCH (CSI Pn P) with a count larger than the number of cells from the cursor
+    // to the end of the line must only blank the cursor cell and those to its
+    // right; cells before the cursor must be left untouched. Previously the count
+    // was clamped to the full row width, so the trailing clear wrapped before the
+    // cursor and wiped the whole row.
+    let mut grid = GridHandler::new_for_test(1, 5);
+    for c in "abcde".chars() {
+        grid.input(c);
+    }
+    grid.goto(VisibleRow(0), 3);
+    grid.delete_chars(10); // 10 >> remaining cells (cols 5 - col 3 = 2).
+
+    // Columns 0..=2 keep `abc`; columns 3..=4 are blanked.
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][0].c, 'a');
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][1].c, 'b');
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][2].c, 'c');
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][3].c, '\0');
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][4].c, '\0');
+}
+
+#[test]
 fn test_delete_chars_at_wide_char_spacer_boundary() {
     // Input a wide char at col 0-1, then move cursor to col 1 (spacer)
     // and delete one char.  The WIDE_CHAR at col 0 must be cleared.

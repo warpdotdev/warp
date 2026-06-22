@@ -670,10 +670,15 @@ impl ansi::Handler for GridHandler {
         let cursor = &self.grid.cursor();
         let bg = cursor.template.bg;
 
-        // Ensure deleting within terminal bounds.
-        let count = min(count, cols);
-
         let start = cursor.point.col;
+
+        // Clamp to the number of cells from the cursor to the end of the line, not
+        // the full row width. DCH must only delete the character under the cursor
+        // and those to its right; if `count` exceeded `cols - start`, the trailing
+        // clear below (`cols - count`) would wrap before `start` and wipe cells
+        // before the cursor. Mirrors the clamp already used by `insert_blank`.
+        let count = min(count, cols - start);
+
         let end = min(start + count, cols - 1);
         let num_cells = cols - end;
 
