@@ -1074,6 +1074,7 @@ fn create_server_metadata(
     let usage = ConversationUsageMetadata {
         was_summarized: false,
         context_window_usage: 0.0,
+        total_input_tokens: 0,
         credits_spent,
         platform_credits_spent: 0.0,
         credits_spent_for_last_block: None,

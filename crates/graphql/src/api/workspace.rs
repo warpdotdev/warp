@@ -49,6 +49,7 @@ pub struct LlmContextWindow {
     pub min: crate::scalars::Uint32,
     pub max: crate::scalars::Uint32,
     pub default: crate::scalars::Uint32,
+    pub long_context_threshold: Option<crate::scalars::Uint32>,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
