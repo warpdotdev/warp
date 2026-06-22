@@ -82,6 +82,55 @@ fn test_prompt_context_menu_items_shared_session_viewer_no_edit_prompt() {
 }
 
 #[test]
+fn test_share_pending_context_menu_hides_copy_link_without_session_id() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(Manager::new);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            let mut model = view.model.lock();
+            model.set_shared_session_status(SharedSessionStatus::SharePending);
+
+            let items = view.session_sharing_context_menu_items(&model, false, ctx);
+
+            assert!(!items.iter().any(|item| {
+                item.fields()
+                    .is_some_and(|fields| fields.label() == "Copy session sharing link")
+            }));
+        });
+    })
+}
+
+#[test]
+fn test_active_shared_context_menu_shows_copy_link_with_session_id() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(Manager::new);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_weak = terminal.downgrade();
+
+        terminal.update(&mut app, |view, ctx| {
+            let session_id = SessionId::new();
+            let window_id = ctx.window_id();
+            Manager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.started_share(terminal_weak.clone(), session_id, window_id, ctx);
+            });
+
+            let mut model = view.model.lock();
+            model.set_shared_session_status(SharedSessionStatus::ActiveSharer);
+
+            let items = view.session_sharing_context_menu_items(&model, false, ctx);
+
+            assert!(items.iter().any(|item| {
+                item.fields()
+                    .is_some_and(|fields| fields.label() == "Copy session sharing link")
+            }));
+        });
+    })
+}
+
+#[test]
 fn test_on_ambient_agent_execution_ended_enables_followup_input_for_editable_non_owner_finished_view(
 ) {
     let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
