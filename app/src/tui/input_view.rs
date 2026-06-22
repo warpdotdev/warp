@@ -26,6 +26,8 @@ pub enum InputEvent {
     /// The user submitted a draft. The text is emitted verbatim; only
     /// whitespace-only drafts are suppressed (never emitted).
     Submitted(String),
+    /// The user pressed Esc, asking to stop any running command.
+    Cancel,
 }
 
 /// The typed editing actions the input dispatches from its key handlers.
@@ -39,6 +41,7 @@ pub enum InputAction {
     Home,
     End,
     Submit,
+    Cancel,
 }
 
 #[derive(Default)]
@@ -135,6 +138,9 @@ impl TuiView for TuiInputView {
             .on_key("enter", |_, ctx, _| {
                 ctx.dispatch_typed_action(InputAction::Submit)
             })
+            .on_key("escape", |_, ctx, _| {
+                ctx.dispatch_typed_action(InputAction::Cancel)
+            })
             .on_key("backspace", |_, ctx, _| {
                 ctx.dispatch_typed_action(InputAction::Backspace)
             })
@@ -193,6 +199,7 @@ impl TypedActionView for TuiInputView {
                     ctx.emit(InputEvent::Submitted(text));
                 }
             }
+            InputAction::Cancel => ctx.emit(InputEvent::Cancel),
         }
         ctx.notify();
     }

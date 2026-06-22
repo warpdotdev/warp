@@ -15,13 +15,14 @@
 //!   lives with the runtime, in `crate::runtime`.)
 //! - The concrete elements: [`TuiText`], [`TuiColumn`], [`TuiContainer`],
 //!   [`TuiConstrainedBox`], [`TuiInputLine`], [`TuiCenter`], [`TuiScrollable`],
-//!   [`TuiChildView`], and [`TuiEventHandler`].
+//!   [`TuiChildView`], [`TuiCanvas`], and [`TuiEventHandler`].
 
 use std::collections::HashMap;
 
 use crate::{AppContext, EntityId, Event};
 
 mod buffer;
+mod canvas;
 mod center;
 mod child_view;
 mod column;
@@ -35,6 +36,7 @@ mod scrollable;
 mod text;
 
 pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiStyle};
+pub use canvas::{rasterize_text, TuiCanvas, TuiCanvasCache};
 pub use center::TuiCenter;
 pub use child_view::TuiChildView;
 pub use column::TuiColumn;
