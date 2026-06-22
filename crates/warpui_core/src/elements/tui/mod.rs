@@ -15,18 +15,35 @@
 //!   lives with the runtime, in `crate::runtime`.)
 //! - The concrete elements: [`TuiText`], [`TuiColumn`], [`TuiContainer`],
 //!   [`TuiChildView`], and [`TuiEventHandler`].
+//! - [`TuiParentElement`]: a trait for multi-child elements, providing
+//!   [`with_child`](TuiParentElement::with_child) /
+//!   [`with_children`](TuiParentElement::with_children) /
+//!   [`add_child`](TuiParentElement::add_child) /
+//!   [`add_children`](TuiParentElement::add_children).
 
 use std::collections::HashMap;
 
 use crate::{AppContext, EntityId, Event};
 
 mod buffer;
+mod child_view;
+mod column;
+mod container;
 mod event;
+mod event_handler;
 mod geometry;
+mod parent;
+mod text;
 
 pub use buffer::{Cell, TuiBuffer, TuiStyle};
+pub use child_view::TuiChildView;
+pub use column::TuiColumn;
+pub use container::TuiContainer;
 pub use event::{TuiDispatchEventResult, TuiEventContext, TuiEventDispatchResult};
+pub use event_handler::TuiEventHandler;
 pub use geometry::{TuiConstraint, TuiRect, TuiSize};
+pub use parent::TuiParentElement;
+pub use text::TuiText;
 
 /// A node in the renderable tree: it measures itself against a constraint,
 /// then paints into a sub-rectangle of the buffer.
@@ -81,6 +98,21 @@ pub trait TuiElement {
         _app: &AppContext,
     ) -> bool {
         false
+    }
+}
+
+/// A no-op leaf element: occupies no space and paints nothing. Used by tests
+/// as a placeholder child where the element's own rendering is irrelevant.
+#[cfg(test)]
+impl TuiElement for () {
+    fn layout(&mut self, _constraint: TuiConstraint) -> TuiSize {
+        TuiSize::ZERO
+    }
+
+    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer) {}
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        0
     }
 }
 
