@@ -982,6 +982,39 @@ en:
     open_file: "Open file"
     open_in_warp: "Open in Warp"
 
+  # ── Onboarding ──
+  onboarding:
+    ai_access:
+      choose_how: "Choose how to access AI"
+      subtitle: "Save with a recurring plan, or use your own key or endpoint."
+      subscription: "Subscription"
+      best_value: "Best value"
+      subscription_description: "Starting at $18 / mo, available with monthly or annual plans. Includes base credits, frontier models, cloud agents, collaboration, and more."
+      choose_plan: "Choose plan"
+      byok_label: "Use my own key or endpoint"
+      byok_description: "Use your own API key or OpenAI-compatible endpoint with Warp for free."
+      add_key: "+ Add key"
+      add_custom_endpoint: "+ Add custom endpoint"
+      back: "Back"
+      no_ai: "I don't want AI"
+      next: "Next"
+      requires_subscription: "Warp Agent requires a subscription or inference supplied by you"
+    ai_setup:
+      feature_harness: "Best harness for terminal tasks and agentic coding"
+      feature_models: "Frontier models from OpenAI, Anthropic, and Google"
+      feature_routing: "Model routing across frontier and open-weight models"
+      feature_orchestration: "Multi-agent orchestration"
+      choose_your_setup: "Choose your AI setup"
+      subtitle: "Choose if you'd like to use Warp Agent or third party agents."
+      use_warp_agent: "Use Warp Agent"
+      access_more_models: "Access more models"
+      warp_agent_description: "State of the art agent harness deeply integrated into the terminal."
+      use_third_party: "Use third party agents"
+      third_party_description: "Use agents like Claude Code, Codex, and Gemini."
+      back: "Back"
+      no_ai: "I don't want AI"
+      next: "Next"
+
   # ── AI Settings ──
   settings.ai:
     next_command_description: "Let AI suggest the next command to run based on your command history, outputs, and common workflows."

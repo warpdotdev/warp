@@ -141,7 +141,7 @@ impl AiAccessSlide {
 
         let title = appearance
             .ui_builder()
-            .paragraph("Choose how to access AI")
+            .paragraph(crate::menu_label("onboarding.ai_access.choose_how", "Choose how to access AI"))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -151,7 +151,7 @@ impl AiAccessSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Save with a recurring plan, or use your own key or endpoint.",
+            crate::menu_label("onboarding.ai_access.subtitle", "Save with a recurring plan, or use your own key or endpoint."),
             appearance.ui_font_family(),
             16.,
         )
@@ -250,7 +250,7 @@ impl AiAccessSlide {
 
         let label = appearance
             .ui_builder()
-            .paragraph("Subscription")
+            .paragraph(crate::menu_label("onboarding.ai_access.subscription", "Subscription"))
             .with_style(UiComponentStyles {
                 font_size: Some(16.),
                 font_weight: Some(Weight::Semibold),
@@ -264,7 +264,7 @@ impl AiAccessSlide {
             let green = theme.ansi_fg_green();
             let badge_text = appearance
                 .ui_builder()
-                .paragraph("Best value")
+                .paragraph(crate::menu_label("onboarding.ai_access.best_value", "Best value"))
                 .with_style(UiComponentStyles {
                     font_size: Some(12.),
                     font_weight: Some(Weight::Normal),
@@ -290,8 +290,7 @@ impl AiAccessSlide {
             .finish();
 
         let description = FormattedTextElement::from_str(
-            "Starting at $18 / mo, available with monthly or annual plans. Includes base credits, \
-             frontier models, cloud agents, collaboration, and more.",
+            crate::menu_label("onboarding.ai_access.subscription_description", "Starting at $18 / mo, available with monthly or annual plans. Includes base credits, frontier models, cloud agents, collaboration, and more."),
             appearance.ui_font_family(),
             14.,
         )
@@ -304,7 +303,7 @@ impl AiAccessSlide {
         let choose_plan_button = self.choose_plan_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Choose plan".into()),
+                content: button::Content::Label(crate::menu_label("onboarding.ai_access.choose_plan", "Choose plan").into()),
                 theme: &button::themes::Secondary,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -348,7 +347,7 @@ impl AiAccessSlide {
 
         let label = appearance
             .ui_builder()
-            .paragraph("Use my own key or endpoint")
+            .paragraph(crate::menu_label("onboarding.ai_access.byok_label", "Use my own key or endpoint"))
             .with_style(UiComponentStyles {
                 font_size: Some(16.),
                 font_weight: Some(Weight::Semibold),
@@ -359,7 +358,7 @@ impl AiAccessSlide {
             .finish();
 
         let description = FormattedTextElement::from_str(
-            "Use your own API key or OpenAI-compatible endpoint with Warp for free.",
+            crate::menu_label("onboarding.ai_access.byok_description", "Use your own API key or OpenAI-compatible endpoint with Warp for free."),
             appearance.ui_font_family(),
             14.,
         )
@@ -372,7 +371,7 @@ impl AiAccessSlide {
         let add_key_button = self.add_key_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("+ Add key".into()),
+                content: button::Content::Label(crate::menu_label("onboarding.ai_access.add_key", "+ Add key").into()),
                 theme: &button::themes::Secondary,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -386,7 +385,7 @@ impl AiAccessSlide {
         let add_endpoint_button = self.add_endpoint_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("+ Add custom endpoint".into()),
+                content: button::Content::Label(crate::menu_label("onboarding.ai_access.add_custom_endpoint", "+ Add custom endpoint").into()),
                 theme: &button::themes::Secondary,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -486,7 +485,7 @@ impl AiAccessSlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(crate::menu_label("onboarding.ai_access.back", "Back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -501,7 +500,7 @@ impl AiAccessSlide {
         let no_ai_button = self.no_ai_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("I don't want AI".into()),
+                content: button::Content::Label(crate::menu_label("onboarding.ai_access.no_ai", "I don't want AI").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     keystroke: Some(no_ai_keystroke),
@@ -518,7 +517,7 @@ impl AiAccessSlide {
         let next_button = self.next_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Next".into()),
+                content: button::Content::Label(crate::menu_label("onboarding.ai_access.next", "Next").into()),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     disabled: !can_advance,
@@ -527,7 +526,7 @@ impl AiAccessSlide {
                     tooltip: (!can_advance).then(|| button::Tooltip {
                         params: tooltip::Params {
                             label:
-                                "Warp Agent requires a subscription or inference supplied by you"
+                                crate::menu_label("onboarding.ai_access.requires_subscription", "Warp Agent requires a subscription or inference supplied by you")
                                     .into(),
                             options: tooltip::Options {
                                 keyboard_shortcut: None,
