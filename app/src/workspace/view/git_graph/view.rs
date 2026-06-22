@@ -57,7 +57,7 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 use super::auto_refresh;
 use super::data::{BranchRef, ChangedFile, CommitDetail, CommitNode, RefKind, RefLabel};
 use super::layout::{build_layout, GraphLayout, GraphRow};
-use super::menu::{build_menu, MenuKind, PromptKind};
+use super::menu::{build_menu, MenuKind, PromptKind, DEFAULT_PUSH_REMOTE};
 use super::ops::{archive_format_from_path, GitWriteOp, ResetMode};
 use super::row_canvas::GitGraphRowCanvas;
 use crate::appearance::Appearance;
@@ -145,10 +145,21 @@ pub(crate) enum GitGraphAction {
     OpenMenu { kind: MenuKind, x: f32, y: f32 },
     /// Write `text` to the clipboard (commit hash / subject / ref name).
     CopyToClipboard(String),
-    /// Open the text-input dialog to collect a name (tag / branch / rename).
+    /// Open the text-input dialog to collect a name (branch / rename).
     PromptInput(PromptKind),
     /// Submit the text-input dialog: build the op from the entered text and run.
     SubmitInput,
+    /// Open the Add-tag dialog (tag-name input + "Push to remote" checkbox) for
+    /// the commit at `hash`. Distinct from [`PromptInput`] because the dialog
+    /// owns a checkbox that chains a follow-up [`GitWriteOp::PushTag`] after the
+    /// local tag is created.
+    OpenAddTag { hash: String },
+    /// Toggle the "Push to remote" checkbox in the open Add-tag dialog.
+    ToggleAddTagPush,
+    /// Submit the Add-tag dialog: build [`GitWriteOp::AddTag`] from the entered
+    /// name and, when the checkbox is checked, chain a [`GitWriteOp::PushTag`]
+    /// after the tag is created.
+    SubmitAddTag,
     /// Open the stash dialog for the uncommitted-changes row (message input +
     /// Include-untracked checkbox).
     PromptStash,
@@ -230,9 +241,14 @@ enum DetailState {
 enum DialogState {
     /// No dialog open.
     None,
-    /// A single-line text prompt (tag / branch name, rename) — the entered text
-    /// is read from `dialog_input` on submit.
+    /// A single-line text prompt (branch name, rename) — the entered text is
+    /// read from `dialog_input` on submit.
     Input(PromptKind),
+    /// The Add-tag dialog: a tag-name input (read from `dialog_input`) plus a
+    /// "Push to remote" checkbox whose state is held here. When the checkbox is
+    /// checked, a [`GitWriteOp::PushTag`] is chained after the local tag is
+    /// created (see [`GitGraphView::pending_follow_up`]).
+    AddTag { hash: String, push_after: bool },
     /// The stash dialog: a message input (read from `dialog_input`, optional) plus
     /// an Include-untracked checkbox whose state is held here.
     Stash { include_untracked: bool },
@@ -436,6 +452,11 @@ pub(crate) struct GitGraphView {
     /// True while a write op is running (reentrancy guard: blocks a second op and
     /// dims the panel).
     op_running: bool,
+    /// One-shot follow-up to run after the next successful op (currently only
+    /// set by [`Self::submit_add_tag`] when "Push to remote" is checked, so a
+    /// successful `git tag` is followed by a `git push` of that tag). Cleared
+    /// on failure to avoid leaking the queued push to an unrelated next op.
+    pending_follow_up: Option<GitWriteOp>,
     /// Last git error (write op, or a failed refresh fetch), shown in a
     /// dismissable banner at the top of the panel.
     op_error: Option<String>,
@@ -599,8 +620,15 @@ impl GitGraphView {
         // Escape cancels.
         let dialog_input =
             ctx.add_view(|ctx| EditorView::single_line(SingleLineEditorOptions::default(), ctx));
+        // Enter submits the currently open input-bearing dialog (plain prompt or
+        // Add-tag); Escape always cancels. Stash dialog ignores Enter on purpose:
+        // its message field is optional and empty-Enter would be ambiguous.
         ctx.subscribe_to_view(&dialog_input, |me, _, event, ctx| match event {
-            EditorEvent::Enter => me.submit_input(ctx),
+            EditorEvent::Enter => match &me.dialog {
+                DialogState::Input(_) => me.submit_input(ctx),
+                DialogState::AddTag { .. } => me.submit_add_tag(ctx),
+                _ => {}
+            },
             EditorEvent::Escape => me.cancel_dialog(ctx),
             _ => {}
         });
@@ -670,6 +698,7 @@ impl GitGraphView {
             dialog_input,
             dialog_button_mouse_states: (0..4).map(|_| MouseStateHandle::default()).collect(),
             op_running: false,
+            pending_follow_up: None,
             op_error: None,
             op_error_dismiss_mouse_state: MouseStateHandle::default(),
             uncommitted_count: 0,
@@ -2437,6 +2466,63 @@ impl GitGraphView {
         self.run_op(op, ctx);
     }
 
+    /// Opens the Add-tag dialog at `hash`: clears the shared input editor,
+    /// defaults the "Push to remote" checkbox off, and focuses the input.
+    fn open_add_tag_dialog(&mut self, hash: String, ctx: &mut ViewContext<Self>) {
+        self.open_menu = None;
+        self.dialog_input.update(ctx, |editor, ctx| {
+            editor.set_buffer_text("", ctx);
+        });
+        self.dialog = DialogState::AddTag {
+            hash,
+            push_after: false,
+        };
+        ctx.focus(&self.dialog_input);
+        ctx.notify();
+    }
+
+    /// Flips the "Push to remote" checkbox in the open Add-tag dialog. A no-op
+    /// when no Add-tag dialog is open.
+    fn toggle_add_tag_push(&mut self, ctx: &mut ViewContext<Self>) {
+        if let DialogState::AddTag { push_after, .. } = &mut self.dialog {
+            *push_after = !*push_after;
+            ctx.notify();
+        }
+    }
+
+    /// Submits the Add-tag dialog: reads the tag name (blank keeps the dialog
+    /// open), builds [`GitWriteOp::AddTag`], and — when "Push to remote" is
+    /// checked — queues a [`GitWriteOp::PushTag`] follow-up to run after the
+    /// tag is created (see [`Self::pending_follow_up`]).
+    fn submit_add_tag(&mut self, ctx: &mut ViewContext<Self>) {
+        let (hash, push_after) = match &self.dialog {
+            DialogState::AddTag { hash, push_after } => (hash.clone(), *push_after),
+            _ => return,
+        };
+        let name = self
+            .dialog_input
+            .as_ref(ctx)
+            .buffer_text(ctx)
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            return;
+        }
+        let add_op = GitWriteOp::AddTag {
+            hash,
+            name: name.clone(),
+            message: None,
+        };
+        self.pending_follow_up = push_after.then_some(GitWriteOp::PushTag {
+            remote: DEFAULT_PUSH_REMOTE.to_string(),
+            name,
+            force: false,
+        });
+        self.dialog = DialogState::None;
+        ctx.focus_self();
+        self.run_op(add_op, ctx);
+    }
+
     /// Opens the stash dialog: clears the shared message editor, defaults the
     /// Include-untracked checkbox on, and focuses the input.
     fn open_stash_dialog(&mut self, ctx: &mut ViewContext<Self>) {
@@ -2547,16 +2633,32 @@ impl GitGraphView {
                         return;
                     }
                     match result {
-                        // An archive just writes a file; nothing in the graph changed.
-                        Ok(GitWriteOp::Archive { .. }) => ctx.notify(),
-                        // Deleting a remote branch: fetch --prune so the dropped
-                        // remote-tracking ref disappears from the graph.
-                        Ok(GitWriteOp::DeleteRemoteBranch { .. }) => view.refresh(ctx),
-                        // Everything else — including push, which updates (or
-                        // creates) the local remote-tracking ref — reloads so the
-                        // graph reflects the new ref positions.
-                        Ok(_) => view.reload(LoadAnchor::Top, ctx),
+                        Ok(op) => {
+                            // A queued follow-up (e.g. "push the tag we just
+                            // added") wins over the post-op refresh: its own
+                            // completion is what eventually reloads the graph,
+                            // so we skip this op's reload to avoid a double
+                            // load with the second one's state landing on top.
+                            if let Some(follow_up) = view.pending_follow_up.take() {
+                                view.run_op(follow_up, ctx);
+                                return;
+                            }
+                            match op {
+                                // An archive just writes a file; nothing in the graph changed.
+                                GitWriteOp::Archive { .. } => ctx.notify(),
+                                // Deleting a remote branch: fetch --prune so the dropped
+                                // remote-tracking ref disappears from the graph.
+                                GitWriteOp::DeleteRemoteBranch { .. } => view.refresh(ctx),
+                                // Everything else — including push, which updates (or
+                                // creates) the local remote-tracking ref — reloads so the
+                                // graph reflects the new ref positions.
+                                _ => view.reload(LoadAnchor::Top, ctx),
+                            }
+                        }
                         Err(err) => {
+                            // Drop any queued follow-up: if the local tag
+                            // failed, the chained push it queued is moot.
+                            view.pending_follow_up = None;
                             view.op_error = Some(clean_git_error(&err.to_string()));
                             ctx.notify();
                         }
@@ -2753,6 +2855,74 @@ impl GitGraphView {
                             self.dialog_button(
                                 kind.title().to_string(),
                                 GitGraphAction::SubmitInput,
+                                st(1),
+                                true,
+                                appearance,
+                            ),
+                        ],
+                    )
+                }
+                DialogState::AddTag { push_after, .. } => {
+                    // Tag-name input on top, "Push to remote" checkbox below.
+                    // When the checkbox is checked, the submit chains a
+                    // `git push` of the new tag after the local `git tag`.
+                    let input = appearance
+                        .ui_builder()
+                        .text_input(self.dialog_input.clone())
+                        .with_style(UiComponentStyles {
+                            border_width: Some(1.),
+                            border_color: Some(theme.outline().into()),
+                            border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
+                            padding: Some(Coords {
+                                top: 7.,
+                                bottom: 7.,
+                                left: 8.,
+                                right: 8.,
+                            }),
+                            ..Default::default()
+                        })
+                        .build()
+                        .finish();
+                    let checkbox = appearance
+                        .ui_builder()
+                        .checkbox(st(2), Some(size))
+                        .check(*push_after)
+                        .build()
+                        .on_click(move |ctx, _, _| {
+                            ctx.dispatch_typed_action(GitGraphAction::ToggleAddTagPush);
+                        })
+                        .finish();
+                    let label = Text::new_inline(
+                        format!("Push to remote ({})", DEFAULT_PUSH_REMOTE),
+                        font,
+                        size,
+                    )
+                    .with_color(theme.foreground().into())
+                    .finish();
+                    let push_row = Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_child(checkbox)
+                        .with_child(Container::new(label).with_padding_left(2.).finish())
+                        .finish();
+                    let body = Flex::column()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                        .with_child(input)
+                        .with_child(Container::new(push_row).with_margin_top(10.).finish())
+                        .finish();
+                    (
+                        "Add tag".to_string(),
+                        body,
+                        vec![
+                            self.dialog_button(
+                                "Cancel".to_string(),
+                                GitGraphAction::CancelDialog,
+                                st(0),
+                                false,
+                                appearance,
+                            ),
+                            self.dialog_button(
+                                "Add tag".to_string(),
+                                GitGraphAction::SubmitAddTag,
                                 st(1),
                                 true,
                                 appearance,
@@ -4122,6 +4292,9 @@ impl TypedActionView for GitGraphView {
             }
             GitGraphAction::PromptInput(kind) => self.open_input_dialog(kind.clone(), ctx),
             GitGraphAction::SubmitInput => self.submit_input(ctx),
+            GitGraphAction::OpenAddTag { hash } => self.open_add_tag_dialog(hash.clone(), ctx),
+            GitGraphAction::ToggleAddTagPush => self.toggle_add_tag_push(ctx),
+            GitGraphAction::SubmitAddTag => self.submit_add_tag(ctx),
             GitGraphAction::PromptStash => self.open_stash_dialog(ctx),
             GitGraphAction::ToggleStashUntracked => self.toggle_stash_untracked(ctx),
             GitGraphAction::SubmitStash => self.submit_stash(ctx),

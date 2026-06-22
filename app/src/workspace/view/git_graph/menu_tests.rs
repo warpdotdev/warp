@@ -66,6 +66,20 @@ fn commit_menu_read_only_shows_only_copy() {
 }
 
 #[test]
+fn commit_add_tag_action_opens_add_tag_dialog_with_hash() {
+    // "Add Tag…" routes to the dedicated AddTag dialog (input + "Push to remote"
+    // checkbox), not the plain text-input prompt — carries the commit hash so
+    // the dialog can build the AddTag op once the name is submitted.
+    let items = build_commit_menu(&commit(), true);
+    assert_eq!(
+        items[0].item_on_select_action(),
+        Some(&GitGraphAction::OpenAddTag {
+            hash: "abcdef1234567890".into()
+        })
+    );
+}
+
+#[test]
 fn commit_copy_actions_carry_hash_and_subject() {
     let items = build_commit_menu(&commit(), true);
     let copy_actions: Vec<&GitGraphAction> = items

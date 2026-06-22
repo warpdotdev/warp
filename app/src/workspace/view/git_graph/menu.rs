@@ -73,11 +73,13 @@ impl MenuKind {
 /// A text-input dialog request: the user must type a name before the operation
 /// can be built. Carries the context needed to construct the final
 /// [`GitWriteOp`] once the text is known.
+///
+/// The Add-tag flow is intentionally NOT here: its dialog also carries a
+/// "Push to remote" checkbox, so it lives on its own
+/// [`super::view::DialogState::AddTag`] variant rather than the shared single-line
+/// input prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PromptKind {
-    AddTag {
-        hash: String,
-    },
     CreateBranch {
         hash: String,
     },
@@ -94,7 +96,6 @@ impl PromptKind {
     /// Title shown at the top of the input dialog.
     pub(crate) fn title(&self) -> &'static str {
         match self {
-            PromptKind::AddTag { .. } => "Add tag",
             PromptKind::CreateBranch { .. } => "Create branch",
             PromptKind::RenameBranch { .. } => "Rename branch",
             PromptKind::StashBranch { .. } => "Create branch from stash",
@@ -104,9 +105,7 @@ impl PromptKind {
     /// The pre-filled text (e.g. the existing branch name, for rename).
     pub(crate) fn initial_text(&self) -> String {
         match self {
-            PromptKind::AddTag { .. }
-            | PromptKind::CreateBranch { .. }
-            | PromptKind::StashBranch { .. } => String::new(),
+            PromptKind::CreateBranch { .. } | PromptKind::StashBranch { .. } => String::new(),
             PromptKind::RenameBranch { old } => old.clone(),
         }
     }
@@ -115,11 +114,6 @@ impl PromptKind {
     /// known non-empty by the caller).
     pub(crate) fn into_op(self, text: String) -> GitWriteOp {
         match self {
-            PromptKind::AddTag { hash } => GitWriteOp::AddTag {
-                hash,
-                name: text,
-                message: None,
-            },
             PromptKind::CreateBranch { hash } => GitWriteOp::CreateBranch { hash, name: text },
             PromptKind::RenameBranch { old } => GitWriteOp::RenameBranch { old, new: text },
             PromptKind::StashBranch { selector } => GitWriteOp::StashBranch {
@@ -133,7 +127,7 @@ impl PromptKind {
 /// Default remote used by "Push Branch" / "Push Tag" (the branch's configured
 /// upstream remote is not resolved; `origin` is the overwhelmingly common case,
 /// and a wrong remote surfaces as a normal error in the banner).
-const DEFAULT_PUSH_REMOTE: &str = "origin";
+pub(crate) const DEFAULT_PUSH_REMOTE: &str = "origin";
 
 fn item(label: &str, action: GitGraphAction) -> MenuItem<GitGraphAction> {
     MenuItemFields::new(label)
@@ -278,7 +272,7 @@ fn build_commit_menu(commit: &CommitNode, write_enabled: bool) -> Vec<MenuItem<G
         vec![
             item(
                 "Add Tag…",
-                GitGraphAction::PromptInput(PromptKind::AddTag { hash: hash.clone() }),
+                GitGraphAction::OpenAddTag { hash: hash.clone() },
             ),
             item(
                 "Create Branch…",
