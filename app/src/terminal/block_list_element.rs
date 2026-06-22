@@ -4621,7 +4621,7 @@ impl Element for BlockListElement {
                 is_first_mouse,
                 modifiers,
                 ..
-            } => self.mouse_down(
+            } if !handled => self.mouse_down(
                 *position,
                 *click_count,
                 *is_first_mouse,

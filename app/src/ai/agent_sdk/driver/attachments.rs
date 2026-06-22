@@ -31,6 +31,7 @@ pub const MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY: usize = 25;
 ///
 /// Makes a best-effort attempt to download all attachments.
 /// Individual download failures are logged but don't cause the entire function to fail.
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
 pub(crate) async fn fetch_and_download_attachments(
     ai_client: Arc<dyn AIClient>,
     http_client: Arc<ServerApi>,
@@ -66,6 +67,7 @@ pub(crate) async fn fetch_and_download_attachments(
 /// logged at WARN level inside this function; per-file errors are not surfaced to callers.
 ///
 /// Fatal failures (listing the attachments, creating the handoff dir) return `Err`.
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
 pub(crate) async fn fetch_and_download_handoff_snapshot_attachments(
     ai_client: Arc<dyn AIClient>,
     http_client: &http_client::Client,
@@ -220,13 +222,20 @@ async fn download_handoff_entry(
 /// Shared download primitive: GET `download_url`, write the body to `file_path`, and retry
 /// transient HTTP failures on the shared bounded-backoff schedule. Non-2xx responses surface
 /// an [`HttpStatusError`] so the retry classifier can decide whether to retry.
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
 async fn download_attachment(
     http_client: &http_client::Client,
     download_url: &str,
     file_path: &Path,
 ) -> anyhow::Result<()> {
     let operation = format!("download attachment '{}'", file_path.display());
-    with_bounded_retry(&operation, || async {
+
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
+    async fn attempt(
+        http_client: &http_client::Client,
+        download_url: &str,
+        file_path: &Path,
+    ) -> anyhow::Result<()> {
         let response = http_client
             .get(download_url)
             .send()
@@ -255,6 +264,10 @@ async fn download_attachment(
             .context("Failed to write file")?;
 
         Ok(())
+    }
+
+    with_bounded_retry(&operation, || async {
+        attempt(http_client, download_url, file_path).await
     })
     .await
 }

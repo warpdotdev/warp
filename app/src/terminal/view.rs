@@ -8675,7 +8675,9 @@ impl TerminalView {
     /// (e.g. another session).
     ///
     /// Skips the steal when the user is navigating another AI block / code diff
-    /// (e.g. arrowing diff hunks), unless the target block is blocked on user input.
+    /// (e.g. arrowing diff hunks), unless the target block is blocked on user input. Also skips
+    /// while the queued-prompt inline editor is focused so async AI/tool updates don't commit and
+    /// close the edit by blurring it.
     ///
     /// Warning: this should not be called when focusing the [`TerminalView`]. It could
     /// lead to a focus cycle because [`AIBlock::try_focus`] conditionally yields focus
@@ -8686,6 +8688,9 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         if !ctx.is_self_or_child_focused() {
+            return;
+        }
+        if self.is_queued_prompt_inline_editor_focused(ctx) {
             return;
         }
         let target_needs_attention = block.as_ref(ctx).is_blocked_on_user_confirmation(ctx);
@@ -8702,6 +8707,12 @@ impl TerminalView {
                 .ai_block_metadata()
                 .is_some_and(|metadata| metadata.ai_block_handle.is_self_or_child_focused(ctx))
         })
+    }
+
+    fn is_queued_prompt_inline_editor_focused(&self, ctx: &AppContext) -> bool {
+        self.input
+            .as_ref(ctx)
+            .is_queued_prompt_inline_editor_focused(ctx)
     }
 
     #[cfg(not(windows))]
@@ -10858,11 +10869,12 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         // Only reset focus if this terminal is focused; don't steal it from another part
-        // of the app, or from an AI block / code diff the user is navigating.
+        // of the app, or from an interactive child the user is navigating/editing.
         let reset_focus = ctx.is_self_or_child_focused()
             && !self.find_bar.is_self_or_child_focused(ctx)
             && !self.block_filter_editor.is_self_or_child_focused(ctx)
-            && !self.is_any_ai_block_focused(ctx);
+            && !self.is_any_ai_block_focused(ctx)
+            && !self.is_queued_prompt_inline_editor_focused(ctx);
         if reset_focus {
             self.redetermine_global_focus_with_policy(selection_focus_policy, ctx);
         }

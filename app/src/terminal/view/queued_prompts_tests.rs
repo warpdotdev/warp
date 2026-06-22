@@ -1451,6 +1451,51 @@ fn build_panel_with_active_conversation(
 }
 
 #[test]
+fn redetermine_terminal_focus_preserves_focused_queued_prompt_editor() {
+    App::test((), |mut app| async move {
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        let input = terminal.read(&app, |view, _| view.input.clone());
+        let panel = input
+            .read(&app, |input, _| input.queued_prompts_panel().cloned())
+            .expect("queue flag should create a queued prompts panel");
+        let row_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, user_query("edit me"), ctx)
+        });
+
+        panel.update(&mut app, |panel, ctx| {
+            panel.handle_action(&QueuedPromptsPanelAction::StartEditingRow(row_id), ctx);
+        });
+        panel.read(&app, |panel, ctx| {
+            assert!(panel.is_inline_edit_editor_focused(ctx));
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            assert!(
+                !view.redetermine_terminal_focus(ctx),
+                "focused queued-prompt edits should hold focus during async focus reconciliation"
+            );
+        });
+
+        panel.read(&app, |panel, ctx| {
+            assert!(panel.is_inline_edit_editor_focused(ctx));
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert_eq!(model.editing_row(conversation_id), Some(row_id));
+        });
+    });
+}
+
+#[test]
 fn can_send_prompt_gates_buttons_and_hint_while_nonempty_input_gates_only_the_hint() {
     // When the host reports prompts cannot be sent (read-only shared-session viewer), every
     // row's send-now button is disabled and the enter hint hides. A non-empty input hides the
