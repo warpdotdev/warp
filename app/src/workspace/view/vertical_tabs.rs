@@ -693,6 +693,7 @@ pub(super) struct VerticalTabsPanelState {
     pane_title_mouse_states: RefCell<HashMap<PaneId, MouseStateHandle>>,
     pane_badge_mouse_states: RefCell<HashMap<PaneId, PaneRowBadgeMouseStates>>,
     detail_pane_badge_mouse_states: RefCell<HashMap<PaneId, PaneRowBadgeMouseStates>>,
+    summary_branch_pr_badge_mouse_states: RefCell<HashMap<SummaryBranchBadgeKey, MouseStateHandle>>,
     detail_scroll_state: ClippedScrollStateHandle,
     detail_sidecar_mouse_state: MouseStateHandle,
     detail_overlay_state: Arc<Mutex<VerticalTabsDetailOverlayState>>,
@@ -730,6 +731,7 @@ impl Default for VerticalTabsPanelState {
             pane_title_mouse_states: RefCell::default(),
             pane_badge_mouse_states: RefCell::default(),
             detail_pane_badge_mouse_states: RefCell::default(),
+            summary_branch_pr_badge_mouse_states: RefCell::default(),
             detail_scroll_state: ClippedScrollStateHandle::default(),
             detail_sidecar_mouse_state: Default::default(),
             detail_overlay_state: Arc::new(Mutex::new(VerticalTabsDetailOverlayState::default())),
@@ -918,6 +920,24 @@ struct VerticalTabsSummaryBranchEntry {
     branch_name: String,
     diff_stats: Option<GitLineChanges>,
     pull_request_label: Option<String>,
+    pull_request_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct SummaryBranchBadgeKey {
+    pane_group_id: EntityId,
+    repo_path: PathBuf,
+    branch_name: String,
+}
+
+impl SummaryBranchBadgeKey {
+    fn new(pane_group_id: EntityId, entry: &VerticalTabsSummaryBranchEntry) -> Self {
+        Self {
+            pane_group_id,
+            repo_path: entry.repo_path.clone(),
+            branch_name: entry.branch_name.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1075,6 +1095,9 @@ fn coalesce_summary_branch_entries(
             }
             if existing.pull_request_label.is_none() {
                 existing.pull_request_label = entry.pull_request_label;
+                existing.pull_request_url = entry.pull_request_url;
+            } else if existing.pull_request_url.is_none() {
+                existing.pull_request_url = entry.pull_request_url;
             }
         } else {
             indices.insert(key, coalesced.len());
@@ -2159,6 +2182,7 @@ fn render_tab_group_internal(
                     return Empty::new().finish();
                 };
                 rows.add_child(render_summary_tab_item(
+                    state,
                     pane_props,
                     summary
                         .as_ref()
@@ -3518,15 +3542,19 @@ fn build_vertical_tabs_summary_data(
                         .current_git_branch(app)
                         .and_then(|branch| normalize_summary_text(&branch)),
                 ) {
+                    let pull_request_url = terminal_view
+                        .current_pull_request_url(app)
+                        .filter(|url| !url.trim().is_empty());
+                    let pull_request_label = pull_request_url
+                        .as_deref()
+                        .map(terminal_pull_request_badge_label)
+                        .and_then(|label| normalize_summary_text(&label));
                     branch_entries.push(VerticalTabsSummaryBranchEntry {
                         repo_path,
                         branch_name,
                         diff_stats: terminal_view.current_diff_line_changes(app),
-                        pull_request_label: terminal_view
-                            .current_pull_request_url(app)
-                            .as_deref()
-                            .map(terminal_pull_request_badge_label)
-                            .and_then(|label| normalize_summary_text(&label)),
+                        pull_request_label,
+                        pull_request_url,
                     });
                 }
             }
@@ -4380,6 +4408,7 @@ fn render_pane_title_slot(
 }
 
 fn render_summary_tab_item(
+    state: &VerticalTabsPanelState,
     props: PaneProps<'_>,
     summary: &VerticalTabsSummaryData,
     summary_pane_kind_icons: Option<SummaryPaneKindIcons>,
@@ -4538,10 +4567,23 @@ fn render_summary_tab_item(
 
     // Branch region. Each branch line gets the existing 4px top margin from APP-3875.
     for branch_entry in summary.branch_entries.iter().take(MAX_VISIBLE_BRANCH_LINES) {
+        let pull_request_mouse_state = state
+            .summary_branch_pr_badge_mouse_states
+            .borrow_mut()
+            .entry(SummaryBranchBadgeKey::new(
+                props.pane_group_id,
+                branch_entry,
+            ))
+            .or_default()
+            .clone();
         text_col.add_child(
-            Container::new(render_summary_branch_line(branch_entry, appearance))
-                .with_margin_top(REGION_GAP)
-                .finish(),
+            Container::new(render_summary_branch_line(
+                branch_entry,
+                pull_request_mouse_state,
+                appearance,
+            ))
+            .with_margin_top(REGION_GAP)
+            .finish(),
         );
     }
 
@@ -4852,6 +4894,7 @@ fn summary_pane_kind_icon(
 
 fn render_summary_branch_line(
     entry: &VerticalTabsSummaryBranchEntry,
+    pull_request_mouse_state: MouseStateHandle,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -4879,10 +4922,20 @@ fn render_summary_branch_line(
         has_right_badges = true;
     }
     if let Some(pull_request_label) = &entry.pull_request_label {
-        right_badges.add_child(render_passive_terminal_pull_request_badge(
-            pull_request_label,
-            appearance,
-        ));
+        if let Some(pull_request_url) = &entry.pull_request_url {
+            right_badges.add_child(render_terminal_pull_request_badge(
+                pull_request_label.clone(),
+                pull_request_url.clone(),
+                VerticalTabsChipEntrypoint::Tab,
+                pull_request_mouse_state,
+                appearance,
+            ));
+        } else {
+            right_badges.add_child(render_passive_terminal_pull_request_badge(
+                pull_request_label,
+                appearance,
+            ));
+        }
         has_right_badges = true;
     }
     if has_right_badges {
