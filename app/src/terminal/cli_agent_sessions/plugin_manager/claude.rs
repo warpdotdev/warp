@@ -348,10 +348,16 @@ fn is_local_marketplace_path(source: &str) -> bool {
         || source.starts_with("file://")
 }
 
-/// Checks `CLAUDE_HOME` env var first, falls back to `~/.claude`.
+/// Resolves the dir the Claude CLI reads/writes its state from.
+///
+/// Honors `CLAUDE_CONFIG_DIR` (respected by the Claude CLI, and set by the Oz
+/// worker to a per-task dir), falling back to `~/.claude`. Must match where
+/// `claude plugin install` writes, else install/verify checks read the wrong dir.
 fn claude_home_dir() -> io::Result<PathBuf> {
-    if let Ok(claude_home) = env::var("CLAUDE_HOME") {
-        return Ok(PathBuf::from(claude_home));
+    if let Ok(dir) = env::var("CLAUDE_CONFIG_DIR") {
+        if !dir.is_empty() {
+            return Ok(PathBuf::from(dir));
+        }
     }
     dirs::home_dir()
         .map(|home| home.join(".claude"))
