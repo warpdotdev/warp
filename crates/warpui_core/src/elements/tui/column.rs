@@ -1,9 +1,12 @@
 //! [`TuiColumn`]: a vertical stack that lays its children out top-to-bottom.
 //!
 //! # Construction
-//! Start from [`TuiColumn::new`] (empty) and append children with
-//! [`child`](TuiColumn::child), or build from an iterator with
-//! [`with_children`](TuiColumn::with_children).
+//! Start from [`TuiColumn::new`] (empty) and append children via the
+//! [`TuiParentElement`](super::TuiParentElement) trait:
+//! [`with_child`](super::TuiParentElement::with_child),
+//! [`with_children`](super::TuiParentElement::with_children),
+//! [`add_child`](super::TuiParentElement::add_child),
+//! [`add_children`](super::TuiParentElement::add_children).
 //!
 //! # Layout policy
 //! The column fills the width it is offered and gives every child that same
@@ -27,16 +30,11 @@ impl TuiColumn {
     pub fn new() -> Self {
         Self::default()
     }
+}
 
-    pub fn child(mut self, child: impl TuiElement + 'static) -> Self {
-        self.children.push(Box::new(child));
-        self
-    }
-
-    pub fn with_children(children: impl IntoIterator<Item = Box<dyn TuiElement>>) -> Self {
-        Self {
-            children: children.into_iter().collect(),
-        }
+impl Extend<Box<dyn TuiElement>> for TuiColumn {
+    fn extend<I: IntoIterator<Item = Box<dyn TuiElement>>>(&mut self, iter: I) {
+        self.children.extend(iter);
     }
 }
 

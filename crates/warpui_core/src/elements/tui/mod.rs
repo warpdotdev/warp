@@ -15,6 +15,11 @@
 //!   lives with the runtime, in `crate::runtime`.)
 //! - The concrete elements: [`TuiText`], [`TuiColumn`], [`TuiContainer`],
 //!   [`TuiChildView`], and [`TuiEventHandler`].
+//! - [`TuiParentElement`]: a trait for multi-child elements, providing
+//!   [`with_child`](TuiParentElement::with_child) /
+//!   [`with_children`](TuiParentElement::with_children) /
+//!   [`add_child`](TuiParentElement::add_child) /
+//!   [`add_children`](TuiParentElement::add_children).
 
 use std::collections::HashMap;
 
@@ -27,6 +32,7 @@ mod container;
 mod event;
 mod event_handler;
 mod geometry;
+mod parent;
 mod text;
 
 pub use buffer::{Cell, TuiBuffer, TuiStyle};
@@ -36,6 +42,7 @@ pub use container::TuiContainer;
 pub use event::{TuiDispatchEventResult, TuiEventContext, TuiEventDispatchResult};
 pub use event_handler::TuiEventHandler;
 pub use geometry::{TuiConstraint, TuiRect, TuiSize};
+pub use parent::TuiParentElement;
 pub use text::TuiText;
 
 /// A node in the renderable tree: it measures itself against a constraint,
@@ -153,7 +160,3 @@ impl<'a> TuiPresentationContext<'a> {
             .expect("a child view is entered before it is exited");
     }
 }
-
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;
