@@ -1641,42 +1641,47 @@ impl AgentDriver {
         let templatable_manager_handle = TemplatableMCPServerManager::handle(ctx);
         let pending_state_details_for_subscription = Arc::clone(&pending_state_details);
 
-        ctx.subscribe_to_model(&templatable_manager_handle, move |_me, manager, event, ctx| {
-            if let TemplatableMCPServerManagerEvent::StateChanged { uuid, state } = event {
-                if !pending_uuids.contains(uuid) {
-                    return;
-                }
-                let server_name = file_based_mcp_names
-                    .get(uuid)
-                    .map(String::as_str)
-                    .unwrap_or("<unknown>");
-                let error = TemplatableMCPServerManager::as_ref(ctx)
-                    .get_server_error_message(*uuid)
-                    .map(|message| format!(", error={message}"))
-                    .unwrap_or_default();
-                if let Ok(mut details) = pending_state_details_for_subscription.lock() {
-                    details.insert(*uuid, format!("{server_name} ({uuid}): {state:?}{error}"));
-                }
-                match state {
-                    MCPServerState::Running | MCPServerState::FailedToStart => {
-                        pending_uuids.remove(uuid);
-                        if let Ok(mut details) = pending_state_details_for_subscription.lock() {
-                            details.remove(uuid);
-                        }
-                    }
-                    _ => {
+        ctx.subscribe_to_model(
+            &templatable_manager_handle,
+            move |_me, manager, event, ctx| {
+                if let TemplatableMCPServerManagerEvent::StateChanged { uuid, state } = event {
+                    if !pending_uuids.contains(uuid) {
                         return;
                     }
-                }
-                if pending_uuids.is_empty() {
-                    log::info!("All file-based MCP servers reached a terminal state; proceeding");
-                    if let Some(sender) = tx.take() {
-                        let _ = sender.send(());
+                    let server_name = file_based_mcp_names
+                        .get(uuid)
+                        .map(String::as_str)
+                        .unwrap_or("<unknown>");
+                    let error = TemplatableMCPServerManager::as_ref(ctx)
+                        .get_server_error_message(*uuid)
+                        .map(|message| format!(", error={message}"))
+                        .unwrap_or_default();
+                    if let Ok(mut details) = pending_state_details_for_subscription.lock() {
+                        details.insert(*uuid, format!("{server_name} ({uuid}): {state:?}{error}"));
                     }
-                    ctx.unsubscribe_from_model(&manager);
+                    match state {
+                        MCPServerState::Running | MCPServerState::FailedToStart => {
+                            pending_uuids.remove(uuid);
+                            if let Ok(mut details) = pending_state_details_for_subscription.lock() {
+                                details.remove(uuid);
+                            }
+                        }
+                        _ => {
+                            return;
+                        }
+                    }
+                    if pending_uuids.is_empty() {
+                        log::info!(
+                            "All file-based MCP servers reached a terminal state; proceeding"
+                        );
+                        if let Some(sender) = tx.take() {
+                            let _ = sender.send(());
+                        }
+                        ctx.unsubscribe_from_model(&manager);
+                    }
                 }
-            }
-        });
+            },
+        );
 
         Either::Left(async move {
             match rx.with_timeout(MCP_SERVER_STARTUP_TIMEOUT).await {

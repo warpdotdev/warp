@@ -100,9 +100,8 @@ pub fn create_cloud_mode_view(
                     // conversation on chip click. Use append-mode scrollback
                     // + replay suppression so the cloud agent's replay doesn't
                     // duplicate the blocks we already have.
-                    let append_followup_scrollback = view_model
-                        .as_ref(ctx)
-                        .is_local_to_cloud_handoff();
+                    let append_followup_scrollback =
+                        view_model.as_ref(ctx).is_local_to_cloud_handoff();
                     if manager.connect_to_session(*session_id, append_followup_scrollback, ctx) {
                         manager.start_cloud_mode_setup_command_tracking();
                     }
