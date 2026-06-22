@@ -244,3 +244,194 @@ fn write_session_index_entry_overwrites_malformed_file() {
         serde_json::from_slice(&fs::read(tmp.path().join("sessions-index.json")).unwrap()).unwrap();
     assert_eq!(index[uuid.to_string()]["sessionId"], uuid.to_string());
 }
+
+// --- write_envelope_for_local_continuation ---
+
+#[test]
+fn write_envelope_for_local_continuation_uses_remote_sessions_dir() {
+    let tmp = TempDir::new().unwrap();
+    let uuid = Uuid::new_v4();
+    let cloud_cwd = Path::new("/remote/cloud/workspace");
+
+    let envelope = ClaudeTranscriptEnvelope {
+        cwd: cloud_cwd.to_path_buf(),
+        uuid,
+        claude_version: None,
+        entries: vec![serde_json::json!({"type": "user"})],
+        subagents: HashMap::new(),
+        todos: HashMap::new(),
+    };
+
+    write_envelope_for_local_continuation(&envelope, tmp.path()).unwrap();
+
+    // Transcript is written under projects/remote-sessions/, NOT a cwd-encoded path.
+    let expected_file = tmp
+        .path()
+        .join("projects")
+        .join(REMOTE_SESSIONS_DIR)
+        .join(format!("{uuid}.jsonl"));
+    assert!(
+        expected_file.exists(),
+        "session JSONL missing under remote-sessions/"
+    );
+    assert_eq!(read_jsonl(&expected_file).unwrap(), envelope.entries);
+
+    // No cwd-encoded project directory should exist.
+    let cwd_encoded_dir = tmp.path().join("projects").join(encode_cwd(cloud_cwd));
+    assert!(
+        !cwd_encoded_dir.exists(),
+        "unexpected cwd-encoded project directory"
+    );
+}
+
+#[test]
+fn write_envelope_for_local_continuation_writes_subagents_relative_to_remote_sessions() {
+    let tmp = TempDir::new().unwrap();
+    let uuid = Uuid::new_v4();
+
+    let envelope = ClaudeTranscriptEnvelope {
+        cwd: "/remote/workspace".into(),
+        uuid,
+        claude_version: None,
+        entries: vec![],
+        subagents: HashMap::from([(
+            "agent-abc".to_string(),
+            vec![serde_json::json!({"type": "assistant"})],
+        )]),
+        todos: HashMap::new(),
+    };
+
+    write_envelope_for_local_continuation(&envelope, tmp.path()).unwrap();
+
+    let subagent_file = tmp
+        .path()
+        .join("projects")
+        .join(REMOTE_SESSIONS_DIR)
+        .join(uuid.to_string())
+        .join("subagents")
+        .join("agent-abc.jsonl");
+    assert!(subagent_file.exists(), "subagent JSONL missing");
+    assert_eq!(
+        read_jsonl(&subagent_file).unwrap(),
+        envelope.subagents["agent-abc"]
+    );
+}
+
+// --- write_session_index_entry_for_local_continuation ---
+
+#[test]
+fn write_session_index_entry_for_local_continuation_uses_remote_sessions_path() {
+    let tmp = TempDir::new().unwrap();
+    let uuid = Uuid::new_v4();
+
+    write_session_index_entry_for_local_continuation(uuid, tmp.path()).unwrap();
+
+    let index: serde_json::Value =
+        serde_json::from_slice(&fs::read(tmp.path().join("sessions-index.json")).unwrap()).unwrap();
+    let entry = &index[uuid.to_string()];
+    assert_eq!(entry["sessionId"], uuid.to_string());
+    assert_eq!(entry["projectPath"], REMOTE_SESSIONS_DIR);
+    assert_eq!(
+        entry["transcriptPath"],
+        format!("projects/{REMOTE_SESSIONS_DIR}/{uuid}.jsonl")
+    );
+    // cwd should not be present in the index entry.
+    assert!(
+        entry.get("cwd").is_none(),
+        "unexpected cwd field in index entry"
+    );
+}
+
+#[test]
+fn write_session_index_entry_for_local_continuation_preserves_other_entries() {
+    let tmp = TempDir::new().unwrap();
+    let other_uuid = Uuid::new_v4();
+    fs::write(
+        tmp.path().join("sessions-index.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            other_uuid.to_string(): {"sessionId": other_uuid.to_string(), "custom_field": 99},
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let new_uuid = Uuid::new_v4();
+    write_session_index_entry_for_local_continuation(new_uuid, tmp.path()).unwrap();
+
+    let index: serde_json::Value =
+        serde_json::from_slice(&fs::read(tmp.path().join("sessions-index.json")).unwrap()).unwrap();
+    assert_eq!(
+        index[new_uuid.to_string()]["projectPath"],
+        REMOTE_SESSIONS_DIR
+    );
+    // Pre-existing entry is untouched.
+    assert_eq!(
+        index[other_uuid.to_string()]["sessionId"],
+        other_uuid.to_string()
+    );
+    assert_eq!(index[other_uuid.to_string()]["custom_field"], 99);
+}
+
+// --- rehydrate_claude_transcript_from_reader ---
+
+#[test]
+#[serial_test::serial]
+fn rehydrate_claude_transcript_from_reader_uses_remote_sessions_and_preserves_cwd() {
+    let tmp = TempDir::new().unwrap();
+    // Override the Claude config dir to point at our temp directory.
+    let prev = std::env::var_os("CLAUDE_CONFIG_DIR");
+    std::env::set_var("CLAUDE_CONFIG_DIR", tmp.path());
+
+    let uuid = Uuid::new_v4();
+    let cloud_cwd = "/remote/cloud/workspace";
+    let envelope = ClaudeTranscriptEnvelope {
+        cwd: cloud_cwd.into(),
+        uuid,
+        claude_version: None,
+        entries: vec![serde_json::json!({"type": "user"})],
+        subagents: HashMap::new(),
+        todos: HashMap::new(),
+    };
+    let json = serde_json::to_vec(&envelope).unwrap();
+
+    let result = rehydrate_claude_transcript_from_reader(json.as_slice()).unwrap();
+
+    match prev {
+        Some(v) => std::env::set_var("CLAUDE_CONFIG_DIR", v),
+        None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+    }
+
+    // Resume command is generated correctly.
+    assert!(
+        result.command.contains(&format!("--resume {uuid}")),
+        "expected --resume flag: {}",
+        result.command
+    );
+
+    // Session file is under remote-sessions/, not a cwd-encoded path.
+    let session_file = tmp
+        .path()
+        .join("projects")
+        .join(REMOTE_SESSIONS_DIR)
+        .join(format!("{uuid}.jsonl"));
+    assert!(
+        session_file.exists(),
+        "session JSONL not found at remote-sessions path"
+    );
+
+    // No cwd-encoded directory was created.
+    let cwd_encoded_dir = tmp
+        .path()
+        .join("projects")
+        .join(encode_cwd(Path::new(cloud_cwd)));
+    assert!(
+        !cwd_encoded_dir.exists(),
+        "unexpected cwd-encoded project directory created"
+    );
+
+    // sessions-index.json points at remote-sessions.
+    let index: serde_json::Value =
+        serde_json::from_slice(&fs::read(tmp.path().join("sessions-index.json")).unwrap()).unwrap();
+    assert_eq!(index[uuid.to_string()]["projectPath"], REMOTE_SESSIONS_DIR);
+    assert!(index[uuid.to_string()].get("cwd").is_none());
+}

@@ -24,7 +24,6 @@ mod vertical_tabs;
 mod wasm_view;
 
 use std::cell::RefCell;
-use anyhow::Context as _;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "local_fs")]
@@ -46,6 +45,7 @@ use ::settings::{Setting, ToggleableSetting};
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 #[cfg(target_os = "macos")]
 use anyhow::Result;
+use anyhow::Context as _;
 use autoupdate::AutoupdateStage;
 #[cfg(target_os = "macos")]
 use command::blocking::Command;
@@ -13115,12 +13115,6 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         let window_id = ctx.window_id();
-        let local_cwd = self
-            .active_tab_pane_group()
-            .as_ref(ctx)
-            .active_session_path(ctx)
-            .or_else(dirs::home_dir)
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
 
         ctx.spawn(
@@ -13137,35 +13131,27 @@ impl Workspace {
                     .await
                     .context("Failed to download run transcript")?;
 
-                tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-                    let file = std::fs::File::open(&transcript_path)
-                        .context("Failed to open downloaded run transcript")?;
-                    match harness {
-                        AIAgentHarness::ClaudeCode => {
-                            let launch =
-                                claude_transcript::rehydrate_claude_transcript_from_reader(
-                                    file, &local_cwd,
-                                )?;
-                            Ok(ThirdPartyLocalContinuationLaunch {
-                                command: launch.command,
-                            })
-                        }
-                        AIAgentHarness::Codex => {
-                            let launch =
-                                codex_transcript::rehydrate_codex_transcript_from_reader(
-                                    file, &local_cwd,
-                                )?;
-                            Ok(ThirdPartyLocalContinuationLaunch {
-                                command: launch.command,
-                            })
-                        }
-                        _ => anyhow::bail!(
-                            "Local continuation is not supported for this harness"
-                        ),
+                let file = std::fs::File::open(&transcript_path)
+                    .context("Failed to open downloaded run transcript")?;
+                match harness {
+                    AIAgentHarness::ClaudeCode => {
+                        let launch =
+                            claude_transcript::rehydrate_claude_transcript_from_reader(file)?;
+                        Ok(ThirdPartyLocalContinuationLaunch {
+                            command: launch.command,
+                        })
                     }
-                })
-                .await
-                .context("Failed to rehydrate run transcript")?
+                    AIAgentHarness::Codex => {
+                        let launch =
+                            codex_transcript::rehydrate_codex_transcript_from_reader(file)?;
+                        Ok(ThirdPartyLocalContinuationLaunch {
+                            command: launch.command,
+                        })
+                    }
+                    _ => anyhow::bail!(
+                        "Local continuation is not supported for this harness"
+                    ),
+                }
             },
             move |workspace, result, ctx| {
                 let launch = match result {
