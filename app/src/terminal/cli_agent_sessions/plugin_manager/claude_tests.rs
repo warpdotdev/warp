@@ -3,8 +3,25 @@ use std::fs;
 use super::{
     check_installed, check_platform_plugin_installed, claude_code_marketplace_has_local_override,
     installed_platform_plugin_version, installed_version, ClaudeCodePluginManager,
-    CliAgentPluginManager,
+    CliAgentPluginManager, MINIMUM_PLATFORM_PLUGIN_VERSION,
 };
+
+/// A version strictly below `version`, so below-minimum tests track the
+/// constant instead of a hardcoded literal. Assumes `version` > "0.0.0".
+fn version_below(version: &str) -> String {
+    let mut parts: Vec<u64> = version.split('.').map(|p| p.parse().unwrap_or(0)).collect();
+    for part in parts.iter_mut().rev() {
+        if *part > 0 {
+            *part -= 1;
+            break;
+        }
+    }
+    parts
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(".")
+}
 
 #[test]
 fn installed_when_plugin_present() {
@@ -102,7 +119,7 @@ fn installed_platform_plugin_version_returns_version_when_present() {
 
     let json = serde_json::json!({
         "plugins": {
-            "oz-harness-support@claude-code-warp": [{"version": "1.1.3"}]
+            "oz-harness-support@claude-code-warp": [{"version": MINIMUM_PLATFORM_PLUGIN_VERSION}]
         }
     });
     fs::write(
@@ -113,7 +130,7 @@ fn installed_platform_plugin_version_returns_version_when_present() {
 
     assert_eq!(
         installed_platform_plugin_version(dir.path()).as_deref(),
-        Some("1.1.3")
+        Some(MINIMUM_PLATFORM_PLUGIN_VERSION)
     );
 }
 
@@ -125,7 +142,7 @@ fn platform_plugin_installed_when_platform_plugin_present() {
 
     let json = serde_json::json!({
         "plugins": {
-            "oz-harness-support@claude-code-warp": [{"version": "1.1.3"}]
+            "oz-harness-support@claude-code-warp": [{"version": MINIMUM_PLATFORM_PLUGIN_VERSION}]
         }
     });
     fs::write(
@@ -146,7 +163,7 @@ fn platform_plugin_needs_update_via_trait_when_version_below_minimum() {
 
     let json = serde_json::json!({
         "plugins": {
-            "oz-harness-support@claude-code-warp": [{"version": "1.1.2"}]
+            "oz-harness-support@claude-code-warp": [{"version": version_below(MINIMUM_PLATFORM_PLUGIN_VERSION)}]
         }
     });
     fs::write(
@@ -171,7 +188,7 @@ fn platform_plugin_does_not_need_update_via_trait_when_current() {
 
     let json = serde_json::json!({
         "plugins": {
-            "oz-harness-support@claude-code-warp": [{"version": "1.1.3"}]
+            "oz-harness-support@claude-code-warp": [{"version": MINIMUM_PLATFORM_PLUGIN_VERSION}]
         }
     });
     fs::write(
