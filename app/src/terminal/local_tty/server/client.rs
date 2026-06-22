@@ -50,21 +50,28 @@ impl TerminalServerClient {
             Option::<RawFd>::None,
         )?;
 
-        let result = protocol::receive_message(fd.as_fd())?;
-        match result {
-            Some(api::Message::SpawnShellResponse {
-                spawn_result: api::Result::Ok(spawn_result),
-            }) => Ok(spawn_result),
-            Some(api::Message::SpawnShellResponse {
-                spawn_result: api::Result::Err(message),
-            }) => {
-                bail!("Terminal server failed to spawn a shell: {message}");
-            }
-            Some(_) => {
-                bail!("Got response message other than SpawnShellResponse after sending a SpawnShellRequest message!");
-            }
-            None => {
-                bail!("Received error reading message back from terminal server");
+        loop {
+            let result = protocol::receive_message(fd.as_fd())?;
+            match result {
+                Some(api::Message::SpawnShellResponse {
+                    spawn_result: api::Result::Ok(spawn_result),
+                }) => return Ok(spawn_result),
+                Some(api::Message::SpawnShellResponse {
+                    spawn_result: api::Result::Err(message),
+                }) => {
+                    bail!("Terminal server failed to spawn a shell: {message}");
+                }
+                Some(api::Message::KillChildResponse { error_msg }) => {
+                    log::warn!(
+                        "Ignoring stale KillChildResponse while waiting for SpawnShellResponse: {error_msg:?}"
+                    );
+                }
+                Some(_) => {
+                    bail!("Got response message other than SpawnShellResponse after sending a SpawnShellRequest message!");
+                }
+                None => {
+                    bail!("Received error reading message back from terminal server");
+                }
             }
         }
     }
@@ -114,3 +121,7 @@ impl TerminalServerClient {
         self.terminated_children.lock().remove(&pid)
     }
 }
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;
