@@ -997,6 +997,20 @@ fn parse_osc777_missing_parts_ignored() {
 }
 
 #[test]
+fn parse_osc1337_without_second_param_does_not_panic() {
+    // Regression for #12817: a bare OSC 1337 with no second parameter
+    // (`ESC ] 1337 BEL`) used to index `params[1]` unconditionally and panic
+    // with "index out of bounds". Untrusted PTY output must never crash the
+    // parser; a malformed sequence should be ignored instead.
+    let bytes: &[u8] = b"\x1b]1337\x07";
+    let (_, _handler) = parse_bytes(bytes);
+
+    // Also exercise the ST-terminated form.
+    let bytes: &[u8] = b"\x1b]1337\x1b\\";
+    let (_, _handler) = parse_bytes(bytes);
+}
+
+#[test]
 fn parse_osc7_local_hostname() {
     // Happy path: payload host matches the running machine's hostname.
     let local = crate::terminal::model::session::get_local_hostname()

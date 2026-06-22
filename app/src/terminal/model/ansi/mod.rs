@@ -1026,6 +1026,12 @@ where
 
             // iTerm inline image protocol.
             b"1337" => {
+                // Every branch below indexes `params[1]`, so a sequence with no
+                // second parameter (e.g. a bare `OSC 1337 ST`) would panic. Bail
+                // out to `unhandled` like the neighboring OSC arms do.
+                if params.len() < 2 {
+                    return unhandled(params);
+                }
                 if params[1].starts_with(b"File=") {
                     let metadata = parse_iterm_image_metadata(params);
 
