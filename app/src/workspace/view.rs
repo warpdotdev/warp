@@ -545,6 +545,8 @@ const TAB_BAR_PADDING_LEFT: f32 = 4.;
 const TAB_BAR_PADDING_RIGHT: f32 = 8.;
 const TITLE_BAR_SEARCH_BAR_MAX_WIDTH: f32 = 320.;
 const TITLE_BAR_SEARCH_BAR_SLOT_PADDING: f32 = 8.;
+const TITLE_BAR_SEARCH_BAR_COLLISION_PADDING: f32 = 12.;
+const TITLE_BAR_SEARCH_BAR_FALLBACK_MIN_WINDOW_WIDTH: f32 = 720.;
 
 // The total height taken up by the tab bar, including its bottom border.
 pub const TOTAL_TAB_BAR_HEIGHT: f32 = TAB_BAR_HEIGHT + TAB_BAR_BORDER_HEIGHT;
@@ -573,6 +575,10 @@ pub(crate) const TAB_BAR_POSITION_ID: &str = "workspace_view:tab_bar";
 /// path renders the vertical tabs panel must wrap it in a `SavePosition` with
 /// this id.
 pub(crate) const VERTICAL_TABS_PANEL_POSITION_ID: &str = "workspace_view:vertical_tabs_panel";
+const VERTICAL_TABS_TITLE_BAR_LEFT_CONTROLS_POSITION_ID: &str =
+    "workspace_view:vertical_tabs_title_bar_left_controls";
+const VERTICAL_TABS_TITLE_BAR_RIGHT_CONTROLS_POSITION_ID: &str =
+    "workspace_view:vertical_tabs_title_bar_right_controls";
 
 /// The main content area in a workspace. This is directly below the tab bar.
 const TAB_CONTENT_POSITION_ID: &str = "workspace_view:tab_content";
@@ -20059,6 +20065,31 @@ impl Workspace {
         .finish()
     }
 
+    fn can_render_centered_title_bar_search_bar(&self, ctx: &AppContext) -> bool {
+        let Some(window_bounds) = ctx.window_bounds(&self.window_id) else {
+            return false;
+        };
+        let window_width = window_bounds.width();
+        if window_width < TITLE_BAR_SEARCH_BAR_FALLBACK_MIN_WINDOW_WIDTH {
+            return false;
+        }
+
+        let search_width = TITLE_BAR_SEARCH_BAR_MAX_WIDTH + 2. * TITLE_BAR_SEARCH_BAR_SLOT_PADDING;
+        let search_left = window_bounds.min_x() + (window_width - search_width) / 2.;
+        let search_right = search_left + search_width;
+
+        let overlaps_search = |position_id| {
+            ctx.element_position_by_id_at_last_frame(self.window_id, position_id)
+                .is_some_and(|rect| {
+                    rect.max_x() + TITLE_BAR_SEARCH_BAR_COLLISION_PADDING > search_left
+                        && rect.min_x() - TITLE_BAR_SEARCH_BAR_COLLISION_PADDING < search_right
+                })
+        };
+
+        !overlaps_search(VERTICAL_TABS_TITLE_BAR_LEFT_CONTROLS_POSITION_ID)
+            && !overlaps_search(VERTICAL_TABS_TITLE_BAR_RIGHT_CONTROLS_POSITION_ID)
+    }
+
     fn render_tab_bar_contents(
         &self,
         hover_fixed_width: Option<f32>,
@@ -20198,49 +20229,64 @@ impl Workspace {
 
             let left_padding = self.compute_tab_bar_left_padding(ctx);
 
-            // The title bar search bar can be hidden via a user setting; when hidden,
-            // an empty flexible slot keeps the right-side controls aligned to the right.
+            // The title bar search bar can be hidden via a user setting.
             let hide_search_bar =
                 *TabSettings::as_ref(ctx).hide_title_bar_search_bar_in_vertical_tabs;
-            let search_bar_slot = if hide_search_bar {
-                Expanded::new(1., Empty::new().finish()).finish()
-            } else {
-                Shrinkable::new(
-                    1.,
-                    Clipped::new(
-                        Container::new(
-                            Align::new(self.render_title_bar_search_bar(appearance)).finish(),
-                        )
-                        .with_padding_left(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
-                        .with_padding_right(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
-                        .finish(),
-                    )
-                    .finish(),
-                )
-                .finish()
-            };
 
             let tab_bar = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(tab_bar.finish())
-                .with_child(search_bar_slot)
-                .with_child(right_controls.finish())
+                .with_child(
+                    SavePosition::new(
+                        tab_bar.finish(),
+                        VERTICAL_TABS_TITLE_BAR_LEFT_CONTROLS_POSITION_ID,
+                    )
+                    .finish(),
+                )
+                .with_child(Expanded::new(1., Empty::new().finish()).finish())
+                .with_child(
+                    SavePosition::new(
+                        right_controls.finish(),
+                        VERTICAL_TABS_TITLE_BAR_RIGHT_CONTROLS_POSITION_ID,
+                    )
+                    .finish(),
+                )
                 .finish();
 
-            return EventHandler::new(
-                Container::new(tab_bar)
-                    .with_padding_left(left_padding)
-                    .with_padding_right(TAB_BAR_PADDING_RIGHT)
-                    .finish(),
-            )
-            .on_right_mouse_down(|ctx, _, position| {
-                ctx.dispatch_typed_action(WorkspaceAction::ShowHeaderToolbarContextMenu {
-                    position,
-                });
-                DispatchEventResult::StopPropagation
-            })
-            .finish();
+            let tab_bar = Container::new(tab_bar)
+                .with_padding_left(left_padding)
+                .with_padding_right(TAB_BAR_PADDING_RIGHT)
+                .finish();
+
+            let tab_bar = if hide_search_bar || !self.can_render_centered_title_bar_search_bar(ctx)
+            {
+                tab_bar
+            } else {
+                let mut stack = Stack::new();
+                stack.add_child(tab_bar);
+                stack.add_positioned_overlay_child(
+                    Container::new(self.render_title_bar_search_bar(appearance))
+                        .with_padding_left(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
+                        .with_padding_right(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
+                        .finish(),
+                    OffsetPositioning::offset_from_parent(
+                        Vector2F::zero(),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::Center,
+                        ChildAnchor::Center,
+                    ),
+                );
+                stack.finish()
+            };
+
+            return EventHandler::new(tab_bar)
+                .on_right_mouse_down(|ctx, _, position| {
+                    ctx.dispatch_typed_action(WorkspaceAction::ShowHeaderToolbarContextMenu {
+                        position,
+                    });
+                    DispatchEventResult::StopPropagation
+                })
+                .finish();
         } else {
             // Copy from our saved tab_bar_state to ensure all tabs get rendered with the same state
             let active_tab_index = if FeatureFlag::AgentManagementView.is_enabled()
