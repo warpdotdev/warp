@@ -1,5 +1,5 @@
 [build]
 rustflags = ["-C", "prefer-dynamic"]
 
-[target.aarch64-apple-darwin]
+[target.'cfg(all())']
 linker = "dylint-link"

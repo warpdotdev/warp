@@ -639,10 +639,14 @@ jobs:
 
       - name: Install cargo-dylint
         shell: bash
-        run: cargo install --locked cargo-dylint@6.0.1 dylint-link@6.0.1
+        # Use binstall to download pre-built binaries rather than compiling from source,
+        # which avoids rustc version conflicts (cargo-dylint deps require rustc >= 1.93).
+        run: cargo binstall --secure --no-confirm --no-discover-github-token cargo-dylint@6.0.1 dylint-link@6.0.1
 
       - name: Run dylint
         run: cargo dylint --path ./lints -p warp
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run clang-format
         if: ${{ matrix.os == 'macos' }}

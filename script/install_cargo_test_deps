@@ -15,5 +15,6 @@ cargo install --git https://github.com/wgsl-analyzer/wgsl-analyzer --tag "2025-0
 cargo binstall --secure --no-confirm --no-discover-github-token cargo-nextest
 
 # Install cargo-dylint and dylint-link for running custom lint rules via `script/presubmit`.
-# Keep this version in sync with .github/workflows/ci.yml.
-cargo install --locked cargo-dylint@6.0.1 dylint-link@6.0.1
+# Uses binstall to download pre-built binaries (avoids rustc version conflicts from compiling
+# from source). Keep this version in sync with .github/workflows/ci.yml.
+cargo binstall --secure --no-confirm --no-discover-github-token cargo-dylint@6.0.1 dylint-link@6.0.1
