@@ -319,12 +319,44 @@ impl<'a> Editor {
 
 /// Opens the given directory in the user's configured editor when possible,
 /// otherwise hands off to the macOS default opener (Finder).
+///
+/// Editors expose `<scheme>://file/<path>` URLs for opening files, but those
+/// URLs do not open directories as a workspace — they are routed back through
+/// macOS LaunchServices, which falls back to Finder. We open directories the
+/// macOS-native way instead: `/usr/bin/open -a <app-bundle> <dir>`, which
+/// VSCode, Cursor, Windsurf, Zed, Sublime, Atom, and the JetBrains family
+/// all interpret as "open this folder as a workspace."
 pub fn open_directory(with_editor: Option<Editor>, directory: &Path, ctx: &mut AppContext) {
     if directory.is_dir() {
-        let editor = with_editor.filter(|editor| editor.is_installed(ctx));
-        if let Some(editor) = editor {
-            if editor.open(None, directory, ctx) {
-                return;
+        if let Some(editor) = with_editor {
+            if let Some(bundle_info) = editor.application_bundle_info(ctx) {
+                let mut command = Command::new("/usr/bin/open");
+                command.arg("-a").arg(bundle_info.path).arg(directory);
+                match command.spawn() {
+                    Ok(mut child) => {
+                        ctx.background_executor()
+                            .spawn(async move {
+                                let now = Instant::now();
+                                match child.status().await {
+                                    Ok(exit_code) => {
+                                        log::debug!(
+                                            "open -a for {editor:?} exited after {}ms with {exit_code}",
+                                            now.elapsed().as_millis(),
+                                        );
+                                    }
+                                    Err(err) => {
+                                        log::error!("unable to await open -a for {editor:?}: {err:?}");
+                                    }
+                                }
+                            })
+                            .detach();
+                        log::info!("Successfully opened directory in {editor:?}.");
+                        return;
+                    }
+                    Err(e) => {
+                        log::error!("Error launching {editor:?} for directory: {e:?}");
+                    }
+                }
             }
         }
     }
