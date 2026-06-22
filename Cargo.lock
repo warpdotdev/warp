@@ -15169,6 +15169,7 @@ dependencies = [
  "tink-core",
  "tink-hybrid",
  "tink-proto",
+ "tracing",
  "vec1",
  "warp_core",
  "warp_graphql",
