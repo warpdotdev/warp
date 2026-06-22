@@ -19,7 +19,7 @@ pub struct ConnectedSelfHostedWorkersModel {
 
 impl ConnectedSelfHostedWorkersModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, _, event, ctx| {
             if let NetworkStatusEvent::NetworkStatusChanged {
                 new_status: NetworkStatusKind::Online,
             } = event
@@ -28,7 +28,7 @@ impl ConnectedSelfHostedWorkersModel {
             }
         });
 
-        ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, event, ctx| match event {
+        ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, _, event, ctx| match event {
             AuthManagerEvent::AuthComplete => {
                 me.refresh(ctx);
             }
@@ -44,7 +44,7 @@ impl ConnectedSelfHostedWorkersModel {
             | AuthManagerEvent::ReceivedDeviceAuthorizationCode { .. } => {}
         });
 
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
                 me.refresh(ctx);
             }

@@ -2704,6 +2704,10 @@ impl AIConversation {
                             }
                         }
                         Some(api::message::Message::ModelUsed(model_used)) => {
+                            let prompt_cache_expires_at = model_used
+                                .prompt_cache_expires_at
+                                .as_ref()
+                                .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos));
                             let exchange_id = self
                                 .added_exchanges_by_response
                                 .get(response_stream_id)
@@ -2717,6 +2721,7 @@ impl AIConversation {
                                     model_id: model_used.model_id.clone().into(),
                                     display_name: model_used.model_display_name.clone(),
                                     is_fallback: model_used.is_fallback,
+                                    prompt_cache_expires_at,
                                 });
                             }
                         }

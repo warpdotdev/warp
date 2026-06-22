@@ -160,7 +160,7 @@ pub struct UndoCloseStack {
 impl UndoCloseStack {
     /// Constructs a new undo close stack.
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&UndoCloseSettings::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&UndoCloseSettings::handle(ctx), |me, _, event, ctx| {
             me.handle_settings_event(event, ctx);
         });
 

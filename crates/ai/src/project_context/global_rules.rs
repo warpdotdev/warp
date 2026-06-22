@@ -82,13 +82,6 @@ impl GlobalRules {
         self.rules.keys().cloned().map(LocalOrRemotePath::Local)
     }
 
-    pub(crate) fn first_rule_parent(&self) -> Option<LocalOrRemotePath> {
-        self.rules
-            .values()
-            .next()
-            .and_then(|rule| rule.path.parent())
-    }
-
     /// Index all configured global rule sources (see [`GlobalRuleSource`]).
     ///
     /// All disk I/O is dispatched through `ctx.spawn` so this method does not
@@ -121,7 +114,7 @@ impl GlobalRules {
         );
 
         // React to creation/deletion of home subdirs at runtime.
-        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _, event, ctx| {
             me.global_rules
                 .handle_home_dir_event_for_global_rules(event, ctx);
         });

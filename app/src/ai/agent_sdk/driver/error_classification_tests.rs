@@ -1,7 +1,7 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::classify_driver_error;
-use crate::ai::agent_sdk::driver::terminal::ShareSessionError;
+use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 use crate::ai::agent_sdk::driver::AgentDriverError;
 
 fn assert_state_and_code(
@@ -20,12 +20,56 @@ fn assert_state_and_code(
 // --- Infrastructure errors → ERROR ---
 
 #[test]
-fn bootstrap_failed_is_error_with_internal() {
-    assert_state_and_code(
-        AgentDriverError::BootstrapFailed,
-        AgentTaskState::Error,
-        Some(PlatformErrorCode::InternalError),
+fn bootstrap_pty_spawn_failed_with_reason_includes_reason_in_message() {
+    let (state, update) = classify_driver_error(&AgentDriverError::BootstrapFailed {
+        error: BootstrapError::PtySpawnFailed {
+            reason: Some("Argument list too long (os error 7)".to_string()),
+        },
+    });
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
+    assert!(
+        update.message.contains("Argument list too long"),
+        "message should include the specific failure reason: {:?}",
+        update.message
     );
+}
+
+#[test]
+fn bootstrap_pty_spawn_failed_without_reason_is_generic() {
+    let (state, update) = classify_driver_error(&AgentDriverError::BootstrapFailed {
+        error: BootstrapError::PtySpawnFailed { reason: None },
+    });
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
+    assert!(
+        update.message.contains("Shell spawn failed"),
+        "message should describe the spawn failure: {:?}",
+        update.message
+    );
+}
+
+#[test]
+fn bootstrap_timed_out_is_error_with_internal() {
+    let (state, update) = classify_driver_error(&AgentDriverError::BootstrapFailed {
+        error: BootstrapError::TimedOut,
+    });
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
+    assert!(
+        update.message.contains("did not start within"),
+        "message should describe the timeout: {:?}",
+        update.message
+    );
+}
+
+#[test]
+fn bootstrap_internal_error_is_error_with_internal() {
+    let (state, update) = classify_driver_error(&AgentDriverError::BootstrapFailed {
+        error: BootstrapError::InternalError,
+    });
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
 }
 
 #[test]
@@ -67,6 +111,18 @@ fn warp_drive_sync_failed_is_error() {
 fn mcp_server_not_found_is_failed_with_env_setup() {
     assert_state_and_code(
         AgentDriverError::MCPServerNotFound(uuid::Uuid::nil()),
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::EnvironmentSetupFailed),
+    );
+}
+
+#[test]
+fn managed_mcp_resolution_failed_is_failed_with_env_setup() {
+    assert_state_and_code(
+        AgentDriverError::ManagedMcpResolutionFailed {
+            uid: uuid::Uuid::nil(),
+            message: "not active".into(),
+        },
         AgentTaskState::Failed,
         Some(PlatformErrorCode::EnvironmentSetupFailed),
     );

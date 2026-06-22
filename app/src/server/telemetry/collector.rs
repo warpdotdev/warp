@@ -70,7 +70,7 @@ impl TelemetryCollector {
         // previously opted-out of telemetry. In the case where the user turns the telemetry from
         // on to off, we should not send another request with any telemetry, even if the event was
         // initially recorded prior to the user turning telemetry off.`
-        ctx.subscribe_to_model(&PrivacySettings::handle(ctx), |_me, event, _ctx| {
+        ctx.subscribe_to_model(&PrivacySettings::handle(ctx), |_me, _, event, _ctx| {
             if let PrivacySettingsChangedEvent::UpdateIsTelemetryEnabled { .. } = event {
                 clear_event_queue();
             }

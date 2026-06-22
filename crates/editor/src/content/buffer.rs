@@ -535,6 +535,10 @@ impl BufferSnapshot {
     pub fn bytes(&self) -> Bytes<'_> {
         Bytes::from_sum_tree(&self.content, ByteOffset::from(0), self.byte_len)
     }
+
+    pub fn byte_len(&self) -> usize {
+        self.byte_len.as_usize()
+    }
 }
 
 /// Model for storing the content of an editor.

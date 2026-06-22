@@ -177,7 +177,7 @@ impl ActiveAgentViewsModel {
             register_agent_event_consumer(conversation_id, terminal_view_id, ctx);
         }
 
-        ctx.subscribe_to_model(controller, move |model, event, ctx| match event {
+        ctx.subscribe_to_model(controller, move |model, _, event, ctx| match event {
             AgentViewControllerEvent::EnteredAgentView {
                 conversation_id, ..
             } => {

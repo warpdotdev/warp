@@ -3,8 +3,25 @@ use std::fs;
 use super::{
     check_installed, check_platform_plugin_installed, claude_code_marketplace_has_local_override,
     installed_platform_plugin_version, installed_version, ClaudeCodePluginManager,
-    CliAgentPluginManager,
+    CliAgentPluginManager, MINIMUM_PLATFORM_PLUGIN_VERSION,
 };
+
+/// A version strictly below `version`, so below-minimum tests track the
+/// constant instead of a hardcoded literal. Assumes `version` > "0.0.0".
+fn version_below(version: &str) -> String {
+    let mut parts: Vec<u64> = version.split('.').map(|p| p.parse().unwrap_or(0)).collect();
+    for part in parts.iter_mut().rev() {
+        if *part > 0 {
+            *part -= 1;
+            break;
+        }
+    }
+    parts
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(".")
+}
 
 #[test]
 fn installed_when_plugin_present() {
@@ -69,7 +86,7 @@ fn local_marketplace_override_ignores_repo_source() {
 
 #[test]
 #[serial_test::serial]
-fn local_marketplace_override_via_trait_uses_claude_home() {
+fn local_marketplace_override_via_trait_uses_claude_config_dir() {
     let dir = tempfile::tempdir().unwrap();
     let settings = serde_json::json!({
         "extraKnownMarketplaces": {
@@ -87,9 +104,9 @@ fn local_marketplace_override_via_trait_uses_claude_home() {
     )
     .unwrap();
 
-    std::env::set_var("CLAUDE_HOME", dir.path());
+    std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
     let result = ClaudeCodePluginManager::new(None, None, None).has_local_marketplace_override();
-    std::env::remove_var("CLAUDE_HOME");
+    std::env::remove_var("CLAUDE_CONFIG_DIR");
 
     assert!(result);
 }
@@ -102,7 +119,7 @@ fn installed_platform_plugin_version_returns_version_when_present() {
 
     let json = serde_json::json!({
         "plugins": {
-            "oz-harness-support@claude-code-warp": [{"version": "1.1.3"}]
+            "oz-harness-support@claude-code-warp": [{"version": MINIMUM_PLATFORM_PLUGIN_VERSION}]
         }
     });
     fs::write(
@@ -113,7 +130,7 @@ fn installed_platform_plugin_version_returns_version_when_present() {
 
     assert_eq!(
         installed_platform_plugin_version(dir.path()).as_deref(),
-        Some("1.1.3")
+        Some(MINIMUM_PLATFORM_PLUGIN_VERSION)
     );
 }
 
@@ -125,7 +142,7 @@ fn platform_plugin_installed_when_platform_plugin_present() {
 
     let json = serde_json::json!({
         "plugins": {
-            "oz-harness-support@claude-code-warp": [{"version": "1.1.3"}]
+            "oz-harness-support@claude-code-warp": [{"version": MINIMUM_PLATFORM_PLUGIN_VERSION}]
         }
     });
     fs::write(
@@ -146,7 +163,7 @@ fn platform_plugin_needs_update_via_trait_when_version_below_minimum() {
 
     let json = serde_json::json!({
         "plugins": {
-            "oz-harness-support@claude-code-warp": [{"version": "1.1.2"}]
+            "oz-harness-support@claude-code-warp": [{"version": version_below(MINIMUM_PLATFORM_PLUGIN_VERSION)}]
         }
     });
     fs::write(
@@ -155,9 +172,9 @@ fn platform_plugin_needs_update_via_trait_when_version_below_minimum() {
     )
     .unwrap();
 
-    std::env::set_var("CLAUDE_HOME", dir.path());
+    std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
     let result = ClaudeCodePluginManager::new(None, None, None).platform_plugin_needs_update();
-    std::env::remove_var("CLAUDE_HOME");
+    std::env::remove_var("CLAUDE_CONFIG_DIR");
 
     assert!(result);
 }
@@ -171,7 +188,7 @@ fn platform_plugin_does_not_need_update_via_trait_when_current() {
 
     let json = serde_json::json!({
         "plugins": {
-            "oz-harness-support@claude-code-warp": [{"version": "1.1.3"}]
+            "oz-harness-support@claude-code-warp": [{"version": MINIMUM_PLATFORM_PLUGIN_VERSION}]
         }
     });
     fs::write(
@@ -180,9 +197,9 @@ fn platform_plugin_does_not_need_update_via_trait_when_current() {
     )
     .unwrap();
 
-    std::env::set_var("CLAUDE_HOME", dir.path());
+    std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
     let result = ClaudeCodePluginManager::new(None, None, None).platform_plugin_needs_update();
-    std::env::remove_var("CLAUDE_HOME");
+    std::env::remove_var("CLAUDE_CONFIG_DIR");
 
     assert!(!result);
 }
@@ -205,9 +222,9 @@ fn platform_plugin_needs_update_via_trait_when_installed_without_version() {
     )
     .unwrap();
 
-    std::env::set_var("CLAUDE_HOME", dir.path());
+    std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
     let result = ClaudeCodePluginManager::new(None, None, None).platform_plugin_needs_update();
-    std::env::remove_var("CLAUDE_HOME");
+    std::env::remove_var("CLAUDE_CONFIG_DIR");
 
     assert!(result);
 }
@@ -305,10 +322,10 @@ fn not_installed_when_plugins_key_missing() {
 }
 
 /// Tests `ClaudeCodePluginManager::is_installed` end-to-end by pointing
-/// `CLAUDE_HOME` at a temp directory with a valid installed_plugins.json.
+/// `CLAUDE_CONFIG_DIR` at a temp directory with a valid installed_plugins.json.
 #[test]
 #[serial_test::serial]
-fn is_installed_via_trait_with_claude_home_env() {
+fn is_installed_via_trait_with_claude_config_dir_env() {
     let dir = tempfile::tempdir().unwrap();
     let plugins_dir = dir.path().join("plugins");
     fs::create_dir_all(&plugins_dir).unwrap();
@@ -324,21 +341,21 @@ fn is_installed_via_trait_with_claude_home_env() {
     )
     .unwrap();
 
-    std::env::set_var("CLAUDE_HOME", dir.path());
+    std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
     let result = ClaudeCodePluginManager::new(None, None, None).is_installed();
-    std::env::remove_var("CLAUDE_HOME");
+    std::env::remove_var("CLAUDE_CONFIG_DIR");
 
     assert!(result);
 }
 
 #[test]
 #[serial_test::serial]
-fn not_installed_via_trait_when_claude_home_empty() {
+fn not_installed_via_trait_when_claude_config_dir_empty() {
     let dir = tempfile::tempdir().unwrap();
 
-    std::env::set_var("CLAUDE_HOME", dir.path());
+    std::env::set_var("CLAUDE_CONFIG_DIR", dir.path());
     let result = ClaudeCodePluginManager::new(None, None, None).is_installed();
-    std::env::remove_var("CLAUDE_HOME");
+    std::env::remove_var("CLAUDE_CONFIG_DIR");
 
     assert!(!result);
 }

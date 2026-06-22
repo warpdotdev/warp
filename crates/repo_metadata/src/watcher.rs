@@ -433,7 +433,12 @@ impl DirectoryWatcher {
     }
 
     /// Handles events from the internal task queue.
-    fn handle_queue_event(&mut self, event: &TaskQueueEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_queue_event(
+        &mut self,
+        _: ModelHandle<TaskQueue>,
+        event: &TaskQueueEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let &TaskQueueEvent::TaskEnqueued = event;
         self.processing_queue.update(ctx, |queue, ctx| {
             queue.advance(ctx);
@@ -485,6 +490,7 @@ impl DirectoryWatcher {
     #[cfg(feature = "local_fs")]
     fn handle_watcher_event(
         &mut self,
+        _: ModelHandle<BulkFilesystemWatcher>,
         event: &BulkFilesystemWatcherEvent,
         ctx: &mut ModelContext<Self>,
     ) {

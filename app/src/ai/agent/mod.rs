@@ -34,6 +34,7 @@ use session_sharing_protocol::common::ParticipantId;
 use task::TaskId;
 pub use telemetry::AIIdentifiers;
 use uuid::Uuid;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_editor::render::model::LineCount;
 use warp_multi_agent_api::{diff_hunk as diff_hunk_api, AgentEvent, AgentType};
@@ -424,6 +425,9 @@ pub struct OutputModelInfo {
     pub model_id: LLMId,
     pub display_name: String,
     pub is_fallback: bool,
+    /// When the provider-side prompt cache for this request is expected to
+    /// expire. `None` means unknown / no cache-expiry info.
+    pub prompt_cache_expires_at: Option<DateTime<Local>>,
 }
 
 impl Display for AIAgentOutput {
@@ -719,6 +723,14 @@ impl RenderableAIError {
                 ..
             }
         )
+    }
+
+    /// Whether the failed-output UI should be suppressed while an automatic resume is in
+    /// flight. Release builds stay quiet so transient blips that recover on their own
+    /// don't surface an alarming error; dogfood builds (Local/Dev) keep the old, more
+    /// aggressive behavior so developers still see every transport failure.
+    pub fn should_suppress_during_recovery(&self) -> bool {
+        self.will_attempt_resume() && !ChannelState::channel().is_dogfood()
     }
 }
 

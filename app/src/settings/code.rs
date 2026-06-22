@@ -62,7 +62,7 @@ define_settings_group!(CodeSettings, settings: [
     // Controls whether hidden files (dotfiles) are shown in the project explorer.
     show_hidden_files: ShowHiddenFiles {
         type: bool,
-        default: false,
+        default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,

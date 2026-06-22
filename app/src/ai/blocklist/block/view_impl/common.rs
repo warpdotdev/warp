@@ -3036,6 +3036,16 @@ pub struct FailedOutputProps<'a> {
 pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
 
+    // While an automatic retry/resume is still in flight, don't surface the underlying
+    // transport failure at all. These are typically transient and recover on their own,
+    // so showing the alarming "Warp lost connection" banner (plus debug info) for every
+    // blip is noisy and misleading. Render nothing during in-flight recovery; the full
+    // error banner is only shown once recovery has actually failed. Dogfood builds
+    // (Local/Dev) opt out so developers still see every transport failure aggressively.
+    if props.error.should_suppress_during_recovery() {
+        return Empty::new().finish();
+    }
+
     let error_text = match props.error {
         RenderableAIError::QuotaLimit {
             user_display_message,
@@ -3060,31 +3070,16 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
         RenderableAIError::InternalWarpError => {
             format!("{ERROR_APOLOGY_TEXT}\n\n{INTERNAL_WARP_ERROR}")
         }
-        RenderableAIError::Other {
-            error_message,
-            will_attempt_resume,
-            waiting_for_network,
-            ..
-        } => {
-            if *will_attempt_resume {
-                with_resume_status(error_message.clone(), *waiting_for_network)
-            } else {
-                format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
-            }
+        RenderableAIError::Other { error_message, .. } => {
+            // A still-recovering `Other` error is handled by the early return above; once we
+            // reach here recovery has failed, so surface the error directly.
+            format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
         }
-        RenderableAIError::TransientNetworkError {
-            will_attempt_resume,
-            waiting_for_network,
-            ..
-        } => {
-            // Transient network errors carry their own complete user-facing copy (plus
-            // debug info), so the apology prefix adds nothing.
-            let error_message = props.error.to_string();
-            if *will_attempt_resume {
-                with_resume_status(error_message, *waiting_for_network)
-            } else {
-                error_message
-            }
+        RenderableAIError::TransientNetworkError { .. } => {
+            // Recovering transient errors are handled by the early return above; once we
+            // reach here recovery has failed. These carry their own complete user-facing
+            // copy (plus debug info), so the apology prefix adds nothing.
+            props.error.to_string()
         }
         RenderableAIError::InvalidApiKey {
             provider,
@@ -3159,17 +3154,6 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
             .finish(),
         )
         .finish()
-}
-
-/// Appends the pending auto-resume status line to a failed-output error message.
-fn with_resume_status(error_message: String, waiting_for_network: bool) -> String {
-    if waiting_for_network {
-        format!(
-            "{error_message}\n\nWill resume conversation when network connectivity is restored..."
-        )
-    } else {
-        format!("{error_message}\n\nAttempting to resume conversation...")
-    }
 }
 
 fn render_invalid_api_key_error(

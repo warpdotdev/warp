@@ -3,7 +3,6 @@ use std::fs;
 use std::path::PathBuf;
 
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
-use remote_server::proto::{file_context_proto, FileContextProto};
 use repo_metadata::entry::{DirectoryEntry, Entry, FileMetadata};
 use repo_metadata::file_tree_store::FileTreeState;
 use repo_metadata::repositories::DetectedRepositories;
@@ -19,10 +18,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use super::super::subscribers::SkillRepositoryMessage;
-use super::{
-    parse_project_skill_contents, read_remote_project_skill_contents, remote_skill_read_request,
-    SkillWatcher, REMOTE_SKILL_MAX_BATCH_BYTES, REMOTE_SKILL_MAX_FILE_BYTES,
-};
+use super::{parse_project_skill_contents, SkillWatcher};
 use crate::ai::skills::skill_manager::SkillWatcherEvent;
 
 /// Helper function for creating a single skill file
@@ -86,39 +82,18 @@ description: {description}
     )
 }
 
-fn remote_skill_file_context(path: &LocalOrRemotePath, content: &str) -> FileContextProto {
-    let LocalOrRemotePath::Remote(remote) = path else {
-        panic!("Expected a remote skill path");
-    };
-
-    FileContextProto {
-        file_name: remote.path.as_str().to_string(),
-        content: Some(file_context_proto::Content::TextContent(
-            content.to_string(),
-        )),
-        line_range_start: None,
-        line_range_end: None,
-        last_modified_epoch_millis: None,
-        line_count: content.lines().count() as u32,
-    }
-}
-
 #[test]
-fn parse_project_skill_contents_matches_reordered_remote_responses_by_path() {
+fn parse_project_skill_contents_preserves_remote_paths() {
     let host = HostId::new("test-host".to_string());
     let first_path = remote_skill_path(&host, "first");
     let second_path = remote_skill_path(&host, "second");
     let first_content = remote_skill_content("first", "First skill", "First body");
     let second_content = remote_skill_content("second", "Second skill", "Second body");
 
-    let skill_contents = read_remote_project_skill_contents(
-        vec![first_path.clone(), second_path.clone()],
-        vec![
-            remote_skill_file_context(&second_path, &second_content),
-            remote_skill_file_context(&first_path, &first_content),
-        ],
-    );
-    let skills = parse_project_skill_contents(skill_contents);
+    let skills = parse_project_skill_contents(vec![
+        (first_path.clone(), first_content.clone()),
+        (second_path.clone(), second_content.clone()),
+    ]);
 
     assert_eq!(skills.len(), 2);
     assert_eq!(skills[0].path, first_path);
@@ -143,46 +118,6 @@ fn parse_project_skill_contents_classifies_foreign_encoded_provider_path() {
     assert_eq!(skills.len(), 1);
     assert_eq!(skills[0].path, path);
     assert_eq!(skills[0].provider, SkillProvider::Codex);
-}
-
-#[test]
-fn read_remote_project_skill_contents_keeps_paths_aligned_after_missing_reads() {
-    let host = HostId::new("test-host".to_string());
-    let missing_path = remote_skill_path(&host, "missing");
-    let present_path = remote_skill_path(&host, "present");
-    let present_content = remote_skill_content("present", "Present skill", "Present body");
-
-    let skill_contents = read_remote_project_skill_contents(
-        vec![missing_path, present_path.clone()],
-        vec![remote_skill_file_context(&present_path, &present_content)],
-    );
-    let skills = parse_project_skill_contents(skill_contents);
-
-    assert_eq!(skills.len(), 1);
-    assert_eq!(skills[0].path, present_path);
-    assert_eq!(skills[0].name, "present");
-    assert_eq!(skills[0].content, present_content);
-}
-
-#[test]
-fn remote_skill_read_request_sets_bounded_read_budget() {
-    let host = HostId::new("test-host".to_string());
-    let first_path = remote_skill_path(&host, "first");
-    let second_path = remote_skill_path(&host, "second");
-
-    let request = remote_skill_read_request(&[first_path.clone(), second_path.clone()]);
-
-    assert_eq!(request.max_file_bytes, Some(REMOTE_SKILL_MAX_FILE_BYTES));
-    assert_eq!(request.max_batch_bytes, Some(REMOTE_SKILL_MAX_BATCH_BYTES));
-    assert_eq!(request.files.len(), 2);
-    let LocalOrRemotePath::Remote(first_remote) = first_path else {
-        panic!("Expected remote path");
-    };
-    let LocalOrRemotePath::Remote(second_remote) = second_path else {
-        panic!("Expected remote path");
-    };
-    assert_eq!(request.files[0].path, first_remote.path.as_str());
-    assert_eq!(request.files[1].path, second_remote.path.as_str());
 }
 
 // ============================================================================

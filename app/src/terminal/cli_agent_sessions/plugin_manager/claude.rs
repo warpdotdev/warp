@@ -14,18 +14,16 @@ use crate::terminal::model::session::LocalCommandExecutor;
 use crate::terminal::shell::ShellType;
 
 const PLUGIN_KEY: &str = "warp@claude-code-warp";
+const PLATFORM_PLUGIN_KEY: &str = "oz-harness-support@claude-code-warp";
+
 const MARKETPLACE_REPO: &str = "warpdotdev/claude-code-warp";
 const MARKETPLACE_NAME: &str = "claude-code-warp";
-
-const PLATFORM_PLUGIN_KEY: &str = "oz-harness-support@claude-code-warp";
-// Note: we will eventually publish this to the same marketplace repo, but are using the internal one as we build out multi-harness.
-const PLATFORM_MARKETPLACE_REPO: &str = "warpdotdev/claude-code-warp-internal";
 
 // Keep in sync with the plugin version in warpdotdev/claude-code-warp.
 // (See the Versioning section of that repo's README.)
 const MINIMUM_PLUGIN_VERSION: &str = "2.1.0";
-// Keep in sync with the oz-harness-support plugin version in warpdotdev/claude-code-warp-internal.
-const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "1.1.3";
+// Keep in sync with the oz-harness-support plugin version in warpdotdev/claude-code-warp.
+const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "1.1.2";
 
 pub(super) struct ClaudeCodePluginManager {
     executor: LocalCommandExecutor,
@@ -176,7 +174,7 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
     async fn install_platform_plugin(&self) -> Result<(), PluginInstallError> {
         let mut log = String::new();
         self.run_logged(
-            &["plugin", "marketplace", "add", PLATFORM_MARKETPLACE_REPO],
+            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
             &mut log,
         )
         .await?;
@@ -188,7 +186,7 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
     async fn update_platform_plugin(&self) -> Result<(), PluginInstallError> {
         let mut log = String::new();
         self.run_logged(
-            &["plugin", "marketplace", "add", PLATFORM_MARKETPLACE_REPO],
+            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
             &mut log,
         )
         .await?;
@@ -350,10 +348,16 @@ fn is_local_marketplace_path(source: &str) -> bool {
         || source.starts_with("file://")
 }
 
-/// Checks `CLAUDE_HOME` env var first, falls back to `~/.claude`.
+/// Resolves the dir the Claude CLI reads/writes its state from.
+///
+/// Honors `CLAUDE_CONFIG_DIR` (respected by the Claude CLI, and set by the Oz
+/// worker to a per-task dir), falling back to `~/.claude`. Must match where
+/// `claude plugin install` writes, else install/verify checks read the wrong dir.
 fn claude_home_dir() -> io::Result<PathBuf> {
-    if let Ok(claude_home) = env::var("CLAUDE_HOME") {
-        return Ok(PathBuf::from(claude_home));
+    if let Ok(dir) = env::var("CLAUDE_CONFIG_DIR") {
+        if !dir.is_empty() {
+            return Ok(PathBuf::from(dir));
+        }
     }
     dirs::home_dir()
         .map(|home| home.join(".claude"))

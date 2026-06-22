@@ -42,17 +42,17 @@ impl SingletonEntity for AgentNotificationsModel {}
 impl AgentNotificationsModel {
     pub(crate) fn new(ctx: &mut ModelContext<Self>) -> Self {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
-        ctx.subscribe_to_model(&history_model, move |me, event, ctx| {
+        ctx.subscribe_to_model(&history_model, move |me, _, event, ctx| {
             me.handle_history_event(event, ctx);
         });
 
         let cli_sessions_model = CLIAgentSessionsModel::handle(ctx);
-        ctx.subscribe_to_model(&cli_sessions_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&cli_sessions_model, |me, _, event, ctx| {
             me.handle_cli_agent_session_event(event, ctx);
         });
 
         let active_views_model = ActiveAgentViewsModel::handle(ctx);
-        ctx.subscribe_to_model(&active_views_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&active_views_model, |me, _, event, ctx| {
             me.handle_active_agent_views_changed(event, ctx);
         });
 

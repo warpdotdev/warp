@@ -44,13 +44,13 @@ impl ActiveEnvVarCollectionData {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let update_manager = UpdateManager::handle(ctx);
 
-        ctx.subscribe_to_model(&update_manager, |me, event, ctx| {
+        ctx.subscribe_to_model(&update_manager, |me, _, event, ctx| {
             me.handle_update_manager_event(event, ctx);
         });
 
         let cloud_model = CloudModel::handle(ctx);
 
-        ctx.subscribe_to_model(&cloud_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&cloud_model, |me, _, event, ctx| {
             me.handle_cloud_model_event(event, ctx);
         });
 

@@ -81,6 +81,7 @@ pub fn resolve_asset_source_relative_to_directory(
     } else if source.starts_with("/") {
         AssetSource::LocalFile {
             path: source.to_string(),
+            content_version: None,
         }
     } else {
         let resolved_path = if let Some(base_directory) = base_directory {
@@ -94,6 +95,7 @@ pub fn resolve_asset_source_relative_to_directory(
                 Ok(canon) => canon.to_string_lossy().to_string(),
                 Err(_) => resolved_path.to_string_lossy().to_string(),
             },
+            content_version: None,
         }
     }
 }
@@ -113,6 +115,7 @@ pub fn resolve_asset_source_relative_to_directory(
     } else {
         AssetSource::LocalFile {
             path: source.to_string(),
+            content_version: None,
         }
     }
 }

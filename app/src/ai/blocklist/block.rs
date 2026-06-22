@@ -1734,10 +1734,13 @@ impl AIBlock {
                         for source in image_sources {
                             resolved_image_sources.insert(
                                 source.clone(),
-                                Some(resolve_asset_source_relative_to_directory(
-                                    &source,
-                                    cwd.as_deref().map(Path::new),
-                                )),
+                                Some(
+                                    resolve_asset_source_relative_to_directory(
+                                        &source,
+                                        cwd.as_deref().map(Path::new),
+                                    )
+                                    .with_local_file_content_version(),
+                                ),
                             );
                         }
 

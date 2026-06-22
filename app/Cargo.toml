@@ -731,6 +731,7 @@ github_pr_prompt_chip = []
 create_project_flow = []
 agent_mode_evals = [
     "integration_tests",
+    "warpui/defer_scene_build",
     "full_source_code_embedding",
     "cross_repo_context",
     "cloud_object_models/agent_mode_evals",
@@ -1010,6 +1011,7 @@ cloud_mode_setup_v2 = ["cloud_mode"]
 cloud_mode_input_v2 = ["cloud_mode"]
 handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
+prompt_cache_expiry_warning = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

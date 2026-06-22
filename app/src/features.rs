@@ -499,6 +499,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SuperGrok,
         #[cfg(feature = "gemini_enterprise")]
         FeatureFlag::GeminiEnterprise,
+        #[cfg(feature = "prompt_cache_expiry_warning")]
+        FeatureFlag::PromptCacheExpiryWarning,
     ]);
 
     flags

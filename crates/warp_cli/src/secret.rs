@@ -24,6 +24,17 @@ pub enum SecretCommand {
     List(ListSecretsArgs),
 }
 
+impl SecretCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            SecretCommand::Create(_) => "secret create",
+            SecretCommand::Delete(_) => "secret delete",
+            SecretCommand::Update(_) => "secret update",
+            SecretCommand::List(_) => "secret list",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct CreateSecretArgs {

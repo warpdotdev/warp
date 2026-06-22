@@ -9,6 +9,7 @@ use warpui::{Entity, ModelContext, ModelHandle};
 
 use super::{GitRepoStatusEvent, GitStatusMetadata};
 use crate::code_review::diff_state::diff_metadata_against_head;
+use crate::context_chips::display_chip::GitBranchTrackingStatus;
 use crate::throttle::throttle;
 use crate::util::git::{detect_current_branch_display, detect_main_branch};
 
@@ -167,6 +168,70 @@ impl LocalGitRepoStatusModel {
         changed_count > 0
     }
 
+    fn parse_branch_tracking_counts(output: &str) -> Option<(u32, u32, u32)> {
+        let mut parts = output.split_whitespace();
+        let ahead = parts.next()?.parse().ok()?;
+        let behind = parts.next()?.parse().ok()?;
+        let equivalent = parts.next().map(str::parse).transpose().ok()?.unwrap_or(0);
+        Some((ahead, behind, equivalent))
+    }
+
+    async fn branch_tracking_status(
+        repo_path: &Path,
+        current_branch_name: &str,
+    ) -> GitBranchTrackingStatus {
+        let upstream = warp_util::git::run_git_command(
+            repo_path,
+            &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        )
+        .await
+        .ok()
+        .and_then(|output| {
+            output
+                .lines()
+                .next()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+        });
+
+        let Some(upstream) = upstream else {
+            return GitBranchTrackingStatus::new(current_branch_name.to_string(), None, 0, 0);
+        };
+
+        let counts = warp_util::git::run_git_command(
+            repo_path,
+            &[
+                "rev-list",
+                "--left-right",
+                "--cherry-mark",
+                "--count",
+                "HEAD...@{u}",
+            ],
+        )
+        .await
+        .ok()
+        .and_then(|output| Self::parse_branch_tracking_counts(&output));
+
+        let Some((ahead, behind, equivalent)) = counts else {
+            return GitBranchTrackingStatus::without_counts(
+                current_branch_name.to_string(),
+                Some(upstream),
+            );
+        };
+
+        if ahead == 0 && behind == 0 && equivalent > 0 {
+            return GitBranchTrackingStatus::rebased(current_branch_name.to_string(), upstream);
+        }
+
+        GitBranchTrackingStatus::new(
+            current_branch_name.to_string(),
+            Some(upstream),
+            ahead,
+            behind,
+        )
+    }
+
     /// Compute metadata for a repo — branch names and diff stats against HEAD.
     ///
     /// This reuses logic extracted from `DiffStateModel::load_metadata_for_repo`
@@ -180,11 +245,14 @@ impl LocalGitRepoStatusModel {
         let current_branch_name = detect_current_branch_display(&repo_path).await?;
         // Diff stats against HEAD.
         let stats_against_head = diff_metadata_against_head(&repo_path).await?;
+        let branch_tracking_status =
+            Self::branch_tracking_status(&repo_path, &current_branch_name).await;
 
         Ok(GitStatusMetadata {
             current_branch_name,
             main_branch_name,
             stats_against_head: stats_against_head.aggregate_stats,
+            branch_tracking_status,
         })
     }
 }
