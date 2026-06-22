@@ -24,7 +24,7 @@ use warpui::color::ColorU;
 use warpui::r#async::Timer;
 use warpui::windowing::{StateEvent, WindowManager};
 use warpui::{
-    duration_with_jitter, AppContext, Entity, EntityId, ModelContext, RequestState,
+    duration_with_jitter, AppContext, Entity, EntityId, ModelContext, ModelHandle, RequestState,
     SingletonEntity, WindowId,
 };
 
@@ -361,6 +361,8 @@ impl AgentRunDisplayStatus {
     pub fn from_conversation_status(status: &ConversationStatus) -> Self {
         match status {
             ConversationStatus::InProgress => Self::ConversationInProgress,
+            // A recovery is in flight; the run is still working.
+            ConversationStatus::TransientError => Self::ConversationInProgress,
             ConversationStatus::Success => Self::ConversationSucceeded,
             ConversationStatus::Error => Self::ConversationError,
             ConversationStatus::Cancelled => Self::ConversationCancelled,
@@ -591,6 +593,8 @@ pub enum ConversationUpdateKind {
     },
     /// Conversation metadata or capabilities changed.
     MetadataChanged,
+    /// Conversation title changed.
+    TitleChanged,
 }
 
 impl Entity for AgentConversationsModel {
@@ -627,12 +631,12 @@ impl AgentConversationsModel {
         ctx.subscribe_to_model(&auth_manager, Self::handle_auth_manager_event);
 
         let history_model = BlocklistAIHistoryModel::handle(ctx);
-        ctx.subscribe_to_model(&history_model, move |me, event, ctx| {
+        ctx.subscribe_to_model(&history_model, move |me, _, event, ctx| {
             me.handle_history_event(event, ctx);
         });
 
         let active_views_model = ActiveAgentViewsModel::handle(ctx);
-        ctx.subscribe_to_model(&active_views_model, |me, _event, ctx| {
+        ctx.subscribe_to_model(&active_views_model, |me, _, _event, ctx| {
             me.sync_conversations(ctx);
         });
 
@@ -671,6 +675,7 @@ impl AgentConversationsModel {
 
     fn handle_network_status_changed(
         &mut self,
+        _: ModelHandle<NetworkStatus>,
         event: &NetworkStatusEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -686,7 +691,12 @@ impl AgentConversationsModel {
         }
     }
 
-    fn handle_window_state_changed(&mut self, event: &StateEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_window_state_changed(
+        &mut self,
+        _: ModelHandle<WindowManager>,
+        event: &StateEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             StateEvent::ValueChanged { current, previous } => {
                 // If the active window changed, check if we need to start/stop polling
@@ -699,6 +709,7 @@ impl AgentConversationsModel {
 
     fn handle_auth_manager_event(
         &mut self,
+        _: ModelHandle<AuthManager>,
         event: &AuthManagerEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -714,6 +725,7 @@ impl AgentConversationsModel {
 
     fn handle_update_manager_event(
         &mut self,
+        _: ModelHandle<UpdateManager>,
         event: &UpdateManagerEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1536,6 +1548,24 @@ impl AgentConversationsModel {
                     conversation_id: *conversation_id,
                 });
             }
+            BlocklistAIHistoryEvent::UpdatedConversationTitle {
+                conversation_id,
+                title,
+                ..
+            } => {
+                let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+                for task in self.tasks.values_mut() {
+                    if entry::conversation_id_shadowed_by_task(task, history_model)
+                        == Some(*conversation_id)
+                    {
+                        task.title = title.clone();
+                    }
+                }
+
+                ctx.emit(AgentConversationsModelEvent::ConversationUpdated {
+                    kind: ConversationUpdateKind::TitleChanged,
+                });
+            }
 
             // Task/exchange-level changes that don't affect conversation navigation.
             BlocklistAIHistoryEvent::CreatedSubtask { .. }
@@ -1543,7 +1573,6 @@ impl AgentConversationsModel {
             | BlocklistAIHistoryEvent::ReassignedExchange { .. }
             | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
-            | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
             // UpdatedStreamingExchange covers streaming and other exchange-level updates but
             // doesn't change any ConversationNavigationData fields (title comes from
             // UpdateTaskDescription, last_updated uses exchange.start_time which is set at append time).
@@ -1552,7 +1581,8 @@ impl AgentConversationsModel {
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
             | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
             | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
-            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. } => {}
 
             BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. } => {
                 ctx.emit(AgentConversationsModelEvent::ConversationUpdated {

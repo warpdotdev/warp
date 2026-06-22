@@ -76,7 +76,7 @@ impl SkillSelectorDataSource {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&active_session, |_, event, ctx| match event {
+        ctx.subscribe_to_model(&active_session, |_, _, event, ctx| match event {
             // Emit event so the mixer can re-run its query with the new pwd
             ActiveSessionEvent::UpdatedPwd | ActiveSessionEvent::Bootstrapped => {
                 ctx.emit(UpdatedAvailableSkills);
@@ -124,6 +124,9 @@ impl SyncDataSource for SkillSelectorDataSource {
         let skills = SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
 
         // Filter out bundled skills when in open mode, since they cannot be opened.
+        // Bundled skills are identified by scope rather than reference: local
+        // catalog entries are `BundledSkillId`-referenced, but remote catalog
+        // entries are path-referenced, and both must be excluded here.
         // When CLI agent input is open, filter to skills that exist in a supported
         // provider folder. We check all paths for the skill name (not just the
         // deduplicated provider) because deduplication may pick a higher-priority
@@ -135,8 +138,7 @@ impl SyncDataSource for SkillSelectorDataSource {
                 if let Some(providers) = &cli_agent_providers {
                     skill_manager.skill_exists_for_any_provider(skill, providers)
                 } else {
-                    self.include_bundled
-                        || !matches!(skill.reference, SkillReference::BundledSkillId(_))
+                    self.include_bundled || skill.scope != SkillScope::Bundled
                 }
             })
             .map(|mut skill| {

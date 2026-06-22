@@ -16,8 +16,6 @@ impl Display for ServerExperiment {
             Self::EnvVarsEarlyAccessExperiment => "ENV_VARS_EARLY_ACCESS_EXPERIMENT",
             Self::AgentModeAnalyticsExperiment => "AGENT_MODE_ANALYTICS_EXPERIMENT",
             Self::WindowsLaunchExperiment => "WINDOWS_LAUNCH_EXPERIMENT",
-            Self::TmuxSshWarpificationControl => "TMUX_SSH_WARPIFICATION_CONTROL",
-            Self::TmuxSshWarpificationExperiment => "TMUX_SSH_WARPIFICATION_EXPERIMENT",
             Self::CodebaseContextControl => "CODEBASE_CONTEXT_CONTROL",
             Self::CodebaseContextExperiment => "CODEBASE_CONTEXT_EXPERIMENT",
             Self::SuggestedCodeDiffsControl => "SUGGESTED_CODE_DIFFS_CONTROL",
@@ -32,8 +30,6 @@ impl Display for ServerExperiment {
             Self::PromptSuggestionsViaMaaOutOfBandExperiment => {
                 "PROMPT_SUGGESTIONS_VIA_MAA_OOB_EXPERIMENT"
             }
-            Self::FreeUserNoAiControl => "FREE_USER_NO_AI_CONTROL",
-            Self::FreeUserNoAiExperiment => "FREE_USER_NO_AI_EXPERIMENT",
             Self::OzMultiHarnessControl => "OZ_MULTI_HARNESS_CONTROL",
             Self::OzMultiHarnessExperiment => "OZ_MULTI_HARNESS_EXPERIMENT",
             #[cfg(test)]
@@ -52,8 +48,6 @@ impl ServerExperiment {
             "ENV_VARS_EARLY_ACCESS_EXPERIMENT" => Ok(Self::EnvVarsEarlyAccessExperiment),
             "AGENT_MODE_ANALYTICS_EXPERIMENT" => Ok(Self::AgentModeAnalyticsExperiment),
             "WINDOWS_LAUNCH_EXPERIMENT" => Ok(Self::WindowsLaunchExperiment),
-            "TMUX_SSH_WARPIFICATION_CONTROL" => Ok(Self::TmuxSshWarpificationControl),
-            "TMUX_SSH_WARPIFICATION_EXPERIMENT" => Ok(Self::TmuxSshWarpificationExperiment),
             "CODEBASE_CONTEXT_EXPERIMENT" => Ok(Self::CodebaseContextExperiment),
             "CODEBASE_CONTEXT_CONTROL" => Ok(Self::CodebaseContextControl),
             "SUGGESTED_CODE_DIFFS_CONTROL" => Ok(Self::SuggestedCodeDiffsControl),
@@ -65,8 +59,6 @@ impl ServerExperiment {
             }
             "PROMPT_SUGGESTIONS_VIA_MAA_CONTROL" => Ok(Self::PromptSuggestionsViaMaaControl),
             "PROMPT_SUGGESTIONS_VIA_MAA_EXPERIMENT" => Ok(Self::PromptSuggestionsViaMaaExperiment),
-            "FREE_USER_NO_AI_CONTROL" => Ok(Self::FreeUserNoAiControl),
-            "FREE_USER_NO_AI_EXPERIMENT" => Ok(Self::FreeUserNoAiExperiment),
             "OZ_MULTI_HARNESS_CONTROL" => Ok(Self::OzMultiHarnessControl),
             "OZ_MULTI_HARNESS_EXPERIMENT" => Ok(Self::OzMultiHarnessExperiment),
             s => Err(anyhow::anyhow!(
@@ -93,8 +85,6 @@ impl TryFrom<Experiment> for ServerExperiment {
             Experiment::DisableAgentModeExperiment => Ok(Self::DisableAgentModeExperiment),
             Experiment::EnvVarsEarlyAccessExperiment => Ok(Self::EnvVarsEarlyAccessExperiment),
             Experiment::AgentModeAnalyticsExperiment => Ok(Self::AgentModeAnalyticsExperiment),
-            Experiment::TmuxSshWarpificationControl => Ok(Self::TmuxSshWarpificationControl),
-            Experiment::TmuxSshWarpificationExperiment => Ok(Self::TmuxSshWarpificationExperiment),
             Experiment::WindowsLaunchExperiment => Ok(Self::WindowsLaunchExperiment),
             Experiment::CodebaseContextControl => Ok(Self::CodebaseContextControl),
             Experiment::CodebaseContextExperiment => Ok(Self::CodebaseContextExperiment),
@@ -104,8 +94,6 @@ impl TryFrom<Experiment> for ServerExperiment {
             Experiment::PromptSuggestionsViaMaaOob => {
                 Ok(Self::PromptSuggestionsViaMaaOutOfBandExperiment)
             }
-            Experiment::FreeUserNoAiControl => Ok(Self::FreeUserNoAiControl),
-            Experiment::FreeUserNoAiExperiment => Ok(Self::FreeUserNoAiExperiment),
             Experiment::OzMultiHarnessControl => Ok(Self::OzMultiHarnessControl),
             Experiment::OzMultiHarnessExperiment => Ok(Self::OzMultiHarnessExperiment),
             // Experiments that we no longer support on the client.

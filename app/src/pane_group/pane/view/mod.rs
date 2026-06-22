@@ -14,8 +14,8 @@ use warpui::elements::{
 use warpui::keymap::EditableBinding;
 use warpui::presenter::ChildView;
 use warpui::{
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
+    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
 };
 
 use super::{
@@ -431,6 +431,20 @@ impl<P: BackingView> View for PaneView<P> {
             keymap_context.set.insert(HAS_SHARED_OBJECT_CONTEXT_KEY);
         }
         keymap_context
+    }
+
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId> {
+        // The backing views are owned by the `pane_stack` model, and only the
+        // active (topmost) one is ever rendered (see `render`), so the
+        // non-active views — and even the active one in a window that never
+        // laid out — are invisible to the render-time parent graph. Report
+        // all of them plus the header so the entire pane moves together when
+        // it is transferred between windows; otherwise a backing view would
+        // be orphaned in the source window and later trip a "circular view
+        // reference" panic when accessed from its new window.
+        let mut ids = vec![self.header.id()];
+        ids.extend(self.pane_stack.as_ref(app).views().map(|view| view.id()));
+        ids
     }
 }
 

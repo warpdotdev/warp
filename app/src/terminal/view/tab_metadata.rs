@@ -33,20 +33,12 @@ impl TerminalView {
             .unwrap_or(fallback_title)
     }
 
-    #[cfg_attr(not(feature = "local_fs"), allow(clippy::unnecessary_lazy_evaluations))]
     pub fn current_git_branch(&self, ctx: &AppContext) -> Option<String> {
         self.prompt_chip_value(&ContextChipKind::ShellGitBranch, ctx)
             .or_else(|| {
-                #[cfg(feature = "local_fs")]
-                {
-                    self.git_status_metadata(ctx)
-                        .map(|metadata| metadata.current_branch_name.clone())
-                        .filter(|branch| !branch.trim().is_empty())
-                }
-                #[cfg(not(feature = "local_fs"))]
-                {
-                    None
-                }
+                self.git_status_metadata(ctx)
+                    .map(|metadata| metadata.current_branch_name.clone())
+                    .filter(|branch| !branch.trim().is_empty())
             })
     }
 
@@ -85,18 +77,14 @@ impl TerminalView {
             .filter(|value| !value.trim().is_empty())
     }
 
-    #[cfg_attr(not(feature = "local_fs"), allow(clippy::unnecessary_lazy_evaluations))]
     pub fn current_diff_line_changes(&self, ctx: &AppContext) -> Option<GitLineChanges> {
-        // Prefer the filesystem-event-based GitRepoStatusModel (which includes
-        // untracked files) over parsing the raw shell chip output. This matches
-        // the preference order used by the prompt chip display (display.rs) and
-        // agent footer (chips.rs).
-        #[cfg(feature = "local_fs")]
+        // Prefer the externally-updated GitRepoStatusModel (local filesystem
+        // watcher or remote daemon push receiver) over parsing the raw shell
+        // chip output. This matches the preference order used by the prompt
+        // chip display (display.rs) and agent footer (chips.rs).
         let from_model = self
             .git_status_metadata(ctx)
             .map(|metadata| GitLineChanges::from_diff_stats(&metadata.stats_against_head));
-        #[cfg(not(feature = "local_fs"))]
-        let from_model: Option<GitLineChanges> = None;
 
         from_model
             .or_else(|| {

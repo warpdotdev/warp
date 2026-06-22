@@ -29,7 +29,7 @@ use super::display_menu::{
 };
 use super::{
     agent_view_chip_color, github_pr_display_text_from_url, render_text_from_kind, ChipResult,
-    ContextChipKind,
+    ChipValue, ContextChipKind,
 };
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::ai::blocklist::prompt::plan_and_todo_list::{PlanAndTodoListEvent, PlanAndTodoListView};
@@ -166,6 +166,62 @@ pub fn render_git_diff_stats_content(
     git_content.finish()
 }
 
+fn git_branch_status_icon(icon: Icon, color: ColorU, icon_size: f32) -> Box<dyn Element> {
+    Container::new(
+        ConstrainedBox::new(icon.to_warpui_icon(Fill::Solid(color)).finish())
+            .with_height(icon_size)
+            .with_width(icon_size)
+            .finish(),
+    )
+    .finish()
+}
+
+fn git_branch_status_text(
+    text: String,
+    color: ColorU,
+    font_family: FamilyId,
+    font_size: f32,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    Text::new_inline(text, font_family, font_size)
+        .with_color(Fill::Solid(color).into())
+        .with_line_height_ratio(appearance.line_height_ratio())
+        .with_style(Properties::default().weight(Weight::Semibold))
+        .finish()
+}
+
+fn git_branch_status_count(
+    icon: Icon,
+    count: String,
+    color: ColorU,
+    font_family: FamilyId,
+    font_size: f32,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+    add_git_branch_status_child(
+        &mut content,
+        git_branch_status_icon(icon, color, GIT_BRANCH_STATUS_STATUS_ICON_SIZE),
+        GIT_BRANCH_STATUS_COUNT_GAP,
+    );
+    content.add_child(git_branch_status_text(
+        count,
+        color,
+        font_family,
+        font_size,
+        appearance,
+    ));
+    content.finish()
+}
+
+fn add_git_branch_status_child(content: &mut Flex, child: Box<dyn Element>, margin_right: f32) {
+    content.add_child(
+        Container::new(child)
+            .with_margin_right(margin_right)
+            .finish(),
+    );
+}
+
 const PROMPT_CHIP_DISPLAY_ID: &str = "PromptChipDisplay";
 const DROP_SHADOW_COLOR: ColorU = ColorU {
     r: 0,
@@ -178,6 +234,12 @@ const CHIP_MARGIN_RIGHT: f32 = 8.;
 const UDI_CHIP_MAX_NUM_CHARACTERS: usize = 40;
 
 const CHIP_CORNER_RADIUS: f32 = 4.0;
+const GIT_BRANCH_STATUS_CHIP_HORIZONTAL_PADDING: f32 = 8.0;
+const GIT_BRANCH_STATUS_CHIP_VERTICAL_PADDING: f32 = 4.0;
+const GIT_BRANCH_STATUS_MAIN_GAP: f32 = 4.0;
+const GIT_BRANCH_STATUS_COUNT_GAP: f32 = 2.0;
+const GIT_BRANCH_STATUS_BRANCH_ICON_SIZE: f32 = 14.0;
+const GIT_BRANCH_STATUS_STATUS_ICON_SIZE: f32 = 12.0;
 pub(crate) const CHIP_BORDER_WIDTH: f32 = 1.0;
 /// Inner rounded corners are 1px smaller than the outer border radius
 const CHIP_INNER_CORNER_RADIUS: f32 = CHIP_CORNER_RADIUS - CHIP_BORDER_WIDTH;
@@ -286,6 +348,7 @@ pub struct DisplayChip {
     mouse_state: MouseStateHandle,
     diff_stats_mouse_state: MouseStateHandle,
     text: String,
+    value: Option<ChipValue>,
     chip_kind: ContextChipKind,
     display_chip_kind: DisplayChipKind,
     next_chip_kind: Option<ContextChipKind>,
@@ -357,6 +420,198 @@ impl GitLineChanges {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GitBranchTrackingStatus {
+    pub branch: String,
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    pub counts_available: bool,
+    #[serde(default)]
+    pub rebased: bool,
+}
+
+impl GitBranchTrackingStatus {
+    pub fn new(branch: String, upstream: Option<String>, ahead: u32, behind: u32) -> Self {
+        let counts_available = upstream.is_some();
+        Self {
+            branch,
+            upstream,
+            ahead,
+            behind,
+            counts_available,
+            rebased: false,
+        }
+    }
+
+    pub fn without_counts(branch: String, upstream: Option<String>) -> Self {
+        Self {
+            branch,
+            upstream,
+            ahead: 0,
+            behind: 0,
+            counts_available: false,
+            rebased: false,
+        }
+    }
+
+    pub fn rebased(branch: String, upstream: String) -> Self {
+        Self {
+            branch,
+            upstream: Some(upstream),
+            ahead: 0,
+            behind: 0,
+            counts_available: true,
+            rebased: true,
+        }
+    }
+
+    pub fn from_display_text(text: &str) -> Option<Self> {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+
+        let Some((branch, status_text)) = text.rsplit_once(" • ") else {
+            return Some(Self {
+                branch: text.to_string(),
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                counts_available: false,
+                rebased: false,
+            });
+        };
+
+        let Some((ahead, behind, rebased)) = Self::parse_display_status(status_text) else {
+            return Some(Self {
+                branch: text.to_string(),
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                counts_available: false,
+                rebased: false,
+            });
+        };
+
+        let branch = branch.trim();
+        if branch.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            branch: branch.to_string(),
+            upstream: None,
+            ahead,
+            behind,
+            counts_available: true,
+            rebased,
+        })
+    }
+
+    pub fn display_text(&self) -> String {
+        let mut parts = Vec::new();
+        if self.is_rebased() {
+            parts.push("⇅".to_string());
+        } else {
+            if let Some(ahead) = self.ahead_display_count() {
+                parts.push(format!("↑{ahead}"));
+            }
+            if let Some(behind) = self.behind_display_count() {
+                parts.push(format!("↓{behind}"));
+            }
+        }
+
+        if parts.is_empty() {
+            self.branch.clone()
+        } else {
+            format!("{} • {}", self.branch, parts.join(" "))
+        }
+    }
+
+    pub fn is_rebased(&self) -> bool {
+        self.counts_available && self.rebased
+    }
+
+    pub fn ahead_display_count(&self) -> Option<String> {
+        (!self.is_rebased() && self.counts_available && self.ahead > 0)
+            .then(|| Self::format_display_count(self.ahead))
+    }
+
+    pub fn behind_display_count(&self) -> Option<String> {
+        (!self.is_rebased() && self.counts_available && self.behind > 0)
+            .then(|| Self::format_display_count(self.behind))
+    }
+
+    fn format_display_count(count: u32) -> String {
+        const MAX_DISPLAY_COUNT: u32 = 999;
+        if count > MAX_DISPLAY_COUNT {
+            format!("{MAX_DISPLAY_COUNT}+")
+        } else {
+            count.to_string()
+        }
+    }
+
+    fn parse_display_count(count: &str) -> Option<u32> {
+        if let Some(capped_count) = count.strip_suffix('+') {
+            capped_count.parse::<u32>().ok()?.checked_add(1)
+        } else {
+            count.parse::<u32>().ok()
+        }
+    }
+
+    fn parse_display_status(status_text: &str) -> Option<(u32, u32, bool)> {
+        let mut ahead = 0;
+        let mut behind = 0;
+        let mut rebased = false;
+        let mut saw_status_token = false;
+
+        for part in status_text.split_whitespace() {
+            saw_status_token = true;
+            if part == "⇅" {
+                rebased = true;
+            } else if let Some(ahead_count) = part.strip_prefix('↑') {
+                ahead = Self::parse_display_count(ahead_count)?;
+            } else if let Some(behind_count) = part.strip_prefix('↓') {
+                behind = Self::parse_display_count(behind_count)?;
+            } else {
+                return None;
+            }
+        }
+
+        saw_status_token.then_some((ahead, behind, rebased))
+    }
+
+    fn tooltip_text(&self) -> String {
+        match &self.upstream {
+            Some(upstream) if self.is_rebased() => {
+                format!("Tracking {upstream} • branch was rebased")
+            }
+            Some(upstream) if self.counts_available => format!(
+                "Tracking {upstream} • ahead {}, behind {}",
+                self.ahead, self.behind
+            ),
+            Some(upstream) => {
+                format!("Tracking {upstream}; ahead/behind counts are unavailable")
+            }
+            None if self.is_rebased() => {
+                "Branch was rebased; upstream name is unavailable".to_string()
+            }
+            None if self.counts_available => format!(
+                "Ahead {}, behind {}; upstream name is unavailable",
+                self.ahead, self.behind
+            ),
+            None => "No upstream configured".to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for GitBranchTrackingStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.display_text())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum DisplayChipKind {
     Text,
@@ -381,6 +636,9 @@ pub enum DisplayChipKind {
         menu_open: bool,
         menu: ViewHandle<DisplayChipMenu>,
     },
+    GitBranchStatus {
+        tracking_status: Option<GitBranchTrackingStatus>,
+    },
     GithubPullRequest,
     GitDiffStats {
         line_changes_info: Option<GitLineChanges>,
@@ -394,6 +652,7 @@ impl DisplayChipKind {
             DisplayChipKind::NodeVersion { popup_open, .. } => *popup_open,
             DisplayChipKind::GitBranch { menu_open, .. } => *menu_open,
             DisplayChipKind::GithubPullRequest
+            | DisplayChipKind::GitBranchStatus { .. }
             | DisplayChipKind::GitDiffStats { .. }
             | DisplayChipKind::Text
             | DisplayChipKind::Ssh
@@ -663,6 +922,13 @@ impl DisplayChip {
             ContextChipKind::GitDiffStats => DisplayChipKind::GitDiffStats {
                 line_changes_info: None,
             },
+            ContextChipKind::GitBranchStatus => DisplayChipKind::GitBranchStatus {
+                tracking_status: chip_result
+                    .value
+                    .as_ref()
+                    .and_then(|value| value.as_git_branch_tracking_status())
+                    .cloned(),
+            },
             ContextChipKind::GithubPullRequest => DisplayChipKind::GithubPullRequest,
             ContextChipKind::WorkingDirectory => {
                 let dir_path = chip_result
@@ -883,7 +1149,12 @@ impl DisplayChip {
         Self {
             mouse_state: Default::default(),
             diff_stats_mouse_state: Default::default(),
-            text: chip_result.value.map(|v| v.to_string()).unwrap_or_default(),
+            text: chip_result
+                .value
+                .as_ref()
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            value: chip_result.value,
             chip_kind: chip_result.kind,
             display_chip_kind,
             next_chip_kind,
@@ -917,6 +1188,10 @@ impl DisplayChip {
 
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    pub fn value(&self) -> Option<&ChipValue> {
+        self.value.as_ref()
     }
 
     pub fn chip_kind(&self) -> &ContextChipKind {
@@ -971,6 +1246,7 @@ impl DisplayChip {
                 }
             }
             DisplayChipKind::GitDiffStats { .. }
+            | DisplayChipKind::GitBranchStatus { .. }
             | DisplayChipKind::Text
             | DisplayChipKind::Ssh
             | DisplayChipKind::Subshell
@@ -1199,6 +1475,127 @@ impl DisplayChip {
             })
             .with_cursor(Cursor::PointingHand)
             .finish()
+    }
+
+    fn git_branch_status_chip(
+        &self,
+        tracking_status: &Option<GitBranchTrackingStatus>,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let font_color = internal_colors::neutral_6(theme);
+        let font_family = appearance.ui_font_family();
+        let font_size = udi_font_size(appearance);
+        let fallback_branch = self.text.clone();
+        let tracking_status = tracking_status
+            .clone()
+            .or_else(|| GitBranchTrackingStatus::from_display_text(&self.text));
+        let tooltip_text = tracking_status
+            .as_ref()
+            .map(GitBranchTrackingStatus::tooltip_text);
+
+        Hoverable::new(self.mouse_state.clone(), move |state| {
+            let branch = tracking_status
+                .as_ref()
+                .map(|status| status.branch.clone())
+                .unwrap_or_else(|| fallback_branch.clone());
+
+            let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+            add_git_branch_status_child(
+                &mut content,
+                git_branch_status_icon(
+                    Icon::GitBranch,
+                    font_color,
+                    GIT_BRANCH_STATUS_BRANCH_ICON_SIZE,
+                ),
+                GIT_BRANCH_STATUS_MAIN_GAP,
+            );
+            add_git_branch_status_child(
+                &mut content,
+                git_branch_status_text(branch, font_color, font_family, font_size, appearance),
+                GIT_BRANCH_STATUS_MAIN_GAP,
+            );
+
+            if let Some(status) = tracking_status.as_ref() {
+                let show_rebased = status.is_rebased();
+                let ahead = status.ahead_display_count();
+                let behind = status.behind_display_count();
+                if show_rebased || ahead.is_some() || behind.is_some() {
+                    add_git_branch_status_child(
+                        &mut content,
+                        git_branch_status_text(
+                            "•".to_string(),
+                            font_color,
+                            font_family,
+                            font_size,
+                            appearance,
+                        ),
+                        GIT_BRANCH_STATUS_MAIN_GAP,
+                    );
+                }
+
+                if show_rebased {
+                    content.add_child(git_branch_status_icon(
+                        Icon::SwitchVertical02,
+                        font_color,
+                        GIT_BRANCH_STATUS_STATUS_ICON_SIZE,
+                    ));
+                } else {
+                    if let Some(ahead) = ahead {
+                        add_git_branch_status_child(
+                            &mut content,
+                            git_branch_status_count(
+                                Icon::ArrowUp,
+                                ahead,
+                                font_color,
+                                font_family,
+                                font_size,
+                                appearance,
+                            ),
+                            GIT_BRANCH_STATUS_MAIN_GAP,
+                        );
+                    }
+                    if let Some(behind) = behind {
+                        content.add_child(git_branch_status_count(
+                            Icon::ArrowDown,
+                            behind,
+                            font_color,
+                            font_family,
+                            font_size,
+                            appearance,
+                        ));
+                    }
+                }
+            }
+
+            let mut chip_element = Container::new(content.finish())
+                .with_background(theme.surface_1())
+                .with_border(
+                    Border::all(CHIP_BORDER_WIDTH)
+                        .with_border_color(internal_colors::neutral_3(theme)),
+                )
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CHIP_CORNER_RADIUS)))
+                .with_vertical_padding(GIT_BRANCH_STATUS_CHIP_VERTICAL_PADDING)
+                .with_horizontal_padding(GIT_BRANCH_STATUS_CHIP_HORIZONTAL_PADDING);
+            if state.is_hovered() {
+                chip_element = chip_element.with_background(theme.surface_2());
+            }
+
+            let mut stack = Stack::new().with_child(chip_element.finish());
+            if state.is_hovered() {
+                if let Some(tooltip_text) = tooltip_text.clone() {
+                    let tool_tip = appearance
+                        .ui_builder()
+                        .tool_tip(tooltip_text)
+                        .build()
+                        .finish();
+                    stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());
+                }
+            }
+            stack.finish()
+        })
+        .finish()
     }
 
     fn git_diff_stats_chip(
@@ -1585,6 +1982,9 @@ impl DisplayChip {
             DisplayChipKind::GitBranch { menu_open, menu } => {
                 Some(self.git_branch_chip(*menu_open, menu, app))
             }
+            DisplayChipKind::GitBranchStatus { tracking_status } => {
+                Some(self.git_branch_status_chip(tracking_status, app))
+            }
             DisplayChipKind::GithubPullRequest => Some(self.github_pull_request_chip(app)),
             DisplayChipKind::GitDiffStats { line_changes_info } => {
                 self.git_diff_stats_chip(line_changes_info, app)
@@ -1703,6 +2103,7 @@ impl TypedActionView for DisplayChip {
                 | DisplayChipKind::AgentPlanAndTodoList { .. }
                 | DisplayChipKind::Text
                 | DisplayChipKind::GithubPullRequest
+                | DisplayChipKind::GitBranchStatus { .. }
                 | DisplayChipKind::GitDiffStats { .. } => {}
                 DisplayChipKind::NodeVersion { popup_open, .. } => {
                     *popup_open = false;

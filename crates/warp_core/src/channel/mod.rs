@@ -58,6 +58,18 @@ impl Channel {
             Channel::Oss => "warp-oss",
         }
     }
+
+    /// Returns the Warp Control CLI command name corresponding to this channel.
+    pub fn warpctrl_command_name(&self) -> &'static str {
+        match self {
+            Channel::Stable => "warpctrl",
+            Channel::Dev => "warpctrl-dev",
+            Channel::Preview => "warpctrl-preview",
+            Channel::Local => "warpctrl-local",
+            Channel::Integration => "warpctrl-integration",
+            Channel::Oss => "warpctrl-oss",
+        }
+    }
 }
 
 impl fmt::Display for Channel {

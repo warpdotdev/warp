@@ -21,7 +21,10 @@ fn pill_status_sort_key(status: Option<&ConversationStatus>) -> u8 {
     match status {
         Some(ConversationStatus::Blocked { .. }) => 0,
         Some(ConversationStatus::Error) => 1,
-        Some(ConversationStatus::InProgress) | Some(ConversationStatus::WaitingForEvents) => 2,
+        // A recovering conversation sorts with the actively-running ones.
+        Some(ConversationStatus::InProgress)
+        | Some(ConversationStatus::TransientError)
+        | Some(ConversationStatus::WaitingForEvents) => 2,
         Some(ConversationStatus::Cancelled) | Some(ConversationStatus::Success) => DONE_STATUS_KEY,
         None => 2,
     }
@@ -201,7 +204,10 @@ pub fn aggregated_orchestrator_status(
             orchestrator_status = Some(status.clone());
         }
         match status {
-            ConversationStatus::InProgress => any_in_progress = true,
+            // A recovering node counts as still running for aggregation purposes.
+            ConversationStatus::InProgress | ConversationStatus::TransientError => {
+                any_in_progress = true
+            }
             ConversationStatus::WaitingForEvents => any_waiting = true,
             ConversationStatus::Blocked { .. } => {
                 if first_blocked.is_none() {

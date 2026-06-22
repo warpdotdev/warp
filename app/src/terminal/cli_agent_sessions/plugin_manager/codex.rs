@@ -55,6 +55,27 @@ impl CodexPluginManager {
             .map(|path| HashMap::from([("PATH".to_owned(), path.to_owned())]));
         run_cli_command_logged("codex", args, &self.executor, env_vars, log).await
     }
+
+    /// Ensures the codex-warp marketplace is registered, while preserving a
+    /// non-Git/local marketplace override. If the marketplace is already a
+    /// Git repo, upgrade it; if it is a non-Git source, leave it alone; otherwise
+    /// add it from the canonical repository.
+    async fn ensure_marketplace(&self, log: &mut String) -> Result<(), PluginInstallError> {
+        match codex_home_dir()
+            .ok()
+            .and_then(|dir| codex_warp_marketplace_config(&dir))
+        {
+            Some(config) if config.is_git() => {
+                self.run_logged(&["plugin", "marketplace", "upgrade", MARKETPLACE_NAME], log)
+                    .await
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.run_logged(&["plugin", "marketplace", "add", MARKETPLACE_REPO], log)
+                    .await
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -135,11 +156,7 @@ impl CliAgentPluginManager for CodexPluginManager {
         }
         let mut log = String::new();
         ensure_codex_home_dir()?;
-        self.run_logged(
-            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
-            &mut log,
-        )
-        .await?;
+        self.ensure_marketplace(&mut log).await?;
         self.run_logged(&["plugin", "add", PLUGIN_KEY], &mut log)
             .await?;
         Ok(())
@@ -208,11 +225,7 @@ impl CliAgentPluginManager for CodexPluginManager {
         }
         let mut log = String::new();
         ensure_codex_home_dir()?;
-        self.run_logged(
-            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
-            &mut log,
-        )
-        .await?;
+        self.ensure_marketplace(&mut log).await?;
         self.run_logged(&["plugin", "add", PLATFORM_PLUGIN_KEY], &mut log)
             .await?;
         let updated = codex_home_dir()

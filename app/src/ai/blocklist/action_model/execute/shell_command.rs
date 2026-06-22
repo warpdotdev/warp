@@ -74,7 +74,12 @@ impl ShellCommandExecutor {
         }
     }
 
-    fn handle_terminal_model_event(&mut self, event: &ModelEvent, _ctx: &mut ModelContext<Self>) {
+    fn handle_terminal_model_event(
+        &mut self,
+        _: ModelHandle<ModelEventDispatcher>,
+        event: &ModelEvent,
+        _ctx: &mut ModelContext<Self>,
+    ) {
         // We wait for precmd for the block _after_ the requested command's block so that
         // downstream checks for current working directory are fresh. The precmd hook is when
         // the shell relays current working directory to warp.
@@ -232,6 +237,18 @@ impl ShellCommandExecutor {
                     .is_active_and_long_running()
                 {
                     // If there is an active block, we can't execute another command.
+                    return ActionExecution::Sync(AIAgentActionResultType::RequestCommandOutput(
+                        RequestCommandOutputResult::CancelledBeforeExecution,
+                    ));
+                }
+                // If another conversation has taken over the agent view since this command
+                // was requested, cancel instead of executing.
+                let is_displaced_by_other_conversation = model
+                    .block_list()
+                    .agent_view_state()
+                    .active_conversation_id()
+                    .is_some_and(|active_id| active_id != input.conversation_id);
+                if is_displaced_by_other_conversation {
                     return ActionExecution::Sync(AIAgentActionResultType::RequestCommandOutput(
                         RequestCommandOutputResult::CancelledBeforeExecution,
                     ));

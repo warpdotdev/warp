@@ -919,6 +919,23 @@ type CreateManagedSecretOutput implements Response {
 
 union CreateManagedSecretResult = CreateManagedSecretOutput | UserFacingError
 
+input CreateManagedMcpClientConfigInput {
+  uid: ID!
+}
+
+type CreateManagedMcpClientConfigOutput implements Response {
+  transportKind: ManagedMcpTransportKind!
+  mcpConfigJson: String!
+  proxyUrl: String
+  proxyToken: String
+  authorizationHeaderName: String
+  authorizationHeaderValue: String
+  expiresAt: Time
+  responseContext: ResponseContext!
+}
+
+union CreateManagedMcpClientConfigResult = CreateManagedMcpClientConfigOutput | UserFacingError
+
 input CreateNotebookInput {
   aiDocumentId: String
   conversationId: String
@@ -1991,6 +2008,19 @@ type LlmHostSettings {
   enablementSetting: HostEnablementSetting
 
   """
+  Full resource name of the GCP workload identity provider that Gemini Enterprise
+  clients exchange Warp OIDC JWTs against (used as both the JWT audience and the
+  STS exchange audience).
+  """
+  gcpAudience: String
+
+  """
+  Email of the GCP service account that Gemini Enterprise clients impersonate after
+  the STS exchange. Empty means the federated token is used directly.
+  """
+  gcpSaEmail: String
+
+  """
   IAM role ARN that Oz Cloud Agents assume via the OIDC trust flow to obtain credentials for AWS Bedrock requests.
   """
   oidcAssumeRoleArn: String
@@ -2044,6 +2074,7 @@ enum LlmModelHost {
   AWS_BEDROCK
   CUSTOM_ENDPOINT
   DIRECT_API
+  GEMINI_ENTERPRISE
 }
 
 type LlmModelHostSettings {
@@ -2220,6 +2251,11 @@ type ManagedSecretOpenAiApiKeyValue {
 """A raw, unencrypted managed secret value."""
 type ManagedSecretRawValue {
   value: String!
+}
+
+enum ManagedMcpTransportKind {
+  URL
+  COMMAND
 }
 
 """Type of Warp-managed secret values."""
@@ -2844,6 +2880,7 @@ type RootMutation {
   createFileArtifactUploadTarget(input: CreateFileArtifactUploadTargetInput!, requestContext: RequestContext!): CreateFileArtifactUploadTargetResult!
   createFolder(input: CreateFolderInput!, requestContext: RequestContext!): CreateFolderResult!
   createGenericStringObject(input: CreateGenericStringObjectInput!, requestContext: RequestContext!): CreateGenericStringObjectResult!
+  createManagedMcpClientConfig(input: CreateManagedMcpClientConfigInput!, requestContext: RequestContext!): CreateManagedMcpClientConfigResult!
   createManagedSecret(input: CreateManagedSecretInput!, requestContext: RequestContext!): CreateManagedSecretResult!
   createNotebook(input: CreateNotebookInput!, requestContext: RequestContext!): CreateNotebookResult!
   createSimpleIntegration(input: CreateSimpleIntegrationInput!, requestContext: RequestContext!): CreateSimpleIntegrationResult!

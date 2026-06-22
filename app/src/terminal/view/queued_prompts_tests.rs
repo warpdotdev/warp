@@ -22,12 +22,13 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::block::FinishReason;
 use crate::ai::blocklist::{
-    AutofireAction, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
-    PendingAttachment, QueuedQuery, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin,
+    AutofireAction, BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    ConversationStatusUpdate, PendingAttachment, QueuedQuery, QueuedQueryId, QueuedQueryModel,
+    QueuedQueryOrigin, ResponseStreamId,
 };
 use crate::features::FeatureFlag;
 use crate::server::server_api::ai::SpawnAgentRequest;
-use crate::terminal::input::Event as InputEvent;
+use crate::terminal::input::{Event as InputEvent, Input};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -911,6 +912,133 @@ fn complete_drain_with_non_empty_input_preserves_edited_head_row() {
 }
 
 #[test]
+fn commit_edit_saves_current_editor_text_for_lrc_row() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(
+                    "stale committed".to_owned(),
+                    QueuedQueryOrigin::LrcAutoQueue,
+                ),
+                ctx,
+            )
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.enter_edit_mode(conversation_id, query_id, ctx);
+        });
+
+        let queued_prompts_panel = terminal.read(&app, |view, ctx| {
+            view.input()
+                .as_ref(ctx)
+                .queued_prompts_panel()
+                .cloned()
+                .expect("queue panel should exist")
+        });
+        queued_prompts_panel.update(&mut app, |panel, ctx| {
+            panel.set_edit_buffer_text_for_test("edited before finish", ctx);
+            panel.commit_edit(ctx);
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].id(), query_id);
+            assert_eq!(queue[0].text(), "edited before finish");
+            assert_eq!(model.editing_row(conversation_id), None);
+        });
+    });
+}
+
+#[test]
+fn lrc_finish_commits_edited_lrc_row_before_sending() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(
+                    "stale committed".to_owned(),
+                    QueuedQueryOrigin::LrcAutoQueue,
+                ),
+                ctx,
+            )
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.enter_edit_mode(conversation_id, query_id, ctx);
+        });
+
+        let queued_prompts_panel = terminal.read(&app, |view, ctx| {
+            view.input()
+                .as_ref(ctx)
+                .queued_prompts_panel()
+                .cloned()
+                .expect("queue panel should exist")
+        });
+        queued_prompts_panel.update(&mut app, |panel, ctx| {
+            panel.set_edit_buffer_text_for_test("edited before finish", ctx);
+        });
+
+        let edit_commit_count = Rc::new(RefCell::new(0));
+        let edit_commit_count_for_subscription = edit_commit_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(
+                &QueuedQueryModel::handle(ctx),
+                move |_, event: &crate::ai::blocklist::QueuedQueryEvent, _| {
+                    if matches!(
+                        event,
+                        crate::ai::blocklist::QueuedQueryEvent::EditCommitted { .. }
+                    ) {
+                        *edit_commit_count_for_subscription.borrow_mut() += 1;
+                    }
+                },
+            );
+        });
+
+        let ai_query_count = Rc::new(RefCell::new(0));
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let ai_query_count_for_subscription = ai_query_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &InputEvent, _| {
+                if matches!(event, InputEvent::ExecuteAIQuery) {
+                    *ai_query_count_for_subscription.borrow_mut() += 1;
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.send_lrc_queued_prompts(conversation_id, ctx);
+        });
+
+        assert_eq!(*edit_commit_count.borrow(), 1);
+        assert_eq!(*ai_query_count.borrow(), 1);
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
+
+#[test]
 fn complete_drain_with_empty_queue_returns_none() {
     with_singleton(|mut app, model, conv| {
         let action = drain_one(&model, &mut app, conv);
@@ -1170,30 +1298,7 @@ fn send_now_action_emits_row_kind_and_leaves_rows_for_host_to_fire() {
 
         // The panel keys its queue lookups on the history model's active conversation for its
         // terminal view, so seed one and build the panel as a child of that terminal view.
-        let terminal = add_window_with_terminal(&mut app, None);
-        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
-        let conversation_id =
-            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
-                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
-                history.set_active_conversation_id(id, terminal_view_id, ctx);
-                id
-            });
-        let suggestions_mode_model = {
-            let input = terminal.read(&app, |view, _| view.input.clone());
-            input.read(&app, |input, _| input.suggestions_mode_model().clone())
-        };
-        let cli_subagent_controller =
-            terminal.read(&app, |view, _| view.cli_subagent_controller.clone());
-        let panel = terminal.update(&mut app, |_, ctx| {
-            ctx.add_view(move |ctx| {
-                QueuedPromptsPanelView::new(
-                    terminal_view_id,
-                    suggestions_mode_model,
-                    cli_subagent_controller,
-                    ctx,
-                )
-            })
-        });
+        let (panel, conversation_id, _) = build_panel_with_active_conversation(&mut app);
 
         let (prompt_id, command_id) =
             QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
@@ -1256,30 +1361,7 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
-        let terminal = add_window_with_terminal(&mut app, None);
-        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
-        let conversation_id =
-            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
-                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
-                history.set_active_conversation_id(id, terminal_view_id, ctx);
-                id
-            });
-        let suggestions_mode_model = {
-            let input = terminal.read(&app, |view, _| view.input.clone());
-            input.read(&app, |input, _| input.suggestions_mode_model().clone())
-        };
-        let cli_subagent_controller =
-            terminal.read(&app, |view, _| view.cli_subagent_controller.clone());
-        let panel = terminal.update(&mut app, |_, ctx| {
-            ctx.add_view(move |ctx| {
-                QueuedPromptsPanelView::new(
-                    terminal_view_id,
-                    suggestions_mode_model,
-                    cli_subagent_controller,
-                    ctx,
-                )
-            })
-        });
+        let (panel, conversation_id, _) = build_panel_with_active_conversation(&mut app);
 
         // The locked initial cloud-mode prompt, plus a follow-up queued during setup.
         let (initial_id, followup_id) =
@@ -1316,6 +1398,207 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
                 panel.send_now_button_disabled_for_test(followup_id, ctx),
                 Some(false)
             );
+        });
+    });
+}
+
+/// Builds a panel keyed to a fresh terminal view with an active conversation, mirroring the
+/// construction the host `Input` performs. Returns the panel, the conversation id, and the
+/// host input.
+///
+/// When the QueueSlashCommand flag is on, the host input already owns a panel for this
+/// terminal view, and that panel is returned instead of constructing a second one: two panels
+/// on the same terminal view both react to `EditEntered` and fight over edit-editor focus, and
+/// the loser's `Blurred` handler commits the edit on the shared model out from under the test.
+fn build_panel_with_active_conversation(
+    app: &mut App,
+) -> (
+    ViewHandle<QueuedPromptsPanelView>,
+    AIConversationId,
+    ViewHandle<Input>,
+) {
+    let terminal = add_window_with_terminal(app, None);
+    let terminal_view_id = terminal.read(app, |view, _| view.view_id);
+    let conversation_id = BlocklistAIHistoryModel::handle(app).update(app, |history, ctx| {
+        let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+        history.set_active_conversation_id(id, terminal_view_id, ctx);
+        id
+    });
+    let input = terminal.read(app, |view, _| view.input.clone());
+    if let Some(panel) = input.read(app, |input, _| input.queued_prompts_panel().cloned()) {
+        return (panel, conversation_id, input);
+    }
+    let (suggestions_mode_model, host_editor) = input.read(app, |input, _| {
+        (
+            input.suggestions_mode_model().clone(),
+            input.editor().clone(),
+        )
+    });
+    let cli_subagent_controller =
+        terminal.read(app, |view, _| view.cli_subagent_controller.clone());
+    let panel = terminal.update(app, |_, ctx| {
+        ctx.add_view(move |ctx| {
+            QueuedPromptsPanelView::new(
+                terminal_view_id,
+                suggestions_mode_model,
+                cli_subagent_controller,
+                host_editor,
+                ctx,
+            )
+        })
+    });
+    (panel, conversation_id, input)
+}
+
+#[test]
+fn redetermine_terminal_focus_preserves_focused_queued_prompt_editor() {
+    App::test((), |mut app| async move {
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        let input = terminal.read(&app, |view, _| view.input.clone());
+        let panel = input
+            .read(&app, |input, _| input.queued_prompts_panel().cloned())
+            .expect("queue flag should create a queued prompts panel");
+        let row_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, user_query("edit me"), ctx)
+        });
+
+        panel.update(&mut app, |panel, ctx| {
+            panel.handle_action(&QueuedPromptsPanelAction::StartEditingRow(row_id), ctx);
+        });
+        panel.read(&app, |panel, ctx| {
+            assert!(panel.is_inline_edit_editor_focused(ctx));
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            assert!(
+                !view.redetermine_terminal_focus(ctx),
+                "focused queued-prompt edits should hold focus during async focus reconciliation"
+            );
+        });
+
+        panel.read(&app, |panel, ctx| {
+            assert!(panel.is_inline_edit_editor_focused(ctx));
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert_eq!(model.editing_row(conversation_id), Some(row_id));
+        });
+    });
+}
+
+#[test]
+fn can_send_prompt_gates_buttons_and_hint_while_nonempty_input_gates_only_the_hint() {
+    // When the host reports prompts cannot be sent (read-only shared-session viewer), every
+    // row's send-now button is disabled and the enter hint hides. A non-empty input hides the
+    // hint but leaves the buttons alone.
+    App::test((), |mut app| async move {
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+
+        let (panel, conversation_id, input) = build_panel_with_active_conversation(&mut app);
+        let row_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, user_query("send me"), ctx)
+        });
+
+        // Default: sendable, hint shown.
+        panel.read(&app, |panel, ctx| {
+            assert_eq!(
+                panel.send_now_button_disabled_for_test(row_id, ctx),
+                Some(false)
+            );
+            assert!(panel.enter_hint_shown_for_test(ctx));
+        });
+
+        // Sending unavailable: button disabled and hint hidden.
+        panel.update(&mut app, |panel, ctx| {
+            panel.set_can_send_prompt(false, ctx);
+        });
+        panel.read(&app, |panel, ctx| {
+            assert_eq!(
+                panel.send_now_button_disabled_for_test(row_id, ctx),
+                Some(true)
+            );
+            assert!(!panel.enter_hint_shown_for_test(ctx));
+        });
+
+        // Sending available again: button re-enabled and hint restored.
+        panel.update(&mut app, |panel, ctx| {
+            panel.set_can_send_prompt(true, ctx);
+        });
+        panel.read(&app, |panel, ctx| {
+            assert_eq!(
+                panel.send_now_button_disabled_for_test(row_id, ctx),
+                Some(false)
+            );
+            assert!(panel.enter_hint_shown_for_test(ctx));
+        });
+
+        // Non-empty input: hint hidden, button stays enabled. The panel reads the host
+        // editor's emptiness live, so writing into the input buffer is enough.
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("draft", ctx);
+        });
+        panel.read(&app, |panel, ctx| {
+            assert_eq!(
+                panel.send_now_button_disabled_for_test(row_id, ctx),
+                Some(false)
+            );
+            assert!(!panel.enter_hint_shown_for_test(ctx));
+        });
+    });
+}
+
+#[test]
+fn enter_hint_hidden_during_inline_edit_and_for_locked_head() {
+    // The enter hint hides while a row is in inline edit mode and while the locked initial
+    // cloud-mode prompt sits at the head of the queue.
+    App::test((), |mut app| async move {
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+
+        let (panel, conversation_id, _) = build_panel_with_active_conversation(&mut app);
+        let row_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, user_query("editable"), ctx)
+        });
+
+        panel.read(&app, |panel, ctx| {
+            assert!(panel.enter_hint_shown_for_test(ctx));
+        });
+
+        // Inline edit hides the hint; cancelling restores it.
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.enter_edit_mode(conversation_id, row_id, ctx);
+        });
+        panel.read(&app, |panel, ctx| {
+            assert!(!panel.enter_hint_shown_for_test(ctx));
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.cancel_edit(conversation_id, ctx);
+        });
+        panel.read(&app, |panel, ctx| {
+            assert!(panel.enter_hint_shown_for_test(ctx));
+        });
+
+        // A locked initial cloud-mode head row hides the hint.
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.remove_by_id(conversation_id, row_id, ctx);
+            model.append(
+                conversation_id,
+                QueuedQuery::new("initial".to_owned(), QueuedQueryOrigin::InitialCloudMode),
+                ctx,
+            );
+        });
+        panel.read(&app, |panel, ctx| {
+            assert!(!panel.enter_hint_shown_for_test(ctx));
         });
     });
 }
@@ -1363,6 +1646,92 @@ fn multi_cycle_queue_keeps_each_rows_attachments_independent() {
             assert_eq!(
                 m.attachments_for(conv, second_id)[0].file_name(),
                 "second.png"
+            );
+        });
+    });
+}
+
+#[test]
+fn finish_reason_is_scoped_to_the_finished_conversation() {
+    // An orchestration pane hosts the lead and local child conversations in one view, so the
+    // most recent block in the pane can belong to a sibling conversation that is still
+    // mid-turn. The per-conversation lookup must report the finished conversation's own block
+    // as Complete (so its queued prompts drain) and the streaming sibling's as unfinished.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let finished_block =
+                view.insert_dummy_ai_block("review".to_owned(), "done".to_owned(), ctx);
+            let finished_conversation = finished_block.as_ref(ctx).conversation_id();
+            // Inserted after the finished block, so it is the last block in the pane and
+            // masks the pane-global `active_ai_block` / `last_ai_block` lookups.
+            let streaming_block = view.insert_dummy_streaming_ai_block("working".to_owned(), ctx);
+            let streaming_conversation = streaming_block.as_ref(ctx).conversation_id();
+            assert_ne!(finished_conversation, streaming_conversation);
+
+            assert_eq!(
+                view.finish_reason_for_conversation(finished_conversation, ctx),
+                Some(FinishReason::Complete)
+            );
+            assert_eq!(
+                view.finish_reason_for_conversation(streaming_conversation, ctx),
+                None
+            );
+            // A conversation with no blocks in this pane has no finish reason.
+            assert_eq!(
+                view.finish_reason_for_conversation(AIConversationId::new(), ctx),
+                None
+            );
+        });
+    });
+}
+
+#[test]
+fn finished_receiving_output_drains_queue_when_sibling_block_masks_turn_end() {
+    // End-to-end through the controller-event path: `FinishedReceivingOutput` for a finished
+    // conversation must drain that conversation's queue even when a sibling conversation's
+    // still-streaming block is the most recent block in the pane (orchestration panes host the
+    // lead and local child conversations in one view).
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let finished_block =
+                view.insert_dummy_ai_block("review".to_owned(), "done".to_owned(), ctx);
+            let finished_conversation = finished_block.as_ref(ctx).conversation_id();
+            // Inserted after the finished block, so it is the last block in the pane and
+            // masks the pane-global `active_ai_block` / `last_ai_block` lookups.
+            let streaming_block = view.insert_dummy_streaming_ai_block("working".to_owned(), ctx);
+            let streaming_conversation = streaming_block.as_ref(ctx).conversation_id();
+            assert_ne!(finished_conversation, streaming_conversation);
+
+            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.append(finished_conversation, user_query("queued follow up"), ctx);
+                model.append(
+                    streaming_conversation,
+                    user_query("sibling stays queued"),
+                    ctx,
+                );
+            });
+
+            view.handle_ai_controller_event(
+                view.ai_controller.clone(),
+                &BlocklistAIControllerEvent::FinishedReceivingOutput {
+                    stream_id: ResponseStreamId::new_for_test(),
+                    conversation_id: finished_conversation,
+                },
+                ctx,
+            );
+
+            // The finished conversation's queued prompt fired; the still-streaming sibling's
+            // queue is untouched.
+            let model = QueuedQueryModel::as_ref(ctx);
+            assert!(model.queue(finished_conversation).is_empty());
+            assert_eq!(model.queue(streaming_conversation).len(), 1);
+            assert_eq!(
+                model.queue(streaming_conversation)[0].text(),
+                "sibling stays queued"
             );
         });
     });

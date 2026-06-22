@@ -132,4 +132,14 @@ define_settings_group!(AppIconSettings, settings: [
         toml_path: "appearance.icon.app_icon",
         description: "The app icon displayed in the dock.",
     },
+    show_dock_icon: ShowDockIconState {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::MAC,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        storage_key: "ShowDockIcon",
+        toml_path: "appearance.icon.show_dock_icon",
+        description: "Whether Warp is shown in the macOS Dock and Cmd-Tab switcher.",
+    },
 ]);

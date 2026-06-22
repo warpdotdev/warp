@@ -3817,7 +3817,7 @@ impl ansi::Handler for BlockList {
     }
 
     fn handle_completed_iterm_image(&mut self, image: ITermImage) {
-        delegate_to_block!(self.handle_completed_iterm_image(image))
+        delegate!(self.handle_completed_iterm_image(image))
     }
 
     fn handle_completed_kitty_action(
@@ -3825,7 +3825,7 @@ impl ansi::Handler for BlockList {
         action: KittyAction,
         metadata: &mut HashMap<u32, StoredImageMetadata>,
     ) -> Option<KittyResponse> {
-        delegate_to_block!(self.handle_completed_kitty_action(action, metadata))
+        delegate!(self.handle_completed_kitty_action(action, metadata))
     }
 
     fn set_keyboard_enhancement_flags(

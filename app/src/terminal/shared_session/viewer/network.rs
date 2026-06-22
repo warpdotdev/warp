@@ -43,7 +43,6 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::telemetry_context;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::block::BlockId;
-use crate::terminal::shared_session::network::heartbeat::{Event as HeartbeatEvent, Heartbeat};
 use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
 use crate::terminal::shared_session::viewer::event_loop::{
     EventLoop, SharedSessionInitialLoadMode,
@@ -108,8 +107,6 @@ struct CachedLatestState {
 /// The network interface to allow communication to and from the
 /// cloud-backed shared session.
 pub struct Network {
-    heartbeat: ModelHandle<Heartbeat>,
-
     session_id: SessionId,
     /// [`None`] until the viewer receives the successful join ack.
     event_loop: Option<ModelHandle<EventLoop>>,
@@ -163,11 +160,7 @@ impl Network {
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
-        let heartbeat = ctx.add_model(|_| Heartbeat::default());
-        ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
-
         let model = Network {
-            heartbeat,
             session_id,
             event_loop: None,
             ws_proxy_tx,
@@ -224,16 +217,12 @@ impl Network {
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
-        let heartbeat = ctx.add_model(|_| Heartbeat::default());
-        ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
-
         let session_id = SessionId::new();
         let viewer_id = ParticipantId::new();
         let viewer_firebase_uid = UserUid::new("mock_firebase_uid");
         let active_prompt = ActivePrompt::WarpPrompt("test warp prompt".to_owned());
 
         let model = Network {
-            heartbeat,
             session_id,
             event_loop: None,
             ws_proxy_tx,
@@ -283,21 +272,6 @@ impl Network {
         model
     }
 
-    /// We need to ensure we're maintaining a heartbeat with the server.
-    /// This helps us detect if the server has gone away silently and helps
-    /// the server detect if we (the client) have disconnected quietly.
-    fn handle_heartbeat_event(&mut self, event: &HeartbeatEvent, ctx: &mut ModelContext<Self>) {
-        match event {
-            HeartbeatEvent::Ping => {
-                self.send_message_to_server(UpstreamMessage::Ping { data: vec![] });
-            }
-            HeartbeatEvent::Idle => {
-                log::info!("Viewer reconnecting: heartbeat idle timeout");
-                self.reconnect_websocket(ctx);
-            }
-        }
-    }
-
     async fn get_user_id(
         auth_client: Arc<dyn AuthClient>,
         auth_state: &AuthState,
@@ -336,18 +310,11 @@ impl Network {
         stream: impl Stream,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.heartbeat.update(ctx, |heartbeat, ctx| {
-            heartbeat.start(ctx);
-        });
-
         // Receive messages from the server.
         ctx.spawn_stream_local(
             stream,
             |network, item, ctx| match item {
                 Ok(message) => {
-                    network.heartbeat.update(ctx, |heartbeat, ctx| {
-                        heartbeat.reset_idle_timeout(ctx);
-                    });
                     network.process_websocket_message(message, ctx);
                 }
                 Err(e) => {
@@ -356,13 +323,13 @@ impl Network {
             },
             |network, ctx| {
                 log::info!("Websocket to session sharing server ended");
-                // Close our current websocket proxy, because we may try to reconnect and that will create a new websocket proxy.
-                // This must be done before trying to reconnect.
-                network.close();
                 if matches!(network.stage, Stage::JoinedSuccessfully) {
                     // The connection may have timed out or the server restarted.
                     log::info!("Viewer reconnecting: websocket closed by server");
                     network.reconnect_websocket(ctx);
+                } else if !matches!(network.stage, Stage::Reconnecting { .. }) {
+                    // Not reconnecting — clean up the proxy channel.
+                    network.close();
                 }
             },
         );
@@ -456,6 +423,11 @@ impl Network {
         if matches!(self.stage, Stage::Finished | Stage::Reconnecting { .. }) {
             return;
         }
+        // Close the old connection before reconnecting so the server sees
+        // WebsocketClosed immediately rather than waiting for its own idle
+        // timer. Stage is guaranteed not Reconnecting here, so close() will
+        // not abort any in-progress reconnect handle.
+        self.close();
         let Some(event_loop) = self.event_loop.clone() else {
             log::error!("Cannot reconnect to server as viewer when event loop does not exist");
             return;
@@ -548,10 +520,11 @@ impl Network {
     }
 
     fn process_websocket_message(&mut self, message: Message, ctx: &mut ModelContext<Self>) {
-        let Some(msg) = message
-            .text()
-            .and_then(|t| DownstreamMessage::from_json(t).ok())
-        else {
+        // Ignore non-text frames (e.g. ping frames sent by the server).
+        let Some(text) = message.text() else {
+            return;
+        };
+        let Some(msg) = DownstreamMessage::from_json(text).ok() else {
             log::warn!("Got unexpected message from shared session viewer websocket");
             return;
         };

@@ -327,7 +327,7 @@ impl BlocklistAIActionExecutor {
         let use_computer_executor = ctx.add_model(|_| UseComputerExecutor::new());
         let request_computer_use_executor =
             ctx.add_model(|_| RequestComputerUseExecutor::new(terminal_view_id));
-        let read_skill_executor = ctx.add_model(|_| ReadSkillExecutor::new());
+        let read_skill_executor = ctx.add_model(|_| ReadSkillExecutor::new(active_session.clone()));
         let fetch_conversation_executor = ctx.add_model(|_| FetchConversationExecutor::new());
         let start_agent_executor = ctx.add_model(StartAgentExecutor::new);
         let run_agents_executor = ctx

@@ -265,6 +265,7 @@ pub enum GlobalBufferModelEvent {
     },
     FileSaved {
         file_id: FileId,
+        content_version: ContentVersion,
     },
     FailedToSave {
         file_id: FileId,
@@ -272,9 +273,7 @@ pub enum GlobalBufferModelEvent {
     },
     /// A remote buffer update conflicted with local edits.
     /// The UI should present a resolution dialog.
-    RemoteBufferConflict {
-        file_id: FileId,
-    },
+    RemoteBufferConflict { file_id: FileId },
     /// A server-local buffer was updated from a file-watcher event.
     /// Carries the incremental diff edits for the ServerModel to push
     /// to connected clients as `BufferUpdatedPush`.
@@ -338,7 +337,7 @@ impl GlobalBufferModel {
         if FeatureFlag::SshRemoteServer.is_enabled() {
             use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
             let mgr = RemoteServerManager::handle(_ctx);
-            _ctx.subscribe_to_model(&mgr, |me, event, ctx| match event {
+            _ctx.subscribe_to_model(&mgr, |me, _, event, ctx| match event {
                 RemoteServerManagerEvent::BufferUpdated {
                     host_id,
                     path,
@@ -677,7 +676,12 @@ impl GlobalBufferModel {
     }
 
     #[cfg(feature = "local_fs")]
-    fn handle_file_model_events(&mut self, event: &FileModelEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_file_model_events(
+        &mut self,
+        _: ModelHandle<FileModel>,
+        event: &FileModelEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             FileModelEvent::FileLoaded {
                 content,
@@ -778,7 +782,10 @@ impl GlobalBufferModel {
                 if let Some(state) = self.buffers.get_mut(id) {
                     state.set_base_content_version(*version);
                 }
-                ctx.emit(GlobalBufferModelEvent::FileSaved { file_id: *id });
+                ctx.emit(GlobalBufferModelEvent::FileSaved {
+                    file_id: *id,
+                    content_version: *version,
+                });
             }
             FileModelEvent::FailedToSave { id, error } => {
                 ctx.emit(GlobalBufferModelEvent::FailedToSave {
@@ -834,7 +841,10 @@ impl GlobalBufferModel {
                     async move { handle.save_buffer(path).await },
                     move |_me, result, ctx| match result {
                         Ok(()) => {
-                            ctx.emit(GlobalBufferModelEvent::FileSaved { file_id });
+                            ctx.emit(GlobalBufferModelEvent::FileSaved {
+                                file_id,
+                                content_version: version,
+                            });
                         }
                         Err(error) => {
                             log::warn!("Remote save failed: {error}");
@@ -1057,7 +1067,7 @@ impl GlobalBufferModel {
 
         // Subscribe to buffer events for LSP sync.
         let path_clone = path.clone();
-        ctx.subscribe_to_model(&buffer, move |me, event, ctx| {
+        ctx.subscribe_to_model(&buffer, move |me, _, event, ctx| {
             use warp_editor::content::buffer::BufferEvent;
 
             let Some(state) = me.buffers.get(&file_id) else {
@@ -1196,7 +1206,7 @@ impl GlobalBufferModel {
         });
 
         let path_clone = path.to_path_buf();
-        ctx.subscribe_to_model(&buffer, move |me, event, ctx| {
+        ctx.subscribe_to_model(&buffer, move |me, _, event, ctx| {
             use warp_editor::content::buffer::BufferEvent;
 
             let Some(state) = me.buffers.get(&file_id) else {
@@ -1491,6 +1501,7 @@ impl GlobalBufferModel {
     #[cfg(feature = "local_fs")]
     fn handle_lsp_manager_events(
         &mut self,
+        _: ModelHandle<LspManagerModel>,
         event: &LspManagerModelEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1679,7 +1690,7 @@ impl GlobalBufferModel {
         if let Some(client) = &client_for_sub {
             let client = client.clone();
             let path_for_edit = path_str.clone();
-            ctx.subscribe_to_model(&buffer, move |me, event, ctx| {
+            ctx.subscribe_to_model(&buffer, move |me, _, event, ctx| {
                 use warp_editor::content::buffer::BufferEvent;
                 if let BufferEvent::ContentChanged { delta, origin, .. } = event {
                     // Skip server-originated changes to prevent echo loop.

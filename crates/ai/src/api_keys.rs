@@ -7,6 +7,10 @@ use warpui_core::{Entity, ModelContext, SingletonEntity};
 use warpui_extras::secure_storage::{self, AppContextExt};
 
 pub use crate::aws_credentials::{AwsCredentials, AwsCredentialsState};
+pub use crate::geap_credentials::{
+    GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding,
+    LoadGeapCredentialsError, GEAP_REFRESH_LEAD_TIME,
+};
 
 const SECURE_STORAGE_KEY: &str = "AiApiKeys";
 
@@ -78,9 +82,19 @@ impl ApiKeys {
                 .any(|endpoint| !endpoint.api_key.trim().is_empty())
     }
 
-    /// Returns `true` when the user has at least one custom endpoint configured.
-    pub fn has_custom_endpoints(&self) -> bool {
-        !self.custom_endpoints.is_empty()
+    /// Number of single-provider API keys currently configured (OpenAI,
+    /// Anthropic, Google, OpenRouter). Custom endpoints are counted separately
+    /// via `custom_endpoints`.
+    pub fn provider_key_count(&self) -> usize {
+        [
+            &self.openai,
+            &self.anthropic,
+            &self.google,
+            &self.open_router,
+        ]
+        .into_iter()
+        .filter(|key| key.as_deref().is_some_and(|v| !v.trim().is_empty()))
+        .count()
     }
 }
 
@@ -109,22 +123,13 @@ pub struct GrokTokens {
 }
 
 impl GrokTokens {
-    /// Stop sending / start refreshing this long before the hard expiry so we
-    /// never hand the server a token that expires mid-flight.
-    const EXPIRY_SKEW: Duration = Duration::from_secs(60);
-
-    /// Returns the access token when it is non-empty and not within
-    /// [`Self::EXPIRY_SKEW`] of expiring. An unknown (`None`) expiry is treated
-    /// as valid — the server remains the final authority on the token.
-    pub fn valid_access_token(&self) -> Option<&str> {
-        if self.access_token.trim().is_empty() {
-            return None;
-        }
-        match self.expires_at {
-            Some(expires_at) => (expires_at > SystemTime::now() + Self::EXPIRY_SKEW)
-                .then_some(self.access_token.as_str()),
-            None => Some(self.access_token.as_str()),
-        }
+    /// Returns the access token whenever it is non-empty, regardless of
+    /// expiry. Possibly-expired tokens are still sent so the server stays the
+    /// final authority on token validity (it rejects truly invalid tokens);
+    /// `crate::grok_subscription` refreshes (nearly) expired tokens in the
+    /// background.
+    pub fn access_token_for_request(&self) -> Option<&str> {
+        (!self.access_token.trim().is_empty()).then_some(self.access_token.as_str())
     }
 
     /// Returns `true` when the token is known to expire within `lead_time` and
@@ -166,8 +171,15 @@ pub struct ApiKeyManager {
     /// via `ApiKeyManager::set_grok_refresh_allowed` (`crate::grok_subscription`).
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_allowed: bool,
+    /// Guards against overlapping Grok token refreshes: the proactive refresh
+    /// timer and the request-time safety net
+    /// (`ApiKeyManager::refresh_grok_tokens_if_needed`) can otherwise race.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) grok_refresh_in_flight: bool,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
+    /// In-memory Gemini Enterprise (GEAP) credential state.
+    pub(crate) geap_credentials_state: GeapCredentialsState,
     secure_storage_write_version: u64,
     grok_secure_storage_write_version: u64,
 }
@@ -181,8 +193,11 @@ impl ApiKeyManager {
             grok_tokens,
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_allowed: false,
+            #[cfg(not(target_family = "wasm"))]
+            grok_refresh_in_flight: false,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
+            geap_credentials_state: GeapCredentialsState::Missing,
             secure_storage_write_version: 0,
             grok_secure_storage_write_version: 0,
         }
@@ -196,6 +211,21 @@ impl ApiKeyManager {
     /// Grok subscription.
     pub fn grok_tokens(&self) -> Option<&GrokTokens> {
         self.grok_tokens.as_ref()
+    }
+
+    /// Returns `true` when a Grok subscription is connected with a usable OAuth
+    /// access token.
+    pub fn has_grok_subscription(&self) -> bool {
+        self.grok_tokens
+            .as_ref()
+            .and_then(GrokTokens::access_token_for_request)
+            .is_some()
+    }
+
+    /// Returns `true` when the user has any usable BYO credential: a pasted
+    /// provider or custom-endpoint key, or a connected Grok subscription.
+    pub fn has_any_key(&self) -> bool {
+        self.keys.has_any_key() || self.has_grok_subscription()
     }
 
     /// Stores (or clears, with `None`) the xAI/Grok OAuth tokens and persists
@@ -323,6 +353,22 @@ impl ApiKeyManager {
         &self.aws_credentials_state
     }
 
+    pub fn set_geap_credentials_state(
+        &mut self,
+        state: GeapCredentialsState,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.geap_credentials_state == state {
+            return;
+        }
+        self.geap_credentials_state = state;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+    }
+
+    pub fn geap_credentials_state(&self) -> &GeapCredentialsState {
+        &self.geap_credentials_state
+    }
+
     pub fn aws_credentials_refresh_strategy(&self) -> AwsCredentialsRefreshStrategy {
         self.aws_credentials_refresh_strategy.clone()
     }
@@ -387,6 +433,7 @@ impl ApiKeyManager {
         &self,
         include_byo_keys: bool,
         include_aws_bedrock_credentials: bool,
+        geap_binding: Option<GeapMintBinding>,
     ) -> Option<api::request::settings::ApiKeys> {
         let anthropic = include_byo_keys
             .then(|| self.keys.anthropic.clone())
@@ -408,12 +455,13 @@ impl ApiKeyManager {
         // The connected Grok subscription's OAuth access token is user-provided
         // auth, just like a pasted BYO API key, so it respects the same BYO
         // policy gate: when BYO keys are disabled (e.g. by workspace policy),
-        // the token must not be sent.
+        // the token must not be sent. Possibly-expired tokens ARE sent — the
+        // server is the authority on validity.
         let grok_oauth_access_token = include_byo_keys
             .then(|| {
                 self.grok_tokens
                     .as_ref()
-                    .and_then(GrokTokens::valid_access_token)
+                    .and_then(GrokTokens::access_token_for_request)
                     .map(str::to_owned)
             })
             .flatten()
@@ -435,12 +483,36 @@ impl ApiKeyManager {
             })
             .flatten();
 
+        // Gemini Enterprise (GEAP) credentials attach only when the caller's
+        // gate is on AND the stored token was minted for that same
+        // (user, audience, SA) binding.
+        let google_cloud_credentials: Option<
+            api::request::settings::api_keys::GoogleCloudCredentials,
+        > = geap_binding
+            .as_ref()
+            .and_then(|binding| match self.geap_credentials_state {
+                GeapCredentialsState::Loaded {
+                    ref credentials,
+                    ref minted_for,
+                    ..
+                } if minted_for == binding => credentials
+                    .access_token_for_request()
+                    .map(|_| credentials.clone().into()),
+                GeapCredentialsState::Refreshing {
+                    previous: Some((ref credentials, ref minted_for)),
+                } if minted_for == binding => credentials
+                    .access_token_for_request()
+                    .map(|_| credentials.clone().into()),
+                _ => None,
+            });
+
         if anthropic.is_empty()
             && openai.is_empty()
             && google.is_empty()
             && open_router.is_empty()
             && grok_oauth_access_token.is_empty()
             && aws_credentials.is_none()
+            && google_cloud_credentials.is_none()
         {
             None
         } else {
@@ -452,9 +524,7 @@ impl ApiKeyManager {
                 grok_oauth_access_token,
                 allow_use_of_warp_credits: false,
                 aws_credentials,
-                // GCP credentials (Gemini Enterprise Agent Platform) are not
-                // collected by the client yet.
-                google_cloud_credentials: None,
+                google_cloud_credentials,
             })
         }
     }

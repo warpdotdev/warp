@@ -42,7 +42,7 @@ mod gpu_state;
 mod input_classifier;
 mod interval_timer;
 mod linear;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "local_fs")]
 mod local_control;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod login_item;
@@ -151,6 +151,7 @@ use auth::auth_manager::AuthManager;
 use auth::auth_state::{AuthState, AuthStateProvider};
 use code::editor_management::CodeManager;
 use code::opened_files::OpenedFilesModel;
+use code_review::git_repo_model::GitRepoModels;
 use code_review::GlobalCodeReviewModel;
 use quit_warning::UnsavedStateSummary;
 #[cfg(feature = "local_fs")]
@@ -178,6 +179,8 @@ use watcher::HomeDirectoryWatcher;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::AwsCredentialRefresher as _;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::geap_credentials::GeapCredentialRefresher as _;
 use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
 use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 pub mod workflows;
@@ -217,7 +220,6 @@ pub use warp_core::r#async::debounce;
 // Re-export the send_telemetry_from_ctx macro at the crate root level
 pub use warp_core::send_telemetry_from_app_ctx;
 pub use warp_core::send_telemetry_from_ctx;
-use warp_core::user_preferences::GetUserPreferences as _;
 // Re-export the safe logging macros at the crate root level for backwards compatibility
 pub use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
 #[cfg(feature = "local_fs")]
@@ -537,6 +539,16 @@ impl LaunchMode {
         }
     }
 
+    fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            LaunchMode::App { .. } => "app",
+            LaunchMode::CommandLine { command, .. } => command.as_str_for_tracing(),
+            LaunchMode::Test { .. } => "test",
+            LaunchMode::RemoteServerDaemon { .. } => "remote_server_daemon",
+            LaunchMode::RemoteServerProxy => "remote_server_proxy",
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn new_for_unit_test() -> Self {
         LaunchMode::Test {
@@ -579,7 +591,11 @@ fn apply_scroll_multiplier(event: &mut Event, app: &AppContext) {
     }
 }
 
-/// Runs the app. If a subcommand was requested, it'll be run instead of the main application.
+/// Runs the shared Warp executable as the app or as one of its command-line modes.
+///
+/// The bundled Warp Control wrapper injects `--warpctrl`, which is dispatched
+/// before the normal Warp/Oz parser. Oz subcommands are part of that normal
+/// parser and therefore do not require a separate mode flag.
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
 pub fn run() -> Result<()> {
     // Perform any necessary platform-specific initialization.
@@ -799,7 +815,11 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
     // Start the `run_internal` span here - we can't do it before this point
     // because we need the tracing initialization to be complete first.
-    let span = ::tracing::info_span!("run_internal", tags.cloud_agent = true);
+    let span = ::tracing::info_span!(
+        "run_internal",
+        tags.cloud_agent = true,
+        launch_mode = launch_mode.as_str_for_tracing()
+    );
     let _enter = span.enter();
 
     let log_destination = launch_mode.log_destination();
@@ -922,7 +942,12 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // the TOML-backed store. When disabled, they live in the platform-native
     // store (same backend as private). Use the correct one for pre-app reads.
     #[cfg_attr(
-        not(any(enable_crash_recovery, any(target_os = "linux", target_os = "freebsd"))),
+        not(any(
+            enable_crash_recovery,
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "macos"
+        )),
         expect(unused)
     )]
     let prefs_for_public_settings: &dyn warpui_extras::user_preferences::UserPreferences =
@@ -974,6 +999,11 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         let dev_icon = ASSETS.get("bundled/png/local.png")?;
         app_builder.set_dev_icon(dev_icon);
 
+        let show_dock_icon = crate::settings::app_icon::ShowDockIconState::read_from_preferences(
+            prefs_for_public_settings,
+        )
+        .unwrap_or_else(crate::settings::app_icon::ShowDockIconState::default_value);
+        app_builder.set_show_dock_icon_on_launch(show_dock_icon);
         app_builder.set_menu_bar_builder(app_menus::menu_bar);
         app_builder.set_dock_menu_builder(|_| app_menus::dock_menu());
     }
@@ -1096,16 +1126,23 @@ pub(crate) fn initialize_app(
     // any other stuff here, as failures will be silent. Push them to pre_sentry_errors instead.
     let data_domain = ChannelState::data_domain();
 
-    // Register an implementation of the secure storage service.
-    cfg_if::cfg_if! {
-        if #[cfg(feature = "integration_tests")] {
-            warpui_extras::secure_storage::register_noop(&data_domain, ctx);
-        } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-            warpui_extras::secure_storage::register_with_fallback(&data_domain, warp_core::paths::state_dir(), ctx)
-        } else if #[cfg(target_os = "windows")] {
-            warpui_extras::secure_storage::register_with_dir(&data_domain, warp_core::paths::state_dir(), ctx)
-        } else {
-            warpui_extras::secure_storage::register(&data_domain, ctx);
+    // Daemon auth arrives through the client handshake, so avoid platform keychains that may
+    // require an interactive unlock prompt. Other headless modes still use secure storage for
+    // persisted login and BYO provider credentials.
+    if matches!(launch_mode, LaunchMode::RemoteServerDaemon { .. }) {
+        warpui_extras::secure_storage::register_unavailable(ctx);
+    } else {
+        // Register an implementation of the secure storage service.
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "integration_tests")] {
+                warpui_extras::secure_storage::register_noop(&data_domain, ctx);
+            } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
+                warpui_extras::secure_storage::register_with_fallback(&data_domain, warp_core::paths::state_dir(), ctx)
+            } else if #[cfg(target_os = "windows")] {
+                warpui_extras::secure_storage::register_with_dir(&data_domain, warp_core::paths::state_dir(), ctx)
+            } else {
+                warpui_extras::secure_storage::register(&data_domain, ctx);
+            }
         }
     }
 
@@ -1167,7 +1204,21 @@ pub(crate) fn initialize_app(
     });
 
     let server_api = server_api_provider.as_ref(ctx).get();
+    #[cfg(not(target_family = "wasm"))]
+    if let Ok(run_id) = std::env::var(warp_cli::OZ_RUN_ID_ENV) {
+        match run_id.parse() {
+            Ok(task_id) => server_api.set_ambient_agent_task_id(Some(task_id)),
+            Err(err) => log::warn!("Ignoring invalid {}: {err}", warp_cli::OZ_RUN_ID_ENV),
+        }
+    }
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
+    #[cfg(not(target_family = "wasm"))]
+    // Refresh starts only after the authenticated server client exists; tracing initialization
+    // remains responsible for deciding whether this process opted in to cloud-agent export.
+    tracing::start_auth_refresh(
+        server_api_provider.as_ref(ctx).get_managed_secrets_client(),
+        ctx,
+    );
 
     ctx.add_singleton_model(|_ctx| AuthStateProvider::new(auth_state.clone()));
 
@@ -1344,6 +1395,12 @@ pub(crate) fn initialize_app(
         let mut manager = ::ai::api_keys::ApiKeyManager::new(ctx);
         #[cfg(not(target_family = "wasm"))]
         manager.subscribe_to_settings_changes(ctx);
+        // Gemini Enterprise (GEAP) credential refresh triggers: workspace
+        // settings saves / team changes and the member's enablement toggle.
+        #[cfg(not(target_family = "wasm"))]
+        if FeatureFlag::GeminiEnterprise.is_enabled() {
+            manager.subscribe_to_geap_settings_changes(ctx);
+        }
         // The Grok subscription refresher (`ai::grok_subscription`) has no
         // visibility into workspace policy, so wire the BYO API key policy in
         // here. The initial value resumes proactive refresh of any tokens
@@ -1352,7 +1409,7 @@ pub(crate) fn initialize_app(
         #[cfg(not(target_family = "wasm"))]
         if FeatureFlag::SuperGrok.is_enabled() {
             use crate::workspaces::user_workspaces::UserWorkspacesEvent;
-            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, event, ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, _, event, ctx| {
                 if matches!(event, UserWorkspacesEvent::TeamsChanged) {
                     let allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
                     manager.set_grok_refresh_allowed(allowed, ctx);
@@ -1597,7 +1654,7 @@ pub(crate) fn initialize_app(
             {
                 use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
                 let mgr = RemoteServerManager::handle(ctx);
-                ctx.subscribe_to_model(&mgr, |me, event, ctx| match event {
+                ctx.subscribe_to_model(&mgr, |me, _, event, ctx| match event {
                     RemoteServerManagerEvent::RepoMetadataSnapshot { host_id, update } => {
                         me.insert_remote_snapshot(host_id.clone(), update, ctx);
                     }
@@ -1616,10 +1673,7 @@ pub(crate) fn initialize_app(
         });
     }
 
-    {
-        use code_review::git_status_update::GitStatusUpdateModel;
-        ctx.add_singleton_model(|_| GitStatusUpdateModel::new());
-    }
+    ctx.add_singleton_model(|_| GitRepoModels::new());
 
     ctx.add_singleton_model(|ctx| {
         ProjectManagementModel::new(persisted_projects, persistence_writer.sender(), ctx)
@@ -1675,9 +1729,6 @@ pub(crate) fn initialize_app(
     ai_assistant::panel::init(ctx);
     settings_view::update_environment_form::init(ctx);
     env_vars::env_var_collection_block::init(ctx);
-    terminal::ssh::install_tmux::init(ctx);
-    terminal::ssh::warpify::init(ctx);
-    terminal::ssh::error::init(ctx);
     context_chips::display_menu::init(ctx);
     context_chips::node_version_popup::init(ctx);
     env_vars::view::env_var_collection::init(ctx);
@@ -2003,17 +2054,6 @@ pub(crate) fn initialize_app(
 
     ctx.add_singleton_model(move |_| timer);
 
-    let is_ssh_tmux_wrapper_enabled = ctx
-        .private_user_preferences()
-        .read_value("SshTmuxWrapperOverride")
-        .ok()
-        .flatten()
-        .and_then(|s| s.parse().ok());
-
-    if let Some(is_ssh_tmux_wrapper_enabled) = is_ssh_tmux_wrapper_enabled {
-        FeatureFlag::SSHTmuxWrapper.set_user_preference(is_ssh_tmux_wrapper_enabled);
-    }
-
     ctx.add_singleton_model(|ctx| AIExecutionProfilesModel::new(launch_mode, ctx));
 
     ctx.add_singleton_model(DefaultTerminal::new);
@@ -2063,6 +2103,10 @@ pub(crate) fn initialize_app(
     // Index global rules (e.g. ~/.agents/AGENTS.md) on a background task so
     // they are available to subsequent agent queries.
     ProjectContextModel::handle(ctx).update(ctx, |me, ctx| me.index_global_rules(ctx));
+    #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
+    {
+        ctx.add_singleton_model(ai::remote_agent_context::RemoteAgentContext::new);
+    }
 
     ctx.add_singleton_model(|ctx| {
         PersistedWorkspace::new(
@@ -2093,7 +2137,7 @@ pub(crate) fn initialize_app(
         ];
         http_server::HttpServer::new(routers, ctx)
     });
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "local_fs")]
     if matches!(
         launch_mode,
         LaunchMode::App { .. } | LaunchMode::Test { .. }

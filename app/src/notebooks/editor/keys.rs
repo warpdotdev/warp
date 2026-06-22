@@ -1,6 +1,6 @@
 //! Utilities for notebook keybindings.
 
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
 use crate::util::bindings::{
@@ -40,6 +40,7 @@ impl NotebookKeybindings {
 
     fn handle_keybinding_change(
         &mut self,
+        _: ModelHandle<KeybindingChangedNotifier>,
         event: &KeybindingChangedEvent,
         ctx: &mut ModelContext<Self>,
     ) {

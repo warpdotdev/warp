@@ -1,37 +1,16 @@
 //! Wire protocol envelopes and error types for Warp local control.
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub use crate::catalog::{
     ActionImplementationStatus, ActionKind, ActionMetadata, ActionParameterSpec, ActionResultSpec,
-    AuthenticatedUserRequirement, ExecutionContextProof, InvocationContext, PROTOCOL_VERSION,
-    TargetScope,
+    PROTOCOL_VERSION, TargetScope,
 };
 pub use crate::selectors::{
-    PaneSelector, PaneTarget, TabSelector, TabTarget, TargetSelector, WindowSelector, WindowTarget,
+    PaneSelector, PaneTarget, SessionSelector, SessionTarget, TabSelector, TabTarget,
+    TargetSelector, WindowSelector, WindowTarget,
 };
-
-/// Opaque Drive object identifier supplied by Warp metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct DriveObjectId(pub String);
-
-/// Public Warp Drive object families addressed by the control protocol.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DriveObjectType {
-    Workflow,
-    Notebook,
-    EnvVarCollection,
-    Prompt,
-    Folder,
-    AiFact,
-    AiRule,
-    McpServer,
-    McpServerCollection,
-    Space,
-    Trash,
-}
 
 /// Common layout direction values accepted by pane and tab mutations.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,24 +24,7 @@ pub enum Direction {
     Next,
 }
 
-/// Input mode values accepted by `input.mode.set`.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum InputMode {
-    Terminal,
-    Agent,
-}
-
-/// Output flavor for block output reads.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BlockOutputFormat {
-    Plain,
-    Ansi,
-    Json,
-}
-
-/// Tab type accepted by `tab.create`.
+/// Tab type accepted by `tab.create` and `window.create`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TabType {
@@ -70,146 +32,6 @@ pub enum TabType {
     Agent,
     CloudAgent,
     Default,
-}
-
-/// Typed parameter payloads for public catalog actions.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ActionParams {
-    None,
-    ActionName {
-        action: String,
-    },
-    BindingName {
-        binding_name: String,
-    },
-    BooleanValue {
-        value: bool,
-    },
-    ColorValue {
-        color: String,
-    },
-    Direction {
-        direction: Direction,
-    },
-    DriveObjectCreate(DriveObjectCreateParams),
-    DriveObjectId {
-        id: DriveObjectId,
-    },
-    DriveObjectInsert(DriveObjectInsertParams),
-    DriveObjectList {
-        object_type: DriveObjectType,
-    },
-    DriveObjectUpdate(DriveObjectUpdateParams),
-    FileOpen(FileOpenParams),
-    InputMode {
-        mode: InputMode,
-    },
-    Key {
-        key: String,
-    },
-    KeyValue {
-        key: String,
-        value: serde_json::Value,
-    },
-    Limit {
-        limit: Option<u32>,
-    },
-    Namespace {
-        namespace: Option<String>,
-    },
-    PageQuery {
-        page: Option<String>,
-        query: Option<String>,
-    },
-    Query {
-        query: Option<String>,
-    },
-    Rename {
-        title: String,
-    },
-    Resize {
-        direction: Direction,
-        amount: Option<u32>,
-    },
-    TabActivate {
-        mode: TabActivationMode,
-    },
-    TabClose {
-        mode: TabCloseMode,
-    },
-    TabCreate(TabCreateParams),
-    Text {
-        text: String,
-    },
-    ThemeName {
-        theme_name: String,
-    },
-    WorkflowRun(WorkflowRunParams),
-}
-
-/// Parameters for `tab.create` and `window.create` shell/profile options.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct TabCreateParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tab_type: Option<TabType>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shell: Option<String>,
-}
-
-/// Parameters for opening a file in Warp's app/editor state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FileOpenParams {
-    pub path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub line: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub column: Option<u32>,
-    #[serde(default)]
-    pub new_tab: bool,
-}
-
-/// Parameters for Drive object creation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DriveObjectCreateParams {
-    pub object_type: DriveObjectType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_file: Option<String>,
-}
-
-/// Parameters for Drive object updates.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DriveObjectUpdateParams {
-    pub id: DriveObjectId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_file: Option<String>,
-}
-
-/// Parameters for inserting an existing Drive object into a target surface.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DriveObjectInsertParams {
-    pub id: DriveObjectId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target: Option<TargetSelector>,
-}
-
-/// Parameters for running an approved Warp Drive workflow.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkflowRunParams {
-    pub id: DriveObjectId,
-    #[serde(default)]
-    pub args: Vec<WorkflowArgument>,
-}
-
-/// Name/value argument passed to an approved workflow run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkflowArgument {
-    pub name: String,
-    pub value: String,
 }
 
 /// Mode accepted by `tab.activate`.
@@ -230,6 +52,254 @@ pub enum TabCloseMode {
     Active,
     Others,
     RightOf,
+}
+
+/// Empty parameters for actions whose catalog parameter spec is `none`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyParams {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionNameParams {
+    pub action: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BindingNameParams {
+    pub binding_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BooleanValueParams {
+    pub value: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColorValueParams {
+    pub color: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectionParams {
+    pub direction: Direction,
+}
+
+/// Parameters for opening a file in Warp's app/editor state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileOpenParams {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<u32>,
+    #[serde(default)]
+    pub new_tab: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyParams {
+    pub key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyValueParams {
+    pub key: String,
+    pub value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NamespaceParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageQueryParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueryParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenameParams {
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResizeParams {
+    pub direction: Direction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TabActivateParams {
+    pub mode: TabActivationMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TabCloseParams {
+    pub mode: TabCloseMode,
+}
+
+/// Parameters for `tab.create` and `window.create` shell/profile options.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TabCreateParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_type: Option<TabType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextParams {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThemeNameParams {
+    pub theme_name: String,
+}
+
+pub type KeybindingGetParams = BindingNameParams;
+pub type KeybindingListParams = EmptyParams;
+pub type SettingGetParams = KeyParams;
+pub type SettingListParams = NamespaceParams;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActionListResult {
+    pub actions: Vec<ActionMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActionInspectResult {
+    pub action: ActionMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveTargetChain {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeSummary {
+    pub name: String,
+    pub is_current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeListResult {
+    pub themes: Vec<ThemeSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeStateResult {
+    pub name: String,
+    pub follow_system_theme: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub light_theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dark_theme: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppearanceStateResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    pub follow_system_theme: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub light_theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dark_theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_zoom_percent: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingSummary {
+    pub key: String,
+    pub value: serde_json::Value,
+    pub value_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingListResult {
+    pub settings: Vec<SettingSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SettingGetResult {
+    pub setting: SettingSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeybindingSummary {
+    pub name: String,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keystroke: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_keystroke: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeybindingListResult {
+    pub keybindings: Vec<KeybindingSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeybindingGetResult {
+    pub keybinding: KeybindingSummary,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SurfaceSummary {
+    pub name: String,
+    pub is_available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SurfaceListResult {
+    pub surfaces: Vec<SurfaceSummary>,
 }
 
 /// Typed success payloads for catalog actions that need stable structured data.
@@ -276,6 +346,29 @@ impl Action {
             kind,
             params: serde_json::Value::Object(Default::default()),
         }
+    }
+
+    pub fn with_params<T: Serialize>(kind: ActionKind, params: T) -> Result<Self, ControlError> {
+        Ok(Self {
+            kind,
+            params: serde_json::to_value(params).map_err(|err| {
+                ControlError::with_details(
+                    ErrorCode::InvalidParams,
+                    format!("failed to serialize {} parameters", kind.as_str()),
+                    err.to_string(),
+                )
+            })?,
+        })
+    }
+
+    pub fn params_as<T: DeserializeOwned>(&self) -> Result<T, ControlError> {
+        serde_json::from_value(self.params.clone()).map_err(|err| {
+            ControlError::with_details(
+                ErrorCode::InvalidParams,
+                format!("failed to decode {} parameters", self.kind.as_str()),
+                err.to_string(),
+            )
+        })
     }
 }
 
@@ -368,9 +461,6 @@ pub enum ErrorCode {
     LocalControlDisabled,
     UnauthorizedLocalClient,
     InsufficientPermissions,
-    AuthenticatedUserRequired,
-    AuthenticatedUserUnavailable,
-    ExecutionContextNotAllowed,
     ProtocolVersionUnsupported,
     InvalidRequest,
     InvalidSelector,

@@ -1004,7 +1004,12 @@ impl SelectionModel {
         }
     }
 
-    fn handle_buffer_event(&mut self, event: &BufferEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_buffer_event(
+        &mut self,
+        _: ModelHandle<Buffer>,
+        event: &BufferEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             BufferEvent::ContentChanged { origin, .. } if origin.from_user() => self.goal_xs = None,
             BufferEvent::AnchorUpdated {

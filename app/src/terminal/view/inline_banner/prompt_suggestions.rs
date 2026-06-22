@@ -3,6 +3,7 @@ use std::rc::Rc;
 use pathfinder_geometry::vector::vec2f;
 use serde::Serialize;
 use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors::{neutral_2, neutral_3};
 use warpui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
@@ -26,6 +27,7 @@ use crate::ai::blocklist::prompt::prompt_alert::{
 };
 use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::ai::predict::prompt_suggestions::ACCEPT_PROMPT_SUGGESTION_KEYBINDING;
+use crate::ai::AIRequestUsageModel;
 use crate::appearance::Appearance;
 use crate::server::ids::ServerId;
 use crate::server::telemetry::InteractionSource;
@@ -35,10 +37,11 @@ use crate::terminal::view::{ContextMenuAction, InputType, PromptSuggestion, Term
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon as WarpUIIcon;
 use crate::util::bindings::keybinding_name_to_keystroke;
+use crate::workspace::WorkspaceAction;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const INLINE_BANNER_SPACING: f32 = 8.;
 const INLINE_BANNER_BUTTON_PADDING: f32 = 8.;
-const INLINE_BANNER_BUTTON_VERTICAL_PADDING: f32 = 4.;
 
 const DELINQUENT_DUE_TO_PAYMENT_ISSUE_TOOLTIP_MESSAGE: &str = "Restricted due to payment issue";
 const OUT_OF_REQUESTS_TOOLTIP_MESSAGE: &str = "Out of credits";
@@ -129,7 +132,9 @@ fn render_button(
     debug_request_token: Option<ServerConversationToken>,
     prompt_alert_state: &PromptAlertState,
     should_shrink: bool,
+    force_enabled: bool,
     appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let is_button_disabled = matches!(
@@ -140,7 +145,7 @@ fn render_button(
             | PromptAlertState::OveragesToggleableButNotEnabled
             | PromptAlertState::MonthlyOveragesSpendLimitReached
             | PromptAlertState::RequestLimitReached
-    );
+    ) && !force_enabled;
     let opacity: f32 = if is_button_disabled { 0.5 } else { 1.0 };
     let opacity_u8 = (opacity * 255.0).round() as u8;
     let hoverable = Hoverable::new(mouse_state.clone(), |mouse_state| {
@@ -158,17 +163,21 @@ fn render_button(
         }
 
         let icon_size = appearance.monospace_font_size();
+        let button_height = app.font_cache().line_height(
+            appearance.monospace_font_size(),
+            appearance.line_height_ratio(),
+        ) + 14.;
+        // Need this to have reasonable keyboard shortcut heights.
+        // let keyboard_shortcut_icon_height = button_height - 6.;
         let mut icon_color = blended_colors::text_main(theme, theme.surface_1());
         icon_color.a = opacity_u8;
 
-        let should_expand_button = mouse_state.is_hovered();
         let text = {
-            let base = Text::new(
+            let base = Text::new_inline(
                 text,
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )
-            .soft_wrap(should_expand_button)
             .with_color(text_color)
             .finish();
 
@@ -223,9 +232,7 @@ fn render_button(
         let mut container = Container::new(flex.finish())
             .with_background(background_fill)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-            .with_padding_right(INLINE_BANNER_BUTTON_PADDING)
-            .with_padding_top(INLINE_BANNER_BUTTON_VERTICAL_PADDING)
-            .with_padding_bottom(INLINE_BANNER_BUTTON_VERTICAL_PADDING);
+            .with_padding_right(INLINE_BANNER_BUTTON_PADDING);
 
         if button_index != 0 {
             container = container.with_margin_left(INLINE_BANNER_SPACING);
@@ -263,7 +270,9 @@ fn render_button(
             }
         }
 
-        stack.finish()
+        ConstrainedBox::new(stack.finish())
+            .with_height(button_height)
+            .finish()
     })
     .with_cursor(Cursor::PointingHand);
 
@@ -304,11 +313,24 @@ fn get_tooltip_text_for_alert_state(alert_state: &PromptAlertState) -> Option<St
     }
 }
 
+/// Free-plan users who run out of Warp-provided AI credits should get a modal
+/// offering BYO/upgrade instead of a disabled button. Other disabled states
+/// (offline, payment issues, team overage gates) keep the disabled treatment.
+fn should_open_unavailable_modal(state: &PromptAlertState, app: &AppContext) -> bool {
+    FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+        && matches!(state, PromptAlertState::RequestLimitReached)
+        && !UserWorkspaces::as_ref(app)
+            .current_workspace()
+            .is_some_and(|workspace| workspace.billing_metadata.is_user_on_paid_plan())
+        // ICPs who still receive base credits on the Free plan keep the disabled
+        // button; only offer the modal once the base allowance is gone.
+        && AIRequestUsageModel::as_ref(app).request_limit() == 0
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptSuggestionsEvent {
     SignupAnonymousUser,
     OpenBillingAndUsagePage,
-    OpenPrivacyPage,
     OpenBillingPortal { team_uid: ServerId },
 }
 
@@ -351,9 +373,6 @@ impl PromptSuggestionsView {
             PromptAlertEvent::OpenBillingAndUsagePage => {
                 ctx.emit(PromptSuggestionsEvent::OpenBillingAndUsagePage);
             }
-            PromptAlertEvent::OpenPrivacyPage => {
-                ctx.emit(PromptSuggestionsEvent::OpenPrivacyPage);
-            }
             PromptAlertEvent::OpenBillingPortal { team_uid } => {
                 ctx.emit(PromptSuggestionsEvent::OpenBillingPortal {
                     team_uid: *team_uid,
@@ -381,6 +400,7 @@ impl View for PromptSuggestionsView {
             .with_main_axis_size(MainAxisSize::Max);
 
         let prompt_alert_state = self.prompt_alert.as_ref(app).state();
+        let open_unavailable_modal = should_open_unavailable_modal(prompt_alert_state, app);
 
         let Some(banner_state) = &self.banner_state else {
             return Empty::new().finish();
@@ -406,16 +426,24 @@ impl View for PromptSuggestionsView {
                     keybinding_name_to_keystroke(ACCEPT_PROMPT_SUGGESTION_KEYBINDING, app),
                     banner_state.accept_button_mouse_state.clone(),
                     Rc::new(move |ctx: &mut warpui::EventContext<'_>| {
-                        ctx.dispatch_typed_action(TerminalAction::ResolvePromptSuggestion(
-                            PromptSuggestionResolution::Accept {
-                                interaction_source: InteractionSource::Button,
-                            },
-                        ));
+                        if open_unavailable_modal {
+                            ctx.dispatch_typed_action(
+                                WorkspaceAction::OpenPromptSuggestionsUnavailableModal,
+                            );
+                        } else {
+                            ctx.dispatch_typed_action(TerminalAction::ResolvePromptSuggestion(
+                                PromptSuggestionResolution::Accept {
+                                    interaction_source: InteractionSource::Button,
+                                },
+                            ));
+                        }
                     }),
                     debug_request_token,
                     prompt_alert_state,
                     true, // should_shrink
+                    open_unavailable_modal,
                     appearance,
+                    app,
                 ),
             )
             .finish(),
@@ -455,9 +483,6 @@ impl TypedActionView for PromptSuggestionsView {
             }
             PromptSuggestionsEvent::OpenBillingAndUsagePage => {
                 ctx.emit(PromptSuggestionsEvent::OpenBillingAndUsagePage);
-            }
-            PromptSuggestionsEvent::OpenPrivacyPage => {
-                ctx.emit(PromptSuggestionsEvent::OpenPrivacyPage);
             }
             PromptSuggestionsEvent::OpenBillingPortal { team_uid } => {
                 ctx.emit(PromptSuggestionsEvent::OpenBillingPortal {

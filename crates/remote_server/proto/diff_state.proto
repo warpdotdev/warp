@@ -175,6 +175,9 @@ message FileChangeEntry {
 message PrInfo {
   uint64 number = 1;
   string url = 2;
+  string state = 3;
+  bool draft = 4;
+  string base_branch = 5;
 }
 
 // Mirrors DiffMetadata in Rust.
@@ -186,7 +189,6 @@ message DiffMetadata {
   bool has_head_commit = 5;
   repeated Commit unpushed_commits = 6;
   optional string upstream_ref = 7;
-  optional PrInfo pr_info = 8;
 }
 
 // Mirrors FileStatusInfo in Rust. Identifies a file and its git status
@@ -317,7 +319,7 @@ message GetBranchesError {
   string message = 1;
 }
 
-// ── Git operations (commit / push / create-PR / PR info) ──────────
+// ── Git operations (commit / push / create-PR) ────────────────────
 // Run git / gh on the remote filesystem. These mirror the local code
 // review git dialog operations in app/src/code_review/git_dialog/*.
 
@@ -406,24 +408,6 @@ message GitCreatePrResponse {
   }
 }
 
-// Client → server: look up the PR for the current branch (`gh pr view`).
-// This is the remote PR get/view command; it does not depend on a remote
-// git-status model.
-message GitGetPrInfoRequest {
-  string repo_path = 1;
-}
-
-message GitGetPrInfoResponse {
-  oneof result {
-    GitGetPrInfoSuccess success = 1;
-    GitOpError error = 2;
-  }
-}
-
-// `pr_info` absent => there is no open PR for the current branch.
-message GitGetPrInfoSuccess {
-  optional PrInfo pr_info = 1;
-}
 
 // Client → server: list the committed file changes for the current branch's
 // PR-ready diff (merge_base(HEAD, main)..HEAD). Backs the Create PR dialog's
@@ -463,4 +447,65 @@ message GitGenerateCommitMessageResponse {
     string message = 1;
     GitOpError error = 2;
   }
+}
+
+// ── Git and GitHub info ──────────────────────────────────────────────────
+
+// Mirrors RepositoryInfo in Rust (util/git.rs). Returned by `gh repo view`.
+message RepositoryInfo {
+  string name = 1;
+  optional string owner = 2;
+}
+
+// Mirrors GitStatusMetadata in Rust (code_review/git_repo_model/mod.rs).
+message GitStatusMetadata {
+  string current_branch_name = 1;
+  string main_branch_name = 2;
+  DiffStats stats_against_head = 3;
+  optional string tracking_upstream = 4;
+  uint32 tracking_ahead = 5;
+  uint32 tracking_behind = 6;
+  bool tracking_counts_available = 7;
+}
+
+// Server -> client push: aggregate git status for a repo. Sent on every
+// watcher tick, opportunistically after navigation resolves a git root, and
+// when a client requests a current snapshot.
+message GitStatusPush {
+  string repo_path = 1;
+  GitStatusMetadata metadata = 2;
+}
+
+// Client -> server notification: ask the daemon to create the per-repo git
+// status model if needed and push the current GitStatusPush snapshot when
+// available. Fire-and-forget; no response is sent.
+message UpdateGitStatus {
+  string repo_path = 1;
+}
+
+// Server -> client push: PR info for a repo's current branch. Sent when the
+// daemon's `GitHubRepoModel` recomputes PR info.
+message GitHubPrInfoPush {
+  string repo_path = 1;
+  optional PrInfo pr_info = 2;
+}
+// Server -> client push: repository name/owner info for a repo. Sent when the
+// daemon's `GitHubRepoModel` recomputes repository info.
+message GitHubRepositoryInfoPush {
+  string repo_path = 1;
+  optional RepositoryInfo repository_info = 2;
+}
+// Client -> server notification: ask the daemon to create the per-repo
+// GitHubRepoModel if needed and refresh PR info for the current branch. The
+// result is delivered as a `GitHubPrInfoPush` broadcast (single source of
+// truth: the daemon's `GitHubRepoModel`). Fire-and-forget; no response.
+message UpdateGitHubPrInfo {
+  string repo_path = 1;
+}
+// Client -> server notification: ask the daemon to create the per-repo
+// GitHubRepoModel if needed and refresh repository name/owner. The result is
+// delivered as a `GitHubRepositoryInfoPush` broadcast. Fire-and-forget; no
+// response.
+message UpdateGitHubRepoInfo {
+  string repo_path = 1;
 }

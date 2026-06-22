@@ -147,7 +147,7 @@ impl FileMCPWatcher {
         // Subscribe to changes to detected repositories.
         ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), {
             let file_mcp_tx = file_mcp_tx.clone();
-            move |me, event, ctx| {
+            move |me, _, event, ctx| {
                 let DetectedRepositoriesEvent::DetectedGitRepo { repository, source } = event;
                 // Register MCP servers for repos the user actively navigated to, and for
                 // repos cloned during cloud agent environment preparation.
@@ -169,12 +169,15 @@ impl FileMCPWatcher {
         });
 
         // Subscribe to changes to top-level files in the home directory.
-        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _, event, ctx| {
             me.handle_home_directory_watcher_event(event, ctx);
         });
-        ctx.subscribe_to_model(&WarpManagedPathsWatcher::handle(ctx), |me, event, ctx| {
-            me.handle_warp_managed_paths_event(event, ctx);
-        });
+        ctx.subscribe_to_model(
+            &WarpManagedPathsWatcher::handle(ctx),
+            |me, _, event, ctx| {
+                me.handle_warp_managed_paths_event(event, ctx);
+            },
+        );
 
         let mut home_provider_watchers = HashMap::new();
         if let Some(mcp_config_path) = warp_managed_mcp_config_path() {

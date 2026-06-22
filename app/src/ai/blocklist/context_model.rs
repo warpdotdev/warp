@@ -9,9 +9,9 @@ use ai::project_context::model::ProjectContextModel;
 use parking_lot::FairMutex;
 use warp_core::features::FeatureFlag;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
-#[cfg(feature = "local_fs")]
-use warpui::WeakModelHandle;
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{
+    AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle,
+};
 
 use super::agent_view::{AgentViewController, AgentViewEntryOrigin, EnterAgentViewError};
 use super::block::DirectoryContext;
@@ -28,14 +28,12 @@ use crate::ai::block_context::BlockContext;
 use crate::ai::document::ai_document_model::AIDocumentId;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::outline::RepoOutlines;
-#[cfg(feature = "local_fs")]
 use crate::code_review::github_repo_model::GitHubRepoModel;
 use crate::terminal::event::{BlockCompletedEvent, BlockType};
 use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::TerminalModel;
-#[cfg(any(feature = "local_fs", test))]
 use crate::util::git::{PrInfo, RepositoryInfo};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -105,7 +103,6 @@ impl PendingQueryState {
 pub struct BlocklistAIContextModel {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     directory_context: DirectoryContext,
-    #[cfg(feature = "local_fs")]
     github_repo_model: Option<WeakModelHandle<GitHubRepoModel>>,
 
     /// `BlockId`s corresponding to blocks to be included as context with the next AI query.
@@ -185,71 +182,77 @@ impl BlocklistAIContextModel {
         agent_view_controller: ModelHandle<AgentViewController>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(model_event_dispatcher, move |me, event, ctx| match event {
-            ModelEvent::BlockCompleted(BlockCompletedEvent {
-                block_type: BlockType::User(user_block_completed),
-                block_id,
-                ..
-            }) => {
-                // If AgentViewBlockContext is enabled and we're in agent view, track user-executed
-                // blocks for auto-attachment as context.
-                if FeatureFlag::AgentViewBlockContext.is_enabled()
-                    && me.agent_view_controller.as_ref(ctx).is_fullscreen()
-                    && !user_block_completed.was_part_of_agent_interaction
-                {
-                    me.auto_attached_agent_view_user_block_ids
-                        .push(block_id.clone());
-                }
+        ctx.subscribe_to_model(
+            model_event_dispatcher,
+            move |me, _, event, ctx| match event {
+                ModelEvent::BlockCompleted(BlockCompletedEvent {
+                    block_type: BlockType::User(user_block_completed),
+                    block_id,
+                    ..
+                }) => {
+                    // If AgentViewBlockContext is enabled and we're in agent view, track user-executed
+                    // blocks for auto-attachment as context.
+                    if FeatureFlag::AgentViewBlockContext.is_enabled()
+                        && me.agent_view_controller.as_ref(ctx).is_fullscreen()
+                        && !user_block_completed.was_part_of_agent_interaction
+                    {
+                        me.auto_attached_agent_view_user_block_ids
+                            .push(block_id.clone());
+                    }
 
-                // If the block that finished was part of an agent interaction (i.e. LRC finishing),
-                // we should preserve input context.
-                if !FeatureFlag::AgentViewBlockContext.is_enabled()
-                    && !user_block_completed.was_part_of_agent_interaction
-                {
-                    me.reset_context_to_default(ctx);
-                }
-            }
-            ModelEvent::BlockMetadataReceived(e) => {
-                me.apply_block_metadata_directory_context(&e.block_metadata, &sessions, ctx);
-            }
-            ModelEvent::BlockWorkingDirectoryUpdated(e) => {
-                me.apply_block_metadata_directory_context(&e.block_metadata, &sessions, ctx);
-            }
-            _ => {}
-        });
-
-        ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, event, ctx| {
-            if event
-                .terminal_view_id()
-                .is_some_and(|id| id != me.terminal_view_id)
-            {
-                return;
-            }
-
-            match event {
-                BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. } => {
-                    me.set_pending_query_state(PendingQueryState::default(), ctx);
-                    if FeatureFlag::AgentView.is_enabled() {
-                        me.agent_view_controller.update(ctx, |controller, ctx| {
-                            controller.exit_agent_view(ctx);
-                        });
+                    // If the block that finished was part of an agent interaction (i.e. LRC finishing),
+                    // we should preserve input context.
+                    if !FeatureFlag::AgentViewBlockContext.is_enabled()
+                        && !user_block_completed.was_part_of_agent_interaction
+                    {
+                        me.reset_context_to_default(ctx);
                     }
                 }
-                BlocklistAIHistoryEvent::SplitConversation {
-                    new_conversation_id,
-                    ..
-                } => {
-                    me.set_pending_query_state_for_existing_conversation(
-                        *new_conversation_id,
-                        AgentViewEntryOrigin::AgentRequestedNewConversation,
-                        ctx,
-                    );
+                ModelEvent::BlockMetadataReceived(e) => {
+                    me.apply_block_metadata_directory_context(&e.block_metadata, &sessions, ctx);
+                }
+                ModelEvent::BlockWorkingDirectoryUpdated(e) => {
+                    me.apply_block_metadata_directory_context(&e.block_metadata, &sessions, ctx);
                 }
                 _ => {}
-            }
-        });
+            },
+        );
 
-        ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |me, _, event, ctx| {
+                if event
+                    .terminal_view_id()
+                    .is_some_and(|id| id != me.terminal_view_id)
+                {
+                    return;
+                }
+
+                match event {
+                    BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. } => {
+                        me.set_pending_query_state(PendingQueryState::default(), ctx);
+                        if FeatureFlag::AgentView.is_enabled() {
+                            me.agent_view_controller.update(ctx, |controller, ctx| {
+                                controller.exit_agent_view(ctx);
+                            });
+                        }
+                    }
+                    BlocklistAIHistoryEvent::SplitConversation {
+                        new_conversation_id,
+                        ..
+                    } => {
+                        me.set_pending_query_state_for_existing_conversation(
+                            *new_conversation_id,
+                            AgentViewEntryOrigin::AgentRequestedNewConversation,
+                            ctx,
+                        );
+                    }
+                    _ => {}
+                }
+            },
+        );
+
+        ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
             if let LLMPreferencesEvent::UpdatedActiveAgentModeLLM = event {
                 let llm_prefs = LLMPreferences::as_ref(ctx);
                 let vision_supported = llm_prefs.vision_supported(ctx, Some(me.terminal_view_id));
@@ -260,7 +263,7 @@ impl BlocklistAIContextModel {
         });
 
         // Clear auto-attached blocks when exiting agent view or switching conversations
-        ctx.subscribe_to_model(&agent_view_controller, |me, event, _ctx| {
+        ctx.subscribe_to_model(&agent_view_controller, |me, _, event, _ctx| {
             use super::agent_view::AgentViewControllerEvent;
             match event {
                 AgentViewControllerEvent::ExitedAgentView { .. }
@@ -285,7 +288,6 @@ impl BlocklistAIContextModel {
         Self {
             terminal_model,
             directory_context: Default::default(),
-            #[cfg(feature = "local_fs")]
             github_repo_model: None,
             pending_context_block_ids: HashSet::new(),
             pending_context_selected_text: None,
@@ -314,7 +316,6 @@ impl BlocklistAIContextModel {
         Self {
             terminal_model,
             directory_context: Default::default(),
-            #[cfg(feature = "local_fs")]
             github_repo_model: None,
             pending_context_block_ids: HashSet::new(),
             pending_context_selected_text: None,
@@ -989,26 +990,18 @@ impl BlocklistAIContextModel {
         }
     }
 
-    #[cfg(feature = "local_fs")]
     pub fn set_github_repo_model(&mut self, handle: Option<WeakModelHandle<GitHubRepoModel>>) {
         self.github_repo_model = handle;
     }
 
     /// Builds an `AIAgentContext::Repository` from cached git remote metadata, if available.
-    #[cfg(feature = "local_fs")]
     fn repository_context(&self, app: &AppContext) -> Option<AIAgentContext> {
         let handle = self.github_repo_model.as_ref()?.upgrade(app)?;
-        let repository_info = handle.as_ref(app).repository_info()?;
+        let repository_info = handle.as_ref(app).repository_info(app)?;
         Some(Self::repository_context_from_repository_info(
             repository_info,
         ))
     }
-    #[cfg(not(feature = "local_fs"))]
-    fn repository_context(&self, _app: &AppContext) -> Option<AIAgentContext> {
-        None
-    }
-
-    #[cfg(any(feature = "local_fs", test))]
     fn repository_context_from_repository_info(repository_info: &RepositoryInfo) -> AIAgentContext {
         AIAgentContext::Repository {
             name: repository_info.name.clone(),
@@ -1016,18 +1009,11 @@ impl BlocklistAIContextModel {
         }
     }
 
-    #[cfg(feature = "local_fs")]
     fn pull_request_context(&self, app: &AppContext) -> Option<AIAgentContext> {
         let handle = self.github_repo_model.as_ref()?.upgrade(app)?;
-        let pr_info = handle.as_ref(app).pr_info()?;
+        let pr_info = handle.as_ref(app).pr_info(app)?;
         Self::pull_request_context_from_pr_info(pr_info)
     }
-    #[cfg(not(feature = "local_fs"))]
-    fn pull_request_context(&self, _app: &AppContext) -> Option<AIAgentContext> {
-        None
-    }
-
-    #[cfg(any(feature = "local_fs", test))]
     fn pull_request_context_from_pr_info(pr_info: &PrInfo) -> Option<AIAgentContext> {
         Some(AIAgentContext::PullRequest {
             number: i32::try_from(pr_info.number).ok()?,

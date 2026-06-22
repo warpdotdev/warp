@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use ai::skills::{
-    provider_parent_directory_for_skills_root, provider_rank, ParsedSkill, SkillProvider,
+    provider_parent_directory_for_skills_root, provider_rank, ParsedSkill, SkillPathOrigin,
+    SkillProvider,
 };
 use lazy_static::lazy_static;
 use siphasher::sip::SipHasher;
@@ -28,6 +29,7 @@ lazy_static! {
 /// Tries to insert or update a skill descriptor in the deduplication map.
 /// If a skill with the same (directory, content) key already exists, keeps the one
 /// from the higher-priority provider based on [`SKILL_PROVIDER_DEFINITIONS`].
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 fn try_insert_skill(
     dedup_map: &mut HashMap<u64, SkillDescriptor>,
     descriptor: SkillDescriptor,
@@ -52,8 +54,44 @@ fn try_insert_skill(
     }
 }
 
-/// Deduplicates skills with identical content installed under the same directory across
-/// multiple providers, keeping the single best representative per
+/// Accumulates file-backed skills from one or more catalogs and keeps the best
+/// representative for each owning-directory-and-content pair.
+#[derive(Default)]
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+pub(crate) struct SkillDeduplicator {
+    dedup_map: HashMap<u64, SkillDescriptor>,
+}
+
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+impl SkillDeduplicator {
+    pub(crate) fn insert(&mut self, dir_path: &LocalOrRemotePath, skill: &ParsedSkill) {
+        try_insert_skill(
+            &mut self.dedup_map,
+            SkillDescriptor::from(skill.clone()),
+            dir_path,
+            &skill.content,
+        );
+    }
+
+    pub(crate) fn extend_paths(
+        &mut self,
+        skill_paths: &[(LocalOrRemotePath, LocalOrRemotePath)],
+        skills_by_path: &HashMap<LocalOrRemotePath, ParsedSkill>,
+    ) {
+        for (dir_path, path) in skill_paths {
+            if let Some(skill) = skills_by_path.get(path) {
+                self.insert(dir_path, skill);
+            }
+        }
+    }
+
+    pub(crate) fn into_descriptors(self) -> Vec<SkillDescriptor> {
+        self.dedup_map.into_values().collect()
+    }
+}
+
+/// Deduplicates paths from one indexed catalog when identical content is installed under the
+/// same directory across multiple providers, keeping the single best representative per
 /// [`SKILL_PROVIDER_DEFINITIONS`] (index 0 = highest priority).
 ///
 /// Two skills are considered duplicates only when they share the same owning directory
@@ -62,37 +100,29 @@ fn try_insert_skill(
 ///
 /// Each element of `skill_paths` is a `(dir_path, skill_file_path)` tuple where
 /// `dir_path` is the directory that owns the skill.
-#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn unique_skills(
     skill_paths: &[(LocalOrRemotePath, LocalOrRemotePath)],
     skills_by_path: &HashMap<LocalOrRemotePath, ParsedSkill>,
 ) -> Vec<SkillDescriptor> {
-    // hash(dir_path + content) → best descriptor seen so far
-    let mut dedup_map: HashMap<u64, SkillDescriptor> = HashMap::new();
-
-    for (dir_path, path) in skill_paths {
-        if let Some(skill) = skills_by_path.get(path) {
-            try_insert_skill(
-                &mut dedup_map,
-                SkillDescriptor::from(skill.clone()),
-                dir_path,
-                &skill.content,
-            );
-        }
-    }
-
-    dedup_map.into_values().collect()
+    let mut deduplicator = SkillDeduplicator::default();
+    deduplicator.extend_paths(skill_paths, skills_by_path);
+    deduplicator.into_descriptors()
 }
 
 /// Returns the list of skills if they have changed since the last time we sent them to the server.
 /// Skills are always included except when the current list matches the last list sent.
 pub fn list_skills_if_changed(
     working_directory: Option<&LocalOrRemotePath>,
+    path_origin: &SkillPathOrigin,
     conversation_id: Option<AIConversationId>,
     app: &AppContext,
 ) -> Option<Vec<SkillDescriptor>> {
-    let current_skills =
-        SkillManager::as_ref(app).get_skills_for_working_directory(working_directory, app);
+    let current_skills = SkillManager::as_ref(app).get_skills_for_working_directory_with_origin(
+        working_directory,
+        path_origin,
+        app,
+    );
 
     let previous_skills: Option<Vec<SkillDescriptor>> =
         conversation_id.and_then(|conversation_id| {

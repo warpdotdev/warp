@@ -36,7 +36,7 @@ pub(in crate::ai) fn prepare_plan_publications<E: Entity>(
         .into_iter()
         .filter_map(|document_id| {
             let (save_tx, save_rx) = async_channel::bounded(1);
-            ctx.subscribe_to_model(&document_model, move |_, event, ctx| {
+            ctx.subscribe_to_model(&document_model, move |_, _, event, ctx| {
                 let AIDocumentModelEvent::DocumentSaveStatusUpdated(saved_document_id) = event
                 else {
                     return;

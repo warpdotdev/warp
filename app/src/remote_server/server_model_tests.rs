@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use warp_util::standardized_path::StandardizedPath;
@@ -6,8 +6,9 @@ use warpui::App;
 
 use super::super::diff_state_tracker::RemoteDiffStateManager;
 use super::super::proto::{
-    server_message, write_file_response, Authenticate, Initialize, ServerMessage,
-    WriteFileResponse, WriteFileSuccess,
+    remote_skill_proto, server_message, write_file_response, Authenticate, BundledSkillMetadata,
+    HomeSkillMetadata, Initialize, RemoteAgentContextSnapshot, RemoteContextFileProto,
+    RemoteSkillProto, ServerMessage, WriteFileResponse, WriteFileSuccess,
 };
 use super::super::protocol::RequestId;
 use super::super::server_buffer_tracker::ServerBufferTracker;
@@ -23,12 +24,24 @@ fn test_model(app: &mut App) -> ServerModel {
         grace_timer_cancel: None,
         in_progress: HashMap::new(),
         host_id: "test-host-id".to_string(),
+        bundled_skills: Vec::new(),
+        remote_agent_context_snapshot: RemoteAgentContextSnapshot {
+            revision: 1,
+            home_dir: "/home/user".to_string(),
+            skills: Vec::new(),
+            global_rules: Vec::new(),
+        },
+        remote_agent_context_snapshot_sent: HashSet::new(),
         executors: HashMap::new(),
         pending_file_ops: PendingFileOps::new(),
         auth_state: Arc::new(AuthState::new_logged_out_for_test()),
         buffers: ServerBufferTracker::new(),
         diff_states: app.add_model(|_| RemoteDiffStateManager::new()),
         host_scoped_requests: HashMap::new(),
+        git_status_models: HashMap::new(),
+        github_repo_models: HashMap::new(),
+        git_status_subscribers: HashMap::new(),
+        git_status_repo_by_conn: HashMap::new(),
     }
 }
 
@@ -39,6 +52,80 @@ fn test_key(repo: &str, mode: DiffMode) -> DiffModelKey {
         repo_path: StandardizedPath::try_new(repo).unwrap(),
         mode,
     }
+}
+
+fn test_bundled_skill_proto(id: &str) -> RemoteSkillProto {
+    RemoteSkillProto {
+        path: format!(
+            "/home/user/.warp/remote-server/bundled_resources/bundled/skills/{id}/SKILL.md"
+        ),
+        content: format!("# {id}"),
+        source: Some(remote_skill_proto::Source::Bundled(BundledSkillMetadata {
+            id: id.to_string(),
+            requires_mcp: None,
+        })),
+    }
+}
+
+#[test]
+fn remote_agent_context_snapshot_broadcasts_replacements_and_initializes_once() {
+    App::test((), |mut app| async move {
+        let mut model = test_model(&mut app);
+        let conn = uuid::Uuid::new_v4();
+        let (tx, rx) = async_channel::unbounded();
+        model.connection_senders.insert(conn, tx);
+
+        model.send_remote_agent_context_snapshot_to_connection(conn);
+        assert!(matches!(
+            rx.try_recv().map(|msg| msg.message),
+            Ok(Some(server_message::Message::RemoteAgentContextSnapshot(_)))
+        ));
+        model.send_remote_agent_context_snapshot_to_connection(conn);
+        assert!(rx.try_recv().is_err());
+
+        model.remote_agent_context_snapshot = RemoteAgentContextSnapshot {
+            revision: 2,
+            home_dir: "/home/user".to_string(),
+            skills: vec![
+                test_bundled_skill_proto("test-skill"),
+                RemoteSkillProto {
+                    path: "/home/user/.agents/skills/test/SKILL.md".to_string(),
+                    content: "skill content".to_string(),
+                    source: Some(remote_skill_proto::Source::Home(HomeSkillMetadata {})),
+                },
+            ],
+            global_rules: vec![RemoteContextFileProto {
+                path: "/home/user/.agents/AGENTS.md".to_string(),
+                content: "rule content".to_string(),
+            }],
+        };
+        model.broadcast_remote_agent_context_snapshot();
+
+        match rx
+            .try_recv()
+            .expect("remote Agent Mode context replacement")
+            .message
+        {
+            Some(server_message::Message::RemoteAgentContextSnapshot(snapshot)) => {
+                assert_eq!(snapshot.revision, 2);
+                assert_eq!(snapshot.skills.len(), 2);
+                assert_eq!(snapshot.skills[1].content, "skill content");
+                assert_eq!(snapshot.global_rules[0].content, "rule content");
+            }
+            other => panic!("expected RemoteAgentContextSnapshot, got {other:?}"),
+        }
+
+        let late_conn = uuid::Uuid::new_v4();
+        let (late_tx, late_rx) = async_channel::unbounded();
+        model.connection_senders.insert(late_conn, late_tx);
+        model.send_remote_agent_context_snapshot_to_connection(late_conn);
+        assert!(matches!(
+            late_rx.try_recv().map(|msg| msg.message),
+            Ok(Some(server_message::Message::RemoteAgentContextSnapshot(_)))
+        ));
+        model.send_remote_agent_context_snapshot_to_connection(late_conn);
+        assert!(late_rx.try_recv().is_err());
+    });
 }
 
 #[test]
@@ -187,6 +274,123 @@ fn diff_states_starts_empty() {
             mgr.subscribed_connections(&key).is_empty()
         });
         assert!(empty);
+    });
+}
+
+// ── Git status / GitHub: navigation-driven model cleanup ────────────
+
+#[test]
+fn subscribe_git_status_records_subscriber_and_current_repo() {
+    App::test((), |mut app| async move {
+        let mut model = test_model(&mut app);
+        let conn = uuid::Uuid::new_v4();
+        let repo = StandardizedPath::try_new("/repo").unwrap();
+
+        model.subscribe_git_status(conn, &repo);
+
+        assert_eq!(model.git_status_repo_by_conn.get(&conn), Some(&repo));
+        assert!(model.git_status_subscribers[&repo].contains(&conn));
+    });
+}
+
+#[test]
+fn navigating_between_repos_moves_the_subscription() {
+    App::test((), |mut app| async move {
+        let mut model = test_model(&mut app);
+        let conn = uuid::Uuid::new_v4();
+        let repo_a = StandardizedPath::try_new("/repo-a").unwrap();
+        let repo_b = StandardizedPath::try_new("/repo-b").unwrap();
+
+        model.subscribe_git_status(conn, &repo_a);
+        model.subscribe_git_status(conn, &repo_b);
+
+        // Moved off A (now empty) and onto B.
+        assert!(!model.git_status_subscribers.contains_key(&repo_a));
+        assert!(model.git_status_subscribers[&repo_b].contains(&conn));
+        assert_eq!(model.git_status_repo_by_conn.get(&conn), Some(&repo_b));
+    });
+}
+
+#[test]
+fn snapshot_request_does_not_move_another_repos_subscription() {
+    App::test((), |mut app| async move {
+        let mut model = test_model(&mut app);
+        let conn = uuid::Uuid::new_v4();
+        let repo_a = StandardizedPath::try_new("/repo-a").unwrap();
+        let repo_b = StandardizedPath::try_new("/repo-b").unwrap();
+
+        // Navigation put the connection in repo A.
+        model.subscribe_git_status(conn, &repo_a);
+
+        // A snapshot request for repo B riding this connection must not move
+        // the navigation-driven subscription off repo A (mirrors the guard in
+        // `handle_update_git_status`).
+        if !model.git_status_repo_by_conn.contains_key(&conn) {
+            model.subscribe_git_status(conn, &repo_b);
+        }
+        assert_eq!(model.git_status_repo_by_conn.get(&conn), Some(&repo_a));
+        assert!(model.git_status_subscribers[&repo_a].contains(&conn));
+        assert!(!model.git_status_subscribers.contains_key(&repo_b));
+
+        // An untracked connection is registered normally.
+        let conn2 = uuid::Uuid::new_v4();
+        if !model.git_status_repo_by_conn.contains_key(&conn2) {
+            model.subscribe_git_status(conn2, &repo_b);
+        }
+        assert!(model.git_status_subscribers[&repo_b].contains(&conn2));
+        assert_eq!(model.git_status_repo_by_conn.get(&conn2), Some(&repo_b));
+    });
+}
+
+#[test]
+fn last_subscriber_leaving_evicts_the_repo() {
+    App::test((), |mut app| async move {
+        let mut model = test_model(&mut app);
+        let conn = uuid::Uuid::new_v4();
+        let repo = StandardizedPath::try_new("/repo").unwrap();
+
+        model.subscribe_git_status(conn, &repo);
+        assert!(model.git_status_subscribers.contains_key(&repo));
+
+        model.unsubscribe_git_status(conn);
+
+        // Subscriber set, current-repo mapping, and the per-repo model maps are
+        // all cleared once no connection remains in the repo.
+        assert!(!model.git_status_subscribers.contains_key(&repo));
+        assert!(!model.git_status_repo_by_conn.contains_key(&conn));
+        assert!(!model.git_status_models.contains_key(&repo));
+        assert!(!model.github_repo_models.contains_key(&repo));
+    });
+}
+
+#[test]
+fn sibling_connection_keeps_the_repo_alive() {
+    App::test((), |mut app| async move {
+        let mut model = test_model(&mut app);
+        let conn_a = uuid::Uuid::new_v4();
+        let conn_b = uuid::Uuid::new_v4();
+        let repo = StandardizedPath::try_new("/repo").unwrap();
+
+        model.subscribe_git_status(conn_a, &repo);
+        model.subscribe_git_status(conn_b, &repo);
+
+        // First connection leaves: the repo stays for the sibling.
+        model.unsubscribe_git_status(conn_a);
+        assert!(model.git_status_subscribers[&repo].contains(&conn_b));
+
+        // Second connection leaves: now evicted.
+        model.unsubscribe_git_status(conn_b);
+        assert!(!model.git_status_subscribers.contains_key(&repo));
+    });
+}
+
+#[test]
+fn unsubscribe_unknown_connection_is_a_noop() {
+    App::test((), |mut app| async move {
+        let mut model = test_model(&mut app);
+        model.unsubscribe_git_status(uuid::Uuid::new_v4());
+        assert!(model.git_status_subscribers.is_empty());
+        assert!(model.git_status_repo_by_conn.is_empty());
     });
 }
 

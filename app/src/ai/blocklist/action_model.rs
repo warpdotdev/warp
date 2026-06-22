@@ -262,7 +262,7 @@ impl BlocklistAIActionModel {
                 ctx,
             )
         });
-        ctx.subscribe_to_model(&executor, move |me, event, ctx| match event {
+        ctx.subscribe_to_model(&executor, move |me, _, event, ctx| match event {
             BlocklistAIActionExecutorEvent::ExecutingAction { action_id } => {
                 ctx.emit(BlocklistAIActionEvent::ExecutingAction(action_id.clone()));
             }

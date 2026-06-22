@@ -635,20 +635,49 @@ if test "$WARP_IS_LOCAL_SHELL_SESSION" = "1"
         # and use printf to convert back to plaintext
         set -l zsh_env_script (printf '%s' 'unsetopt ZLE; unset RCS; unset GLOBAL_RCS; WARP_SESSION_ID='$remote_session_id'; WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@; WARP_HONOR_PS1='$WARP_HONOR_PS1'; _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || uname -n); _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER); _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d " \n"); printf '"'"'\x1b\x50\x24\x64%s\x1b\x5c'"'"' $_msg; unset _hostname _user _msg' | command od -An -v -tx1 | command tr -d ' \n')
 
+        # Optionally attach to an existing ControlMaster the user already
+        # runs for this destination instead of creating our own. Resolve
+        # the user's configured ControlPath with `ssh -G` (which expands
+        # tokens like %h/%p/%r/%C into a literal path), then verify the
+        # master is alive with `ssh -O check`. Both probes are local-only
+        # commands. On any failure we fall back to creating a Warp-owned
+        # master, preserving the existing behavior.
+        set -l control_path "$SSH_SOCKET_DIR/$WARP_SESSION_ID"
+        set -l control_master_mode "yes"
+        set -l external_control_master "false"
+        if test "$WARP_SSH_REUSE_CONTROL_MASTER" = "1"
+            set -l user_control_path (command ssh -G $argv 2>/dev/null | command sed -n 's/^controlpath //p')
+            # Skip when no ControlPath is configured, and reject resolved
+            # paths containing characters we cannot safely embed in the SSH
+            # hook JSON below (e.g. an unexpanded % token, quotes, or
+            # whitespace); in those cases fall back to a Warp-owned master.
+            if test -n "$user_control_path"
+                and test "$user_control_path" != "none"
+                and string match --quiet --regex '^[A-Za-z0-9._/~@:+,-]+$' -- "$user_control_path"
+                if command ssh -O check -o ControlPath="$user_control_path" $argv >/dev/null 2>&1
+                    # A live master exists: multiplex through it and let the
+                    # client know Warp does not own it.
+                    set control_path "$user_control_path"
+                    set control_master_mode "no"
+                    set external_control_master "true"
+                end
+            end
+        end
+
         # Note that in this command, we're passing a string to the remote shell. Any variable expansions need to be
         # escaped with "''" to avoid the local shell from expanding them before they're passed to the remote shell.
         # We check the SHELL env var and use shell string manipulation to get the contents after the last slash to
         # determine what shell is the login shell on the remote machine.  We perform a preliminary check to see if
         # the remote shell is the Bourne shell to avoid asking it to parse later lines that use syntax it doesn't
         # support.
-        command ssh -o ControlMaster=yes -o ControlPath=$SSH_SOCKET_DIR/$WARP_SESSION_ID \
+        command ssh -o ControlMaster=$control_master_mode -o ControlPath="$control_path" \
         -t $argv \
 "
 export TERM_PROGRAM='WarpTerminal'
 test -n '$WARP_CLIENT_VERSION' && export WARP_CLIENT_VERSION='$WARP_CLIENT_VERSION'
 # Only forward the protocol version if it was set locally (i.e. the HOANotifications feature flag is on).
 test -n '$WARP_CLI_AGENT_PROTOCOL_VERSION' && export WARP_CLI_AGENT_PROTOCOL_VERSION='$WARP_CLI_AGENT_PROTOCOL_VERSION'
-hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$SSH_SOCKET_DIR/$WARP_SESSION_ID'\", \"remote_shell\": \"%s\", \"session_id\": '"$WARP_SESSION_ID"', \"remote_session_id\": '"$remote_session_id"'}}" "${SHELL##*/}" | command od -An -v -tx1 | command tr -d " \n")'"
+hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$control_path'\", \"remote_shell\": \"%s\", \"session_id\": '"$WARP_SESSION_ID"', \"remote_session_id\": '"$remote_session_id"', \"external_control_master\": '"$external_control_master"'}}" "${SHELL##*/}" | command od -An -v -tx1 | command tr -d " \n")'"
 printf '$DCS_START$DCS_JSON_MARKER%s$DCS_END' "'$hook'"
 
 if test "'"${SHELL##*/}" != "bash" -a "${SHELL##*/}" != "zsh"'"; then
