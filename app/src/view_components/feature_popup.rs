@@ -1,12 +1,14 @@
 use warpui::elements::{
-    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable, MouseStateHandle,
-    ParentElement, Radius, Text,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex, Hoverable,
+    MouseStateHandle, ParentElement, Radius, Text,
 };
 use warpui::platform::Cursor;
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::appearance::Appearance;
 use crate::ui_components::icons::Icon;
+
+const FEATURE_POPUP_MAX_WIDTH: f32 = 280.;
 
 pub enum NewFeaturePopupLabel {
     /// A static label.
@@ -109,16 +111,21 @@ impl View for FeaturePopup {
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_child(Container::new(new_badge).with_margin_right(4.).finish())
                     .with_child(
-                        Container::new(
-                            Text::new(
-                                label,
-                                appearance.ui_font_family(),
-                                appearance.ui_font_size(),
+                        Expanded::new(
+                            1.,
+                            Container::new(
+                                Text::new(
+                                    label,
+                                    appearance.ui_font_family(),
+                                    appearance.ui_font_size(),
+                                )
+                                .soft_wrap(true)
+                                .with_color(background.into())
+                                .finish(),
                             )
-                            .with_color(background.into())
+                            .with_horizontal_padding(4.)
                             .finish(),
                         )
-                        .with_horizontal_padding(4.)
                         .finish(),
                     )
                     .with_child(
@@ -148,6 +155,7 @@ impl View for FeaturePopup {
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
             .finish(),
         )
+        .with_max_width(FEATURE_POPUP_MAX_WIDTH)
         .finish()
     }
 }
