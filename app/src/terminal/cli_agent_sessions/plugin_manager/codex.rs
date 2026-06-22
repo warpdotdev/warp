@@ -432,7 +432,7 @@ fn plugin_needs_update(
     }
     match installed_plugin_version(codex_dir, plugin_name) {
         Some(v) => compare_versions(&v, minimum_version).is_lt(),
-        // Enabled but no cached version means a very old install.
+        // No version field means very old plugin.
         None => true,
     }
 }
@@ -478,7 +478,8 @@ fn codex_home_dir() -> io::Result<PathBuf> {
 }
 
 /// Creates the resolved Codex home directory if it does not yet exist.
-/// The Codex CLI expects `CODEX_HOME` to exist before running plugin commands.
+/// The Codex CLI expects `CODEX_HOME` to exist before running plugin commands, we need
+/// this for self-hosted direct backend workers.
 fn ensure_codex_home_dir() -> io::Result<PathBuf> {
     let dir = codex_home_dir()?;
     fs::create_dir_all(&dir)?;
