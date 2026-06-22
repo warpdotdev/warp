@@ -317,6 +317,20 @@ impl<'a> Editor {
     }
 }
 
+/// Opens the given directory in the user's configured editor when possible,
+/// otherwise hands off to the macOS default opener (Finder).
+pub fn open_directory(with_editor: Option<Editor>, directory: &Path, ctx: &mut AppContext) {
+    if directory.is_dir() {
+        let editor = with_editor.filter(|editor| editor.is_installed(ctx));
+        if let Some(editor) = editor {
+            if editor.open(None, directory, ctx) {
+                return;
+            }
+        }
+    }
+    ctx.open_file_path(directory);
+}
+
 pub fn open_file_path_with_line_and_col(
     line_column_number: Option<LineAndColumnArg>,
     with_editor: Option<Editor>,

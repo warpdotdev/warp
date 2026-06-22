@@ -399,6 +399,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::OzLaunchModal,
         #[cfg(feature = "open_warp_launch_modal")]
         FeatureFlag::OpenWarpLaunchModal,
+        #[cfg(feature = "open_directory_in_external_editor")]
+        FeatureFlag::OpenDirectoryInExternalEditor,
         #[cfg(feature = "orchestration_launch_modal")]
         FeatureFlag::OrchestrationLaunchModal,
         #[cfg(feature = "new_tab_styling")]

@@ -230,6 +230,7 @@ impl TabData {
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, can_move_left, can_move_right, pane_name_target, ctx),
+            self.open_in_editor_menu_items(index, ctx),
             self.close_tab_menu_items(index, tabs_len, ctx),
             Self::save_config_menu_items(index),
             self.color_option_menu_items(index, terminal_colors),
@@ -514,6 +515,44 @@ impl TabData {
             );
         }
         menu_items
+    }
+
+    /// Returns the "Open with <Editor>" menu item for the tab's current
+    /// working directory, gated by [`FeatureFlag::OpenDirectoryInExternalEditor`]
+    /// and the resolvability of both the label and the cwd.
+    fn open_in_editor_menu_items(
+        &self,
+        index: usize,
+        ctx: &AppContext,
+    ) -> Vec<MenuItem<WorkspaceAction>> {
+        if !FeatureFlag::OpenDirectoryInExternalEditor.is_enabled() {
+            return vec![];
+        }
+        let Some(label) = crate::util::file::external_editor::open_with_editor_menu_label(ctx)
+        else {
+            return vec![];
+        };
+        let has_cwd = self
+            .pane_group
+            .as_ref(ctx)
+            .focused_session_view(ctx)
+            .and_then(|view| {
+                view.as_ref(ctx)
+                    .model
+                    .lock()
+                    .block_list()
+                    .active_block()
+                    .metadata()
+                    .current_working_directory()
+                    .map(|s| s.to_string())
+            })
+            .is_some();
+        if !has_cwd {
+            return vec![];
+        }
+        vec![MenuItemFields::new(label)
+            .with_on_select_action(WorkspaceAction::OpenTabCwdInExternalEditor { tab_index: index })
+            .into_item()]
     }
 
     fn close_tab_menu_items(

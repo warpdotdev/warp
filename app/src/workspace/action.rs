@@ -432,6 +432,11 @@ pub enum WorkspaceAction {
     CopySharedSessionLinkFromTab {
         tab_index: usize,
     },
+    /// Open the tab's current working directory in the user's configured
+    /// external editor. Gated by `FeatureFlag::OpenDirectoryInExternalEditor`.
+    OpenTabCwdInExternalEditor {
+        tab_index: usize,
+    },
     OpenSharedSessionQrCode {
         session_id: SessionId,
     },
@@ -1064,6 +1069,7 @@ impl WorkspaceAction {
             | StopSharingSessionFromTabMenu { .. }
             | StopSharingAllSessionsInTab { .. }
             | CopySharedSessionLinkFromTab { .. }
+            | OpenTabCwdInExternalEditor { .. }
             | OpenSharedSessionQrCode { .. }
             | ReopenClosedSession
             | FocusLeftPanel

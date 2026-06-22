@@ -227,3 +227,21 @@ pub fn open_file_path_with_line_and_col(
 
     ctx.open_file_path(full_path);
 }
+
+/// Opens the given directory in the user's configured editor when possible,
+/// otherwise hands off to the Windows shell (Explorer).
+pub fn open_directory(mut with_editor: Option<Editor>, directory: &Path, ctx: &mut AppContext) {
+    if directory.is_dir() {
+        with_editor = with_editor.filter(|editor| editor.is_installed(ctx));
+        if let Some(editor) = with_editor {
+            if let Some(mut command) = editor.command(None, directory) {
+                if let Err(err) = command.spawn() {
+                    log::error!("Error launching {editor:?}: {err:#}");
+                }
+                return;
+            }
+        }
+    }
+
+    ctx.open_file_path(directory);
+}

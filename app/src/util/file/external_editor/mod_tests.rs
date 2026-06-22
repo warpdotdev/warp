@@ -311,3 +311,46 @@ fn test_editor_try_from_unsupported_editors() {
     assert!(Editor::try_from("nano").is_err());
     assert!(Editor::try_from("unknown-editor").is_err());
 }
+
+#[test]
+fn menu_label_external_editor_uses_editor_display_name() {
+    use super::{open_with_editor_menu_label_for_choice, Editor, EditorChoice};
+
+    let label = open_with_editor_menu_label_for_choice(
+        EditorChoice::ExternalEditor(Editor::VSCode),
+        // env editor flag is irrelevant when a specific editor is chosen
+        false,
+    );
+    assert_eq!(label.as_deref(), Some("Open with VSCode"));
+
+    let label =
+        open_with_editor_menu_label_for_choice(EditorChoice::ExternalEditor(Editor::Cursor), false);
+    assert_eq!(label.as_deref(), Some("Open with Cursor"));
+}
+
+#[test]
+fn menu_label_system_default_falls_back_to_generic_label() {
+    use super::{open_with_editor_menu_label_for_choice, EditorChoice};
+
+    let label = open_with_editor_menu_label_for_choice(EditorChoice::SystemDefault, false);
+    assert_eq!(label.as_deref(), Some("Open in editor"));
+}
+
+#[test]
+fn menu_label_warp_choice_yields_no_item() {
+    use super::{open_with_editor_menu_label_for_choice, EditorChoice};
+
+    let label = open_with_editor_menu_label_for_choice(EditorChoice::Warp, false);
+    assert_eq!(label, None);
+}
+
+#[test]
+fn menu_label_env_editor_requires_editor_var_to_be_set() {
+    use super::{open_with_editor_menu_label_for_choice, EditorChoice};
+
+    let label_unset = open_with_editor_menu_label_for_choice(EditorChoice::EnvEditor, false);
+    assert_eq!(label_unset, None);
+
+    let label_set = open_with_editor_menu_label_for_choice(EditorChoice::EnvEditor, true);
+    assert_eq!(label_set.as_deref(), Some("Open in editor"));
+}

@@ -4443,6 +4443,28 @@ impl Workspace {
         });
     }
 
+    fn open_tab_cwd_in_external_editor(&mut self, tab_index: usize, ctx: &mut ViewContext<Self>) {
+        let Some(pane_group) = self.tabs.get(tab_index).map(|tab| tab.pane_group.clone()) else {
+            return;
+        };
+        let Some(terminal_view) = pane_group.as_ref(ctx).focused_session_view(ctx) else {
+            return;
+        };
+        let Some(cwd) = terminal_view
+            .as_ref(ctx)
+            .model
+            .lock()
+            .block_list()
+            .active_block()
+            .metadata()
+            .current_working_directory()
+            .map(std::path::PathBuf::from)
+        else {
+            return;
+        };
+        crate::util::file::external_editor::open_directory_in_external_editor(cwd, ctx);
+    }
+
     fn subscribe_to_shared_session_manager(ctx: &mut ViewContext<Self>) {
         use terminal::shared_session::manager::{Manager, ManagerEvent};
 
@@ -24380,6 +24402,9 @@ impl TypedActionView for Workspace {
             }
             CopySharedSessionLinkFromTab { tab_index } => {
                 self.copy_shared_session_link_from_tab(*tab_index, ctx)
+            }
+            OpenTabCwdInExternalEditor { tab_index } => {
+                self.open_tab_cwd_in_external_editor(*tab_index, ctx)
             }
             OpenSharedSessionQrCode { session_id } => {
                 use terminal::shared_session::manager::Manager;

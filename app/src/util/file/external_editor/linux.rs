@@ -344,6 +344,23 @@ pub fn open_file_path_with_line_and_col(
     ctx.open_file_path(full_path);
 }
 
+/// Opens the given directory in the user's configured editor when possible,
+/// otherwise hands off to xdg-open / the desktop file manager.
+pub fn open_directory(with_editor: Option<Editor>, directory: &Path, ctx: &mut AppContext) {
+    if directory.is_dir() {
+        if let Some(editor) = with_editor {
+            if let Some(mut command) = editor.command(directory, None) {
+                if let Err(err) = command.spawn() {
+                    log::error!("Error launching {editor:?}: {err:#}");
+                }
+                return;
+            }
+        }
+    }
+
+    ctx.open_file_path(directory);
+}
+
 /// Attempt to match a file with an existing editor based on Mime type
 ///
 /// Calls xdg-mime to first find the mime type of a file, and then find

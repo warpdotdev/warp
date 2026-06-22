@@ -9,11 +9,10 @@ mod windows;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use settings::EditorChoice;
 use warp_util::path::LineAndColumnArg;
 use warpui::{AppContext, SingletonEntity};
 
-pub use self::settings::{EditorLayout, EditorSettings};
+pub use self::settings::{EditorChoice, EditorLayout, EditorSettings};
 
 pub const SUPPORTED_EDITORS: &[Editor] = &[
     Editor::VSCode,
@@ -319,6 +318,60 @@ pub fn open_file_path_with_editor(
             ctx.open_file_path(&full_path);
         }
     }
+}
+
+/// Opens a directory in the user's configured external editor, falling back
+/// to the platform default when the configured editor is unavailable.
+pub fn open_directory_in_external_editor(directory: PathBuf, ctx: &mut AppContext) {
+    let editor = match *EditorSettings::as_ref(ctx).open_file_editor {
+        EditorChoice::ExternalEditor(editor) => Some(editor),
+        _ => None,
+    };
+    open_directory_with_editor(directory, editor, ctx);
+}
+
+pub fn open_directory_with_editor(
+    directory: PathBuf,
+    editor: Option<Editor>,
+    ctx: &mut AppContext,
+) {
+    cfg_if::cfg_if! {
+        if #[cfg(target_os = "macos")] {
+            mac::open_directory(editor, &directory, ctx);
+        } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
+            linux::open_directory(editor, &directory, ctx);
+        } else if #[cfg(windows)] {
+            windows::open_directory(editor, &directory, ctx);
+        } else {
+            ctx.open_file_path(&directory);
+        }
+    }
+}
+
+/// Returns the "Open with …" menu label for the given `EditorChoice`, or
+/// `None` when no menu item should be rendered (Warp viewer or `EnvEditor`
+/// without `$EDITOR`). Pure — extracted so unit tests don't need an
+/// `AppContext`.
+pub fn open_with_editor_menu_label_for_choice(
+    choice: EditorChoice,
+    env_editor_is_set: bool,
+) -> Option<String> {
+    match choice {
+        EditorChoice::ExternalEditor(editor) => Some(format!("Open with {editor}")),
+        EditorChoice::SystemDefault => Some("Open in editor".to_string()),
+        EditorChoice::EnvEditor if env_editor_is_set => Some("Open in editor".to_string()),
+        _ => None,
+    }
+}
+
+/// Resolves the menu label by reading the current editor setting and `$EDITOR`
+/// from the environment.
+pub fn open_with_editor_menu_label(ctx: &AppContext) -> Option<String> {
+    let env_editor_is_set = !std::env::var("EDITOR").unwrap_or_default().is_empty();
+    open_with_editor_menu_label_for_choice(
+        *EditorSettings::as_ref(ctx).open_file_editor,
+        env_editor_is_set,
+    )
 }
 
 #[cfg(test)]
