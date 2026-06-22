@@ -289,16 +289,16 @@ impl SetupStep {
                 span_and_name!("setup_third_party_harness_external_conversation")
             }
             Self::ThirdPartyHarnessPreparationNotificationPluginInstall => {
-                "setup_third_party_harness_preparation_notification_plugin_install"
+                span_and_name!("setup_third_party_harness_preparation_notification_plugin_install")
             }
             Self::ThirdPartyHarnessPreparationNotificationPluginUpdate => {
-                "setup_third_party_harness_preparation_notification_plugin_update"
+                span_and_name!("setup_third_party_harness_preparation_notification_plugin_update")
             }
             Self::ThirdPartyHarnessPreparationPlatformPluginInstall => {
-                "setup_third_party_harness_preparation_platform_plugin_install"
+                span_and_name!("setup_third_party_harness_preparation_platform_plugin_install")
             }
             Self::ThirdPartyHarnessPreparationPlatformPluginUpdate => {
-                "setup_third_party_harness_preparation_platform_plugin_update"
+                span_and_name!("setup_third_party_harness_preparation_platform_plugin_update")
             }
         }
     }
