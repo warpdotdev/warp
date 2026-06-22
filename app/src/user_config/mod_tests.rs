@@ -43,7 +43,14 @@ fn test_is_tab_config_toml_rejects_tomls_outside_tab_config_dirs() {
     assert!(!is_tab_config_toml(&path));
 }
 
-#[cfg(feature = "local_fs")]
+// POSIX-only: the assertions read `generated_worktree_repo_dir`'s
+// `display().to_string()` and compare against the materialized TOML.
+// On Windows the AppData prefix contains `\` separators that get
+// POSIX-escaped (doubled) when embedded in the rendered command, so the
+// substring lookup against the raw helper output no longer matches.
+// PowerShell-side coverage lives in
+// `tab_config_tests::build_worktree_config_toml_path_quoting`.
+#[cfg(all(feature = "local_fs", not(windows)))]
 #[test]
 fn test_materialize_default_worktree_config_bakes_repo_and_pane_type_only() {
     let template = include_str!("../../resources/tab_configs/default_worktree.toml");
@@ -82,7 +89,7 @@ fn test_materialize_default_worktree_config_bakes_repo_and_pane_type_only() {
     );
 }
 
-#[cfg(feature = "local_fs")]
+#[cfg(all(feature = "local_fs", not(windows)))]
 #[test]
 fn test_materialized_default_worktree_config_renders_full_worktree_path() {
     let template = include_str!("../../resources/tab_configs/default_worktree.toml");
@@ -238,6 +245,9 @@ mod worktree_path_quoting {
         }
     }
 
+    // POSIX-only: asserts `/dollar\$repo/` with forward-slash separators.
+    // On Windows the path uses `\`, so the substring doesn't match.
+    #[cfg(not(windows))]
     #[test]
     fn dollar_in_repo_name_is_shell_escaped() {
         // `generated_worktree_repo_dir` uses only the last component of
@@ -320,6 +330,10 @@ mod worktree_path_quoting {
         }
     }
 
+    // POSIX-only: asserts no `\` in the rendered command, which is true
+    // under POSIX semantics but tautologically false on Windows where
+    // `\` is the native path separator.
+    #[cfg(not(windows))]
     #[test]
     fn plain_paths_remain_unchanged() {
         // A repo path with no shell-significant characters renders

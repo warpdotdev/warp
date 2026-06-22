@@ -792,6 +792,13 @@ fn test_worktree_custom_commands_with_template() {
     }
 }
 
+// POSIX-only: the round-trip assertion compares the rendered command
+// against the helper's raw `generated_worktree_path` output. On Windows
+// the platform-supplied AppData prefix contains `\` separators that the
+// POSIX shell-escape regex doubles, so the rendered command no longer
+// matches the helper's `display().to_string()`. PowerShell coverage lives
+// in `build_worktree_config_toml_path_quoting::powershell_*`.
+#[cfg(not(windows))]
 #[test]
 fn test_build_worktree_toml_autogenerate_round_trips() {
     let toml_str = build_worktree_config_toml(
@@ -836,6 +843,7 @@ fn test_build_worktree_toml_autogenerate_round_trips() {
     }
 }
 
+#[cfg(not(windows))]
 #[test]
 fn test_build_worktree_toml_manual_round_trips() {
     let toml_str = build_worktree_config_toml(
@@ -997,6 +1005,10 @@ mod build_worktree_config_toml_path_quoting {
         }
     }
 
+    // POSIX-only: asserts `!cmd.contains('\\')`, which is true under POSIX
+    // semantics for a plain repo path but tautologically false on Windows
+    // where `\` is the native path separator.
+    #[cfg(not(windows))]
     #[test]
     fn plain_repo_name_round_trips_unchanged() {
         // Sanity: a repo path with no shell-significant characters must not
