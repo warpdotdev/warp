@@ -65,6 +65,9 @@ test = false
 addr = "0.15.6"
 ai.workspace = true
 alphanumeric-sort = "1.5.7"
+# ANSI SGR -> ratatui Text, used by the TUI front-end to render shell-command
+# output. Optional + gated on the `tui` feature (the only consumer).
+ansi-to-tui = { version = "8.0.1", optional = true }
 anyhow.workspace = true
 arrayvec.workspace = true
 asset_cache.workspace = true
@@ -471,7 +474,7 @@ embed-resource = "3.0"
 [features]
 # Headless terminal-UI front-end (the `warp-tui` binary); enables the TUI
 # backend in warpui_core.
-tui = ["warpui_core/tui"]
+tui = ["warpui_core/tui", "dep:ansi-to-tui"]
 ai_resume_button = []
 autoupdate = []
 figma_detection = []

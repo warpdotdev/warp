@@ -8,6 +8,7 @@
 //! called from `run_internal` once the headless app is up (see
 //! [`crate::run_tui`]). Ctrl-C quit is handled by the runtime's input loop.
 
+mod command_output;
 mod input_view;
 mod transcript_view;
 
@@ -46,9 +47,22 @@ impl RootTuiView {
         // communication.
         ctx.subscribe_to_view(&input, |root, _input, event, ctx| match event {
             InputEvent::Submitted(text) => {
-                let text = text.clone();
+                // A leading `!` is a local-shell escape hatch: run the rest as a
+                // shell command and stream its output into the transcript.
+                // Anything else is appended verbatim as a prompt entry.
+                if let Some(command) = text.strip_prefix('!') {
+                    let command = command.to_string();
+                    root.transcript
+                        .update(ctx, |transcript, ctx| transcript.run_command(command, ctx));
+                } else {
+                    let text = text.clone();
+                    root.transcript
+                        .update(ctx, |transcript, ctx| transcript.append(text, ctx));
+                }
+            }
+            InputEvent::Cancel => {
                 root.transcript
-                    .update(ctx, |transcript, ctx| transcript.append(text, ctx));
+                    .update(ctx, |transcript, ctx| transcript.cancel_running(ctx));
             }
         });
 

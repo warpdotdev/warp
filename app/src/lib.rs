@@ -572,6 +572,7 @@ impl LaunchMode {
             LaunchMode::Test { .. } => "test",
             LaunchMode::RemoteServerDaemon { .. } => "remote_server_daemon",
             LaunchMode::RemoteServerProxy => "remote_server_proxy",
+            LaunchMode::Tui => "tui",
         }
     }
 
