@@ -517,6 +517,28 @@ ru:
     quit_warp: "Выйти из Warp?"
     save_changes: "Сохранить изменения?"
 
+  # ── Provider Keys ──
+  provider_keys:
+    add_api_key: "Добавить API-ключ"
+    description: "Используйте свои API-ключи от провайдеров моделей для Warp Agent."
+    openai_api_key: "API-ключ OpenAI"
+    anthropic_api_key: "API-ключ Anthropic"
+    google_api_key: "API-ключ Google"
+    cancel: "Отмена"
+    add_keys: "Добавить ключи"
+
+  # ── Free AI Removal ──
+  free_ai_removal:
+    notice:
+      title: "Warp больше не предоставляет инференс на бесплатном плане."
+      body: "Чтобы продолжить использовать AI-функции Warp, перейдите на платный план, добавьте свой API-ключ или эндпоинт, либо войдите с подпиской Grok."
+      bonus_credits: "Если у вас есть неиспользованные бонусные кредиты, AI продолжит работать, пока они не закончатся."
+    prompt_suggestions:
+      title: "Как использовать AI-функции в Warp"
+      body: "Чтобы использовать AI-функции в Warp, оформите платную подписку, добавьте API-ключ (OpenAI, Anthropic или Google), добавьте свой эндпоинт инференса (OpenRouter, LiteLLM) или войдите с подпиской SuperGrok."
+    bring_your_own_ai: "Свой AI"
+    view_pricing: "Тарифы"
+
   # ── Аутентификация ──
   auth:
     log_out_title: "Выйти?"

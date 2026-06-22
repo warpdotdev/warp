@@ -195,7 +195,7 @@ impl View for ProviderKeysModalView {
         let border_color = internal_colors::neutral_4(theme);
         let ui_builder = appearance.ui_builder();
 
-        let title = FormattedTextElement::from_str("Add API key", appearance.ui_font_family(), 16.)
+        let title = FormattedTextElement::from_str(crate::menu_label("provider_keys.add_api_key", "Add API key"), appearance.ui_font_family(), 16.)
             .with_color(internal_colors::text_main(theme, dialog_surface_solid))
             .with_weight(Weight::Bold)
             .with_line_height_ratio(1.25)
@@ -218,7 +218,7 @@ impl View for ProviderKeysModalView {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Use your own API keys from model providers for Warp Agent.",
+            crate::menu_label("provider_keys.description", "Use your own API keys from model providers for Warp Agent."),
             appearance.ui_font_family(),
             14.,
         )
@@ -231,11 +231,11 @@ impl View for ProviderKeysModalView {
         let body = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(Container::new(subtitle).with_margin_bottom(16.).finish())
-            .with_child(self.render_field(appearance, "OpenAI API key", self.openai_input.clone()))
+            .with_child(self.render_field(appearance, crate::menu_label("provider_keys.openai_api_key", "OpenAI API key"), self.openai_input.clone()))
             .with_child(
                 Container::new(self.render_field(
                     appearance,
-                    "Anthropic API key",
+                    crate::menu_label("provider_keys.anthropic_api_key", "Anthropic API key"),
                     self.anthropic_input.clone(),
                 ))
                 .with_margin_top(16.)
@@ -244,7 +244,7 @@ impl View for ProviderKeysModalView {
             .with_child(
                 Container::new(self.render_field(
                     appearance,
-                    "Google API key",
+                    crate::menu_label("provider_keys.google_api_key", "Google API key"),
                     self.google_input.clone(),
                 ))
                 .with_margin_top(16.)
@@ -255,7 +255,7 @@ impl View for ProviderKeysModalView {
         let cancel_button = self.cancel_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Cancel".into()),
+                content: button::Content::Label(crate::menu_label("provider_keys.cancel", "Cancel").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -269,7 +269,7 @@ impl View for ProviderKeysModalView {
         let add_button = self.add_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Add keys".into()),
+                content: button::Content::Label(crate::menu_label("provider_keys.add_keys", "Add keys").into()),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
