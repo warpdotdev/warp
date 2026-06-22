@@ -982,6 +982,39 @@ ru:
     open_file: "Открыть файл"
     open_in_warp: "Открыть в Warp"
 
+  # ── Onboarding ──
+  onboarding:
+    ai_access:
+      choose_how: "Выберите способ доступа к AI"
+      subtitle: "Экономьте с регулярным планом или используйте свой ключ или эндпоинт."
+      subscription: "Подписка"
+      best_value: "Лучшая цена"
+      subscription_description: "От $18 / мес, доступно с месячной или годовой подпиской. Включает базовые кредиты, фронтир-модели, облачных агентов, коллаборацию и многое другое."
+      choose_plan: "Выбрать план"
+      byok_label: "Использовать свой ключ или эндпоинт"
+      byok_description: "Используйте свой API-ключ или OpenAI-совместимый эндпоинт с Warp бесплатно."
+      add_key: "+ Добавить ключ"
+      add_custom_endpoint: "+ Добавить свой эндпоинт"
+      back: "Назад"
+      no_ai: "Мне не нужен AI"
+      next: "Далее"
+      requires_subscription: "Warp Agent требует подписку или ваш собственный инференс"
+    ai_setup:
+      feature_harness: "Лучший харнесс для терминальных задач и агентного кодинга"
+      feature_models: "Фронтир-модели от OpenAI, Anthropic и Google"
+      feature_routing: "Маршрутизация между фронтир и open-weight моделями"
+      feature_orchestration: "Мульти-агентная оркестрация"
+      choose_your_setup: "Выберите настройку AI"
+      subtitle: "Выберите, хотите ли вы использовать Warp Agent или сторонних агентов."
+      use_warp_agent: "Использовать Warp Agent"
+      access_more_models: "Доступ к большему числу моделей"
+      warp_agent_description: "Современный агентный харнесс, глубоко интегрированный в терминал."
+      use_third_party: "Использовать сторонних агентов"
+      third_party_description: "Используйте агентов, таких как Claude Code, Codex и Gemini."
+      back: "Назад"
+      no_ai: "Мне не нужен AI"
+      next: "Далее"
+
   # ── Настройки AI ──
   settings.ai:
     next_command_description: "Позволяет AI предлагать следующую команду на основе истории команд, выводов и популярных рабочих процессов."
