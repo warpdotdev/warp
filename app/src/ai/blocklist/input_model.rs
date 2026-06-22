@@ -832,11 +832,6 @@ impl BlocklistAIInputModel {
                         )
                         .await;
 
-                        // Yield between the command- and prompt-history scans so the
-                        // classification can be aborted before starting the second
-                        // match.
-                        futures_lite::future::yield_now().await;
-
                         if let Some(prompt_entries) = &prompt_entries {
                             // `prompt_entries` is ascending (oldest-first); reverse it so the
                             // matcher iterates newest-first and the first match is most-recent.
