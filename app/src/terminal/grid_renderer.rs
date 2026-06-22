@@ -2340,6 +2340,43 @@ fn calculate_cursor_origin(
         )
 }
 
+/// Caches the alt-screen cursor position for IME (input method editor) popup
+/// positioning without rendering the cursor visually. Call this whenever the
+/// cursor is hidden (e.g. because the TUI app issued `\e[?25l`) so that
+/// `TerminalView::active_cursor_position` always has a current value for
+/// `firstRectForCharacterRange:`, even between frames where the cursor is not
+/// drawn.
+#[allow(clippy::too_many_arguments)]
+pub fn cache_cursor_position_for_ime(
+    grid_render_params: &GridRenderParams,
+    cursor_point: Point,
+    is_cursor_on_wide_char: bool,
+    padding_x: Pixels,
+    grid_origin: Vector2F,
+    ctx: &mut PaintContext,
+    terminal_view_id: EntityId,
+) {
+    let line_top_origin = grid_origin
+        + vec2f(padding_x.as_f32(), 0.)
+        + grid_render_params.cell_size * vec2f(cursor_point.col as f32, cursor_point.row as f32);
+
+    let cursor_top_origin = calculate_cursor_origin(grid_render_params, line_top_origin, ctx);
+    let cell_width = if is_cursor_on_wide_char {
+        grid_render_params.cell_size.x() * 2.
+    } else {
+        grid_render_params.cell_size.x()
+    };
+    let cursor_block_size = vec2f(
+        cell_width,
+        grid_render_params.font_size * DEFAULT_UI_LINE_HEIGHT_RATIO,
+    );
+
+    ctx.position_cache.cache_position_indefinitely(
+        format!("terminal_view:cursor_{terminal_view_id}"),
+        RectF::new(cursor_top_origin, cursor_block_size),
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_cursor(
     grid_render_params: &GridRenderParams,

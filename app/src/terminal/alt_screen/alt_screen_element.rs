@@ -767,6 +767,24 @@ impl Element for AltScreenElement {
         );
         record_trace_event!("alt_screen_element:paint:grid_rendered");
 
+        // Always cache the cursor position for IME (input method editor) popup
+        // positioning, as long as the CLI rich input overlay is not active. When
+        // the rich input overlay is open it manages its own cursor position.
+        // Caching unconditionally (regardless of `cursor_visible`) ensures the
+        // IME popup appears at the correct location even when the TUI app
+        // temporarily hides the cursor during screen updates (e.g. via \e[?25l).
+        if !self.grid_render_params.hide_cursor_cell {
+            grid_renderer::cache_cursor_position_for_ime(
+                &self.grid_render_params,
+                grid.cursor_render_point(),
+                grid.is_cursor_on_wide_char(),
+                padding_x,
+                adjusted_grid_origin,
+                ctx,
+                self.terminal_view_id,
+            );
+        }
+
         // Render cursor if the escape sequence is set.
         // Also suppress the cursor when hide_cursor_cell is active (CLI agent rich input is open).
         if cursor_visible && !self.grid_render_params.hide_cursor_cell {
