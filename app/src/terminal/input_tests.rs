@@ -20,6 +20,7 @@ use warp_completer::completer::{
     SuggestionResults, SuggestionType,
 };
 use warp_completer::meta::Span;
+use warp_util::standardized_path::StandardizedPath;
 use warp_util::user_input::UserInput;
 use warpui::platform::WindowStyle;
 use warpui::text::SelectionType;
@@ -57,6 +58,7 @@ use crate::input_suggestions::{HistoryOrder, Item};
 use crate::network::NetworkStatus;
 use crate::pricing::PricingInfoModel;
 use crate::search::files::model::FileSearchModel;
+use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::ServerApiProvider;
@@ -715,6 +717,87 @@ fn test_input_tab() {
         input.read(&app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "    cd so");
         });
+    });
+}
+
+#[test]
+fn zero_state_hint_text_only_registers_active_slash_command_placeholders() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            None, /* history_file_commands */
+            Some(session_info),
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.set_zero_state_hint_text(ctx);
+        });
+
+        let editor = input.read(&app, |input, _| input.editor().clone());
+        let rename_tab_prefix = format!("{} ", commands::RENAME_TAB.name);
+        let continue_locally_prefix = format!("{} ", commands::CONTINUE_LOCALLY.name);
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_placeholder_text_with_prefix(
+                continue_locally_prefix.clone(),
+                "stale hint",
+                ctx,
+            );
+        });
+        input.update(&mut app, |input, ctx| {
+            input.set_zero_state_hint_text(ctx);
+        });
+
+        assert!(
+            editor.read(&app, |editor, _| editor
+                .placeholder_text(&rename_tab_prefix)
+                .is_some()),
+            "always-active slash command placeholders should still be registered"
+        );
+        assert!(
+            editor.read(&app, |editor, _| editor
+                .placeholder_text(&continue_locally_prefix)
+                .is_none()),
+            "/continue-locally should not be registered outside cloud conversation context"
+        );
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_placeholder_text_with_prefix(
+                continue_locally_prefix.clone(),
+                "stale hint",
+                ctx,
+            );
+        });
+
+        let repo_dir = tempfile::TempDir::new().expect("repo temp dir");
+        let repo_path = repo_dir.path().to_path_buf();
+        simulate_directory_for_completion(
+            session_id,
+            &terminal,
+            &mut app,
+            repo_path.to_string_lossy().into_owned(),
+        );
+        DetectedRepositories::handle(&app).update(&mut app, |repos, _| {
+            let root = StandardizedPath::from_local_canonicalized(&repo_path)
+                .expect("canonicalized repo root");
+            repos.insert_test_repo_root(root);
+        });
+        input.update(&mut app, |input, ctx| {
+            input.update_repo_path(Some(repo_path), ctx);
+        });
+
+        assert!(
+            editor.read(&app, |editor, _| editor
+                .placeholder_text(&continue_locally_prefix)
+                .is_none()),
+            "active slash-command data source updates should refresh stale placeholders"
+        );
     });
 }
 
