@@ -2,10 +2,11 @@ use std::ops::Deref;
 
 use serde::{Serialize, Serializer};
 use warpui::platform::Cursor;
-use warpui::ViewContext;
+use warpui::{SingletonEntity, ViewContext};
 
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{LinkOpenMethod, TelemetryEvent};
+use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::model::grid::grid_handler::Link;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::{WithinBlock, WithinModel};
@@ -298,6 +299,8 @@ impl super::TerminalView {
             )
         };
 
+        let file_links = *GeneralSettings::as_ref(ctx).file_links;
+
         match (url_at_point, &self.last_hover_fragment_boundary) {
             (Some(url), _) => {
                 self.highlighted_link
@@ -306,7 +309,7 @@ impl super::TerminalView {
             }
             // Only scan for links if the mouse hovered on a new word.
             (_, Some(last_hover_fragment_boundary))
-                if !last_hover_fragment_boundary.contains(position) =>
+                if file_links && !last_hover_fragment_boundary.contains(position) =>
             {
                 // Use try_send to return an error directly when the channel is full
                 // instead of blocking main thread.
@@ -316,7 +319,7 @@ impl super::TerminalView {
                 });
             }
             // If there's no last hover fragment boundary, we scan for links.
-            (_, None) => {
+            (_, None) if file_links => {
                 let _ = self.find_link_tx.try_send(FindLinkArg {
                     position: *position,
                     from_editor,
@@ -339,6 +342,10 @@ impl super::TerminalView {
         find_link_arg: FindLinkArg,
         ctx: &mut ViewContext<Self>,
     ) {
+        if !*GeneralSettings::as_ref(ctx).file_links {
+            return;
+        }
+
         let FindLinkArg {
             position,
             from_editor,
