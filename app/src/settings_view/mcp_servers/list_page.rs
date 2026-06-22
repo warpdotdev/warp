@@ -64,7 +64,7 @@ use crate::ui_components::blended_colors;
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::{ActionButton, NakedTheme};
 use crate::view_components::DismissibleToast;
-use crate::workflows::local_workflows::tail_command_for_shell;
+use crate::workflows::local_workflows::tail_command_for_shell_with_path_converter;
 use crate::workspace::Workspace;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::ToastStack;
@@ -629,7 +629,11 @@ impl MCPServersListPageView {
 
             terminal_view_handle.update(ctx, |terminal, ctx| {
                 let shell_family = terminal.shell_family(ctx);
-                let tail_command = tail_command_for_shell(shell_family, log_file_path);
+                let tail_command = tail_command_for_shell_with_path_converter(
+                    shell_family,
+                    log_file_path,
+                    terminal.windows_path_converter(ctx),
+                );
                 terminal.set_pending_command(&tail_command, ctx);
             });
         })

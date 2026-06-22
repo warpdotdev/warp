@@ -449,8 +449,9 @@ use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDisp
 use crate::terminal::recorder::PtyRecorder;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::session_settings::{
-    NotificationsMode, NotificationsSettings, SessionSettings, SessionSettingsChangedEvent,
-    ToolbarChipSelection, DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION,
+    NewSessionShell, NotificationsMode, NotificationsSettings, SessionSettings,
+    SessionSettingsChangedEvent, ToolbarChipSelection,
+    DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION,
 };
 use crate::terminal::settings::{TerminalSettings, TerminalSettingsChangedEvent};
 use crate::terminal::shared_session::role_change_modal::{
@@ -16341,6 +16342,38 @@ impl TerminalView {
                         .shell_family()
                 })
             })
+    }
+
+    pub fn windows_path_converter(
+        &self,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<fn(&str) -> String> {
+        if let Some(converter) = self
+            .active_block_session_id()
+            .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
+            .and_then(|session| session.windows_path_converter())
+        {
+            return Some(converter);
+        }
+
+        SessionSettings::handle(ctx).read(ctx, |settings, _| {
+            match settings
+                .new_session_shell_override
+                .value()
+                .clone()
+                .unwrap_or_default()
+            {
+                NewSessionShell::WSL(_) => {
+                    Some(warp_util::path::convert_windows_path_to_wsl as fn(&str) -> String)
+                }
+                NewSessionShell::MSYS2(_) => {
+                    Some(warp_util::path::convert_windows_path_to_msys2 as fn(&str) -> String)
+                }
+                NewSessionShell::SystemDefault
+                | NewSessionShell::Executable(_)
+                | NewSessionShell::Custom(_) => None,
+            }
+        })
     }
 
     fn paste(&mut self, middle_click: bool, ctx: &mut ViewContext<Self>) {
