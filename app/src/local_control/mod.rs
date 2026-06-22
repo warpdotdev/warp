@@ -140,7 +140,7 @@ impl LocalControlServer {
         }
         ctx.subscribe_to_model(
             &crate::settings::LocalControlSettings::handle(ctx),
-            |server, _, ctx| {
+            |server, _, _, ctx| {
                 if let Err(error) = server.refresh_for_settings(ctx) {
                     log::warn!("Failed to refresh local-control server state: {error:#}");
                 }

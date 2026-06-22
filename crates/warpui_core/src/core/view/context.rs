@@ -1,3 +1,6 @@
+#[cfg(feature = "tui")]
+mod tui;
+
 use std::any::Any;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -5,7 +8,6 @@ use std::sync::Arc;
 
 use futures::future::{AbortHandle, Abortable};
 use futures::{Future, FutureExt};
-use pathfinder_geometry::rect::RectF;
 use thiserror::Error;
 
 use super::handle::{AnyViewHandle, ReadView, UpdateView, ViewAsRef, ViewHandle, WeakViewHandle};
@@ -25,6 +27,24 @@ use crate::{
     ModelContext, ModelHandle, ReadModel, UpdateModel, WindowId,
 };
 
+impl<'a, T: View> ViewContext<'a, T> {
+    /// The layout-position cache is only populated by the GUI presenter; in
+    /// TUI mode this method returns `None` because there is no presenter.
+    pub fn element_position_by_id<S>(&self, id: S) -> Option<pathfinder_geometry::rect::RectF>
+    where
+        S: AsRef<str>,
+    {
+        let presenter = self.app.presenter(self.window_id);
+
+        if let Some(presenter) = presenter {
+            let borrowed_presenter = presenter.borrow();
+            borrowed_presenter.position_cache().get_position(id)
+        } else {
+            None
+        }
+    }
+}
+
 /// Structure that combines view identifiers and a handle to the application
 /// context/application state.
 pub struct ViewContext<'a, T: ?Sized> {
@@ -34,7 +54,7 @@ pub struct ViewContext<'a, T: ?Sized> {
     view_type: PhantomData<T>,
 }
 
-impl<'a, T: View> ViewContext<'a, T> {
+impl<'a, T: Entity> ViewContext<'a, T> {
     pub(in crate::core) fn new(
         app: &'a mut AppContext,
         window_id: WindowId,
@@ -96,21 +116,7 @@ impl<'a, T: View> ViewContext<'a, T> {
             .check_view_or_child_focused(self.window_id, &self.view_id)
     }
 
-    pub fn element_position_by_id<S>(&self, id: S) -> Option<RectF>
-    where
-        S: AsRef<str>,
-    {
-        let presenter = self.app.presenter(self.window_id);
-
-        if let Some(presenter) = presenter {
-            let borrowed_presenter = presenter.borrow();
-            borrowed_presenter.position_cache().get_position(id)
-        } else {
-            None
-        }
-    }
-
-    pub fn focus<S: View>(&mut self, handle: &ViewHandle<S>) {
+    pub fn focus<S: Entity>(&mut self, handle: &ViewHandle<S>) {
         let handle: AnyViewHandle = handle.into();
         self.app.pending_effects.push_back(Effect::Focus {
             window_id: handle.window_id(self.app),
@@ -186,7 +192,7 @@ impl<'a, T: View> ViewContext<'a, T> {
 
     pub fn subscribe_to_view<V, F>(&mut self, handle: &ViewHandle<V>, mut callback: F)
     where
-        V: View,
+        V: Entity,
         V::Event: 'static,
         F: 'static + FnMut(&mut T, ViewHandle<V>, &V::Event, &mut ViewContext<T>),
     {
@@ -512,7 +518,7 @@ impl<'a, T: View> ViewContext<'a, T> {
                 window_id: self.window_id,
                 view_id: self.view_id,
                 callback: Box::new(move |view, output, app, window_id, view_id| {
-                    let view = view.as_any_mut().downcast_mut().expect("this downcast should never fail, as correct typing is statically enforced via the generic parameters on spawn_local");
+                    let view = view.downcast_mut().expect("this downcast should never fail, as correct typing is statically enforced via the generic parameters on spawn_local");
                     let output = *output.downcast().expect("this downcast should never fail, as correct typing is statically enforced via the generic parameters on spawn_local");
                     let result =
                         callback(view, output, &mut ViewContext::new(app, window_id, view_id));
@@ -657,13 +663,13 @@ impl<'a, T: View> ViewContext<'a, T> {
                 window_id: self.window_id,
                 view_id: self.view_id,
                 on_item: Box::new(move |view, output, app, window_id, view_id| {
-                    let view = view.as_any_mut().downcast_mut().expect("this downcast should never fail, as correct typing is statically enforced via the generic parameters on spawn_local");
+                    let view = view.downcast_mut().expect("this downcast should never fail, as correct typing is statically enforced via the generic parameters on spawn_local");
                     let output = *output.downcast().expect("this downcast should never fail, as correct typing is statically enforced via the generic parameters on spawn_local");
                     let mut ctx = ViewContext::new(app, window_id, view_id);
                     on_item(view, output, &mut ctx);
                 }),
                 on_done: Box::new(move |view, app, window_id, view_id| {
-                    let view = view.as_any_mut().downcast_mut().expect("this downcast should never fail, as correct typing is statically enforced via the generic parameters on spawn_local");
+                    let view = view.downcast_mut().expect("this downcast should never fail, as correct typing is statically enforced via the generic parameters on spawn_local");
                     let mut ctx = ViewContext::new(app, window_id, view_id);
                     on_done(view, &mut ctx);
                 }),
@@ -777,10 +783,7 @@ impl<'a, T: View> ViewContext<'a, T> {
                 window_id: self.window_id,
                 view_id: self.view_id,
                 on_item: Box::new(move |view, task, app, window_id, view_id| {
-                    let view = view
-                        .as_any_mut()
-                        .downcast_mut()
-                        .expect("unexpected view type");
+                    let view = view.downcast_mut().expect("unexpected view type");
                     let task: ViewTask<T> = *task
                         .downcast()
                         .expect("task from spawner should be ViewTask<T>");
@@ -864,7 +867,7 @@ impl<V> ReadModel for ViewContext<'_, V> {
     }
 }
 
-impl<V: View> UpdateModel for ViewContext<'_, V> {
+impl<V: Entity> UpdateModel for ViewContext<'_, V> {
     fn update_model<T, F, S>(&mut self, handle: &ModelHandle<T>, update: F) -> S
     where
         T: Entity,
@@ -874,37 +877,37 @@ impl<V: View> UpdateModel for ViewContext<'_, V> {
     }
 }
 
-impl<V: View> ViewAsRef for ViewContext<'_, V> {
-    fn view<T: View>(&self, handle: &ViewHandle<T>) -> &T {
+impl<V: Entity> ViewAsRef for ViewContext<'_, V> {
+    fn view<T: 'static>(&self, handle: &ViewHandle<T>) -> &T {
         self.app.view(handle)
     }
 
-    fn try_view<T: View>(&self, handle: &ViewHandle<T>) -> Option<&T> {
+    fn try_view<T: 'static>(&self, handle: &ViewHandle<T>) -> Option<&T> {
         self.app.try_view(handle)
     }
 }
 
-impl<V: View> UpdateView for ViewContext<'_, V> {
+impl<V: Entity> UpdateView for ViewContext<'_, V> {
     fn update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> S
     where
-        T: View,
+        T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
     {
         self.app.update_view(handle, update)
     }
 }
 
-impl<V: View> ReadView for ViewContext<'_, V> {
+impl<V: Entity> ReadView for ViewContext<'_, V> {
     fn read_view<T, F, S>(&self, handle: &ViewHandle<T>, read: F) -> S
     where
-        T: View,
+        T: 'static,
         F: FnOnce(&T, &AppContext) -> S,
     {
         self.app.read_view(handle, read)
     }
 }
 
-impl<V: View> GetSingletonModelHandle for ViewContext<'_, V> {
+impl<V: Entity> GetSingletonModelHandle for ViewContext<'_, V> {
     fn get_singleton_model_handle<T: crate::SingletonEntity>(&self) -> ModelHandle<T> {
         self.app.get_singleton_model_handle()
     }

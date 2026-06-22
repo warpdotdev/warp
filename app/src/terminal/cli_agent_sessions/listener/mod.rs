@@ -178,7 +178,7 @@ impl CLIAgentSessionListener {
         // Subscribe to subsequent OSC events from this terminal's PTY.
         // Parsing is delegated to the handler's `try_parse`; the handler's
         // `handle_event` then filters/transforms the result.
-        ctx.subscribe_to_model(model_event_dispatcher, move |me, event, ctx| {
+        ctx.subscribe_to_model(model_event_dispatcher, move |me, _, event, ctx| {
             if let ModelEvent::PluggableNotification { title, body } = event {
                 let view_id = me.terminal_view_id;
                 let plugin_already_active = CLIAgentSessionsModel::as_ref(ctx)

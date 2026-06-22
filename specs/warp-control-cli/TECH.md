@@ -75,7 +75,7 @@ Design:
 - Each process writes a discovery record into a secure per-user directory when Scripting is enabled.
 - The record contains: `instance_id`, PID, channel/build metadata, control-listener endpoint, protocol version, start timestamp, and the filename of its instance-bound broker socket.
 - The record does not contain bearer tokens, raw credentials, or control authority.
-- The CLI loads records, rejects records whose endpoint is not exactly `127.0.0.1` or whose broker socket is not the expected filename, prunes stale records after health checks, and selects an instance using product selector rules.
+- The CLI passes its compiled channel into the shared discovery scan. The scan excludes records from other channels before returning candidates, rejects records whose endpoint is not exactly `127.0.0.1` or whose broker socket is not the expected filename, prunes stale same-channel records after health checks, and selects an instance using product selector rules. This same-channel boundary applies to listing, implicit selection, and explicit instance or PID selection.
 - When Scripting is disabled, no discovery record is published.
 Default discovery directory: `~/.warp/local-control/`. `$XDG_RUNTIME_DIR/warp/local-control` is preferred when available. On Unix, the directory is restricted to `0700` and records/sockets to `0600`.
 ### 3. Credential broker
@@ -206,7 +206,7 @@ sequenceDiagram
     participant BRIDGE as App bridge
     participant UI as Warp app state
 
-    CLI->>REG: Read instance discovery records
+    CLI->>REG: Read same-channel instance discovery records
     CLI->>HTTP: Health/protocol check (app.ping)
     HTTP-->>CLI: Instance metadata
     CLI->>CLI: Resolve instance selector
@@ -230,6 +230,7 @@ sequenceDiagram
 - **Scripting gate:** Disabled state rejects all credential requests and control requests. Enabled state allows them. Toggling invalidates outstanding credentials.
 - **Credential model:** Raw credentials never appear in discovery records. Credentials are instance-bound, action-bound, and short-lived. A credential for one action fails with `insufficient_permissions` for any other action.
 - **Selector resolution:** Tests for active, explicit ID, index, stale target, ambiguous target, missing target, and target-state-conflict cases.
+- **Channel isolation:** Discovery tests prove that a CLI scan excludes records published by other Warp channels.
 - **Input staging:** Only `input.insert` and `input.replace` exist. No `input.run`, `input.get`, `input.clear`, or `input.mode.set`. Tests prove no buffer submission occurs.
 - **Excluded families:** The Block, Auth, Drive, and History families are entirely absent. The CLI rejects their command routes at parse time, the protocol rejects their action names at deserialization (`invalid_request`), and `action.inspect`/`capability.inspect` report non-catalog names as `not_allowlisted`.
 - **Unsupported platforms:** Windows fails closed with no fallback.

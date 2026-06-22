@@ -17,7 +17,8 @@ fn mock_buffer_and_tree(text_content: &str, language: Arc<Language>) -> (Buffer,
     let snapshot = BufferSnapshot::from_plain_text(text_content);
     let tree = warpui_core::r#async::block_on(async {
         SyntaxTreeState::parse_text(snapshot, None, &language).await
-    });
+    })
+    .expect("test buffer is small and should parse");
 
     // Create a minimal buffer
     let buffer = Buffer::new(Box::new(|_, _| IndentBehavior::Ignore));
@@ -61,7 +62,8 @@ fn test_indent_query() {
         let buffer_snapshot = buffer_handle.read(&app, |buffer, _| buffer.buffer_snapshot());
         let tree = warpui_core::r#async::block_on(async {
             SyntaxTreeState::parse_text(buffer_snapshot, None, &language).await
-        });
+        })
+        .expect("test buffer is small and should parse");
 
         let query = language.as_ref().indents_query.as_ref().unwrap();
 
@@ -157,7 +159,8 @@ fn test_indent_query_on_go() {
         let buffer_snapshot = buffer_handle.read(&app, |buffer, _| buffer.buffer_snapshot());
         let tree = warpui_core::r#async::block_on(async {
             SyntaxTreeState::parse_text(buffer_snapshot, None, &language).await
-        });
+        })
+        .expect("test buffer is small and should parse");
 
         let query = &language.as_ref().indents_query.as_ref().unwrap();
 

@@ -1,0 +1,121 @@
+use std::cell::Cell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use crossterm::style::Color;
+
+use super::TuiContainer;
+use crate::elements::tui::{
+    TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEventContext, TuiEventHandler,
+    TuiPresentationContext, TuiRect, TuiSize, TuiText,
+};
+use crate::event::KeyEventDetails;
+use crate::keymap::Keystroke;
+use crate::{App, EntityId, Event};
+
+fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
+    let mut buffer = TuiBuffer::new(size);
+    element.render(TuiRect::from_size(size), &mut buffer);
+    buffer.to_lines()
+}
+
+#[test]
+fn padding_offsets_the_child() {
+    let container = TuiContainer::new(TuiText::new("X")).with_padding(1);
+    assert_eq!(container.desired_height(3), 3);
+    assert_eq!(
+        render_to_lines(&container, TuiSize::new(3, 3)),
+        vec!["   ", " X ", "   "],
+    );
+}
+
+#[test]
+fn border_frames_the_child() {
+    let container = TuiContainer::new(TuiText::new("X")).with_border();
+    assert_eq!(
+        render_to_lines(&container, TuiSize::new(3, 3)),
+        vec!["┌─┐", "│X│", "└─┘"],
+    );
+}
+
+#[test]
+fn border_and_padding_compose() {
+    let mut container = TuiContainer::new(TuiText::new("X"))
+        .with_border()
+        .with_padding(1);
+
+    // Child inset by 2 (border + padding) on each side: 1x1 child -> 5x5 total.
+    let size = container.layout(TuiConstraint::loose(TuiSize::new(20, 20)));
+    assert_eq!(size, TuiSize::new(5, 5));
+
+    assert_eq!(
+        render_to_lines(&container, TuiSize::new(5, 5)),
+        vec!["┌───┐", "│   │", "│ X │", "│   │", "└───┘"],
+    );
+}
+
+#[test]
+fn background_fills_the_padding_area() {
+    let container = TuiContainer::new(TuiText::new("X"))
+        .with_padding(1)
+        .with_background(Color::Blue);
+
+    let mut buffer = TuiBuffer::new(TuiSize::new(3, 3));
+    container.render(TuiRect::new(0, 0, 3, 3), &mut buffer);
+
+    // A padding cell carries the background fill...
+    assert_eq!(
+        buffer.get(0, 0).expect("cell in bounds").style().background,
+        Some(Color::Blue),
+    );
+    // ...and the child glyph lands in the center.
+    assert_eq!(buffer.get(1, 1).expect("cell in bounds").symbol(), "X");
+}
+
+#[test]
+fn present_recurses_into_the_child() {
+    let root = EntityId::from_usize(1);
+    let embedded = EntityId::from_usize(2);
+    let mut parent_by_child = HashMap::new();
+
+    {
+        let mut ctx = TuiPresentationContext::new(root, &mut parent_by_child);
+        let mut container =
+            TuiContainer::new(TuiChildView::from_rendered(embedded, Box::new(()))).with_border();
+        container.present(&mut ctx);
+    }
+
+    assert_eq!(parent_by_child.get(&embedded), Some(&root));
+}
+
+#[test]
+fn dispatch_event_forwards_to_the_child_inside_the_inset() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let hits = Rc::new(Cell::new(0u32));
+            let counter = hits.clone();
+            let mut container = TuiContainer::new(
+                TuiEventHandler::new(TuiText::new("X"))
+                    .on_key("enter", move |_, _, _| counter.set(counter.get() + 1)),
+            )
+            .with_border()
+            .with_padding(1);
+
+            let event = Event::KeyDown {
+                keystroke: Keystroke {
+                    key: "enter".to_owned(),
+                    ..Default::default()
+                },
+                chars: "enter".to_owned(),
+                details: KeyEventDetails::default(),
+                is_composing: false,
+            };
+            let mut event_ctx = TuiEventContext::default();
+            let handled =
+                container.dispatch_event(&event, TuiRect::new(0, 0, 9, 9), &mut event_ctx, app_ctx);
+
+            assert!(handled);
+            assert_eq!(hits.get(), 1);
+        });
+    });
+}

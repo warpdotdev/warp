@@ -37,6 +37,12 @@ pub enum OnboardingEvent {
     SlideNavigatedNext,
     /// The user navigated to the previous slide.
     SlideNavigatedBack,
+    /// The user was shown the "Are you sure you don't want AI?" confirmation modal.
+    NoAiConfirmationShown,
+    /// The user confirmed they don't want AI in the confirmation modal.
+    NoAiConfirmed,
+    /// The user chose to keep AI ("Give me AI features") in the confirmation modal.
+    NoAiConfirmationCancelled,
     /// The user clicked the "Upgrade" button on the "Customize your agent" slide.
     AgentSlideUpgradeClicked,
     /// The user clicked the "Log in" link on the welcome/intro slide.
@@ -58,6 +64,9 @@ impl TelemetryEvent for OnboardingEvent {
             OnboardingEvent::CalloutCompleted { .. } => "onboarding_callout_completed",
             OnboardingEvent::SlideNavigatedNext => "onboarding_slide_navigated_next",
             OnboardingEvent::SlideNavigatedBack => "onboarding_slide_navigated_back",
+            OnboardingEvent::NoAiConfirmationShown => "onboarding_no_ai_confirmation_shown",
+            OnboardingEvent::NoAiConfirmed => "onboarding_no_ai_confirmed",
+            OnboardingEvent::NoAiConfirmationCancelled => "onboarding_no_ai_confirmation_cancelled",
             OnboardingEvent::AgentSlideUpgradeClicked => "onboarding_agent_slide_upgrade_clicked",
             OnboardingEvent::WelcomeLoginClicked => "onboarding_welcome_login_clicked",
         }
@@ -96,6 +105,9 @@ impl TelemetryEvent for OnboardingEvent {
             })),
             OnboardingEvent::SlideNavigatedNext => None,
             OnboardingEvent::SlideNavigatedBack => None,
+            OnboardingEvent::NoAiConfirmationShown => None,
+            OnboardingEvent::NoAiConfirmed => None,
+            OnboardingEvent::NoAiConfirmationCancelled => None,
             OnboardingEvent::AgentSlideUpgradeClicked => None,
             OnboardingEvent::WelcomeLoginClicked => None,
         }
@@ -117,6 +129,13 @@ impl TelemetryEvent for OnboardingEvent {
             OnboardingEvent::CalloutCompleted { .. } => "User completed the callout flow",
             OnboardingEvent::SlideNavigatedNext => "User navigated to the next slide",
             OnboardingEvent::SlideNavigatedBack => "User navigated to the previous slide",
+            OnboardingEvent::NoAiConfirmationShown => "User was shown the no-AI confirmation modal",
+            OnboardingEvent::NoAiConfirmed => {
+                "User confirmed they don't want AI in the confirmation modal"
+            }
+            OnboardingEvent::NoAiConfirmationCancelled => {
+                "User chose to keep AI in the confirmation modal"
+            }
             OnboardingEvent::AgentSlideUpgradeClicked => {
                 "User clicked the Upgrade button on the Customize your agent slide"
             }
@@ -156,6 +175,13 @@ impl TelemetryEventDesc for OnboardingEventDiscriminant {
             OnboardingEventDiscriminant::CalloutCompleted => "onboarding_callout_completed",
             OnboardingEventDiscriminant::SlideNavigatedNext => "onboarding_slide_navigated_next",
             OnboardingEventDiscriminant::SlideNavigatedBack => "onboarding_slide_navigated_back",
+            OnboardingEventDiscriminant::NoAiConfirmationShown => {
+                "onboarding_no_ai_confirmation_shown"
+            }
+            OnboardingEventDiscriminant::NoAiConfirmed => "onboarding_no_ai_confirmed",
+            OnboardingEventDiscriminant::NoAiConfirmationCancelled => {
+                "onboarding_no_ai_confirmation_cancelled"
+            }
             OnboardingEventDiscriminant::AgentSlideUpgradeClicked => {
                 "onboarding_agent_slide_upgrade_clicked"
             }
@@ -184,6 +210,15 @@ impl TelemetryEventDesc for OnboardingEventDiscriminant {
             OnboardingEventDiscriminant::SlideNavigatedNext => "User navigated to the next slide",
             OnboardingEventDiscriminant::SlideNavigatedBack => {
                 "User navigated to the previous slide"
+            }
+            OnboardingEventDiscriminant::NoAiConfirmationShown => {
+                "User was shown the no-AI confirmation modal"
+            }
+            OnboardingEventDiscriminant::NoAiConfirmed => {
+                "User confirmed they don't want AI in the confirmation modal"
+            }
+            OnboardingEventDiscriminant::NoAiConfirmationCancelled => {
+                "User chose to keep AI in the confirmation modal"
             }
             OnboardingEventDiscriminant::AgentSlideUpgradeClicked => {
                 "User clicked the Upgrade button on the Customize your agent slide"

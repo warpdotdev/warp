@@ -105,7 +105,7 @@ impl MCPGalleryManager {
 
         // Subscribe to UpdateManager events to receive MCP gallery updates
         let update_manager = UpdateManager::handle(ctx);
-        ctx.subscribe_to_model(&update_manager, |me, event, ctx| {
+        ctx.subscribe_to_model(&update_manager, |me, _, event, ctx| {
             if let UpdateManagerEvent::MCPGalleryUpdated { templates } = event {
                 me.update_gallery_items(templates.clone(), ctx);
             }

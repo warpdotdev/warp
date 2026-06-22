@@ -16,12 +16,12 @@ impl AgentShortcutViewModel {
         agent_view_controller: ModelHandle<AgentViewController>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&input_buffer_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&input_buffer_model, |me, _, event, ctx| {
             if me.is_shortcut_view_open && !event.new_content.is_empty() {
                 me.hide_shortcut_view(ctx);
             }
         });
-        ctx.subscribe_to_model(&agent_view_controller, |me, event, ctx| {
+        ctx.subscribe_to_model(&agent_view_controller, |me, _, event, ctx| {
             if matches!(event, AgentViewControllerEvent::ExitedAgentView { .. }) {
                 me.hide_shortcut_view(ctx);
             }

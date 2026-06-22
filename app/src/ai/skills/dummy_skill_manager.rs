@@ -2,7 +2,9 @@ use ai::skills::{ParsedSkill, SkillPathOrigin, SkillProvider, SkillReference};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use crate::ai::skills::{ActiveSkillLookupError, SkillDescriptor, SkillPathQuery};
+use crate::ai::skills::{
+    ActiveSkillLookupError, SkillDescriptor, SkillManagerEvent, SkillPathQuery,
+};
 
 pub struct SkillManager {}
 
@@ -86,7 +88,7 @@ impl SkillManager {
 }
 
 impl Entity for SkillManager {
-    type Event = ();
+    type Event = SkillManagerEvent;
 }
 
 impl SingletonEntity for SkillManager {}

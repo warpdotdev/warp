@@ -108,7 +108,7 @@ impl<T: EventLoopSender> PtyController<T> {
         terminal_model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&model_event_dispatcher, |me, event, ctx| match event {
+        ctx.subscribe_to_model(&model_event_dispatcher, |me, _, event, ctx| match event {
             ModelEvent::Handler(AnsiHandlerEvent::UserCommandFinished) => {
                 me.is_user_command_executing = false;
             }
@@ -174,7 +174,7 @@ impl<T: EventLoopSender> PtyController<T> {
             _ => (),
         });
 
-        ctx.subscribe_to_model(&line_editor_status, |me, event, ctx| {
+        ctx.subscribe_to_model(&line_editor_status, |me, _, event, ctx| {
             if let LineEditorStatusEvent::Active = event {
                 let input_reporting_seq = me
                     .model_event_dispatcher

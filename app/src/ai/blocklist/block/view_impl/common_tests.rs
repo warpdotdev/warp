@@ -291,6 +291,7 @@ fn blocklist_image_asset_source_uses_cached_resolution_when_available() {
         "diagram.png".to_string(),
         Some(AssetSource::LocalFile {
             path: cached_path.clone(),
+            content_version: None,
         }),
     )]);
 
@@ -301,7 +302,7 @@ fn blocklist_image_asset_source_uses_cached_resolution_when_available() {
     );
 
     match resolved {
-        Some(AssetSource::LocalFile { path }) => assert_eq!(path, cached_path),
+        Some(AssetSource::LocalFile { path, .. }) => assert_eq!(path, cached_path),
         other => panic!("expected cached local file asset source, got {other:?}"),
     }
 }

@@ -255,6 +255,22 @@ pub enum AgentCommand {
     Skills(ListAgentSkillsArgs),
 }
 
+impl AgentCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            AgentCommand::Run(_) => "agent run",
+            AgentCommand::RunCloud(_) => "agent run-cloud",
+            AgentCommand::Profile(_) => "agent profile",
+            AgentCommand::List(_) => "agent list",
+            AgentCommand::Get(_) => "agent get",
+            AgentCommand::Create(_) => "agent create",
+            AgentCommand::Update(_) => "agent update",
+            AgentCommand::Delete(_) => "agent delete",
+            AgentCommand::Skills(_) => "agent skills",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 #[command(
     visible_alias = "r",
@@ -404,6 +420,9 @@ pub struct RunAgentArgs {
         conflicts_with_all = ["prompt", "saved_prompt", "file"]
     )]
     pub skip_initial_turn: bool,
+
+    #[arg(long = "configure-git-credentials-with-github", hide = true, requires_all = ["task_id"])]
+    pub configure_git_credentials_with_github: bool,
 }
 
 impl RunAgentArgs {

@@ -200,20 +200,37 @@ fn has_any_key_false_for_endpoint_with_empty_api_key() {
     assert!(!keys.has_any_key());
 }
 
-// ── has_custom_endpoints
+// ── provider_key_count ─────────────────────────────────────────
 
 #[test]
-fn has_custom_endpoints_false_when_empty() {
-    assert!(!ApiKeys::default().has_custom_endpoints());
+fn provider_key_count_zero_when_empty() {
+    assert_eq!(ApiKeys::default().provider_key_count(), 0);
 }
 
 #[test]
-fn has_custom_endpoints_true_when_present() {
+fn provider_key_count_counts_each_provider_key() {
     let keys = ApiKeys {
-        custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
-        ..Default::default()
+        openai: Some("sk-o".into()),
+        anthropic: Some("sk-a".into()),
+        google: Some("AIza".into()),
+        open_router: Some("sk-or".into()),
+        custom_endpoints: vec![],
     };
-    assert!(keys.has_custom_endpoints());
+    assert_eq!(keys.provider_key_count(), 4);
+}
+
+#[test]
+fn provider_key_count_ignores_blank_keys_and_endpoints() {
+    let keys = ApiKeys {
+        openai: Some("sk-o".into()),
+        anthropic: Some("   ".into()),
+        google: None,
+        open_router: None,
+        custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
+    };
+    // Only the non-blank OpenAI key counts; the whitespace Anthropic key and the
+    // custom endpoint are excluded.
+    assert_eq!(keys.provider_key_count(), 1);
 }
 
 // ── custom_model_providers_for_request ──────────────────────────
@@ -468,6 +485,70 @@ fn api_keys_for_request_includes_expired_grok_token() {
     let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("grok-abc", Some(0))));
     let result = mgr.api_keys_for_request(true, false, None).unwrap();
     assert_eq!(result.grok_oauth_access_token, "grok-abc");
+}
+
+#[test]
+fn has_grok_subscription_false_when_not_connected() {
+    let mgr = make_manager(ApiKeys::default());
+    assert!(!mgr.has_grok_subscription());
+}
+
+#[test]
+fn has_grok_subscription_true_when_connected() {
+    let mgr = make_manager_with_grok(
+        ApiKeys::default(),
+        Some(grok_tokens("grok-abc", Some(3600))),
+    );
+    assert!(mgr.has_grok_subscription());
+}
+
+#[test]
+fn has_grok_subscription_true_for_expired_token() {
+    // A connected subscription still counts even when its token is past expiry:
+    // the token is sent anyway and the server is the authority on validity.
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("grok-abc", Some(0))));
+    assert!(mgr.has_grok_subscription());
+}
+
+#[test]
+fn has_grok_subscription_false_when_token_blank() {
+    // A blank token can't be sent, so it does not count as a usable credential.
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("   ", None)));
+    assert!(!mgr.has_grok_subscription());
+}
+
+// ── ApiKeyManager::has_any_key ──────────────────
+
+#[test]
+fn manager_has_any_key_false_when_no_keys_and_no_grok() {
+    let mgr = make_manager(ApiKeys::default());
+    assert!(!mgr.has_any_key());
+}
+
+#[test]
+fn manager_has_any_key_true_for_pasted_key_without_grok() {
+    let mgr = make_manager(ApiKeys {
+        openai: Some("sk-x".into()),
+        ..Default::default()
+    });
+    assert!(mgr.has_any_key());
+}
+
+#[test]
+fn manager_has_any_key_true_for_connected_grok_without_pasted_key() {
+    // The crux: a connected Grok subscription counts even with no pasted keys,
+    // matching how it's sent as a BYO credential on requests.
+    let mgr = make_manager_with_grok(
+        ApiKeys::default(),
+        Some(grok_tokens("grok-abc", Some(3600))),
+    );
+    assert!(mgr.has_any_key());
+}
+
+#[test]
+fn manager_has_any_key_false_for_blank_grok_and_no_keys() {
+    let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("   ", None)));
+    assert!(!mgr.has_any_key());
 }
 
 // ── geap credentials ────────────────────────────────────────────
