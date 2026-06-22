@@ -896,6 +896,12 @@ pub enum FeatureFlag {
     /// Enables the `--runner` flag on `run-cloud`, which overrides an agent's
     /// compute (docker image, instance shape, setup commands) by runner ID.
     CloudRunners,
+
+    /// Gates the MCP `prompts/list` capability query in `register_mcp_server_with_logger`.
+    /// When off (the default), `prompts` on `TemplatableMCPServerInfo` is left empty regardless
+    /// of what the server advertises. The struct field itself stays defined so downstream
+    /// consumers don't need to be re-gated. See PR #10441 / issue #9456.
+    McpPromptsList,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =

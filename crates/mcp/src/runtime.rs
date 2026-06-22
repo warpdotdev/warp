@@ -16,6 +16,7 @@ use rmcp::ServiceExt as _;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
+use warp_core::features::FeatureFlag;
 
 use super::TemplatableMCPServerInfo;
 
@@ -319,8 +320,14 @@ pub async fn spawn_server(
     let resources =
         query_resources_for(capabilities, &server_name, || service.list_all_resources()).await;
     let tools = query_tools_for(capabilities, &server_name, || service.list_all_tools()).await;
-    let prompts =
-        query_prompts_for(capabilities, &server_name, || service.list_all_prompts()).await;
+    // Gated per peicodes' ask on PR #10441: the prompts/list network call only happens
+    // when the launch-level flag is enabled. The struct field stays populated (with an
+    // empty Vec) so downstream consumers don't need to be re-gated.
+    let prompts = if FeatureFlag::McpPromptsList.is_enabled() {
+        query_prompts_for(capabilities, &server_name, || service.list_all_prompts()).await
+    } else {
+        Vec::new()
+    };
 
     Ok(TemplatableMCPServerInfo {
         name: server_name,
