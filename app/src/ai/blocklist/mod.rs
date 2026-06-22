@@ -32,12 +32,18 @@ pub(crate) mod codebase_index_speedbump_banner;
 pub(crate) mod telemetry_banner;
 pub(super) mod view_util;
 
-#[cfg_attr(target_family = "wasm", allow(unused_imports))]
+#[cfg_attr(
+    any(target_family = "wasm", not(feature = "tui")),
+    allow(unused_imports)
+)]
 pub(crate) use action_model::{
-    apply_edits, read_local_file_context, BlocklistAIActionEvent, BlocklistAIActionModel,
-    FileReadResult, ReadFileContextResult, RequestFileEditsFormatKind, ShellCommandExecutor,
-    ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
-    StartAgentRequestId,
+    apply_edits, read_local_file_context, ActionExecution, AgentToolActionModel,
+    AgentToolExecutionContext, AgentToolExecutor, AgentToolScheduleHost, AgentToolScheduler,
+    AnyActionExecution, BlocklistAIActionEvent, BlocklistAIActionModel, ExecuteActionInput,
+    FileReadResult, PreprocessActionInput, ReadFileContextResult, RequestFileEditsFormatKind,
+    RunningActionPhase, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
+    StartAgentExecutorEvent, StartAgentRequest, StartAgentRequestId, SurfaceSpecificToolExecutor,
+    TryExecuteResult,
 };
 pub(crate) use agent_conversation_engine::AgentConversationEngine;
 #[cfg(feature = "tui")]

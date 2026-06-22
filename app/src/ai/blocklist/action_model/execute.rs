@@ -6,7 +6,6 @@ pub(super) mod fetch_conversation;
 pub(super) mod file_glob;
 pub(super) mod grep;
 pub(super) mod read_documents;
-pub(super) mod read_files;
 pub(super) mod read_mcp_resource;
 pub(super) mod read_skill;
 pub(super) mod request_computer_use;
@@ -26,6 +25,7 @@ use std::any::Any;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ai::agent::action_result::{InsertReviewCommentsResult, RequestCommandOutputResult};
 pub use ask_user_question::AskUserQuestionExecutor;
@@ -34,17 +34,14 @@ use call_mcp_tool::CallMCPToolExecutor;
 use create_documents::CreateDocumentsExecutor;
 use edit_documents::EditDocumentsExecutor;
 use fetch_conversation::FetchConversationExecutor;
-use file_glob::FileGlobExecutor;
 use futures::future::BoxFuture;
 #[cfg(feature = "local_fs")]
 use futures::AsyncReadExt;
 use futures::FutureExt;
-use grep::GrepExecutor;
 #[cfg(feature = "local_fs")]
 use mime_guess::from_path;
 use parking_lot::FairMutex;
 use read_documents::ReadDocumentsExecutor;
-pub(super) use read_files::ReadFilesExecutor;
 use read_mcp_resource::ReadMCPResourceExecutor;
 use read_skill::ReadSkillExecutor;
 use request_computer_use::RequestComputerUseExecutor;
@@ -76,20 +73,22 @@ use warp_files::{FileModel, TextFileReadResult};
 use warp_util::file::FileLoadError;
 #[cfg(feature = "local_fs")]
 use warp_util::file_type::is_buffer_binary;
-use warpui::r#async::{Spawnable, SpawnableOutput};
+use warpui::r#async::{FutureExt as AsyncFutureExt, Spawnable, SpawnableOutput};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::search_codebase::SearchCodebaseExecutor;
 use crate::ai::agent::conversation::AIConversationId;
+#[cfg(feature = "local_fs")]
+use crate::ai::agent::AnyFileContent;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentActionTypeDiscriminants, CancellationReason, FileContext,
-    FileLocations, ServerOutputId,
+    FileGlobResult, FileGlobV2Result, FileLocations, GrepResult, ReadFilesResult, ServerOutputId,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
-#[cfg(feature = "local_fs")]
-use crate::ai::{agent::AnyFileContent, paths::host_native_absolute_path};
+use crate::ai::paths::{host_native_absolute_path, shell_native_absolute_path};
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::command_executor::shell_quote_arg;
 use crate::terminal::model::session::{ExecuteCommandOptions, Session};
@@ -106,7 +105,7 @@ use crate::BlocklistAIHistoryModel;
 
 /// Types of actions that can be executed in parallel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ParallelExecutionPolicy {
+pub(crate) enum ParallelExecutionPolicy {
     /// Read-only actions that only inspect local context and may be safely coalesced into the
     /// same execution phase when the underlying runtime supports it.
     ReadOnlyLocalContext,
@@ -114,7 +113,7 @@ pub(super) enum ParallelExecutionPolicy {
 
 /// Whether an action is running serially or in parallel with other actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RunningActionPhase {
+pub(crate) enum RunningActionPhase {
     /// A barrier action that must run by itself.
     Serial,
     /// A phase where several actions from the same compatibility group may be in flight together.
@@ -122,21 +121,21 @@ pub(super) enum RunningActionPhase {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ExecuteActionInput<'a> {
-    action: &'a AIAgentAction,
-    conversation_id: AIConversationId,
+pub(crate) struct ExecuteActionInput<'a> {
+    pub(crate) action: &'a AIAgentAction,
+    pub(crate) conversation_id: AIConversationId,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct PreprocessActionInput<'a> {
-    action: &'a AIAgentAction,
-    conversation_id: AIConversationId,
+pub(crate) struct PreprocessActionInput<'a> {
+    pub(crate) action: &'a AIAgentAction,
+    pub(crate) conversation_id: AIConversationId,
 }
 
 type AsyncExecuteActionFn<T> = Pin<Box<dyn Spawnable<Output = T>>>;
 type OnCompleteFn<T> = Box<dyn FnOnce(T, &mut AppContext) -> AIAgentActionResultType>;
 
-enum ActionExecution<T: SpawnableOutput> {
+pub(crate) enum ActionExecution<T: SpawnableOutput> {
     Async {
         execute_future: AsyncExecuteActionFn<T>,
         on_complete: OnCompleteFn<T>,
@@ -147,7 +146,7 @@ enum ActionExecution<T: SpawnableOutput> {
 }
 
 impl<T: SpawnableOutput> ActionExecution<T> {
-    fn new_async(
+    pub(crate) fn new_async(
         execute_future: impl Spawnable<Output = T>,
         on_complete: impl FnOnce(T, &mut AppContext) -> AIAgentActionResultType + 'static,
     ) -> Self {
@@ -159,13 +158,13 @@ impl<T: SpawnableOutput> ActionExecution<T> {
 }
 
 /// A trait implemented by all types that implement [`Any`] and [`SpawnableOutput`].
-trait AnySpawnableOutput: Any + SpawnableOutput {}
+pub(crate) trait AnySpawnableOutput: Any + SpawnableOutput {}
 impl<T> AnySpawnableOutput for T where T: Any + SpawnableOutput {}
 
 type AnyAsyncExecuteActionFn = Pin<Box<dyn Spawnable<Output = Box<dyn AnySpawnableOutput>>>>;
 type AnyOnCompleteFn = Box<dyn FnOnce(Box<dyn Any>, &mut AppContext) -> AIAgentActionResultType>;
 
-enum AnyActionExecution {
+pub(crate) enum AnyActionExecution {
     Async {
         execute_future: AnyAsyncExecuteActionFn,
         on_complete: AnyOnCompleteFn,
@@ -200,6 +199,453 @@ where
     }
 }
 
+const SHARED_GREP_TIMEOUT: Duration = Duration::from_secs(10);
+const SHARED_FILE_GLOB_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Runtime context needed by surface-neutral tool implementations.
+#[derive(Clone)]
+pub(crate) struct AgentToolExecutionContext {
+    pub(crate) current_working_directory: Option<String>,
+    pub(crate) shell_launch_data: Option<ShellLaunchData>,
+    pub(crate) session: Option<Arc<Session>>,
+    pub(crate) terminal_view_id: Option<EntityId>,
+}
+
+/// Surface-specific execution for tool families that cannot be shared.
+pub(crate) trait SurfaceSpecificToolExecutor {
+    type Context<'a>;
+
+    fn tool_execution_context(&self, ctx: &Self::Context<'_>) -> AgentToolExecutionContext;
+
+    fn tool_execution_context_from_app(&self, ctx: &AppContext) -> AgentToolExecutionContext;
+
+    fn app_context<'a, 'b>(ctx: &'a Self::Context<'b>) -> &'a AppContext;
+
+    fn preprocess_shell(
+        &mut self,
+        input: PreprocessActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> BoxFuture<'static, ()>;
+
+    fn execute_shell(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> AnyActionExecution;
+
+    fn should_autoexecute_shell(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> bool;
+
+    fn preprocess_file_edits(
+        &mut self,
+        input: PreprocessActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> BoxFuture<'static, ()>;
+
+    fn execute_file_edits(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> AnyActionExecution;
+
+    fn should_autoexecute_file_edits(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> bool;
+
+    fn preprocess_other(
+        &mut self,
+        _input: PreprocessActionInput<'_>,
+        _ctx: &mut Self::Context<'_>,
+    ) -> BoxFuture<'static, ()> {
+        futures::future::ready(()).boxed()
+    }
+
+    fn execute_other(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        _ctx: &mut Self::Context<'_>,
+    ) -> AnyActionExecution {
+        AnyActionExecution::Sync(input.action.action.cancelled_result())
+    }
+
+    fn should_autoexecute_other(
+        &mut self,
+        _input: ExecuteActionInput<'_>,
+        _ctx: &mut Self::Context<'_>,
+    ) -> bool {
+        false
+    }
+
+    fn action_phase_other(&self, _action: &AIAgentAction, _ctx: &AppContext) -> RunningActionPhase {
+        RunningActionPhase::Serial
+    }
+}
+
+/// Shared-first executor for agent tool actions.
+pub(crate) struct AgentToolExecutor;
+
+impl AgentToolExecutor {
+    /// Routes preprocessing through shared defaults before surface-specific tools.
+    pub(crate) fn preprocess_action<S>(
+        surface: &mut S,
+        input: PreprocessActionInput<'_>,
+        ctx: &mut S::Context<'_>,
+    ) -> BoxFuture<'static, ()>
+    where
+        S: SurfaceSpecificToolExecutor,
+    {
+        match &input.action.action {
+            AIAgentActionType::RequestCommandOutput { .. }
+            | AIAgentActionType::WriteToLongRunningShellCommand { .. }
+            | AIAgentActionType::ReadShellCommandOutput { .. }
+            | AIAgentActionType::TransferShellCommandControlToUser { .. } => {
+                surface.preprocess_shell(input, ctx)
+            }
+            AIAgentActionType::RequestFileEdits { .. } => surface.preprocess_file_edits(input, ctx),
+            AIAgentActionType::ReadFiles(..)
+            | AIAgentActionType::Grep { .. }
+            | AIAgentActionType::FileGlob { .. }
+            | AIAgentActionType::FileGlobV2 { .. } => futures::future::ready(()).boxed(),
+            _ => surface.preprocess_other(input, ctx),
+        }
+    }
+
+    /// Routes execution through shared defaults before surface-specific tools.
+    pub(crate) fn execute_action<S>(
+        surface: &mut S,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut S::Context<'_>,
+    ) -> AnyActionExecution
+    where
+        S: SurfaceSpecificToolExecutor,
+    {
+        match &input.action.action {
+            AIAgentActionType::RequestCommandOutput { .. }
+            | AIAgentActionType::WriteToLongRunningShellCommand { .. }
+            | AIAgentActionType::ReadShellCommandOutput { .. }
+            | AIAgentActionType::TransferShellCommandControlToUser { .. } => {
+                surface.execute_shell(input, ctx)
+            }
+            AIAgentActionType::RequestFileEdits { .. } => surface.execute_file_edits(input, ctx),
+            AIAgentActionType::ReadFiles(..) => {
+                Self::execute_read_files(input, surface.tool_execution_context(ctx))
+            }
+            AIAgentActionType::Grep { .. } => {
+                Self::execute_grep(input, surface.tool_execution_context(ctx))
+            }
+            AIAgentActionType::FileGlob { .. } | AIAgentActionType::FileGlobV2 { .. } => {
+                Self::execute_file_glob(input, surface.tool_execution_context(ctx))
+            }
+            _ => surface.execute_other(input, ctx),
+        }
+    }
+
+    /// Routes auto-execution checks through shared defaults before surface-specific tools.
+    pub(crate) fn should_autoexecute<S>(
+        surface: &mut S,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut S::Context<'_>,
+    ) -> bool
+    where
+        S: SurfaceSpecificToolExecutor,
+    {
+        match &input.action.action {
+            AIAgentActionType::RequestCommandOutput { .. }
+            | AIAgentActionType::WriteToLongRunningShellCommand { .. }
+            | AIAgentActionType::ReadShellCommandOutput { .. }
+            | AIAgentActionType::TransferShellCommandControlToUser { .. } => {
+                surface.should_autoexecute_shell(input, ctx)
+            }
+            AIAgentActionType::RequestFileEdits { .. } => {
+                surface.should_autoexecute_file_edits(input, ctx)
+            }
+            AIAgentActionType::ReadFiles(..) => Self::can_read_files(
+                input,
+                &surface.tool_execution_context(ctx),
+                S::app_context(ctx),
+            ),
+            AIAgentActionType::Grep { .. } => Self::can_grep(
+                input,
+                &surface.tool_execution_context(ctx),
+                S::app_context(ctx),
+            ),
+            AIAgentActionType::FileGlob { .. } | AIAgentActionType::FileGlobV2 { .. } => {
+                Self::can_file_glob(
+                    input,
+                    &surface.tool_execution_context(ctx),
+                    S::app_context(ctx),
+                )
+            }
+            _ => surface.should_autoexecute_other(input, ctx),
+        }
+    }
+
+    /// Computes the shared execution phase when possible.
+    pub(crate) fn action_phase<S>(
+        surface: &S,
+        action: &AIAgentAction,
+        ctx: &AppContext,
+    ) -> RunningActionPhase
+    where
+        S: SurfaceSpecificToolExecutor,
+    {
+        match &action.action {
+            AIAgentActionType::ReadFiles(..) => {
+                RunningActionPhase::Parallel(ParallelExecutionPolicy::ReadOnlyLocalContext)
+            }
+            AIAgentActionType::Grep { .. }
+            | AIAgentActionType::FileGlob { .. }
+            | AIAgentActionType::FileGlobV2 { .. }
+                if surface
+                    .tool_execution_context_from_app(ctx)
+                    .session
+                    .is_some_and(|session| session.supports_parallel_command_execution()) =>
+            {
+                RunningActionPhase::Parallel(ParallelExecutionPolicy::ReadOnlyLocalContext)
+            }
+            _ => surface.action_phase_other(action, ctx),
+        }
+    }
+
+    fn execute_read_files(
+        input: ExecuteActionInput<'_>,
+        context: AgentToolExecutionContext,
+    ) -> AnyActionExecution {
+        let AIAgentAction {
+            action: AIAgentActionType::ReadFiles(request),
+            ..
+        } = input.action
+        else {
+            return ActionExecution::<()>::InvalidAction.into();
+        };
+
+        let locations = request.locations.clone();
+        let current_working_directory = context.current_working_directory;
+        let shell_launch_data = context.shell_launch_data;
+
+        ActionExecution::new_async(
+            async move {
+                let result = read_local_file_context(
+                    &locations,
+                    current_working_directory,
+                    shell_launch_data,
+                    None,
+                    None,
+                )
+                .await?;
+                if result.missing_files.is_empty() {
+                    Ok(ReadFilesResult::Success {
+                        files: result.file_contexts,
+                    })
+                } else {
+                    Ok(ReadFilesResult::Error(format!(
+                        "These files do not exist: {}",
+                        result.missing_files.join(", ")
+                    )))
+                }
+            },
+            |result: anyhow::Result<ReadFilesResult>, _ctx| {
+                AIAgentActionResultType::ReadFiles(
+                    result.unwrap_or_else(|error| ReadFilesResult::Error(error.to_string())),
+                )
+            },
+        )
+        .into()
+    }
+
+    fn execute_grep(
+        input: ExecuteActionInput<'_>,
+        context: AgentToolExecutionContext,
+    ) -> AnyActionExecution {
+        let AIAgentAction {
+            action: AIAgentActionType::Grep { queries, path },
+            ..
+        } = input.action
+        else {
+            return ActionExecution::<()>::InvalidAction.into();
+        };
+
+        let queries = queries.clone();
+        let absolute_path = shell_native_absolute_path(
+            path,
+            context.shell_launch_data.as_ref(),
+            context.current_working_directory.as_ref(),
+        );
+        ActionExecution::new_async(
+            async move {
+                match grep::run_grep(
+                    queries,
+                    absolute_path,
+                    context.session,
+                    context.shell_launch_data,
+                )
+                .with_timeout(SHARED_GREP_TIMEOUT)
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err(grep::GrepError::new("Grep operation timed out".to_string())),
+                }
+            },
+            |result, _ctx| {
+                AIAgentActionResultType::Grep(
+                    result
+                        .unwrap_or_else(|error| GrepResult::Error(error.error_for_conversation())),
+                )
+            },
+        )
+        .into()
+    }
+
+    fn execute_file_glob(
+        input: ExecuteActionInput<'_>,
+        context: AgentToolExecutionContext,
+    ) -> AnyActionExecution {
+        let AIAgentAction {
+            action:
+                AIAgentActionType::FileGlob { patterns, path }
+                | AIAgentActionType::FileGlobV2 {
+                    patterns,
+                    search_dir: path,
+                },
+            ..
+        } = input.action
+        else {
+            return ActionExecution::<()>::InvalidAction.into();
+        };
+
+        let is_v2 = matches!(input.action.action, AIAgentActionType::FileGlobV2 { .. });
+        let patterns = patterns.clone();
+        let path = path.clone().unwrap_or_else(|| ".".to_string());
+        let absolute_path = shell_native_absolute_path(
+            &path,
+            context.shell_launch_data.as_ref(),
+            context.current_working_directory.as_ref(),
+        );
+        ActionExecution::new_async(
+            async move {
+                match file_glob::run_file_glob(
+                    patterns,
+                    absolute_path,
+                    context.session,
+                    context.shell_launch_data,
+                )
+                .with_timeout(SHARED_FILE_GLOB_TIMEOUT)
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err(anyhow::anyhow!("File glob operation timed out")),
+                }
+            },
+            move |result, _ctx| match result {
+                Ok(result) if is_v2 => AIAgentActionResultType::FileGlobV2(result),
+                Ok(result) => AIAgentActionResultType::FileGlob(result.into()),
+                Err(error) if is_v2 => {
+                    AIAgentActionResultType::FileGlobV2(FileGlobV2Result::Error(error.to_string()))
+                }
+                Err(error) => {
+                    AIAgentActionResultType::FileGlob(FileGlobResult::Error(error.to_string()))
+                }
+            },
+        )
+        .into()
+    }
+
+    fn can_read_files(
+        input: ExecuteActionInput<'_>,
+        context: &AgentToolExecutionContext,
+        ctx: &AppContext,
+    ) -> bool {
+        let AIAgentAction {
+            action: AIAgentActionType::ReadFiles(request),
+            ..
+        } = input.action
+        else {
+            return false;
+        };
+        BlocklistAIPermissions::as_ref(ctx)
+            .can_read_files_with_conversation(
+                &input.conversation_id,
+                request
+                    .locations
+                    .iter()
+                    .map(|file| {
+                        PathBuf::from(host_native_absolute_path(
+                            &file.name,
+                            &context.shell_launch_data,
+                            &context.current_working_directory,
+                        ))
+                    })
+                    .collect(),
+                context.terminal_view_id,
+                ctx,
+            )
+            .is_allowed()
+    }
+
+    fn can_grep(
+        input: ExecuteActionInput<'_>,
+        context: &AgentToolExecutionContext,
+        ctx: &AppContext,
+    ) -> bool {
+        let AIAgentAction {
+            action: AIAgentActionType::Grep { path, .. },
+            ..
+        } = input.action
+        else {
+            return false;
+        };
+        let absolute_path = host_native_absolute_path(
+            path,
+            &context.shell_launch_data,
+            &context.current_working_directory,
+        );
+        BlocklistAIPermissions::as_ref(ctx)
+            .can_read_files_with_conversation(
+                &input.conversation_id,
+                vec![PathBuf::from(absolute_path)],
+                context.terminal_view_id,
+                ctx,
+            )
+            .is_allowed()
+    }
+
+    fn can_file_glob(
+        input: ExecuteActionInput<'_>,
+        context: &AgentToolExecutionContext,
+        ctx: &AppContext,
+    ) -> bool {
+        let AIAgentAction {
+            action:
+                AIAgentActionType::FileGlob { path, .. }
+                | AIAgentActionType::FileGlobV2 {
+                    search_dir: path, ..
+                },
+            ..
+        } = input.action
+        else {
+            return false;
+        };
+        let path = path.clone().unwrap_or_else(|| ".".to_string());
+        let absolute_path = host_native_absolute_path(
+            &path,
+            &context.shell_launch_data,
+            &context.current_working_directory,
+        );
+        BlocklistAIPermissions::as_ref(ctx)
+            .can_read_files_with_conversation(
+                &input.conversation_id,
+                vec![PathBuf::from(absolute_path)],
+                context.terminal_view_id,
+                ctx,
+            )
+            .is_allowed()
+    }
+}
 #[derive(Debug, Copy, Clone)]
 pub enum NotExecutedReason {
     NotReady,
@@ -215,7 +661,7 @@ impl NotExecutedReason {
 
 /// Result type for `BlocklistAIActionExecutor::try_to_execute_action`.
 #[derive(Debug)]
-pub(super) enum TryExecuteResult {
+pub(crate) enum TryExecuteResult {
     ExecutedSync,
     ExecutedAsync,
     NotExecuted {
@@ -244,13 +690,12 @@ impl AsyncExecutingAction {
 }
 
 pub struct BlocklistAIActionExecutor {
+    active_session: ModelHandle<ActiveSession>,
+    terminal_view_id: EntityId,
     shell_command_executor: ModelHandle<ShellCommandExecutor>,
-    read_files_executor: ModelHandle<ReadFilesExecutor>,
     upload_artifact_executor: ModelHandle<UploadArtifactExecutor>,
     search_codebase_executor: ModelHandle<SearchCodebaseExecutor>,
     request_file_edits_executor: ModelHandle<RequestFileEditsExecutor>,
-    grep_executor: ModelHandle<GrepExecutor>,
-    file_glob_executor: ModelHandle<FileGlobExecutor>,
     read_mcp_resource_executor: ModelHandle<ReadMCPResourceExecutor>,
     call_mcp_tool_executor: ModelHandle<CallMCPToolExecutor>,
     suggest_new_conversation_executor: ModelHandle<SuggestNewConversationExecutor>,
@@ -285,8 +730,6 @@ impl BlocklistAIActionExecutor {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let read_files_executor =
-            ctx.add_model(|_| ReadFilesExecutor::new(active_session.clone(), terminal_view_id));
         let upload_artifact_executor = ctx
             .add_model(|_| UploadArtifactExecutor::new(active_session.clone(), terminal_view_id));
         let search_codebase_executor = ctx.add_model(|ctx| {
@@ -309,10 +752,6 @@ impl BlocklistAIActionExecutor {
         let request_file_edits_executor = ctx.add_model(|ctx| {
             RequestFileEditsExecutor::new(active_session.clone(), terminal_view_id, ctx)
         });
-        let grep_executor =
-            ctx.add_model(|_| GrepExecutor::new(active_session.clone(), terminal_view_id));
-        let file_glob_executor =
-            ctx.add_model(|_| FileGlobExecutor::new(active_session.clone(), terminal_view_id));
         let read_mcp_resource_executor = ctx
             .add_model(|_| ReadMCPResourceExecutor::new(active_session.clone(), terminal_view_id));
         let call_mcp_tool_executor =
@@ -339,12 +778,9 @@ impl BlocklistAIActionExecutor {
             ctx.add_model(|ctx| WaitForEventsExecutor::new(terminal_view_id, ctx));
         Self {
             shell_command_executor,
-            read_files_executor,
             upload_artifact_executor,
             search_codebase_executor,
             request_file_edits_executor,
-            grep_executor,
-            file_glob_executor,
             read_mcp_resource_executor,
             call_mcp_tool_executor,
             suggest_new_conversation_executor,
@@ -363,6 +799,8 @@ impl BlocklistAIActionExecutor {
             send_message_executor,
             ask_user_question_executor,
             wait_for_events_executor,
+            active_session,
+            terminal_view_id,
         }
     }
 
@@ -426,27 +864,7 @@ impl BlocklistAIActionExecutor {
     }
 
     pub fn action_phase(&self, action: &AIAgentAction, ctx: &AppContext) -> RunningActionPhase {
-        match &action.action {
-            AIAgentActionType::ReadFiles(..)
-            | AIAgentActionType::SearchCodebase(..)
-            | AIAgentActionType::ReadSkill(_) => {
-                RunningActionPhase::Parallel(ParallelExecutionPolicy::ReadOnlyLocalContext)
-            }
-            AIAgentActionType::Grep { .. }
-                if self.grep_executor.as_ref(ctx).can_execute_in_parallel(ctx) =>
-            {
-                RunningActionPhase::Parallel(ParallelExecutionPolicy::ReadOnlyLocalContext)
-            }
-            AIAgentActionType::FileGlob { .. } | AIAgentActionType::FileGlobV2 { .. }
-                if self
-                    .file_glob_executor
-                    .as_ref(ctx)
-                    .can_execute_in_parallel(ctx) =>
-            {
-                RunningActionPhase::Parallel(ParallelExecutionPolicy::ReadOnlyLocalContext)
-            }
-            _ => RunningActionPhase::Serial,
-        }
+        AgentToolExecutor::action_phase(self, action, ctx)
     }
 
     pub fn ask_user_question_executor(&self) -> &ModelHandle<AskUserQuestionExecutor> {
@@ -468,7 +886,7 @@ impl BlocklistAIActionExecutor {
     }
 
     pub fn preprocess_action(
-        &self,
+        &mut self,
         action: &AIAgentAction,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
@@ -483,87 +901,7 @@ impl BlocklistAIActionExecutor {
             conversation_id,
         };
 
-        match &action.action {
-            AIAgentActionType::RequestCommandOutput { .. }
-            | AIAgentActionType::WriteToLongRunningShellCommand { .. }
-            | AIAgentActionType::ReadShellCommandOutput { .. }
-            | AIAgentActionType::TransferShellCommandControlToUser { .. } => self
-                .shell_command_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::ReadFiles(..) => self
-                .read_files_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::UploadArtifact(..) => self
-                .upload_artifact_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::SearchCodebase(..) => self
-                .search_codebase_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::Grep { .. } => self
-                .grep_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::FileGlob { .. } | AIAgentActionType::FileGlobV2 { .. } => self
-                .file_glob_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::CallMCPTool { .. } => self
-                .call_mcp_tool_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::ReadMCPResource { .. } => self
-                .read_mcp_resource_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            // Normally, requested file edits are not handled by the executor. However, when performing a task autonomously,
-            // the executor is responsible for auto-approving diffs.
-            AIAgentActionType::RequestFileEdits { .. } => self
-                .request_file_edits_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::InitProject => futures::future::ready(()).boxed(),
-            AIAgentActionType::OpenCodeReview => futures::future::ready(()).boxed(),
-            AIAgentActionType::InsertCodeReviewComments { .. } => {
-                futures::future::ready(()).boxed()
-            }
-            AIAgentActionType::SuggestNewConversation { .. } => self
-                .suggest_new_conversation_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::SuggestPrompt { .. } => self
-                .suggest_prompt_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::ReadDocuments(_) => self
-                .read_documents_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::EditDocuments(_) => self
-                .edit_documents_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::CreateDocuments(_) => self
-                .create_documents_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::UseComputer(_) => self
-                .use_computer_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::RequestComputerUse(_) => self
-                .request_computer_use_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::ReadSkill(_) => self
-                .read_skill_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::FetchConversation { .. } => self
-                .fetch_conversation_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::StartAgent { .. } => self
-                .start_agent_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::SendMessageToAgent { .. } => self
-                .send_message_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::AskUserQuestion { .. } => self
-                .ask_user_question_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::RunAgents(_) => self
-                .run_agents_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::WaitForEvents { .. } => self
-                .wait_for_events_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-        }
+        AgentToolExecutor::preprocess_action(self, input, ctx)
     }
 
     /// Returns `None` if the action was executed (and thereby consumed).
@@ -630,133 +968,7 @@ impl BlocklistAIActionExecutor {
         }
 
         let action_clone = action.clone();
-        let execution = match &action.action {
-            AIAgentActionType::RequestCommandOutput { .. }
-            | AIAgentActionType::WriteToLongRunningShellCommand { .. }
-            | AIAgentActionType::ReadShellCommandOutput { .. }
-            | AIAgentActionType::TransferShellCommandControlToUser { .. } => self
-                .shell_command_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::InitProject => {
-                ctx.emit(BlocklistAIActionExecutorEvent::InitProject(action.id));
-                ActionExecution::<()>::Sync(AIAgentActionResultType::InitProject).into()
-            }
-            AIAgentActionType::OpenCodeReview => {
-                ctx.emit(BlocklistAIActionExecutorEvent::OpenCodeReview(action.id));
-                ActionExecution::<()>::Sync(AIAgentActionResultType::OpenCodeReview).into()
-            }
-            AIAgentActionType::InsertCodeReviewComments {
-                repo_path,
-                comments,
-                base_branch,
-            } => {
-                if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-                    ctx.emit(BlocklistAIActionExecutorEvent::InsertCodeReviewComments {
-                        action_id: action.id,
-                        repo_path: repo_path.clone(),
-                        comments: comments.clone(),
-                        base_branch: base_branch.clone(),
-                    });
-                }
-                ActionExecution::<()>::Sync(AIAgentActionResultType::InsertReviewComments(
-                    InsertReviewCommentsResult::Success {
-                        repo_path: repo_path.to_string_lossy().to_string(),
-                    },
-                ))
-                .into()
-            }
-            AIAgentActionType::ReadFiles(..) => self
-                .read_files_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::UploadArtifact(..) => self
-                .upload_artifact_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx)),
-            AIAgentActionType::SearchCodebase(..) => self
-                .search_codebase_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::Grep { .. } => self
-                .grep_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::FileGlob { .. } | AIAgentActionType::FileGlobV2 { .. } => self
-                .file_glob_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::CallMCPTool { .. } => self
-                .call_mcp_tool_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::ReadMCPResource { .. } => self
-                .read_mcp_resource_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            // Normally, requested file edits are not handled by the executor. However, when performing a task autonomously,
-            // the executor is responsible for auto-approving diffs.
-            AIAgentActionType::RequestFileEdits { .. } => self
-                .request_file_edits_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::SuggestNewConversation { .. } => self
-                .suggest_new_conversation_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::SuggestPrompt { .. } => self
-                .suggest_prompt_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::ReadDocuments(_) => self
-                .read_documents_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::EditDocuments(_) => self
-                .edit_documents_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::CreateDocuments(_) => self
-                .create_documents_executor
-                .update(ctx, |executor, ctx| {
-                    executor.execute(input, conversation_id, ctx)
-                })
-                .into(),
-            AIAgentActionType::UseComputer(_) => self
-                .use_computer_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::RequestComputerUse(_) => self
-                .request_computer_use_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::ReadSkill(_) => self
-                .read_skill_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::FetchConversation { .. } => self
-                .fetch_conversation_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::StartAgent { .. } => self
-                .start_agent_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::SendMessageToAgent { .. } => self
-                .send_message_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx)),
-            AIAgentActionType::AskUserQuestion { .. } => self
-                .ask_user_question_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::RunAgents(_) => self
-                .run_agents_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::WaitForEvents { .. } => self
-                .wait_for_events_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-        };
+        let execution = AgentToolExecutor::execute_action(self, input, ctx);
 
         let action_id = action_clone.id.clone();
         match execution {
@@ -821,7 +1033,7 @@ impl BlocklistAIActionExecutor {
     }
 
     pub fn can_autoexecute_action(
-        &self,
+        &mut self,
         action: &AIAgentAction,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
@@ -903,31 +1115,291 @@ impl BlocklistAIActionExecutor {
         }
     }
 
-    fn should_autoexecute(&self, input: ExecuteActionInput, ctx: &mut ModelContext<Self>) -> bool {
+    fn should_autoexecute(
+        &mut self,
+        input: ExecuteActionInput,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        AgentToolExecutor::should_autoexecute(self, input, ctx)
+    }
+
+    fn is_shared_session_viewer(&self) -> bool {
+        self.terminal_model.lock().is_shared_session_viewer()
+    }
+}
+
+impl SurfaceSpecificToolExecutor for BlocklistAIActionExecutor {
+    type Context<'a> = ModelContext<'a, Self>;
+
+    fn tool_execution_context(&self, ctx: &Self::Context<'_>) -> AgentToolExecutionContext {
+        let active_session = self.active_session.as_ref(ctx);
+        AgentToolExecutionContext {
+            current_working_directory: active_session.current_working_directory().cloned(),
+            shell_launch_data: active_session.shell_launch_data(ctx),
+            session: active_session.session(ctx),
+            terminal_view_id: Some(self.terminal_view_id),
+        }
+    }
+
+    fn tool_execution_context_from_app(&self, ctx: &AppContext) -> AgentToolExecutionContext {
+        let active_session = self.active_session.as_ref(ctx);
+        AgentToolExecutionContext {
+            current_working_directory: active_session.current_working_directory().cloned(),
+            shell_launch_data: active_session.shell_launch_data(ctx),
+            session: active_session.session(ctx),
+            terminal_view_id: Some(self.terminal_view_id),
+        }
+    }
+
+    fn app_context<'a, 'b>(ctx: &'a Self::Context<'b>) -> &'a AppContext {
+        ctx
+    }
+
+    fn preprocess_shell(
+        &mut self,
+        input: PreprocessActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> BoxFuture<'static, ()> {
+        self.shell_command_executor
+            .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx))
+    }
+
+    fn execute_shell(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> AnyActionExecution {
+        self.shell_command_executor
+            .update(ctx, |executor, ctx| executor.execute(input, ctx))
+            .into()
+    }
+
+    fn should_autoexecute_shell(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> bool {
+        self.shell_command_executor
+            .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx))
+    }
+
+    fn preprocess_file_edits(
+        &mut self,
+        input: PreprocessActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> BoxFuture<'static, ()> {
+        self.request_file_edits_executor
+            .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx))
+    }
+
+    fn execute_file_edits(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> AnyActionExecution {
+        self.request_file_edits_executor
+            .update(ctx, |executor, ctx| executor.execute(input, ctx))
+            .into()
+    }
+
+    fn should_autoexecute_file_edits(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> bool {
+        self.request_file_edits_executor
+            .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx))
+    }
+
+    fn preprocess_other(
+        &mut self,
+        input: PreprocessActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> BoxFuture<'static, ()> {
+        match &input.action.action {
+            AIAgentActionType::UploadArtifact(..) => self
+                .upload_artifact_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::SearchCodebase(..) => self
+                .search_codebase_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::CallMCPTool { .. } => self
+                .call_mcp_tool_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::ReadMCPResource { .. } => self
+                .read_mcp_resource_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::SuggestNewConversation { .. } => self
+                .suggest_new_conversation_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::SuggestPrompt { .. } => self
+                .suggest_prompt_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::ReadDocuments(_) => self
+                .read_documents_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::EditDocuments(_) => self
+                .edit_documents_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::CreateDocuments(_) => self
+                .create_documents_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::UseComputer(_) => self
+                .use_computer_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::RequestComputerUse(_) => self
+                .request_computer_use_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::ReadSkill(_) => self
+                .read_skill_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::FetchConversation { .. } => self
+                .fetch_conversation_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::StartAgent { .. } => self
+                .start_agent_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::SendMessageToAgent { .. } => self
+                .send_message_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::AskUserQuestion { .. } => self
+                .ask_user_question_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::RunAgents(_) => self
+                .run_agents_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::WaitForEvents { .. } => self
+                .wait_for_events_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            _ => futures::future::ready(()).boxed(),
+        }
+    }
+
+    fn execute_other(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> AnyActionExecution {
+        match &input.action.action {
+            AIAgentActionType::InitProject => {
+                ctx.emit(BlocklistAIActionExecutorEvent::InitProject(
+                    input.action.id.clone(),
+                ));
+                ActionExecution::<()>::Sync(AIAgentActionResultType::InitProject).into()
+            }
+            AIAgentActionType::OpenCodeReview => {
+                ctx.emit(BlocklistAIActionExecutorEvent::OpenCodeReview(
+                    input.action.id.clone(),
+                ));
+                ActionExecution::<()>::Sync(AIAgentActionResultType::OpenCodeReview).into()
+            }
+            AIAgentActionType::InsertCodeReviewComments {
+                repo_path,
+                comments,
+                base_branch,
+            } => {
+                if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
+                    ctx.emit(BlocklistAIActionExecutorEvent::InsertCodeReviewComments {
+                        action_id: input.action.id.clone(),
+                        repo_path: repo_path.clone(),
+                        comments: comments.clone(),
+                        base_branch: base_branch.clone(),
+                    });
+                }
+                ActionExecution::<()>::Sync(AIAgentActionResultType::InsertReviewComments(
+                    InsertReviewCommentsResult::Success {
+                        repo_path: repo_path.to_string_lossy().to_string(),
+                    },
+                ))
+                .into()
+            }
+            AIAgentActionType::UploadArtifact(..) => self
+                .upload_artifact_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx)),
+            AIAgentActionType::SearchCodebase(..) => self
+                .search_codebase_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::CallMCPTool { .. } => self
+                .call_mcp_tool_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::ReadMCPResource { .. } => self
+                .read_mcp_resource_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::SuggestNewConversation { .. } => self
+                .suggest_new_conversation_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::SuggestPrompt { .. } => self
+                .suggest_prompt_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::ReadDocuments(_) => self
+                .read_documents_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::EditDocuments(_) => self
+                .edit_documents_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::CreateDocuments(_) => self
+                .create_documents_executor
+                .update(ctx, |executor, ctx| {
+                    executor.execute(input, input.conversation_id, ctx)
+                })
+                .into(),
+            AIAgentActionType::UseComputer(_) => self
+                .use_computer_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::RequestComputerUse(_) => self
+                .request_computer_use_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::ReadSkill(_) => self
+                .read_skill_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::FetchConversation { .. } => self
+                .fetch_conversation_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::StartAgent { .. } => self
+                .start_agent_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::SendMessageToAgent { .. } => self
+                .send_message_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx)),
+            AIAgentActionType::AskUserQuestion { .. } => self
+                .ask_user_question_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::RunAgents(_) => self
+                .run_agents_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::WaitForEvents { .. } => self
+                .wait_for_events_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            _ => AnyActionExecution::Sync(input.action.action.cancelled_result()),
+        }
+    }
+
+    fn should_autoexecute_other(
+        &mut self,
+        input: ExecuteActionInput<'_>,
+        ctx: &mut Self::Context<'_>,
+    ) -> bool {
         match input.action.action {
-            AIAgentActionType::RequestCommandOutput { .. }
-            | AIAgentActionType::WriteToLongRunningShellCommand { .. }
-            | AIAgentActionType::ReadShellCommandOutput { .. }
-            | AIAgentActionType::TransferShellCommandControlToUser { .. } => self
-                .shell_command_executor
-                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
-            AIAgentActionType::ReadFiles(_) => self
-                .read_files_executor
-                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::UploadArtifact(_) => self
                 .upload_artifact_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::SearchCodebase(_) => self
                 .search_codebase_executor
-                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
-            AIAgentActionType::RequestFileEdits { .. } => self
-                .request_file_edits_executor
-                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
-            AIAgentActionType::Grep { .. } => self
-                .grep_executor
-                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
-            AIAgentActionType::FileGlob { .. } | AIAgentActionType::FileGlobV2 { .. } => self
-                .file_glob_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::CallMCPTool { .. } => self
                 .call_mcp_tool_executor
@@ -980,11 +1452,17 @@ impl BlocklistAIActionExecutor {
             AIAgentActionType::WaitForEvents { .. } => self
                 .wait_for_events_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
+            _ => false,
         }
     }
 
-    fn is_shared_session_viewer(&self) -> bool {
-        self.terminal_model.lock().is_shared_session_viewer()
+    fn action_phase_other(&self, action: &AIAgentAction, _ctx: &AppContext) -> RunningActionPhase {
+        match &action.action {
+            AIAgentActionType::SearchCodebase(..) | AIAgentActionType::ReadSkill(_) => {
+                RunningActionPhase::Parallel(ParallelExecutionPolicy::ReadOnlyLocalContext)
+            }
+            _ => RunningActionPhase::Serial,
+        }
     }
 }
 impl Entity for BlocklistAIActionExecutor {

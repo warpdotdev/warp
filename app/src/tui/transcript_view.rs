@@ -7,7 +7,7 @@ use warpui::SingletonEntity;
 use warpui_core::elements::tui::{Color, Modifier, TuiColumn, TuiElement, TuiStyle, TuiText};
 use warpui_core::{AppContext, Entity, TuiView};
 
-use super::CoreTuiModel;
+use super::{CoreTuiModel, TuiToolActionModel};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 
 /// Near-white transcript text (`#f1f1f1`).
@@ -52,6 +52,22 @@ impl TuiView for TuiTranscriptView {
             }
             if has_output {
                 children.push(Box::new(TuiText::new(output).with_style(agent_style)));
+            }
+            if let Some(output) = exchange.output_status.output() {
+                for action in output.get().actions() {
+                    if let Some(card) =
+                        TuiToolActionModel::as_ref(ctx).card_for_action(conversation_id, &action.id)
+                    {
+                        children.push(Box::new(
+                            TuiText::new(format!("[ {} ]", card.title)).with_style(agent_style),
+                        ));
+                        for line in &card.lines {
+                            children.push(Box::new(
+                                TuiText::new(format!("  {line}")).with_style(agent_style),
+                            ));
+                        }
+                    }
+                }
             }
             if has_input || has_output {
                 children.push(Box::new(TuiText::new(" ")));

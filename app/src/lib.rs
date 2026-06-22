@@ -1919,6 +1919,7 @@ pub(crate) fn initialize_app(
     );
     #[cfg(feature = "tui")]
     if matches!(launch_mode, LaunchMode::Tui { .. }) {
+        ctx.add_singleton_model(crate::tui::TuiToolActionModel::new);
         ctx.add_singleton_model(crate::tui::CoreTuiModel::new);
     }
 

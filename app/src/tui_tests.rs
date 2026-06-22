@@ -525,7 +525,7 @@ fn core_tui_model_sends_initial_prompt_and_follow_up() {
         assert_eq!(first_params.input.len(), 1);
         assert_eq!(first_params.conversation_token, None);
         assert_eq!(first_params.tasks.len(), 0);
-        assert_eq!(first_params.supported_tools_override, Some(vec![]));
+        assert_eq!(first_params.supported_tools_override, None);
 
         complete_initial_fake_stream(&mut app, owner, conversation_id, &first_stream_id);
 
@@ -563,7 +563,7 @@ fn core_tui_model_sends_initial_prompt_and_follow_up() {
             !second_params.tasks.is_empty(),
             "follow-up should carry prior task context",
         );
-        assert_eq!(second_params.supported_tools_override, Some(vec![]));
+        assert_eq!(second_params.supported_tools_override, None);
 
         complete_follow_up_fake_stream(&mut app, owner, conversation_id, &_second_stream_id);
 

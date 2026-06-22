@@ -8,6 +8,7 @@
 //! quit is handled by the runtime's input loop.
 
 mod input_view;
+mod tool_model;
 mod transcript_view;
 
 use std::collections::HashMap;
@@ -21,6 +22,7 @@ use ai::skills::SkillPathOrigin;
 use anyhow::{anyhow, Result};
 use chrono::Local;
 use input_view::{InputEvent, TuiInputView};
+pub(crate) use tool_model::{TuiToolActionEvent, TuiToolActionModel};
 use transcript_view::TuiTranscriptView;
 use warp_multi_agent_api::{AgentType, ToolType};
 use warpui::r#async::Timer;
@@ -38,8 +40,8 @@ use crate::ai::agent::api::{self, RequestParams};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAttachment, AIAgentContext, AIAgentInput, AIAgentOutputStatus, CancellationReason,
-    FinishedAIAgentOutput, UserQueryMode,
+    AIAgentAction, AIAgentActionResult, AIAgentAttachment, AIAgentContext, AIAgentInput,
+    AIAgentOutputStatus, CancellationReason, FinishedAIAgentOutput, UserQueryMode,
 };
 use crate::ai::blocklist::{
     AgentConversationEngine, AgentConversationEngineDelegate, AgentSessionOwnerId,
@@ -52,6 +54,20 @@ use crate::ai_assistant::execution_context::{WarpAiExecutionContext, WarpAiOsCon
 /// The bottom input frame's height: one text row inside a single-cell rounded
 /// border (top + bottom), i.e. three rows total.
 const INPUT_ROWS: u16 = 3;
+
+/// The agent tools the v0 TUI can meaningfully execute. The long-running-command
+/// follow-up tools (read/write/transfer) are intentionally excluded until the TUI
+/// has a command registry; see the LRC follow-up.
+fn tui_supported_tools() -> Vec<ToolType> {
+    vec![
+        ToolType::RunShellCommand,
+        ToolType::ApplyFileDiffs,
+        ToolType::ReadFiles,
+        ToolType::Grep,
+        ToolType::FileGlob,
+        ToolType::FileGlobV2,
+    ]
+}
 
 /// App-level singleton owning the TUI app's single agent session.
 pub struct CoreTuiModel {
@@ -72,6 +88,26 @@ impl CoreTuiModel {
                 ctx.emit(CoreTuiModelEvent::ConversationUpdated { conversation_id });
             }
         });
+        ctx.subscribe_to_model(
+            &TuiToolActionModel::handle(ctx),
+            |me, event, ctx| match event {
+                TuiToolActionEvent::Updated { conversation_id } => {
+                    if Some(*conversation_id) == me.active_conversation_id {
+                        ctx.emit(CoreTuiModelEvent::ConversationUpdated {
+                            conversation_id: *conversation_id,
+                        });
+                    }
+                }
+                TuiToolActionEvent::ActionsFinished { conversation_id } => {
+                    if Some(*conversation_id) != me.active_conversation_id {
+                        return;
+                    }
+                    if let Err(error) = me.send_action_results(*conversation_id, ctx) {
+                        log::error!("failed to send TUI tool-result follow-up: {error:#}");
+                    }
+                }
+            },
+        );
 
         Self {
             owner: None,
@@ -119,7 +155,7 @@ impl CoreTuiModel {
 
         let conversation_id = self.active_conversation_id.unwrap_or_else(|| {
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                history_model.start_new_conversation(owner.entity_id(), false, false, false, ctx)
+                history_model.start_new_conversation(owner.entity_id(), true, false, false, ctx)
             })
         });
 
@@ -170,6 +206,54 @@ impl CoreTuiModel {
                 ctx,
             )
         };
+        self.active_conversation_id = Some(conversation_id);
+        self.in_flight = Some(response_stream);
+        ctx.emit(CoreTuiModelEvent::PromptSubmitted { conversation_id });
+        Ok((conversation_id, response_stream_id))
+    }
+
+    fn send_action_results(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(AIConversationId, ResponseStreamId)> {
+        if self.in_flight.is_some() {
+            return Err(anyhow!("TUI agent request already in flight"));
+        }
+        let owner = self
+            .owner
+            .ok_or_else(|| anyhow!("TUI agent session is not registered"))?;
+        let finished_results = TuiToolActionModel::handle(ctx).update(ctx, |model, _| {
+            model.drain_finished_results(conversation_id)
+        });
+        if finished_results.is_empty() {
+            return Err(anyhow!("TUI tool result follow-up had no finished results"));
+        }
+
+        let (_task_id, conversation_data, parent_agent_id, agent_name) =
+            conversation_request_data(owner, conversation_id, ctx)?;
+        let context = TuiAgentContextBuilder::context(ctx);
+        let request_input =
+            tui_action_result_request_input(owner, conversation_id, finished_results, context, ctx);
+        let mut request_params = RequestParams::new(
+            Some(owner.entity_id()),
+            TuiAgentContextBuilder::session_context(ctx),
+            &request_input,
+            conversation_data.clone(),
+            None,
+            ctx,
+        );
+        request_params.parent_agent_id = parent_agent_id;
+        request_params.agent_name = agent_name;
+
+        let (response_stream, response_stream_id) = AgentConversationEngine::send_request(
+            owner,
+            request_input,
+            request_params,
+            conversation_data,
+            /*can_attempt_resume_on_error*/ true,
+            ctx,
+        );
         self.active_conversation_id = Some(conversation_id);
         self.in_flight = Some(response_stream);
         ctx.emit(CoreTuiModelEvent::PromptSubmitted { conversation_id });
@@ -297,6 +381,17 @@ pub fn run_prompt(prompt: String, ctx: &mut AppContext) {
 impl AgentConversationEngineDelegate for CoreTuiModel {
     fn skill_path_origin(&self, _ctx: &AppContext) -> SkillPathOrigin {
         SkillPathOrigin::Local
+    }
+
+    fn queue_client_actions(
+        &mut self,
+        actions: Vec<AIAgentAction>,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        TuiToolActionModel::handle(ctx).update(ctx, |model, ctx| {
+            model.queue_actions(actions, conversation_id, ctx);
+        });
     }
 
     fn finished_receiving_output(
@@ -655,7 +750,54 @@ fn tui_request_input(
             .clone(),
         shared_session_response_initiator: None,
         request_start_ts: Local::now(),
-        supported_tools_override: Some(Vec::<ToolType>::new()),
+        supported_tools_override: Some(tui_supported_tools()),
+    }
+}
+
+fn tui_action_result_request_input(
+    owner: AgentSessionOwnerId,
+    conversation_id: AIConversationId,
+    action_results: Vec<AIAgentActionResult>,
+    context: Arc<[AIAgentContext]>,
+    app: &AppContext,
+) -> RequestInput {
+    let llm_prefs = LLMPreferences::as_ref(app);
+    let mut input_messages: HashMap<TaskId, Vec<AIAgentInput>> = HashMap::new();
+    for result in action_results {
+        input_messages
+            .entry(result.task_id.clone())
+            .or_default()
+            .push(AIAgentInput::ActionResult {
+                result,
+                context: context.clone(),
+            });
+    }
+
+    RequestInput {
+        conversation_id,
+        input_messages,
+        working_directory: TuiAgentContextBuilder::session_context(app)
+            .current_working_directory()
+            .clone(),
+        model_id: llm_prefs
+            .get_active_base_model(app, Some(owner.entity_id()))
+            .id
+            .clone(),
+        coding_model_id: llm_prefs
+            .get_active_coding_model(app, Some(owner.entity_id()))
+            .id
+            .clone(),
+        cli_agent_model_id: llm_prefs
+            .get_active_cli_agent_model(app, Some(owner.entity_id()))
+            .id
+            .clone(),
+        computer_use_model_id: llm_prefs
+            .get_active_computer_use_model(app, Some(owner.entity_id()))
+            .id
+            .clone(),
+        shared_session_response_initiator: None,
+        request_start_ts: Local::now(),
+        supported_tools_override: Some(tui_supported_tools()),
     }
 }
 
