@@ -1248,12 +1248,11 @@ impl AgentDriver {
         let failed_for_subscription = Arc::clone(&failed);
 
         let templatable_mcp_manager = TemplatableMCPServerManager::handle(ctx);
-        let manager_clone = templatable_mcp_manager.clone();
 
         // Clear any stale subscription left behind by a previous wait that
         // timed out, so it can't tear down this wait's subscription.
         ctx.unsubscribe_from_model(&templatable_mcp_manager);
-        ctx.subscribe_to_model(&templatable_mcp_manager, move |_me, _, event, ctx| {
+        ctx.subscribe_to_model(&templatable_mcp_manager, move |_me, manager, event, ctx| {
             let TemplatableMCPServerManagerEvent::StateChanged { uuid, state } = event else {
                 return;
             };
@@ -1290,7 +1289,7 @@ impl AgentDriver {
                 if let Some(sender) = tx.take() {
                     let _ = sender.send(());
                 }
-                ctx.unsubscribe_from_model(&manager_clone);
+                ctx.unsubscribe_from_model(&manager);
             }
         });
 
@@ -1533,9 +1532,8 @@ impl AgentDriver {
         let mut collected_wait_uuids = Vec::<Uuid>::new();
 
         let file_based_mcp_manager = FileBasedMCPManager::handle(ctx);
-        let manager_clone = file_based_mcp_manager.clone();
 
-        ctx.subscribe_to_model(&file_based_mcp_manager, move |_me, _, event, ctx| {
+        ctx.subscribe_to_model(&file_based_mcp_manager, move |_me, manager, event, ctx| {
             if let FileBasedMCPManagerEvent::CloudEnvMcpScanComplete {
                 repo_path,
                 wait_server_uuids,
@@ -1555,7 +1553,7 @@ impl AgentDriver {
                             );
                             let _ = sender.send(uuids);
                         }
-                        ctx.unsubscribe_from_model(&manager_clone);
+                        ctx.unsubscribe_from_model(&manager);
                     }
                 }
             }
@@ -1641,10 +1639,9 @@ impl AgentDriver {
         let mut tx = Some(tx);
 
         let templatable_manager_handle = TemplatableMCPServerManager::handle(ctx);
-        let manager_clone = templatable_manager_handle.clone();
         let pending_state_details_for_subscription = Arc::clone(&pending_state_details);
 
-        ctx.subscribe_to_model(&templatable_manager_handle, move |_me, _, event, ctx| {
+        ctx.subscribe_to_model(&templatable_manager_handle, move |_me, manager, event, ctx| {
             if let TemplatableMCPServerManagerEvent::StateChanged { uuid, state } = event {
                 if !pending_uuids.contains(uuid) {
                     return;
@@ -1676,7 +1673,7 @@ impl AgentDriver {
                     if let Some(sender) = tx.take() {
                         let _ = sender.send(());
                     }
-                    ctx.unsubscribe_from_model(&manager_clone);
+                    ctx.unsubscribe_from_model(&manager);
                 }
             }
         });
