@@ -517,6 +517,28 @@ en:
     quit_warp: "Quit Warp?"
     save_changes: "Save changes?"
 
+  # ── Provider Keys ──
+  provider_keys:
+    add_api_key: "Add API key"
+    description: "Use your own API keys from model providers for Warp Agent."
+    openai_api_key: "OpenAI API key"
+    anthropic_api_key: "Anthropic API key"
+    google_api_key: "Google API key"
+    cancel: "Cancel"
+    add_keys: "Add keys"
+
+  # ── Free AI Removal ──
+  free_ai_removal:
+    notice:
+      title: "Warp is no longer providing inference on the free plan."
+      body: "To keep using Warp's AI features, please upgrade to a paid plan, bring your own API key or endpoint, or log in with your Grok subscription."
+      bonus_credits: "If you have any unused bonus credits, AI will keep working until these run out."
+    prompt_suggestions:
+      title: "How to use AI features in Warp"
+      body: "To use AI features in Warp, subscribe to a paid plan, add an API key (OpenAI, Anthropic, or Google), add a custom inference endpoint (OpenRouter, LiteLLM), or log in using your SuperGrok subscription."
+    bring_your_own_ai: "Bring your own AI"
+    view_pricing: "View pricing"
+
   # ── Auth ──
   auth:
     log_out_title: "Log out?"
