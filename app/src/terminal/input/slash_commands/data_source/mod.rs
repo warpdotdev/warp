@@ -217,8 +217,7 @@ impl SlashCommandDataSource {
     fn recompute_active_commands(&mut self, ctx: &mut ModelContext<Self>) {
         let active_commands_context = self.active_commands_context(ctx);
 
-        let old_active_command_count = self.active_commands_by_id.len();
-        self.active_commands_by_id = HashMap::from_iter(
+        let active_commands_by_id = HashMap::from_iter(
             COMMAND_REGISTRY
                 .all_commands_by_id()
                 .filter(|(_, command)| {
@@ -227,10 +226,8 @@ impl SlashCommandDataSource {
                 .map(|(id, command)| (id, command.clone())),
         );
 
-        // This is an imperfect heuristic, but better than re-firing unnecessarily.
-        //
-        // If it actually matters, we can update it.
-        if self.active_commands_by_id.len() != old_active_command_count {
+        if self.active_commands_by_id != active_commands_by_id {
+            self.active_commands_by_id = active_commands_by_id;
             ctx.emit(UpdatedActiveCommands);
         }
     }

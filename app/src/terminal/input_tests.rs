@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -58,6 +59,7 @@ use crate::input_suggestions::{HistoryOrder, Item};
 use crate::network::NetworkStatus;
 use crate::pricing::PricingInfoModel;
 use crate::search::files::model::FileSearchModel;
+use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::ServerApiProvider;
@@ -716,6 +718,70 @@ fn test_input_tab() {
         input.read(&app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "    cd so");
         });
+    });
+}
+
+#[test]
+fn zero_state_hint_text_only_registers_active_slash_command_placeholders() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.set_zero_state_hint_text(ctx);
+        });
+
+        let editor = input.read(&app, |input, _| input.editor().clone());
+        let rename_tab_prefix = format!("{} ", commands::RENAME_TAB.name);
+        let continue_locally_prefix = format!("{} ", commands::CONTINUE_LOCALLY.name);
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_placeholder_text_with_prefix(
+                continue_locally_prefix.clone(),
+                "stale hint",
+                ctx,
+            );
+        });
+        input.update(&mut app, |input, ctx| {
+            input.set_zero_state_hint_text(ctx);
+        });
+
+        assert!(
+            editor.read(&app, |editor, _| editor
+                .placeholder_text(&rename_tab_prefix)
+                .is_some()),
+            "always-active slash command placeholders should still be registered"
+        );
+        assert!(
+            editor.read(&app, |editor, _| editor
+                .placeholder_text(&continue_locally_prefix)
+                .is_none()),
+            "/continue-locally should not be registered outside cloud conversation context"
+        );
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_placeholder_text_with_prefix(
+                continue_locally_prefix.clone(),
+                "stale hint",
+                ctx,
+            );
+        });
+        input.update(&mut app, |input, ctx| {
+            input.update_repo_path(Some(PathBuf::from("/tmp/warp-test-repo")), ctx);
+        });
+
+        assert!(
+            editor.read(&app, |editor, _| editor
+                .placeholder_text(&continue_locally_prefix)
+                .is_none()),
+            "active slash-command data source updates should refresh stale placeholders"
+        );
     });
 }
 
