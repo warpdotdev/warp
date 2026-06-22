@@ -1,4 +1,3 @@
-use crate::default_terminal::DefaultTerminal;
 use crate::gpu_state::{GPUState, GPUStateEvent};
 use crate::terminal::input::OPEN_COMPLETIONS_KEYBINDING_NAME;
 #[cfg(feature = "local_tty")]
@@ -550,15 +549,6 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         id!("Workspace"),
     )]);
 
-    if DefaultTerminal::can_warp_become_default() {
-        app.register_fixed_bindings([FixedBinding::empty(
-            "Make Warp the default terminal",
-            builder(SettingsAction::FeaturesPageToggle(
-                FeaturesPageAction::MakeWarpDefaultTerminal,
-            )),
-            context.to_owned() & !id!(flags::WARP_IS_DEFAULT_TERMINAL),
-        )]);
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -644,8 +634,6 @@ pub enum FeaturesPageAction {
     ToggleAutoOpenCodeReviewPane,
     ToggleShowTerminalInputMessageLine,
     ToggleAgentInAppNotifications,
-    MakeWarpDefaultTerminal,
-    RestoreMacOSTerminalAsDefault,
 }
 
 lazy_static! {
@@ -1135,14 +1123,6 @@ impl FeaturesPageAction {
                     ),
                 }
             }
-            Self::MakeWarpDefaultTerminal => TelemetryEvent::FeaturesPageAction {
-                action: "MakeWarpDefaultTerminal".to_string(),
-                value: to_string(DefaultTerminal::as_ref(ctx).is_warp_default()),
-            },
-            Self::RestoreMacOSTerminalAsDefault => TelemetryEvent::FeaturesPageAction {
-                action: "RestoreMacOSTerminalAsDefault".to_string(),
-                value: to_string(DefaultTerminal::as_ref(ctx).is_warp_default()),
-            },
             Self::ToggleAutoOpenCodeReviewPane => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleAutoOpenCodeReviewPane".to_string(),
                 value: to_string(
@@ -1910,16 +1890,6 @@ impl TypedActionView for FeaturesPageView {
                     }
                 }
             }
-            MakeWarpDefaultTerminal => {
-                DefaultTerminal::handle(ctx).update(ctx, |default_terminal, ctx| {
-                    default_terminal.make_warp_default(ctx);
-                });
-            }
-            RestoreMacOSTerminalAsDefault => {
-                DefaultTerminal::handle(ctx).update(ctx, |default_terminal, ctx| {
-                    default_terminal.restore_macos_terminal_as_default(ctx);
-                });
-            }
         }
 
         send_telemetry_from_ctx!(action.telemetry_event(ctx), ctx);
@@ -2068,10 +2038,6 @@ impl FeaturesPageView {
         );
 
         ctx.subscribe_to_model(&UndoCloseSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
-
-        ctx.subscribe_to_model(&DefaultTerminal::handle(ctx), |_, _, _, ctx| {
-            ctx.notify();
-        });
 
         ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
             if matches!(
@@ -2518,10 +2484,6 @@ impl FeaturesPageView {
             && !FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
         {
             general_widgets.push(Box::new(AutoOpenCodeReviewPaneWidget::default()));
-        }
-
-        if DefaultTerminal::can_warp_become_default() {
-            general_widgets.push(Box::new(DefaultTerminalWidget::default()));
         }
 
         let app_editor_settings = AppEditorSettings::as_ref(ctx);
@@ -4778,56 +4740,6 @@ impl SettingsWidget for AutoOpenCodeReviewPaneWidget {
                 .finish(),
             Some("When this setting is on, the code review panel will open on the first accepted diff of a conversation".into()),
         )
-    }
-}
-
-#[derive(Default)]
-struct DefaultTerminalWidget {
-    link_state: MouseStateHandle,
-}
-
-impl SettingsWidget for DefaultTerminalWidget {
-    type View = FeaturesPageView;
-
-    fn search_terms(&self) -> &str {
-        "warp default terminal application"
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let ui_builder = appearance.ui_builder();
-        let default_terminal = DefaultTerminal::as_ref(app);
-        if default_terminal.is_warp_default() {
-            ui_builder
-                .link(
-                    "Restore macOS Terminal as the default terminal".to_string(),
-                    None,
-                    Some(Box::new(|ctx| {
-                        ctx.dispatch_typed_action(FeaturesPageAction::RestoreMacOSTerminalAsDefault);
-                    })),
-                    self.link_state.clone(),
-                )
-                .build()
-                .with_margin_bottom(16.)
-                .finish()
-        } else {
-            ui_builder
-                .link(
-                    "Make Warp the default terminal".to_string(),
-                    None,
-                    Some(Box::new(|ctx| {
-                        ctx.dispatch_typed_action(FeaturesPageAction::MakeWarpDefaultTerminal);
-                    })),
-                    self.link_state.clone(),
-                )
-                .build()
-                .with_margin_bottom(16.)
-                .finish()
-        }
     }
 }
 
