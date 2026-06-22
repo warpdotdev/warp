@@ -2317,10 +2317,16 @@ impl AgentDriver {
         if manager.needs_update() {
             if let Err(e) = manager.update().await {
                 log::warn!("Plugin update failed (continuing): {e}");
+                if !e.log.is_empty() {
+                    log::warn!("Plugin update command log:\n{}", e.log);
+                }
             }
         } else if !manager.is_installed() {
             if let Err(e) = manager.install().await {
                 log::warn!("Plugin installation failed (continuing): {e}");
+                if !e.log.is_empty() {
+                    log::warn!("Plugin installation command log:\n{}", e.log);
+                }
             }
         }
     }
@@ -2332,6 +2338,9 @@ impl AgentDriver {
     ) -> Result<(), AgentDriverError> {
         if manager.platform_plugin_needs_update() {
             if let Err(e) = manager.update_platform_plugin().await {
+                if !e.log.is_empty() {
+                    log::warn!("Platform plugin update command log:\n{}", e.log);
+                }
                 if required {
                     return Err(Self::required_platform_plugin_error(
                         harness_name,
@@ -2342,6 +2351,9 @@ impl AgentDriver {
             }
         } else if !manager.is_platform_plugin_installed() {
             if let Err(e) = manager.install_platform_plugin().await {
+                if !e.log.is_empty() {
+                    log::warn!("Platform plugin installation command log:\n{}", e.log);
+                }
                 if required {
                     return Err(Self::required_platform_plugin_error(
                         harness_name,
