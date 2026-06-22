@@ -44,7 +44,7 @@ fn registered_instance_round_trips_discovery_record() {
     );
     let _registered = RegisteredInstance::register_in_dir_for_test(record.clone(), dir.path())
         .expect("registered");
-    let records = list_instances_from_dir(dir.path());
+    let records = list_instances_from_dir(dir.path(), "local");
     assert_eq!(records, vec![record]);
 }
 
@@ -62,7 +62,50 @@ fn incompatible_protocol_record_is_ignored() {
     let _registered =
         RegisteredInstance::register_in_dir_for_test(record, dir.path()).expect("registered");
 
-    assert!(list_instances_from_dir(dir.path()).is_empty());
+    assert!(list_instances_from_dir(dir.path(), "local").is_empty());
+}
+
+#[test]
+fn malformed_record_and_matching_broker_socket_are_pruned() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let record_path = dir.path().join("inst_malformed.json");
+    let socket_path = dir.path().join("inst_malformed.broker.sock");
+    fs::write(&record_path, "not json").expect("write malformed record");
+    fs::write(&socket_path, "").expect("write broker socket");
+
+    assert!(list_instances_from_dir(dir.path(), "local").is_empty());
+    assert!(!record_path.exists());
+    assert!(!socket_path.exists());
+}
+
+#[test]
+fn orphan_broker_sockets_are_pruned_after_grace_period() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let orphan_path = dir.path().join("inst_orphan.broker.sock");
+    let retained_filename = PathBuf::from("inst_retained.broker.sock");
+    let retained_path = dir.path().join(&retained_filename);
+    fs::write(&orphan_path, "").expect("write orphan socket");
+    fs::write(&retained_path, "").expect("write retained socket");
+
+    sweep_orphan_broker_sockets(
+        dir.path(),
+        &HashSet::from([retained_filename]),
+        Duration::ZERO,
+    );
+
+    assert!(!orphan_path.exists());
+    assert!(retained_path.exists());
+}
+
+#[test]
+fn abandoned_temp_records_are_pruned_after_grace_period() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let temp_path = dir.path().join("inst_abandoned.json.tmp");
+    fs::write(&temp_path, "").expect("write temporary record");
+
+    sweep_abandoned_temp_records(dir.path(), Duration::ZERO);
+
+    assert!(!temp_path.exists());
 }
 #[cfg(unix)]
 #[test]
@@ -81,11 +124,14 @@ fn stale_process_record_is_pruned() {
         crate::protocol::ActionKind::implemented_metadata(),
     );
     record.pid = pid;
+    let socket_path = dir.path().join(broker_socket_filename(&record.instance_id));
+    fs::write(&socket_path, "").expect("write broker socket");
     let registered =
         RegisteredInstance::register_in_dir_for_test(record, dir.path()).expect("registered");
 
-    assert!(list_instances_from_dir(dir.path()).is_empty());
+    assert!(list_instances_from_dir(dir.path(), "local").is_empty());
     assert!(!registered.path.exists());
+    assert!(!socket_path.exists());
 }
 #[cfg(unix)]
 #[test]
@@ -122,7 +168,7 @@ fn multiple_live_process_records_are_discovered() {
     let _second = RegisteredInstance::register_in_dir_for_test(second_record, dir.path())
         .expect("second registered");
 
-    let ids = list_instances_from_dir(dir.path())
+    let ids = list_instances_from_dir(dir.path(), "local")
         .into_iter()
         .map(|record| record.instance_id)
         .collect::<Vec<_>>();
@@ -136,6 +182,24 @@ fn multiple_live_process_records_are_discovered() {
     second_process.wait().expect("second process reaped");
 }
 
+#[test]
+fn records_from_other_channels_are_ignored() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let record = InstanceRecord::for_current_process(
+        Some(ControlEndpoint::localhost(4000)),
+        "dev",
+        "dev.warp.Warp-Dev",
+        Some("test".to_owned()),
+        crate::protocol::ActionKind::implemented_metadata(),
+    );
+    let socket_path = dir.path().join(broker_socket_filename(&record.instance_id));
+    fs::write(&socket_path, "").expect("write broker socket");
+    let _registered =
+        RegisteredInstance::register_in_dir_for_test(record, dir.path()).expect("registered");
+
+    assert!(list_instances_from_dir(dir.path(), "local").is_empty());
+    assert!(socket_path.exists());
+}
 #[test]
 fn serialized_discovery_record_does_not_contain_raw_credential_material() {
     let raw_secret = "raw-secret-token-material";

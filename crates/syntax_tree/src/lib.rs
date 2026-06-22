@@ -23,6 +23,12 @@ use warpui_core::{AppContext, Entity, ModelContext, WeakModelHandle};
 
 const MAX_SYNTAX_TREES: usize = 3;
 
+/// Maximum buffer size in bytes for which we attempt to parse a syntax tree.
+/// Files larger than this are skipped to avoid tree-sitter's super-linear
+/// memory growth on large inputs. See this tree-sitter issue:
+/// https://github.com/tree-sitter/tree-sitter/issues/222#issuecomment-435987441
+const MAX_PARSE_BYTES: usize = 2 * 1024 * 1024; // 2 MB
+
 thread_local! {
     static PARSER: RefCell<Parser> = RefCell::new(Parser::new());
 }
@@ -215,12 +221,17 @@ impl SyntaxTreeState {
     }
 
     /// Re-parse the tree based on the updated tree and source content.
+    ///
+    /// Returns `None` if the buffer exceeds [`MAX_PARSE_BYTES`].
     async fn parse_text(
         content: BufferSnapshot,
         old_tree: Option<Tree>,
         language: &Language,
-    ) -> Tree {
-        PARSER.with(|parser| {
+    ) -> Option<Tree> {
+        if content.byte_len() > MAX_PARSE_BYTES {
+            return None;
+        }
+        Some(PARSER.with(|parser| {
             let mut parser = parser.borrow_mut();
             parser
                 .set_language(&language.grammar)
@@ -234,7 +245,7 @@ impl SyntaxTreeState {
             parser
                 .parse_with_options(&mut callback, old_tree.as_ref(), None)
                 .expect("Should succeed")
-        })
+        }))
     }
 
     /// Translate an incoming edit delta into an InputEdit for incrementally updating the syntax
@@ -345,6 +356,17 @@ impl DecorationLayer for SyntaxTreeState {
                     new_tree
                 },
                 move |model, new_tree, ctx| {
+                    let Some(new_tree) = new_tree else {
+                        // Buffer exceeded MAX_PARSE_BYTES; skip updating the syntax tree, but
+                        // still emit DecorationUpdated so any delayed rendering is flushed
+                        let mut syntax_tree_lock = model.syntax_tree.lock();
+                        syntax_tree_lock.remove(&version);
+                        drop(syntax_tree_lock);
+                        model.invalidate_highlight_cache_for_version(version);
+                        // (the editor delays showing content until this event fires).
+                        ctx.emit(DecorationStateEvent::DecorationUpdated { version });
+                        return;
+                    };
                     let mut syntax_tree_lock = model.syntax_tree.lock();
                     model.invalidate_highlight_cache_for_version(version);
                     if let Some(old_tree) = syntax_tree_lock.get_mut(&version) {

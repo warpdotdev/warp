@@ -104,7 +104,7 @@ impl GitHubRepoModel {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let inner = ctx.add_model(move |_| LocalGitHubRepoModel::new_for_test(git_status));
-        ctx.subscribe_to_model(&inner, Self::forward_event);
+        ctx.subscribe_to_model(&inner, |me, _, event, ctx| me.forward_event(event, ctx));
         Self::Local(inner)
     }
 

@@ -142,7 +142,25 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         (Get-Variable | Select-Object -ExpandProperty Name) -join ' '
         $aliasesRaw = Get-Command -CommandType Alias | Select-Object -ExpandProperty DisplayName
         $aliases = $aliasesRaw -join [Environment]::NewLine
-        $functionNamesRaw = Get-Command -CommandType Function | Where-Object { -not $_.Name.StartsWith('Warp') } | Select-Object -ExpandProperty Name
+        # Only query modules that ship with PowerShell itself. This keeps bootstrap fast by
+        # avoiding Windows system modules and third-party modules from the Gallery. The rest are
+        # loaded asynchronously later.
+        $corePsModules = @(
+            'Microsoft.PowerShell.*',  # All built-in PS modules (cross-platform)
+            'Microsoft.WSMan.*',       # WS-Management (Windows PS)
+            'CimCmdlets',              # CIM/WMI (Windows)
+            'PackageManagement',       # Package management
+            'PowerShellGet',           # Package get
+            'PSReadLine',              # Line editor bundled with PS
+            'ThreadJob',               # Thread jobs (PS 7)
+            'PSDiagnostics',           # PS diagnostics
+            'PSDesiredStateConfiguration', # DSC (Windows PS)
+            'PSWorkflow',              # Legacy workflow (Windows PS 5)
+            'PSWorkflowUtility'        # Legacy workflow utility (Windows PS 5)
+        )
+        $functionNamesRaw = Get-Command -CommandType Function -Module $corePsModules |
+            Where-Object { -not $_.Name.StartsWith('Warp') } |
+            Select-Object -ExpandProperty Name
         $functionNames = $functionNamesRaw -join [Environment]::NewLine
         $builtinsRaw = Get-Command -CommandType Cmdlet | Select-Object -ExpandProperty Name
         $builtins = $builtinsRaw -join [Environment]::NewLine

@@ -44,7 +44,7 @@ impl SearchCodebaseExecutor {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&get_relevant_files_controller, |me, event, ctx| {
+        ctx.subscribe_to_model(&get_relevant_files_controller, |me, _, event, ctx| {
             if !me.active_searches.contains_key(event.action_id()) {
                 return;
             }

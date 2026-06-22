@@ -462,6 +462,10 @@ message GitStatusMetadata {
   string current_branch_name = 1;
   string main_branch_name = 2;
   DiffStats stats_against_head = 3;
+  optional string tracking_upstream = 4;
+  uint32 tracking_ahead = 5;
+  uint32 tracking_behind = 6;
+  bool tracking_counts_available = 7;
 }
 
 // Server -> client push: aggregate git status for a repo. Sent on every

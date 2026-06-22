@@ -330,6 +330,13 @@ impl QueuedPromptsPanelView {
                 .is_some_and(|row| !row.is_locked())
     }
 
+    /// Returns whether the reusable inline edit editor is currently holding focus for an active
+    /// queued prompt row. Parent views use this to avoid stealing focus during async AI/tool
+    /// updates.
+    pub(in crate::terminal) fn is_inline_edit_editor_focused(&self, ctx: &AppContext) -> bool {
+        self.editing_row_id(ctx).is_some() && self.edit_editor.is_focused(ctx)
+    }
+
     /// Re-renders when the host input transitions between empty and non-empty, so the header
     /// hint tracks whether Enter would send.
     fn handle_host_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
@@ -686,6 +693,7 @@ impl QueuedPromptsPanelView {
         self.should_show_enter_hint(ctx)
     }
 
+    /// Test helper: replaces the inline edit editor buffer.
     pub(super) fn set_edit_buffer_text_for_test(
         &mut self,
         text: &str,

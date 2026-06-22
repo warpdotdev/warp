@@ -239,7 +239,7 @@ impl QueuedQueryModel {
         // from its owning terminal view. Agent-view exit is intentionally NOT subscribed to:
         // conversations (cloud agents in particular) outlive their visible session.
         let history_handle = BlocklistAIHistoryModel::handle(ctx);
-        ctx.subscribe_to_model(&history_handle, |this, event, ctx| {
+        ctx.subscribe_to_model(&history_handle, |this, _, event, ctx| {
             this.handle_history_event(event, ctx);
         });
 
@@ -250,7 +250,7 @@ impl QueuedQueryModel {
         // the chip and ghost text re-render with the new effective state.
         let default_mode = AISettings::as_ref(ctx).default_prompt_submission_mode;
         let ai_settings_handle = AISettings::handle(ctx);
-        ctx.subscribe_to_model(&ai_settings_handle, |this, event, ctx| match event {
+        ctx.subscribe_to_model(&ai_settings_handle, |this, _, event, ctx| match event {
             AISettingsChangedEvent::PromptSubmissionMode { .. } => {
                 this.default_mode = AISettings::as_ref(ctx).default_prompt_submission_mode;
                 ctx.emit(QueuedQueryEvent::DefaultModeChanged);

@@ -8,13 +8,11 @@ pub use telemetry::{SkillOpenOrigin, SkillTelemetryEvent};
 #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
 mod remote;
 #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
-pub(crate) use remote::{bundled_skills_snapshot_protos, wire_remote_bundled_skills};
+pub(crate) use remote::bundled_skill_snapshot_protos;
 #[cfg(feature = "local_fs")]
 mod bundled;
 #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
-pub(crate) use bundled::BundledSkill;
-#[cfg(all(feature = "local_fs", test))]
-pub use bundled::BundledSkillActivation;
+pub(crate) use bundled::{BundledSkill, BundledSkillActivation};
 
 cfg_if::cfg_if! {
     if #[cfg(not(feature = "local_fs"))] {
@@ -24,6 +22,11 @@ cfg_if::cfg_if! {
 }
 
 pub use ai::skills::SkillReference;
+
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub enum SkillManagerEvent {
+    HomeSkillsChanged,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ActiveSkillLookupError {

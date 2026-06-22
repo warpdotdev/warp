@@ -135,7 +135,7 @@ fn test_create_notebook() {
         let sync_queue_events = app.add_model(|_ctx| Events::default());
 
         sync_queue_events.update(&mut app, |_, ctx| {
-            ctx.subscribe_to_model(&sync_queue, |me, event, _ctx| me.0.push(event.clone()))
+            ctx.subscribe_to_model(&sync_queue, |me, _, event, _ctx| me.0.push(event.clone()))
         });
 
         // Enqueue a single item and wait for the response to complete.
@@ -266,7 +266,7 @@ fn test_generic_string_object_unique_key_failure() {
 
         let sync_queue_events = app.add_model(|_ctx| Events::default());
         sync_queue_events.update(&mut app, |_, ctx| {
-            ctx.subscribe_to_model(&sync_queue, |me, event, _ctx| me.0.push(event.clone()))
+            ctx.subscribe_to_model(&sync_queue, |me, _, event, _ctx| me.0.push(event.clone()))
         });
 
         // Await the first future.
@@ -425,7 +425,7 @@ fn test_dequeue_after_transient_failure() {
 
         let sync_queue_events = app.add_model(|_ctx| Events::default());
         sync_queue_events.update(&mut app, |_, ctx| {
-            ctx.subscribe_to_model(&sync_queue, |me, event, _ctx| me.0.push(event.clone()))
+            ctx.subscribe_to_model(&sync_queue, |me, _, event, _ctx| me.0.push(event.clone()))
         });
 
         sync_queue
@@ -575,7 +575,7 @@ fn test_no_dequeue_after_intransient_failure() {
 
         let sync_queue_events = app.add_model(|_ctx| Events::default());
         sync_queue_events.update(&mut app, |_, ctx| {
-            ctx.subscribe_to_model(&sync_queue, |me, event, _ctx| me.0.push(event.clone()))
+            ctx.subscribe_to_model(&sync_queue, |me, _, event, _ctx| me.0.push(event.clone()))
         });
 
         sync_queue
@@ -715,7 +715,7 @@ fn test_create_and_update_notebook() {
         let events = app.add_model(|_ctx| Events::default());
 
         events.update(&mut app, |_, ctx| {
-            ctx.subscribe_to_model(&sync_queue, |me, event, _ctx| me.0.push(event.clone()))
+            ctx.subscribe_to_model(&sync_queue, |me, _, event, _ctx| me.0.push(event.clone()))
         });
 
         sync_queue
@@ -917,7 +917,7 @@ fn test_record_object_action() {
         let sync_queue_events = app.add_model(|_ctx| Events::default());
 
         sync_queue_events.update(&mut app, |_, ctx| {
-            ctx.subscribe_to_model(&sync_queue, |me, event, _ctx| me.0.push(event.clone()))
+            ctx.subscribe_to_model(&sync_queue, |me, _, event, _ctx| me.0.push(event.clone()))
         });
 
         // Enqueue a single item and wait for the response to complete.
@@ -1095,7 +1095,7 @@ fn test_sync_queue_dependency_failure() {
         let sync_queue_events = app.add_model(|_ctx| Events::default());
 
         sync_queue_events.update(&mut app, |_, ctx| {
-            ctx.subscribe_to_model(&sync_queue, |me, event, _ctx| me.0.push(event.clone()))
+            ctx.subscribe_to_model(&sync_queue, |me, _, event, _ctx| me.0.push(event.clone()))
         });
 
         sync_queue.update(&mut app, |sync_queue, ctx| {
@@ -1220,7 +1220,7 @@ fn test_sync_queue_dependency_mixed_ids() {
         let sync_queue_events = app.add_model(|_ctx| Events::default());
 
         sync_queue_events.update(&mut app, |_, ctx| {
-            ctx.subscribe_to_model(&sync_queue, |me, event, _ctx| me.0.push(event.clone()))
+            ctx.subscribe_to_model(&sync_queue, |me, _, event, _ctx| me.0.push(event.clone()))
         });
 
         sync_queue.update(&mut app, |sync_queue, ctx| {

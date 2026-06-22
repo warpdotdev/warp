@@ -831,7 +831,7 @@ macro_rules! generate_settings_event_fn {
                 use $crate::warpui_core::SingletonEntity;
                 SettingsManager::handle(ctx).update(ctx, |manager, ctx| {
                     // Propagate per settings change events through the SettingsManager
-                    ctx.subscribe_to_model(&settings_group, |_manager, _, ctx| {
+                    ctx.subscribe_to_model(&settings_group, |_manager, _, _, ctx| {
                         ctx.emit(SettingsEvent::LocalPreferencesUpdated {
                             storage_key: $setting::storage_key().to_string(),
                             sync_to_cloud: $setting::sync_to_cloud(),

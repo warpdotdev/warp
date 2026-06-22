@@ -864,7 +864,7 @@ fn dispatch_pending_child_launch(
     let executor = app.add_model(StartAgentExecutor::new);
     let captured = app.add_model(|_| CapturedCleanupEvents::default());
     captured.update(app, |_, ctx| {
-        ctx.subscribe_to_model(&executor, |captured, event, _ctx| {
+        ctx.subscribe_to_model(&executor, |captured, _, event, _ctx| {
             if let StartAgentExecutorEvent::CleanupFailedChildLaunch { conversation_id } = event {
                 captured.0.push(*conversation_id);
             }
