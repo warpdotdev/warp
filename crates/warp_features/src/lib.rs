@@ -518,6 +518,10 @@ pub enum FeatureFlag {
     /// Enables embedded code review comments.
     EmbeddedCodeReviewComments,
 
+    /// Enables the code-review-style commenting UI on planning documents, letting
+    /// users attach comments to the plan and submit them to the agent.
+    PlanComments,
+
     /// Enables the revert to checkpoints feature.
     RevertToCheckpoints,
 
@@ -935,6 +939,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CodebaseIndexSpeedbump,
     // End manually enabled Code features.
     FeatureFlag::EditableMarkdownMermaid,
+    FeatureFlag::PlanComments,
     FeatureFlag::CodeReviewScrollPreservation,
     FeatureFlag::RememberFastForwardState,
     FeatureFlag::CodexPlugin,
