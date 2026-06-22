@@ -15,12 +15,16 @@ use crate::terminal::TerminalModel;
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use crate::{
+            code::buffer_location::LocalOrRemotePath,
             terminal::model::grid::grid_handler,
+            terminal::model::session::{SessionId, SessionType},
             terminal::ShellLaunchData,
             util::file::{FileLink, absolute_path_if_valid, ShellPathType},
-            util::openable_file_type::FileTarget,
+            util::openable_file_type::{is_markdown_file, FileTarget},
         };
         use std::path::PathBuf;
+        use warp_util::remote_path::RemotePath;
+        use warp_util::standardized_path::StandardizedPath;
         use warp_util::path::CleanPathResult;
         use warp_util::path::LineAndColumnArg;
     }
@@ -36,6 +40,19 @@ const PREFIXES_TO_REMOVE: [&str; 2] = ["a/", "b/"];
 /// for `ls`.
 #[cfg(feature = "local_fs")]
 const SUFFIXES_TO_REMOVE: [&str; 1] = ["@"];
+
+#[cfg(feature = "local_fs")]
+#[derive(Clone)]
+enum FileLinkScanContext {
+    Local {
+        working_directory: String,
+        shell_launch_data: Option<ShellLaunchData>,
+    },
+    RemoteMarkdown {
+        working_directory: String,
+        host_id: warp_core::HostId,
+    },
+}
 
 /// Highlighted link within a terminal model grid.
 #[derive(Debug, Clone)]
@@ -377,10 +394,7 @@ impl super::TerminalView {
         match link {
             #[cfg(feature = "local_fs")]
             GridHighlightedLink::File(link) => {
-                let link = link.get_inner();
-                if let Some(path) = link.absolute_path() {
-                    self.open_file_path(path.clone(), link.line_and_column_num, ctx);
-                }
+                self.open_file_link(link, ctx);
             }
             GridHighlightedLink::Url(url) => {
                 let model = self.model.lock();
@@ -427,6 +441,45 @@ impl super::TerminalView {
 // where we can spawn a local tty.
 #[cfg(feature = "local_fs")]
 impl super::TerminalView {
+    fn session_for_file_link(
+        &self,
+        link: &WithinModel<FileLink>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<std::sync::Arc<crate::terminal::model::session::Session>> {
+        let session_id = match link {
+            WithinModel::AltScreen(_) => self.active_block_session_id(),
+            WithinModel::BlockList(inner) => self
+                .model
+                .lock()
+                .block_list()
+                .block_at(inner.block_index)
+                .and_then(|block| block.session_id()),
+        }?;
+
+        self.sessions.as_ref(ctx).get(session_id)
+    }
+
+    pub(super) fn open_file_link(
+        &mut self,
+        link: &WithinModel<FileLink>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let file_link = link.get_inner();
+        match file_link.location() {
+            LocalOrRemotePath::Local(path) => {
+                self.open_file_path(path.clone(), file_link.line_and_column_num, ctx);
+            }
+            LocalOrRemotePath::Remote(_) => {
+                if let Some(session) = self.session_for_file_link(link, ctx) {
+                    ctx.emit(super::Event::OpenFileInWarp {
+                        path: file_link.location().clone(),
+                        session,
+                    });
+                }
+            }
+        }
+    }
+
     /// Scans the terminal model at the given position to see if it is
     /// contained within a path that should be linkified.
     fn scan_for_file_path(
@@ -435,29 +488,46 @@ impl super::TerminalView {
         from_editor: TerminalEditor,
         ctx: &mut ViewContext<Self>,
     ) {
-        // For AltScreen we scan for relative path with the current working directory.
-        // For BlockList we scan for relative path with the pwd of the hovered block.
-        let pwd_to_scan_for = match position {
-            WithinModel::AltScreen(_) => self.pwd_if_local(ctx),
-            WithinModel::BlockList(inner) => self
-                .model
-                .lock()
-                .block_list()
-                .block_at(inner.block_index)
-                .filter(|block| !self.is_block_considered_remote(block.session_id(), None, ctx)) // Don't scan for file links if the block is on remote sessions
-                .and_then(|block| block.pwd().map(String::from)),
+        // For AltScreen we scan relative paths with the active working directory. For BlockList we
+        // scan relative paths with the pwd and session of the hovered block.
+        let scan_context = match position {
+            WithinModel::AltScreen(_) => {
+                self.pwd_if_local(ctx)
+                    .map(|working_directory| FileLinkScanContext::Local {
+                        working_directory,
+                        shell_launch_data: self
+                            .active_block_session_id()
+                            .and_then(|active_session_id| {
+                                self.sessions.as_ref(ctx).get(active_session_id)
+                            })
+                            .and_then(|active_session| active_session.launch_data().cloned()),
+                    })
+            }
+            WithinModel::BlockList(inner) => {
+                let block_context = {
+                    let model = self.model.lock();
+                    model
+                        .block_list()
+                        .block_at(inner.block_index)
+                        .and_then(|block| Some((block.pwd()?.clone(), block.session_id())))
+                };
+
+                block_context.and_then(|(working_directory, session_id)| {
+                    Self::file_link_scan_context_for_session(
+                        working_directory,
+                        session_id,
+                        self.sessions.as_ref(ctx),
+                    )
+                })
+            }
         };
 
-        match pwd_to_scan_for {
+        match scan_context {
             // Check if we are hovering on any file path. Don't scan for file path
             // if user is hovering from an editor like vim or nano.
-            Some(path) if matches!(from_editor, TerminalEditor::No) => {
+            Some(scan_context) if matches!(from_editor, TerminalEditor::No) => {
                 let possible_paths = self.model.lock().possible_file_paths_at_point(position);
                 let max_columns = self.size_info.columns;
-                let shell_launch_data = self
-                    .active_block_session_id()
-                    .and_then(|active_session_id| self.sessions.as_ref(ctx).get(active_session_id))
-                    .and_then(|active_session| active_session.launch_data().cloned());
 
                 // Using the thread builder instead of ctx.spawn here so that the previous
                 // scanning job will be dropped once there is a new scanning job created.
@@ -465,12 +535,8 @@ impl super::TerminalView {
                 self.file_link_scanning_join_handle = std::thread::Builder::new()
                     .name("Compute file paths".into())
                     .spawn(move || {
-                        let paths = Self::compute_valid_paths(
-                            &path,
-                            possible_paths,
-                            max_columns,
-                            shell_launch_data,
-                        );
+                        let paths =
+                            Self::compute_valid_paths(scan_context, possible_paths, max_columns);
                         let _ = tx.send(paths);
                     })
                     .map_err(|e| {
@@ -491,26 +557,49 @@ impl super::TerminalView {
         };
     }
 
+    fn file_link_scan_context_for_session(
+        working_directory: String,
+        session_id: Option<SessionId>,
+        sessions: &crate::terminal::model::session::Sessions,
+    ) -> Option<FileLinkScanContext> {
+        let Some(session_id) = session_id else {
+            return Some(FileLinkScanContext::Local {
+                working_directory,
+                shell_launch_data: None,
+            });
+        };
+
+        let session = sessions.get(session_id)?;
+        match session.session_type() {
+            SessionType::Local => Some(FileLinkScanContext::Local {
+                working_directory,
+                shell_launch_data: session.launch_data().cloned(),
+            }),
+            SessionType::WarpifiedRemote {
+                host_id: Some(host_id),
+            } => Some(FileLinkScanContext::RemoteMarkdown {
+                working_directory,
+                host_id,
+            }),
+            SessionType::WarpifiedRemote { host_id: None } => None,
+        }
+    }
+
     fn compute_valid_paths(
-        working_directory: &str,
+        scan_context: FileLinkScanContext,
         possible_paths: impl Iterator<Item = WithinModel<grid_handler::PossiblePath>>,
         max_columns: usize,
-        shell_launch_data: Option<ShellLaunchData>,
     ) -> Option<GridHighlightedLink> {
         let mut link = None;
         'path_loop: for within_model_possible_path in possible_paths {
             let possible_path = within_model_possible_path.get_inner();
             // We want to check if the clean path result is a valid path and get the canonical
             // absolute path back.
-            let absolute_path = absolute_path_if_valid(
-                &possible_path.path,
-                ShellPathType::ShellNative(working_directory.to_string()),
-                shell_launch_data.as_ref(),
-            );
+            let location = Self::valid_file_link_location(&possible_path.path, &scan_context);
 
-            if let Some(absolute_path) = absolute_path {
+            if let Some(location) = location {
                 link = Some(Self::create_valid_link(
-                    absolute_path,
+                    location,
                     possible_path.path.line_and_column_num,
                     possible_path.range.clone(),
                     &within_model_possible_path,
@@ -524,21 +613,18 @@ impl super::TerminalView {
                         path: new_possible_path.into(),
                         line_and_column_num: possible_path.path.line_and_column_num,
                     };
-                    let absolute_path = absolute_path_if_valid(
-                        &new_possible_cleaned_path,
-                        ShellPathType::ShellNative(working_directory.to_string()),
-                        shell_launch_data.as_ref(),
-                    );
+                    let location =
+                        Self::valid_file_link_location(&new_possible_cleaned_path, &scan_context);
 
                     // check if new_possible_path is valid
-                    if let Some(absolute_path) = absolute_path {
+                    if let Some(location) = location {
                         let new_start_point = possible_path
                             .range
                             .start()
                             .wrapping_add(max_columns, prefix.len());
 
                         link = Some(Self::create_valid_link(
-                            absolute_path,
+                            location,
                             new_possible_cleaned_path.line_and_column_num,
                             new_start_point..=*possible_path.range.end(),
                             &within_model_possible_path,
@@ -556,21 +642,18 @@ impl super::TerminalView {
                         path: new_possible_path.into(),
                         line_and_column_num: possible_path.path.line_and_column_num,
                     };
-                    let absolute_path = absolute_path_if_valid(
-                        &new_possible_cleaned_path,
-                        ShellPathType::ShellNative(working_directory.to_string()),
-                        shell_launch_data.as_ref(),
-                    );
+                    let location =
+                        Self::valid_file_link_location(&new_possible_cleaned_path, &scan_context);
 
                     // check if new_possible_path is valid
-                    if let Some(absolute_path) = absolute_path {
+                    if let Some(location) = location {
                         let new_end_point = possible_path
                             .range
                             .end()
                             .wrapping_sub(max_columns, suffix.len());
 
                         link = Some(Self::create_valid_link(
-                            absolute_path,
+                            location,
                             new_possible_cleaned_path.line_and_column_num,
                             *possible_path.range.start()..=new_end_point,
                             &within_model_possible_path,
@@ -586,8 +669,46 @@ impl super::TerminalView {
         link.map(GridHighlightedLink::File)
     }
 
+    fn valid_file_link_location(
+        clean_path_result: &CleanPathResult,
+        scan_context: &FileLinkScanContext,
+    ) -> Option<LocalOrRemotePath> {
+        match scan_context {
+            FileLinkScanContext::Local {
+                working_directory,
+                shell_launch_data,
+            } => absolute_path_if_valid(
+                clean_path_result,
+                ShellPathType::ShellNative(working_directory.to_string()),
+                shell_launch_data.as_ref(),
+            )
+            .map(LocalOrRemotePath::Local),
+            FileLinkScanContext::RemoteMarkdown {
+                working_directory,
+                host_id,
+            } => {
+                if !is_markdown_file(std::path::Path::new(&clean_path_result.path)) {
+                    return None;
+                }
+
+                let path = std::path::Path::new(&clean_path_result.path);
+                let absolute_path = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    PathBuf::from(working_directory).join(path)
+                };
+                let standardized =
+                    StandardizedPath::try_new(absolute_path.to_string_lossy().as_ref()).ok()?;
+                Some(LocalOrRemotePath::Remote(RemotePath::new(
+                    host_id.clone(),
+                    standardized,
+                )))
+            }
+        }
+    }
+
     fn create_valid_link(
-        absolute_path: PathBuf,
+        location: LocalOrRemotePath,
         line_and_column_num: Option<LineAndColumnArg>,
         path_range: std::ops::RangeInclusive<Point>,
         possible_path: &WithinModel<grid_handler::PossiblePath>,
@@ -597,7 +718,7 @@ impl super::TerminalView {
                 range: path_range,
                 is_empty: false,
             },
-            absolute_path,
+            location,
             line_and_column_num,
         };
 

@@ -35,7 +35,6 @@ use crate::ai::conversation_utils;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::skills::SkillManager;
 use crate::app_state::{AmbientAgentPaneSnapshot, LeafContents, TerminalPaneSnapshot};
-use crate::code::buffer_location::LocalOrRemotePath;
 use crate::pane_group::child_agent::{
     create_error_child_agent_conversation, ErrorChildAgentConversationRequest,
 };
@@ -1106,7 +1105,7 @@ fn handle_terminal_view_event(
             }
             Event::OpenFileInWarp { path, session } => {
                 ctx.emit(pane_group::Event::OpenFileInWarp {
-                    path: LocalOrRemotePath::Local(path.clone()),
+                    path: path.clone(),
                     session: session.clone(),
                 });
             }
