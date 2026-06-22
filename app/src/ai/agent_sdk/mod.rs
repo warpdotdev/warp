@@ -844,13 +844,14 @@ impl AgentDriverRunner {
                         .args(["auth", "setup-git"])
                         .spawn()
                         .map_err(|err| {
-                            AgentDriverError::SkillResolutionFailed(format!(
+                            AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
                                 "gh auth setup-git failed: {err:?}"
                             ))
                         })
                 })
                 .await?
-                .map(|_| ())?
+                .map(|_| ())?;
+            return Ok(());
         }
 
         if !FeatureFlag::GitCredentialRefresh.is_enabled() {
