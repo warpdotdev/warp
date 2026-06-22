@@ -48,7 +48,6 @@ pub(crate) use self::environment_selector::sort_environments_by_recency;
 pub(crate) use self::environment_selector::{
     EnvironmentSelector, EnvironmentSelectorEvent, EnvironmentSelectorTarget,
 };
-use crate::ai::agent::conversation::AIConversation;
 use crate::ai::blocklist::agent_view::is_in_cloud_context;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
@@ -168,13 +167,6 @@ fn plugin_chip_key(agent_prefix: &str, remote_host: &Option<String>) -> String {
         Some(host) => format!("{agent_prefix}@{host}"),
         None => agent_prefix.to_owned(),
     }
-}
-
-/// Returns the prompt-cache expiry reported for the conversation's most
-/// recent exchange output, if known.
-fn prompt_cache_expiry(conversation: &AIConversation) -> Option<DateTime<Local>> {
-    let output = conversation.latest_exchange()?.output_status.output()?;
-    output.get().model_info.as_ref()?.prompt_cache_expires_at
 }
 
 fn is_conversation_transcript_context(
@@ -2028,13 +2020,17 @@ impl AgentInputFooter {
             let icon = icon_for_context_window_usage(usage);
             let remaining_pct = ((1.0 - usage) * 100.0).round() as i32;
 
-            let expiry = prompt_cache_expiry(conversation);
+            let expiry = conversation.latest_exchange().and_then(|exchange| {
+                let output = exchange.output_status.output()?;
+                output.get().model_info.as_ref()?.prompt_cache_expires_at
+            });
             let is_cache_expired = FeatureFlag::PromptCacheExpiryWarning.is_enabled()
                 && expiry.is_some_and(|expiry| expiry <= Local::now());
+            let context_remaining_tooltip = format!("{remaining_pct}% context remaining");
             let tooltip = if is_cache_expired {
-                "prompt cache expired".to_string()
+                format!("{context_remaining_tooltip} · prompt cache expired")
             } else {
-                format!("{remaining_pct}% context remaining")
+                context_remaining_tooltip
             };
 
             self.context_window_button.update(ctx, |button, ctx| {
