@@ -1,7 +1,10 @@
 //! The "sender" of a shared session represents the sharer's end.
 //!
 //! Currently there is no way to share a session from wasm.
-#![cfg_attr(target_family = "wasm", allow(dead_code))]
+#![cfg_attr(
+    any(test, feature = "integration_tests", target_family = "wasm"),
+    allow(dead_code)
+)]
 
 use std::collections::HashMap;
 use std::pin::pin;
@@ -37,7 +40,7 @@ use session_sharing_protocol::sharer::{
 };
 use warp_core::features::FeatureFlag;
 use warpui::r#async::Timer;
-use warpui::{Entity, ModelContext, ModelHandle, RequestState, RetryOption, SingletonEntity};
+use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 
 use crate::auth::{AuthStateProvider, UserUid};
@@ -45,7 +48,6 @@ use crate::editor::{CrdtOperation, ReplicaId};
 use crate::server::iap::IapManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
-use crate::terminal::shared_session::network::heartbeat::{Event as HeartbeatEvent, Heartbeat};
 use crate::terminal::shared_session::{
     connect_endpoint, max_session_size, EventNumber, SharedSessionScrollbackType,
     SharedSessionSource, SELECTION_THROTTLE_PERIOD,
@@ -253,7 +255,6 @@ fn startup_max_attempts(source: &SharedSessionSource) -> usize {
 pub struct Network {
     model: Arc<FairMutex<TerminalModel>>,
     stage: Stage,
-    heartbeat: ModelHandle<Heartbeat>,
 
     /// The next event number to use when sending an event to the server.
     event_no: EventNumber,
@@ -309,11 +310,7 @@ impl Network {
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let init_block_id = model.lock().block_list().active_block_id().clone();
-        let heartbeat = ctx.add_model(|_| Heartbeat::default());
-        ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
-
         let network = Network {
-            heartbeat,
             event_no: EventNumber::new(),
             selection_event_no: EventNumber::new(),
             model: model.clone(),
@@ -386,8 +383,6 @@ impl Network {
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let init_block_id = model.lock().block_list().active_block_id().clone();
-        let heartbeat = ctx.add_model(|_| Heartbeat::default());
-        ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
         let window_size = {
             let size_info = *model.lock().block_list().size();
             WindowSize {
@@ -412,7 +407,6 @@ impl Network {
         };
 
         let mut network = Network {
-            heartbeat,
             event_no: EventNumber::new(),
             selection_event_no: EventNumber::new(),
             model: model.clone(),
@@ -508,21 +502,6 @@ impl Network {
         let message = UpstreamMessage::EndSession { reason };
         self.send_message_to_server(message);
         self.close_without_reconnection();
-    }
-
-    /// We need to ensure we're maintaining a heartbeat with the server.
-    /// This helps us detect if the server has gone away silently and helps
-    /// the server detect if we (the client) have disconnected quietly.
-    fn handle_heartbeat_event(&mut self, event: &HeartbeatEvent, ctx: &mut ModelContext<Self>) {
-        match event {
-            HeartbeatEvent::Ping => {
-                self.send_message_to_server(UpstreamMessage::Ping { data: vec![] });
-            }
-            HeartbeatEvent::Idle => {
-                sharer_info!(self, "Sharer reconnecting: heartbeat idle timeout");
-                self.reconnect_websocket(ctx);
-            }
-        }
     }
 
     pub fn send_active_prompt_update_if_changed(&mut self, active_prompt: ActivePrompt) {
@@ -764,7 +743,7 @@ impl Network {
         };
 
         self.abort_startup_handles();
-        self.close_startup_transport(ctx);
+        self.close_startup_transport();
 
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
         self.ws_proxy_tx = ws_proxy_tx;
@@ -965,11 +944,8 @@ impl Network {
         }
     }
 
-    fn close_startup_transport(&mut self, ctx: &mut ModelContext<Self>) {
+    fn close_startup_transport(&mut self) {
         self.ws_proxy_tx.close();
-        self.heartbeat.update(ctx, |heartbeat, _| {
-            heartbeat.stop();
-        });
     }
 
     fn handle_startup_failure(&mut self, failure: StartupFailure, ctx: &mut ModelContext<Self>) {
@@ -1002,7 +978,7 @@ impl Network {
                 );
             }
             self.abort_startup_handles();
-            self.close_startup_transport(ctx);
+            self.close_startup_transport();
 
             #[cfg(not(any(test, feature = "integration_tests")))]
             self.start_create_session_attempt(ctx);
@@ -1022,7 +998,7 @@ impl Network {
         }
         self.abort_startup_handles();
         self.stage = Stage::Finished;
-        self.close_startup_transport(ctx);
+        self.close_startup_transport();
         self.startup_config = None;
 
         #[cfg(not(any(test, feature = "integration_tests")))]
@@ -1168,10 +1144,6 @@ impl Network {
         stream: impl Stream,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.heartbeat.update(ctx, |heartbeat, ctx| {
-            heartbeat.start(ctx);
-        });
-
         // Handle any messages we receive over the websocket.
         ctx.spawn_stream_local(
             stream,
@@ -1182,9 +1154,6 @@ impl Network {
                     }) {
                         return;
                     }
-                    network.heartbeat.update(ctx, |heartbeat, ctx| {
-                        heartbeat.reset_idle_timeout(ctx);
-                    });
                     network.process_websocket_message(message, ctx);
                 }
                 Err(e) => {
@@ -1285,10 +1254,11 @@ impl Network {
     }
 
     fn process_websocket_message(&mut self, message: Message, ctx: &mut ModelContext<Self>) {
-        let Some(downstream_message) = message
-            .text()
-            .and_then(|t| DownstreamMessage::from_json(t).ok())
-        else {
+        // Ignore non-text frames (e.g. ping frames sent by the server).
+        let Some(text) = message.text() else {
+            return;
+        };
+        let Some(downstream_message) = DownstreamMessage::from_json(text).ok() else {
             sharer_warn!(
                 self,
                 "Received unexpected message from shared session websocket as sharer"

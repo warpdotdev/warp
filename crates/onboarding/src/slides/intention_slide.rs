@@ -21,7 +21,7 @@ use warpui_core::{
 };
 
 use super::OnboardingSlide;
-use crate::model::OnboardingStateModel;
+use crate::model::{NoAiConfirmationSource, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::visuals::{intention_terminal_visual, intention_visual};
 use crate::{OnboardingIntention, AI_FEATURES};
@@ -523,8 +523,14 @@ impl IntentionSlide {
     fn next(&mut self, ctx: &mut ViewContext<Self>) {
         self.onboarding_state.update(ctx, |model, ctx| {
             if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-                // Always advance to Customize slide; both intentions continue the flow.
-                model.next(ctx);
+                match model.intention() {
+                    // "Just use the terminal" confirms leaving AI behind before advancing.
+                    OnboardingIntention::Terminal => {
+                        model.request_no_ai_confirmation(NoAiConfirmationSource::Intention, ctx);
+                    }
+                    // Agent intention routes to the next step (the AI-setup fork).
+                    OnboardingIntention::AgentDrivenDevelopment => model.next(ctx),
+                }
             } else {
                 match model.intention() {
                     OnboardingIntention::Terminal => {

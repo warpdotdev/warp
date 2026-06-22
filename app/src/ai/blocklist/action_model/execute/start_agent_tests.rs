@@ -1,6 +1,6 @@
 use ai::agent::action_result::StartAgentVersion;
 use warp_core::features::FeatureFlag;
-use warpui::{App, EntityId};
+use warpui::{App, Entity, EntityId, ModelHandle};
 
 use super::*;
 use crate::ai::agent::conversation::ConversationStatus;
@@ -829,6 +829,184 @@ fn parallel_pendings_each_resolve_independently_via_recorded_child_id() {
 
         drop(future_a);
         drop(complete_a);
+    });
+}
+
+#[derive(Default)]
+struct CapturedCleanupEvents(Vec<AIConversationId>);
+
+impl Entity for CapturedCleanupEvents {
+    type Event = ();
+}
+
+/// Per-test handles for the launch-cleanup tests, returned by
+/// [`dispatch_pending_child_launch`].
+struct PendingChildLaunch {
+    history_model: ModelHandle<BlocklistAIHistoryModel>,
+    captured: ModelHandle<CapturedCleanupEvents>,
+    terminal_view_id: EntityId,
+    child_conversation_id: AIConversationId,
+}
+
+/// Dispatches a local child launch and creates (but does not yet link) its
+/// child conversation, leaving one in-flight pending in the executor with a
+/// model subscribed to capture `CleanupFailedChildLaunch` events. Tests link
+/// the child and drive it to a terminal state, then assert on cleanup. The
+/// returned executor handle must be kept alive for the duration of the test so
+/// the executor (and its history subscription) is not dropped before the child
+/// status change is processed.
+fn dispatch_pending_child_launch(
+    app: &mut App,
+) -> (PendingChildLaunch, ModelHandle<StartAgentExecutor>) {
+    initialize_history_persistence_for_tests(app);
+    let terminal_view_id = EntityId::new();
+    let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    let executor = app.add_model(StartAgentExecutor::new);
+    let captured = app.add_model(|_| CapturedCleanupEvents::default());
+    captured.update(app, |_, ctx| {
+        ctx.subscribe_to_model(&executor, |captured, _, event, _ctx| {
+            if let StartAgentExecutorEvent::CleanupFailedChildLaunch { conversation_id } = event {
+                captured.0.push(*conversation_id);
+            }
+        });
+    });
+    let parent_conversation_id = history_model.update(app, |history_model, ctx| {
+        history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+    });
+    history_model.update(app, |model, ctx| {
+        model.assign_run_id_for_conversation(
+            parent_conversation_id,
+            PARENT_RUN_ID.to_string(),
+            None,
+            terminal_view_id,
+            ctx,
+        );
+    });
+    let action = build_start_agent_action(
+        StartAgentVersion::V1,
+        StartAgentExecutionMode::local_with_defaults(),
+    );
+    // The pending lives in the executor regardless of the returned execution,
+    // and cleanup is emitted synchronously from the child status update, so the
+    // action-result plumbing is discarded.
+    executor.update(app, |executor, ctx| {
+        let _: AnyActionExecution = executor
+            .execute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: parent_conversation_id,
+                },
+                ctx,
+            )
+            .into();
+    });
+    let child_conversation_id = history_model.update(app, |history_model, ctx| {
+        history_model.start_new_child_conversation(
+            terminal_view_id,
+            "Agent 1".to_string(),
+            parent_conversation_id,
+            None,
+            ctx,
+        )
+    });
+    (
+        PendingChildLaunch {
+            history_model,
+            captured,
+            terminal_view_id,
+            child_conversation_id,
+        },
+        executor,
+    )
+}
+
+/// Links the dispatched child conversation back to its pending request,
+/// which lets subsequent child status changes resolve the pending.
+fn link_pending_child(state: &PendingChildLaunch, app: &mut App) {
+    state.history_model.update(app, |model, ctx| {
+        model.record_new_conversation_request_complete(
+            FIRST_REQUEST_ID,
+            state.child_conversation_id,
+            ctx,
+        );
+    });
+}
+
+#[test]
+fn errored_child_launch_emits_cleanup_event() {
+    App::test((), |mut app| async move {
+        let (state, _executor) = dispatch_pending_child_launch(&mut app);
+        link_pending_child(&state, &mut app);
+        state.history_model.update(&mut app, |model, ctx| {
+            model.update_conversation_status_with_error_message(
+                state.terminal_view_id,
+                state.child_conversation_id,
+                ConversationStatus::Error,
+                Some("Child agent failed to spawn".to_string()),
+                ctx,
+            );
+        });
+
+        state.captured.read(&app, |captured, _| {
+            assert_eq!(captured.0, vec![state.child_conversation_id]);
+        });
+    });
+}
+
+#[test]
+fn blocked_child_launch_does_not_emit_cleanup_event() {
+    App::test((), |mut app| async move {
+        let (state, _executor) = dispatch_pending_child_launch(&mut app);
+        link_pending_child(&state, &mut app);
+        // A recoverable startup block (e.g. awaiting GitHub auth) keeps its
+        // chip so the user can resolve it.
+        state.history_model.update(&mut app, |model, ctx| {
+            model.update_conversation_status(
+                state.terminal_view_id,
+                state.child_conversation_id,
+                ConversationStatus::Blocked {
+                    blocked_action: "GitHub authentication required.".to_string(),
+                },
+                ctx,
+            );
+        });
+
+        state.captured.read(&app, |captured, _| {
+            assert!(
+                captured.0.is_empty(),
+                "blocked startup should not schedule chip cleanup"
+            );
+        });
+    });
+}
+
+#[test]
+fn successfully_started_child_does_not_emit_cleanup_event() {
+    App::test((), |mut app| async move {
+        let (state, _executor) = dispatch_pending_child_launch(&mut app);
+        // `OrchestrationEventStreamer::new` reads the history singleton, so it
+        // must be registered after the helper registers it.
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(OrchestrationEventStreamer::new);
+        // Assigning a run id before linkage marks the child as started, so the
+        // executor resolves the pending as a success, not a launch failure.
+        state.history_model.update(&mut app, |model, ctx| {
+            model.assign_run_id_for_conversation(
+                state.child_conversation_id,
+                uuid::Uuid::new_v4().to_string(),
+                None,
+                state.terminal_view_id,
+                ctx,
+            );
+        });
+        link_pending_child(&state, &mut app);
+
+        state.captured.read(&app, |captured, _| {
+            assert!(
+                captured.0.is_empty(),
+                "a child that started successfully should not be cleaned up"
+            );
+        });
     });
 }
 

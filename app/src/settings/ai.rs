@@ -532,6 +532,71 @@ impl PromptSubmissionMode {
     }
 }
 
+/// What happens when a prompt is submitted while an agent controls an agent-requested
+/// long-running command (LRC).
+///
+/// Only consulted when [`PromptSubmissionMode`] is `Interrupt`: in `Queue` mode
+/// prompts always queue until the full response finishes, so this setting is
+/// hidden and ignored.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "What happens when a prompt is submitted while an agent controls an agent-requested long-running command.",
+    rename_all = "snake_case"
+)]
+pub enum LongRunningCommandSubmissionMode {
+    /// Send the prompt to the agent immediately, steering it mid-command.
+    SendImmediately,
+    /// Queue the prompt and send it to the agent when the command finishes
+    /// (default).
+    #[default]
+    QueueUntilCommandCompletes,
+}
+
+settings::macros::implement_setting_for_enum!(
+    LongRunningCommandSubmissionMode,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    private: false,
+    toml_path: "agents.warp_agent.other.long_running_command_submission_mode",
+    description: "What happens when a prompt is submitted while an agent controls an agent-requested long-running command.",
+    feature_flag: FeatureFlag::QueueSlashCommand,
+);
+
+impl LongRunningCommandSubmissionMode {
+    /// Display name for the settings dropdown.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            LongRunningCommandSubmissionMode::SendImmediately => "Send immediately",
+            LongRunningCommandSubmissionMode::QueueUntilCommandCompletes => {
+                "Queue until command finishes"
+            }
+        }
+    }
+
+    pub fn command_palette_description(&self) -> &'static str {
+        match self {
+            LongRunningCommandSubmissionMode::SendImmediately => {
+                "Set long-running command submission: send immediately"
+            }
+            LongRunningCommandSubmissionMode::QueueUntilCommandCompletes => {
+                "Set long-running command submission: queue until command finishes"
+            }
+        }
+    }
+}
+
 /// Tracks the state of the quota reset banner
 #[derive(
     Debug,
@@ -1206,6 +1271,19 @@ define_settings_group!(AISettings, settings: [
         private: true,
     }
 
+    // This is not a user-visible setting - it's merely a one-time flag to track if the
+    // free-AI-removal notice modal has been shown to (or silently marked as seen for) the user.
+    //
+    // We model it as a setting so it's only shown once to a given user regardless of the number of
+    // devices they use.
+    did_check_to_trigger_free_ai_removal_modal: DidShowFreeAiRemovalModal {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        private: true,
+    }
+
     // Used to determine whether the "What's new in Oz" section of the agent view
     // zero state is expanded or collapsed by default.
     should_expand_oz_updates: ShouldExpandOzUpdates {
@@ -1420,6 +1498,11 @@ define_settings_group!(AISettings, settings: [
     // setting is the fallback used when a conversation has no explicit override.
     default_prompt_submission_mode: PromptSubmissionMode,
 
+    // What happens when a prompt is submitted while an agent controls an agent-requested
+    // long-running command. Only consulted when `default_prompt_submission_mode` is `Interrupt`;
+    // per-LRC manual overrides live on `QueuedQueryModel`.
+    long_running_command_submission_mode: LongRunningCommandSubmissionMode,
+
     // Whether agent-executed shell commands should be included in command history
     // (up-arrow, Ctrl-R search, inline history menu).
     // When false, commands run by the AI agent are excluded from history.
@@ -1522,6 +1605,19 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.warp_agent.other.auto_handoff_on_sleep_enabled",
         description: "Whether Warp automatically hands off local agent conversations to cloud when the computer is about to sleep.",
     }
+
+    // This is not a user-visible setting - it's merely a one-time flag to track if the
+    // auto-handoff sleep modal has been shown to the user.
+    //
+    // We model it as a setting so it's only shown once to a given user regardless of the number of
+    // devices they use.
+    did_show_auto_handoff_sleep_modal: DidShowAutoHandoffSleepModal {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        private: true,
+    }
 ]);
 
 impl AISettings {
@@ -1531,7 +1627,7 @@ impl AISettings {
         CompiledCommandsForCodingAgentToolbar::register(app);
 
         app.update_model(&Self::handle(app), |_me, ctx| {
-            ctx.subscribe_to_model(&FocusedTerminalInfo::handle(ctx), |_me, event, ctx| {
+            ctx.subscribe_to_model(&FocusedTerminalInfo::handle(ctx), |_me, _, event, ctx| {
                 if matches!(event, FocusedTerminalInfoEvent::TerminalInfoUpdated) {
                     // Pipe the event so that any view that listens for settings changes will be notified.
                     ctx.emit(AISettingsChangedEvent::IsAnyAIEnabled {

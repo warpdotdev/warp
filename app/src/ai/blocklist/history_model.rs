@@ -1895,9 +1895,11 @@ impl BlocklistAIHistoryModel {
         });
     }
 
+    /// Marks the stream's exchanges as finished with `error`.
     pub fn mark_response_stream_completed_with_error(
         &mut self,
         error: RenderableAIError,
+        recovery_pending: bool,
         stream_id: &ResponseStreamId,
         conversation_id: AIConversationId,
         terminal_view_id: EntityId,
@@ -1907,6 +1909,7 @@ impl BlocklistAIHistoryModel {
             if let Err(e) = conversation.mark_request_completed_with_error(
                 stream_id,
                 error.clone(),
+                recovery_pending,
                 terminal_view_id,
                 ctx,
             ) {
@@ -3069,7 +3072,7 @@ fn ai_exchange_to_query_history(
     value: &AIAgentExchange,
     history_order: HistoryOrder,
 ) -> Option<AIQueryHistory> {
-    let query = value.input.iter().find_map(AIAgentInput::user_query)?;
+    let query = value.input.iter().find_map(AIAgentInput::display_query)?;
 
     Some(AIQueryHistory {
         query_text: query,

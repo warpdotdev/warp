@@ -3206,6 +3206,7 @@ impl CodeReviewView {
                     },
                     ctx
                 );
+                ctx.notify();
             }
             LocalCodeEditorEvent::FailedToSave { .. } => {}
             LocalCodeEditorEvent::DelayedRenderingFlushed
@@ -6540,7 +6541,14 @@ impl CodeReviewView {
                     button.set_label("Commit", ctx);
                     button.set_icon(Some(Icon::GitCommit), ctx);
                     button.set_disabled(disabled, ctx);
-                    button.set_tooltip(disabled.then_some("No changes to commit"), ctx);
+                    button.set_tooltip(
+                        Some(if disabled {
+                            "No changes to commit"
+                        } else {
+                            "Commit changes locally"
+                        }),
+                        ctx,
+                    );
                     button.set_on_click(
                         |ctx| ctx.dispatch_typed_action(CodeReviewAction::OpenCommitDialog),
                         ctx,
@@ -6557,7 +6565,7 @@ impl CodeReviewView {
                     button.set_label("Push", ctx);
                     button.set_icon(Some(Icon::ArrowUp), ctx);
                     button.set_disabled(false, ctx);
-                    button.clear_tooltip(ctx);
+                    button.set_tooltip(Some("Push commits to remote"), ctx);
                     button.set_on_click(
                         |ctx| ctx.dispatch_typed_action(CodeReviewAction::OpenPushDialog),
                         ctx,
@@ -6573,7 +6581,7 @@ impl CodeReviewView {
                     button.set_label("Create PR", ctx);
                     button.set_icon(Some(Icon::Github), ctx);
                     button.set_disabled(false, ctx);
-                    button.clear_tooltip(ctx);
+                    button.set_tooltip(Some("Create a pull request"), ctx);
                     button.set_on_click(
                         |ctx| ctx.dispatch_typed_action(CodeReviewAction::OpenCreatePrDialog),
                         ctx,
@@ -6593,7 +6601,11 @@ impl CodeReviewView {
                         button.set_icon(Some(Icon::Github), ctx);
                         button.set_disabled(is_pr_info_refreshing, ctx);
                         button.set_tooltip(
-                            is_pr_info_refreshing.then_some("Refreshing PR info"),
+                            Some(if is_pr_info_refreshing {
+                                "Refreshing PR info"
+                            } else {
+                                "View pull request on GitHub"
+                            }),
                             ctx,
                         );
                         button.set_on_click(
@@ -6611,7 +6623,7 @@ impl CodeReviewView {
                     button.set_label("Publish", ctx);
                     button.set_icon(Some(Icon::UploadCloud), ctx);
                     button.set_disabled(false, ctx);
-                    button.clear_tooltip(ctx);
+                    button.set_tooltip(Some("Publish branch to remote"), ctx);
                     button.set_on_click(
                         |ctx| ctx.dispatch_typed_action(CodeReviewAction::PublishBranch),
                         ctx,

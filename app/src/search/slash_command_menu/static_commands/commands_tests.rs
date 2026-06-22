@@ -60,7 +60,10 @@ fn continue_locally_command_is_registered() {
     assert!(command.auto_enter_ai_mode);
     assert_eq!(
         command.availability,
-        Availability::AGENT_VIEW | Availability::ACTIVE_CONVERSATION | Availability::AI_ENABLED
+        Availability::AGENT_VIEW
+            | Availability::ACTIVE_CONVERSATION
+            | Availability::AI_ENABLED
+            | Availability::CLOUD_AGENT
     );
 
     let argument = command
@@ -71,7 +74,7 @@ fn continue_locally_command_is_registered() {
     assert!(!argument.should_execute_on_selection);
     assert_eq!(
         argument.hint_text,
-        Some("<optional prompt to send in forked conversation>")
+        Some("<optional prompt to send in local conversation>")
     );
 }
 

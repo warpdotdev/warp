@@ -454,7 +454,7 @@ impl DiffStateModel {
         let repo_path = Some(path.display().to_string());
         let local = ctx
             .add_model(|ctx| LocalDiffStateModel::new(repo_path, BackendOrigin::ClientLocal, ctx));
-        ctx.subscribe_to_model(&local, Self::forward_event);
+        ctx.subscribe_to_model(&local, |me, _, event, ctx| me.forward_event(event, ctx));
         Self::Local(local)
     }
 
@@ -473,7 +473,7 @@ impl DiffStateModel {
         let remote = ctx.add_model(|ctx| {
             RemoteDiffStateModel::new(remote_path, DiffMode::default(), preferred_session, ctx)
         });
-        ctx.subscribe_to_model(&remote, Self::forward_event);
+        ctx.subscribe_to_model(&remote, |me, _, event, ctx| me.forward_event(event, ctx));
         Self::Remote(remote)
     }
 
@@ -873,7 +873,7 @@ impl DiffStateModel {
     /// `new_for_test_remote` variant when remote-backend tests are needed.
     pub fn new_for_test(ctx: &mut ModelContext<Self>) -> Self {
         let local = ctx.add_model(LocalDiffStateModel::new_for_test);
-        ctx.subscribe_to_model(&local, Self::forward_event);
+        ctx.subscribe_to_model(&local, |me, _, event, ctx| me.forward_event(event, ctx));
         Self::Local(local)
     }
 }

@@ -15,6 +15,8 @@ use tempfile::TempDir;
 use terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use terminal::view::ActiveSessionState;
 use warp_editor::editor::NavigationKey;
+#[cfg(feature = "local_fs")]
+use warp_files::FileModel;
 use warpui::platform::WindowStyle;
 use warpui::{AddSingletonModel, App, ViewHandle};
 use watcher::HomeDirectoryWatcher;
@@ -87,6 +89,23 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
     experiments, workspace, AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions,
 };
+#[test]
+fn query_for_rewind_prefill_uses_custom_display_query_inputs() {
+    let context: std::sync::Arc<[crate::ai::agent::AIAgentContext]> = Vec::new().into();
+    let input = crate::ai::agent::AIAgentInput::FetchReviewComments {
+        repo_path: "/repo".to_string(),
+        context,
+    };
+
+    assert_eq!(
+        query_for_rewind_prefill(&[input]),
+        Some(
+            crate::search::slash_command_menu::static_commands::commands::PR_COMMENTS
+                .name
+                .to_string()
+        )
+    );
+}
 
 pub(crate) fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -171,6 +190,8 @@ pub(crate) fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| FileBasedMCPManager::default());
 
     app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+    #[cfg(feature = "local_fs")]
+    app.add_singleton_model(FileModel::new);
     app.add_singleton_model(|ctx| {
         AIExecutionProfilesModel::new(&crate::LaunchMode::new_for_unit_test(), ctx)
     });
@@ -184,6 +205,9 @@ pub(crate) fn initialize_app(app: &mut App) {
     // singleton isn't registered, even though it's a no-op on production.
     app.add_singleton_model(|ctx| crate::server::iap::IapManager::new(None, ctx));
     app.add_singleton_model(|_| RestoredAgentConversations::new(vec![]));
+    app.add_singleton_model(|ctx| {
+        AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
+    });
     app.add_singleton_model(OneTimeModalModel::new);
     // Register GlobalResourceHandlesProvider before ServerExperiments which depends on it
     let global_resource_handles = GlobalResourceHandles::mock(app);
@@ -214,9 +238,6 @@ pub(crate) fn initialize_app(app: &mut App) {
 
     app.update(experiments::init);
 
-    app.add_singleton_model(|ctx| {
-        AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
-    });
     app.add_singleton_model(
         crate::workspace::bonus_grant_notification_model::BonusGrantNotificationModel::new,
     );
@@ -594,6 +615,66 @@ fn test_worktree_sidecar_close_via_select_item_executes_from_workspace() {
 
         workspace.read(&app, |workspace, _| {
             assert_eq!(workspace.tab_count(), 2);
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_open_file_notebook_focuses_existing_markdown_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let markdown_path = temp_dir.path().join("README.md");
+        std::fs::write(&markdown_path, "# Test\n").expect("failed to write markdown file");
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_file_with_target(
+                markdown_path.clone(),
+                FileTarget::MarkdownViewer(EditorLayout::SplitPane),
+                None,
+                CodeSource::Link {
+                    path: markdown_path.clone(),
+                    range_start: None,
+                    range_end: None,
+                },
+                ctx,
+            );
+        });
+
+        let markdown_pane_id = workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group();
+            pane_group.update(ctx, |pane_group, ctx| {
+                let markdown_panes = pane_group.file_notebook_panes(ctx).collect_vec();
+                assert_eq!(markdown_panes.len(), 1);
+                let pane_id = markdown_panes[0].0;
+
+                pane_group.add_terminal_pane(Direction::Right, None, ctx);
+                assert_ne!(pane_group.focused_pane_id(ctx), pane_id);
+
+                pane_id
+            })
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_file_with_target(
+                markdown_path.clone(),
+                FileTarget::MarkdownViewer(EditorLayout::SplitPane),
+                None,
+                CodeSource::Link {
+                    path: markdown_path,
+                    range_start: None,
+                    range_end: None,
+                },
+                ctx,
+            );
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
+            assert_eq!(pane_group.file_notebook_panes(ctx).count(), 1);
+            assert_eq!(pane_group.focused_pane_id(ctx), markdown_pane_id);
         });
     });
 }
@@ -2746,6 +2827,37 @@ fn test_vertical_tabs_panel_auto_shows_when_setting_enabled() {
         });
         workspace.read(&app, |workspace, _| {
             assert!(!workspace.vertical_tabs_panel_open);
+        });
+    });
+}
+
+#[test]
+fn test_active_tab_bar_position_id_tracks_layout() {
+    // Cross-window drag hit-testing (`tab_bar_rects_for_window`) targets only
+    // the active tab presentation. Regression guard for the bug where the
+    // inactive horizontal bar registered as a drop zone while vertical tabs
+    // were enabled, lighting up a spurious placeholder over the top bar.
+    let _vertical_tabs_guard = FeatureFlag::VerticalTabs.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        // Horizontal tabs (setting off): the horizontal bar is the drop zone.
+        app.read(|ctx| {
+            assert_eq!(active_tab_bar_position_id(ctx), TAB_BAR_POSITION_ID);
+        });
+
+        // Vertical tabs (setting on): only the vertical panel is the drop zone,
+        // so the horizontal bar no longer registers as a cross-window target.
+        app.update(|ctx| {
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
+            });
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                active_tab_bar_position_id(ctx),
+                VERTICAL_TABS_PANEL_POSITION_ID
+            );
         });
     });
 }

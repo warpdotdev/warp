@@ -41,7 +41,7 @@ impl FileSearchModel {
         #[cfg(feature = "local_fs")]
         ctx.subscribe_to_model(
             &RepoMetadataModel::handle(ctx),
-            |me, event, _ctx| match event {
+            |me, _, event, _ctx| match event {
                 RepoMetadataEvent::FileTreeUpdated { ids } => {
                     let mut cache = me.repo_contents_cache.borrow_mut();
                     for id in ids {

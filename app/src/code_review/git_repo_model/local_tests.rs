@@ -30,3 +30,20 @@ fn should_refresh_metadata_ignores_ignored_file_updates() {
         &remote_ref_update
     ));
 }
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn parse_branch_tracking_counts_accepts_git_rev_list_output() {
+    assert_eq!(
+        LocalGitRepoStatusModel::parse_branch_tracking_counts("2\t3\n"),
+        Some((2, 3, 0))
+    );
+    assert_eq!(
+        LocalGitRepoStatusModel::parse_branch_tracking_counts("10 0 4"),
+        Some((10, 0, 4))
+    );
+    assert_eq!(
+        LocalGitRepoStatusModel::parse_branch_tracking_counts("error"),
+        None
+    );
+}

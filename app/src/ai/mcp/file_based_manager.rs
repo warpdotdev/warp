@@ -33,11 +33,11 @@ pub struct FileBasedMCPManager {
 impl FileBasedMCPManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         if FeatureFlag::FileBasedMcp.is_enabled() {
-            ctx.subscribe_to_model(&FileMCPWatcher::handle(ctx), |me, event, ctx| {
+            ctx.subscribe_to_model(&FileMCPWatcher::handle(ctx), |me, _, event, ctx| {
                 me.handle_watcher_event(event, ctx);
             });
 
-            ctx.subscribe_to_model(&AISettings::handle(ctx), |me, event, ctx| {
+            ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
                 if matches!(event, AISettingsChangedEvent::FileBasedMcpEnabled { .. }) {
                     me.handle_file_based_mcp_enabled_change(ctx);
                 }

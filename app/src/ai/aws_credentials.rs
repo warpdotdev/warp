@@ -84,8 +84,8 @@ fn user_facing_aws_credentials_error_message(err: &CredentialsError, profile: &s
 
 impl std::error::Error for LoadAwsCredentialsError {}
 
-const AWS_BEDROCK_STS_AUDIENCE: &str = "sts.amazonaws.com";
-const BEDROCK_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
+pub(crate) const AWS_BEDROCK_STS_AUDIENCE: &str = "sts.amazonaws.com";
+pub(crate) const BEDROCK_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
 
 pub(crate) fn aws_role_session_name(run_id: &str) -> String {
     format!("Oz_Run_{run_id}")
@@ -99,7 +99,7 @@ pub(crate) fn aws_role_session_name(run_id: &str) -> String {
 /// and reuse a single client across refreshes.
 static STS_CLIENT_CACHE: Mutex<Option<(String, aws_sdk_sts::Client)>> = Mutex::const_new(None);
 
-async fn sts_client(region: &str) -> aws_sdk_sts::Client {
+pub(crate) async fn sts_client(region: &str) -> aws_sdk_sts::Client {
     let mut cache = STS_CLIENT_CACHE.lock().await;
     if let Some((cached_region, client)) = cache.as_ref() {
         if cached_region == region {
@@ -192,7 +192,7 @@ impl AwsCredentialRefresher for ApiKeyManager {
         model_events: &ModelHandle<ModelEventDispatcher>,
         ctx: &mut ModelContext<Self>,
     ) {
-        ctx.subscribe_to_model(model_events, |manager, event, ctx| {
+        ctx.subscribe_to_model(model_events, |manager, _, event, ctx| {
             if let ModelEvent::AfterBlockCompleted(AfterBlockCompletedEvent {
                 block_type: BlockType::User(UserBlockCompleted { command, .. }),
                 ..
@@ -210,7 +210,7 @@ impl AwsCredentialRefresher for ApiKeyManager {
     fn subscribe_to_settings_changes(&mut self, ctx: &mut ModelContext<Self>) {
         // Subscribe to UserWorkspaces events to refresh AWS credentials when workspace settings change
         // (this also initializes AWS credentials on app startup via TeamsChanged)
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, event, ctx| {
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, _, event, ctx| {
             if matches!(
                 event,
                 UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
@@ -221,7 +221,7 @@ impl AwsCredentialRefresher for ApiKeyManager {
         });
 
         // Subscribe to AISettings changes to refresh AWS credentials when AWS Bedrock settings change
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |manager, event, ctx| {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |manager, _, event, ctx| {
             if matches!(
                 event,
                 AISettingsChangedEvent::AwsBedrockProfile { .. }

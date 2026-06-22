@@ -836,3 +836,165 @@ fn test_transfer_structural_children_does_not_move_unrelated_views() {
         });
     });
 }
+
+#[test]
+fn test_transfer_view_tree_moves_child_view_ids_owned_views() {
+    // A view can own child views that are never rendered (e.g. held through a
+    // model, like a pane's navigation stack) and are not registered as
+    // structural children. Such views are invisible to both the render-time
+    // parent graph and the structural graph, so `transfer_view_tree_to_window`
+    // must consult `View::child_view_ids` to avoid orphaning them in the
+    // source window. Regression test for the "circular view reference" panic
+    // that occurred during cross-window tab drags when a `TerminalView` (owned
+    // via `PaneStack`) was left behind.
+    struct OwnerView {
+        owned: Vec<EntityId>,
+    }
+
+    impl Entity for OwnerView {
+        type Event = ();
+    }
+
+    impl View for OwnerView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "OwnerView"
+        }
+
+        fn child_view_ids(&self, _app: &AppContext) -> Vec<EntityId> {
+            self.owned.clone()
+        }
+    }
+
+    impl TypedActionView for OwnerView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let (window_1_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| OwnerView {
+            owned: Vec::new(),
+        });
+        let (window_2_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| OwnerView {
+            owned: Vec::new(),
+        });
+
+        // Child created without a structural parent and never rendered, so it
+        // is reachable only through the parent's `child_view_ids`.
+        let owned_child = app.add_view(window_1_id, |_| OwnerView { owned: Vec::new() });
+        let child_id = owned_child.id();
+
+        let parent = app.add_view(window_1_id, |_| OwnerView {
+            owned: vec![child_id],
+        });
+        let parent_id = parent.id();
+
+        let transferred =
+            app.update(|ctx| ctx.transfer_view_tree_to_window(parent_id, window_1_id, window_2_id));
+
+        assert!(
+            transferred.contains(&parent_id),
+            "parent should be transferred"
+        );
+        assert!(
+            transferred.contains(&child_id),
+            "child owned only via child_view_ids should be transferred"
+        );
+
+        app.read(|ctx| {
+            assert!(
+                ctx.windows[&window_2_id].views.contains_key(&child_id),
+                "owned child should now live in window 2"
+            );
+            assert!(
+                !ctx.windows[&window_1_id].views.contains_key(&child_id),
+                "owned child should no longer be in window 1"
+            );
+            assert_eq!(
+                owned_child.window_id(ctx),
+                window_2_id,
+                "view_to_window should point the owned child at window 2"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_transfer_view_tree_reconciles_views_known_only_to_target_presenter() {
+    // Reproduces the cross-window tab "put-back" panic. The forward walk seeds
+    // its subtree from the *source* window's presenter, so a render-time
+    // descendant that was never laid out in the source (e.g. when the source
+    // is a freshly created preview window) is missing from the source parent
+    // map and would be left behind. When the subtree is moved back to a window
+    // it previously lived in, that window's presenter still references the
+    // child, so `transfer_view_tree_to_window` must re-walk from the target
+    // and reconcile the straggler instead of stranding it (which previously
+    // desynced `view_to_window` and triggered "circular view reference").
+    #[derive(Default)]
+    struct TestView;
+
+    impl Entity for TestView {
+        type Event = ();
+    }
+
+    impl View for TestView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "TestView"
+        }
+    }
+
+    impl TypedActionView for TestView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let (window_1_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| TestView);
+        let (window_2_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| TestView);
+
+        let root = app.add_view(window_1_id, |_| TestView);
+        let root_id = root.id();
+
+        // A child that lives in window 1 but is reachable only through window
+        // 2's presenter parent map: not a structural child, not exposed via
+        // `child_view_ids`, and absent from window 1's presenter. This models
+        // a view that was laid out while the subtree previously lived in
+        // window 2.
+        let stranded = app.add_view(window_1_id, |_| TestView);
+        let stranded_id = stranded.id();
+
+        app.update(|ctx| {
+            ctx.record_view_parent(window_2_id, stranded_id, root_id);
+        });
+
+        let transferred =
+            app.update(|ctx| ctx.transfer_view_tree_to_window(root_id, window_1_id, window_2_id));
+
+        assert!(transferred.contains(&root_id), "root should be transferred");
+        assert!(
+            transferred.contains(&stranded_id),
+            "child reachable only via the target presenter should be reconciled"
+        );
+
+        app.read(|ctx| {
+            assert!(
+                ctx.windows[&window_2_id].views.contains_key(&stranded_id),
+                "stranded child should now live in window 2"
+            );
+            assert!(
+                !ctx.windows[&window_1_id].views.contains_key(&stranded_id),
+                "stranded child should no longer be in window 1"
+            );
+            assert_eq!(
+                stranded.window_id(ctx),
+                window_2_id,
+                "view_to_window should point the stranded child at window 2"
+            );
+        });
+    });
+}

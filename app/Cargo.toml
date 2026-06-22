@@ -56,6 +56,7 @@ test = false
 [dependencies]
 addr = "0.15.6"
 ai.workspace = true
+alphanumeric-sort = "1.5.7"
 anyhow.workspace = true
 arrayvec.workspace = true
 asset_cache.workspace = true
@@ -729,6 +730,7 @@ github_pr_prompt_chip = []
 create_project_flow = []
 agent_mode_evals = [
     "integration_tests",
+    "warpui/defer_scene_build",
     "full_source_code_embedding",
     "cross_repo_context",
     "cloud_object_models/agent_mode_evals",

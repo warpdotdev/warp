@@ -919,6 +919,23 @@ type CreateManagedSecretOutput implements Response {
 
 union CreateManagedSecretResult = CreateManagedSecretOutput | UserFacingError
 
+input CreateManagedMcpClientConfigInput {
+  uid: ID!
+}
+
+type CreateManagedMcpClientConfigOutput implements Response {
+  transportKind: ManagedMcpTransportKind!
+  mcpConfigJson: String!
+  proxyUrl: String
+  proxyToken: String
+  authorizationHeaderName: String
+  authorizationHeaderValue: String
+  expiresAt: Time
+  responseContext: ResponseContext!
+}
+
+union CreateManagedMcpClientConfigResult = CreateManagedMcpClientConfigOutput | UserFacingError
+
 input CreateNotebookInput {
   aiDocumentId: String
   conversationId: String
@@ -2236,6 +2253,11 @@ type ManagedSecretRawValue {
   value: String!
 }
 
+enum ManagedMcpTransportKind {
+  URL
+  COMMAND
+}
+
 """Type of Warp-managed secret values."""
 enum ManagedSecretType {
   ANTHROPIC_API_KEY
@@ -2858,6 +2880,7 @@ type RootMutation {
   createFileArtifactUploadTarget(input: CreateFileArtifactUploadTargetInput!, requestContext: RequestContext!): CreateFileArtifactUploadTargetResult!
   createFolder(input: CreateFolderInput!, requestContext: RequestContext!): CreateFolderResult!
   createGenericStringObject(input: CreateGenericStringObjectInput!, requestContext: RequestContext!): CreateGenericStringObjectResult!
+  createManagedMcpClientConfig(input: CreateManagedMcpClientConfigInput!, requestContext: RequestContext!): CreateManagedMcpClientConfigResult!
   createManagedSecret(input: CreateManagedSecretInput!, requestContext: RequestContext!): CreateManagedSecretResult!
   createNotebook(input: CreateNotebookInput!, requestContext: RequestContext!): CreateNotebookResult!
   createSimpleIntegration(input: CreateSimpleIntegrationInput!, requestContext: RequestContext!): CreateSimpleIntegrationResult!

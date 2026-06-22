@@ -46,7 +46,7 @@ impl OrchestrationPillBarModel {
         // Prune deleted conversations globally so per-pane code never
         // has to (and can't accidentally clobber sibling panes' pins).
         let history_handle = BlocklistAIHistoryModel::handle(ctx);
-        ctx.subscribe_to_model(&history_handle, |this, event, ctx| match event {
+        ctx.subscribe_to_model(&history_handle, |this, _, event, ctx| match event {
             BlocklistAIHistoryEvent::RemoveConversation {
                 conversation_id, ..
             }

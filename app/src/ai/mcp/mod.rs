@@ -433,12 +433,13 @@ impl MCPServerExt for MCPServer {
             Some(TemplatableMCPServerInstallation::new(
                 uuid::Uuid::new_v4(),
                 templatable_mcp_server.clone(),
-                variable_values,
+                variable_values.clone(),
             ));
 
         ParsedTemplatableMCPServerResult {
             templatable_mcp_server,
             templatable_mcp_server_installation,
+            variable_values,
         }
     }
 
