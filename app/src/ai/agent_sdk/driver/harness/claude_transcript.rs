@@ -398,8 +398,7 @@ pub(crate) fn write_session_index_entry(
     index.insert(session_uuid.to_string(), entry);
 
     if let Some(parent) = index_path.parent() {
-        create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
+        create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
     }
     write(
         &index_path,

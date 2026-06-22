@@ -99,7 +99,7 @@ impl CliAgentPluginManager for CodexPluginManager {
         let Ok(codex_dir) = codex_home_dir() else {
             return false;
         };
-        dbg!(check_installed(&codex_dir))
+        check_installed(&codex_dir)
     }
 
     fn needs_update(&self) -> bool {
