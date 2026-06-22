@@ -29,8 +29,8 @@ use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::appearance::Appearance;
 use crate::persistence::model::{
-    token_usage_category_display_name, ContextWindowSegment, ModelTokenUsage,
-    FULL_TERMINAL_USE_CATEGORY, PRIMARY_AGENT_CATEGORY,
+    token_usage_category_display_name, ContextWindowSegment, ContextWindowSegmentType,
+    ModelTokenUsage, FULL_TERMINAL_USE_CATEGORY, PRIMARY_AGENT_CATEGORY,
 };
 use crate::ui_components::blended_colors;
 
@@ -305,11 +305,11 @@ impl ConversationUsageView {
         let text_color = blended_colors::text_main(theme, theme.surface_2());
         let context_window_breakdown_enabled = FeatureFlag::ContextWindowUsageBreakdown
             .is_enabled()
-            && self
-                .usage_info
-                .context_window_segments
-                .iter()
-                .any(|segment| context_window_segment_display_percentage(segment).is_some());
+            && !context_window_segment_display_rows(
+                self.usage_info.context_window_usage,
+                &self.usage_info.context_window_segments,
+            )
+            .is_empty();
 
         let rollup = self.rollup(app);
 
@@ -729,7 +729,7 @@ impl ConversationUsageView {
 
     /// Pushes the per-segment context-window breakdown rows into the
     /// two-column layout when the dev-only breakdown is enabled and
-    /// expanded. Segment percentages are estimated/derived.
+    /// expanded. Segment percentages are derived from token counts.
     fn append_context_window_segment_rows(
         &self,
         labels: &mut Vec<Box<dyn Element>>,
@@ -745,18 +745,19 @@ impl ConversationUsageView {
         let font_size = appearance.ui_font_size() + 2.;
         let label_color = blended_colors::text_disabled(theme, background);
         let value_color = blended_colors::text_sub(theme, background);
-        for segment in &self.usage_info.context_window_segments {
-            let Some(pct) = context_window_segment_display_percentage(segment) else {
-                continue;
-            };
+        let rows = context_window_segment_display_rows(
+            self.usage_info.context_window_usage,
+            &self.usage_info.context_window_segments,
+        );
+        for (segment_type, pct) in rows {
             let label = Text::new(
-                token_usage_category_display_name(&segment.name),
+                token_usage_category_display_name(segment_type.as_str()),
                 appearance.ui_font_family(),
                 font_size,
             )
             .with_color(label_color)
             .finish();
-            labels.push(if segment.name == "other" {
+            labels.push(if segment_type == ContextWindowSegmentType::Other {
                 let info_icon = render_context_window_other_info_icon(
                     appearance,
                     self.context_window_other_tooltip_mouse_state.clone(),
@@ -1047,12 +1048,43 @@ fn render_toggle_link(
     .finish()
 }
 
-/// Returns the display percentage for a context-window segment, or `None`
-/// when that display value would be zero.
-fn context_window_segment_display_percentage(segment: &ContextWindowSegment) -> Option<f32> {
+/// Computes the per-segment display rows for the context-window breakdown.
+/// Each row's percentage is derived as
+/// `context_window_usage * token_count / total_positive_segment_token_count * 100`,
+/// so the segments sum to `context_window_usage`. Rows that round to zero
+/// are dropped. Rows are sorted by percentage descending with `Other` last.
+fn context_window_segment_display_rows(
+    context_window_usage: f32,
+    segments: &[ContextWindowSegment],
+) -> Vec<(ContextWindowSegmentType, f32)> {
+    let total: u32 = segments
+        .iter()
+        .map(|s| s.token_count)
+        .filter(|&t| t > 0)
+        .sum();
+    if total == 0 || context_window_usage <= 0. {
+        return Vec::new();
+    }
+    let total_f = total as f32;
     let multiplier = 10f32.powi(CONTEXT_WINDOW_SEGMENT_PERCENT_DECIMAL_PLACES as i32);
-    let pct = (segment.fraction * 100. * multiplier).round() / multiplier;
-    (pct != 0.).then_some(pct)
+    let mut rows: Vec<(ContextWindowSegmentType, f32)> = segments
+        .iter()
+        .filter_map(|s| {
+            if s.token_count == 0 {
+                return None;
+            }
+            let pct = (context_window_usage * (s.token_count as f32) / total_f * 100. * multiplier)
+                .round()
+                / multiplier;
+            (pct != 0.).then(|| (s.segment_type, pct))
+        })
+        .collect();
+    rows.sort_by(|a, b| match (a.0, b.0) {
+        (ContextWindowSegmentType::Other, _) => Ordering::Greater,
+        (_, ContextWindowSegmentType::Other) => Ordering::Less,
+        _ => b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal),
+    });
+    rows
 }
 
 /// Renders the "Other" segment info icon with an unclipped overlay tooltip.

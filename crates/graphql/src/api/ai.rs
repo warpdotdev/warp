@@ -173,19 +173,42 @@ pub struct ConversationUsageMetadata {
     pub summarized: bool,
 }
 
+#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextWindowSegmentType {
+    Unknown,
+    SystemPrompt,
+    ToolDefinitions,
+    ConversationHistory,
+    LatestInput,
+    Images,
+    Other,
+}
+
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct ContextWindowSegment {
-    pub name: String,
+    pub segment_type: ContextWindowSegmentType,
     pub token_count: i32,
-    pub fraction: f64,
+}
+
+impl From<ContextWindowSegmentType> for persistence::model::ContextWindowSegmentType {
+    fn from(value: ContextWindowSegmentType) -> Self {
+        match value {
+            ContextWindowSegmentType::Unknown => Self::Unknown,
+            ContextWindowSegmentType::SystemPrompt => Self::SystemPrompt,
+            ContextWindowSegmentType::ToolDefinitions => Self::ToolDefinitions,
+            ContextWindowSegmentType::ConversationHistory => Self::ConversationHistory,
+            ContextWindowSegmentType::LatestInput => Self::LatestInput,
+            ContextWindowSegmentType::Images => Self::Images,
+            ContextWindowSegmentType::Other => Self::Other,
+        }
+    }
 }
 
 impl From<&ContextWindowSegment> for persistence::model::ContextWindowSegment {
     fn from(gql: &ContextWindowSegment) -> Self {
         Self {
-            name: gql.name.clone(),
+            segment_type: gql.segment_type.into(),
             token_count: u32::try_from(gql.token_count).unwrap_or_default(),
-            fraction: gql.fraction as f32,
         }
     }
 }
