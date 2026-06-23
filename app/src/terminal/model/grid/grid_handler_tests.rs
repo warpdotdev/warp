@@ -1179,6 +1179,57 @@ fn test_possible_file_paths_across_wide_wrapped_line() {
     }
 }
 
+/// Regression test for issue #9193 covering the core purpose of the change: a
+/// path that soft-wraps across *more than two* visual rows in a *wide* terminal
+/// must be detected end to end. This combines both conditions that the other
+/// tests only exercise separately — `test_possible_file_paths_across_wide_wrapped_line`
+/// is wide but only 2 rows, and `test_possible_file_paths_across_multiple_wrapped_lines`
+/// is multi-row but narrow — so neither alone proves a wide, >2-row wrap works.
+#[test]
+fn test_possible_file_paths_across_wide_multiple_wrapped_lines() {
+    // The first two rows must be exactly the grid width (the widest row) so they
+    // are fully filled and soft-wrap into one another with no trailing empty
+    // cells; the last row is shorter. Each row is wider than the previous
+    // cross-wrap scan budget, so a single visual row already exceeds it.
+    let first_line = "/home/user/workspace/projects/applications/services/backend/";
+    let second_line = "components/internal/utilities/wrappers/adapters/factory/lib/";
+    let third_line = "implementations/interfaces/definitions/README.md";
+    // The two non-final rows must be equal length so both equal the grid width
+    // (otherwise the shorter one would leave separator-like empty cells and the
+    // path would not reconstruct across the wrap).
+    assert_eq!(
+        first_line.len(),
+        second_line.len(),
+        "non-final wrapped rows must be the same (max) width"
+    );
+    let full_path = format!("{first_line}{second_line}{third_line}");
+    let expected_range = Point { row: 0, col: 0 }..=Point {
+        row: 2,
+        col: third_line.len() - 1,
+    };
+    let blockgrid = mock_blockgrid(&format!("{first_line}\n{second_line}\n{third_line}"));
+
+    // Hover points on every row, deliberately far from the wrap boundaries.
+    for hover_point in [
+        Point { row: 0, col: 5 },
+        Point { row: 1, col: 30 },
+        Point { row: 2, col: 45 },
+    ] {
+        let possible_paths = blockgrid
+            .grid_handler
+            .possible_file_paths_at_point(hover_point);
+
+        assert!(
+            possible_paths.iter().any(|possible_path| {
+                possible_path.path.path.as_str() == full_path.as_str()
+                    && possible_path.path.line_and_column_num.is_none()
+                    && possible_path.range == expected_range
+            }),
+            "expected wide multi-line wrapped file path candidate at {hover_point:?} in {possible_paths:?}"
+        );
+    }
+}
+
 #[test]
 fn test_fragment_boundary_at_point() {
     let assert_fragment_boundary =
