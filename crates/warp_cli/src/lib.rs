@@ -582,6 +582,7 @@ impl CliCommand {
             CliCommand::HarnessSupport(args) => args.command.as_str_for_tracing(),
             CliCommand::Artifact(command) => command.as_str_for_tracing(),
             CliCommand::ApiKey(command) => command.as_str_for_tracing(),
+            CliCommand::MemoryStore(command) => command.as_str_for_tracing(),
         }
     }
 }

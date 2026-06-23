@@ -55,6 +55,18 @@ pub(super) enum CliTelemetryEvent {
     MemoryStoreListMemories,
     /// Executing `warp memory-store create-memory`
     MemoryStoreCreateMemory,
+    /// Executing `warp memory-store update-memory`
+    MemoryStoreUpdateMemory,
+    /// Executing `warp memory-store delete-memory`
+    MemoryStoreDeleteMemory,
+    /// Executing `warp memory-store get-store`
+    MemoryStoreGetStore,
+    /// Executing `warp memory-store update-store`
+    MemoryStoreUpdateStore,
+    /// Executing `warp memory-store list-store-agents`
+    MemoryStoreListStoreAgents,
+    /// Executing `warp memory-store list-versions`
+    MemoryStoreListVersions,
     /// Executing `warp task list`
     TaskList,
     /// Executing `warp task get`
@@ -178,6 +190,12 @@ impl TelemetryEvent for CliTelemetryEvent {
             CliTelemetryEvent::MemoryStoreList => None,
             CliTelemetryEvent::MemoryStoreListMemories => None,
             CliTelemetryEvent::MemoryStoreCreateMemory => None,
+            CliTelemetryEvent::MemoryStoreUpdateMemory => None,
+            CliTelemetryEvent::MemoryStoreDeleteMemory => None,
+            CliTelemetryEvent::MemoryStoreGetStore => None,
+            CliTelemetryEvent::MemoryStoreUpdateStore => None,
+            CliTelemetryEvent::MemoryStoreListStoreAgents => None,
+            CliTelemetryEvent::MemoryStoreListVersions => None,
             CliTelemetryEvent::TaskList => None,
             CliTelemetryEvent::TaskGet => None,
             CliTelemetryEvent::ConversationGet => None,
@@ -273,6 +291,24 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::MemoryStoreCreateMemory => {
                 "CLI.Execute.MemoryStore.CreateMemory"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreUpdateMemory => {
+                "CLI.Execute.MemoryStore.UpdateMemory"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreDeleteMemory => {
+                "CLI.Execute.MemoryStore.DeleteMemory"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreGetStore => {
+                "CLI.Execute.MemoryStore.GetStore"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreUpdateStore => {
+                "CLI.Execute.MemoryStore.UpdateStore"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreListStoreAgents => {
+                "CLI.Execute.MemoryStore.ListStoreAgents"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreListVersions => {
+                "CLI.Execute.MemoryStore.ListVersions"
             }
             CliTelemetryEventDiscriminants::TaskList => "CLI.Execute.Task.List",
             CliTelemetryEventDiscriminants::TaskGet => "CLI.Execute.Task.Get",
@@ -375,6 +411,24 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::MemoryStoreCreateMemory => {
                 "Created a manual memory in a memory store from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreUpdateMemory => {
+                "Updated a memory in a memory store from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreDeleteMemory => {
+                "Deleted a memory from a memory store from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreGetStore => {
+                "Got a memory store from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreUpdateStore => {
+                "Updated a memory store from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreListStoreAgents => {
+                "Listed agents attached to a memory store from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::MemoryStoreListVersions => {
+                "Listed version history of a memory from the Warp CLI"
             }
             CliTelemetryEventDiscriminants::TaskList => "Listed tasks from the Warp CLI",
             CliTelemetryEventDiscriminants::TaskGet => "Got status of task from the Warp CLI",
