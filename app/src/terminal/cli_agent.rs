@@ -135,7 +135,6 @@ const MISTRAL_ORANGE: ColorU = ColorU {
     a: 255,
 };
 
-
 /// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
@@ -329,7 +328,9 @@ impl CLIAgent {
     /// Agents with light brand colors use a dark icon for contrast.
     pub fn brand_icon_color(&self) -> ColorU {
         match self {
-            CLIAgent::Pi | CLIAgent::Auggie | CLIAgent::Droid | CLIAgent::Antigravity => ColorU::new(0, 0, 0, 255),
+            CLIAgent::Pi | CLIAgent::Auggie | CLIAgent::Droid | CLIAgent::Antigravity => {
+                ColorU::new(0, 0, 0, 255)
+            }
             _ => ColorU::white(),
         }
     }
