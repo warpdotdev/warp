@@ -884,6 +884,12 @@ pub enum FeatureFlag {
     /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
+
+    /// Gates NLD input classification matching the buffer against agent
+    /// prompt history (in addition to shell command history). Still in
+    /// development, so enabled only for dev/dogfood builds.
+    NldPromptHistoryMatch,
+
     /// Shows a warning in the agent view when the active conversation's
     /// provider-side prompt cache has expired.
     PromptCacheExpiryWarning,
@@ -953,6 +959,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
+    FeatureFlag::NldPromptHistoryMatch,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::PinnedTabs,
     FeatureFlag::ContextWindowUsageBreakdown,

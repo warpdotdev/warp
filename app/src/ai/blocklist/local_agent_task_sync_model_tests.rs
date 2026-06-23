@@ -167,7 +167,8 @@ fn transient_network_error_is_error_with_internal_and_debug_details() {
 #[test]
 fn map_conversation_status_waiting_for_events_reports_in_progress_with_no_message() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let conversation = AIConversation::new(false, false);
         let conversation_id = conversation.id();
@@ -392,7 +393,8 @@ fn register_cli_agent_sessions_model(app: &mut App) {
 #[test]
 fn shared_session_link_fires_update_agent_task_with_session_id() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         // A local orchestrator conversation owned by this client: not a
         // viewer, not a remote-child placeholder, and has a `task_id`.
@@ -428,7 +430,8 @@ fn shared_session_link_fires_update_agent_task_with_session_id() {
 #[test]
 fn shared_session_link_uses_correct_argument_order() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let mut conversation = AIConversation::new(false, false);
         let task_id = fixed_task_id();
@@ -476,7 +479,8 @@ fn shared_session_link_uses_correct_argument_order() {
 #[test]
 fn shared_session_link_skips_viewer_conversations() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         // A viewer-side conversation: even if it carries a task_id, this
         // client does not own the task and must not link.
@@ -511,7 +515,8 @@ fn shared_session_link_skips_viewer_conversations() {
 #[test]
 fn shared_session_link_skips_remote_child_conversations() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id(fixed_task_id().to_string());
@@ -544,7 +549,8 @@ fn shared_session_link_skips_remote_child_conversations() {
 #[test]
 fn shared_session_link_skips_when_task_id_missing() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         // No set_run_id call: the conversation has no task_id yet.
         let conversation = AIConversation::new(false, false);
@@ -576,7 +582,8 @@ fn shared_session_link_skips_when_task_id_missing() {
 #[test]
 fn shared_session_link_skips_unknown_conversation() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let (_model, counter) = install_model_with_call_counter(&mut app);
 
@@ -603,7 +610,8 @@ fn shared_session_link_skips_unknown_conversation() {
 #[test]
 fn conversation_server_token_assigned_fires_update_with_conversation_id() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let mut conversation = AIConversation::new(false, false);
         let task_id = fixed_task_id();
@@ -651,7 +659,8 @@ fn conversation_server_token_assigned_fires_update_with_conversation_id() {
 #[test]
 fn conversation_server_token_assigned_skips_viewer_conversations() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let mut conversation =
             AIConversation::new(/* is_viewing_shared_session */ true, false);
@@ -685,7 +694,8 @@ fn conversation_server_token_assigned_skips_viewer_conversations() {
 #[test]
 fn conversation_server_token_assigned_skips_remote_child_conversations() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let mut conversation = AIConversation::new(false, false);
         conversation.set_run_id(fixed_task_id().to_string());
@@ -719,7 +729,8 @@ fn conversation_server_token_assigned_skips_remote_child_conversations() {
 #[test]
 fn conversation_server_token_assigned_skips_without_task_id() {
     App::test((), |mut app| async move {
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
         let mut conversation = AIConversation::new(false, false);
         conversation.set_server_conversation_token("server-conversation-id".to_string());

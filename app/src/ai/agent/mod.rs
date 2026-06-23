@@ -2893,6 +2893,14 @@ impl AIAgentInput {
         Some(query)
     }
 
+    /// Returns the raw user query text for the [`Self::UserQuery`] variant.
+    pub fn user_query(&self) -> Option<String> {
+        match self {
+            AIAgentInput::UserQuery { query, .. } => Some(query.clone()),
+            _ => None,
+        }
+    }
+
     pub fn user_query_mode(&self) -> Option<UserQueryMode> {
         match self {
             AIAgentInput::UserQuery {

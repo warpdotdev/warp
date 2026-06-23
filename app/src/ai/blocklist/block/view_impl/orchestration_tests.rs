@@ -381,7 +381,7 @@ fn participant_for_restored_child_run_id_resolves_to_agent_name() {
             }],
         };
 
-        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[child, parent]));
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[child, parent]));
 
         // Before Fix C the child would not be loaded into
         // `conversations_by_id`, so `participant_for_agent_id` would return

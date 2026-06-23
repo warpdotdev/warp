@@ -195,6 +195,7 @@ pub struct PersistedData {
     pub object_actions: Vec<ObjectAction>,
     pub experiments: Vec<ServerExperiment>,
     pub ai_queries: Vec<PersistedAIInput>,
+    pub nld_prompts: Vec<(String, DateTime<Local>)>,
     pub codebase_indices: Vec<CodeWorkspaceMetadata>,
     pub workspace_language_servers: HashMap<PathBuf, HashMap<LSPServerType, EnablementState>>,
     pub multi_agent_conversations: Vec<AgentConversation>,

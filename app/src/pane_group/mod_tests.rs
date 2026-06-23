@@ -1081,7 +1081,7 @@ fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() 
 ///   * the hidden child pane must materialize in `child_agent_panes` keyed
 ///     by the placeholder conversation id after parent fullscreen.
 ///
-/// The disk-load construction path (`BlocklistAIHistoryModel::new(_, &conversations)`
+/// The disk-load construction path (`BlocklistAIHistoryModel::new(_, _, &conversations)`
 /// invoking `initialize_historical_conversations`) is covered by
 /// `test_initialize_historical_conversations_eagerly_hydrates_orchestration_children`
 /// in `app/src/ai/blocklist/history_model_tests.rs`. `agent_display_name_from_id`
