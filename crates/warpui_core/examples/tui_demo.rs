@@ -13,10 +13,11 @@
 //!   that wide / zero-width grapheme clusters keep their columns aligned,
 //! - **the ratatui buffer diff** — only changed cells are re-emitted between
 //!   frames, and resizing reconciles instead of clearing (so no flicker),
-//! - **vertical scrolling** — a long body scrolls in place under a fixed header.
+//! - **vertical scrolling** — a long body scrolls in place (clipped above and
+//!   below) under a fixed header, via a real `TuiScrollable`.
 //!
-//! Keys: `j` / `↓` scroll down · `k` / `↑` scroll up · resize `↔` to re-wrap ·
-//! `q` / `Esc` quit.
+//! Keys: `↑`/`↓` · `PgUp`/`PgDn` · `Home`/`End` · `j`/`k` or the mouse wheel
+//! scroll the body · resize `↔` to re-wrap · `q` / `Esc` quit.
 //!
 //! It uses [`App::test`] only to stand up the shared core without the GUI
 //! platform; the TUI backend itself renders to stdout, not a GUI window.
@@ -25,13 +26,12 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use warpui_core::elements::tui::{
-    Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiStyle, TuiText,
+    Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiScrollHandle, TuiScrollable, TuiStyle,
+    TuiText,
 };
 use warpui_core::platform::WindowStyle;
 use warpui_core::runtime::TuiRuntime;
-use warpui_core::{
-    AddWindowOptions, App, AppContext, Entity, TuiView, TypedActionView, ViewContext,
-};
+use warpui_core::{AddWindowOptions, App, AppContext, Entity, TuiView, TypedActionView};
 
 /// A long line that mixes wide CJK, emoji, a ZWJ family/snowman and a flag, so
 /// wrapping + grapheme-cluster width handling can be eyeballed as it reflows.
@@ -41,17 +41,9 @@ emoji 😀 🎉 🚀, a polar-bear ZWJ sequence 🐻\u{200d}❄\u{fe0f}, a famil
 and a flag 🇺🇸 so you can confirm that wide and zero-width grapheme clusters keep \
 their columns aligned as the text reflows to the available width.";
 
-/// Scroll actions, dispatched as typed actions through the shared core so the
-/// runtime's typed-action path is exercised end to end.
-#[derive(Debug, Clone, Copy)]
-enum Scroll {
-    Down,
-    Up,
-}
-
 struct ShowcaseView {
     body: Vec<String>,
-    scroll: usize,
+    scroll: TuiScrollHandle,
     quit: Rc<Cell<bool>>,
 }
 
@@ -75,7 +67,7 @@ impl ShowcaseView {
             .collect();
         Self {
             body,
-            scroll: 0,
+            scroll: TuiScrollHandle::new(),
             quit,
         }
     }
@@ -94,41 +86,53 @@ impl TuiView for ShowcaseView {
         let bold = TuiStyle::default().add_modifier(Modifier::BOLD);
         let dim = TuiStyle::default().add_modifier(Modifier::DIM);
 
-        let mut rows: Vec<Box<dyn TuiElement>> = Vec::new();
-        rows.push(Box::new(
-            TuiText::new("WarpUI · TUI showcase")
-                .with_style(bold)
-                .truncate(),
-        ));
-        rows.push(Box::new(
-            TuiText::new("j/↓ scroll · k/↑ up · resize ↔ to re-wrap · q quit")
-                .with_style(dim)
-                .truncate(),
-        ));
-        rows.push(Box::new(TuiText::new(" ")));
-        // Wrapping paragraph: default (word-wrap) policy, so it reflows to width.
-        rows.push(Box::new(TuiText::new(WRAPPING_PARAGRAPH)));
-        rows.push(Box::new(TuiText::new(" ")));
-        rows.push(Box::new(
-            TuiText::new(format!("scroll {}/{}", self.scroll, self.body.len()))
-                .with_style(dim)
-                .truncate(),
-        ));
-        rows.push(Box::new(TuiText::new("──────── body ────────").truncate()));
-        // Scrollable body: feed rows from the scroll offset; the column clips
-        // whatever doesn't fit at the bottom, so the list scrolls in place.
-        for line in &self.body[self.scroll.min(self.body.len())..] {
-            rows.push(Box::new(TuiText::new(line.clone()).truncate()));
-        }
+        // Fixed header above the scrollable body.
+        let header = TuiColumn::new()
+            .child(
+                TuiText::new("WarpUI · TUI showcase")
+                    .with_style(bold)
+                    .truncate(),
+            )
+            .child(
+                TuiText::new("↑/↓ · PgUp/PgDn · Home/End · wheel · j/k scroll · q quit")
+                    .with_style(dim)
+                    .truncate(),
+            )
+            .child(TuiText::new(" "))
+            // Wrapping paragraph: default (word-wrap) policy, so it reflows to width.
+            .child(TuiText::new(WRAPPING_PARAGRAPH))
+            .child(TuiText::new(" "))
+            .child(
+                TuiText::new(format!("body: {} rows (scrolls below)", self.body.len()))
+                    .with_style(dim)
+                    .truncate(),
+            )
+            .child(TuiText::new("──────── body ────────").truncate());
 
+        // Scrollable body: a column of every row, clipped to the viewport the
+        // flex layout gives it and scrolled through the shared handle.
+        let body_rows = self
+            .body
+            .iter()
+            .map(|line| Box::new(TuiText::new(line.clone()).truncate()) as Box<dyn TuiElement>);
+        let body = TuiScrollable::new(self.scroll.clone(), TuiColumn::with_children(body_rows));
+
+        let content = TuiColumn::new().child(header).flex_child(body);
+
+        // The element handles the wheel and arrow/page/home/end keys itself;
+        // `j`/`k` drive the shared handle directly (clamped on the next layout).
+        let scroll_for_j = self.scroll.clone();
+        let scroll_for_k = self.scroll.clone();
         let quit_for_q = self.quit.clone();
         let quit_for_esc = self.quit.clone();
         Box::new(
-            TuiEventHandler::new(TuiColumn::new().with_children(rows))
-                .on_key("j", |_, ctx, _| ctx.dispatch_typed_action(Scroll::Down))
-                .on_key("down", |_, ctx, _| ctx.dispatch_typed_action(Scroll::Down))
-                .on_key("k", |_, ctx, _| ctx.dispatch_typed_action(Scroll::Up))
-                .on_key("up", |_, ctx, _| ctx.dispatch_typed_action(Scroll::Up))
+            TuiEventHandler::new(content)
+                .on_key("j", move |_, _, _| {
+                    scroll_for_j.set_offset(scroll_for_j.offset().saturating_add(1))
+                })
+                .on_key("k", move |_, _, _| {
+                    scroll_for_k.set_offset(scroll_for_k.offset().saturating_sub(1))
+                })
                 .on_key("q", move |_, _, _| quit_for_q.set(true))
                 .on_key("escape", move |_, _, _| quit_for_esc.set(true)),
         )
@@ -136,17 +140,9 @@ impl TuiView for ShowcaseView {
 }
 
 impl TypedActionView for ShowcaseView {
-    type Action = Scroll;
-
-    fn handle_action(&mut self, action: &Scroll, ctx: &mut ViewContext<Self>) {
-        let max = self.body.len().saturating_sub(1);
-        match action {
-            Scroll::Down => self.scroll = (self.scroll + 1).min(max),
-            Scroll::Up => self.scroll = self.scroll.saturating_sub(1),
-        }
-        // Mark the view dirty so the runtime repaints with the new offset.
-        ctx.notify();
-    }
+    // No typed actions: scrolling is owned by the `TuiScrollable` element and the
+    // `j`/`k` handlers, which drive the shared scroll handle directly.
+    type Action = ();
 }
 
 fn main() {

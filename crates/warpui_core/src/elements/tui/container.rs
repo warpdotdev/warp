@@ -29,6 +29,7 @@ pub struct TuiContainer {
     child: Box<dyn TuiElement>,
     padding: u16,
     border: bool,
+    rounded: bool,
     border_style: TuiStyle,
     background: Option<Color>,
 }
@@ -39,6 +40,7 @@ impl TuiContainer {
             child: Box::new(child),
             padding: 0,
             border: false,
+            rounded: false,
             border_style: TuiStyle::default(),
             background: None,
         }
@@ -51,6 +53,14 @@ impl TuiContainer {
 
     pub fn with_border(mut self) -> Self {
         self.border = true;
+        self
+    }
+
+    /// Enables a border drawn with rounded corners (`╭╮╰╯`) instead of square
+    /// ones.
+    pub fn with_rounded_border(mut self) -> Self {
+        self.border = true;
+        self.rounded = true;
         self
     }
 
@@ -106,7 +116,7 @@ impl TuiElement for TuiContainer {
         }
 
         if self.border {
-            draw_border(area, buffer, self.painted_border_style());
+            draw_border(area, buffer, self.painted_border_style(), self.rounded);
         }
 
         self.child.render(area.inset(self.inset()), buffer, ctx);
@@ -117,7 +127,10 @@ impl TuiElement for TuiContainer {
     }
 
     fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
-        self.child.cursor_position(area.inset(self.inset()), ctx)
+        let inset = self.inset();
+        self.child
+            .cursor_position(area.inset(inset), ctx)
+            .map(|(x, y)| (x.saturating_add(inset), y.saturating_add(inset)))
     }
 
     fn dispatch_event(
@@ -136,12 +149,18 @@ impl TuiElement for TuiContainer {
     }
 }
 
-/// Paints a single-cell box-drawing frame around the perimeter of `area`.
-fn draw_border(area: TuiRect, buffer: &mut TuiBuffer, style: TuiStyle) {
+/// Paints a single-cell box-drawing frame around the perimeter of `area`,
+/// using rounded corner glyphs when `rounded` is set.
+fn draw_border(area: TuiRect, buffer: &mut TuiBuffer, style: TuiStyle, rounded: bool) {
     let right = area.right().saturating_sub(1);
     let bottom = area.bottom().saturating_sub(1);
     let multi_column = area.width > 1;
     let multi_row = area.height > 1;
+    let (top_left, top_right, bottom_left, bottom_right) = if rounded {
+        ("╭", "╮", "╰", "╯")
+    } else {
+        ("┌", "┐", "└", "┘")
+    };
 
     for x in area.x..area.right() {
         put(buffer, x, area.y, "─", style);
@@ -156,15 +175,15 @@ fn draw_border(area: TuiRect, buffer: &mut TuiBuffer, style: TuiStyle) {
         }
     }
 
-    put(buffer, area.x, area.y, "┌", style);
+    put(buffer, area.x, area.y, top_left, style);
     if multi_column {
-        put(buffer, right, area.y, "┐", style);
+        put(buffer, right, area.y, top_right, style);
     }
     if multi_row {
-        put(buffer, area.x, bottom, "└", style);
+        put(buffer, area.x, bottom, bottom_left, style);
     }
     if multi_column && multi_row {
-        put(buffer, right, bottom, "┘", style);
+        put(buffer, right, bottom, bottom_right, style);
     }
 }
 

@@ -96,6 +96,53 @@ fn child_consumes_the_event_before_the_wrapper() {
 }
 
 #[test]
+fn fallback_consumes_keys_that_match_no_binding() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let hits = Rc::new(Cell::new(0u32));
+            let counter = hits.clone();
+            let mut handler = TuiEventHandler::new(())
+                .on_key("enter", |_, _, _| {})
+                .on_key_fallback(move |_event, _ctx, _app| {
+                    counter.set(counter.get() + 1);
+                    true
+                });
+
+            let area = TuiRect::new(0, 0, 4, 1);
+            let mut event_ctx = TuiEventContext::default();
+
+            let mut rendered_views = HashMap::new();
+            let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+            // A key with no exact binding falls through to the fallback.
+            let handled = handler.dispatch_event(&key_event("a"), area, &mut event_ctx, &mut ctx, app_ctx);
+            assert!(handled);
+            assert_eq!(hits.get(), 1);
+
+            // An exact binding still takes precedence over the fallback.
+            let handled =
+                handler.dispatch_event(&key_event("enter"), area, &mut event_ctx, &mut ctx, app_ctx);
+            assert!(handled);
+            assert_eq!(hits.get(), 1);
+        });
+    });
+}
+
+#[test]
+fn fallback_may_decline_so_the_event_propagates() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let mut handler = TuiEventHandler::new(()).on_key_fallback(|_, _, _| false);
+            let area = TuiRect::new(0, 0, 4, 1);
+            let mut event_ctx = TuiEventContext::default();
+            let mut rendered_views = HashMap::new();
+            let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+            let handled = handler.dispatch_event(&key_event("a"), area, &mut event_ctx, &mut ctx, app_ctx);
+            assert!(!handled);
+        });
+    });
+}
+
+#[test]
 fn present_recurses_into_the_wrapped_child() {
     let root = EntityId::from_usize(1);
     let embedded = EntityId::from_usize(2);

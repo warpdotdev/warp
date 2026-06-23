@@ -10,7 +10,7 @@
 //! [`TuiElement`](super::TuiElement) contract; the crossterm → warp event
 //! conversion lives with the runtime.
 
-use crate::{Action, App, EntityId};
+use crate::{Action, AppContext, EntityId};
 
 /// Whether an element that handled an event wants its ancestors to keep seeing
 /// it. Returned by event-aware elements during dispatch.
@@ -29,8 +29,13 @@ pub struct TuiEventDispatchResult {
     pub handled: bool,
 }
 
-type TuiAppUpdate = Box<dyn FnOnce(&mut App)>;
+type TuiAppUpdate = Box<dyn FnOnce(&mut AppContext)>;
 
+/// Collects the side effects an element requests while handling an event:
+/// deferred mutations of the [`AppContext`] and typed actions to dispatch
+/// through the shared core. The runtime drains these after dispatch and applies
+/// them on the main thread, mirroring how GUI event handlers defer work via the
+/// app context.
 #[derive(Default)]
 pub struct TuiEventContext {
     updates: Vec<TuiAppUpdate>,
@@ -47,6 +52,15 @@ pub(crate) struct TuiDispatchedAction {
 }
 
 impl TuiEventContext {
+    /// Queues a closure to run against the [`AppContext`] once dispatch
+    /// completes.
+    pub fn dispatch_app_update<F>(&mut self, update: F)
+    where
+        F: 'static + FnOnce(&mut AppContext),
+    {
+        self.updates.push(Box::new(update));
+    }
+
     /// Queues a typed action to dispatch from the view currently being
     /// processed. Panics if called outside of view event processing, where
     /// there is no origin view to attribute the action to.

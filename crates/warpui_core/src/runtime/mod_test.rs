@@ -12,7 +12,7 @@ use crate::elements::tui::{
     TuiStyle, TuiText,
 };
 use crate::platform::WindowStyle;
-use crate::{AddWindowOptions, AppContext, Entity, TypedActionView, ViewContext};
+use crate::{AddWindowOptions, AppContext, Entity, TypedActionView, UpdateView, ViewContext};
 
 /// A trivial leaf element that paints a single line of text.
 struct TextElement {
@@ -214,6 +214,140 @@ fn typed_action_from_embedded_child_reaches_parent_through_runtime_dispatch() {
         // to the parent's handler. (The legacy origin-only dispatch could not
         // do this.)
         assert_eq!(root.read(&app, |view, _| view.bumps), 1);
+    });
+}
+
+/// A view whose rendered text flips entirely when `flipped` is toggled, so a
+/// repaint is observable as a brand-new substring in the diffed output.
+struct ToggleView {
+    flipped: bool,
+}
+
+impl Entity for ToggleView {
+    type Event = ();
+}
+
+impl TuiView for ToggleView {
+    fn ui_name() -> &'static str {
+        "ToggleView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
+        let text = if self.flipped { "BBBBB" } else { "AAAAA" };
+        Box::new(TextElement {
+            text: text.to_owned(),
+        })
+    }
+}
+
+impl TypedActionView for ToggleView {
+    type Action = ();
+}
+
+#[test]
+fn invalidation_callback_repaints_on_notify_without_input() {
+    App::test((), |mut app| async move {
+        let (window_id, root) = app
+            .update(|ctx| ctx.add_tui_window(window_options(), |_| ToggleView { flipped: false }));
+
+        // Wire an invalidation-driven redraw against an in-memory terminal, the
+        // same way `spawn_tui_driver` does for the real terminal.
+        let screen = Rc::new(RefCell::new(TuiScreen::new(
+            window_id,
+            root.clone(),
+            TestTerminal::new(TuiSize::new(5, 1)),
+        )));
+        {
+            let screen = screen.clone();
+            app.on_window_invalidated(window_id, move |_, ctx| {
+                screen.borrow_mut().draw(ctx).expect("draw should succeed");
+            });
+        }
+
+        // Initial paint: registers the view as a render dependency and draws
+        // "AAAAA".
+        app.update(|ctx| screen.borrow_mut().draw(ctx).expect("initial draw"));
+        assert!(screen.borrow().terminal.output_string().contains("AAAAA"));
+        assert!(
+            !screen.borrow().terminal.output_string().contains("BBBBB"),
+            "the flipped text must not have been drawn yet"
+        );
+
+        // Flip the view's state with NO input event. The `notify()` should flush
+        // and repaint through the invalidation callback — the whole point of the
+        // invalidation-driven model (vs. only redrawing after input).
+        app.update_view(&root, |view, ctx| {
+            view.flipped = true;
+            ctx.notify();
+        });
+
+        assert!(
+            screen.borrow().terminal.output_string().contains("BBBBB"),
+            "ctx.notify() (no input) should repaint via the invalidation callback"
+        );
+    });
+}
+
+/// A view whose element consumes the `x` key, so an `x` key event dispatches as
+/// "handled" without the handler itself calling `notify`.
+struct KeyConsumingView;
+
+impl Entity for KeyConsumingView {
+    type Event = ();
+}
+
+impl TuiView for KeyConsumingView {
+    fn ui_name() -> &'static str {
+        "KeyConsumingView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
+        Box::new(TuiEventHandler::new(TuiText::new("x")).on_key("x", |_, _, _| {}))
+    }
+}
+
+impl TypedActionView for KeyConsumingView {
+    type Action = ();
+}
+
+fn char_key(character: char) -> CrosstermEvent {
+    CrosstermEvent::Key(KeyEvent::new(
+        KeyCode::Char(character),
+        KeyModifiers::empty(),
+    ))
+}
+
+#[test]
+fn handled_input_invalidates_window_for_repaint() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| KeyConsumingView));
+        let root_view_id = root.id();
+
+        // Clear the window's creation invalidation so we observe only what input
+        // dispatch produces.
+        app.update(|ctx| {
+            let _ = ctx.take_all_invalidations_for_window(window_id);
+        });
+
+        // A handled key invalidates the window (mirrors `run_until`'s
+        // "handled => redraw") even though the handler never calls `notify` — the
+        // path a scrollable relies on to repaint after changing its offset.
+        app.update(|ctx| handle_input_event(ctx, window_id, root_view_id, char_key('x')));
+        assert!(
+            app.read(|ctx| ctx.has_window_invalidations(window_id)),
+            "a handled input event should invalidate the window so the driver repaints"
+        );
+
+        // An unhandled key does not force a needless repaint.
+        app.update(|ctx| {
+            let _ = ctx.take_all_invalidations_for_window(window_id);
+        });
+        app.update(|ctx| handle_input_event(ctx, window_id, root_view_id, char_key('z')));
+        assert!(
+            !app.read(|ctx| ctx.has_window_invalidations(window_id)),
+            "an unhandled input event should not invalidate the window"
+        );
     });
 }
 

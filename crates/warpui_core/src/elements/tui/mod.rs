@@ -14,35 +14,41 @@
 //!   [`TuiElement::dispatch_event`]. (The crossterm → warp event *conversion*
 //!   lives with the runtime, in `crate::runtime`.)
 //! - The concrete elements: [`TuiText`], [`TuiColumn`], [`TuiContainer`],
-//!   [`TuiChildView`], and [`TuiEventHandler`].
-//! - [`TuiParentElement`]: a trait for multi-child elements, providing
-//!   [`with_child`](TuiParentElement::with_child) /
-//!   [`with_children`](TuiParentElement::with_children) /
-//!   [`add_child`](TuiParentElement::add_child) /
-//!   [`add_children`](TuiParentElement::add_children).
+//!   [`TuiConstrainedBox`], [`TuiInputLine`], [`TuiCenter`], [`TuiScrollable`],
+//!   [`TuiChildView`], [`TuiCanvas`], and [`TuiEventHandler`].
 
 use std::collections::HashMap;
 
 use crate::{AppContext, EntityId, Event};
 
 mod buffer;
+mod canvas;
+mod center;
 mod child_view;
 mod column;
+mod constrained_box;
 mod container;
 mod event;
 mod event_handler;
 mod geometry;
+mod input_line;
 mod parent;
+mod scrollable;
 mod text;
 
 pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiStyle};
+pub use canvas::{rasterize_text, TuiCanvas, TuiCanvasCache};
+pub use center::TuiCenter;
 pub use child_view::TuiChildView;
 pub use column::TuiColumn;
+pub use constrained_box::TuiConstrainedBox;
 pub use container::TuiContainer;
 pub use event::{TuiDispatchEventResult, TuiEventContext, TuiEventDispatchResult};
 pub use event_handler::TuiEventHandler;
 pub use geometry::{TuiConstraint, TuiRect, TuiRectExt, TuiSize};
+pub use input_line::TuiInputLine;
 pub use parent::TuiParentElement;
+pub use scrollable::{TuiScrollHandle, TuiScrollable};
 pub use text::TuiText;
 
 /// Carries the pre-rendered per-view element map through the layout pass,
@@ -139,8 +145,11 @@ pub trait TuiElement {
     }
 }
 
-/// A no-op leaf element: occupies no space and paints nothing. Used by tests
-/// as a placeholder child where the element's own rendering is irrelevant.
+/// The boxed, type-erased element a [`TuiView`](crate::TuiView) renders to.
+pub type TuiRenderOutput = Box<dyn TuiElement>;
+
+/// A no-op leaf element: occupies no space and paints nothing. Used by tests as
+/// a placeholder child where the element's own rendering is irrelevant.
 #[cfg(test)]
 impl TuiElement for () {
     fn layout(&mut self, _constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
@@ -210,3 +219,4 @@ impl<'a> TuiPresentationContext<'a> {
         Some(result)
     }
 }
+
