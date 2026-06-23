@@ -158,7 +158,6 @@ jobs:
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
-          cache_key: ${{ matrix.arch }}
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
@@ -426,7 +425,6 @@ jobs:
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
-          cache_key: ${{ matrix.arch }}
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
@@ -1159,13 +1157,6 @@ jobs:
         shell: bash
 
       # Bundle the CLI packages
-
-      # Clear the settings schema cache so that the next build will regenerate it.
-      # This is necessary because the set of features enabled for the CLI build
-      # may be different from the app build.
-      - name: Reset settings schema cache
-        run: |
-          rm -f $SETTINGS_SCHEMA_CACHE
 
       - name: Download CLI build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

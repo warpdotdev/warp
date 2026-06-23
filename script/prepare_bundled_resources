@@ -141,9 +141,6 @@ if [ "${SKIP_SETTINGS_SCHEMA:-}" != "1" ]; then
     if [ -n "$CARGO_PROFILE" ]; then
       SCHEMA_CMD+=(--profile "$CARGO_PROFILE")
     fi
-    if [ -n "$CARGO_FEATURES" ]; then
-      SCHEMA_CMD+=(--features "$CARGO_FEATURES")
-    fi
     SCHEMA_CMD+=(--manifest-path "$REPO_ROOT/Cargo.toml" --bin generate_settings_schema --)
     if [ -n "$CHANNEL" ]; then
       SCHEMA_CMD+=(--channel "$CHANNEL")
