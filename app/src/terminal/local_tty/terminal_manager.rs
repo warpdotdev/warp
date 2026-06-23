@@ -40,7 +40,7 @@ use {
 };
 
 use super::event_loop::EventLoop;
-use super::shell::{ShellStarter, ShellStarterSource};
+use super::shell::{ShellStarter, ShellStarterSource, ShellStarterSourceOrWslName};
 use super::{mio_channel, recorder};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversation;
@@ -183,6 +183,110 @@ impl Drop for TerminalManager {
     }
 }
 
+/// The view-free core of a terminal session: the channels, `Sessions`,
+/// `ModelEventDispatcher`, `TerminalModel`, and `PtyController`. The PTY itself
+/// is not spawned here — the caller spawns it later (the GUI defers this in
+/// `on_shell_determined`; the TUI does so directly). Shared by the GUI's
+/// [`TerminalManager::create_model`] and the TUI's session.
+pub(crate) struct SessionCore {
+    pub(crate) model: Arc<FairMutex<TerminalModel>>,
+    pub(crate) sessions: ModelHandle<Sessions>,
+    pub(crate) model_events: ModelHandle<ModelEventDispatcher>,
+    pub(crate) pty_controller: ModelHandle<PtyController>,
+    pub(crate) event_loop_tx: mio_channel::Sender<Message>,
+    pub(crate) event_loop_rx: mio_channel::Receiver<Message>,
+    pub(crate) wakeups_rx: async_channel::Receiver<()>,
+    pub(crate) inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
+    pub(crate) channel_event_proxy: ChannelEventListener,
+    pub(crate) wsl_name_or_shell_starter: Option<ShellStarterSourceOrWslName>,
+}
+
+/// Builds the [`SessionCore`]: channels, `Sessions`, `ModelEventDispatcher`,
+/// `TerminalModel` (via [`terminal_manager::create_terminal_model`]), and
+/// `PtyController`. View-free and PTY-spawn-free so the GUI and TUI share it.
+pub(crate) fn build_session_core(
+    startup_directory: Option<PathBuf>,
+    restored_blocks: Option<&Vec<SerializedBlockListItem>>,
+    initial_size: Vector2F,
+    chosen_shell: Option<AvailableShell>,
+    ctx: &mut AppContext,
+) -> SessionCore {
+    // Create all the necessary channels we need for communication.
+    let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let (executor_command_tx, executor_command_rx) = async_channel::unbounded();
+    let (event_loop_tx, event_loop_rx) = mio_channel::channel();
+
+    // Create the broadcast channel to receive data from the PTY, but deactivate it immediately.
+    // We only want to create active receivers as necessary.
+    let (pty_reads_tx, pty_reads_rx) = async_broadcast::broadcast(PTY_READS_BROADCAST_CHANNEL_SIZE);
+    let inactive_pty_reads_rx = pty_reads_rx.deactivate();
+
+    let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
+
+    // Initialize the sessions model.
+    let sessions = ctx.add_model(|ctx| Sessions::new(executor_command_tx.clone(), ctx));
+
+    let model_events =
+        ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
+
+    // Have ApiKeyManager subscribe to block completion events for AWS credential refresh.
+    ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+        manager.register_model_event_dispatcher(&model_events, ctx);
+    });
+
+    let preferred_shell = chosen_shell.unwrap_or_else(|| {
+        AvailableShells::handle(ctx).read(ctx, |shells, ctx| shells.get_user_preferred_shell(ctx))
+    });
+
+    let wsl_name_or_shell_starter = ShellStarter::init(preferred_shell.clone());
+
+    // Create the terminal model with all restored blocks.
+    log::info!(
+        "Creating terminal model with {} restored blocks",
+        restored_blocks.map(|blocks| blocks.len()).unwrap_or(0)
+    );
+    let model = terminal_manager::create_terminal_model(
+        startup_directory.clone(),
+        restored_blocks,
+        initial_size,
+        channel_event_proxy.clone(),
+        ShellLaunchState::DeterminingShell {
+            available_shell: Some(preferred_shell),
+            display_name: wsl_name_or_shell_starter
+                .as_ref()
+                .map(|wsl_name_or_shell_starter| wsl_name_or_shell_starter.name())
+                .unwrap_or(ShellName::LessDescriptive("Shell".to_owned())),
+        },
+        ctx,
+    );
+
+    let model = Arc::new(FairMutex::new(model));
+
+    // Initialize the PtyController.
+    let pty_controller = init_pty_controller_model(
+        event_loop_tx.clone(),
+        executor_command_rx,
+        model_events.clone(),
+        sessions.clone(),
+        model.clone(),
+        ctx,
+    );
+
+    SessionCore {
+        model,
+        sessions,
+        model_events,
+        pty_controller,
+        event_loop_tx,
+        event_loop_rx,
+        wakeups_rx,
+        inactive_pty_reads_rx,
+        channel_event_proxy,
+        wsl_name_or_shell_starter,
+    }
+}
+
 impl TerminalManager {
     /// Sends a shutdown message to the PTY event loop and waits for it to
     /// process that event.
@@ -229,42 +333,9 @@ impl TerminalManager {
         initial_input_config: Option<InputConfig>,
         ctx: &mut AppContext,
     ) -> ModelHandle<Box<dyn crate::terminal::TerminalManager>> {
-        // Create all the necessary channels we need for communication.
-        let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
-        let (events_tx, events_rx) = async_channel::unbounded();
-        let (executor_command_tx, executor_command_rx) = async_channel::unbounded();
-        let (event_loop_tx, event_loop_rx) = mio_channel::channel();
-
-        // Create the broadcast channel to receive data from the PTY, but deactivate it immediately.
-        // We only want to create active receivers as necessary.
-        let (pty_reads_tx, pty_reads_rx) =
-            async_broadcast::broadcast(PTY_READS_BROADCAST_CHANNEL_SIZE);
-        let inactive_pty_reads_rx = pty_reads_rx.deactivate();
-
-        let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
-
-        // Initialize the sessions model.
-        let sessions = ctx.add_model(|ctx| Sessions::new(executor_command_tx.clone(), ctx));
-
-        let model_events =
-            ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
-
-        // Have ApiKeyManager subscribe to block completion events for AWS credential refresh
-        ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-            manager.register_model_event_dispatcher(&model_events, ctx);
-        });
-
-        let preferred_shell = chosen_shell.unwrap_or_else(|| {
-            AvailableShells::handle(ctx)
-                .read(ctx, |shells, ctx| shells.get_user_preferred_shell(ctx))
-        });
-
-        let session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>> = Rc::new(RefCell::new(None));
-        let wsl_name_or_shell_starter = ShellStarter::init(preferred_shell.clone());
-
-        // If we have explicit non-empty restored_blocks, prioritize those (these come from db on startup).
-        // Otherwise if there's a conversation we're restoring, get blocks from those (including when
-        // restored_blocks is missing or an empty vec).
+        // Resolve the restored blocks (explicit DB blocks, else a conversation being
+        // restored) before constructing the session core, which consumes them to
+        // build the TerminalModel.
         let all_restored_blocks = restored_blocks
             .filter(|blocks| !blocks.is_empty())
             .cloned()
@@ -289,31 +360,31 @@ impl TerminalManager {
                 _ => None,
             });
 
-        // Create the terminal model with all restored blocks
-        log::info!(
-            "Creating terminal model with {} restored blocks",
-            all_restored_blocks
-                .as_ref()
-                .map(|blocks| blocks.len())
-                .unwrap_or(0)
-        );
-        let model = terminal_manager::create_terminal_model(
+        let session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>> = Rc::new(RefCell::new(None));
+
+        // Build the view-free session core: channels, Sessions,
+        // ModelEventDispatcher, the TerminalModel, and the PtyController. The PTY
+        // itself is spawned later (GUI: deferred in `on_shell_determined`).
+        let SessionCore {
+            model,
+            sessions,
+            model_events,
+            pty_controller,
+            event_loop_tx,
+            event_loop_rx,
+            wakeups_rx,
+            inactive_pty_reads_rx,
+            channel_event_proxy,
+            wsl_name_or_shell_starter,
+        } = build_session_core(
             startup_directory.clone(),
             all_restored_blocks.as_ref(),
             initial_size,
-            channel_event_proxy.clone(),
-            ShellLaunchState::DeterminingShell {
-                available_shell: Some(preferred_shell),
-                display_name: wsl_name_or_shell_starter
-                    .as_ref()
-                    .map(|wsl_name_or_shell_starter| wsl_name_or_shell_starter.name())
-                    .unwrap_or(ShellName::LessDescriptive("Shell".to_owned())),
-            },
+            chosen_shell,
             ctx,
         );
-        let colors = model.colors();
 
-        let model = Arc::new(FairMutex::new(model));
+        let colors = model.lock().colors();
 
         // This is purely for measuring throughput on WarpDev.
         if FeatureFlag::RecordPtyThroughput.is_enabled() {
@@ -340,16 +411,6 @@ impl TerminalManager {
             }
             IsSharedSessionCreator::No => {}
         }
-
-        // Initialize the PtyController.
-        let pty_controller = init_pty_controller_model(
-            event_loop_tx.clone(),
-            executor_command_rx,
-            model_events.clone(),
-            sessions.clone(),
-            model.clone(),
-            ctx,
-        );
 
         // Initialize the RemoteServerController.
         let remote_server_controller =
