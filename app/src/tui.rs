@@ -413,12 +413,10 @@ impl TuiElement for TuiAltScreenElement {
     }
 
     fn desired_height(&self, _width: u16) -> u16 {
+        use crate::terminal::model::grid::Dimensions as _;
         let model = self.model.lock();
-        model
-            .alt_screen()
-            .grid_handler()
-            .len_displayed()
-            .unwrap_or(0) as u16
+        let grid = model.alt_screen().grid_handler();
+        grid.len_displayed().unwrap_or_else(|| grid.visible_rows()) as u16
     }
 }
 

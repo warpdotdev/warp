@@ -80,7 +80,10 @@ pub fn render_grid(
         return;
     }
 
-    let num_rows = grid.len_displayed().unwrap_or(0);
+    // `len_displayed()` is `Some` only when a displayed-output filter is active;
+    // for the alt screen (and ordinary grids) it is `None`, so fall back to the
+    // screen's visible row count.
+    let num_rows = grid.len_displayed().unwrap_or_else(|| grid.visible_rows());
     let num_cols = grid.columns().min(area.width as usize);
 
     for row_idx in 0..num_rows {
