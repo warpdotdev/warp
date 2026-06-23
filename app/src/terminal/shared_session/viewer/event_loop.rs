@@ -215,7 +215,17 @@ impl EventLoop {
                                     return;
                                 }
                                 view.input().update(ctx, |input, ctx| {
-                                    input.unfreeze_and_clear_agent_input(ctx);
+                                    // Restore frozen visual state. Then also reinitialize the
+                                    // buffer here: for shell commands the block transition will
+                                    // reset the CRDT with a new block ID shortly after, so the
+                                    // brief CRDT inconsistency is harmless. This pre-emptive
+                                    // clear gives the viewer an empty buffer while the command
+                                    // runs rather than showing the command text.
+                                    input.unfreeze_agent_input(ctx);
+                                    let editor = input.editor().clone();
+                                    editor.update(ctx, |editor, ctx| {
+                                        editor.reinitialize_buffer(None, ctx);
+                                    });
                                 });
                             });
                         }

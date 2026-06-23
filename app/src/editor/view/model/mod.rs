@@ -603,6 +603,17 @@ impl EditorModel {
         self.buffer_and_display_map.deactivate_ephemeral_state();
     }
 
+    /// Exits an ephemeral loading state (created by `set_buffer_text_ignoring_undo`)
+    /// without touching the CRDT buffer or generating any `UpdatePeers` operations.
+    /// After this call the editor displays the regular collaborative buffer, allowing
+    /// any pending remote delete operations to become visible.
+    pub fn exit_ephemeral_loading_state(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.is_ephemeral() {
+            self.buffer_and_display_map.deactivate_ephemeral_state();
+            ctx.notify();
+        }
+    }
+
     fn refresh_batch_version(&mut self, ctx: &mut ModelContext<Self>) {
         self.buffer_handle().update(ctx, |buffer, _| {
             buffer.refresh_version_on_edits_and_selection_changes_batch()

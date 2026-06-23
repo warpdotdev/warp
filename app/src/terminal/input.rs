@@ -7366,22 +7366,33 @@ impl Input {
         shared_session_input_state.pending_command_execution_request = None;
     }
 
-    /// This clears the loading state and input buffer for both the sharer and viewer
-    /// once an agent request is in flight or cancelled.
-    pub fn unfreeze_and_clear_agent_input(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Restores the frozen/loading visual state of the agent input for both the sharer
+    /// and viewer without touching the CRDT buffer contents.
+    ///
+    /// Does NOT clear or reinitialize the buffer. Buffer clearing for agent prompts is
+    /// handled by the sharer emitting CRDT delete operations via `system_clear_buffer`
+    /// (triggered when `BlocklistAIControllerEvent::SentRequest` fires). Viewers receive
+    /// those delete ops through `InputUpdated` and apply them via the normal CRDT path.
+    ///
+    /// For viewers, this also exits the ephemeral loading state created by
+    /// `freeze_input_in_loading_state`. That ephemeral buffer shadows the regular
+    /// collaborative buffer, so without exiting it the viewer never sees the regular
+    /// buffer update when the sharer's CRDT delete ops arrive.
+    pub fn unfreeze_agent_input(&mut self, ctx: &mut ViewContext<Self>) {
         if matches!(
             self.model.lock().shared_session_status(),
             SharedSessionStatus::ActiveViewer { .. } | SharedSessionStatus::ActiveSharer
         ) {
             self.editor.update(ctx, |editor, ctx| {
-                // Reinitialize the buffer to properly clear it
-                editor.reinitialize_buffer(None, ctx);
-
                 if let SharedSessionStatus::ActiveViewer { role } =
                     self.model.lock().shared_session_status()
                 {
                     // reinstate role for viewers
                     editor.set_interaction_state(role.into(), ctx);
+                    // Exit the ephemeral loading state so the regular CRDT buffer is
+                    // displayed. The sharer's delete ops (arriving via InputUpdated)
+                    // will then clear the regular buffer, making the viewer's buffer empty.
+                    editor.exit_ephemeral_loading_state(ctx);
                 }
 
                 let appearance: &Appearance = Appearance::as_ref(ctx);
@@ -14430,7 +14441,7 @@ impl Input {
                         // Prepare request failed (e.g. attachment limit exceeded).
                         // Keep pending attachments so the user can retry, unfreeze input,
                         // and show an error toast.
-                        input.unfreeze_and_clear_agent_input(ctx);
+                        input.unfreeze_agent_input(ctx);
                         let window_id = ctx.window_id();
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(

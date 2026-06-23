@@ -1189,8 +1189,12 @@ impl TerminalManager {
                     return;
                 };
                 view.update(ctx, |terminal_view, ctx| {
+                    // Restore frozen visual state only. The sharer emits CRDT delete ops
+                    // (via system_clear_buffer in the SentRequest handler) which arrive
+                    // through InputUpdated and clear the buffer via the normal CRDT path.
+                    // Reinitializing here would corrupt CRDT state (lamport clock reset).
                     terminal_view.input().update(ctx, |input, ctx| {
-                        input.unfreeze_and_clear_agent_input(ctx);
+                        input.unfreeze_agent_input(ctx);
                     });
                 });
             }
@@ -1202,8 +1206,11 @@ impl TerminalManager {
                     let reason_string = agent_prompt_failure_reason_string(reason);
                     terminal_view.show_persistent_toast(reason_string, ToastFlavor::Error, ctx);
 
+                    // Restore frozen visual state without clearing the buffer — the prompt
+                    // failed so no CRDT delete ops were sent, and the user should be able
+                    // to retry with their original text.
                     terminal_view.input().update(ctx, |input, ctx| {
-                        input.unfreeze_and_clear_agent_input(ctx);
+                        input.unfreeze_agent_input(ctx);
                     });
                 });
             }
