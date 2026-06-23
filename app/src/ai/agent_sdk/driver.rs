@@ -851,7 +851,6 @@ impl AgentDriver {
         let foreground_for_error = foreground.clone();
         let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
         let task_id = self.task_id;
-        let idle_on_complete = self.idle_on_complete;
 
         ctx.spawn(
             async move {
