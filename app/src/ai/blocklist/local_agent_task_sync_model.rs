@@ -385,7 +385,10 @@ fn map_conversation_status(
                         None
                     }
                 });
-            task_update_for_conversation_error(renderable_error, conversation.status_error_message())
+            task_update_for_conversation_error(
+                renderable_error,
+                conversation.status_error_message(),
+            )
         }
         ConversationStatus::Cancelled => (
             AgentTaskState::Cancelled,
