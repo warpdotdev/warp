@@ -23,7 +23,8 @@ fn host_bash_command_sets_history_size_sentinels() {
         false,
         false,
         true,
-    );
+    )
+    .expect("test build_host_shell_command");
 
     assert_eq!(
         env_value(&command, "HISTFILESIZE"),
@@ -55,7 +56,8 @@ fn host_non_bash_command_does_not_set_history_size_sentinels() {
         false,
         false,
         true,
-    );
+    )
+    .expect("test build_host_shell_command zsh");
 
     assert_eq!(env_value(&command, "HISTFILESIZE"), None);
     assert_eq!(env_value(&command, "HISTSIZE"), None);
@@ -76,7 +78,8 @@ fn docker_sandbox_command_sets_history_size_sentinels() {
         false,
         false,
         true,
-    );
+    )
+    .expect("test build_docker_sandbox_command");
 
     assert_eq!(
         env_value(&command, "HISTFILESIZE"),
