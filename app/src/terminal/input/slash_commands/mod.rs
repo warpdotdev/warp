@@ -21,7 +21,6 @@ use warp_util::path::{CleanPathResult, LineAndColumnArg};
 use warpui::clipboard::ClipboardContent;
 use warpui::{AppContext, SingletonEntity, ViewContext};
 
-#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::conversation::AIConversationId;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_conversations_model::AgentConversationsModel;
@@ -1103,15 +1102,29 @@ impl Input {
                     });
 
                 if should_queue {
+                    let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
+                        context_model.take_pending_attachments(ctx)
+                    });
                     QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                         model.append(
                             conversation_id,
-                            QueuedQuery::new(prompt, QueuedQueryOrigin::QueueSlashCommand),
+                            QueuedQuery::new_with_attachments(
+                                prompt,
+                                QueuedQueryOrigin::QueueSlashCommand,
+                                attachments,
+                            ),
                             ctx,
                         );
                     });
                 } else {
-                    self.submit_queued_prompt(prompt, ctx);
+                    self.ai_controller.update(ctx, move |controller, ctx| {
+                        controller.send_user_query_in_conversation(
+                            prompt,
+                            conversation_id,
+                            None,
+                            ctx,
+                        );
+                    });
                 }
             }
             open_repo if command.name == commands::OPEN_REPO.name => {
@@ -1230,7 +1243,7 @@ impl Input {
                 let reference = detected_skill.reference.clone();
                 let user_query = detected_skill.argument.clone();
                 self.execute_skill_command(
-                    reference, user_query, /*is_queued_prompt*/ false, ctx,
+                    reference, user_query, /*is_queued_prompt*/ false, None, ctx,
                 )
             }
             SlashCommandEntryState::None
@@ -1331,7 +1344,7 @@ impl Input {
                 let reference = detected_skill.reference.clone();
                 let user_query = detected_skill.argument.clone();
                 self.execute_skill_command(
-                    reference, user_query, /*is_queued_prompt*/ false, ctx,
+                    reference, user_query, /*is_queued_prompt*/ false, None, ctx,
                 )
             }
             SlashCommandEntryState::None

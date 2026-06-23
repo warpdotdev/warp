@@ -80,7 +80,7 @@ fn initial_cloud_mode_head_rejects_user_mutations_and_autofire() {
             model.reorder(conv, followup_id, 0, ctx);
         });
 
-        let action = model.update(&mut app, |model, ctx| model.pop_for_autofire(conv, ctx));
+        let action = model.update(&mut app, |model, _| model.peek_autofire(conv));
         assert!(action.is_none());
 
         model.read(&app, |model, _| {
@@ -141,9 +141,9 @@ fn remove_initial_cloud_mode_row_only_removes_the_locked_head() {
         });
         assert!(removed_again.is_none());
 
-        let action = model.update(&mut app, |model, ctx| model.pop_for_autofire(conv, ctx));
+        let action = model.update(&mut app, |model, _| model.peek_autofire(conv));
         match action {
-            Some(AutofireAction::Submit { text }) => assert_eq!(text, "follow up"),
+            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "follow up"),
             other => panic!("expected Submit, got {other:?}"),
         }
 
@@ -296,9 +296,14 @@ fn pop_for_autofire_returns_submit_for_user_managed_head() {
         append_user(&model, &mut app, conv, "first");
         append_user(&model, &mut app, conv, "second");
 
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = model.update(&mut app, |m, _| m.peek_autofire(conv));
         match action {
-            Some(AutofireAction::Submit { text }) => assert_eq!(text, "first"),
+            Some(AutofireAction::Submit { query_id, text }) => {
+                assert_eq!(text, "first");
+                model.update(&mut app, |m, ctx| {
+                    m.remove_fired_row(conv, query_id, ctx);
+                });
+            }
             other => panic!("expected Submit, got {other:?}"),
         }
 
@@ -318,9 +323,14 @@ fn pop_for_autofire_returns_last_committed_text_when_first_row_is_in_edit_mode()
         append_user(&model, &mut app, conv, "second");
         model.update(&mut app, |m, ctx| m.enter_edit_mode(conv, id_a, ctx));
 
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = model.update(&mut app, |m, _| m.peek_autofire(conv));
         match action {
-            Some(AutofireAction::PopFromEditMode { text }) => assert_eq!(text, "first"),
+            Some(AutofireAction::PopFromEditMode { query_id, text, .. }) => {
+                assert_eq!(text, "first");
+                model.update(&mut app, |m, ctx| {
+                    m.remove_fired_row(conv, query_id, ctx);
+                });
+            }
             other => panic!("expected PopFromEditMode, got {other:?}"),
         }
         model.read(&app, |model, _| {

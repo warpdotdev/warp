@@ -5223,8 +5223,15 @@ impl TerminalView {
             .ai_context_model
             .as_ref(ctx)
             .selected_conversation_id(ctx)?;
+        let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
+            context_model.take_pending_attachments(ctx)
+        });
         let id = QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-            model.append(conversation_id, QueuedQuery::new(prompt, origin), ctx)
+            model.append(
+                conversation_id,
+                QueuedQuery::new_with_attachments(prompt, origin, attachments),
+                ctx,
+            )
         });
         Some(id)
     }
@@ -5278,21 +5285,37 @@ impl TerminalView {
                     return;
                 }
 
-                let action = QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.pop_for_autofire(conversation_id, ctx)
-                });
+                let action = QueuedQueryModel::as_ref(ctx).peek_autofire(conversation_id);
                 match action {
-                    Some(AutofireAction::Submit { text }) => {
+                    Some(AutofireAction::Submit { query_id, text }) => {
                         self.input.update(ctx, |input, ctx| {
-                            input.submit_queued_prompt_for_active_pane(text, ctx);
+                            input.submit_queued_prompt_for_active_pane(
+                                text,
+                                conversation_id,
+                                query_id,
+                                ctx,
+                            );
+                        });
+                        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.remove_fired_row(conversation_id, query_id, ctx);
                         });
                     }
-                    Some(AutofireAction::PopFromEditMode { text }) => {
+                    Some(AutofireAction::PopFromEditMode {
+                        query_id,
+                        text,
+                        attachments,
+                    }) => {
                         self.input.update(ctx, |input, ctx| {
                             if input.buffer_text(ctx).is_empty() {
                                 input.replace_buffer_content(&text, ctx);
                                 input.focus_input_box(ctx);
                             }
+                        });
+                        self.ai_context_model.update(ctx, |context_model, ctx| {
+                            context_model.append_pending_attachments(attachments, ctx);
+                        });
+                        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.remove_fired_row(conversation_id, query_id, ctx);
                         });
                     }
                     None => {}
@@ -5325,8 +5348,12 @@ impl TerminalView {
                 let popped = QueuedQueryModel::handle(ctx)
                     .update(ctx, |model, ctx| model.pop_front(conversation_id, ctx));
                 if let Some(query) = popped {
+                    let attachments = query.attachments().to_vec();
                     self.input.update(ctx, |input, ctx| {
                         input.replace_buffer_content(query.text(), ctx);
+                    });
+                    self.ai_context_model.update(ctx, |context_model, ctx| {
+                        context_model.append_pending_attachments(attachments, ctx);
                     });
                 }
             }

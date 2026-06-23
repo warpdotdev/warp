@@ -175,7 +175,7 @@ use crate::ai::blocklist::{
     AttachmentType, BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
     BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
     BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
-    InputTypeAutoDetectionSource, QueuedQuery, QueuedQueryEvent, QueuedQueryModel,
+    InputTypeAutoDetectionSource, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
     QueuedQueryOrigin, SlashCommandRequest, BLOCK_CONTEXT_ATTACHMENT_REGEX,
     DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
 };
@@ -3713,8 +3713,20 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            QueuedPromptsPanelEvent::SendNow { text } => {
-                self.submit_queued_prompt_for_active_pane(text.clone(), ctx);
+            QueuedPromptsPanelEvent::SendNow {
+                conversation_id,
+                query_id,
+                text,
+            } => {
+                self.submit_queued_prompt_for_active_pane(
+                    text.clone(),
+                    *conversation_id,
+                    *query_id,
+                    ctx,
+                );
+                QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.remove_fired_row(*conversation_id, *query_id, ctx);
+                });
                 self.focus_input_box(ctx);
             }
             QueuedPromptsPanelEvent::RowDeleted => {
@@ -3918,9 +3930,6 @@ impl Input {
         self.exit_cloud_handoff_compose(ctx);
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
-        });
-        self.ai_context_model.update(ctx, |context_model, ctx| {
-            context_model.clear_pending_attachments(ctx);
         });
     }
 
@@ -5364,6 +5373,7 @@ impl Input {
         reference: SkillReference,
         user_query: Option<String>,
         is_queued_prompt: bool,
+        queued_prompt: Option<(AIConversationId, QueuedQueryId)>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         // Resolve the skill from SkillManager
@@ -5412,8 +5422,13 @@ impl Input {
         // Send the skill invocation request
         let request = SlashCommandRequest::InvokeSkill { skill, user_query };
         self.ai_controller.update(ctx, move |controller, ctx| {
-            if is_queued_prompt {
-                controller.send_queued_slash_command_request(request, ctx);
+            if let Some((conversation_id, query_id)) = queued_prompt {
+                controller.send_queued_slash_command_request(
+                    request,
+                    conversation_id,
+                    query_id,
+                    ctx,
+                );
             } else {
                 controller.send_slash_command_request(request, ctx);
             }
@@ -13364,22 +13379,22 @@ impl Input {
     /// Cancels the in-flight stream first so slash/skill paths don't trip the in-flight assertion.
     /// `is_for_same_conversation: true` keeps the conversation status `InProgress` so the warping
     /// indicator stays visible.
-    pub(crate) fn submit_queued_prompt(&mut self, prompt: String, ctx: &mut ViewContext<Self>) {
-        if let Some(conversation_id) = self
-            .ai_context_model
-            .as_ref(ctx)
-            .selected_conversation_id(ctx)
-        {
-            self.ai_controller.update(ctx, |controller, ctx| {
-                controller.cancel_conversation_progress(
-                    conversation_id,
-                    CancellationReason::FollowUpSubmitted {
-                        is_for_same_conversation: true,
-                    },
-                    ctx,
-                );
-            });
-        }
+    pub(crate) fn submit_queued_prompt(
+        &mut self,
+        prompt: String,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.ai_controller.update(ctx, |controller, ctx| {
+            controller.cancel_conversation_progress(
+                conversation_id,
+                CancellationReason::FollowUpSubmitted {
+                    is_for_same_conversation: true,
+                },
+                ctx,
+            );
+        });
 
         let detected = self
             .slash_command_model
@@ -13404,6 +13419,51 @@ impl Input {
                     detected_skill.reference,
                     detected_skill.argument,
                     /*is_queued_prompt*/ true,
+                    Some((conversation_id, query_id)),
+                    ctx,
+                )
+            }
+            _ => false,
+        };
+
+        if handled {
+            return;
+        }
+
+        self.ai_controller.update(ctx, move |controller, ctx| {
+            controller.send_queued_user_query_in_conversation(
+                prompt,
+                conversation_id,
+                query_id,
+                None,
+                ctx,
+            );
+        });
+
+        ctx.emit(Event::ExecuteAIQuery);
+    }
+
+    pub(crate) fn submit_user_query_now(&mut self, prompt: String, ctx: &mut ViewContext<Self>) {
+        let detected = self
+            .slash_command_model
+            .as_ref(ctx)
+            .detect_command(&prompt, ctx);
+        let handled = match detected {
+            SlashCommandEntryState::SlashCommand(detected_command) => {
+                self.execute_slash_command(
+                    &detected_command.command,
+                    detected_command.argument.as_ref(),
+                    SlashCommandTrigger::input(),
+                    /*is_queued_prompt*/ false,
+                    ctx,
+                )
+            }
+            SlashCommandEntryState::SkillCommand(detected_skill) => {
+                self.execute_skill_command(
+                    detected_skill.reference,
+                    detected_skill.argument,
+                    /*is_queued_prompt*/ false,
+                    None,
                     ctx,
                 )
             }
@@ -13420,16 +13480,11 @@ impl Input {
             .selected_conversation_id(ctx)
         {
             self.ai_controller.update(ctx, move |controller, ctx| {
-                controller.send_queued_user_query_in_conversation(
-                    prompt,
-                    conversation_id,
-                    None,
-                    ctx,
-                );
+                controller.send_user_query_in_conversation(prompt, conversation_id, None, ctx);
             });
         } else {
             self.ai_controller.update(ctx, move |controller, ctx| {
-                controller.send_queued_user_query_in_new_conversation(
+                controller.send_user_query_in_new_conversation(
                     prompt,
                     None,
                     EntrypointType::UserInitiated,
@@ -13450,6 +13505,8 @@ impl Input {
     pub(crate) fn submit_queued_prompt_for_active_pane(
         &mut self,
         prompt: String,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
         ctx: &mut ViewContext<Self>,
     ) {
         // Cloud follow-up path: the cloud run has ended an execution and the next queued
@@ -13463,6 +13520,12 @@ impl Input {
                         .is_ready_for_cloud_followup_prompt()
                 });
         if is_ready_for_cloud_followup {
+            if !QueuedQueryModel::as_ref(ctx)
+                .attachments_for(conversation_id, query_id)
+                .is_empty()
+            {
+                log::warn!("Dropping queued prompt attachments for cloud follow-up prompt");
+            }
             ctx.emit(Event::SubmitCloudFollowup { prompt });
             return;
         }
@@ -13477,15 +13540,9 @@ impl Input {
         // something locally, we leave the buffer alone so their in-progress prompt is
         // not clobbered.
         if self.model.lock().shared_session_status().is_viewer() {
-            let server_conversation_token = self
-                .ai_context_model
-                .as_ref(ctx)
-                .selected_conversation_id(ctx)
-                .and_then(|id| {
-                    BlocklistAIHistoryModel::as_ref(ctx)
-                        .conversation(&id)
-                        .and_then(|conv| conv.server_conversation_token().cloned())
-                })
+            let server_conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .and_then(|conv| conv.server_conversation_token().cloned())
                 .and_then(|token| {
                     token
                         .as_str()
@@ -13505,7 +13562,7 @@ impl Input {
         }
 
         // Local Agent Mode path.
-        self.submit_queued_prompt(prompt, ctx);
+        self.submit_queued_prompt(prompt, conversation_id, query_id, ctx);
     }
 
     /// Checks whether the current input should be queued instead of executed.
@@ -13589,11 +13646,18 @@ impl Input {
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
         });
+        let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
+            context_model.take_pending_attachments(ctx)
+        });
 
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.append(
                 conversation_id,
-                QueuedQuery::new(prompt, QueuedQueryOrigin::AutoQueueToggle),
+                QueuedQuery::new_with_attachments(
+                    prompt,
+                    QueuedQueryOrigin::AutoQueueToggle,
+                    attachments,
+                ),
                 ctx,
             );
         });
@@ -13645,13 +13709,17 @@ impl Input {
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
         });
-        self.ai_context_model.update(ctx, |context_model, ctx| {
-            context_model.clear_pending_attachments(ctx);
+        let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
+            context_model.take_pending_attachments(ctx)
         });
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.append(
                 conversation_id,
-                QueuedQuery::new(prompt, QueuedQueryOrigin::AutoQueueToggle),
+                QueuedQuery::new_with_attachments(
+                    prompt,
+                    QueuedQueryOrigin::AutoQueueToggle,
+                    attachments,
+                ),
                 ctx,
             );
         });

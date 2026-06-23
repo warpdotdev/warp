@@ -246,29 +246,6 @@ pub(super) fn parse_context_attachments(
         }
     }
 
-    // Add pending file attachments as FilePathReference.
-    // Duplicate basenames get a (1), (2), ... suffix to avoid collisions,
-    // matching the pattern in build_file_attachment_map.
-    for file in context_model.pending_files().iter() {
-        let attachment = AIAgentAttachment::FilePathReference {
-            file_id: uuid::Uuid::new_v4().to_string(),
-            file_name: file.file_name.clone(),
-            file_path: file.file_path.to_string_lossy().to_string(),
-        };
-        let mut key = file.file_name.clone();
-        if referenced_attachments.contains_key(&key) {
-            let mut suffix = 1;
-            loop {
-                key = format!("{} ({suffix})", file.file_name);
-                if !referenced_attachments.contains_key(&key) {
-                    break;
-                }
-                suffix += 1;
-            }
-        }
-        referenced_attachments.insert(key, attachment);
-    }
-
     // Add pending AI document as attachment if present
     if let Some(document_id) = context_model.pending_document_id() {
         if let Some(content) = AIDocumentModel::as_ref(ctx).get_document_content(&document_id, ctx)

@@ -147,9 +147,14 @@ fn complete_drain_pops_head_and_returns_submit_action() {
             m.append(conv, user_query("second"), ctx);
         });
 
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = model.update(&mut app, |m, _| m.peek_autofire(conv));
         match action {
-            Some(AutofireAction::Submit { text }) => assert_eq!(text, "first"),
+            Some(AutofireAction::Submit { query_id, text }) => {
+                assert_eq!(text, "first");
+                model.update(&mut app, |m, ctx| {
+                    m.remove_fired_row(conv, query_id, ctx);
+                });
+            }
             other => panic!("expected Submit, got {other:?}"),
         }
         model.read(&app, |m, _| {
@@ -690,9 +695,14 @@ fn complete_drain_with_first_row_in_edit_mode_returns_pop_from_edit_mode() {
             m.enter_edit_mode(conv, id_a, ctx);
         });
 
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = model.update(&mut app, |m, _| m.peek_autofire(conv));
         match action {
-            Some(AutofireAction::PopFromEditMode { text }) => assert_eq!(text, "first"),
+            Some(AutofireAction::PopFromEditMode { query_id, text, .. }) => {
+                assert_eq!(text, "first");
+                model.update(&mut app, |m, ctx| {
+                    m.remove_fired_row(conv, query_id, ctx);
+                });
+            }
             other => panic!("expected PopFromEditMode, got {other:?}"),
         }
         // Edit mode is cleared after pop.
@@ -719,7 +729,7 @@ fn complete_drain_with_non_empty_input_preserves_edited_head_row() {
         if !(simulated_input_is_non_empty
             && model.read(&app, |m, _| m.first_row_is_in_edit_mode(conv)))
         {
-            model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+            model.update(&mut app, |m, _| m.peek_autofire(conv));
         }
 
         model.read(&app, |m, _| {
@@ -734,7 +744,7 @@ fn complete_drain_with_non_empty_input_preserves_edited_head_row() {
 #[test]
 fn complete_drain_with_empty_queue_returns_none() {
     with_singleton(|mut app, model, conv| {
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = model.update(&mut app, |m, _| m.peek_autofire(conv));
         assert!(action.is_none());
     });
 }
@@ -937,21 +947,31 @@ fn complete_drain_after_error_drain_continues_with_next_row() {
         );
 
         // Complete: pop "second".
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = model.update(&mut app, |m, _| m.peek_autofire(conv));
         match action {
-            Some(AutofireAction::Submit { text }) => assert_eq!(text, "second"),
+            Some(AutofireAction::Submit { query_id, text }) => {
+                assert_eq!(text, "second");
+                model.update(&mut app, |m, ctx| {
+                    m.remove_fired_row(conv, query_id, ctx);
+                });
+            }
             other => panic!("expected Submit(\"second\"), got {other:?}"),
         }
 
         // Complete again: pop "third".
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = model.update(&mut app, |m, _| m.peek_autofire(conv));
         match action {
-            Some(AutofireAction::Submit { text }) => assert_eq!(text, "third"),
+            Some(AutofireAction::Submit { query_id, text }) => {
+                assert_eq!(text, "third");
+                model.update(&mut app, |m, ctx| {
+                    m.remove_fired_row(conv, query_id, ctx);
+                });
+            }
             other => panic!("expected Submit(\"third\"), got {other:?}"),
         }
 
         // Queue is now empty; the next drain returns None.
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = model.update(&mut app, |m, _| m.peek_autofire(conv));
         assert!(action.is_none());
     });
 }
@@ -966,9 +986,14 @@ fn drain_is_isolated_per_conversation() {
             m.append(conv_b, user_query("b-first"), ctx);
         });
 
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv_a, ctx));
+        let action = model.update(&mut app, |m, _| m.peek_autofire(conv_a));
         match action {
-            Some(AutofireAction::Submit { text }) => assert_eq!(text, "a-first"),
+            Some(AutofireAction::Submit { query_id, text }) => {
+                assert_eq!(text, "a-first");
+                model.update(&mut app, |m, ctx| {
+                    m.remove_fired_row(conv_a, query_id, ctx);
+                });
+            }
             other => panic!("expected Submit(\"a-first\"), got {other:?}"),
         }
         model.read(&app, |m, _| {
@@ -1023,7 +1048,7 @@ fn send_now_action_removes_row_and_emits_send_now_event() {
         let send_now_events_for_subscription = send_now_events.clone();
         app.update(|ctx| {
             ctx.subscribe_to_view(&panel, move |_, event: &QueuedPromptsPanelEvent, _| {
-                if let QueuedPromptsPanelEvent::SendNow { text } = event {
+                if let QueuedPromptsPanelEvent::SendNow { text, .. } = event {
                     send_now_events_for_subscription
                         .borrow_mut()
                         .push(text.clone());
@@ -1037,7 +1062,7 @@ fn send_now_action_removes_row_and_emits_send_now_event() {
 
         assert_eq!(send_now_events.borrow().as_slice(), ["send me now"]);
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
-            assert!(model.queue(conversation_id).is_empty());
+            assert_eq!(model.queue(conversation_id).len(), 1);
         });
     });
 }

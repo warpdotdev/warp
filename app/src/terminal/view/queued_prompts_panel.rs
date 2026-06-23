@@ -186,7 +186,11 @@ pub enum QueuedPromptsPanelAction {
 #[derive(Clone, Debug)]
 pub enum QueuedPromptsPanelEvent {
     /// A row was removed via its send-now button. The host should immediately submit `text`.
-    SendNow { text: String },
+    SendNow {
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+        text: String,
+    },
     /// A row was deleted via the trash button. The host should refocus the input.
     RowDeleted,
     /// An inline edit was committed or cancelled. The host should refocus the input.
@@ -595,11 +599,16 @@ impl TypedActionView for QueuedPromptsPanelView {
                     self.commit_edit(ctx);
                 }
 
-                let removed = QueuedQueryModel::handle(ctx)
-                    .update(ctx, |model, ctx| model.remove_by_id(conv_id, query_id, ctx));
-                if let Some(removed) = removed {
+                let text = QueuedQueryModel::as_ref(ctx)
+                    .queue(conv_id)
+                    .iter()
+                    .find(|row| row.id() == query_id)
+                    .map(|row| row.text().to_owned());
+                if let Some(text) = text {
                     ctx.emit(QueuedPromptsPanelEvent::SendNow {
-                        text: removed.text().to_owned(),
+                        conversation_id: conv_id,
+                        query_id,
+                        text,
                     });
                 }
             }

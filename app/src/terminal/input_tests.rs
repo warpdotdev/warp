@@ -1169,8 +1169,22 @@ fn send_now_event_submits_through_active_pane_and_preserves_draft() {
 
         input.update(&mut app, |input, ctx| {
             input.replace_buffer_content("draft in progress", ctx);
+            let conversation_id = crate::ai::agent::conversation::AIConversationId::new();
+            let query_id =
+                crate::ai::blocklist::QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.append(
+                        conversation_id,
+                        crate::ai::blocklist::QueuedQuery::new(
+                            "queued prompt".to_owned(),
+                            crate::ai::blocklist::QueuedQueryOrigin::QueueSlashCommand,
+                        ),
+                        ctx,
+                    )
+                });
             input.handle_queued_prompts_panel_event(
                 &QueuedPromptsPanelEvent::SendNow {
+                    conversation_id,
+                    query_id,
                     text: "queued prompt".to_owned(),
                 },
                 ctx,

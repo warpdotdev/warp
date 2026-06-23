@@ -4,7 +4,7 @@ use uuid::Uuid;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment};
 use crate::settings::{AISettings, AISettingsChangedEvent, PromptSubmissionMode};
 
 /// A globally unique identifier for a single queued prompt row.
@@ -42,14 +42,24 @@ pub struct QueuedQuery {
     id: QueuedQueryId,
     text: String,
     origin: QueuedQueryOrigin,
+    attachments: Vec<PendingAttachment>,
 }
 
 impl QueuedQuery {
     pub fn new(text: String, origin: QueuedQueryOrigin) -> Self {
+        Self::new_with_attachments(text, origin, vec![])
+    }
+
+    pub fn new_with_attachments(
+        text: String,
+        origin: QueuedQueryOrigin,
+        attachments: Vec<PendingAttachment>,
+    ) -> Self {
         Self {
             id: QueuedQueryId::new(),
             text,
             origin,
+            attachments,
         }
     }
 
@@ -65,6 +75,10 @@ impl QueuedQuery {
         self.origin
     }
 
+    pub fn attachments(&self) -> &[PendingAttachment] {
+        &self.attachments
+    }
+
     /// Returns true if this row is locked from user mutation, reorder, and auto-fire.
     /// Currently only the locked initial Cloud Mode row is non-mutable; lifecycle code
     /// removes it explicitly via [`QueuedQueryModel::remove_initial_cloud_mode_row`].
@@ -77,10 +91,17 @@ impl QueuedQuery {
 #[derive(Debug)]
 pub enum AutofireAction {
     /// Submit this prompt as a normal queued user query.
-    Submit { text: String },
+    Submit {
+        query_id: QueuedQueryId,
+        text: String,
+    },
     /// The popped row was in edit mode at the time of pop.
     /// The caller places `text` (the row's last committed text) in the input box.
-    PopFromEditMode { text: String },
+    PopFromEditMode {
+        query_id: QueuedQueryId,
+        text: String,
+        attachments: Vec<PendingAttachment>,
+    },
 }
 
 /// Per-conversation queue / edit / toggle state.
@@ -230,6 +251,19 @@ impl QueuedQueryModel {
             .unwrap_or(&[])
     }
 
+    /// Returns the attachments stored on `query_id`, or an empty slice when absent.
+    pub fn attachments_for(
+        &self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+    ) -> &[PendingAttachment] {
+        self.queues
+            .get(&conversation_id)
+            .and_then(|state| state.queue.iter().find(|query| query.id == query_id))
+            .map(|query| query.attachments.as_slice())
+            .unwrap_or(&[])
+    }
+
     /// Returns true when `conversation_id` has at least one queued prompt.
     pub fn has_queue(&self, conversation_id: AIConversationId) -> bool {
         self.queues
@@ -324,33 +358,51 @@ impl QueuedQueryModel {
 
     /// Auto-fire drain entry point for `conversation_id`.
     /// Returns `None` for empty queues or when the head is locked
-    /// ([`QueuedQuery::is_locked`]); otherwise pops the first row and returns whether
+    /// ([`QueuedQuery::is_locked`]); otherwise peeks the first row and returns whether
     /// the caller should submit it normally or treat it as a popped edit-mode row.
-    pub fn pop_for_autofire(
-        &mut self,
-        conversation_id: AIConversationId,
-        ctx: &mut ModelContext<Self>,
-    ) -> Option<AutofireAction> {
-        let state = self.queues.get_mut(&conversation_id)?;
+    pub fn peek_autofire(&self, conversation_id: AIConversationId) -> Option<AutofireAction> {
+        let state = self.queues.get(&conversation_id)?;
         let first = state.queue.first()?;
         if first.is_locked() {
             return None;
         }
         let first_in_edit_mode = state.editing == Some(first.id);
-        let popped = state.queue.remove(0);
-        if first_in_edit_mode {
+
+        Some(if first_in_edit_mode {
+            AutofireAction::PopFromEditMode {
+                query_id: first.id,
+                text: first.text.clone(),
+                attachments: first.attachments.clone(),
+            }
+        } else {
+            AutofireAction::Submit {
+                query_id: first.id,
+                text: first.text.clone(),
+            }
+        })
+    }
+
+    /// Removes the already-dispatched auto-fired row.
+    pub fn remove_fired_row(
+        &mut self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<QueuedQuery> {
+        let state = self.queues.get_mut(&conversation_id)?;
+        let idx = state.queue.iter().position(|q| q.id == query_id)?;
+        if state.queue[idx].is_locked() {
+            return None;
+        }
+        let removed = state.queue.remove(idx);
+        if state.editing == Some(query_id) {
             state.editing = None;
         }
         ctx.emit(QueuedQueryEvent::Removed {
             conversation_id,
-            query_id: popped.id,
+            query_id,
         });
-
-        Some(if first_in_edit_mode {
-            AutofireAction::PopFromEditMode { text: popped.text }
-        } else {
-            AutofireAction::Submit { text: popped.text }
-        })
+        Some(removed)
     }
 
     /// Removes a specific row by id within `conversation_id`'s queue, if present. Returns the
