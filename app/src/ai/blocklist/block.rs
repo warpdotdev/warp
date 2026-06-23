@@ -4884,6 +4884,7 @@ impl AIBlock {
                     .find_map(|comment| comment.rich_text_editor.as_ref(ctx).selected_text(ctx))
             })
             .or_else(|| self.selected_text.read().clone())
+            .filter(|selection| !selection.is_empty())
     }
 
     /// Test-only helper to set the block-level text selection, which is normally
