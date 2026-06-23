@@ -2367,8 +2367,14 @@ impl View for AgentInputFooter {
 
 /// Overlays a small yellow notification dot on the top-right corner of `element`
 /// to flag that the active conversation's prompt cache has expired.
+///
+/// `render_with_offset` applies a built-in `(width/2, -height/2)` offset that would place
+/// the dot outside the element's logical bounds, causing it to be clipped by the parent
+/// flex container. We counteract that with `(-width/2, height/2)` so the dot's top-right
+/// corner lands exactly at the chip's top-right corner and the dot extends inward.
 fn render_prompt_cache_expiry_dot(element: Box<dyn Element>, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
+    let half = PROMPT_CACHE_EXPIRY_DOT_SIZE / 2.;
     RedNotificationDot::render_with_offset(
         element,
         &UiComponentStyles {
@@ -2381,7 +2387,7 @@ fn render_prompt_cache_expiry_dot(element: Box<dyn Element>, app: &AppContext) -
             )),
             ..RedNotificationDot::default_styles(appearance)
         },
-        (-1., 1.),
+        (-half, half),
     )
 }
 
