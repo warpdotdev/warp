@@ -83,11 +83,29 @@ fn both_match_equal_timestamps_prefer_shell() {
 }
 
 #[test]
-fn both_match_command_without_timestamp_prefer_shell() {
-    // Cannot prove the prompt is newer when the command carries no timestamp.
+fn both_match_command_without_timestamp_locks_to_ai() {
+    // A timestamped prompt match beats a command match with no timestamp
+    // (e.g. a shell history-file entry): the prompt is the only entry whose
+    // recency we can establish, so it is treated as more recent.
     let (_, prompt_ts) = earlier_and_later();
     assert_eq!(
         resolve_history_match(Some(None), Some(Some(prompt_ts))),
+        HISTORY_MATCH_AI,
+    );
+}
+
+#[test]
+fn both_match_prompt_without_timestamp_prefer_shell() {
+    // Without a prompt timestamp we cannot prove the prompt is newer, so we
+    // preserve the Shell short-circuit (prompt entries always carry a timestamp
+    // in practice; this pins the defensive fallback).
+    let (command_ts, _) = earlier_and_later();
+    assert_eq!(
+        resolve_history_match(Some(Some(command_ts)), Some(None)),
+        HISTORY_MATCH_SHELL,
+    );
+    assert_eq!(
+        resolve_history_match(Some(None), Some(None)),
         HISTORY_MATCH_SHELL,
     );
 }

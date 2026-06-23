@@ -1007,19 +1007,19 @@ async fn most_recent_close_match<'a>(
 /// - command-only match -> Shell
 /// - prompt-only match -> AI
 /// - both matched: the entry with the later timestamp wins. When the command
-///   has no timestamp (e.g. a history-file entry) or the timestamps are equal,
-///   we cannot prove the prompt is more recent, so we preserve the existing
-///   Shell short-circuit.
+///   has no timestamp (e.g. a history-file entry) but the prompt does, the
+///   prompt is treated as more recent (AI).
 fn resolve_history_match(
     command_match: Option<Option<DateTime<Local>>>,
     prompt_match: Option<Option<DateTime<Local>>>,
 ) -> Option<(InputType, InputTypeAutoDetectionSource)> {
     match (command_match, prompt_match) {
         (Some(command_ts), Some(prompt_ts)) => {
-            let prompt_is_newer = matches!(
-                (command_ts, prompt_ts),
-                (Some(command_ts), Some(prompt_ts)) if prompt_ts > command_ts
-            );
+            let prompt_is_newer = match (command_ts, prompt_ts) {
+                (Some(command_ts), Some(prompt_ts)) => prompt_ts > command_ts,
+                (None, Some(_)) => true,
+                (Some(_), None) | (None, None) => false,
+            };
             if prompt_is_newer {
                 log::debug!("found match from prompt history at {prompt_ts:?}");
                 Some((InputType::AI, InputTypeAutoDetectionSource::HistoryMatch))
