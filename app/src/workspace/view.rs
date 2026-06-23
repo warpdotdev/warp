@@ -2616,7 +2616,7 @@ impl Workspace {
     }
 
     /// Subscribes to `WarpConfigUpdateEvent::TabConfigErrors` (and the equivalent
-    /// `ModelConfigErrors` for custom auto model configs) and shows a persistent
+    /// `ModelConfigErrors` for custom model router configs) and shows a persistent
     /// error toast for each file that failed to parse.  Uses `object_id` keyed by
     /// file path so that re-saving the same file auto-dismisses the stale toast.
     fn subscribe_to_tab_config_errors(
@@ -2670,9 +2670,6 @@ impl Workspace {
                     }
                 }
                 WarpConfigUpdateEvent::ModelConfigs => {
-                    // Mirror the tab-config behavior: clear stale model-config
-                    // error toasts on every reload; `ModelConfigErrors` re-adds
-                    // any that still apply.
                     toast_stack.update(ctx, |toast_stack, ctx| {
                         toast_stack.dismiss_toasts_by_prefix("model_config_error:", ctx);
                     });

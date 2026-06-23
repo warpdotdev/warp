@@ -16,7 +16,7 @@ use lazy_static::lazy_static;
 use warp_core::ui::theme::WarpTheme;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::ai::custom_auto_models::{CustomAutoModel, ModelConfigError};
+use crate::ai::custom_model_routers::{CustomModelRouter, ModelConfigError};
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::tab_configs::{TabConfig, TabConfigError};
 use crate::themes::theme::{ThemeKind, WarpThemeConfig};
@@ -62,10 +62,10 @@ pub enum WarpConfigUpdateEvent {
     /// Emitted when one or more tab config files failed to parse.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     TabConfigErrors(Vec<TabConfigError>),
-    /// The local `model_configs/` custom auto models were created, modified, or deleted.
+    /// The local `custom_model_routers/` custom model routers were created, modified, or deleted.
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     ModelConfigs,
-    /// Emitted when one or more `model_configs/` files failed to parse.
+    /// Emitted when one or more `custom_model_routers/` files failed to parse.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     ModelConfigErrors(Vec<ModelConfigError>),
     /// The settings file (`settings.toml`) was created, modified, or deleted.
@@ -94,11 +94,11 @@ pub struct WarpConfig {
     tab_config_errors: Vec<TabConfigError>,
     theme_config: WarpThemeConfig,
     local_user_workflows: Vec<Workflow>,
-    /// User-defined custom auto models loaded from `~/.warp/model_configs/`.
-    custom_auto_models: Vec<CustomAutoModel>,
-    /// Errors for `model_configs/` files that failed to parse.
+    /// User-defined custom model routers loaded from `~/.warp/custom_model_routers/`.
+    custom_model_routers: Vec<CustomModelRouter>,
+    /// Errors for `custom_model_routers/` files that failed to parse.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    custom_auto_model_errors: Vec<ModelConfigError>,
+    custom_model_router_errors: Vec<ModelConfigError>,
 }
 
 /// Platform-independent parts of WarpConfig.
@@ -130,9 +130,9 @@ impl WarpConfig {
         &self.local_user_workflows
     }
 
-    /// The local (YAML-sourced) custom auto models.
-    pub fn custom_auto_models(&self) -> &Vec<CustomAutoModel> {
-        &self.custom_auto_models
+    /// The local (YAML-sourced) custom model routers.
+    pub fn custom_model_routers(&self) -> &Vec<CustomModelRouter> {
+        &self.custom_model_routers
     }
 
     /// Saving the newly created launch configuration to the WarpConfig that we currently
@@ -208,10 +208,10 @@ pub fn tab_configs_dir() -> PathBuf {
     base_dir().join("tab_configs")
 }
 
-/// Returns the path to the user's custom auto model config file
-/// (`~/.warp/custom_auto_models.yaml`).
-pub fn custom_auto_models_file() -> PathBuf {
-    base_dir().join("custom_auto_models.yaml")
+/// Returns the path to the directory containing the user's custom model router
+/// configs (`~/.warp/custom_model_routers/`). Each file defines a single router.
+pub fn custom_model_routers_dir() -> PathBuf {
+    base_dir().join("custom_model_routers")
 }
 
 /// Returns the path to the directory containing the built-in default tab configs.

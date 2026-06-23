@@ -2,43 +2,32 @@
 //! a concrete model per task.
 //!
 //! This module holds the portable definition for **local** (YAML-authored) custom
-//! auto models: produced from `~/.warp/custom_auto_models.yaml` (see
-//! [`parse_model_configs_yaml`]), surfaced in the model picker as synthetic
-//! [`LLMInfo`] entries, and serialized inline into outbound agent requests
-//! (`Request.Settings.custom_auto_models`) mirroring the
-//! `custom_model_providers` inline-registry pattern.
+//! auto models: each file under `~/.warp/custom_model_routers/` defines exactly
+//! one router (see [`parse_model_config_yaml`]), surfaced in the model picker as
+//! synthetic [`LLMInfo`] entries, and serialized inline into outbound agent
+//! requests (`Request.Settings.custom_model_routers`).
 //!
-//! Cloud/team custom autos are delivered separately, as `LLMInfo` entries in the
-//! available-LLMs fetch (id = `custom-auto:cloud:<uid>`); at request time the
-//! client reverses that id into a `cloud_uid` (see
-//! `llms::LLMPreferences::custom_auto_models_for_request`).
-//!
-//! See `specs/custom-auto-models/PRODUCT.md` and `TECH.md`. Invariant numbers in
-//! comments (e.g. "inv. 27") refer to the product spec.
+//! Cloud/team custom routers arrive as regular `LLMInfo` entries in the
+//! available-LLMs fetch with their own server-assigned IDs, and do not need a
+//! client-side registry entry.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Nested proto types live under the snake_cased parent message module, exactly
 /// like `custom_model_providers::{CustomModelProvider, CustomModel}`.
-use api::request::settings::custom_auto_models as proto;
+use api::request::settings::custom_model_routers as proto;
 use serde::{Deserialize, Serialize};
 use warp_multi_agent_api as api;
 
 use super::llms::{LLMContextWindow, LLMId, LLMInfo, LLMProvider, LLMUsageMetadata};
 
-/// The `config_key` prefix shared by all custom auto models. Lets us recognize a
-/// selection as a custom auto and distinguish it from concrete and built-in autos.
-pub const CUSTOM_AUTO_PREFIX: &str = "custom-auto:";
-/// The `config_key` prefix for *local* (YAML-authored) custom auto models.
-pub const LOCAL_CUSTOM_AUTO_PREFIX: &str = "custom-auto:local:";
-/// The `config_key` prefix for *cloud* custom auto models. Cloud autos arrive as
-/// `LLMInfo` entries in the available-LLMs fetch with id `custom-auto:cloud:<uid>`.
-pub const CLOUD_CUSTOM_AUTO_PREFIX: &str = "custom-auto:cloud:";
+/// The `config_key` prefix for local (YAML-authored) custom model routers.
+pub const LOCAL_CUSTOM_ROUTER_PREFIX: &str = "custom-router:local:";
 
-/// The routing strategy for a custom auto model. Exactly one is set (inv. 18).
+/// The routing strategy for a custom model router.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CustomAutoRouting {
+pub enum CustomModelRouting {
     /// Route by Warp-determined task complexity.
     Complexity(ComplexityRouting),
     /// Route by classifying the prompt against user-authored categories.
@@ -47,7 +36,7 @@ pub enum CustomAutoRouting {
 
 /// Complexity routing: each bucket maps to a concrete model id. The required
 /// `default` is the catch-all used when a bucket is omitted or task complexity
-/// cannot be determined. Omitted buckets fall back to `default` (inv. 3, 28).
+/// cannot be determined. Omitted buckets fall back to `default`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ComplexityRouting {
     /// The required catch-all model used when no bucket matches.
@@ -60,8 +49,8 @@ pub struct ComplexityRouting {
     pub hard: Option<String>,
 }
 
-/// Prompt routing: an ordered list of rules plus a required catch-all default
-/// (inv. 29).
+/// Prompt routing: each rule maps to a model that should be used for
+/// prompts that match that rule.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptRouting {
     /// The required catch-all model used when no rule matches.
@@ -78,54 +67,51 @@ pub struct PromptRule {
     pub model: String,
 }
 
-/// A local (YAML-authored) custom auto model.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CustomAutoModel {
-    /// User-facing name shown in the picker.
-    pub name: String,
-    /// The routing strategy + targets.
-    pub routing: CustomAutoRouting,
+/// A local (YAML-authored) custom model router. Bundles the picker display
+/// info and the routing definition together so `LLMPreferences` only needs one
+/// collection rather than two parallel vecs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CustomModelRouter {
+    pub info: LLMInfo,
+    pub routing: CustomModelRouting,
 }
 
-impl CustomAutoModel {
-    /// Builds a local (YAML-sourced) custom auto model.
-    pub fn new_local(name: String, routing: CustomAutoRouting) -> Self {
-        Self { name, routing }
-    }
-
-    /// The `config_key` that identifies this model in the picker (`LLMId`) and in
-    /// the request registry (`ModelConfig.base`). Local autos are keyed by name
-    /// (the unit of local-wins precedence, inv. 19).
-    pub fn config_key(&self) -> String {
-        format!("{LOCAL_CUSTOM_AUTO_PREFIX}{}", self.name)
-    }
-
-    /// The picker [`LLMId`] for this model (equal to its `config_key`).
-    pub fn llm_id(&self) -> LLMId {
-        LLMId::from(self.config_key())
-    }
-
-    /// Builds the synthetic [`LLMInfo`] picker entry for this custom auto model.
+impl CustomModelRouter {
+    /// Builds a local (YAML-sourced) custom model router, computing the
+    /// picker [`LLMInfo`] inline so callers never need to call a separate
+    /// `to_llm_info()` step.
     ///
-    /// Mirrors `llms::custom_llm_info_from`: provider `Unknown` and empty
-    /// `host_configs` mark it as an auto/router-style entry rather than a concrete
-    /// model. The `description` carries the source and routing strategy label shown
-    /// in the model picker details panel.
-    pub fn to_llm_info(&self) -> LLMInfo {
-        let description = match &self.routing {
-            CustomAutoRouting::Complexity(_) => "Locally defined · Routes by task complexity",
-            CustomAutoRouting::Prompt(_) => "Locally defined · Routes by prompt content",
+    /// `source_path` is the file the router was loaded from; when provided it
+    /// appears in the description so the user knows where to edit the config.
+    pub fn new_local(
+        name: String,
+        routing: CustomModelRouting,
+        source_path: Option<&Path>,
+    ) -> Self {
+        let config_key = format!("{LOCAL_CUSTOM_ROUTER_PREFIX}{name}");
+        let routing_kind = match &routing {
+            CustomModelRouting::Complexity(_) => "Routes by task complexity",
+            CustomModelRouting::Prompt(_) => "Routes by prompt content",
         };
-        LLMInfo {
-            display_name: self.name.clone(),
-            base_model_name: self.name.clone(),
-            id: self.llm_id(),
+        let description = match source_path {
+            Some(path) => {
+                format!(
+                    "{routing_kind} · {}",
+                    warp_core::paths::home_relative_path(path)
+                )
+            }
+            None => routing_kind.to_owned(),
+        };
+        let info = LLMInfo {
+            display_name: name.clone(),
+            base_model_name: name,
+            id: config_key.into(),
             reasoning_level: None,
             usage_metadata: LLMUsageMetadata {
                 request_multiplier: 1,
                 credit_multiplier: None,
             },
-            description: Some(description.to_owned()),
+            description: Some(description),
             disable_reason: None,
             vision_supported: true,
             spec: None,
@@ -133,33 +119,51 @@ impl CustomAutoModel {
             host_configs: Default::default(),
             discount_percentage: None,
             context_window: LLMContextWindow::default(),
-        }
+        };
+        Self { info, routing }
     }
 
-    /// Builds the proto registry entry sent in `Request.Settings.custom_auto_models`.
-    /// Local autos send the full definition inline every request. (Cloud autos are
-    /// handled separately in `llms::LLMPreferences::custom_auto_models_for_request`,
-    /// which sends just the `cloud_uid`.)
-    pub fn to_proto(&self) -> proto::CustomAutoModel {
-        proto::CustomAutoModel {
-            config_key: self.config_key(),
-            name: self.name.clone(),
-            router: Some(self.to_proto_router()),
-        }
+    /// The `config_key` that identifies this router in the picker and request
+    /// registry. Equal to `info.id`.
+    pub fn config_key(&self) -> String {
+        self.info.id.as_str().to_owned()
     }
 
-    fn to_proto_router(&self) -> proto::custom_auto_model::Router {
+    /// The picker [`LLMId`] for this router (equal to its `config_key`).
+    pub fn llm_id(&self) -> LLMId {
+        self.info.id.clone()
+    }
+
+    /// Returns all routing target model IDs defined in this router (required
+    /// defaults and any optional bucket/rule targets that are set). Used to
+    /// validate that every target is a known concrete model.
+    pub fn all_targets(&self) -> Vec<&str> {
         match &self.routing {
-            CustomAutoRouting::Complexity(c) => {
-                proto::custom_auto_model::Router::Complexity(proto::ComplexityBasedRouter {
+            CustomModelRouting::Complexity(c) => std::iter::once(c.default.as_str())
+                .chain(c.easy.as_deref())
+                .chain(c.medium.as_deref())
+                .chain(c.hard.as_deref())
+                .collect(),
+            CustomModelRouting::Prompt(p) => std::iter::once(p.default_model.as_str())
+                .chain(p.rules.iter().map(|r| r.model.as_str()))
+                .collect(),
+        }
+    }
+
+    /// Builds the proto registry entry sent in `Request.Settings.custom_model_routers`.
+    /// The full routing definition is sent inline with every request.
+    pub fn to_proto(&self) -> proto::CustomModelRouter {
+        let router = match &self.routing {
+            CustomModelRouting::Complexity(c) => {
+                proto::custom_model_router::Router::Complexity(proto::ComplexityBasedRouter {
                     default: c.default.clone(),
                     easy: c.easy.clone().unwrap_or_default(),
                     medium: c.medium.clone().unwrap_or_default(),
                     hard: c.hard.clone().unwrap_or_default(),
                 })
             }
-            CustomAutoRouting::Prompt(p) => {
-                proto::custom_auto_model::Router::Prompt(proto::PromptBasedRouter {
+            CustomModelRouting::Prompt(p) => {
+                proto::custom_model_router::Router::Prompt(proto::PromptBasedRouter {
                     default: p.default_model.clone(),
                     rules: p
                         .rules
@@ -171,21 +175,21 @@ impl CustomAutoModel {
                         .collect(),
                 })
             }
+        };
+
+        proto::CustomModelRouter {
+            config_key: self.config_key(),
+            name: self.info.display_name.clone(),
+            router: Some(router),
         }
     }
 
-    /// Validates routing targets (inv. 27, 29).
-    ///
-    /// Availability/entitlement and unknown-model-id handling are NOT hard errors
-    /// here — they are resolved by server-side fallback (inv. 26, 28). This only
-    /// rejects structurally invalid definitions: routing to an auto model, empty
-    /// required targets, or a prompt type missing its catch-all default.
     pub fn validate(&self) -> Result<(), String> {
         match &self.routing {
-            CustomAutoRouting::Complexity(c) => {
+            CustomModelRouting::Complexity(c) => {
                 if c.default.trim().is_empty() {
                     return Err(
-                        "complexity routing requires a non-empty `default` model".to_owned(),
+                        "complexity routing requires a non-empty `default` model".to_owned()
                     );
                 }
                 validate_target(&c.default).map_err(|e| format!("`default`: {e}"))?;
@@ -198,9 +202,8 @@ impl CustomAutoModel {
                     }
                 }
             }
-            CustomAutoRouting::Prompt(p) => {
+            CustomModelRouting::Prompt(p) => {
                 if p.default_model.trim().is_empty() {
-                    // inv. 29: the catch-all default is required.
                     return Err("prompt routing requires a non-empty `default` model".to_owned());
                 }
                 validate_target(&p.default_model).map_err(|e| format!("`default`: {e}"))?;
@@ -217,7 +220,7 @@ impl CustomAutoModel {
     }
 }
 
-/// Validates a single routing target id: non-empty and concrete (inv. 27).
+/// Validates a single routing target id: non-empty and concrete.
 fn validate_target(model_id: &str) -> Result<(), String> {
     let trimmed = model_id.trim();
     if trimmed.is_empty() {
@@ -225,50 +228,38 @@ fn validate_target(model_id: &str) -> Result<(), String> {
     }
     if is_auto_target(trimmed) {
         return Err(format!(
-            "target `{trimmed}` is an auto model; custom auto models must route to concrete models"
+            "target `{trimmed}` is an auto model; custom model routers must route to concrete models"
         ));
     }
     Ok(())
 }
 
 /// Returns whether a model id refers to an auto/router model (built-in or custom).
-/// Custom auto models may not route to these (inv. 27).
+/// Custom auto models may not route to these.
 pub fn is_auto_target(model_id: &str) -> bool {
     let id = model_id.trim();
     id == "auto"
         || id.starts_with("auto-")
         || id == "cli-agent-auto"
         || id == "computer-use-agent-auto"
-        || is_custom_auto_id(id)
+        || is_custom_router_id(id)
 }
 
-/// Returns whether an id is the `config_key`/`LLMId` of a custom auto model.
-pub fn is_custom_auto_id(id: &str) -> bool {
-    id.starts_with(CUSTOM_AUTO_PREFIX)
+/// Returns whether an id is the `config_key`/`LLMId` of a local custom model router.
+pub fn is_custom_router_id(id: &str) -> bool {
+    id.starts_with(LOCAL_CUSTOM_ROUTER_PREFIX)
 }
 
-/// Returns whether an id is the `config_key` of a *local* custom auto model.
-/// Used to reconcile stale local selections without touching cloud selections.
-pub fn is_local_custom_auto_id(id: &str) -> bool {
-    id.starts_with(LOCAL_CUSTOM_AUTO_PREFIX)
+/// Returns whether an id is the `config_key` of a local custom model router.
+/// Alias for [`is_custom_router_id`]; prefer that in new call sites.
+pub fn is_local_custom_router_id(id: &str) -> bool {
+    is_custom_router_id(id)
 }
 
-/// Extracts the GSO uid from a *cloud* custom-auto `config_key`
-/// (`custom-auto:cloud:<uid>`), returning `None` if `id` is not a cloud auto.
-///
-/// Cloud autos arrive via the available-LLMs fetch; at request time we reverse
-/// the id into a `cloud_uid` so the server can fetch + authorize the GSO.
-pub fn cloud_uid_from_id(id: &str) -> Option<&str> {
-    id.strip_prefix(CLOUD_CUSTOM_AUTO_PREFIX)
-}
-
-/// Describes a `model_configs/` YAML file that failed to parse or validate.
-///
-/// Mirrors `tab_configs::TabConfigError` so the parse error can surface as a
-/// non-blocking toast naming the offending file (inv. 10).
+/// Describes a `custom_model_routers/` YAML file that failed to parse or validate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelConfigError {
-    /// The file name shown in the toast (e.g. `"my_models.yaml"`).
+    /// The file name shown in the toast (e.g. `"my_router.yaml"`).
     pub file_name: String,
     /// Full path used by the "Open file" action.
     pub file_path: PathBuf,
@@ -278,22 +269,15 @@ pub struct ModelConfigError {
 
 // ── Local YAML authoring shape (PRODUCT §8) ──────────────────────────────────
 
-/// The top-level shape of a `model_configs/*.yaml` file.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct YamlModelConfigsFile {
-    #[serde(default)]
-    custom_auto_models: Vec<YamlCustomAutoModel>,
-}
-
-/// A single custom auto model as authored in YAML.
+/// A single custom model router as authored in YAML. Each
+/// `custom_model_routers/*.yaml` file defines exactly one router at the top level.
 ///
 /// `routing` is polymorphic by `type` (a mapping for complexity, a list for
 /// prompt) and `default` is a sibling used only by prompt, so it is parsed as a
-/// raw value and interpreted in [`YamlCustomAutoModel::into_domain`].
+/// raw value and interpreted in [`YamlCustomModelRouter::into_domain`].
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct YamlCustomAutoModel {
+struct YamlCustomModelRouter {
     name: String,
     #[serde(rename = "type")]
     model_type: String,
@@ -314,11 +298,11 @@ struct YamlComplexityRouting {
     hard: Option<String>,
 }
 
-impl YamlCustomAutoModel {
-    fn into_domain(self) -> Result<CustomAutoModel, String> {
+impl YamlCustomModelRouter {
+    fn into_domain(self, source_path: Option<&Path>) -> Result<CustomModelRouter, String> {
         let name = self.name.trim().to_owned();
         if name.is_empty() {
-            return Err("custom auto model `name` is empty".to_owned());
+            return Err("custom model router `name` is empty".to_owned());
         }
         let routing = match self.model_type.as_str() {
             "complexity" => {
@@ -336,7 +320,7 @@ impl YamlCustomAutoModel {
                     serde_yaml::from_value(self.routing)
                         .map_err(|e| format!("`{name}`: invalid complexity routing: {e}"))?
                 };
-                CustomAutoRouting::Complexity(ComplexityRouting {
+                CustomModelRouting::Complexity(ComplexityRouting {
                     default: default_model,
                     easy: normalize_target(routing.easy),
                     medium: normalize_target(routing.medium),
@@ -348,7 +332,6 @@ impl YamlCustomAutoModel {
                     .default
                     .map(|d| d.trim().to_owned())
                     .filter(|d| !d.is_empty())
-                    // inv. 29: prompt requires a catch-all default.
                     .ok_or_else(|| format!("`{name}`: prompt type requires a `default` model"))?;
                 let rules: Vec<YamlPromptRule> = if self.routing.is_null() {
                     Vec::new()
@@ -356,7 +339,7 @@ impl YamlCustomAutoModel {
                     serde_yaml::from_value(self.routing)
                         .map_err(|e| format!("`{name}`: invalid prompt routing: {e}"))?
                 };
-                CustomAutoRouting::Prompt(PromptRouting {
+                CustomModelRouting::Prompt(PromptRouting {
                     default_model,
                     rules: rules
                         .into_iter()
@@ -374,7 +357,7 @@ impl YamlCustomAutoModel {
             }
         };
 
-        let model = CustomAutoModel::new_local(name, routing);
+        let model = CustomModelRouter::new_local(name, routing, source_path);
         model.validate()?;
         Ok(model)
     }
@@ -392,17 +375,18 @@ fn normalize_target(value: Option<String>) -> Option<String> {
     value.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
 
-/// Parses the contents of a single `model_configs/*.yaml` file into local custom
-/// auto models.
+/// Parses the contents of a single custom model router file (one router per file).
 ///
-/// Returns an error (which the caller surfaces per-file, inv. 10) if the YAML is
-/// invalid or any model in the file fails validation; on success returns every
-/// model defined in the file (a file may define multiple, inv. 7).
-pub fn parse_model_configs_yaml(contents: &str) -> Result<Vec<CustomAutoModel>, String> {
-    let file: YamlModelConfigsFile =
+/// `source_path` is the file the content came from; when provided it is embedded
+/// in the router's description so the user can find and edit the file.
+///
+/// Returns an error if the YAML is invalid or the router fails validation; on
+/// success returns the single router defined in the file.
+pub fn parse_model_config_yaml(
+    contents: &str,
+    source_path: Option<&Path>,
+) -> Result<CustomModelRouter, String> {
+    let router: YamlCustomModelRouter =
         serde_yaml::from_str(contents).map_err(|e| format!("invalid YAML: {e}"))?;
-    file.custom_auto_models
-        .into_iter()
-        .map(YamlCustomAutoModel::into_domain)
-        .collect()
+    router.into_domain(source_path)
 }

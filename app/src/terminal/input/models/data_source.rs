@@ -20,10 +20,10 @@ use warpui::{AppContext, Element, Entity, EntityId, SingletonEntity as _};
 
 use super::model_spec_scores::{
     render_model_spec_header, render_model_spec_scores, CostRow, CostRowTooltip,
-    ModelSpecScoresLayout, CUSTOM_AUTO_MODEL_DESCRIPTION, CUSTOM_AUTO_MODEL_TITLE,
+    ModelSpecScoresLayout, CUSTOM_MODEL_ROUTER_DESCRIPTION, CUSTOM_MODEL_ROUTER_TITLE,
     MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
 };
-use crate::ai::custom_auto_models::is_custom_auto_id;
+use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
     is_using_api_key_for_provider, should_show_bedrock_icon_for_model, DisableReason, LLMId,
@@ -145,15 +145,15 @@ impl ModelSelectorDataSource {
         choices: Vec<&'a LLMInfo>,
     ) -> Vec<&'a LLMInfo> {
         let mut auto_choices = Vec::new();
-        let mut custom_auto_choices = Vec::new();
+        let mut custom_router_choices = Vec::new();
         let mut custom_choices = Vec::new();
         let mut other_choices = Vec::new();
 
         for llm in choices {
-            // Check custom auto before is_auto because custom auto ids contain
+            // Check custom router before is_auto because custom router ids contain
             // "auto" and would otherwise land in auto_choices.
-            if is_custom_auto_id(llm.id.as_str()) {
-                custom_auto_choices.push(llm);
+            if is_custom_router_id(llm.id.as_str()) {
+                custom_router_choices.push(llm);
             } else if is_auto(llm) {
                 auto_choices.push(llm);
             } else if llm_preferences.custom_llm_info_for_id(&llm.id).is_some() {
@@ -165,7 +165,7 @@ impl ModelSelectorDataSource {
 
         auto_choices
             .into_iter()
-            .chain(custom_auto_choices)
+            .chain(custom_router_choices)
             .chain(custom_choices)
             .chain(other_choices)
             .collect()
@@ -250,8 +250,8 @@ struct ModelSearchItem {
     display_text: String,
     is_selected: bool,
     is_custom_endpoint: bool,
-    is_custom_auto: bool,
-    /// Source/routing description for custom auto models (from `LLMInfo.description`).
+    is_custom_router: bool,
+    /// Source/routing description for custom model routers (from `LLMInfo.description`).
     description: Option<String>,
     disable_reason: Option<DisableReason>,
     is_auto: bool,
@@ -278,7 +278,7 @@ impl ModelSearchItem {
         let is_custom_endpoint = LLMPreferences::as_ref(app)
             .custom_llm_info_for_id(&llm.id)
             .is_some();
-        let is_custom_auto = is_custom_auto_id(llm.id.as_str());
+        let is_custom_router = is_custom_router_id(llm.id.as_str());
         let is_auto = is_auto(llm);
         let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
         let is_using_api_key =
@@ -302,7 +302,7 @@ impl ModelSearchItem {
             display_text: llm.display_name.clone(),
             is_selected: &llm.id == active_llm_id,
             is_custom_endpoint,
-            is_custom_auto,
+            is_custom_router,
             description: llm.description.clone(),
             disable_reason,
             is_auto,
@@ -485,9 +485,12 @@ impl SearchItem for ModelSearchItem {
         let theme = appearance.theme();
 
         // Custom auto models get an informational blurb instead of spec bars.
-        if self.is_custom_auto {
-            let header =
-                render_model_spec_header(CUSTOM_AUTO_MODEL_TITLE, CUSTOM_AUTO_MODEL_DESCRIPTION, app);
+        if self.is_custom_router {
+            let header = render_model_spec_header(
+                CUSTOM_MODEL_ROUTER_TITLE,
+                CUSTOM_MODEL_ROUTER_DESCRIPTION,
+                app,
+            );
             let source_text = Text::new(
                 self.description.as_deref().unwrap_or("").to_string(),
                 appearance.ui_font_family(),
