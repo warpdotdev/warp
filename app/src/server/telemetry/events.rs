@@ -991,6 +991,10 @@ pub enum AgentModeCitation {
         #[serde(skip_serializing)]
         url: String,
     },
+    AgentMemory {
+        memory_store_id: String,
+        memory_id: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

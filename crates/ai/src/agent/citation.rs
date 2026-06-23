@@ -8,6 +8,7 @@ pub enum AIAgentCitation {
     WarpDriveObject { uid: String },
     WarpDocumentation { path: String },
     WebPage { url: String },
+    AgentMemory { memory_store_id: String, memory_id: String },
 }
 
 impl Display for AIAgentCitation {
@@ -21,6 +22,12 @@ impl Display for AIAgentCitation {
             }
             AIAgentCitation::WebPage { url } => {
                 write!(f, "Web Page: {url}")
+            }
+            AIAgentCitation::AgentMemory {
+                memory_store_id,
+                memory_id,
+            } => {
+                write!(f, "Agent Memory: {memory_store_id}/{memory_id}")
             }
         }
     }
@@ -51,6 +58,17 @@ impl TryFrom<api::Citation> for AIAgentCitation {
             api::DocumentType::WebPage => Ok(AIAgentCitation::WebPage {
                 url: citation.document_id,
             }),
+            api::DocumentType::AgentMemory => {
+                let (memory_store_id, memory_id) = citation
+                    .document_id
+                    .split_once(':')
+                    .map(|(s, m)| (s.to_string(), m.to_string()))
+                    .ok_or(UnknownCitationTypeError)?;
+                Ok(AIAgentCitation::AgentMemory {
+                    memory_store_id,
+                    memory_id,
+                })
+            }
             api::DocumentType::Unknown => Err(UnknownCitationTypeError),
         }
     }
