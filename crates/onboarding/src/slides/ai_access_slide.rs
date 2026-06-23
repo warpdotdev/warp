@@ -151,7 +151,7 @@ impl AiAccessSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Save with a recurring plan, or use your own key or endpoint.",
+            "Subscribe for the full experience, or bring your own key or endpoint for free.",
             appearance.ui_font_family(),
             16.,
         )
@@ -527,7 +527,7 @@ impl AiAccessSlide {
                     tooltip: (!can_advance).then(|| button::Tooltip {
                         params: tooltip::Params {
                             label:
-                                "Warp Agent requires a subscription or inference supplied by you"
+                                "Choose a plan or add your own API key or endpoint to continue"
                                     .into(),
                             options: tooltip::Options {
                                 keyboard_shortcut: None,

@@ -120,7 +120,7 @@ impl AiSetupSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Choose if you'd like to use Warp Agent or third party agents.",
+            "Use Warp's own agent, or a third-party agent like Claude Code or Codex.",
             appearance.ui_font_family(),
             16.,
         )
