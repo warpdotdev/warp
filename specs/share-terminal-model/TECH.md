@@ -13,7 +13,7 @@ Replace the TUI prototype's raw `$SHELL -c` subprocess command path with a real,
 4. **Alt-screen rendering:** when the model reports alt-screen active, render the alt-screen grid as a full-pane terminal instead of the block list.
 5. **Keystroke passthrough:** route input by the model's `TerminalInputState`. When idle (`InputEditor`), the bottom input view composes the next `!command`. When a command is running (`LongRunningCommand`) or `AltScreen` is active, forward keystrokes to the PTY (the TUI behaves like a real terminal). When `NotBootstrapped`, drop input.
 6. **GUI behavior-preserving:** the GUI terminal path must be unchanged in behavior. The session-core construction is factored into a shared sub-helper that the GUI orchestrator calls internally; the GUI keeps a single entry point.
-7. **In-process PTY backend:** the TUI uses the in-process `local_tty` path (it never spawns the terminal-server; `pty_spawner` stays `None` for Tui to avoid the documented fork-bomb).
+7. **Server-backed PTY:** the TUI uses the same server-backed `PtySpawner` as the GUI (`app/src/lib.rs`). The `warp-tui` entry point dispatches worker subcommands before launching the TUI (`run_tui` → `dispatch_cli_command`), so the terminal server's re-exec of this binary runs the server rather than recursively launching TUIs.
 
 ## Out of scope (do NOT implement in this PR)
 - Any agent cluster: `BlocklistAIController`, `BlocklistAIActionModel`, `BlocklistAIContextModel`, `BlocklistAIInputModel`, `ActiveSession`, `ShellCommandExecutor`, `AgentViewController`/`AgentViewHost`.

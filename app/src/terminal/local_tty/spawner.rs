@@ -153,23 +153,6 @@ impl PtySpawner {
         }
     }
 
-    /// Creates a `PtySpawner` that spawns ptys directly in-process, with no
-    /// backing terminal server. Used by the TUI front-end, which cannot host a
-    /// terminal server: that server is created by re-exec'ing the current
-    /// binary, and `warp-tui`'s `main` always re-runs the TUI, which would fork
-    /// bomb. A server-less spawner routes straight to direct spawning.
-    pub fn new_without_server() -> Self {
-        cfg_if::cfg_if! {
-            if #[cfg(unix)] {
-                Self { server: None }
-            } else if #[cfg(target_os = "windows")] {
-                Self {}
-            } else {
-                unreachable!("Spawning a PTY is not supported on this platform.")
-            }
-        }
-    }
-
     /// Does any work necessary to clean up state in advance of the app
     /// terminating.
     pub fn prepare_for_app_termination(&mut self) {
