@@ -8,7 +8,8 @@ use ratatui::crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyM
 
 use super::*;
 use crate::elements::tui::{
-    TuiBuffer, TuiChildView, TuiElement, TuiEventHandler, TuiStyle, TuiText,
+    TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiLayoutContext,
+    TuiStyle, TuiText,
 };
 use crate::platform::WindowStyle;
 use crate::{AddWindowOptions, AppContext, Entity, TypedActionView, ViewContext};
@@ -19,12 +20,12 @@ struct TextElement {
 }
 
 impl TuiElement for TextElement {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
+    fn layout(&mut self, constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
         let width = u16::try_from(self.text.chars().count()).unwrap_or(u16::MAX);
         constraint.clamp(TuiSize::new(width, 1))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {
         buffer.set_stringn(
             area.x,
             area.y,
@@ -32,10 +33,6 @@ impl TuiElement for TextElement {
             usize::from(area.width),
             TuiStyle::default(),
         );
-    }
-
-    fn desired_height(&self, _width: u16) -> u16 {
-        1
     }
 }
 
@@ -170,8 +167,8 @@ impl TuiView for BumpParentView {
         "BumpParentView"
     }
 
-    fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        Box::new(TuiChildView::new(&self.child, app))
+    fn render(&self, _app: &AppContext) -> Box<dyn TuiElement> {
+        Box::new(TuiChildView::new(&self.child))
     }
 }
 

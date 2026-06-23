@@ -25,7 +25,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use warpui_core::elements::tui::{
-    Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiStyle, TuiText,
+    Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiStyle, TuiText,
 };
 use warpui_core::platform::WindowStyle;
 use warpui_core::runtime::TuiRuntime;
@@ -124,7 +124,7 @@ impl TuiView for ShowcaseView {
         let quit_for_q = self.quit.clone();
         let quit_for_esc = self.quit.clone();
         Box::new(
-            TuiEventHandler::new(TuiColumn::with_children(rows))
+            TuiEventHandler::new(TuiColumn::new().with_children(rows))
                 .on_key("j", |_, ctx, _| ctx.dispatch_typed_action(Scroll::Down))
                 .on_key("down", |_, ctx, _| ctx.dispatch_typed_action(Scroll::Down))
                 .on_key("k", |_, ctx, _| ctx.dispatch_typed_action(Scroll::Up))

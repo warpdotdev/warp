@@ -17,63 +17,72 @@
 //!   the action origin for the duration of the subtree's dispatch.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiPresentationContext, TuiRect, TuiSize,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
+    TuiPresentationContext, TuiRect, TuiSize,
 };
 use crate::{AppContext, EntityId, Event, TuiView, ViewHandle};
 
+/// Embeds a registered [`TuiView`] as a node in the element tree, mirroring
+/// the GUI's `ChildView` design: the child element is never cached in this
+/// struct. Instead, every pass (layout, render, present, dispatch) temporarily
+/// removes the child from [`TuiLayoutContext::rendered_views`] (or
+/// [`TuiPresentationContext::rendered_views`]), uses it, and returns it — the
+/// same move-in/move-out pattern the GUI uses through its `PaintContext` and
+/// `EventContext`.
 pub struct TuiChildView {
     view_id: EntityId,
-    child: Box<dyn TuiElement>,
 }
 
 impl TuiChildView {
-    /// Renders `handle`'s view now and embeds the resulting element tree.
-    ///
-    /// The child is rendered through the handle directly (typed, no erasure)
-    /// rather than through [`AppContext::render_tui_view`]: a child view is
-    /// embedded during its *parent's* render, and autotracking does not allow
-    /// nested `render_view` frames. The child's `Tracked` reads therefore
-    /// attribute to the ancestor view whose render is active — which still
-    /// invalidates the window for the TUI's full-frame repaint.
-    pub fn new<V>(handle: &ViewHandle<V>, app: &AppContext) -> Self
-    where
-        V: TuiView,
-    {
+    pub fn new<V: TuiView>(handle: &ViewHandle<V>) -> Self {
         Self {
             view_id: handle.id(),
-            child: handle.read(app, |view, app| view.render(app)),
         }
     }
 
-    /// Constructs a child view directly from an already-rendered element,
-    /// bypassing the live `App`. Used by headless tests to exercise the
-    /// embedding/recursion contract without standing up a real view.
+    /// Inserts a pre-rendered element directly into `rendered_views` for
+    /// headless tests that exercise the embedding/recursion contract without
+    /// a full presenter. Returns the `TuiChildView` node that will look up the
+    /// element from `rendered_views` during each pass.
     #[cfg(test)]
-    pub(crate) fn from_rendered(view_id: EntityId, child: Box<dyn TuiElement>) -> Self {
-        Self { view_id, child }
+    pub(crate) fn from_rendered(
+        view_id: EntityId,
+        child: Box<dyn TuiElement>,
+        rendered_views: &mut std::collections::HashMap<EntityId, Box<dyn TuiElement>>,
+    ) -> Self {
+        rendered_views.insert(view_id, child);
+        Self { view_id }
+    }
+
+    /// Constructs a bare child-view node for tests — no element pre-inserted.
+    /// The caller must populate `rendered_views` separately before any pass.
+    #[cfg(test)]
+    pub(crate) fn for_view_id(view_id: EntityId) -> Self {
+        Self { view_id }
     }
 }
 
 impl TuiElement for TuiChildView {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
-        self.child.layout(constraint)
+    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
+        ctx.use_view(self.view_id, |child, ctx| child.layout(constraint, ctx))
+            .unwrap_or_else(|| {
+                log::warn!("TuiChildView: no element found for {:?}", self.view_id);
+                TuiSize::ZERO
+            })
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
-        self.child.render(area, buffer);
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+        ctx.use_view(self.view_id, |child, ctx| child.render(area, buffer, ctx));
     }
 
-    fn desired_height(&self, width: u16) -> u16 {
-        self.child.desired_height(width)
-    }
-
-    fn cursor_position(&self, area: TuiRect) -> Option<(u16, u16)> {
-        self.child.cursor_position(area)
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+        ctx.use_view(self.view_id, |child, ctx| child.cursor_position(area, ctx))
+            .flatten()
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
         ctx.enter_child(self.view_id);
-        self.child.present(ctx);
+        ctx.use_view(self.view_id, |child, ctx| child.present(ctx));
         ctx.exit_child();
     }
 
@@ -81,13 +90,17 @@ impl TuiElement for TuiChildView {
         &mut self,
         event: &Event,
         area: TuiRect,
-        ctx: &mut TuiEventContext,
+        event_ctx: &mut TuiEventContext,
+        ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> bool {
-        let previous_origin = ctx.set_origin_view(Some(self.view_id));
-        let handled = self.child.dispatch_event(event, area, ctx, app);
-        ctx.set_origin_view(previous_origin);
-        handled
+        ctx.use_view(self.view_id, |child, ctx| {
+            let previous_origin = event_ctx.set_origin_view(Some(self.view_id));
+            let handled = child.dispatch_event(event, area, event_ctx, ctx, app);
+            event_ctx.set_origin_view(previous_origin);
+            handled
+        })
+        .unwrap_or(false)
     }
 }
 

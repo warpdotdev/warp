@@ -33,7 +33,7 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 
-use crate::elements::tui::{TuiConstraint, TuiEventContext, TuiRect, TuiSize};
+use crate::elements::tui::{TuiEventContext, TuiLayoutContext, TuiRect, TuiSize};
 use crate::presenter::tui::TuiPresenter;
 use crate::{App, Event, TuiView, ViewHandle, WindowId};
 
@@ -121,6 +121,10 @@ where
     ) -> io::Result<()> {
         while !should_quit(app) {
             self.draw_if_dirty(app)?;
+            // 250 ms is a standard event-poll heartbeat: short enough to feel
+            // responsive to resize, long enough to avoid busy-waiting. A timeout
+            // is not an error — `poll_event` returns `Ok(None)`, making the loop
+            // iteration a no-op before the next draw-if-dirty check.
             self.poll_and_dispatch(app, Duration::from_millis(250))?;
         }
         Ok(())
@@ -150,11 +154,10 @@ where
         let presenter = &mut self.presenter;
         let root_view = &self.root_view;
         let frame = app.update(|ctx| {
-            // Drain this window's invalidations each draw. The runtime repaints
-            // the full frame, but the manual + autotracking invalidation sets
-            // must still be consumed so they don't accumulate forever (and so
-            // per-view caching can use them later).
-            let _invalidation = ctx.take_all_invalidations_for_window(window_id);
+            // Re-render only the views that changed this frame, then present
+            // the full tree (unchanged views reuse their cached elements).
+            let invalidation = ctx.take_all_invalidations_for_window(window_id);
+            presenter.invalidate(&invalidation, ctx, window_id);
             presenter.present(ctx, root_view, area)
         });
 
@@ -174,16 +177,17 @@ where
             CrosstermEvent::Resize(_, _) => self.dirty.set(true),
             event => {
                 if let Some(warp_event) = crossterm_event_to_warp_event(event) {
-                    if self.dispatch_event(app, &warp_event) {
-                        self.dirty.set(true);
-                    }
+                    // Redraws are triggered by views calling `ctx.notify()`, which
+                    // fires `on_window_invalidated` and sets the dirty flag. An event
+                    // being handled is not itself a reason to redraw.
+                    self.dispatch_event(app, &warp_event);
                 }
             }
         }
         Ok(())
     }
 
-    fn dispatch_event(&self, app: &mut App, event: &Event) -> bool {
+    fn dispatch_event(&mut self, app: &mut App, event: &Event) -> bool {
         // Keymap pass (GUI parity): offer a keystroke to the focused view's
         // responder chain first, exactly like the GUI window event path.
         if let Event::KeyDown {
@@ -203,28 +207,23 @@ where
             }
         }
 
-        // Element-tree pass: walk the rendered tree, offering the event to
-        // each element (child-view elements re-scope the action origin while
-        // descending into their subtree).
-        let size = self
-            .last_size
-            .or_else(|| self.terminal.size().ok())
-            .unwrap_or_default();
+        // Element-tree pass: walk the last rendered+laid-out element tree
+        // (cached by the presenter from the most recent draw). Access the two
+        // presenter fields directly so Rust can see they are disjoint borrows.
+        let Some(element) = self.presenter.last_element.as_mut() else {
+            return false; // no draw has happened yet
+        };
+        let size = self.last_size.unwrap_or_default();
         let area = TuiRect::new(0, 0, size.width, size.height);
 
         let root_view_id = self.root_view.id();
-        let mut element = match app.read(|ctx| ctx.render_tui_view(self.window_id, root_view_id)) {
-            Ok(element) => element,
-            Err(error) => {
-                log::error!("failed to render the TUI root view for event dispatch: {error}");
-                return false;
-            }
-        };
-        element.layout(TuiConstraint::tight(size));
-
         let mut event_ctx = TuiEventContext::default();
         event_ctx.set_origin_view(Some(root_view_id));
-        let handled = app.read(|ctx| element.dispatch_event(event, area, &mut event_ctx, ctx));
+        let mut ctx = TuiLayoutContext {
+            rendered_views: &mut self.presenter.rendered_views,
+        };
+        let handled = app
+            .read(|app_ctx| element.dispatch_event(event, area, &mut event_ctx, &mut ctx, app_ctx));
 
         for update in event_ctx.take_updates() {
             update(app);

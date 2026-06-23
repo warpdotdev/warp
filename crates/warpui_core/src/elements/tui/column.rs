@@ -17,14 +17,18 @@
 //! available height are clipped.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiPresentationContext, TuiRect,
-    TuiRectExt, TuiSize,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
+    TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
 };
 use crate::{AppContext, Event};
 
 #[derive(Default)]
 pub struct TuiColumn {
     children: Vec<Box<dyn TuiElement>>,
+    /// Sizes returned by each child's `layout()` call; populated during layout
+    /// so `render`, `cursor_position`, and `dispatch_event` don't need to
+    /// re-invoke `desired_height` (which has no context).
+    child_sizes: Vec<TuiSize>,
 }
 
 impl TuiColumn {
@@ -40,36 +44,52 @@ impl Extend<Box<dyn TuiElement>> for TuiColumn {
 }
 
 impl TuiElement for TuiColumn {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
+    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
         let width = constraint.constrain_width(constraint.max.width);
         let mut total_height: u16 = 0;
+        self.child_sizes.clear();
         for child in &mut self.children {
-            let child_height = child.desired_height(width);
-            let child_constraint =
-                TuiConstraint::new(TuiSize::new(width, 0), TuiSize::new(width, child_height));
-            let size = child.layout(child_constraint);
+            // Use the remaining available height rather than desired_height so
+            // child views (which have no locally-cached size) get a valid
+            // budget. The child's layout clamps to its actual content height.
+            let remaining_height = constraint.max.height.saturating_sub(total_height);
+            let child_constraint = TuiConstraint::loose(TuiSize::new(width, remaining_height));
+            let size = child.layout(child_constraint, ctx);
             total_height = total_height.saturating_add(size.height);
+            self.child_sizes.push(size);
         }
         TuiSize::new(width, constraint.constrain_height(total_height))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
         let mut remaining = area;
-        for child in &self.children {
+        for (child, size) in self.children.iter().zip(&self.child_sizes) {
             if remaining.is_empty() {
                 break;
             }
-            let child_height = child.desired_height(remaining.width);
-            let (slot, rest) = remaining.split_top(child_height);
-            child.render(slot, buffer);
+            let (slot, rest) = remaining.split_top(size.height);
+            child.render(slot, buffer, ctx);
             remaining = rest;
         }
     }
 
-    fn desired_height(&self, width: u16) -> u16 {
-        self.children.iter().fold(0, |total, child| {
-            total.saturating_add(child.desired_height(width))
-        })
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+        let mut remaining = area;
+        for (child, size) in self.children.iter().zip(&self.child_sizes) {
+            if remaining.is_empty() {
+                break;
+            }
+            let (slot, rest) = remaining.split_top(size.height);
+            if let Some((cx, cy)) = child.cursor_position(slot, ctx) {
+                // Offset is relative to the slot, not the full area.
+                return Some((
+                    slot.x.saturating_sub(area.x) + cx,
+                    slot.y.saturating_sub(area.y) + cy,
+                ));
+            }
+            remaining = rest;
+        }
+        None
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -82,20 +102,20 @@ impl TuiElement for TuiColumn {
         &mut self,
         event: &Event,
         area: TuiRect,
-        ctx: &mut TuiEventContext,
+        event_ctx: &mut TuiEventContext,
+        ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> bool {
-        // Offer the event to each child in its rendered slot (mirroring
-        // `render`'s stacking); the first child to handle it consumes it.
-        // Children clipped past the available height see no events.
+        // Offer the event to each child in its rendered slot (mirrors render's
+        // stacking); the first child to handle it consumes it. Children clipped
+        // past the available height see no events.
         let mut remaining = area;
-        for child in &mut self.children {
+        for (child, size) in self.children.iter_mut().zip(&self.child_sizes) {
             if remaining.is_empty() {
                 break;
             }
-            let child_height = child.desired_height(remaining.width);
-            let (slot, rest) = remaining.split_top(child_height);
-            if child.dispatch_event(event, slot, ctx, app) {
+            let (slot, rest) = remaining.split_top(size.height);
+            if child.dispatch_event(event, slot, event_ctx, ctx, app) {
                 return true;
             }
             remaining = rest;

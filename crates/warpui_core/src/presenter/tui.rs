@@ -40,8 +40,10 @@
 
 use std::collections::HashMap;
 
-use crate::elements::tui::{TuiBuffer, TuiConstraint, TuiElement, TuiPresentationContext, TuiRect};
-use crate::{AppContext, TuiView, ViewHandle};
+use crate::elements::tui::{
+    TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiPresentationContext, TuiRect,
+};
+use crate::{AppContext, EntityId, TuiView, ViewHandle, WindowId, WindowInvalidation};
 
 /// A painted frame: the composited cell [`TuiBuffer`] plus the absolute cursor
 /// position (in buffer cell coordinates), if a focused element owns the cursor.
@@ -66,26 +68,70 @@ impl TuiFrame {
 
 /// Lays out and paints a [`TuiView`]'s element tree into a [`TuiFrame`].
 ///
-/// The view ancestry discovered while presenting is reported into the core's
-/// neutral `view_parents` hierarchy (the single source of truth shared with the
-/// GUI presenter), so the presenter itself retains no parent map.
+/// Mirrors the GUI [`Presenter`](crate::Presenter) pattern:
+/// - [`invalidate`](Self::invalidate) re-renders only the views that changed
+///   into `rendered_views`, leaving unchanged views' cached elements in place.
+/// - [`present`](Self::present) performs layout (using the `rendered_views` map
+///   via [`TuiLayoutContext`] so [`TuiChildView`] can find its child without a
+///   nested render) and paint, then caches the root element in `last_element`
+///   for event dispatch.
+///
+/// [`TuiChildView`]: crate::elements::tui::TuiChildView
 #[derive(Default)]
-pub struct TuiPresenter;
+pub struct TuiPresenter {
+    /// Pre-rendered elements keyed by view id. Populated by [`invalidate`](Self::invalidate)
+    /// for each view that changed; consumed by [`TuiChildView`] during layout.
+    pub(crate) rendered_views: HashMap<EntityId, Box<dyn TuiElement>>,
+    /// The root element tree from the last [`present`](Self::present) call,
+    /// with all child views already laid out inside it. Reused as the starting
+    /// point for the next frame's layout (for unchanged child subtrees) and for
+    /// event dispatch between frames.
+    pub(crate) last_element: Option<Box<dyn TuiElement>>,
+}
 
 impl TuiPresenter {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
-    /// Renders the root view through the app, then lays it out and paints it
-    /// into `area`, returning the composited [`TuiFrame`].
+    /// Re-renders the views listed in `invalidation.updated` into `rendered_views`,
+    /// mirroring [`Presenter::invalidate`](crate::Presenter::invalidate).
     ///
-    /// The root is resolved via [`AppContext::render_tui_view`] as a typed
-    /// `Box<dyn TuiElement>`; a view that is not a TUI view yields a blank
-    /// frame. Child-view embeddings discovered during the present pass are
-    /// reported via [`AppContext::report_view_embeddings`] — as a batch,
-    /// because the present pass borrows the rendered tree mutably (the same
-    /// constraint the GUI presenter's `build_scene` has).
+    /// Called by the runtime before each draw so that [`present`] finds
+    /// fresh elements for every changed view and stale-but-valid cached elements
+    /// for everything else.
+    ///
+    /// [`present`]: Self::present
+    pub fn invalidate(
+        &mut self,
+        invalidation: &WindowInvalidation,
+        ctx: &AppContext,
+        window_id: WindowId,
+    ) {
+        for &view_id in invalidation.updated.difference(&invalidation.removed) {
+            match ctx.render_tui_view(window_id, view_id) {
+                Ok(element) => {
+                    self.rendered_views.insert(view_id, element);
+                }
+                Err(e) => log::warn!("TUI view {view_id:?} was not rendered: {e:?}"),
+            }
+        }
+        for &view_id in &invalidation.removed {
+            self.rendered_views.remove(&view_id);
+        }
+    }
+
+    /// Lays out and paints the root view's element tree into `area`.
+    ///
+    /// The root element is taken from `rendered_views` (if the root was
+    /// re-rendered this frame by [`invalidate`](Self::invalidate)) or from
+    /// `last_element` (the previous frame's root). During layout, a
+    /// [`TuiLayoutContext`] carrying `rendered_views` is threaded through the
+    /// tree so [`TuiChildView`] can retrieve its child element without a nested
+    /// render call. The laid-out root is stored as `last_element` for the next
+    /// frame and for event dispatch.
+    ///
+    /// [`TuiChildView`]: crate::elements::tui::TuiChildView
     pub fn present<V: TuiView>(
         &mut self,
         ctx: &mut AppContext,
@@ -94,39 +140,78 @@ impl TuiPresenter {
     ) -> TuiFrame {
         let window_id = root.window_id(ctx);
         let root_view_id = root.id();
-        let Ok(mut element) = ctx.render_tui_view(window_id, root_view_id) else {
+
+        // Element resolution order:
+        //   1. Fresh from rendered_views (populated by invalidate() this frame).
+        //   2. Cached last_element — ONLY when rendered_views is non-empty,
+        //      meaning invalidate() was called and this view was not changed.
+        //      If rendered_views is empty (no invalidate() was called), skip
+        //      last_element: the root may be stale (e.g. view called notify()
+        //      but the caller drives the presenter standalone without the
+        //      runtime's invalidate() step).
+        //   3. Direct render fallback for callers that skip invalidate().
+        let Some(mut element) = self
+            .rendered_views
+            .remove(&root_view_id)
+            .or_else(|| {
+                if !self.rendered_views.is_empty() {
+                    self.last_element.take()
+                } else {
+                    None
+                }
+            })
+            .or_else(|| ctx.render_tui_view(window_id, root_view_id).ok())
+        else {
             return TuiFrame::blank(area);
         };
 
-        let arranged = arrange(element.as_mut(), area);
+        let mut layout_ctx = TuiLayoutContext {
+            rendered_views: &mut self.rendered_views,
+        };
+        let arranged = arrange(element.as_mut(), area, &mut layout_ctx);
 
         let mut embeddings = HashMap::new();
         {
-            let mut present_ctx = TuiPresentationContext::new(root_view_id, &mut embeddings);
+            let mut present_ctx = TuiPresentationContext::new(
+                root_view_id,
+                &mut self.rendered_views,
+                &mut embeddings,
+            );
             element.present(&mut present_ctx);
         }
         ctx.report_view_embeddings(window_id, embeddings);
 
-        paint(element.as_ref(), arranged, area)
+        let frame = paint(element.as_ref(), arranged, area, &mut self.rendered_views);
+        self.last_element = Some(element);
+        frame
     }
 
     /// Lays out and paints an already-rendered element tree into `area`.
     ///
-    /// This is the backend-agnostic core of [`present`](Self::present), exposed
-    /// so the runtime (and tests) can drive layout/paint for an element tree
-    /// that was produced outside the app's view registry. No view-ancestry is
-    /// recorded.
+    /// Exposed for the runtime and tests that drive layout/paint for an element
+    /// tree produced outside the app's view registry. No view-ancestry is
+    /// recorded and no `rendered_views` state is consulted or updated.
     pub fn present_element(&mut self, mut root: Box<dyn TuiElement>, area: TuiRect) -> TuiFrame {
-        let arranged = arrange(root.as_mut(), area);
-        paint(root.as_ref(), arranged, area)
+        let mut empty_views = HashMap::new();
+        let mut layout_ctx = TuiLayoutContext {
+            rendered_views: &mut empty_views,
+        };
+        let arranged = arrange(root.as_mut(), area, &mut layout_ctx);
+        paint(root.as_ref(), arranged, area, &mut empty_views)
+    }
+
+    /// Returns a mutable reference to the root element from the last
+    /// [`present`](Self::present) call, for use by event dispatch.
+    pub fn last_element_mut(&mut self) -> Option<&mut Box<dyn TuiElement>> {
+        self.last_element.as_mut()
     }
 }
 
 /// Measure the root against `area` and anchor the measured size at the area's
 /// origin (the size is already within the area, but clamp defensively so
 /// writes stay in bounds).
-fn arrange(root: &mut dyn TuiElement, area: TuiRect) -> TuiRect {
-    let measured = root.layout(TuiConstraint::loose(area.as_size()));
+fn arrange(root: &mut dyn TuiElement, area: TuiRect, ctx: &mut TuiLayoutContext) -> TuiRect {
+    let measured = root.layout(TuiConstraint::loose(area.as_size()), ctx);
     TuiRect::new(
         area.x,
         area.y,
@@ -136,13 +221,22 @@ fn arrange(root: &mut dyn TuiElement, area: TuiRect) -> TuiRect {
 }
 
 /// Composite the tree into a fresh buffer and lift the root-relative cursor
-/// offset to absolute coordinates.
-fn paint(root: &dyn TuiElement, arranged: TuiRect, area: TuiRect) -> TuiFrame {
+/// offset to absolute coordinates. `rendered_views` is threaded through so
+/// [`TuiChildView`] can look up its child during render and cursor passes.
+///
+/// [`TuiChildView`]: crate::elements::tui::TuiChildView
+fn paint(
+    root: &dyn TuiElement,
+    arranged: TuiRect,
+    area: TuiRect,
+    rendered_views: &mut HashMap<EntityId, Box<dyn TuiElement>>,
+) -> TuiFrame {
     let mut buffer = TuiBuffer::empty(buffer_rect_for(area));
-    root.render(arranged, &mut buffer);
+    let mut ctx = TuiLayoutContext { rendered_views };
+    root.render(arranged, &mut buffer, &mut ctx);
 
     let cursor = root
-        .cursor_position(arranged)
+        .cursor_position(arranged, &mut ctx)
         .map(|(x, y)| (arranged.x.saturating_add(x), arranged.y.saturating_add(y)));
 
     TuiFrame { buffer, cursor }

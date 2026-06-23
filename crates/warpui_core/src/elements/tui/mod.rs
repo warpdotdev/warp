@@ -45,17 +45,47 @@ pub use geometry::{TuiConstraint, TuiRect, TuiRectExt, TuiSize};
 pub use parent::TuiParentElement;
 pub use text::TuiText;
 
+/// Carries the pre-rendered per-view element map through the layout pass,
+/// mirroring the GUI's `LayoutContext`. [`TuiChildView`] uses it to look up
+/// its child element (freshly rendered by [`TuiPresenter::invalidate`] if
+/// the child was updated, or cached from the previous frame otherwise).
+///
+/// [`TuiChildView`]: crate::elements::tui::TuiChildView
+/// [`TuiPresenter::invalidate`]: crate::presenter::tui::TuiPresenter::invalidate
+pub struct TuiLayoutContext<'a> {
+    /// Pre-rendered elements keyed by view id, consumed during layout.
+    pub rendered_views: &'a mut HashMap<EntityId, Box<dyn TuiElement>>,
+}
+
+impl<'a> TuiLayoutContext<'a> {
+    /// Temporarily removes the element for `view_id` from `rendered_views`,
+    /// passes it (along with `self`) to `f`, then returns it. Mirrors the
+    /// GUI's `LayoutContext::layout` / `PaintContext::paint` /
+    /// `EventContext::dispatch_event_on_view` pattern. Returns the value
+    /// produced by `f`, or `None` if no element was registered for `view_id`.
+    pub(crate) fn use_view<R>(
+        &mut self,
+        view_id: EntityId,
+        f: impl FnOnce(&mut Box<dyn TuiElement>, &mut Self) -> R,
+    ) -> Option<R> {
+        let mut element = self.rendered_views.remove(&view_id)?;
+        let result = f(&mut element, self);
+        self.rendered_views.insert(view_id, element);
+        Some(result)
+    }
+}
+
 /// A node in the renderable tree: it measures itself against a constraint,
 /// then paints into a sub-rectangle of the buffer.
 ///
-/// - [`layout`](TuiElement::layout): measure against a [`TuiConstraint`],
-///   returning a [`TuiSize`] within it (see [`TuiConstraint::clamp`]).
+/// - [`layout`](TuiElement::layout): measure against a [`TuiConstraint`] and
+///   [`TuiLayoutContext`], returning a [`TuiSize`] within the constraint (see
+///   [`TuiConstraint::clamp`]). The context carries the presenter's
+///   pre-rendered view map so [`TuiChildView`](crate::elements::tui::TuiChildView)
+///   can retrieve its child element.
 /// - [`render`](TuiElement::render): paint into `area` of `buffer`. `area` is
 ///   the rect the parent allocated (its size is the value `layout` returned,
 ///   clamped to what was available).
-/// - [`desired_height`](TuiElement::desired_height): the height this element
-///   wants at a given width, used by stacking containers before they have a
-///   final height budget.
 /// - [`cursor_position`](TuiElement::cursor_position): where a text cursor
 ///   should sit within `area`, if any (default: none).
 /// - [`present`](TuiElement::present): participate in the child-view recursion
@@ -65,20 +95,23 @@ pub use text::TuiText;
 ///   element, returning whether it was handled (default: not handled).
 pub trait TuiElement {
     /// Measures this element against `constraint`, returning the size it will
-    /// occupy (which must lie within `constraint`).
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize;
+    /// occupy (which must lie within `constraint`). `ctx` carries the
+    /// presenter's pre-rendered view map for child-view lookup.
+    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize;
 
-    /// Paints this element into `area` of `buffer`. Implementations must confine
-    /// their writes to `area`; the buffer clips anything outside its own bounds
-    /// but does not clip to `area`.
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer);
-
-    /// The height this element wants when laid out at `width` columns.
-    fn desired_height(&self, width: u16) -> u16;
+    /// Paints this element into `area` of `buffer`. `ctx` carries the
+    /// presenter's pre-rendered view map so [`TuiChildView`] can look up and
+    /// render its child element without caching it locally.
+    ///
+    /// [`TuiChildView`]: crate::elements::tui::TuiChildView
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext);
 
     /// The `(x, y)` cell, within `area`, where the terminal cursor should be
-    /// placed for this element, if it owns the cursor.
-    fn cursor_position(&self, _area: TuiRect) -> Option<(u16, u16)> {
+    /// placed for this element, if it owns the cursor. `ctx` is passed through
+    /// so [`TuiChildView`] can delegate to its child without caching it.
+    ///
+    /// [`TuiChildView`]: crate::elements::tui::TuiChildView
+    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
         None
     }
 
@@ -88,13 +121,18 @@ pub trait TuiElement {
     fn present(&mut self, _ctx: &mut TuiPresentationContext<'_>) {}
 
     /// Offers `event` to this element within `area`, returning `true` if it was
-    /// handled. `ctx` collects deferred app updates and typed actions; `app`
-    /// provides read access to the shared core during dispatch.
+    /// handled. `event_ctx` collects deferred app updates and typed actions;
+    /// `ctx` carries the presenter's pre-rendered view map so [`TuiChildView`]
+    /// can look up and dispatch into its child; `app` provides read access to
+    /// the shared core during dispatch.
+    ///
+    /// [`TuiChildView`]: crate::elements::tui::TuiChildView
     fn dispatch_event(
         &mut self,
         _event: &Event,
         _area: TuiRect,
-        _ctx: &mut TuiEventContext,
+        _event_ctx: &mut TuiEventContext,
+        _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> bool {
         false
@@ -105,15 +143,11 @@ pub trait TuiElement {
 /// as a placeholder child where the element's own rendering is irrelevant.
 #[cfg(test)]
 impl TuiElement for () {
-    fn layout(&mut self, _constraint: TuiConstraint) -> TuiSize {
+    fn layout(&mut self, _constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
         TuiSize::ZERO
     }
 
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer) {}
-
-    fn desired_height(&self, _width: u16) -> u16 {
-        0
-    }
+    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {}
 }
 
 /// Threads the current view ancestry through the element tree during the
@@ -126,16 +160,19 @@ impl TuiElement for () {
 /// [`AppContext::report_view_embeddings`].
 pub struct TuiPresentationContext<'a> {
     parent_by_child: &'a mut HashMap<EntityId, EntityId>,
+    pub(crate) rendered_views: &'a mut HashMap<EntityId, Box<dyn TuiElement>>,
     view_stack: Vec<EntityId>,
 }
 
 impl<'a> TuiPresentationContext<'a> {
     pub(crate) fn new(
         root_view_id: EntityId,
+        rendered_views: &'a mut HashMap<EntityId, Box<dyn TuiElement>>,
         parent_by_child: &'a mut HashMap<EntityId, EntityId>,
     ) -> Self {
         Self {
             parent_by_child,
+            rendered_views,
             view_stack: vec![root_view_id],
         }
     }
@@ -156,5 +193,20 @@ impl<'a> TuiPresentationContext<'a> {
         self.view_stack
             .pop()
             .expect("a child view is entered before it is exited");
+    }
+
+    /// Temporarily removes the element for `view_id` from `rendered_views`,
+    /// passes it (along with `self`) to `f`, then returns it — the same
+    /// move-in/move-out pattern the GUI's `EventContext::dispatch_event_on_view`
+    /// uses. Returns `None` if no element is registered for `view_id`.
+    pub(crate) fn use_view<R>(
+        &mut self,
+        view_id: EntityId,
+        f: impl FnOnce(&mut Box<dyn TuiElement>, &mut Self) -> R,
+    ) -> Option<R> {
+        let mut element = self.rendered_views.remove(&view_id)?;
+        let result = f(&mut element, self);
+        self.rendered_views.insert(view_id, element);
+        Some(result)
     }
 }

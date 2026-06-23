@@ -23,7 +23,7 @@
 
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
-use super::{TuiBuffer, TuiConstraint, TuiElement, TuiRect, TuiSize, TuiStyle};
+use super::{TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiRect, TuiSize, TuiStyle};
 
 pub struct TuiText {
     text: String,
@@ -52,6 +52,15 @@ impl TuiText {
         self
     }
 
+    /// The number of terminal rows this text occupies when laid out at `width`
+    /// columns. Matches what `layout` would return as the height component.
+    pub fn desired_height(&self, width: u16) -> u16 {
+        if self.text.is_empty() {
+            return 0;
+        }
+        u16::try_from(self.paragraph().line_count(width)).unwrap_or(u16::MAX)
+    }
+
     /// The ratatui `Paragraph` backing this element's measure and paint.
     fn paragraph(&self) -> Paragraph<'_> {
         let paragraph = Paragraph::new(self.text.as_str()).style(self.style);
@@ -64,7 +73,7 @@ impl TuiText {
 }
 
 impl TuiElement for TuiText {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
+    fn layout(&mut self, constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
         if self.text.is_empty() {
             return constraint.clamp(TuiSize::ZERO);
         }
@@ -77,18 +86,11 @@ impl TuiElement for TuiText {
         )
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {
         if area.is_empty() {
             return;
         }
         Widget::render(self.paragraph(), area, buffer);
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        if self.text.is_empty() {
-            return 0;
-        }
-        u16::try_from(self.paragraph().line_count(width)).unwrap_or(u16::MAX)
     }
 }
 

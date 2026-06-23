@@ -5,7 +5,8 @@ use std::rc::Rc;
 use super::TuiColumn;
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEventContext,
-    TuiEventHandler, TuiParentElement, TuiPresentationContext, TuiRect, TuiSize, TuiText,
+    TuiEventHandler, TuiLayoutContext, TuiParentElement, TuiPresentationContext, TuiRect, TuiSize,
+    TuiText,
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
@@ -13,7 +14,15 @@ use crate::{App, EntityId, Event};
 
 fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
-    element.render(TuiRect::new(0, 0, size.width, size.height), &mut buffer);
+    let mut rendered_views = HashMap::new();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    element.render(
+        TuiRect::new(0, 0, size.width, size.height),
+        &mut buffer,
+        &mut ctx,
+    );
     buffer.to_lines()
 }
 
@@ -23,8 +32,11 @@ fn stacks_two_children_top_to_bottom() {
         .with_child(Box::new(TuiText::new("AA")))
         .with_child(Box::new(TuiText::new("BB")));
 
-    assert_eq!(column.desired_height(2), 2);
-    let size = column.layout(TuiConstraint::loose(TuiSize::new(2, 10)));
+    let mut rendered_views = HashMap::new();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = column.layout(TuiConstraint::loose(TuiSize::new(2, 10)), &mut ctx);
     assert_eq!(size, TuiSize::new(2, 2));
 
     assert_eq!(
@@ -36,12 +48,18 @@ fn stacks_two_children_top_to_bottom() {
 #[test]
 fn sums_multi_row_children_at_the_correct_offsets() {
     // The middle child spans two rows, so the trailing child must land on row 3.
-    let column = TuiColumn::new()
+    let mut column = TuiColumn::new()
         .with_child(Box::new(TuiText::new("A")))
         .with_child(Box::new(TuiText::new("BB\nCC").truncate()))
         .with_child(Box::new(TuiText::new("D")));
 
-    assert_eq!(column.desired_height(2), 4);
+    // Layout must be called before render so TuiColumn.child_sizes is populated.
+    let mut rendered_views = HashMap::new();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = column.layout(TuiConstraint::loose(TuiSize::new(2, 4)), &mut ctx);
+    assert_eq!(size, TuiSize::new(2, 4));
     assert_eq!(
         render_to_lines(&column, TuiSize::new(2, 4)),
         vec!["A ", "BB", "CC", "D "],
@@ -55,7 +73,15 @@ fn clamps_total_height_to_the_constraint_and_clips_overflow() {
         .with_child(Box::new(TuiText::new("BB\nCC").truncate()))
         .with_child(Box::new(TuiText::new("D")));
 
-    let size = column.layout(TuiConstraint::new(TuiSize::ZERO, TuiSize::new(2, 3)));
+    // Layout populates child_sizes; render and dispatch rely on them.
+    let mut rendered_views = HashMap::new();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = column.layout(
+        TuiConstraint::new(TuiSize::ZERO, TuiSize::new(2, 3)),
+        &mut ctx,
+    );
     assert_eq!(size, TuiSize::new(2, 3));
 
     // Only the first three rows fit; the final child is clipped away.
@@ -72,13 +98,17 @@ fn present_recurses_into_children() {
     let mut parent_by_child = HashMap::new();
 
     {
-        let mut ctx = TuiPresentationContext::new(root, &mut parent_by_child);
+        let mut rendered_views_for_child = HashMap::new();
+        let mut ctx =
+            TuiPresentationContext::new(root, &mut rendered_views_for_child, &mut parent_by_child);
+        let child_node = TuiChildView::from_rendered(
+            embedded,
+            Box::new(TuiText::new("body")),
+            ctx.rendered_views,
+        );
         let mut column = TuiColumn::new()
             .with_child(Box::new(TuiText::new("header")))
-            .with_child(Box::new(TuiChildView::from_rendered(
-                embedded,
-                Box::new(TuiText::new("body")),
-            )));
+            .with_child(Box::new(child_node));
         column.present(&mut ctx);
     }
 
@@ -119,11 +149,18 @@ fn dispatch_event_offers_children_in_order_and_stops_when_handled() {
                     }),
                 ));
 
+            // Layout must run before dispatch so TuiColumn.child_sizes is populated.
             let mut event_ctx = TuiEventContext::default();
+            let mut rendered_views = HashMap::new();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            column.layout(TuiConstraint::loose(TuiSize::new(10, 5)), &mut ctx);
             let handled = column.dispatch_event(
                 &key_event("x"),
                 TuiRect::new(0, 0, 10, 5),
                 &mut event_ctx,
+                &mut ctx,
                 app_ctx,
             );
 

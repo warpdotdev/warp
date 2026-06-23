@@ -3,12 +3,10 @@
 //! identical to the GUI's.
 
 use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
-    MouseEvent, MouseEventKind,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
 
-use crate::event::{KeyEventDetails, ModifiersState};
-use crate::geometry::vector::{vec2f, Vector2F};
+use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
 use crate::Event;
 
@@ -17,7 +15,12 @@ use crate::Event;
 pub fn crossterm_event_to_warp_event(event: CrosstermEvent) -> Option<Event> {
     match event {
         CrosstermEvent::Key(key_event) => key_event_to_warp_event(key_event),
-        CrosstermEvent::Mouse(mouse_event) => mouse_event_to_warp_event(mouse_event),
+        // TODO: Mouse events are not converted yet. TUI coordinates are integer
+        // cell (row, column) pairs that need a dedicated representation before
+        // they can be mapped into Warp's float-pixel Event system.
+        CrosstermEvent::Mouse(_) => None,
+        // TODO: FocusGained, FocusLost, and Paste have no Warp equivalents yet.
+        // If these are needed in the future, consider adding matching Warp events.
         CrosstermEvent::FocusGained
         | CrosstermEvent::FocusLost
         | CrosstermEvent::Paste(_)
@@ -96,76 +99,6 @@ fn key_without_modifiers(code: KeyCode) -> Option<String> {
     match code {
         KeyCode::Char(char) => Some(char.to_lowercase().to_string()),
         _ => None,
-    }
-}
-
-fn mouse_event_to_warp_event(event: MouseEvent) -> Option<Event> {
-    let position = vec2f(f32::from(event.column), f32::from(event.row));
-    let modifiers = modifiers_state(event.modifiers);
-    match event.kind {
-        MouseEventKind::Down(MouseButton::Left) => Some(Event::LeftMouseDown {
-            position,
-            modifiers,
-            click_count: 1,
-            is_first_mouse: false,
-        }),
-        MouseEventKind::Up(MouseButton::Left) => Some(Event::LeftMouseUp {
-            position,
-            modifiers,
-        }),
-        MouseEventKind::Drag(MouseButton::Left) => Some(Event::LeftMouseDragged {
-            position,
-            modifiers,
-        }),
-        MouseEventKind::Down(MouseButton::Middle) => Some(Event::MiddleMouseDown {
-            position,
-            cmd: modifiers.cmd,
-            shift: modifiers.shift,
-            click_count: 1,
-        }),
-        MouseEventKind::Down(MouseButton::Right) => Some(Event::RightMouseDown {
-            position,
-            cmd: modifiers.cmd,
-            shift: modifiers.shift,
-            click_count: 1,
-        }),
-        MouseEventKind::Moved => Some(Event::MouseMoved {
-            position,
-            cmd: modifiers.cmd,
-            shift: modifiers.shift,
-            is_synthetic: false,
-        }),
-        MouseEventKind::ScrollUp => Some(scroll_wheel_event(position, modifiers, vec2f(0.0, 1.0))),
-        MouseEventKind::ScrollDown => {
-            Some(scroll_wheel_event(position, modifiers, vec2f(0.0, -1.0)))
-        }
-        MouseEventKind::ScrollLeft => {
-            Some(scroll_wheel_event(position, modifiers, vec2f(-1.0, 0.0)))
-        }
-        MouseEventKind::ScrollRight => {
-            Some(scroll_wheel_event(position, modifiers, vec2f(1.0, 0.0)))
-        }
-        MouseEventKind::Up(MouseButton::Middle | MouseButton::Right)
-        | MouseEventKind::Drag(MouseButton::Middle | MouseButton::Right) => None,
-    }
-}
-
-fn scroll_wheel_event(position: Vector2F, modifiers: ModifiersState, delta: Vector2F) -> Event {
-    Event::ScrollWheel {
-        position,
-        delta,
-        precise: false,
-        modifiers,
-    }
-}
-
-fn modifiers_state(modifiers: KeyModifiers) -> ModifiersState {
-    ModifiersState {
-        alt: modifiers.contains(KeyModifiers::ALT),
-        cmd: modifiers.contains(KeyModifiers::SUPER),
-        shift: modifiers.contains(KeyModifiers::SHIFT),
-        ctrl: modifiers.contains(KeyModifiers::CONTROL),
-        func: false,
     }
 }
 

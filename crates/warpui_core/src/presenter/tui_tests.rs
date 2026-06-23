@@ -6,8 +6,8 @@
 
 use super::TuiPresenter;
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiPresentationContext,
-    TuiRect, TuiRectExt, TuiSize, TuiStyle,
+    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiLayoutContext,
+    TuiPresentationContext, TuiRect, TuiRectExt, TuiSize, TuiStyle,
 };
 use crate::platform::WindowStyle;
 use crate::{
@@ -35,11 +35,11 @@ impl TextDouble {
 }
 
 impl TuiElement for TextDouble {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
+    fn layout(&mut self, constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
         constraint.clamp(TuiSize::new(self.width(), 1))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {
         buffer.set_stringn(
             area.x,
             area.y,
@@ -47,10 +47,6 @@ impl TuiElement for TextDouble {
             usize::from(area.width),
             TuiStyle::default(),
         );
-    }
-
-    fn desired_height(&self, _width: u16) -> u16 {
-        1
     }
 }
 
@@ -72,7 +68,7 @@ impl ColumnDouble {
 }
 
 impl TuiElement for ColumnDouble {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
+    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
         self.child_sizes.clear();
         let mut total_height = 0u16;
         let mut max_width = 0u16;
@@ -81,7 +77,7 @@ impl TuiElement for ColumnDouble {
                 constraint.max.width,
                 constraint.max.height.saturating_sub(total_height),
             );
-            let size = child.layout(TuiConstraint::loose(available));
+            let size = child.layout(TuiConstraint::loose(available), ctx);
             total_height = total_height.saturating_add(size.height);
             max_width = max_width.max(size.width);
             self.child_sizes.push(size);
@@ -89,21 +85,14 @@ impl TuiElement for ColumnDouble {
         constraint.clamp(TuiSize::new(max_width, total_height))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
         let mut remaining = area;
         for (child, size) in self.children.iter().zip(&self.child_sizes) {
             let (row, rest) = remaining.split_top(size.height);
             let child_area = TuiRect::new(row.x, row.y, size.width.min(row.width), row.height);
-            child.render(child_area, buffer);
+            child.render(child_area, buffer, ctx);
             remaining = rest;
         }
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.children
-            .iter()
-            .map(|child| child.desired_height(width))
-            .sum()
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -112,12 +101,12 @@ impl TuiElement for ColumnDouble {
         }
     }
 
-    fn cursor_position(&self, area: TuiRect) -> Option<(u16, u16)> {
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
         let mut remaining = area;
         for (child, size) in self.children.iter().zip(&self.child_sizes) {
             let (row, rest) = remaining.split_top(size.height);
             let child_area = TuiRect::new(row.x, row.y, size.width.min(row.width), row.height);
-            if let Some((cx, cy)) = child.cursor_position(child_area) {
+            if let Some((cx, cy)) = child.cursor_position(child_area, ctx) {
                 return Some((child_area.x - area.x + cx, child_area.y - area.y + cy));
             }
             remaining = rest;
@@ -147,13 +136,13 @@ impl ContainerDouble {
 }
 
 impl TuiElement for ContainerDouble {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
+    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
         let inset = self.padding.saturating_mul(2);
         let inner_max = TuiSize::new(
             constraint.max.width.saturating_sub(inset),
             constraint.max.height.saturating_sub(inset),
         );
-        let size = self.child.layout(TuiConstraint::loose(inner_max));
+        let size = self.child.layout(TuiConstraint::loose(inner_max), ctx);
         self.child_size = size;
         constraint.clamp(TuiSize::new(
             size.width.saturating_add(inset),
@@ -161,7 +150,7 @@ impl TuiElement for ContainerDouble {
         ))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
         let fill = self.fill.to_string();
         for y in area.y..area.bottom() {
             for x in area.x..area.right() {
@@ -177,14 +166,7 @@ impl TuiElement for ContainerDouble {
             self.child_size.width.min(inner.width),
             self.child_size.height.min(inner.height),
         );
-        self.child.render(child_area, buffer);
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        let inset = self.padding.saturating_mul(2);
-        self.child
-            .desired_height(width.saturating_sub(inset))
-            .saturating_add(inset)
+        self.child.render(child_area, buffer, ctx);
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -204,11 +186,11 @@ impl CursorDouble {
 }
 
 impl TuiElement for CursorDouble {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
+    fn layout(&mut self, constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
         constraint.clamp(TuiSize::new(5, 1))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {
         buffer.set_stringn(
             area.x,
             area.y,
@@ -218,11 +200,7 @@ impl TuiElement for CursorDouble {
         );
     }
 
-    fn desired_height(&self, _width: u16) -> u16 {
-        1
-    }
-
-    fn cursor_position(&self, _area: TuiRect) -> Option<(u16, u16)> {
+    fn cursor_position(&self, _area: TuiRect, _ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
         Some(self.offset)
     }
 }
@@ -291,8 +269,8 @@ impl TuiView for ParentView {
         "ParentView"
     }
 
-    fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        let child = TuiChildView::new(&self.child, app);
+    fn render(&self, _app: &AppContext) -> Box<dyn TuiElement> {
+        let child = TuiChildView::new(&self.child);
         Box::new(ColumnDouble::new(vec![
             Box::new(TextDouble::new("HEADER")),
             Box::new(child),
@@ -366,7 +344,11 @@ fn recurses_into_registered_child_view_and_reports_embeddings() {
         });
 
         let mut presenter = TuiPresenter::new();
-        let frame = app.update(|ctx| presenter.present(ctx, &parent, TuiRect::new(0, 0, 8, 3)));
+        let frame = app.update(|ctx| {
+            let invalidation = ctx.take_all_invalidations_for_window(window_id);
+            presenter.invalidate(&invalidation, ctx, window_id);
+            presenter.present(ctx, &parent, TuiRect::new(0, 0, 8, 3))
+        });
 
         // The child view's output is painted directly below the header, at the
         // area the layout allocated to the embedded child-view element.
@@ -405,7 +387,11 @@ fn focusing_embedded_child_fires_descendent_focus_on_parent() {
 
         // A present pass reports the embedding into `view_parents`...
         let mut presenter = TuiPresenter::new();
-        app.update(|ctx| presenter.present(ctx, &parent, TuiRect::new(0, 0, 8, 3)));
+        app.update(|ctx| {
+            let invalidation = ctx.take_all_invalidations_for_window(window_id);
+            presenter.invalidate(&invalidation, ctx, window_id);
+            presenter.present(ctx, &parent, TuiRect::new(0, 0, 8, 3))
+        });
 
         // ...so focusing the embedded child walks the ancestor chain and fires
         // the parent's `on_focus` hook with `DescendentFocused`.

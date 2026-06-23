@@ -17,7 +17,8 @@
 //! ancestors can react.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiPresentationContext, TuiRect, TuiSize,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
+    TuiPresentationContext, TuiRect, TuiSize,
 };
 use crate::{AppContext, Event};
 
@@ -57,20 +58,16 @@ impl TuiEventHandler {
 }
 
 impl TuiElement for TuiEventHandler {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
-        self.child.layout(constraint)
+    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
+        self.child.layout(constraint, ctx)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
-        self.child.render(area, buffer);
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+        self.child.render(area, buffer, ctx);
     }
 
-    fn desired_height(&self, width: u16) -> u16 {
-        self.child.desired_height(width)
-    }
-
-    fn cursor_position(&self, area: TuiRect) -> Option<(u16, u16)> {
-        self.child.cursor_position(area)
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+        self.child.cursor_position(area, ctx)
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -81,17 +78,18 @@ impl TuiElement for TuiEventHandler {
         &mut self,
         event: &Event,
         area: TuiRect,
-        ctx: &mut TuiEventContext,
+        event_ctx: &mut TuiEventContext,
+        ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> bool {
-        if self.child.dispatch_event(event, area, ctx, app) {
+        if self.child.dispatch_event(event, area, event_ctx, ctx, app) {
             return true;
         }
 
         if let Event::KeyDown { keystroke, .. } = event {
             for binding in &mut self.bindings {
                 if binding.key == keystroke.key {
-                    (binding.callback)(event, ctx, app);
+                    (binding.callback)(event, event_ctx, app);
                     return true;
                 }
             }

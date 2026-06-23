@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use warpui_core::elements::tui::{
-    Modifier, TuiBufferExt, TuiColumn, TuiElement, TuiEventHandler, TuiRect, TuiStyle, TuiText,
+    Modifier, TuiBufferExt, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiRect,
+    TuiStyle, TuiText,
 };
 use warpui_core::platform::WindowStyle;
 use warpui_core::presenter::tui::TuiPresenter;
@@ -127,7 +128,7 @@ impl TuiView for ExplorerView {
                 .truncate(),
         ));
 
-        let body = TuiColumn::with_children(rows);
+        let body = TuiColumn::new().with_children(rows);
 
         // Wire keyboard input: navigation keys dispatch a typed action through
         // the shared core; quit keys flip the shared quit flag the runtime
@@ -328,8 +329,8 @@ fn typed_nav_action_changes_rendered_buffer() {
             "SelectNext dispatched through the shared core should advance the selection"
         );
 
-        // Second frame: the rendered buffer must change (the selection marker
-        // moved).
+        // Second frame: re-present; the runtime would call invalidate() first
+        // but the standalone presenter falls back to a fresh render.
         let after = app.update(|ctx| presenter.present(ctx, &root, area));
         let after_lines = after.buffer.to_lines();
         assert_ne!(

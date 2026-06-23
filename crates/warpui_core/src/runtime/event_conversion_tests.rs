@@ -1,10 +1,8 @@
 use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
-    MouseEvent, MouseEventKind,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
 
 use super::crossterm_event_to_warp_event;
-use crate::geometry::vector::vec2f;
 use crate::keymap::Keystroke;
 use crate::Event;
 
@@ -80,45 +78,6 @@ fn pure_modifier_keys_have_no_warp_equivalent() {
         KeyModifiers::empty(),
     );
     assert!(crossterm_event_to_warp_event(CrosstermEvent::Key(event)).is_none());
-}
-
-#[test]
-fn left_mouse_down_maps_to_left_mouse_down_at_position() {
-    let event = CrosstermEvent::Mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: 3,
-        row: 4,
-        modifiers: KeyModifiers::empty(),
-    });
-    let Some(Event::LeftMouseDown { position, .. }) = crossterm_event_to_warp_event(event) else {
-        panic!("expected LeftMouseDown");
-    };
-    assert_eq!(position, vec2f(3.0, 4.0));
-}
-
-#[test]
-fn scroll_up_and_down_map_to_vertical_scroll_wheel() {
-    let up = CrosstermEvent::Mouse(MouseEvent {
-        kind: MouseEventKind::ScrollUp,
-        column: 0,
-        row: 0,
-        modifiers: KeyModifiers::empty(),
-    });
-    let Some(Event::ScrollWheel { delta, .. }) = crossterm_event_to_warp_event(up) else {
-        panic!("expected ScrollWheel");
-    };
-    assert_eq!(delta, vec2f(0.0, 1.0));
-
-    let down = CrosstermEvent::Mouse(MouseEvent {
-        kind: MouseEventKind::ScrollDown,
-        column: 0,
-        row: 0,
-        modifiers: KeyModifiers::empty(),
-    });
-    let Some(Event::ScrollWheel { delta, .. }) = crossterm_event_to_warp_event(down) else {
-        panic!("expected ScrollWheel");
-    };
-    assert_eq!(delta, vec2f(0.0, -1.0));
 }
 
 #[test]
