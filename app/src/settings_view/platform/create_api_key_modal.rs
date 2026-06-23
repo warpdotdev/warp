@@ -4,10 +4,9 @@ use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warp_server_client::auth::AgentIdentity;
 use warpui::elements::{
-    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Empty, Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, OffsetPositioning, Padding, ParentElement,
-    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Stack, Text,
+    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, Padding, ParentElement, Radius, Text,
 };
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
@@ -25,8 +24,7 @@ use crate::editor::{
 };
 use crate::modal::{Modal, ModalViewState};
 use crate::util::truncation::truncate_from_end;
-use crate::view_components::dropdown::{DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT};
-use crate::view_components::{Dropdown as DropdownView, DropdownItem};
+use crate::view_components::{Dropdown as DropdownView, DropdownItem, FilterableDropdown};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const OZ_AGENTS_URL: &str = "https://oz.warp.dev/agents?new=true";
@@ -35,7 +33,6 @@ const API_KEY_DOCS_URL: &str =
 
 const LABEL_FONT_SIZE: f32 = 14.;
 const INPUT_WIDTH: f32 = 428.; // 460px - (2 * 16px) padding
-const AGENT_DROPDOWN_POSITION_ID: &str = "create_api_key_modal_agent_dropdown";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ApiKeyType {
@@ -63,7 +60,7 @@ impl ApiKeyType {
 pub struct CreateApiKeyModal {
     name_editor: ViewHandle<EditorView>,
     expiration_dropdown: ViewHandle<DropdownView<CreateApiKeyModalAction>>,
-    agent_dropdown: ViewHandle<DropdownView<CreateApiKeyModalAction>>,
+    agent_dropdown: ViewHandle<FilterableDropdown<CreateApiKeyModalAction>>,
     api_key_type_control: ViewHandle<SegmentedControl<ApiKeyType>>,
     expiration: ExpirationOption,
     cancel_button_mouse_state: MouseStateHandle,
@@ -170,10 +167,10 @@ impl CreateApiKeyModal {
             ctx.add_typed_action_view(DropdownView::<CreateApiKeyModalAction>::new);
 
         let agent_dropdown =
-            ctx.add_typed_action_view(DropdownView::<CreateApiKeyModalAction>::new);
+            ctx.add_typed_action_view(FilterableDropdown::<CreateApiKeyModalAction>::new);
         agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_top_bar_max_width(INPUT_WIDTH);
-            dropdown.set_match_menu_width_to_top_bar(true, ctx);
+            dropdown.set_menu_width(INPUT_WIDTH, ctx);
         });
 
         let api_key_type_control = ctx.add_typed_action_view(move |ctx| {
@@ -319,6 +316,16 @@ impl CreateApiKeyModal {
         self.agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_items(items, ctx);
         });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_agents_for_test(
+        &mut self,
+        agents: Vec<AgentIdentity>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.agents = agents;
+        self.populate_agent_dropdown(ctx);
     }
 
     fn create(&mut self, ctx: &mut ViewContext<Self>) {
@@ -695,7 +702,6 @@ impl View for CreateApiKeyModal {
                 .finish();
 
                 let mut col = Flex::column();
-                let mut render_agent_dropdown = false;
 
                 if self.has_team || self.has_named_agents {
                     let type_label =
@@ -767,19 +773,19 @@ impl View for CreateApiKeyModal {
                             .finish(),
                         );
                     } else {
-                        render_agent_dropdown = true;
+                        // The agent list can grow long, so use a FilterableDropdown
+                        // (search input + substring filtering) instead of a plain
+                        // Dropdown. It renders its own expand/overlay menu, so it can
+                        // be placed directly in the column. FilterableDropdown adds
+                        // ~6px of vertical margin internally, so use a smaller bottom
+                        // margin here to keep the spacing consistent with sibling rows.
                         col.add_child(
                             Container::new(
-                                SavePosition::new(
-                                    ConstrainedBox::new(Empty::new().finish())
-                                        .with_width(INPUT_WIDTH)
-                                        .with_height(TOP_MENU_BAR_HEIGHT + (2. * DROPDOWN_PADDING))
-                                        .finish(),
-                                    AGENT_DROPDOWN_POSITION_ID,
-                                )
-                                .finish(),
+                                ConstrainedBox::new(ChildView::new(&self.agent_dropdown).finish())
+                                    .with_width(INPUT_WIDTH)
+                                    .finish(),
                             )
-                            .with_margin_bottom(16.)
+                            .with_margin_bottom(10.)
                             .finish(),
                         );
                     }
@@ -821,24 +827,7 @@ impl View for CreateApiKeyModal {
                 );
 
                 col.add_child(buttons_row);
-                let mut stack = Stack::new()
-                    .with_constrain_absolute_children()
-                    .with_child(col.finish());
-                if render_agent_dropdown {
-                    stack.add_positioned_overlay_child(
-                        ConstrainedBox::new(ChildView::new(&self.agent_dropdown).finish())
-                            .with_width(INPUT_WIDTH)
-                            .finish(),
-                        OffsetPositioning::offset_from_save_position_element(
-                            AGENT_DROPDOWN_POSITION_ID,
-                            vec2f(0., 0.),
-                            PositionedElementOffsetBounds::WindowByPosition,
-                            PositionedElementAnchor::TopLeft,
-                            ChildAnchor::TopLeft,
-                        ),
-                    );
-                }
-                stack.finish()
+                col.finish()
             }
         }
     }
@@ -943,3 +932,7 @@ fn api_key_type_control_styles(app: &AppContext) -> UiComponentStyles {
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+#[path = "create_api_key_modal_tests.rs"]
+mod tests;
