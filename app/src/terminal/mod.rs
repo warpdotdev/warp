@@ -81,7 +81,7 @@ mod terminal_size_element;
 pub mod view;
 pub mod warpify;
 mod waterfall_gap_element;
-mod writeable_pty;
+pub(crate) mod writeable_pty;
 #[cfg(windows)]
 pub mod wsl;
 

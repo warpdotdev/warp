@@ -35,8 +35,7 @@ use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
 use {
     super::terminal_attributes::TerminalAttributesPoller,
     crate::terminal::local_tty::terminal_attributes::Event as TerminalAttributesPollerEvent,
-    crate::terminal::model::terminal_model::BlockIndex,
-    crate::terminal::session_settings::NotificationsMode, nix::sys::termios::LocalFlags,
+    crate::terminal::model::terminal_model::BlockIndex, nix::sys::termios::LocalFlags,
 };
 
 use super::event_loop::EventLoop;
@@ -102,13 +101,14 @@ use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as Termi
 use crate::terminal::writeable_pty;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
-    init_pty_controller_model, init_remote_server_controller, wire_up_pty_controller_with_view,
+    init_pty_controller_model, init_remote_server_controller, wire_up_pty_controller_with_surface,
     wire_up_remote_server_controller_with_view,
 };
-pub(crate) use crate::terminal::writeable_pty::{Message, PtyControllerEvent};
+use crate::terminal::writeable_pty::terminal_surface::TerminalSurface;
+pub(crate) use crate::terminal::writeable_pty::Message;
 use crate::terminal::{
-    terminal_manager, ShellLaunchData, ShellLaunchState, SizeInfo, SizeUpdate,
-    TerminalManager as _, TerminalModel, TerminalView, PTY_READS_BROADCAST_CHANNEL_SIZE,
+    terminal_manager, ShellLaunchData, ShellLaunchState, SizeInfo, SizeUpdate, TerminalModel,
+    TerminalView, PTY_READS_BROADCAST_CHANNEL_SIZE,
 };
 use crate::view_components::ToastFlavor;
 use crate::{send_telemetry_on_executor, NetworkStatus};
@@ -136,13 +136,19 @@ fn should_skip_sharer_op(is_ambient_session: bool, op: &CrdtOperation) -> bool {
 ///
 /// It also holds onto any data that needs to live as long as the session does
 /// (e.g. the event loop join handle).
-pub struct TerminalManager {
+pub(crate) struct TerminalManager<S: TerminalSurface = TerminalView> {
     event_loop_tx: Arc<Mutex<mio_channel::Sender<Message>>>,
     /// This is an `Option` so that we can take ownership of the inner
     /// `JoinHandle` in `TerminalManager::drop`.
     event_loop_handle: Option<JoinHandle<()>>,
     model: Arc<FairMutex<TerminalModel>>,
-    view: ViewHandle<TerminalView>,
+    /// The model event dispatcher, retained so the (generic) manager can drive
+    /// the password-prompt attributes poller off block-lifecycle events.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    model_events: ModelHandle<ModelEventDispatcher>,
+    /// The front-end surface this manager drives (the GUI `TerminalView` or the
+    /// headless TUI root view).
+    view: ViewHandle<S>,
 
     /// The manager is responsible for managing the lifetime
     /// of the terminal attributes poller. None if the event loop has not yet started.
@@ -178,7 +184,7 @@ pub struct TerminalManager {
     session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>>,
 }
 
-impl Drop for TerminalManager {
+impl<S: TerminalSurface> Drop for TerminalManager<S> {
     fn drop(&mut self) {
         self.shutdown_event_loop();
     }
@@ -381,7 +387,7 @@ pub(crate) fn spawn_pty(
     let pty = enqueue_init_script(&shell_starter, generated_session_id, event_loop_tx)
         .context("Failed to write shell init script to the pty")
         .and_then(|_| {
-            TerminalManager::create_pty(
+            TerminalManager::<TerminalView>::create_pty(
                 startup_directory,
                 shell_starter,
                 env_vars,
@@ -397,8 +403,12 @@ pub(crate) fn spawn_pty(
     #[cfg(unix)]
     let fd = pty.get_fd();
 
-    let event_loop_handle =
-        TerminalManager::start_pty_event_loop(pty, event_loop_rx, model, channel_event_proxy);
+    let event_loop_handle = TerminalManager::<TerminalView>::start_pty_event_loop(
+        pty,
+        event_loop_rx,
+        model,
+        channel_event_proxy,
+    );
 
     Ok(SpawnedPty {
         event_loop_handle,
@@ -433,7 +443,7 @@ fn enqueue_init_script(
     }
 }
 
-impl TerminalManager {
+impl<S: TerminalSurface> TerminalManager<S> {
     /// Sends a shutdown message to the PTY event loop and waits for it to
     /// process that event.
     fn shutdown_event_loop(&mut self) {
@@ -453,7 +463,9 @@ impl TerminalManager {
 
         self.inactive_pty_reads_rx.close();
     }
+}
 
+impl TerminalManager<TerminalView> {
     /// Creates a terminal manager model. Note that the order of operations
     /// in this constructor are important! Specifically, we want to
     /// 1. Create the TerminalModel.
@@ -478,7 +490,10 @@ impl TerminalManager {
         chosen_shell: Option<AvailableShell>,
         initial_input_config: Option<InputConfig>,
         ctx: &mut AppContext,
-    ) -> ModelHandle<Box<dyn crate::terminal::TerminalManager>> {
+    ) -> (
+        ModelHandle<Box<dyn crate::terminal::TerminalManager>>,
+        ViewHandle<TerminalView>,
+    ) {
         // Resolve the restored blocks (explicit DB blocks, else a conversation being
         // restored) before constructing the session core, which consumes them to
         // build the TerminalModel.
@@ -663,15 +678,6 @@ impl TerminalManager {
                 )
             });
         }
-
-        wire_up_pty_controller_with_view(
-            &pty_controller,
-            &view,
-            model.clone(),
-            sessions,
-            model_event_sender,
-            ctx,
-        );
 
         wire_up_remote_server_controller_with_view(&remote_server_controller, &view, ctx);
 
@@ -1009,28 +1015,113 @@ impl TerminalManager {
 
         Self::handle_network_status_events(&view, session_sharer.clone(), ctx);
 
+        // Assemble the manager and async-spawn the PTY via the shared
+        // constructor. The view/agent/sharing wiring above is GUI-specific; the
+        // assembly and shell-determination flow is shared with the TUI.
+        let terminal_manager_model = Self::from_session_core(
+            view.clone(),
+            model,
+            sessions,
+            model_events,
+            pty_controller,
+            Some(remote_server_controller),
+            Some(session_sharer),
+            event_loop_tx,
+            event_loop_rx,
+            inactive_pty_reads_rx,
+            channel_event_proxy,
+            wsl_name_or_shell_starter,
+            startup_directory,
+            env_vars,
+            user_default_shell_unsupported_banner_model_handle,
+            model_event_sender,
+            ctx,
+        );
+
+        (terminal_manager_model, view)
+    }
+}
+
+impl<S: TerminalSurface> TerminalManager<S> {
+    /// Returns the backing terminal model. Exposed so the object-safe
+    /// `crate::terminal::TerminalManager` trait can be implemented for
+    /// `TerminalManager<S>` from another module (e.g. the TUI) without access to
+    /// the private `model` field.
+    #[cfg(feature = "tui")]
+    pub(crate) fn shared_model(&self) -> Arc<FairMutex<TerminalModel>> {
+        self.model.clone()
+    }
+
+    /// Builds a manager from an already-constructed session core and a surface:
+    /// wires the surface to the PTY, assembles the manager, then asynchronously
+    /// determines the shell and spawns the PTY. Shared by the GUI's `create_model`
+    /// (which builds the `TerminalView` and its agent/sharing wiring first, then
+    /// delegates the assembly here) and the TUI (which builds its own
+    /// `RootTuiView`).
+    ///
+    /// `remote_server_controller` and `session_sharer` are passed in by callers
+    /// that have already set up surface-specific wiring against them (the GUI);
+    /// callers without that wiring (the TUI) pass `None` and get defaults.
+    ///
+    /// `wakeups_rx` from the session core is intentionally NOT taken here — the
+    /// caller hands it to the surface, which is the sole drainer of that mpmc
+    /// redraw channel.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_session_core(
+        surface: ViewHandle<S>,
+        model: Arc<FairMutex<TerminalModel>>,
+        sessions: ModelHandle<Sessions>,
+        model_events: ModelHandle<ModelEventDispatcher>,
+        pty_controller: ModelHandle<PtyController>,
+        remote_server_controller: Option<ModelHandle<RemoteServerController>>,
+        session_sharer: Option<Rc<RefCell<Option<ModelHandle<Network>>>>>,
+        event_loop_tx: mio_channel::Sender<Message>,
+        event_loop_rx: mio_channel::Receiver<Message>,
+        inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
+        channel_event_proxy: ChannelEventListener,
+        wsl_name_or_shell_starter: Option<ShellStarterSourceOrWslName>,
+        startup_directory: Option<PathBuf>,
+        env_vars: HashMap<OsString, OsString>,
+        user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
+        model_event_sender: Option<SyncSender<ModelEvent>>,
+        ctx: &mut AppContext,
+    ) -> ModelHandle<Box<dyn crate::terminal::TerminalManager>>
+    where
+        TerminalManager<S>: crate::terminal::TerminalManager,
+    {
+        wire_up_pty_controller_with_surface(
+            &pty_controller,
+            &surface,
+            model.clone(),
+            sessions,
+            model_event_sender,
+            ctx,
+        );
+
+        let remote_server_controller = remote_server_controller
+            .unwrap_or_else(|| init_remote_server_controller(&pty_controller, &model_events, ctx));
+        let session_sharer = session_sharer.unwrap_or_else(|| Rc::new(RefCell::new(None)));
+
         #[cfg(windows)]
         let event_loop_tx_clone = event_loop_tx.clone();
 
-        // Create the terminal manager itself.
         let terminal_manager = Self {
             event_loop_tx: Arc::new(Mutex::new(event_loop_tx)),
             model,
+            model_events,
             event_loop_handle: None,
-            view,
+            view: surface,
             #[cfg(unix)]
             terminal_attributes_poller: None,
             pty_controller,
             remote_server_controller,
-
             #[cfg(feature = "integration_tests")]
             pid: None,
-
             inactive_pty_reads_rx,
             session_sharer,
         };
 
-        let terminal_manager_model = ctx.add_model(|ctx| {
+        ctx.add_model(|ctx| {
             let terminal_manager: Box<dyn crate::terminal::TerminalManager> =
                 Box::new(terminal_manager);
 
@@ -1046,7 +1137,7 @@ impl TerminalManager {
                       ctx| {
                     let Some(terminal_manager) =
                         crate::terminal::TerminalManager::as_any_mut(terminal_manager.as_mut())
-                            .downcast_mut::<TerminalManager>()
+                            .downcast_mut::<TerminalManager<S>>()
                     else {
                         return;
                     };
@@ -1066,9 +1157,7 @@ impl TerminalManager {
             );
 
             terminal_manager
-        });
-
-        terminal_manager_model
+        })
     }
 
     /// Callback invoked upon determining the shell to be spawned when starting the event loop.
@@ -1110,7 +1199,7 @@ impl TerminalManager {
                         ctx,
                     );
                 });
-                self.model().lock().exit(ExitReason::ShellNotFound);
+                self.model.lock().exit(ExitReason::ShellNotFound);
                 return;
             }
         };
@@ -1148,7 +1237,7 @@ impl TerminalManager {
             &event_loop_tx,
             event_loop_rx,
             channel_event_proxy,
-            self.model(),
+            self.model.clone(),
             ctx,
         ) {
             Ok(spawned) => spawned,
@@ -1157,7 +1246,7 @@ impl TerminalManager {
                 self.view.update(ctx, |terminal_view, ctx| {
                     terminal_view.on_pty_spawn_failed(err, ctx);
                 });
-                self.model().lock().exit(ExitReason::PtySpawnFailed);
+                self.model.lock().exit(ExitReason::PtySpawnFailed);
                 return;
             }
         };
@@ -1173,21 +1262,93 @@ impl TerminalManager {
             terminal_view.on_active_shell_launch_data_updated(Some(spawned.shell_launch_data), ctx);
         });
 
-        // Initialize the terminal attributes poller.
+        // Initialize the terminal attributes poller (password-prompt detection).
         // TODO(CORE-2297): Implement TerminalPoller on Windows.
         #[cfg(unix)]
         {
-            let terminal_attributes_poller =
-                ctx.add_model(|_| TerminalAttributesPoller::new(spawned.fd));
-            TerminalManager::wire_up_terminal_attribute_poller_with_view(
-                &terminal_attributes_poller,
-                &self.view,
-                self.model(),
-                ctx,
-            );
-
-            self.terminal_attributes_poller = Some(terminal_attributes_poller);
+            let poller = ctx.add_model(|_| TerminalAttributesPoller::new(spawned.fd));
+            self.wire_up_password_poller(&poller, ctx);
+            self.terminal_attributes_poller = Some(poller);
         }
+    }
+
+    /// Wires the password-prompt attributes poller to block-lifecycle events and
+    /// the surface's reaction hooks. The poller mechanism is manager-owned; the
+    /// surface decides whether to poll and how to react.
+    #[cfg(unix)]
+    fn wire_up_password_poller(
+        &self,
+        poller: &ModelHandle<TerminalAttributesPoller>,
+        ctx: &mut ModelContext<Box<dyn crate::terminal::TerminalManager>>,
+    ) {
+        use crate::terminal::model_events::ModelEvent as TerminalModelEvent;
+
+        let poller_weak = poller.downgrade();
+        let surface_weak = self.view.downgrade();
+        // The block that was running when polling started, for the notification.
+        let polling_block_index: Rc<RefCell<Option<BlockIndex>>> = Rc::new(RefCell::new(None));
+
+        // Start/stop polling off block lifecycle; react to block completion.
+        let poller_weak_for_blocks = poller_weak.clone();
+        let surface_weak_for_blocks = surface_weak.clone();
+        let block_index_for_blocks = polling_block_index.clone();
+        let model_for_blocks = self.model.clone();
+        ctx.subscribe_to_model(&self.model_events, move |_, _emitter, event, ctx| {
+            let (Some(poller), Some(surface)) = (
+                poller_weak_for_blocks.upgrade(ctx),
+                surface_weak_for_blocks.upgrade(ctx),
+            ) else {
+                return;
+            };
+            match event {
+                TerminalModelEvent::AfterBlockStarted {
+                    is_for_in_band_command,
+                    ..
+                } if !is_for_in_band_command => {
+                    *block_index_for_blocks.borrow_mut() =
+                        Some(model_for_blocks.lock().block_list().active_block_index());
+                    if surface.read(ctx, |s, ctx| s.wants_password_poll(ctx)) {
+                        poller.update(ctx, |poller, ctx| poller.start_polling(ctx));
+                    }
+                }
+                TerminalModelEvent::BlockCompleted(completed) => {
+                    poller.update(ctx, |poller, _| poller.stop_polling());
+                    let completed = completed.clone();
+                    surface.update(ctx, |s, ctx| s.on_block_completed(&completed, ctx));
+                }
+                _ => {}
+            }
+        });
+
+        // React to a detected password prompt.
+        let surface_weak_for_termios = surface_weak;
+        let block_index_for_termios = polling_block_index;
+        ctx.subscribe_to_model(poller, move |manager, _emitter, event, ctx| {
+            let Some(surface) = surface_weak_for_termios.upgrade(ctx) else {
+                return;
+            };
+            let TerminalAttributesPollerEvent::TermiosQueryFinished { termios } = event;
+            // ECHO off + ICANON on looks like a line-based password prompt.
+            let might_be_password_prompt = !termios.local_flags.contains(LocalFlags::ECHO)
+                && termios.local_flags.contains(LocalFlags::ICANON);
+            if !might_be_password_prompt {
+                return;
+            }
+
+            let block_index = block_index_for_termios.borrow_mut().take();
+            surface.update(ctx, |s, ctx| {
+                s.on_possible_password_prompt(block_index, ctx)
+            });
+
+            // Stop after one detection per command.
+            if let Some(manager) = crate::terminal::TerminalManager::as_any_mut(manager.as_mut())
+                .downcast_mut::<TerminalManager<S>>()
+            {
+                if let Some(poller) = &manager.terminal_attributes_poller {
+                    poller.update(ctx, |poller, _| poller.stop_polling());
+                }
+            }
+        });
     }
 
     /// Sends bindkey to notify shell process to switch to PS1 logic for prompt
@@ -1306,145 +1467,6 @@ impl TerminalManager {
         // Spawn the event loop on a separate thread to interact with the PTY and write the data back
         // to the terminal.
         event_loop.spawn()
-    }
-
-    /// Configures bi-directional communication between the terminal attributes poller
-    /// and the terminal view.
-    ///
-    /// NOTE: we cannot simply use the strong references (the handle arguments to this wire_up fn)
-    /// in the subscription callbacks because that will create a reference cycle. Instead,
-    /// we should use weak handles and upgrade them lazily.
-    ///
-    /// TODO: while there is a lot of notification-heavy logic below, this will eventually
-    /// be in a dedicated terminal::NotificationSender. For now though, this logic cannot
-    /// live in TerminalView (because termios is a *nix thing).
-    #[cfg(unix)]
-    fn wire_up_terminal_attribute_poller_with_view(
-        terminal_attributes_poller: &ModelHandle<TerminalAttributesPoller>,
-        terminal_view: &ViewHandle<TerminalView>,
-        model: Arc<FairMutex<TerminalModel>>,
-        ctx: &mut ModelContext<Box<dyn crate::terminal::TerminalManager>>,
-    ) {
-        let poller_weak_handle = terminal_attributes_poller.downgrade();
-        let view_weak_handle = terminal_view.downgrade();
-        let view_weak_handle_2 = view_weak_handle.clone();
-
-        // Used to track the index of the started block across the view <-> poller interactions.
-        let block_index: Rc<RefCell<Option<BlockIndex>>> = Rc::new(RefCell::new(None));
-        let block_index_clone = block_index.clone();
-
-        // Whenever we get a BlockStarted, we want to start the terminal attribute poller.
-        // Whenever the block is completed, we can stop the terminal attribute poller.
-        ctx.subscribe_to_view(terminal_view, move |_view, _, event, ctx| {
-            let Some(poller) = poller_weak_handle.upgrade(ctx) else {
-                return;
-            };
-
-            match event {
-                TerminalViewEvent::BlockStarted {
-                    is_for_in_band_command,
-                } if !is_for_in_band_command => {
-                    *block_index.borrow_mut() =
-                        Some(model.lock().block_list().active_block_index());
-
-                    let password_notification_setting_on = show_password_notifications(ctx);
-                    let pane_handling_ssh_upload =
-                        view_weak_handle_2.upgrade(ctx).is_some_and(|view| {
-                            view.update(ctx, |terminal_view, _ctx| terminal_view.is_ssh_uploader())
-                        });
-                    let should_poll_for_password_prompt = password_notification_setting_on
-                        || (pane_handling_ssh_upload && FeatureFlag::SshDragAndDrop.is_enabled());
-
-                    if should_poll_for_password_prompt {
-                        poller.update(ctx, |model, ctx| {
-                            model.start_polling(ctx);
-                        });
-                    }
-                }
-                TerminalViewEvent::BlockCompleted { block, .. } => {
-                    // If the poller was turned on, that means that the next BlockCompleted
-                    // event would have been for the same block.
-                    poller.update(ctx, |model, _ctx| {
-                        model.stop_polling();
-                    });
-
-                    if let Some(view) = view_weak_handle_2.upgrade(ctx) {
-                        view.update(ctx, |terminal_view, ctx| {
-                            if terminal_view.is_ssh_uploader() {
-                                let exit_code = block.exit_code;
-                                terminal_view.propagate_upload_finished_event(exit_code, ctx);
-                            }
-                        })
-                    }
-                }
-                _ => {}
-            }
-        });
-
-        // Whenever the terminal attribute poller yields a termios struct, we might
-        // want to trigger a password notification depending on the termios attributes.
-        // TODO: eventually, this logic will be in a terminal::NotificationSender where
-        // it makes far more sense to be reading the termios struct. For now though,
-        // this logic can't live in TerminalView (because termios is a *nix thing).
-        ctx.subscribe_to_model(
-            terminal_attributes_poller,
-            move |terminal_manager, _, event, ctx| {
-                let Some(view) = view_weak_handle.upgrade(ctx) else {
-                    return;
-                };
-
-                let TerminalAttributesPollerEvent::TermiosQueryFinished { termios } = event;
-
-                // A PTY likely has a password prompt if it is not echoing characters back (ECHO disabled)
-                // AND is in canonical mode (ICANON enabled).
-                //
-                // We need to check ICANON because apps like neovim disable both ECHO and ICANON
-                // when entering raw mode (for character-by-character input handling), which would
-                // otherwise cause false positive password notifications. A real password prompt
-                // typically keeps ICANON enabled since password entry is still line-based.
-                let might_be_password_prompt = !termios.local_flags.contains(LocalFlags::ECHO)
-                    && termios.local_flags.contains(LocalFlags::ICANON);
-
-                if might_be_password_prompt {
-                    if FeatureFlag::SshDragAndDrop.is_enabled() {
-                        view.update(ctx, |view, ctx| {
-                            view.propagate_password_request(ctx);
-                        });
-                    }
-
-                    // Only send the notification if the user is navigated away from the window
-                    // when the password prompt appears. If the password prompt appears and they
-                    // are not navigated away, don't poll again since we would then send a notification
-                    // for something the user already knows.
-                    let is_navigated_away_from_window =
-                        ctx.windows().active_window() != Some(view.window_id(ctx));
-                    let password_notification_setting_on = show_password_notifications(ctx);
-                    if is_navigated_away_from_window && password_notification_setting_on {
-                        if let Some(block_index) = block_index_clone.borrow_mut().take() {
-                            view.update(ctx, |view, ctx| {
-                                view.maybe_send_password_notification(block_index, ctx);
-                            });
-                        }
-                    }
-
-                    // TODO: this stops the notification stream for a single command
-                    // after one password notification. We should track the output progress
-                    // instead so that we can send multiple notifications for a single command.
-                    let Some(terminal_manager) =
-                        crate::terminal::TerminalManager::as_any_mut(terminal_manager.as_mut())
-                            .downcast_mut::<TerminalManager>()
-                    else {
-                        return;
-                    };
-
-                    if let Some(poller) = &mut terminal_manager.terminal_attributes_poller {
-                        poller.update(ctx, |poller, _ctx| {
-                            poller.stop_polling();
-                        });
-                    }
-                }
-            },
-        );
     }
 
     /// Streams all historical agent conversations from this terminal to viewers.
@@ -2785,19 +2807,6 @@ impl TerminalManager {
     }
 }
 
-/// Determine whether to show password notifications based on the user's settings.
-/// This returns true if the user hasn't set notification settings yet, or if
-/// they have explicitly enabled notifications for password prompts.
-#[cfg(unix)]
-fn show_password_notifications(
-    ctx: &ModelContext<Box<dyn crate::terminal::TerminalManager>>,
-) -> bool {
-    let notification_settings = &SessionSettings::as_ref(ctx).notifications;
-    matches!(notification_settings.mode, NotificationsMode::Unset)
-        || (matches!(notification_settings.mode, NotificationsMode::Enabled)
-            && notification_settings.is_needs_attention_enabled)
-}
-
 pub fn get_shell_starter(
     chosen_shell: Option<AvailableShell>,
     auth_state: &AuthState,
@@ -2863,7 +2872,7 @@ pub fn shutdown_all_pty_event_loops(ctx: &mut AppContext) {
         terminal_manager.update(ctx, |terminal_manager, _ctx| {
             if let Some(manager) = terminal_manager
                 .as_any_mut()
-                .downcast_mut::<TerminalManager>()
+                .downcast_mut::<TerminalManager<TerminalView>>()
             {
                 manager.shutdown_event_loop();
             }
@@ -2871,13 +2880,9 @@ pub fn shutdown_all_pty_event_loops(ctx: &mut AppContext) {
     })
 }
 
-impl crate::terminal::TerminalManager for TerminalManager {
+impl crate::terminal::TerminalManager for TerminalManager<TerminalView> {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
-    }
-
-    fn view(&self) -> ViewHandle<TerminalView> {
-        self.view.clone()
     }
 
     fn on_view_detached(

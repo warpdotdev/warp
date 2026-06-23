@@ -28,9 +28,10 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use shell::ShellStarter;
 
+pub use self::terminal_manager::get_shell_starter;
 #[cfg(windows)]
 pub use self::terminal_manager::shutdown_all_pty_event_loops;
-pub use self::terminal_manager::{get_shell_starter, TerminalManager};
+pub(crate) use self::terminal_manager::TerminalManager;
 #[cfg(unix)]
 pub use self::unix::*;
 #[cfg(windows)]

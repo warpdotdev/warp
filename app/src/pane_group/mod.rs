@@ -5899,7 +5899,7 @@ impl PaneGroup {
 
         cfg_if::cfg_if! {
             if #[cfg(feature = "remote_tty")] {
-                let terminal_manager: ModelHandle<Box<dyn TerminalManager>> = crate::terminal::remote_tty::TerminalManager::create_model(
+                let (terminal_manager, terminal_view) = crate::terminal::remote_tty::TerminalManager::create_model(
                     resources,
                     initial_size,
                     model_event_sender,
@@ -5908,7 +5908,7 @@ impl PaneGroup {
                     ctx,
                 );
             } else if #[cfg(feature = "local_tty")] {
-                let terminal_manager: ModelHandle<Box<dyn TerminalManager>> = crate::terminal::local_tty::TerminalManager::create_model(
+                let (terminal_manager, terminal_view) = crate::terminal::local_tty::TerminalManager::create_model(
                     startup_directory,
                     env_vars,
                     is_shared_session,
@@ -5926,7 +5926,7 @@ impl PaneGroup {
             } else {
                 use crate::terminal::{ShellLaunchState, shell::{ShellName, ShellType}};
 
-                let terminal_manager: ModelHandle<Box<dyn TerminalManager>> = crate::terminal::MockTerminalManager::create_model(
+                let (terminal_manager, terminal_view) = crate::terminal::MockTerminalManager::create_model(
                     ShellLaunchState::ShellSpawned {
                         available_shell: chosen_shell,
                         display_name: ShellName::blank(),
@@ -5942,7 +5942,6 @@ impl PaneGroup {
             }
         }
 
-        let terminal_view = terminal_manager.as_ref(ctx).view();
         (terminal_view, terminal_manager)
     }
 
@@ -5966,21 +5965,22 @@ impl PaneGroup {
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
         let window_id = ctx.window_id();
-        let terminal_manager = ctx.add_model(|ctx| {
-            let terminal_manager: Box<dyn TerminalManager> =
-                Box::new(shared_session::viewer::TerminalManager::new(
-                    session_id,
-                    resources,
-                    initial_size,
-                    window_id,
-                    enable_orchestration_polling,
-                    is_cloud_mode,
-                    ctx,
-                ));
-            terminal_manager
-        });
-
-        let terminal_view = terminal_manager.as_ref(ctx).view();
+        // The viewer manager builds its own `TerminalView` during construction
+        // and exposes it via `view()`, so grab the view before boxing the
+        // manager behind the object-safe `TerminalManager` trait (which has no
+        // `view()`).
+        let manager = shared_session::viewer::TerminalManager::new(
+            session_id,
+            resources,
+            initial_size,
+            window_id,
+            enable_orchestration_polling,
+            is_cloud_mode,
+            ctx,
+        );
+        let terminal_view = manager.view();
+        let terminal_manager =
+            ctx.add_model(move |_| Box::new(manager) as Box<dyn TerminalManager>);
         (terminal_view, terminal_manager)
     }
 
@@ -5995,7 +5995,7 @@ impl PaneGroup {
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
         let restored_blocks = conversation.to_serialized_blocklist_items();
-        let terminal_manager = MockTerminalManager::create_model(
+        let (terminal_manager, terminal_view) = MockTerminalManager::create_model(
             ShellLaunchState::ShellSpawned {
                 available_shell: None,
                 display_name: ShellName::blank(),
@@ -6024,7 +6024,6 @@ impl PaneGroup {
                 .set_conversation_transcript_viewer_status(Some(viewer_status.clone()));
         });
 
-        let terminal_view = terminal_manager.as_ref(ctx).view();
         // Insert the conversation ended tombstone (includes Open in Warp button on WASM)
         terminal_view.update(ctx, |view, ctx| {
             view.insert_conversation_ended_tombstone_with_resolved_cta(ctx);
@@ -6056,7 +6055,7 @@ impl PaneGroup {
         ViewHandle<TerminalView>,
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
-        let terminal_manager = MockTerminalManager::create_model(
+        let (terminal_manager, terminal_view) = MockTerminalManager::create_model(
             ShellLaunchState::ShellSpawned {
                 available_shell: None,
                 display_name: ShellName::blank(),
@@ -6080,7 +6079,6 @@ impl PaneGroup {
                 ));
         });
 
-        let terminal_view = terminal_manager.as_ref(ctx).view();
         (terminal_view, terminal_manager)
     }
 

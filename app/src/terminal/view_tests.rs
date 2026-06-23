@@ -407,16 +407,13 @@ fn updated_conversation_metadata_refreshes_selected_conversation_pane_title() {
 }
 struct TestTerminalManager {
     model: Arc<FairMutex<TerminalModel>>,
+    #[allow(dead_code)]
     view: ViewHandle<TerminalView>,
 }
 
 impl TerminalManager for TestTerminalManager {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
-    }
-
-    fn view(&self) -> ViewHandle<TerminalView> {
-        self.view.clone()
     }
 
     fn as_any(&self) -> &dyn Any {

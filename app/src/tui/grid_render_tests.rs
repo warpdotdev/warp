@@ -2,7 +2,7 @@
 
 use warp_terminal::model::ansi::{Color, NamedColor};
 use warp_terminal::model::grid::cell::{Cell, Flags};
-use warpui_core::elements::tui::{Color as TuiColor, Modifier, TuiStyle};
+use warpui_core::elements::tui::{Color as TuiColor, Modifier};
 
 use super::cell_to_style;
 use crate::terminal::color;

@@ -67,7 +67,7 @@ fn create_docker_sandbox_view(
 ) {
     cfg_if::cfg_if! {
         if #[cfg(feature = "remote_tty")] {
-            let terminal_manager = RemoteTtyTerminalManager::create_model(
+            let (terminal_manager, terminal_view) = RemoteTtyTerminalManager::create_model(
                 resources,
                 initial_size,
                 model_event_sender,
@@ -84,7 +84,7 @@ fn create_docker_sandbox_view(
                 DEFAULT_DOCKER_SANDBOX_BASE_IMAGE.map(str::to_owned),
             ));
 
-            let terminal_manager = crate::terminal::local_tty::TerminalManager::create_model(
+            let (terminal_manager, terminal_view) = crate::terminal::local_tty::TerminalManager::create_model(
                 None,
                 std::collections::HashMap::new(),
                 crate::terminal::shared_session::IsSharedSessionCreator::No,
@@ -104,7 +104,7 @@ fn create_docker_sandbox_view(
             use crate::terminal::shell::{ShellName, ShellType};
             use crate::terminal::ShellLaunchState;
 
-            let terminal_manager = crate::terminal::MockTerminalManager::create_model(
+            let (terminal_manager, terminal_view) = crate::terminal::MockTerminalManager::create_model(
                 ShellLaunchState::ShellSpawned {
                     available_shell: None,
                     display_name: ShellName::blank(),
@@ -120,7 +120,6 @@ fn create_docker_sandbox_view(
         }
     }
 
-    let terminal_view = terminal_manager.as_ref(ctx).view();
     (terminal_view, terminal_manager)
 }
 
