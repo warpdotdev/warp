@@ -208,11 +208,10 @@ pub fn tab_configs_dir() -> PathBuf {
     base_dir().join("tab_configs")
 }
 
-/// Returns the path to the directory containing the user's custom auto model
-/// configs (`~/.warp/model_configs/`), consistent with `themes/`, `workflows/`,
-/// and `tab_configs/`.
-pub fn model_configs_dir() -> PathBuf {
-    base_dir().join("model_configs")
+/// Returns the path to the user's custom auto model config file
+/// (`~/.warp/custom_auto_models.yaml`).
+pub fn custom_auto_models_file() -> PathBuf {
+    base_dir().join("custom_auto_models.yaml")
 }
 
 /// Returns the path to the directory containing the built-in default tab configs.

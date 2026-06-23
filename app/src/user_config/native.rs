@@ -8,15 +8,14 @@ use repo_metadata::RepositoryUpdate;
 use warpui::{ModelContext, SingletonEntity};
 
 use super::util::{
-    for_each_dir_entry, has_name, is_config_file, parse_model_config_dir_entry,
-    parse_multi_launch_config_dir_entry, parse_multi_workflow_dir_entry,
-    parse_single_theme_dir_entry, parse_tab_config_dir_entry,
+    for_each_dir_entry, has_name, is_config_file, parse_multi_launch_config_dir_entry,
+    parse_multi_workflow_dir_entry, parse_single_theme_dir_entry, parse_tab_config_dir_entry,
 };
 use super::{
-    launch_configs_dir, model_configs_dir, tab_configs_dir, themes_dir, workflows_dir,
+    custom_auto_models_file, launch_configs_dir, tab_configs_dir, themes_dir, workflows_dir,
     WarpConfigUpdateEvent, LAUNCH_CONFIG_COMMENT,
 };
-use crate::ai::custom_auto_models::{CustomAutoModel, ModelConfigError};
+use crate::ai::custom_auto_models::{parse_model_configs_yaml, CustomAutoModel, ModelConfigError};
 use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::tab_configs::{TabConfig, TabConfigError};
@@ -64,7 +63,7 @@ impl super::WarpConfig {
         );
         if FeatureFlag::CustomAutoModels.is_enabled() {
             let _ = ctx.spawn(
-                async move { load_model_configs(&model_configs_dir()) },
+                async move { load_model_configs(&custom_auto_models_file()) },
                 |me, (models, errors), ctx| {
                     me.custom_auto_models = models;
                     me.custom_auto_model_errors = errors;
@@ -142,11 +141,11 @@ impl super::WarpConfig {
         }
 
         if FeatureFlag::CustomAutoModels.is_enabled()
-            && update_touches_dir(update, &model_configs_dir())
+            && update_touches_path(update, &custom_auto_models_file())
         {
-            let model_configs_dir = model_configs_dir();
+            let file_path = custom_auto_models_file();
             let _ = ctx.spawn(
-                async move { load_model_configs(&model_configs_dir) },
+                async move { load_model_configs(&file_path) },
                 |me, (models, errors), ctx| {
                     me.custom_auto_models = models;
                     me.custom_auto_model_errors = errors.clone();
@@ -221,28 +220,38 @@ pub fn load_launch_configs(launch_config_path: &Path) -> Vec<LaunchConfig> {
         .collect_vec()
 }
 
-/// Loads all custom auto models from `model_configs_path`. A single YAML file may
-/// define multiple models (inv. 7). Returns successfully parsed models and any
-/// per-file parse/validation errors (inv. 10), so invalid files are skipped while
-/// the rest still load.
-pub fn load_model_configs(
-    model_configs_path: &Path,
-) -> (Vec<CustomAutoModel>, Vec<ModelConfigError>) {
-    let results = for_each_dir_entry(model_configs_path, parse_model_config_dir_entry);
-    let mut models = Vec::new();
-    let mut errors = Vec::new();
-    for result in results {
-        match result {
-            Ok(file_models) => models.extend(file_models),
-            Err(error) => errors.push(error),
-        }
+/// Loads custom auto models from the single config file at `file_path`
+/// (`~/.warp/custom_auto_models.yaml`). Returns the parsed models and any
+/// parse/validation error. If the file does not exist, returns empty vecs.
+pub fn load_model_configs(file_path: &Path) -> (Vec<CustomAutoModel>, Vec<ModelConfigError>) {
+    if !file_path.exists() {
+        return (vec![], vec![]);
     }
-    models.sort_by(|a, b| {
-        let a_name = a.name.to_lowercase();
-        let b_name = b.name.to_lowercase();
-        a_name.cmp(&b_name).then_with(|| a.name.cmp(&b.name))
-    });
-    (models, errors)
+    let file_name = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("custom_auto_models.yaml")
+        .to_owned();
+    let make_error = |msg: String| ModelConfigError {
+        file_name: file_name.clone(),
+        file_path: file_path.to_path_buf(),
+        error_message: msg,
+    };
+    let contents = match fs::read_to_string(file_path) {
+        Ok(c) => c,
+        Err(e) => return (vec![], vec![make_error(e.to_string())]),
+    };
+    match parse_model_configs_yaml(&contents) {
+        Ok(mut models) => {
+            models.sort_by(|a, b| {
+                let a_name = a.name.to_lowercase();
+                let b_name = b.name.to_lowercase();
+                a_name.cmp(&b_name).then_with(|| a.name.cmp(&b.name))
+            });
+            (models, vec![])
+        }
+        Err(e) => (vec![], vec![make_error(e)]),
+    }
 }
 
 /// Loads all tab configs from `tab_config_path`. Each tab config is an individual TOML file.

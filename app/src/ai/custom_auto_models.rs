@@ -2,10 +2,11 @@
 //! a concrete model per task.
 //!
 //! This module holds the portable definition for **local** (YAML-authored) custom
-//! auto models: produced from a local YAML config (see [`parse_model_configs_yaml`]),
-//! surfaced in the model picker as synthetic [`LLMInfo`] entries, and serialized
-//! inline into outbound agent requests (`Request.Settings.custom_auto_models`)
-//! mirroring the `custom_model_providers` inline-registry pattern.
+//! auto models: produced from `~/.warp/custom_auto_models.yaml` (see
+//! [`parse_model_configs_yaml`]), surfaced in the model picker as synthetic
+//! [`LLMInfo`] entries, and serialized inline into outbound agent requests
+//! (`Request.Settings.custom_auto_models`) mirroring the
+//! `custom_model_providers` inline-registry pattern.
 //!
 //! Cloud/team custom autos are delivered separately, as `LLMInfo` entries in the
 //! available-LLMs fetch (id = `custom-auto:cloud:<uid>`); at request time the
@@ -44,11 +45,13 @@ pub enum CustomAutoRouting {
     Prompt(PromptRouting),
 }
 
-/// Complexity routing: each bucket maps to a concrete model id. Omitted buckets
-/// fall back to `medium`, then to a built-in default (inv. 3, 28) — that fallback
-/// is resolved server-side, so omitted buckets are represented as `None` here.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Complexity routing: each bucket maps to a concrete model id. The required
+/// `default` is the catch-all used when a bucket is omitted or task complexity
+/// cannot be determined. Omitted buckets fall back to `default` (inv. 3, 28).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ComplexityRouting {
+    /// The required catch-all model used when no bucket matches.
+    pub default: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub easy: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -106,8 +109,13 @@ impl CustomAutoModel {
     ///
     /// Mirrors `llms::custom_llm_info_from`: provider `Unknown` and empty
     /// `host_configs` mark it as an auto/router-style entry rather than a concrete
-    /// model. The `description` carries the source label.
+    /// model. The `description` carries the source and routing strategy label shown
+    /// in the model picker details panel.
     pub fn to_llm_info(&self) -> LLMInfo {
+        let description = match &self.routing {
+            CustomAutoRouting::Complexity(_) => "Locally defined · Routes by task complexity",
+            CustomAutoRouting::Prompt(_) => "Locally defined · Routes by prompt content",
+        };
         LLMInfo {
             display_name: self.name.clone(),
             base_model_name: self.name.clone(),
@@ -117,7 +125,7 @@ impl CustomAutoModel {
                 request_multiplier: 1,
                 credit_multiplier: None,
             },
-            description: Some("Custom auto · Local".to_owned()),
+            description: Some(description.to_owned()),
             disable_reason: None,
             vision_supported: true,
             spec: None,
@@ -136,37 +144,33 @@ impl CustomAutoModel {
         proto::CustomAutoModel {
             config_key: self.config_key(),
             name: self.name.clone(),
-            source: Some(proto::custom_auto_model::Source::Inline(
-                self.to_proto_definition(),
-            )),
+            router: Some(self.to_proto_router()),
         }
     }
 
-    fn to_proto_definition(&self) -> proto::CustomAutoModelDefinition {
-        let routing = match &self.routing {
+    fn to_proto_router(&self) -> proto::custom_auto_model::Router {
+        match &self.routing {
             CustomAutoRouting::Complexity(c) => {
-                proto::custom_auto_model_definition::Routing::Complexity(proto::ComplexityRouting {
+                proto::custom_auto_model::Router::Complexity(proto::ComplexityBasedRouter {
+                    default: c.default.clone(),
                     easy: c.easy.clone().unwrap_or_default(),
                     medium: c.medium.clone().unwrap_or_default(),
                     hard: c.hard.clone().unwrap_or_default(),
                 })
             }
             CustomAutoRouting::Prompt(p) => {
-                proto::custom_auto_model_definition::Routing::Prompt(proto::PromptRouting {
-                    default_model: p.default_model.clone(),
+                proto::custom_auto_model::Router::Prompt(proto::PromptBasedRouter {
+                    default: p.default_model.clone(),
                     rules: p
                         .rules
                         .iter()
-                        .map(|r| proto::PromptRule {
-                            description: r.description.clone(),
+                        .map(|r| proto::prompt_based_router::PromptRule {
+                            rule: r.description.clone(),
                             model: r.model.clone(),
                         })
                         .collect(),
                 })
             }
-        };
-        proto::CustomAutoModelDefinition {
-            routing: Some(routing),
         }
     }
 
@@ -179,6 +183,12 @@ impl CustomAutoModel {
     pub fn validate(&self) -> Result<(), String> {
         match &self.routing {
             CustomAutoRouting::Complexity(c) => {
+                if c.default.trim().is_empty() {
+                    return Err(
+                        "complexity routing requires a non-empty `default` model".to_owned(),
+                    );
+                }
+                validate_target(&c.default).map_err(|e| format!("`default`: {e}"))?;
                 for (bucket, target) in
                     [("easy", &c.easy), ("medium", &c.medium), ("hard", &c.hard)]
                 {
@@ -312,6 +322,14 @@ impl YamlCustomAutoModel {
         }
         let routing = match self.model_type.as_str() {
             "complexity" => {
+                let default_model = self
+                    .default
+                    .map(|d| d.trim().to_owned())
+                    .filter(|d| !d.is_empty())
+                    // complexity also requires a catch-all default.
+                    .ok_or_else(|| {
+                        format!("`{name}`: complexity type requires a `default` model")
+                    })?;
                 let routing: YamlComplexityRouting = if self.routing.is_null() {
                     YamlComplexityRouting::default()
                 } else {
@@ -319,6 +337,7 @@ impl YamlCustomAutoModel {
                         .map_err(|e| format!("`{name}`: invalid complexity routing: {e}"))?
                 };
                 CustomAutoRouting::Complexity(ComplexityRouting {
+                    default: default_model,
                     easy: normalize_target(routing.easy),
                     medium: normalize_target(routing.medium),
                     hard: normalize_target(routing.hard),

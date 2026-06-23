@@ -945,9 +945,9 @@ impl LLMPreferences {
     }
 
     /// Builds the proto registry entry for a selected custom-auto id: the full
-    /// definition inline for a local YAML auto, or just the `cloud_uid` for a cloud
-    /// auto (delivered via the available-LLMs fetch, recognized by the
-    /// `custom-auto:cloud:` prefix). Returns `None` for non-custom-auto ids.
+    /// definition inline for a local YAML auto. Cloud autos are resolved by the
+    /// server directly from the model ID, so they produce no registry entry
+    /// (returns `None`). Returns `None` for non-custom-auto ids as well.
     fn custom_auto_proto_entry(
         &self,
         id: &LLMId,
@@ -955,20 +955,8 @@ impl LLMPreferences {
         if let Some(model) = self.custom_auto_model_for_id(id) {
             return Some(model.to_proto());
         }
-        let uid = custom_auto_models::cloud_uid_from_id(id.as_str())?;
-        Some(
-            api::request::settings::custom_auto_models::CustomAutoModel {
-                config_key: id.as_str().to_owned(),
-                // The server resolves cloud autos by `cloud_uid` and already holds the
-                // GSO name; the (sensitive) `name` field is left empty on the wire.
-                name: String::new(),
-                source: Some(
-                    api::request::settings::custom_auto_models::custom_auto_model::Source::CloudUid(
-                        uid.to_owned(),
-                    ),
-                ),
-            },
-        )
+        // Cloud autos are resolved by the server from the model ID; no registry entry needed.
+        None
     }
 
     /// Rebuilds the local `custom_auto_models`/`custom_auto_llms` from the
