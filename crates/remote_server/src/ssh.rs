@@ -33,6 +33,7 @@ pub enum SshCommandError {
 /// immediately; if it doesn't, we'd rather give up than block
 /// teardown.
 const STOP_CONTROL_MASTER_TIMEOUT: Duration = Duration::from_secs(5);
+const MUX_PLACEHOLDER_TARGET: &str = "placeholder@placeholder";
 
 /// Builds the common SSH argument list for multiplexed connections through
 /// an existing ControlMaster socket.
@@ -44,8 +45,12 @@ pub fn ssh_args(socket_path: &Path) -> Vec<String> {
         "-o".to_string(),
         "ForwardX11=no".to_string(),
         "-o".to_string(),
+        // Keep the placeholder target from being rewritten by user configs, but
+        // do not make it resolvable: stale ControlPath values should fail fast.
+        "CanonicalizeHostname=no".to_string(),
+        "-o".to_string(),
         format!("ControlPath={}", socket_path.display()),
-        "placeholder@placeholder".to_string(),
+        MUX_PLACEHOLDER_TARGET.to_string(),
     ]
 }
 
@@ -220,11 +225,13 @@ pub async fn scp_upload(
             .arg("-o")
             .arg(format!("ControlPath={}", socket_path.display()))
             .arg("-o")
+            .arg("CanonicalizeHostname=no")
+            .arg("-o")
             .arg("ControlMaster=no")
             .arg("-o")
             .arg("ConnectTimeout=15")
             .arg(local_path.as_os_str())
-            .arg(format!("placeholder@placeholder:{remote_path}"))
+            .arg(format!("{MUX_PLACEHOLDER_TARGET}:{remote_path}"))
             .kill_on_drop(true)
             .output()
             .await
@@ -243,5 +250,27 @@ pub async fn scp_upload(
             output.status.code(),
             stderr
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_args_disable_canonicalization_without_resolving_placeholder() {
+        let args = ssh_args(Path::new("/tmp/control.sock"));
+
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-o", "CanonicalizeHostname=no"]));
+        assert!(!args.iter().any(|arg| arg.starts_with("HostName=")));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-o", "ControlPath=/tmp/control.sock"]));
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some(MUX_PLACEHOLDER_TARGET)
+        );
     }
 }

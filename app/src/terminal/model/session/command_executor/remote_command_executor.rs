@@ -6,6 +6,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use command::r#async::Command;
 use itertools::Itertools as _;
+use remote_server::ssh::ssh_args;
 
 use super::shared::shell_escape_single_quotes;
 use super::{CommandExecutor, CommandOutput, ExecuteCommandOptions};
@@ -65,25 +66,8 @@ impl CommandExecutor for RemoteCommandExecutor {
         }
         command_str.push_str(command);
 
-        let ssh_args = [
-            "-q",
-            "-o",
-            "PasswordAuthentication=no",
-            // Disable X11 forwarding, as none of our background commands
-            // should need it, and it can cause warnings to appear in the
-            // user's session.
-            "-o",
-            "ForwardX11=no",
-            "-o",
-            &format!(
-                "ControlPath={}",
-                self.control_socket_path
-                    .to_str()
-                    .ok_or_else(|| anyhow!("socket path must exist"))?
-            ),
-            "placeholder@placeholder",
-            command_str.as_str(),
-        ];
+        let mut ssh_args = ssh_args(&self.control_socket_path);
+        ssh_args.push(command_str);
 
         // If the SSH session originated from WSL, the ControlPath also exists inside WSL.
         // Therefore, SSH commands directly from the Windows host will not work. They must be run
@@ -97,7 +81,7 @@ impl CommandExecutor for RemoteCommandExecutor {
             }
         };
 
-        command.args(ssh_args);
+        command.args(&ssh_args);
         command
             .kill_on_drop(true)
             .output()
