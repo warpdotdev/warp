@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::ops::{Deref, RangeInclusive};
 
 use serde::{Serialize, Serializer};
 use warpui::platform::Cursor;
@@ -36,6 +36,13 @@ const PREFIXES_TO_REMOVE: [&str; 2] = ["a/", "b/"];
 /// for `ls`.
 #[cfg(feature = "local_fs")]
 const SUFFIXES_TO_REMOVE: [&str; 1] = ["@"];
+
+/// Natural-language sentence punctuation should not be included in terminal file links.
+///
+/// This is checked before the original path so platforms that normalize trailing periods during
+/// path resolution still get a visible link range that excludes the sentence-ending period.
+#[cfg(feature = "local_fs")]
+const SENTENCE_SUFFIXES_TO_REMOVE: [&str; 1] = ["."];
 
 /// Highlighted link within a terminal model grid.
 #[derive(Debug, Clone)]
@@ -500,49 +507,87 @@ impl super::TerminalView {
         let mut link = None;
         'path_loop: for within_model_possible_path in possible_paths {
             let possible_path = within_model_possible_path.get_inner();
-            // We want to check if the clean path result is a valid path and get the canonical
-            // absolute path back.
-            let absolute_path = absolute_path_if_valid(
-                &possible_path.path,
-                ShellPathType::ShellNative(working_directory.to_string()),
-                shell_launch_data.as_ref(),
-            );
+            for suffix in SENTENCE_SUFFIXES_TO_REMOVE {
+                if let Some(new_possible_path) = possible_path.path.path.strip_suffix(suffix) {
+                    let new_possible_cleaned_path =
+                        CleanPathResult::with_line_and_column_number(new_possible_path);
+                    let new_end_point = possible_path
+                        .range
+                        .end()
+                        .wrapping_sub(max_columns, suffix.len());
 
-            if let Some(absolute_path) = absolute_path {
-                link = Some(Self::create_valid_link(
-                    absolute_path,
-                    possible_path.path.line_and_column_num,
-                    possible_path.range.clone(),
-                    &within_model_possible_path,
-                ));
+                    if let Some(valid_link) = Self::create_valid_link_if_path_exists(
+                        working_directory,
+                        &new_possible_cleaned_path,
+                        *possible_path.range.start()..=new_end_point,
+                        &within_model_possible_path,
+                        shell_launch_data.as_ref(),
+                    ) {
+                        link = Some(valid_link);
+                        break 'path_loop;
+                    }
+                }
+            }
+
+            if let Some(valid_link) = Self::create_valid_link_if_path_exists(
+                working_directory,
+                &possible_path.path,
+                possible_path.range.clone(),
+                &within_model_possible_path,
+                shell_launch_data.as_ref(),
+            ) {
+                link = Some(valid_link);
                 break;
             }
 
             for prefix in PREFIXES_TO_REMOVE {
                 if let Some(new_possible_path) = possible_path.path.path.strip_prefix(prefix) {
+                    for suffix in SENTENCE_SUFFIXES_TO_REMOVE {
+                        if let Some(trimmed_possible_path) = new_possible_path.strip_suffix(suffix)
+                        {
+                            let new_possible_cleaned_path =
+                                CleanPathResult::with_line_and_column_number(trimmed_possible_path);
+                            let new_start_point = possible_path
+                                .range
+                                .start()
+                                .wrapping_add(max_columns, prefix.len());
+                            let new_end_point = possible_path
+                                .range
+                                .end()
+                                .wrapping_sub(max_columns, suffix.len());
+
+                            if let Some(valid_link) = Self::create_valid_link_if_path_exists(
+                                working_directory,
+                                &new_possible_cleaned_path,
+                                new_start_point..=new_end_point,
+                                &within_model_possible_path,
+                                shell_launch_data.as_ref(),
+                            ) {
+                                link = Some(valid_link);
+
+                                // break outer_loop
+                                break 'path_loop;
+                            }
+                        }
+                    }
+
                     let new_possible_cleaned_path = CleanPathResult {
                         path: new_possible_path.into(),
                         line_and_column_num: possible_path.path.line_and_column_num,
                     };
-                    let absolute_path = absolute_path_if_valid(
+                    let new_start_point = possible_path
+                        .range
+                        .start()
+                        .wrapping_add(max_columns, prefix.len());
+
+                    if let Some(valid_link) = Self::create_valid_link_if_path_exists(
+                        working_directory,
                         &new_possible_cleaned_path,
-                        ShellPathType::ShellNative(working_directory.to_string()),
+                        new_start_point..=*possible_path.range.end(),
+                        &within_model_possible_path,
                         shell_launch_data.as_ref(),
-                    );
-
-                    // check if new_possible_path is valid
-                    if let Some(absolute_path) = absolute_path {
-                        let new_start_point = possible_path
-                            .range
-                            .start()
-                            .wrapping_add(max_columns, prefix.len());
-
-                        link = Some(Self::create_valid_link(
-                            absolute_path,
-                            new_possible_cleaned_path.line_and_column_num,
-                            new_start_point..=*possible_path.range.end(),
-                            &within_model_possible_path,
-                        ));
+                    ) {
+                        link = Some(valid_link);
 
                         // break outer_loop
                         break 'path_loop;
@@ -556,25 +601,19 @@ impl super::TerminalView {
                         path: new_possible_path.into(),
                         line_and_column_num: possible_path.path.line_and_column_num,
                     };
-                    let absolute_path = absolute_path_if_valid(
+                    let new_end_point = possible_path
+                        .range
+                        .end()
+                        .wrapping_sub(max_columns, suffix.len());
+
+                    if let Some(valid_link) = Self::create_valid_link_if_path_exists(
+                        working_directory,
                         &new_possible_cleaned_path,
-                        ShellPathType::ShellNative(working_directory.to_string()),
+                        *possible_path.range.start()..=new_end_point,
+                        &within_model_possible_path,
                         shell_launch_data.as_ref(),
-                    );
-
-                    // check if new_possible_path is valid
-                    if let Some(absolute_path) = absolute_path {
-                        let new_end_point = possible_path
-                            .range
-                            .end()
-                            .wrapping_sub(max_columns, suffix.len());
-
-                        link = Some(Self::create_valid_link(
-                            absolute_path,
-                            new_possible_cleaned_path.line_and_column_num,
-                            *possible_path.range.start()..=new_end_point,
-                            &within_model_possible_path,
-                        ));
+                    ) {
+                        link = Some(valid_link);
 
                         // break outer_loop
                         break 'path_loop;
@@ -586,10 +625,31 @@ impl super::TerminalView {
         link.map(GridHighlightedLink::File)
     }
 
+    fn create_valid_link_if_path_exists(
+        working_directory: &str,
+        path: &CleanPathResult,
+        path_range: RangeInclusive<Point>,
+        possible_path: &WithinModel<grid_handler::PossiblePath>,
+        shell_launch_data: Option<&ShellLaunchData>,
+    ) -> Option<WithinModel<FileLink>> {
+        let absolute_path = absolute_path_if_valid(
+            path,
+            ShellPathType::ShellNative(working_directory.to_string()),
+            shell_launch_data,
+        )?;
+
+        Some(Self::create_valid_link(
+            absolute_path,
+            path.line_and_column_num,
+            path_range,
+            possible_path,
+        ))
+    }
+
     fn create_valid_link(
         absolute_path: PathBuf,
         line_and_column_num: Option<LineAndColumnArg>,
-        path_range: std::ops::RangeInclusive<Point>,
+        path_range: RangeInclusive<Point>,
         possible_path: &WithinModel<grid_handler::PossiblePath>,
     ) -> WithinModel<FileLink> {
         let inner_link = FileLink {
@@ -625,5 +685,174 @@ impl super::TerminalView {
             ctx.set_cursor_shape(Cursor::PointingHand);
             ctx.notify();
         }
+    }
+}
+
+#[cfg(all(test, feature = "local_fs"))]
+mod tests {
+    use std::fs;
+
+    use warp_util::path::{CleanPathResult, LineAndColumnArg};
+
+    use super::*;
+    use crate::terminal::model::grid::grid_handler::PossiblePath;
+    use crate::terminal::model::terminal_model::WithinModel;
+
+    #[test]
+    fn terminal_file_link_excludes_trailing_sentence_period() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let markdown_path = temp_dir.path().join("warp-md-test.md");
+        fs::write(&markdown_path, "# Hello").expect("markdown file should be written");
+
+        let possible_path = PossiblePath {
+            path: CleanPathResult {
+                path: "warp-md-test.md.".into(),
+                line_and_column_num: None,
+            },
+            range: Point { row: 0, col: 0 }..=Point { row: 0, col: 15 },
+        };
+
+        let highlighted_link = crate::terminal::view::TerminalView::compute_valid_paths(
+            temp_dir
+                .path()
+                .to_str()
+                .expect("temp dir should be valid UTF-8"),
+            std::iter::once(WithinModel::AltScreen(possible_path)),
+            80,
+            None,
+        )
+        .expect("file link should be detected");
+
+        let GridHighlightedLink::File(WithinModel::AltScreen(file_link)) = highlighted_link else {
+            panic!("expected an alt-screen file link");
+        };
+
+        assert_eq!(file_link.absolute_path, markdown_path);
+        assert_eq!(
+            file_link.link.range,
+            Point { row: 0, col: 0 }..=Point { row: 0, col: 14 }
+        );
+    }
+
+    #[test]
+    fn terminal_file_link_reparses_line_number_after_trailing_sentence_period() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let markdown_path = temp_dir.path().join("warp-md-test.md");
+        fs::write(&markdown_path, "# Hello").expect("markdown file should be written");
+
+        let possible_path = PossiblePath {
+            path: CleanPathResult {
+                path: "warp-md-test.md:42.".into(),
+                line_and_column_num: None,
+            },
+            range: Point { row: 0, col: 0 }..=Point { row: 0, col: 18 },
+        };
+
+        let highlighted_link = crate::terminal::view::TerminalView::compute_valid_paths(
+            temp_dir
+                .path()
+                .to_str()
+                .expect("temp dir should be valid UTF-8"),
+            std::iter::once(WithinModel::AltScreen(possible_path)),
+            80,
+            None,
+        )
+        .expect("file link with line number should be detected");
+
+        let GridHighlightedLink::File(WithinModel::AltScreen(file_link)) = highlighted_link else {
+            panic!("expected an alt-screen file link");
+        };
+
+        assert_eq!(file_link.absolute_path, markdown_path);
+        assert_eq!(
+            file_link.line_and_column_num,
+            Some(LineAndColumnArg {
+                line_num: 42,
+                column_num: None,
+            })
+        );
+        assert_eq!(
+            file_link.link.range,
+            Point { row: 0, col: 0 }..=Point { row: 0, col: 17 }
+        );
+    }
+
+    #[test]
+    fn terminal_file_link_excludes_git_prefix_and_trailing_sentence_period() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let markdown_path = temp_dir.path().join("warp-md-test.md");
+        fs::write(&markdown_path, "# Hello").expect("markdown file should be written");
+
+        let possible_path = PossiblePath {
+            path: CleanPathResult {
+                path: "a/warp-md-test.md.".into(),
+                line_and_column_num: None,
+            },
+            range: Point { row: 0, col: 0 }..=Point { row: 0, col: 17 },
+        };
+
+        let highlighted_link = crate::terminal::view::TerminalView::compute_valid_paths(
+            temp_dir
+                .path()
+                .to_str()
+                .expect("temp dir should be valid UTF-8"),
+            std::iter::once(WithinModel::AltScreen(possible_path)),
+            80,
+            None,
+        )
+        .expect("git-prefixed file link should be detected");
+
+        let GridHighlightedLink::File(WithinModel::AltScreen(file_link)) = highlighted_link else {
+            panic!("expected an alt-screen file link");
+        };
+
+        assert_eq!(file_link.absolute_path, markdown_path);
+        assert_eq!(
+            file_link.link.range,
+            Point { row: 0, col: 2 }..=Point { row: 0, col: 16 }
+        );
+    }
+
+    #[test]
+    fn terminal_file_link_reparses_line_number_after_git_prefix_and_trailing_sentence_period() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let markdown_path = temp_dir.path().join("warp-md-test.md");
+        fs::write(&markdown_path, "# Hello").expect("markdown file should be written");
+
+        let possible_path = PossiblePath {
+            path: CleanPathResult {
+                path: "b/warp-md-test.md:42.".into(),
+                line_and_column_num: None,
+            },
+            range: Point { row: 0, col: 0 }..=Point { row: 0, col: 20 },
+        };
+
+        let highlighted_link = crate::terminal::view::TerminalView::compute_valid_paths(
+            temp_dir
+                .path()
+                .to_str()
+                .expect("temp dir should be valid UTF-8"),
+            std::iter::once(WithinModel::AltScreen(possible_path)),
+            80,
+            None,
+        )
+        .expect("git-prefixed file link with line number should be detected");
+
+        let GridHighlightedLink::File(WithinModel::AltScreen(file_link)) = highlighted_link else {
+            panic!("expected an alt-screen file link");
+        };
+
+        assert_eq!(file_link.absolute_path, markdown_path);
+        assert_eq!(
+            file_link.line_and_column_num,
+            Some(LineAndColumnArg {
+                line_num: 42,
+                column_num: None,
+            })
+        );
+        assert_eq!(
+            file_link.link.range,
+            Point { row: 0, col: 2 }..=Point { row: 0, col: 19 }
+        );
     }
 }
