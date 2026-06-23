@@ -72,6 +72,9 @@ pub enum AgentToolbarItemKind {
 
     // Agent view only – "Hand off to cloud" chip.
     HandoffToCloud,
+
+    // Agent view only – memories the server fetched for the active conversation.
+    FetchedMemories,
 }
 
 impl AgentToolbarItemKind {
@@ -84,7 +87,8 @@ impl AgentToolbarItemKind {
             | Self::NLDToggle
             | Self::ContextWindowUsage
             | Self::FastForwardToggle
-            | Self::HandoffToCloud => ToolbarAvailability::AgentViewOnly,
+            | Self::HandoffToCloud
+            | Self::FetchedMemories => ToolbarAvailability::AgentViewOnly,
             Self::FileExplorer | Self::RichInput | Self::Settings => {
                 ToolbarAvailability::CLIAgentOnly
             }
@@ -110,7 +114,8 @@ impl AgentToolbarItemKind {
             | Self::NLDToggle
             | Self::ContextWindowUsage
             | Self::RichInput
-            | Self::VoiceInput => true,
+            | Self::VoiceInput
+            | Self::FetchedMemories => true,
         }
     }
 
@@ -128,6 +133,7 @@ impl AgentToolbarItemKind {
             Self::Settings => "Settings",
             Self::FastForwardToggle => "Fast Forward",
             Self::HandoffToCloud => "Hand off to cloud",
+            Self::FetchedMemories => "Memories",
         }
     }
 
@@ -147,6 +153,7 @@ impl AgentToolbarItemKind {
             // The bundled `upload-cloud-01.svg` (cloud-with-upward-arrow) is the
             // closest fit among the existing icons for V0; design may swap it later.
             Self::HandoffToCloud => Some(Icon::UploadCloud),
+            Self::FetchedMemories => Some(Icon::Cognition),
         }
     }
 
@@ -163,6 +170,7 @@ impl AgentToolbarItemKind {
             | Self::ContextWindowUsage
             | Self::FastForwardToggle
             | Self::HandoffToCloud
+            | Self::FetchedMemories
             | Self::ShareSession
             | Self::FileExplorer
             | Self::RichInput
@@ -176,6 +184,7 @@ impl AgentToolbarItemKind {
     pub fn is_available(&self, app: &warpui::AppContext) -> bool {
         match self {
             Self::HandoffToCloud => AISettings::as_ref(app).is_cloud_handoff_enabled(app),
+            Self::FetchedMemories => FeatureFlag::FetchedMemoriesChip.is_enabled(),
             _ => true,
         }
     }
@@ -211,8 +220,11 @@ impl AgentToolbarItemKind {
         let mut items = vec![
             Self::ContextChip(ContextChipKind::AgentPlanAndTodoList),
             Self::ContextWindowUsage,
-            Self::ModelSelector,
         ];
+        if FeatureFlag::FetchedMemoriesChip.is_enabled() {
+            items.push(Self::FetchedMemories);
+        }
+        items.push(Self::ModelSelector);
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && FeatureFlag::HOARemoteControl.is_enabled()
         {
@@ -255,6 +267,9 @@ impl AgentToolbarItemKind {
             && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
         {
             items.push(Self::HandoffToCloud);
+        }
+        if FeatureFlag::FetchedMemoriesChip.is_enabled() {
+            items.push(Self::FetchedMemories);
         }
         items
     }
@@ -330,3 +345,7 @@ impl From<ContextChipKind> for AgentToolbarItemKind {
         Self::ContextChip(kind)
     }
 }
+
+#[cfg(test)]
+#[path = "toolbar_item_tests.rs"]
+mod tests;

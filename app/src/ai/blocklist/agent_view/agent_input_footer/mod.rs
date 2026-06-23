@@ -50,6 +50,7 @@ pub(crate) use self::environment_selector::{
 };
 use crate::ai::blocklist::agent_view::is_in_cloud_context;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::blocklist::prompt::fetched_memories::FetchedMemoriesView;
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::usage::icon_for_context_window_usage;
 use crate::ai::blocklist::BlocklistAIInputModel;
@@ -240,6 +241,9 @@ pub struct AgentInputFooter {
     // availability. Per-conversation eligibility is enforced by
     // `Workspace::start_local_to_cloud_handoff`.
     handoff_to_cloud_button: ViewHandle<ActionButton>,
+
+    // Chip showing memories the server fetched for the active conversation.
+    fetched_memories_chip: ViewHandle<FetchedMemoriesView>,
 
     // CLI agent voice input state (self-contained, bypasses editor voice flow).
     #[cfg(feature = "voice_input")]
@@ -813,6 +817,10 @@ impl AgentInputFooter {
             me.update_display_chips(&model, ctx);
         });
 
+        let fetched_memories_chip = ctx.add_typed_action_view(|ctx| {
+            FetchedMemoriesView::new(menu_positioning_provider.clone(), terminal_view_id, ctx)
+        });
+
         let v2_model_selector = if FeatureFlag::CloudModeInputV2.is_enabled() {
             let ambient_agent_view_model_for_selector = ambient_agent_view_model.clone();
             let view = ctx.add_typed_action_view(|ctx| {
@@ -869,6 +877,7 @@ impl AgentInputFooter {
             display_chip_config,
             fast_forward_button,
             handoff_to_cloud_button,
+            fetched_memories_chip,
             #[cfg(feature = "voice_input")]
             cli_voice_input_state: CLIVoiceInputState::default(),
             #[cfg(feature = "voice_input")]
@@ -1492,7 +1501,8 @@ impl AgentInputFooter {
             | AgentToolbarItemKind::NLDToggle
             | AgentToolbarItemKind::ContextWindowUsage
             | AgentToolbarItemKind::FastForwardToggle
-            | AgentToolbarItemKind::HandoffToCloud => None,
+            | AgentToolbarItemKind::HandoffToCloud
+            | AgentToolbarItemKind::FetchedMemories => None,
         }
     }
 
@@ -2206,6 +2216,11 @@ impl AgentInputFooter {
 
                 Some(ChildView::new(&self.handoff_to_cloud_button).finish())
             }
+            AgentToolbarItemKind::FetchedMemories => self
+                .fetched_memories_chip
+                .as_ref(app)
+                .should_render(app)
+                .then(|| ChildView::new(&self.fetched_memories_chip).finish()),
             // Handled by the available_in() guard above; included for exhaustiveness.
             AgentToolbarItemKind::FileExplorer
             | AgentToolbarItemKind::RichInput
