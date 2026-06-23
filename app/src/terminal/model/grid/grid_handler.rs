@@ -57,8 +57,14 @@ use crate::util::extensions::TrimStringExt;
 /// Used to match equal brackets, when performing a bracket-pair selection.
 const BRACKET_PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
 
-/// Number of characters to scan on a different line for a link.
-const LINK_NUM_CHARACTER_SCAN: usize = 50;
+/// Maximum number of characters to scan across soft-wrapped lines when
+/// detecting a file link. A soft-wrapped path is one logical line split over
+/// several visual rows, so this budget must be large enough to span a whole
+/// path rather than a single visual row; it is sized to comfortably cover real
+/// file paths (filesystem `PATH_MAX` is typically 4096). Without enough budget,
+/// a long path that wraps in a wide terminal would only be detected up to the
+/// first wrap boundary (see issue #9193).
+const LINK_NUM_CHARACTER_SCAN: usize = 4096;
 
 /// Max number of characters to scan for a URL.
 const URL_SCAN_CHARACTER_MAX_COUNT: usize = 1000;
