@@ -22754,6 +22754,18 @@ impl TerminalView {
             )
         });
 
+        // Subscribe to the dummy block's events so it behaves like a real AI
+        // block in tests (e.g. so selection events are mirrored into the model
+        // for copy). The production insertion path subscribes the same way.
+        ctx.subscribe_to_view(&ai_block, move |me, block, event, ctx| {
+            me.handle_ai_block_event(
+                block.clone(),
+                false, // is_restored
+                event,
+                ctx,
+            );
+        });
+
         self.insert_rich_content(
             Some(RichContentType::AIBlock),
             ai_block.clone(),

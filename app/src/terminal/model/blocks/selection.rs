@@ -876,10 +876,21 @@ impl BlockList {
     /// [`selection`](Self::selection); tracking it explicitly lets copy/insert
     /// paths find the selected text via
     /// [`rich_content_blocks_in_selection`](Self::rich_content_blocks_in_selection).
-    /// A rich content selection supersedes any point-based selection
-    /// (single-selection semantics), so the existing point selection is cleared.
     pub fn set_rich_content_selection(&mut self, view_id: EntityId) {
-        self.selection = None;
+        if self.selection.is_some() {
+            // A point-based selection is active. If it already spans this rich
+            // content block (e.g. a selection dragged from a command block
+            // *through* this AI block), that point selection remains the source
+            // of truth and already accounts for the AI block's text via its row
+            // range — don't override it, or we'd drop the command-block portion.
+            if self.rich_content_blocks_in_selection().contains(&view_id) {
+                return;
+            }
+            // Otherwise the point selection doesn't involve this block (e.g. a
+            // stale command-block selection elsewhere); a fresh rich content
+            // selection supersedes it (single-selection semantics).
+            self.selection = None;
+        }
         self.rich_content_selections = vec![view_id];
         self.event_proxy
             .send_terminal_event(TerminalEvent::TextSelectionChanged);
