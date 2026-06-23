@@ -928,10 +928,6 @@ impl AgentDriver {
                             );
                         })
                         .await;
-                    // Exit immediately after reporting the setup failure. Session data is
-                    // preserved for debugging via ExtendSessionRetention (7-day Redis TTL),
-                    // but keeping the process alive creates a window where users can
-                    // interact with the session and enter a frozen state.
                 }
             }
 
