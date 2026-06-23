@@ -204,6 +204,15 @@ struct InFlightConversationRename {
     previous_cached_metadata_title: Option<String>,
 }
 
+/// A single agent prompt-history candidate with prompt text and start_ts.
+#[derive(Clone, Debug)]
+pub(crate) struct PromptHistoryEntry {
+    /// The user prompt text.
+    pub(crate) text: Arc<str>,
+    /// When the prompt was submitted.
+    pub(crate) start_ts: DateTime<Local>,
+}
+
 /// Responsible for managing the history of user and AI exchanges.
 #[derive(Default)]
 pub struct BlocklistAIHistoryModel {
@@ -253,8 +262,10 @@ pub struct BlocklistAIHistoryModel {
     /// history.
     persisted_queries: Vec<PersistedAIInput>,
 
-    /// Prompt-history candidates seeded once from `ai_queries` at startup via
-    prompt_history: Vec<(Arc<str>, DateTime<Local>)>,
+    /// Prompt-history candidates for NLD input classification. Seeded once from `ai_queries`
+    /// at startup, then extended with prompts submitted during the session
+    /// (see [`Self::append_session_prompt`]). Ordered oldest-first.
+    prompt_history: Vec<PromptHistoryEntry>,
 
     /// Metadata for both local and ambient agent conversations.
     /// Does not include the actual content of the conversations.
@@ -305,7 +316,10 @@ impl BlocklistAIHistoryModel {
         let prompt_history = prompt_history
             .into_iter()
             .filter(|(text, _)| !text.trim().is_empty())
-            .map(|(text, start_ts)| (Arc::from(text), start_ts))
+            .map(|(text, start_ts)| PromptHistoryEntry {
+                text: Arc::from(text),
+                start_ts,
+            })
             .collect();
 
         let mut model = Self {
@@ -2262,12 +2276,15 @@ impl BlocklistAIHistoryModel {
         if text.trim().is_empty() {
             return;
         }
-        self.prompt_history.push((Arc::from(text), start_ts));
+        self.prompt_history.push(PromptHistoryEntry {
+            text: Arc::from(text),
+            start_ts,
+        });
     }
 
     /// Returns the prompt-history candidates for NLD input classification, oldest-first
     /// (ascending). The matcher reverses this to iterate newest-first.
-    pub(crate) fn prompt_history_candidates(&self) -> Vec<(Arc<str>, DateTime<Local>)> {
+    pub(crate) fn prompt_history_candidates(&self) -> Vec<PromptHistoryEntry> {
         self.prompt_history.clone()
     }
 

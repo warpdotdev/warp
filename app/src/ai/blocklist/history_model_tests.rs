@@ -898,7 +898,7 @@ fn prompt_history_candidates_seeds_from_snapshot_then_appends_session_prompts() 
         });
 
         let prompts = history_model.read(&app, |model, _| model.prompt_history_candidates());
-        let texts: Vec<&str> = prompts.iter().map(|(text, _)| &**text).collect();
+        let texts: Vec<&str> = prompts.iter().map(|entry| &*entry.text).collect();
         // The persisted snapshot comes first in its oldest-first order, followed by the session
         // prompt appended last. Whitespace-only is dropped; the duplicate "live query" is
         // intentionally NOT deduped.
@@ -907,7 +907,7 @@ fn prompt_history_candidates_seeds_from_snapshot_then_appends_session_prompts() 
             vec!["restored query", "live query", "deploy it", "live query"]
         );
         assert_eq!(
-            prompts.last().unwrap().1,
+            prompts.last().unwrap().start_ts,
             now,
             "the session prompt is appended last and keeps its submission timestamp",
         );

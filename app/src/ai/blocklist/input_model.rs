@@ -840,7 +840,7 @@ impl BlocklistAIInputModel {
                                 prompt_entries
                                     .iter()
                                     .rev()
-                                    .map(|(text, start_ts)| (&**text, Some(*start_ts))),
+                                    .map(|entry| (&*entry.text, Some(entry.start_ts))),
                                 HISTORY_ENTRY_MATCH_CUTOFF,
                             )
                             .await;
