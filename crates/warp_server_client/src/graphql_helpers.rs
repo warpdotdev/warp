@@ -6,7 +6,8 @@ use instant::Duration;
 use warp_graphql::client::{GraphQLError, Operation};
 use warpui_core::r#async::BoxFuture;
 
-use crate::{auth::AuthEvent, base_client::BaseClient};
+use crate::auth::AuthEvent;
+use crate::base_client::BaseClient;
 
 /// Sends a GraphQL operation through a base client supplied by the application.
 ///
