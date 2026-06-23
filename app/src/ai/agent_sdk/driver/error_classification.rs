@@ -346,22 +346,51 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             pattern,
             excerpt,
         } => {
-            let message = format!(
-                "Harness '{harness}' could not make a successful API request. \
-                 Matched failure pattern '{pattern}' in harness output: \"{excerpt}\". \
-                 This usually means the API key is invalid, out of credits, or the \
-                 account is misconfigured."
-            );
             log::error!("Runtime failure for {harness}: pattern={pattern}, excerpt={excerpt}");
-            (
-                AgentTaskState::Failed,
-                TaskStatusUpdate::with_error_code(
-                    message,
-                    PlatformErrorCode::AuthenticationRequired,
-                ),
-            )
+            if is_transient_upstream_api_error(pattern) {
+                let message = format!(
+                    "Harness '{harness}' encountered a temporary upstream API error. \
+                     Matched failure pattern '{pattern}' in harness output: \"{excerpt}\". \
+                     This is usually a transient issue — please try running your task again."
+                );
+                (
+                    AgentTaskState::Error,
+                    TaskStatusUpdate::with_error_code(
+                        message,
+                        PlatformErrorCode::InternalError,
+                    ),
+                )
+            } else {
+                let message = format!(
+                    "Harness '{harness}' could not make a successful API request. \
+                     Matched failure pattern '{pattern}' in harness output: \"{excerpt}\". \
+                     This usually means the API key is invalid, out of credits, or the \
+                     account is misconfigured."
+                );
+                (
+                    AgentTaskState::Failed,
+                    TaskStatusUpdate::with_error_code(
+                        message,
+                        PlatformErrorCode::AuthenticationRequired,
+                    ),
+                )
+            }
         }
     }
+}
+
+/// Returns `true` when `pattern` looks like a transient upstream API error
+/// (e.g. HTTP 5xx from the third-party provider) rather than an auth or
+/// billing failure that requires user action.
+///
+/// Used to split `HarnessRuntimeFailureDetected` into two classes:
+/// - Transient upstream errors (500, 529, etc.): task → ERROR, `InternalError` code.
+/// - Auth/billing/config errors: task → FAILED, `AuthenticationRequired` code.
+fn is_transient_upstream_api_error(pattern: &str) -> bool {
+    // Patterns for Anthropic HTTP 5xx errors as Claude Code surfaces them,
+    // e.g. "API Error: 500 Internal server error" or "API Error: 529".
+    let lower = pattern.to_lowercase();
+    lower.starts_with("api error: 5")
 }
 
 #[cfg(test)]

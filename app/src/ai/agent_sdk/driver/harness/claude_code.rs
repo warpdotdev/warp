@@ -103,6 +103,13 @@ impl ThirdPartyHarness for ClaudeHarness {
             // Generic upstream API failures Claude Code surfaces verbatim.
             "API Error: Request rejected (429)",
             "authentication_error",
+            // Transient upstream Anthropic server errors. Claude Code displays
+            // these and then waits for user input; in a cloud (non-interactive)
+            // run this causes the task to hang indefinitely as 'Running'.
+            // Matching these lets the harness output monitor detect the stall
+            // and force-exit Claude so the run is marked failed.
+            "API Error: 500",
+            "API Error: 529",
         ]
     }
 
