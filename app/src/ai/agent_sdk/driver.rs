@@ -158,7 +158,6 @@ const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
 /// Timeout for individual harness auth preflight commands.
 const PREFLIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
-const SETUP_FAILED_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Maximum time to wait for an automatic error resume before propagating the error.
 /// If no follow-up status arrives within this window, the driver terminates with the
 /// original error so the CLI does not hang indefinitely.
@@ -929,16 +928,10 @@ impl AgentDriver {
                             );
                         })
                         .await;
-
-                    // Keep the session alive after environment setup failures so
-                    // the viewer can connect, receive scrollback, and see the error.
-                    if let Some(idle_timeout) = idle_on_complete {
-                        let timeout = idle_timeout.min(SETUP_FAILED_IDLE_TIMEOUT);
-                        log::info!(
-                            "Environment setup failed; keeping session alive for {timeout:?}"
-                        );
-                        warpui::r#async::Timer::after(timeout).await;
-                    }
+                    // Exit immediately after reporting the setup failure. Session data is
+                    // preserved for debugging via ExtendSessionRetention (7-day Redis TTL),
+                    // but keeping the process alive creates a window where users can
+                    // interact with the session and enter a frozen state.
                 }
             }
 
