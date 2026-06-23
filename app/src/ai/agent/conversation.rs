@@ -885,6 +885,13 @@ impl AIConversation {
         self.status = status;
     }
 
+    /// Test-only setter for the status error message, used to exercise
+    /// the `status_error_message` fallback in `map_conversation_status`.
+    #[cfg(test)]
+    pub(crate) fn set_status_error_message_for_test(&mut self, msg: Option<String>) {
+        self.status_error_message = msg;
+    }
+
     /// Test-only helper: appends an exchange to the root task so status-derivation
     /// logic (e.g. `map_conversation_status`) can be exercised end-to-end.
     #[cfg(test)]

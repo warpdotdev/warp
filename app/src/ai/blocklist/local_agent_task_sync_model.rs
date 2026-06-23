@@ -385,7 +385,7 @@ fn map_conversation_status(
                         None
                     }
                 });
-            task_update_for_conversation_error(renderable_error)
+            task_update_for_conversation_error(renderable_error, conversation.status_error_message())
         }
         ConversationStatus::Cancelled => (
             AgentTaskState::Cancelled,
@@ -403,15 +403,26 @@ fn map_conversation_status(
 /// Maps a conversation-level error to a terminal task update. In-flight recoveries
 /// surface as `TransientError`, so an `Error` status is always terminal here — the
 /// `will_attempt_resume` rendering hint is deliberately ignored.
+///
+/// When no structured exchange error is available, `status_error_message` is used
+/// as a fallback so quota/credit failures reported via the cloud-agent polling path
+/// are not incorrectly classified as warp faults.
 fn task_update_for_conversation_error(
     error: Option<&RenderableAIError>,
+    status_error_message: Option<&str>,
 ) -> (AgentTaskState, Option<TaskStatusUpdate>) {
     match error {
         Some(error) => classify_renderable_error(error),
-        None => (
-            AgentTaskState::Error,
-            Some(TaskStatusUpdate::message("Agent encountered an error")),
-        ),
+        None => match status_error_message {
+            Some(msg) => (
+                AgentTaskState::Failed,
+                Some(TaskStatusUpdate::message(msg.to_string())),
+            ),
+            None => (
+                AgentTaskState::Error,
+                Some(TaskStatusUpdate::message("Agent encountered an error")),
+            ),
+        },
     }
 }
 
