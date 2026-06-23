@@ -33,9 +33,9 @@ use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, DispatchEventResult, Element, Empty, EventHandler, Expanded, Flex,
-    MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentElement, PositionedElementAnchor,
-    PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable, Stack, Text, Wrap, WrapFill,
-    WrapFillEntireRun, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Shrinkable,
+    Stack, Text, Wrap, WrapFill, WrapFillEntireRun, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
@@ -130,10 +130,6 @@ const CLOUD_MODE_V2_FOOTER_GAP: f32 = 4.;
 /// Diameter of the yellow notification dot shown on the context-window chip
 /// when the active conversation's prompt cache has expired.
 const PROMPT_CACHE_EXPIRY_DOT_SIZE: f32 = 6.;
-
-/// `SavePosition` ID for the context-window chip so the dot overlay can be
-/// anchored to it at the footer level, bypassing parent container clipping.
-const CONTEXT_WINDOW_CHIP_SAVE_ID: &str = "context_window_chip_badge_anchor";
 
 /// Voice input state for the CLI agent footer. Unlike the editor-based voice
 /// flow (which goes through Input → EditorView), this state is self-contained
@@ -2152,15 +2148,13 @@ impl AgentInputFooter {
                     && BlocklistAIHistoryModel::as_ref(app)
                         .active_conversation(self.terminal_view_id)
                         .is_some();
-                // SavePosition records the chip's bounds each frame so the
-                // footer-level overlay child can anchor the dot to it without
-                // being clipped by the intervening Flex/Wrap containers.
                 has_conversation.then(|| {
-                    SavePosition::new(
-                        ChildView::new(&self.context_window_button).finish(),
-                        CONTEXT_WINDOW_CHIP_SAVE_ID,
-                    )
-                    .finish()
+                    let chip = ChildView::new(&self.context_window_button).finish();
+                    if self.prompt_cache_expired {
+                        render_prompt_cache_expiry_dot(chip, app)
+                    } else {
+                        chip
+                    }
                 })
             }
             AgentToolbarItemKind::ShareSession => {
@@ -2350,40 +2344,19 @@ impl View for AgentInputFooter {
                 .active_block()
                 .is_agent_in_control_or_tagged_in();
 
-        // Collect any overlay children that need to render above the footer
-        // without being clipped by the intervening Flex/Wrap containers.
-        let needs_overlays =
-            (showing_ftu_model_picker && self.render_ftu_callout) || self.prompt_cache_expired;
-        if needs_overlays {
+        if showing_ftu_model_picker && self.render_ftu_callout {
             let mut stack = Stack::new();
             stack.add_child(container.finish());
-            if showing_ftu_model_picker && self.render_ftu_callout {
-                stack.add_positioned_overlay_child(
-                    render_ftu_callout(&self.ftu_callout_close_button, app),
-                    OffsetPositioning::offset_from_save_position_element(
-                        "profile_model_selector_model_button",
-                        vec2f(8., -8.),
-                        PositionedElementOffsetBounds::WindowByPosition,
-                        PositionedElementAnchor::TopRight,
-                        ChildAnchor::BottomRight,
-                    ),
-                );
-            }
-            if self.prompt_cache_expired {
-                // Render the dot as a window-level overlay anchored to the chip's
-                // saved position so it straddles the chip corner without being
-                // clipped by the Flex/Wrap containers between them.
-                stack.add_positioned_overlay_child(
-                    render_prompt_cache_expiry_dot(app),
-                    OffsetPositioning::offset_from_save_position_element(
-                        CONTEXT_WINDOW_CHIP_SAVE_ID,
-                        vec2f(3., -3.),
-                        PositionedElementOffsetBounds::WindowByPosition,
-                        PositionedElementAnchor::TopRight,
-                        ChildAnchor::TopRight,
-                    ),
-                );
-            }
+            stack.add_positioned_overlay_child(
+                render_ftu_callout(&self.ftu_callout_close_button, app),
+                OffsetPositioning::offset_from_save_position_element(
+                    "profile_model_selector_model_button",
+                    vec2f(8., -8.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::TopRight,
+                    ChildAnchor::BottomRight,
+                ),
+            );
             stack.finish()
         } else {
             container.finish()
@@ -2391,14 +2364,15 @@ impl View for AgentInputFooter {
     }
 }
 
-/// Renders the yellow notification dot that signals prompt cache expiry.
+/// Overlays a small yellow notification dot on the top-right corner of `element`
+/// to flag that the active conversation's prompt cache has expired.
 ///
-/// This is placed as a positioned overlay child on the footer-level Stack
-/// (anchored via `SavePosition` on the context-window chip), so it can straddle
-/// the chip's corner without being clipped by the intervening Flex/Wrap layout.
-fn render_prompt_cache_expiry_dot(app: &AppContext) -> Box<dyn Element> {
+/// Uses `add_positioned_overlay_child` so the dot renders in an overlay layer
+/// (`ClipBounds::None`), escaping the parent `Wrap`'s `BoundedByActiveLayerAnd`
+/// clip without needing a `SavePosition` + footer-level anchor.
+fn render_prompt_cache_expiry_dot(element: Box<dyn Element>, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
-    Container::new(
+    let dot = Container::new(
         ConstrainedBox::new(Empty::new().finish())
             .with_width(PROMPT_CACHE_EXPIRY_DOT_SIZE)
             .with_height(PROMPT_CACHE_EXPIRY_DOT_SIZE)
@@ -2410,7 +2384,20 @@ fn render_prompt_cache_expiry_dot(app: &AppContext) -> Box<dyn Element> {
             .to_ansi_color(&appearance.theme().terminal_colors().normal)
             .into(),
     ))
-    .finish()
+    .finish();
+
+    let mut stack = Stack::new();
+    stack.add_child(element);
+    stack.add_positioned_overlay_child(
+        dot,
+        OffsetPositioning::offset_from_parent(
+            vec2f(3., -3.),
+            ParentOffsetBounds::WindowByPosition,
+            ParentAnchor::TopRight,
+            ChildAnchor::TopRight,
+        ),
+    );
+    stack.finish()
 }
 
 /// Render a message bubble calling out that the model has switched now that we're in FTU mode.
