@@ -38,6 +38,7 @@ use warpui::elements::{
     WrapFillEntireRun, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::ui_components::components::UiComponentStyles;
 use warpui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
@@ -101,6 +102,7 @@ use crate::terminal::view::TerminalAction;
 use crate::terminal::ShellLaunchData;
 use crate::terminal::{CLIAgent, TerminalModel};
 use crate::ui_components::icons::Icon;
+use crate::ui_components::red_notification_dot::RedNotificationDot;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource, NakedTheme,
     TooltipAlignment,
@@ -126,6 +128,10 @@ const START_REMOTE_CONTROL_TOOLTIP: &str = "Start remote control";
 const START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP: &str = "Log in to use /remote-control";
 
 const CLOUD_MODE_V2_FOOTER_GAP: f32 = 4.;
+
+/// Diameter of the yellow notification dot shown on the context-window chip
+/// when the active conversation's prompt cache has expired.
+const PROMPT_CACHE_EXPIRY_DOT_SIZE: f32 = 6.;
 
 /// Voice input state for the CLI agent footer. Unlike the editor-based voice
 /// flow (which goes through Input → EditorView), this state is self-contained
@@ -249,8 +255,13 @@ pub struct AgentInputFooter {
     v2_model_selector: Option<ViewHandle<ModelSelector>>,
 
     /// Pending one-shot timer that refreshes the context-window button at the
-    /// prompt-cache expiry instant so the yellow tint appears while idle.
+    /// prompt-cache expiry instant so the notification dot appears while idle.
     prompt_cache_expiry_timer_handle: Option<SpawnedFutureHandle>,
+
+    /// Whether the active conversation's prompt cache has expired. Drives the
+    /// yellow notification dot on the context-window chip when the
+    /// `PromptCacheExpiryWarning` flag is enabled.
+    prompt_cache_expired: bool,
 }
 
 impl AgentInputFooter {
@@ -878,6 +889,7 @@ impl AgentInputFooter {
             }),
             v2_model_selector,
             prompt_cache_expiry_timer_handle: None,
+            prompt_cache_expired: false,
         };
         me.sync_fast_forward_button(ctx);
         me.sync_remote_control_button(ctx);
@@ -2033,13 +2045,9 @@ impl AgentInputFooter {
                 context_remaining_tooltip
             };
 
+            self.prompt_cache_expired = is_cache_expired;
             self.context_window_button.update(ctx, |button, ctx| {
                 button.set_icon(Some(icon), ctx);
-                if is_cache_expired {
-                    button.set_theme(WarningAgentInputButtonTheme, ctx);
-                } else {
-                    button.set_theme(AgentInputButtonTheme, ctx);
-                }
                 button.set_tooltip(Some(tooltip), ctx);
             });
 
@@ -2048,7 +2056,7 @@ impl AgentInputFooter {
     }
 
     /// Schedules a refresh of the context-window button at the prompt-cache
-    /// expiry instant so the yellow tint appears while the conversation is idle.
+    /// expiry instant so the notification dot appears while the conversation is idle.
     fn reschedule_prompt_cache_expiry_timer(
         &mut self,
         expiry: Option<DateTime<Local>>,
@@ -2142,7 +2150,14 @@ impl AgentInputFooter {
                     && BlocklistAIHistoryModel::as_ref(app)
                         .active_conversation(self.terminal_view_id)
                         .is_some();
-                has_conversation.then(|| ChildView::new(&self.context_window_button).finish())
+                has_conversation.then(|| {
+                    let chip = ChildView::new(&self.context_window_button).finish();
+                    if self.prompt_cache_expired {
+                        render_prompt_cache_expiry_dot(chip, app)
+                    } else {
+                        chip
+                    }
+                })
             }
             AgentToolbarItemKind::ShareSession => {
                 if is_conversation_transcript_context {
@@ -2348,6 +2363,26 @@ impl View for AgentInputFooter {
             container.finish()
         }
     }
+}
+
+/// Overlays a small yellow notification dot on the top-right corner of `element`
+/// to flag that the active conversation's prompt cache has expired.
+fn render_prompt_cache_expiry_dot(element: Box<dyn Element>, app: &AppContext) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    RedNotificationDot::render_with_offset(
+        element,
+        &UiComponentStyles {
+            width: Some(PROMPT_CACHE_EXPIRY_DOT_SIZE),
+            height: Some(PROMPT_CACHE_EXPIRY_DOT_SIZE),
+            background: Some(warpui::elements::Fill::Solid(
+                AnsiColorIdentifier::Yellow
+                    .to_ansi_color(&appearance.theme().terminal_colors().normal)
+                    .into(),
+            )),
+            ..RedNotificationDot::default_styles(appearance)
+        },
+        (-1., 1.),
+    )
 }
 
 /// Render a message bubble calling out that the model has switched now that we're in FTU mode.
@@ -2868,43 +2903,6 @@ impl ActionButtonTheme for InstallPluginButtonTheme {
 
     fn should_opt_out_of_contrast_adjustment(&self) -> bool {
         true
-    }
-}
-
-/// Yellow-tinted variant of [`AgentInputButtonTheme`] used to flag a warning
-/// state on an input chip (e.g. expired prompt cache); slightly darker on hover.
-struct WarningAgentInputButtonTheme;
-
-impl ActionButtonTheme for WarningAgentInputButtonTheme {
-    fn background(&self, hovered: bool, appearance: &Appearance) -> Option<Fill> {
-        let yellow = appearance.theme().ansi_fg_yellow();
-        let base = appearance.theme().surface_1();
-        Some(if hovered {
-            base.blend(&Fill::Solid(yellow).with_opacity(45))
-        } else {
-            base.blend(&Fill::Solid(yellow).with_opacity(30))
-        })
-    }
-
-    fn text_color(
-        &self,
-        hovered: bool,
-        background: Option<Fill>,
-        appearance: &Appearance,
-    ) -> ColorU {
-        AgentInputButtonTheme.text_color(hovered, background, appearance)
-    }
-
-    fn border(&self, appearance: &Appearance) -> Option<ColorU> {
-        AgentInputButtonTheme.border(appearance)
-    }
-
-    fn should_opt_out_of_contrast_adjustment(&self) -> bool {
-        AgentInputButtonTheme.should_opt_out_of_contrast_adjustment()
-    }
-
-    fn font_properties(&self) -> Option<warpui::fonts::Properties> {
-        AgentInputButtonTheme.font_properties()
     }
 }
 
