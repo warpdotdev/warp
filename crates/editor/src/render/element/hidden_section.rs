@@ -84,12 +84,11 @@ impl RenderableHiddenSection {
         // Hoverable consume the press so it does not fall through to text selection.
         .on_click(|_, _, _| {})
         .on_double_click(move |ctx, app, _| {
-            if let Some(line_range) = full_line_range.clone() {
-                if let Some(action) =
+            if let Some(line_range) = full_line_range.clone()
+                && let Some(action) =
                     V::Action::hidden_section_double_clicked(line_range, &parent_view, app)
-                {
-                    ctx.dispatch_typed_action(action);
-                }
+            {
+                ctx.dispatch_typed_action(action);
             }
         })
         .with_cursor(Cursor::PointingHand)
