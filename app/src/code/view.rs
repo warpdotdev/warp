@@ -2256,10 +2256,17 @@ impl TypedActionView for CodeView {
                 // The keybinding is registered for all code panes, but only markdown
                 // files have a rendered preview to switch to. Drop the path otherwise so
                 // the action is a no-op (the context-menu entry is already markdown-gated).
+                //
+                // Detect markdown via the standardized path component (always
+                // `/`-separated) instead of display_path() + Path::new, which assumes
+                // local-OS encoding and would misparse a remote file's path on a
+                // cross-OS session.
                 let lor_path = self
                     .tab_at(self.active_tab_index)
                     .and_then(|t| t.location.clone())
-                    .filter(|p| is_markdown_file(std::path::Path::new(&p.display_path())));
+                    .filter(|p| {
+                        is_markdown_file(std::path::Path::new(p.path_component().as_str()))
+                    });
 
                 if let Some(lor_path) = lor_path {
                     let source = self.source.clone();
