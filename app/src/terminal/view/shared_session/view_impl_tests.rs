@@ -584,6 +584,7 @@ fn server_conversation_metadata(
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
+            context_window_segments: Vec::new(),
         },
         metadata: ServerMetadata {
             uid: ServerId::default(),
