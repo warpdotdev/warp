@@ -2340,7 +2340,16 @@ fn calculate_cursor_origin(
         )
 }
 
-/// Computes the cursor's rect (origin + size) in window coordinates from grid-space inputs.
+/// The geometry of a rendered terminal cursor.
+struct CursorGeometry {
+    /// The cursor's bounding rect in window coordinates (baseline-adjusted origin, character-cell size).
+    rect: RectF,
+    /// The un-baseline-adjusted top of the cell row. Needed by the `Underline` cursor shape,
+    /// which draws from the raw cell top rather than the adjusted cursor origin.
+    line_top_origin: Vector2F,
+}
+
+/// Computes the cursor's geometry in window coordinates from grid-space inputs.
 fn compute_cursor_rect(
     grid_render_params: &GridRenderParams,
     cursor_point: Point,
@@ -2348,7 +2357,7 @@ fn compute_cursor_rect(
     padding_x: Pixels,
     grid_origin: Vector2F,
     ctx: &mut PaintContext,
-) -> RectF {
+) -> CursorGeometry {
     let line_top_origin = grid_origin
         + vec2f(padding_x.as_f32(), 0.)
         + grid_render_params.cell_size * vec2f(cursor_point.col as f32, cursor_point.row as f32);
@@ -2362,7 +2371,10 @@ fn compute_cursor_rect(
         cell_width,
         grid_render_params.font_size * DEFAULT_UI_LINE_HEIGHT_RATIO,
     );
-    RectF::new(cursor_top_origin, cursor_block_size)
+    CursorGeometry {
+        rect: RectF::new(cursor_top_origin, cursor_block_size),
+        line_top_origin,
+    }
 }
 
 /// Updates the position cache with the terminal cursor's location in window coordinates.
@@ -2375,7 +2387,7 @@ pub(super) fn cache_cursor_position(
     ctx: &mut PaintContext,
     terminal_view_id: EntityId,
 ) {
-    let rect = compute_cursor_rect(
+    let CursorGeometry { rect, .. } = compute_cursor_rect(
         grid_render_params,
         cursor_point,
         is_cursor_on_wide_char,
@@ -2401,7 +2413,7 @@ pub fn render_cursor(
     hint_text: Option<&mut Box<dyn Element>>,
     app: &AppContext,
 ) {
-    let cursor_rect = compute_cursor_rect(
+    let CursorGeometry { rect: cursor_rect, line_top_origin } = compute_cursor_rect(
         grid_render_params,
         cursor_point,
         is_cursor_on_wide_char,
@@ -2416,11 +2428,6 @@ pub fn render_cursor(
 
     let cursor_top_origin = cursor_rect.origin();
     let cursor_block_size = cursor_rect.size();
-    // line_top_origin is needed for the Underline cursor shape (which draws from the
-    // un-baseline-adjusted top of the line, not from cursor_top_origin).
-    let line_top_origin = grid_origin
-        + vec2f(padding_x.as_f32(), 0.)
-        + grid_render_params.cell_size * vec2f(cursor_point.col as f32, cursor_point.row as f32);
 
     let thickness =
         CURSOR_THICKNESS_SCALE_FACTOR * grid_render_params.cell_size.x().round().max(1.);
