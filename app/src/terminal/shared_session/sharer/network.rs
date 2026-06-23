@@ -1663,6 +1663,8 @@ impl Network {
     }
 
     /// Sends all input updates buffered during disconnection to the server, then clears the buffer.
+    /// This is more a best-effort attempt because these events are not critical - that's why they are not ordered terminal events. 
+    /// With ordered terminal events we require an ack from the server before the client can remove them from the buffer, but we don't do that for these events.
     fn flush_pending_input_updates_to_server(&mut self) {
         // Take the updates out of self to avoid a borrow conflict with sharer_warn!, which
         // borrows all of self while drain() holds a mutable borrow on pending_input_updates.
