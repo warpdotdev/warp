@@ -107,8 +107,8 @@ use crate::terminal::writeable_pty::terminal_manager_util::{
 };
 pub(crate) use crate::terminal::writeable_pty::{Message, PtyControllerEvent};
 use crate::terminal::{
-    terminal_manager, ShellLaunchData, ShellLaunchState, TerminalManager as _, TerminalModel,
-    TerminalView, PTY_READS_BROADCAST_CHANNEL_SIZE,
+    terminal_manager, ShellLaunchData, ShellLaunchState, SizeInfo, SizeUpdate,
+    TerminalManager as _, TerminalModel, TerminalView, PTY_READS_BROADCAST_CHANNEL_SIZE,
 };
 use crate::view_components::ToastFlavor;
 use crate::{send_telemetry_on_executor, NetworkStatus};
@@ -205,10 +205,18 @@ pub(crate) struct SessionCore {
 /// Builds the [`SessionCore`]: channels, `Sessions`, `ModelEventDispatcher`,
 /// `TerminalModel` (via [`terminal_manager::create_terminal_model`]), and
 /// `PtyController`. View-free and PTY-spawn-free so the GUI and TUI share it.
+///
+/// `headless_size_override` lets a headless caller that knows the real terminal
+/// dimensions (the TUI) force the model's grid size. In headless mode
+/// `create_terminal_model` otherwise hardcodes a default size (it has no font
+/// metrics), which would mis-size the shell's PTY (e.g. wrong `ls` columns).
+/// `None` keeps the default behavior (GUI font-based sizing, or the headless
+/// default for the cloud/shared-session path that has no real terminal).
 pub(crate) fn build_session_core(
     startup_directory: Option<PathBuf>,
     restored_blocks: Option<&Vec<SerializedBlockListItem>>,
     initial_size: Vector2F,
+    headless_size_override: Option<SizeInfo>,
     chosen_shell: Option<AvailableShell>,
     ctx: &mut AppContext,
 ) -> SessionCore {
@@ -263,6 +271,15 @@ pub(crate) fn build_session_core(
     );
 
     let model = Arc::new(FairMutex::new(model));
+
+    // Apply the real terminal size before the PTY is spawned. `create_pty` reads
+    // the model's size when it spawns the shell, so resizing the fresh model
+    // here makes the PTY winsize match the actual terminal.
+    if let Some(size) = headless_size_override {
+        let mut model = model.lock();
+        let last_size = *model.block_list().size();
+        model.resize(SizeUpdate::new_for_headless_resize(last_size, size));
+    }
 
     // Initialize the PtyController.
     let pty_controller = init_pty_controller_model(
@@ -509,6 +526,9 @@ impl TerminalManager {
             startup_directory.clone(),
             all_restored_blocks.as_ref(),
             initial_size,
+            // The GUI computes the model size from font metrics; the headless
+            // cloud/shared-session path uses the default. Neither overrides.
+            None,
             chosen_shell,
             ctx,
         );

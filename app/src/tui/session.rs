@@ -13,6 +13,7 @@ use std::thread::JoinHandle;
 use async_broadcast::InactiveReceiver;
 use async_channel::Receiver;
 use parking_lot::FairMutex;
+use pathfinder_geometry::vector::vec2f;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::auth::AuthStateProvider;
@@ -122,9 +123,21 @@ impl TuiTerminalSession {
     /// to PTY disconnect, and async-spawns the PTY.
     pub(crate) fn register(ctx: &mut AppContext) {
         let startup_directory = std::env::current_dir().ok();
-        let initial_size = current_terminal_size_vec();
+        let (cols, rows) = current_terminal_cells().unwrap_or((80, 24));
+        let initial_size = vec2f(cols as f32, rows as f32);
 
-        let core = build_session_core(startup_directory, None, initial_size, None, ctx);
+        // The TUI app is headless, so `build_session_core` would otherwise size
+        // the model with a hardcoded default. Pass the real terminal size so the
+        // shell's PTY winsize matches the actual terminal (e.g. `ls` columns).
+        let headless_size = SizeInfo::new_without_font_metrics(rows as usize, cols as usize);
+        let core = build_session_core(
+            startup_directory,
+            None,
+            initial_size,
+            Some(headless_size),
+            None,
+            ctx,
+        );
 
         ctx.add_singleton_model(|ctx| Self::from_core(core, ctx));
     }
@@ -227,12 +240,6 @@ impl Drop for TuiTerminalSession {
             let _ = handle.join();
         }
     }
-}
-
-/// Returns the current terminal size as a `Vector2F` for `build_session_core`.
-fn current_terminal_size_vec() -> pathfinder_geometry::vector::Vector2F {
-    let (cols, rows) = current_terminal_cells().unwrap_or((80, 24));
-    pathfinder_geometry::vector::vec2f(cols as f32, rows as f32)
 }
 
 /// Reads the current terminal size in cells from crossterm.
