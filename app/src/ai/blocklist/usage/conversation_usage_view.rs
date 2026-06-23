@@ -1,8 +1,8 @@
-use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::vec2f;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
@@ -1076,7 +1076,7 @@ fn context_window_segment_display_rows(
             let pct = (context_window_usage * (s.token_count as f32) / total_f * 100. * multiplier)
                 .round()
                 / multiplier;
-            (pct != 0.).then(|| (s.segment_type, pct))
+            (pct != 0.).then_some((s.segment_type, pct))
         })
         .collect();
     rows.sort_by(|a, b| match (a.0, b.0) {
