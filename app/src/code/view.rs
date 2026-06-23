@@ -2257,16 +2257,15 @@ impl TypedActionView for CodeView {
                 // files have a rendered preview to switch to. Drop the path otherwise so
                 // the action is a no-op (the context-menu entry is already markdown-gated).
                 //
-                // Detect markdown via the standardized path component (always
-                // `/`-separated) instead of display_path() + Path::new, which assumes
-                // local-OS encoding and would misparse a remote file's path on a
-                // cross-OS session.
+                // Detect markdown from the standardized path component (always
+                // `/`-separated) rather than display_path(), which is local-OS
+                // oriented and would misparse a remote file's path on a cross-OS
+                // session. is_markdown_file takes impl AsRef<Path> and only inspects
+                // the extension/file name, so feed it the standardized &str directly.
                 let lor_path = self
                     .tab_at(self.active_tab_index)
                     .and_then(|t| t.location.clone())
-                    .filter(|p| {
-                        is_markdown_file(std::path::Path::new(p.path_component().as_str()))
-                    });
+                    .filter(|p| is_markdown_file(p.path_component().as_str()));
 
                 if let Some(lor_path) = lor_path {
                     let source = self.source.clone();
