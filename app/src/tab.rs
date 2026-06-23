@@ -1195,7 +1195,10 @@ impl<'a> TabComponent<'a> {
                 )
                 .with_style(UiComponentStyles {
                     margin: Some(Coords::default().top(
-                        if FeatureFlag::NewTabStyling.is_enabled() {
+                        if self.grouped_member {
+                            // Reduce the top margin for grouped tabs to make it appear centered.
+                            2.
+                        } else if FeatureFlag::NewTabStyling.is_enabled() {
                             // With the larger tabs in the new ui, we need to give the editor some extra top margin
                             // to make it appear centered
                             8.
