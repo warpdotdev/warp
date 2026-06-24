@@ -1571,8 +1571,8 @@ impl Session {
     }
 
     #[cfg(feature = "integration_tests")]
-    pub fn external_commands(&self) -> Arc<OnceCell<HashSet<SmolStr>>> {
-        self.external_commands.clone()
+    pub fn external_commands(&self) -> &OnceCell<HashSet<SmolStr>> {
+        &self.external_commands
     }
 
     /// Returns a reference to the session's command executor for integration
