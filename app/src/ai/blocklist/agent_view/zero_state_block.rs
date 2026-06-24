@@ -20,8 +20,10 @@ use warpui::prelude::{
     Align, ConstrainedBox, Cursor, Empty, Hoverable, MainAxisAlignment, SavePosition,
 };
 use warpui::scene::Border;
+use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
 use warpui::{
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext,
 };
 
 use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
@@ -1218,14 +1220,19 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
 }
 
 /// Renders the ambient credits banner showing free cloud credits.
-/// If `link_mouse_state` is provided, a "Launch cloud agent" link is shown.
-pub fn render_ambient_credits_banner(credits: i32, app: &AppContext) -> Box<dyn Element> {
+pub fn render_ambient_credits_banner<A>(
+    credits: i32,
+    close_button_mouse_state: MouseStateHandle,
+    dismiss_action: A,
+    app: &AppContext,
+) -> Box<dyn Element>
+where
+    A: Action + Clone + 'static,
+{
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let font_family = appearance.ui_font_family();
     let font_size = styles::CREDITS_BANNER_FONT_SIZE;
-
-    // Use ANSI terminal colors for the pill styling.
     let text_color = theme.terminal_colors().normal.blue;
 
     let credits_text = format!("{credits} free cloud agent credits");
@@ -1234,8 +1241,26 @@ pub fn render_ambient_credits_banner(credits: i32, app: &AppContext) -> Box<dyn 
         .with_style(Properties::default().weight(Weight::Semibold))
         .soft_wrap(false)
         .finish();
+    let close_button = appearance
+        .ui_builder()
+        .close_button(12., close_button_mouse_state)
+        .with_style(UiComponentStyles {
+            font_color: Some(text_color.into()),
+            ..Default::default()
+        })
+        .build()
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(dismiss_action.clone());
+        })
+        .finish();
 
-    Container::new(text)
+    let content = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(text)
+        .with_child(Container::new(close_button).with_margin_left(4.).finish())
+        .finish();
+
+    Container::new(content)
         .with_border(Border::all(1.).with_border_color(text_color.into()))
         .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
         .with_vertical_padding(2.)

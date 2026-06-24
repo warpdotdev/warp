@@ -73,7 +73,7 @@ jobs:
       should_publish: ${{ steps.set_publish.outputs.should_publish }}
     steps:
       - name: Checkout sources
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Get channel configuration
         id: get-config
@@ -153,7 +153,7 @@ jobs:
           - arch: x86_64
             dmg_name_suffix: x86_64
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -273,7 +273,7 @@ jobs:
     if: ${{ inputs.build_macos != false }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -420,7 +420,7 @@ jobs:
           - arch: aarch64
           - arch: x86_64
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -526,7 +526,7 @@ jobs:
       # compiles and runs the generator once per job instead of per-package.
       SETTINGS_SCHEMA_CACHE: ${{ github.workspace }}/.settings_schema_cache.json
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -680,7 +680,7 @@ jobs:
       # compiles and runs the generator once per job instead of per-package.
       SETTINGS_SCHEMA_CACHE: ${{ github.workspace }}/.settings_schema_cache.json
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -859,7 +859,7 @@ jobs:
       # compiles and runs the generator once per job instead of per-package.
       SETTINGS_SCHEMA_CACHE: ${{ github.workspace }}/.settings_schema_cache.json
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -948,7 +948,7 @@ jobs:
     if: ${{ inputs.build_linux != false }}
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -1030,7 +1030,7 @@ jobs:
       SETTINGS_SCHEMA_CACHE: ${{ github.workspace }}/.settings_schema_cache.json
     steps:
       - name: Checkout sources
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.prepare_release.outputs.release_branch }}
 
@@ -1286,7 +1286,7 @@ jobs:
     if: ${{ inputs.build_web != false }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -1411,7 +1411,7 @@ jobs:
       TRUSTED_SIGNING_ACCOUNT: warpdotdev
       TRUSTED_SIGNING_CERT_PROFILE: warpterminal
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - uses: ./.github/actions/prepare_environment
         with:
@@ -1632,7 +1632,7 @@ jobs:
       - release_web
       - release_windows
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         name: Checkout sources
         with:
           # Fetch history for all tags and branches so we can compare revisions

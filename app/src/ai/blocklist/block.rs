@@ -4887,6 +4887,32 @@ impl AIBlock {
                     .find_map(|comment| comment.rich_text_editor.as_ref(ctx).selected_text(ctx))
             })
             .or_else(|| self.selected_text.read().clone())
+            .filter(|selection| !selection.is_empty())
+    }
+
+    /// Test-only helper to set the block-level text selection, which is normally
+    /// written by the `SelectableArea` selection callback during a drag.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn set_block_level_selected_text_for_test(&self, text: Option<String>) {
+        *self.selected_text.write() = text;
+    }
+
+    /// Test-only helper that simulates a block-level text selection in this AI
+    /// block: it writes the selected text and emits the same
+    /// [`AIBlockEvent::SelectionChanged`] signal that
+    /// [`AIBlockAction::SelectText`] does, so the terminal view mirrors it into
+    /// the model's rich content selection (which the copy/insert paths read).
+    ///
+    /// This lets integration tests exercise the in-AI-block copy path without
+    /// depending on layout-sensitive pixel coordinates.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn simulate_text_selection_for_test(
+        &mut self,
+        text: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        *self.selected_text.write() = text;
+        ctx.emit(AIBlockEvent::SelectionChanged);
     }
 
     /// Start a selection at the top left corner of the block's SelectableArea.
@@ -5946,6 +5972,12 @@ pub enum AIBlockEvent {
     /// important because selecting across multiple blocks only supports text selections at the
     /// `AIBlock` level.
     ChildViewTextSelected,
+    /// Emitted when the `AIBlock`'s own (block-level) text selection state may
+    /// have changed. The terminal view uses this to keep the model's record of
+    /// which rich content block has an active selection in sync, so copy/insert
+    /// paths can find the selected text. Rich content selections are not tied to
+    /// the point-based model selection, so this signal is required.
+    SelectionChanged,
     CopiedEmptyText,
     OpenSettings,
     #[cfg(feature = "local_fs")]
@@ -6212,6 +6244,10 @@ impl TypedActionView for AIBlock {
                 // If we have a selection, we should use the default cursor, even if it's over a link.
                 ctx.reset_cursor();
                 self.dismiss_ai_tooltips(ctx);
+                // Notify the terminal view so it can keep the model's record of which rich
+                // content block has an active selection in sync (rich content selections are
+                // not tied to the point-based model selection used for regular blocks).
+                ctx.emit(AIBlockEvent::SelectionChanged);
             }
             AIBlockAction::CopyAIBlockCodeSnippet(text) => {
                 ctx.clipboard()

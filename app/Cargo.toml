@@ -664,6 +664,7 @@ default = [
     "hoa_onboarding_flow",
     "hoa_remote_control",
     "codex_notifications",
+    "codex_plugin",
     "trim_trailing_blank_lines",
     "open_warp_new_settings_modes",
     "skip_firebase_anonymous_user",
@@ -935,6 +936,7 @@ web_search_ui = []
 web_fetch_ui = []
 fork_from_command = []
 context_window_usage_v2 = []
+context_window_usage_breakdown = []
 global_search = []
 file_and_diff_set_comments = []
 revert_to_checkpoints = []

@@ -3859,7 +3859,7 @@ dependencies = [
 [[package]]
 name = "dagre_rust"
 version = "0.0.5"
-source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=79aecc74187c29a027e85e18d070ff0dd884a0a7#79aecc74187c29a027e85e18d070ff0dd884a0a7"
+source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=8d3f789c2eb49335d7bf247a06bb649f59b6d4ed#8d3f789c2eb49335d7bf247a06bb649f59b6d4ed"
 dependencies = [
  "graphlib_rust",
  "ordered_hashmap",
@@ -8035,7 +8035,7 @@ dependencies = [
 [[package]]
 name = "mermaid_to_svg"
 version = "0.1.0"
-source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=79aecc74187c29a027e85e18d070ff0dd884a0a7#79aecc74187c29a027e85e18d070ff0dd884a0a7"
+source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=8d3f789c2eb49335d7bf247a06bb649f59b6d4ed#8d3f789c2eb49335d7bf247a06bb649f59b6d4ed"
 dependencies = [
  "dagre_rust",
  "graphlib_rust",
@@ -15181,7 +15181,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=a04c490e6dd5d7f9073befb954894a681bf0ea88#a04c490e6dd5d7f9073befb954894a681bf0ea88"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=6c1a481ec4c39eadd996a2de097ed0ea11384307#6c1a481ec4c39eadd996a2de097ed0ea11384307"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -15264,14 +15264,20 @@ dependencies = [
 name = "warp_server_client"
 version = "0.1.0"
 dependencies = [
+ "aha-reqwest-eventsource",
  "anyhow",
  "async-channel",
  "async-trait",
+ "base64 0.22.1",
  "bincode",
+ "blocking",
+ "bounded-vec-deque",
+ "cfg-if",
  "chrono",
  "cloud_object_client",
  "cloud_object_models",
  "cloud_objects",
+ "command",
  "cynic",
  "derivative",
  "diesel",
@@ -15284,10 +15290,14 @@ dependencies = [
  "lasso",
  "log",
  "mockall",
+ "mockito",
  "oauth2",
+ "parking_lot",
  "pathfinder_geometry",
+ "reqwest",
  "schemars",
  "serde",
+ "serde_json",
  "session-sharing-protocol",
  "settings_value",
  "thiserror 2.0.17",
@@ -15295,8 +15305,10 @@ dependencies = [
  "uuid",
  "warp_core",
  "warp_graphql",
+ "warp_isolation_platform",
  "warp_server_auth",
  "warpui_core",
+ "websocket",
 ]
 
 [[package]]

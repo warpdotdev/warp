@@ -62,8 +62,8 @@ use crate::ai::skills::SkillDescriptor;
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::notebooks::NotebookId;
 use crate::persistence::model::{
-    AgentConversationData, ConversationUsageMetadata, ModelTokenUsage, PersistedAutoexecuteMode,
-    ToolUsageMetadata,
+    AgentConversationData, ContextWindowSegment, ConversationUsageMetadata, ModelTokenUsage,
+    PersistedAutoexecuteMode, ToolUsageMetadata,
 };
 use crate::persistence::ModelEvent;
 use crate::server::ids::ServerId;
@@ -671,6 +671,13 @@ impl AIConversation {
 
     pub fn context_window_usage(&self) -> f32 {
         self.conversation_usage_metadata.context_window_usage
+    }
+
+    /// The per-segment breakdown of the context window (e.g. system prompt,
+    /// tool definitions, conversation history). Scaled so the segments sum to
+    /// `context_window_usage`. Empty when the server did not emit segments.
+    pub fn context_window_segments(&self) -> &[ContextWindowSegment] {
+        &self.conversation_usage_metadata.context_window_segments
     }
 
     /// Total credits spent in the conversation, including both LLM inference
@@ -1966,6 +1973,12 @@ impl AIConversation {
                 .as_ref()
                 .map(Into::into)
                 .unwrap_or_default();
+
+            self.conversation_usage_metadata.context_window_segments = usage_metadata
+                .context_window_segments
+                .iter()
+                .map(Into::into)
+                .collect();
 
             // A conversation can never go from summarized to un-summarized,
             // so we only update the summarized flag if it's going from false to true.

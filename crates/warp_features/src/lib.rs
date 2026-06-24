@@ -512,6 +512,10 @@ pub enum FeatureFlag {
     /// Enables v2 of the context window usage UI.
     ContextWindowUsageV2,
 
+    /// Dev-only: enables the expandable per-segment context window usage
+    /// breakdown in the conversation usage card.
+    ContextWindowUsageBreakdown,
+
     /// Enables global search
     GlobalSearch,
 
@@ -946,7 +950,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::EditableMarkdownMermaid,
     FeatureFlag::CodeReviewScrollPreservation,
     FeatureFlag::RememberFastForwardState,
-    FeatureFlag::CodexPlugin,
     FeatureFlag::GeminiNotifications,
     FeatureFlag::LocalDockerSandbox,
     #[cfg(not(windows))]
@@ -958,6 +961,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::NldPromptHistoryMatch,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::PinnedTabs,
+    FeatureFlag::ContextWindowUsageBreakdown,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

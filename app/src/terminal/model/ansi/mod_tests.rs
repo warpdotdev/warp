@@ -569,7 +569,7 @@ fn parse_dcs_ssh_with_external_control_master() {
 }
 
 #[test]
-fn parse_dcs_precmd() {
+fn parse_dcs_precmd_ignores_completion_fields() {
     let bytes = hex_encoded_dcs_string(
         r#"{
                 "hook": "Precmd",
@@ -582,6 +582,7 @@ fn parse_dcs_precmd() {
                     "virtual_env": "",
                     "conda_env": "numpy",
                     "exit_code": 0,
+                    "next_block_id": "block_id",
                     "session_id": 167303092612201
                 }
             }"#,
@@ -610,6 +611,21 @@ fn parse_dcs_precmd() {
         ),
         _ => panic!("incorrect dcs value"),
     };
+}
+
+#[test]
+fn pending_precmd_ignores_completion_fields() {
+    let mut hook = PendingHook::create("Precmd").unwrap();
+    hook.update("exit_code".to_owned(), "127".to_owned());
+    hook.update("next_block_id".to_owned(), "block_id".to_owned());
+    hook.update("session_id".to_owned(), "167303092612201".to_owned());
+
+    match hook.finish() {
+        DProtoHook::Precmd { value } => {
+            assert_eq!(value.session_id, Some(167303092612201));
+        }
+        _ => panic!("incorrect dcs value"),
+    }
 }
 
 #[test]
@@ -994,6 +1010,20 @@ fn parse_osc777_missing_parts_ignored() {
     let (_, handler) = parse_bytes(bytes);
 
     assert_eq!(handler.pluggable_notifications.len(), 0);
+}
+
+#[test]
+fn parse_osc1337_without_second_param_does_not_panic() {
+    // Regression for #12817: a bare OSC 1337 with no second parameter
+    // (`ESC ] 1337 BEL`) used to index `params[1]` unconditionally and panic
+    // with "index out of bounds". Untrusted PTY output must never crash the
+    // parser; a malformed sequence should be ignored instead.
+    let bytes: &[u8] = b"\x1b]1337\x07";
+    let (_, _handler) = parse_bytes(bytes);
+
+    // Also exercise the ST-terminated form.
+    let bytes: &[u8] = b"\x1b]1337\x1b\\";
+    let (_, _handler) = parse_bytes(bytes);
 }
 
 #[test]

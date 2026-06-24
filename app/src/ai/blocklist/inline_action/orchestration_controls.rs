@@ -928,11 +928,6 @@ pub fn populate_host_picker<V: View>(
     };
     let mut connected_hosts = ConnectedSelfHostedWorkersModel::as_ref(ctx)
         .worker_hosts_excluding(default_host.as_deref());
-    if !initial.eq_ignore_ascii_case(ORCHESTRATION_WARP_WORKER_HOST)
-        && default_host.as_deref() != Some(initial.as_str())
-    {
-        connected_hosts.push(initial.clone());
-    }
     connected_hosts.sort();
     connected_hosts.dedup();
     picker.update(ctx, |picker, picker_ctx| {

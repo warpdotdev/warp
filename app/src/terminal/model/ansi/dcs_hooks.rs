@@ -239,6 +239,7 @@ impl DProtoHook {
                 "kube_config" => {
                     value.kube_config = map_empty_to_none(v);
                 }
+                "exit_code" | "next_block_id" => {}
                 "session_id" => value.session_id = v.parse::<u64>().ok(),
                 _ => {
                     log::warn!("Tried to add unknown field {key} to Precmd");
