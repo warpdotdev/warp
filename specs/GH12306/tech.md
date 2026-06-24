@@ -62,7 +62,7 @@ Add `pub const WORKSPACE_IN_QUAKE_WINDOW_FLAG: &str = "Workspace_InQuakeWindow";
 
 **New handler methods** (~line 26703, alongside existing transfer functions):
 - `move_active_tab_to_dedicated_hotkey_window` — Verifies the hotkey window is open and visible via `quake_mode_window_is_open()` (opens it via the newly-`pub(crate)` `toggle_quake_mode_window` if closed or hidden), then calls `move_active_tab_to_window`.
-- `move_active_tab_to_standard_window` — Finds an existing standard window via `ctx.ordered_window_ids()` (z-order front-to-back, skipping self and quake). If none exists, calls `create_transferred_window` for the first tab, then transfers remaining tabs to that new window. If one exists, calls `move_active_tab_to_window` with that window as target.
+- `move_active_tab_to_standard_window` — Finds an existing standard window via `ctx.ordered_window_ids()` (z-order front-to-back, skipping self and quake). If one exists, calls `move_active_tab_to_window` with that window as target. If none exists, collects all transfer infos in ascending order, calls `prepare_for_transferred_tab_attach` on the source for each, creates a new window for the first tab via `create_transferred_window`, then transfers remaining tabs to that new window via `transfer_view_tree_to_window` + `insert_transferred_tab_at_index` for each. Removes all source tabs in descending order, clears `suppress_detach_panes_on_window_close` if source stays alive.
 - `toggle_active_tab_window_type` — Dispatches to the appropriate directional method based on current window.
 - `move_active_tab_to_window(target_window_id, ctx)` — Core logic: gathers selected indices (multi-selection from `selected_tab_indices()` or fallback to `active_tab_index`), collects transfer infos in ascending order. For each tab: calls `prepare_for_transferred_tab_attach` on the source workspace, then `ctx.transfer_view_tree_to_window`. After all transfers, removes tabs from source in descending order (to avoid index shift). If the source still has remaining tabs, clears `suppress_detach_panes_on_window_close` via `set_suppress_detach_panes_on_window_close(false)`. Inserts collected tabs at end of target in original ascending order. Focuses target window.
 
@@ -93,7 +93,9 @@ Change `toggle_quake_mode_window` from `fn` to `pub(crate) fn` (line 1331).
 
 ### Move to standard window
 
-Same flow, but the target window is discovered via `ctx.ordered_window_ids()` (z-order front-to-back, excluding the quake window and self). If no standard window exists, `create_transferred_window` creates a new window for the first tab, then remaining tabs are transferred to that new window via `move_active_tab_to_window`.
+If an existing standard window is found: same flow as above (collect, prep, transfer, insert, remove, cleanup), targeting that window via `move_active_tab_to_window`.
+
+If no standard window exists: collect all transfer infos in ascending order, call `prepare_for_transferred_tab_attach` on the source for each, create a new window via `create_transferred_window` with the first tab's info, then transfer remaining tabs to the new window via `transfer_view_tree_to_window` + `insert_transferred_tab_at_index` for each. Remove all source tabs in descending order. Clear `suppress_detach_panes_on_window_close` if the source window remains alive. Focus moves to the new standard window.
 
 ### Toggle
 

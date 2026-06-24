@@ -4,14 +4,14 @@
 
 ## Summary
 
-Three command-palette actions that let users move active tabs (or multi-selections) between standard terminal windows and the dedicated hotkey (quake) window. This covers the keyboard/context-menu half of the issue's first proposal; the drag-and-drop half is being shipped concurrently by the Warp team.
+Three command-palette actions that let users move active tabs (or multi-selections) between standard terminal windows and the dedicated hotkey (quake) window. This covers the command-palette half of the issue's first proposal; the drag-and-drop half is being shipped concurrently by the Warp team.
 
 ## Problem
 
 The dedicated hotkey window (quake overlay) is an isolated sandbox. Users who start a task there that scales up — editing a file, running a long build, researching in the AI terminal — have no way to promote those tabs to a standard window. Conversely, users in a standard window who want a distraction-free view of a particular session in the quake overlay cannot move it there.
 
 The issue proposes two solution families:
-1. **Tab transfer** — move tabs between window types via drag-and-drop or context menu / command-palette actions
+1. **Tab transfer** — move tabs between window types via drag-and-drop or command-palette actions
 2. **Non-dedicated hotkey mode** — a setting that makes the global hotkey present the current active window as a quake-style overlay rather than using a separate dedicated window
 
 The Warp team is shipping cross-window tab drag (hotkey→standard direction) concurrently with this spec ([maintainer comment](https://github.com/warpdotdev/warp/issues/12306#issuecomment-4749224419)). This spec covers the complementary keyboard- and command-palette-driven half of option 1, which applies in both directions (standard↔hotkey).
