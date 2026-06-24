@@ -1211,21 +1211,13 @@ impl SelectableElement for Text {
                 // Currently if we double click on the left side of "m", all of "first middle" would be selected,
                 // and if we double click on the right side of "e" all of "middle second" would be selected.
                 let text_selection_bound = self.position_for_point(absolute_point)?;
-                let inner_point = if matches!(direction, SelectionDirection::Backward) {
-                    text.word_starts_backward_from_offset_exclusive(CharOffset::from(
-                        text_selection_bound.glyph_index,
-                    ))
-                    .ok()?
-                    .with_policy(word_boundaries_policy)
-                    .next()?
-                } else {
-                    text.word_ends_from_offset_exclusive(CharOffset::from(
-                        text_selection_bound.glyph_index,
-                    ))
-                    .ok()?
-                    .with_policy(word_boundaries_policy)
-                    .next()?
-                };
+                let inner_point = text
+                    .semantic_expansion_target(
+                        CharOffset::from(text_selection_bound.glyph_index),
+                        direction,
+                        word_boundaries_policy,
+                    )
+                    .ok()?;
 
                 let offset = text.to_offset(inner_point).ok()?.as_usize();
                 let origin = self.origin()?.xy;

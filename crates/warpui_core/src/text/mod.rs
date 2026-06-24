@@ -3,7 +3,7 @@ use itertools::Itertools;
 use string_offset::{ByteOffset, CharCounter, CharOffset};
 
 use self::point::Point;
-use self::word_boundaries::WordBoundaries;
+use self::word_boundaries::{is_word_boundary, WordBoundaries, WordBoundariesPolicy};
 use crate::event::ModifiersState;
 
 pub mod header;
@@ -186,6 +186,78 @@ pub trait TextBuffer {
             self.chars_rev_at(offset)?,
             self,
         ))
+    }
+
+    /// Returns the target [`Point`] for expanding a semantic (double-click) selection from
+    /// `position` in the given `direction`, respecting the word-boundary `policy`.
+    ///
+    /// The expansion snaps to the maximal contiguous run of the *same character class* as the
+    /// character under `position`:
+    /// - If that character is part of a word, the target is the end (forward) or start
+    ///   (backward) of that word — ordinary word selection.
+    /// - If that character is a word-boundary char (whitespace/punctuation), the target is the
+    ///   end (forward) or start (backward) of the contiguous run of boundary characters, so the
+    ///   selection stops at the boundary run and does NOT spill into the adjacent word.
+    ///
+    /// This mirrors the terminal grid's semantic selection (`semantic_search_left`/`_right`),
+    /// keeping rich-text selection consistent with the terminal block list.
+    fn semantic_expansion_target<T: BufferIndex>(
+        &self,
+        position: T,
+        direction: SelectionDirection,
+        policy: &WordBoundariesPolicy,
+    ) -> Result<Point> {
+        let offset = position.to_char_offset(self)?;
+
+        // Whether the character under `position` is itself a word-boundary character.
+        let on_boundary = self
+            .chars_at(offset)?
+            .next()
+            .is_some_and(|c| is_word_boundary(c, policy));
+
+        if !on_boundary {
+            // Ordinary word selection: expand to the end/start of the current word.
+            let point = match direction {
+                SelectionDirection::Forward => self
+                    .word_ends_from_offset_exclusive(offset)?
+                    .with_policy(policy)
+                    .next(),
+                SelectionDirection::Backward => self
+                    .word_starts_backward_from_offset_exclusive(offset)?
+                    .with_policy(policy)
+                    .next(),
+            };
+            return point.ok_or_else(|| anyhow!("no word boundary found from offset {offset}"));
+        }
+
+        // The character is a boundary: expand only across the contiguous run of boundary
+        // characters, stopping at the next/previous word.
+        let target = match direction {
+            SelectionDirection::Forward => {
+                let mut end = offset;
+                for c in self.chars_at(offset)? {
+                    if is_word_boundary(c, policy) {
+                        end += 1;
+                    } else {
+                        break;
+                    }
+                }
+                end
+            }
+            SelectionDirection::Backward => {
+                let mut start = offset;
+                for c in self.chars_rev_at(offset)? {
+                    if is_word_boundary(c, policy) {
+                        start -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                start
+            }
+        };
+
+        self.to_point(target)
     }
 }
 

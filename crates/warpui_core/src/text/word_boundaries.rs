@@ -20,6 +20,17 @@ pub enum WordBoundariesPolicy {
     OnlyWhitespace,
 }
 
+/// Returns whether `c` is a word-boundary (separator) character under the given `policy`.
+pub fn is_word_boundary(c: char, policy: &WordBoundariesPolicy) -> bool {
+    match policy {
+        WordBoundariesPolicy::Default => is_default_word_boundary(c),
+        WordBoundariesPolicy::Custom(boundary_chars) => {
+            c.is_whitespace() || boundary_chars.contains(&c)
+        }
+        WordBoundariesPolicy::OnlyWhitespace => c.is_whitespace(),
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum WordBoundariesApproach {
     ForwardWordStarts,
@@ -150,13 +161,7 @@ impl<'a, T: TextBuffer + ?Sized> WordBoundaries<'a, T> {
     }
 
     fn is_word_boundary(&self, c: char) -> bool {
-        match self.policy.as_ref() {
-            WordBoundariesPolicy::Default => is_default_word_boundary(c),
-            WordBoundariesPolicy::Custom(boundary_chars) => {
-                c.is_whitespace() || boundary_chars.contains(&c)
-            }
-            WordBoundariesPolicy::OnlyWhitespace => c.is_whitespace(),
-        }
+        is_word_boundary(c, self.policy.as_ref())
     }
 }
 
