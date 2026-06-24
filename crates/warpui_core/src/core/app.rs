@@ -3357,6 +3357,17 @@ impl AppContext {
                 break;
             }
 
+            // Collect every entity id dropped in this batch (models and views
+            // share a single global `EntityId` space). We use this below to also
+            // purge subscription/observation records that these dropped entities
+            // hold *as subscribers* under still-live source entities.
+            let dropped_subscriber_ids: HashSet<EntityId> = dropped_items
+                .models
+                .iter()
+                .copied()
+                .chain(dropped_items.views.iter().map(|(_, view_id)| *view_id))
+                .collect();
+
             for model_id in dropped_items.models {
                 self.models.remove(&model_id);
                 self.subscriptions.remove(&model_id);
@@ -3411,7 +3422,61 @@ impl AppContext {
 
                 autotracking::remove_view(current_window_id, view_id);
             }
+
+            // The loops above only remove map entries keyed by a dropped entity
+            // (i.e. a dropped entity's *incoming* subscribers/observers). A
+            // dropped entity can also be a *subscriber* to other, still-live
+            // sources, whose records live in the `Vec`s keyed by those live
+            // source ids. Those records were previously only pruned lazily, the
+            // next time the live source emitted/notified, so a long-lived source
+            // that rarely emits leaked O(N) records (see issue #13012). Purge
+            // them eagerly here. Freeing these callbacks may drop further
+            // handles, which the enclosing `loop` picks up on the next pass.
+            Self::remove_subscriber_records(&mut self.subscriptions, &dropped_subscriber_ids);
+            Self::remove_observer_records(&mut self.observations, &dropped_subscriber_ids);
         }
+    }
+
+    /// Removes every [`Subscription`] whose subscriber (a view or model) is in
+    /// `dropped`, dropping now-empty source entries to avoid leaking empty keys.
+    /// `FromApp` subscriptions are never affected since they have no entity
+    /// subscriber.
+    fn remove_subscriber_records(
+        subscriptions: &mut HashMap<EntityId, Vec<Subscription>>,
+        dropped: &HashSet<EntityId>,
+    ) {
+        if dropped.is_empty() {
+            return;
+        }
+        subscriptions.retain(|_source_id, subs| {
+            subs.retain(|subscription| match subscription {
+                Subscription::FromModel { model_id, .. } => !dropped.contains(model_id),
+                Subscription::FromView { view_id, .. } => !dropped.contains(view_id),
+                Subscription::FromApp { .. } => true,
+            });
+            !subs.is_empty()
+        });
+    }
+
+    /// Removes every [`Observation`] whose observer (a view or model) is in
+    /// `dropped`, dropping now-empty source entries to avoid leaking empty keys.
+    /// `FromApp` observations are never affected since they have no entity
+    /// observer.
+    fn remove_observer_records(
+        observations: &mut HashMap<EntityId, Vec<Observation>>,
+        dropped: &HashSet<EntityId>,
+    ) {
+        if dropped.is_empty() {
+            return;
+        }
+        observations.retain(|_observed_id, observers| {
+            observers.retain(|observation| match observation {
+                Observation::FromModel { model_id, .. } => !dropped.contains(model_id),
+                Observation::FromView { view_id, .. } => !dropped.contains(view_id),
+                Observation::FromApp { .. } => true,
+            });
+            !observers.is_empty()
+        });
     }
 
     fn flush_effects(&mut self) {

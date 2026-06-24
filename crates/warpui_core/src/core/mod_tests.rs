@@ -2443,6 +2443,93 @@ fn test_unsubscribe_from_model_inside_callback_with_multiple_subscriptions() {
     });
 }
 
+// Regression test for issue #13012: when a subscriber view/model is dropped,
+// its subscription/observation callback records stored under a still-live
+// *source* entity must be removed eagerly by `remove_dropped_items`. Before the
+// fix these records were only pruned lazily, the next time the source emitted /
+// was notified — so a long-lived source that rarely emits (e.g. code-review
+// diff/comment models) accumulated O(N) stale records in high-churn UI flows.
+#[test]
+fn test_dropped_subscribers_are_removed_from_live_source_maps() {
+    struct EmitterModel;
+
+    impl Entity for EmitterModel {
+        type Event = ();
+    }
+
+    struct SubscriberModel;
+
+    impl Entity for SubscriberModel {
+        type Event = ();
+    }
+
+    struct SubscriberView;
+
+    impl Entity for SubscriberView {
+        type Event = ();
+    }
+
+    impl super::View for SubscriberView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "SubscriberView"
+        }
+    }
+
+    impl TypedActionView for SubscriberView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        // Long-lived source that is subscribed to / observed but never emits.
+        let emitter = app.add_model(|_| EmitterModel);
+        let emitter_id = emitter.id();
+
+        // A window is needed to host the view subscribers.
+        let (window_id, _root) = app.add_window(WindowStyle::NotStealFocus, |_| SubscriberView);
+
+        const N: usize = 20;
+        for _ in 0..N {
+            // Model subscriber: subscribes to AND observes the emitter, then is
+            // dropped at the end of this iteration.
+            let model_sub = app.add_model(|_| SubscriberModel);
+            model_sub.update(&mut app, |_, ctx| {
+                ctx.subscribe_to_model(&emitter, |_, _, _, _| {});
+                ctx.observe(&emitter, |_, _, _| {});
+            });
+
+            // View subscriber: subscribes to AND observes the emitter, then is
+            // dropped at the end of this iteration.
+            let view_sub = app.add_view(window_id, |_| SubscriberView);
+            view_sub.update(&mut app, |_, ctx| {
+                ctx.subscribe_to_model(&emitter, |_, _, _, _| {});
+                ctx.observe(&emitter, |_, _, _| {});
+            });
+        }
+
+        // Force a flush so the dropped subscribers are swept.
+        app.update(|_| {});
+
+        // The emitter never emitted, yet its subscription/observation lists must
+        // not retain any records for the now-dropped subscribers.
+        app.update(|ctx| {
+            let subs = ctx.subscriptions.get(&emitter_id).map_or(0, |v| v.len());
+            let obs = ctx.observations.get(&emitter_id).map_or(0, |v| v.len());
+            assert_eq!(
+                subs, 0,
+                "dropped subscribers' subscription records leaked under the live emitter"
+            );
+            assert_eq!(
+                obs, 0,
+                "dropped subscribers' observation records leaked under the live emitter"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_unsubscribe_then_resubscribe_from_model_inside_callback_keeps_new_subscription() {
     #[derive(Default)]
