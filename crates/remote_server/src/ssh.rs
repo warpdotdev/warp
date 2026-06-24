@@ -36,8 +36,24 @@ const STOP_CONTROL_MASTER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Builds the common SSH argument list for multiplexed connections through
 /// an existing ControlMaster socket.
+///
+/// `-F /dev/null` is critical: it disables both per-user (`~/.ssh/config`)
+/// and system (`/etc/ssh/ssh_config`) configuration for these slave
+/// connections. Without it, configs that enable `CanonicalizeHostname` or
+/// match `Host *` with an `Exec` directive will run against the literal
+/// `placeholder` destination below, which fails (e.g. `step ssh
+/// check-host placeholder`, or DNS lookup against `placeholder:22`) and
+/// aborts the slave before it can reach the ControlMaster socket. Slaves
+/// only need the socket — auth, key selection, host-key checking, and
+/// every other config-driven concern was already handled when the master
+/// was established by `warp_ssh_helper`, so dropping config here is
+/// behavior-preserving for the connection and behavior-fixing for users
+/// whose ssh config has hostname-canonicalization / match-exec rules.
+/// Fixes #12137.
 pub fn ssh_args(socket_path: &Path) -> Vec<String> {
     vec![
+        "-F".to_string(),
+        "/dev/null".to_string(),
         "-q".to_string(),
         "-o".to_string(),
         "PasswordAuthentication=no".to_string(),
@@ -215,8 +231,16 @@ pub async fn scp_upload(
     remote_path: &str,
     timeout: Duration,
 ) -> anyhow::Result<()> {
+    // `-F /dev/null` for the same reason as in [`ssh_args`]: scp shares the
+    // ssh client config-parsing path, and user/system configs that enable
+    // `CanonicalizeHostname` or match `Host *` with `Exec` would run against
+    // the literal `placeholder` destination and abort the upload before the
+    // ControlMaster socket is consulted. The slave only needs the socket
+    // (passed explicitly via `-o ControlPath=…`). Fixes #12137.
     let output = async {
         Command::new("scp")
+            .arg("-F")
+            .arg("/dev/null")
             .arg("-o")
             .arg(format!("ControlPath={}", socket_path.display()))
             .arg("-o")
@@ -243,5 +267,36 @@ pub async fn scp_upload(
             output.status.code(),
             stderr
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression guard for #12137: slave ssh commands MUST pass
+    /// `-F /dev/null` so user/system config (e.g. `CanonicalizeHostname`,
+    /// `Match exec` on `Host *`) doesn't run against the literal
+    /// `placeholder` destination and abort the connection.
+    #[test]
+    fn ssh_args_disables_external_config() {
+        let args = ssh_args(Path::new("/tmp/sock"));
+
+        // Both flag and value present, in order.
+        let f_idx = args
+            .iter()
+            .position(|a| a == "-F")
+            .expect("ssh_args must include `-F` to skip external config");
+        assert_eq!(
+            args.get(f_idx + 1).map(String::as_str),
+            Some("/dev/null"),
+            "ssh_args's `-F` argument must be followed by `/dev/null`",
+        );
+
+        // The ControlPath option is still threaded through.
+        assert!(
+            args.iter().any(|a| a == "ControlPath=/tmp/sock"),
+            "ssh_args must still set ControlPath=<socket>; got: {args:?}",
+        );
     }
 }
