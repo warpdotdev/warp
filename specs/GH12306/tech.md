@@ -56,7 +56,7 @@ The `Quake_Mode_Editor` flag (set by `root_view.rs` when `quake_mode_enabled` is
 
 **New handler methods** (~line 27093):
 - `move_active_tab_to_dedicated_hotkey_window` — Verifies the hotkey window is open (opens it via the newly-`pub(crate)` `toggle_quake_mode_window` if needed), then calls `move_active_tab_to_window`.
-- `move_active_tab_to_standard_window` — Finds an existing standard window via `ctx.window_ids()` (excluding self and quake) — the first non-self, non-quake ID corresponds to the most recently focused standard window. If none exists, calls `create_transferred_window`. Calls `move_active_tab_to_window` in either case.
+- `move_active_tab_to_standard_window` — Finds an existing standard window via `ctx.ordered_window_ids()` (z-order front-to-back, skipping self and quake). If none exists, calls `create_transferred_window` for the first tab, then transfers remaining tabs to that new window. If one exists, calls `move_active_tab_to_window` with that window as target.
 - `toggle_active_tab_window_type` — Dispatches to the appropriate directional method based on current window.
 - `move_active_tab_to_window(target_window_id, ctx)` — Core logic: gathers selected indices (multi-selection from `selected_tab_indices()` or fallback to `active_tab_index`), collects transfer infos in ascending order, removes tabs from source in descending order (to avoid index shift), then inserts collected tabs at end of target in original ascending order, focuses target window.
 
@@ -87,7 +87,7 @@ Change `toggle_quake_mode_window` from `fn` to `pub(crate) fn` (line 1331).
 
 ### Move to standard window
 
-Same flow, but the target window is discovered via `ctx.window_ids()` (excluding the quake window and self). If no standard window exists, `create_transferred_window` promotes tabs into a newly created standard window.
+Same flow, but the target window is discovered via `ctx.ordered_window_ids()` (z-order front-to-back, excluding the quake window and self). If no standard window exists, `create_transferred_window` creates a new window for the first tab, then remaining tabs are transferred to that new window via `move_active_tab_to_window`.
 
 ### Toggle
 
@@ -102,7 +102,8 @@ Same flow, but the target window is discovered via `ctx.window_ids()` (excluding
 - **3 — Toggle moves to opposite type:** Invoke toggle from both window types.
 - **4 — Multi-selection:** Enable `FeatureFlag::GroupedTabs`, select 2+ tabs, invoke each action.
 - **5 — Last tab closes window:** Move the only tab out of a window.
-- **6 — Hidden when setting disabled:** Disable quake mode, search command palette.
+- **6 — Hidden from command palette when setting disabled:** Disable quake mode, search command palette.
+- **6b — Hidden from keybindings settings UI when setting disabled:** Open Settings > Keybindings, verify the three commands are absent from the list.
 - **7 — Multi-tab quake stays open:** Move one tab out of a multi-tab quake overlay.
 - **8 — Dynamic window ID:** Close quake window between action invocation and execution.
 
