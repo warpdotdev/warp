@@ -100,6 +100,7 @@ pub struct CustomRouterEditorView {
     save_button: ViewHandle<ActionButton>,
     cancel_button: ViewHandle<ActionButton>,
     delete_button: ViewHandle<ActionButton>,
+    add_rule_button: ViewHandle<ActionButton>,
 
     upgrade_footer_mouse_state: MouseStateHandle,
     save_error: Option<String>,
@@ -261,6 +262,11 @@ impl CustomRouterEditorView {
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| ctx.dispatch_typed_action(CustomRouterEditorAction::Delete))
         });
+        let add_rule_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("+ Add rule", SecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| ctx.dispatch_typed_action(CustomRouterEditorAction::AddPromptRule))
+        });
 
         let view = Self {
             existing,
@@ -284,6 +290,7 @@ impl CustomRouterEditorView {
             save_button,
             cancel_button,
             delete_button,
+            add_rule_button,
             upgrade_footer_mouse_state,
             save_error: None,
         };
@@ -583,19 +590,11 @@ impl CustomRouterEditorView {
             }
         }
 
-        // "+ Add rule" inline text button
-        let accent = warp_core::ui::theme::color::internal_colors::accent_fg(appearance.theme());
-        let add_rule = Hoverable::new(MouseStateHandle::default(), move |_| {
-            Text::new("+ Add rule", appearance.ui_font_family(), 12.)
-                .with_color(accent.into())
-                .finish()
-        })
-        .on_click(|ctx, _app, _pos| {
-            ctx.dispatch_typed_action(CustomRouterEditorAction::AddPromptRule);
-        })
-        .finish();
-
-        column.add_child(Container::new(add_rule).with_margin_top(4.).finish());
+        column.add_child(
+            Container::new(ChildView::new(&self.add_rule_button).finish())
+                .with_margin_top(4.)
+                .finish(),
+        );
         column.finish()
     }
 
