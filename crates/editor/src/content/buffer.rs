@@ -874,33 +874,28 @@ impl Buffer {
     }
 
     /// Construct a [`Buffer`] from the JSON contents of a `.ipynb` (Jupyter)
-    /// notebook. The notebook is converted directly into formatted text.
-    /// On any parse failure the raw contents are shown verbatim
+    /// notebook, converting it directly into formatted text.
+    ///
+    /// Returns an [`ipynb_parser::IpynbError`] if the input is not a parseable
+    /// nbformat v4 notebook, so callers can decide how to present invalid
+    /// notebooks (e.g. routing to a raw text editor) rather than rendering a
+    /// blank or misleading view.
     pub(crate) fn from_ipynb(
         ipynb: &str,
         embedded_item_conversion: Option<EmbeddedItemConversion>,
         tab_indentation: TabIndentation,
         selection_model: ModelHandle<BufferSelectionModel>,
         ctx: &mut ModelContext<Self>,
-    ) -> Self {
+    ) -> Result<Self, ipynb_parser::IpynbError> {
         let gfm_tables = warp_core::features::FeatureFlag::MarkdownTables.is_enabled();
-        let formatted_text = match ipynb_parser::ipynb_to_formatted_text(ipynb, gfm_tables) {
-            Ok(parsed) => parsed,
-            Err(e) => {
-                safe_error! {
-                    safe: ("Failed to render Jupyter notebook; showing raw contents"),
-                    full: ("Failed to render Jupyter notebook: {e}")
-                }
-                ipynb_parser::raw_fallback_formatted_text(ipynb)
-            }
-        };
-        Self::from_formatted_text(
+        let formatted_text = ipynb_parser::ipynb_to_formatted_text(ipynb, gfm_tables)?;
+        Ok(Self::from_formatted_text(
             formatted_text,
             embedded_item_conversion,
             tab_indentation,
             selection_model,
             ctx,
-        )
+        ))
     }
 
     fn replace(
@@ -952,13 +947,28 @@ impl Buffer {
                 selection_model.clone(),
                 ctx,
             ),
-            ContentFormat::Ipynb => Buffer::from_ipynb(
+            ContentFormat::Ipynb => match Buffer::from_ipynb(
                 state.text,
                 callback,
                 indentation,
                 selection_model.clone(),
                 ctx,
-            ),
+            ) {
+                Ok(buffer) => buffer,
+                Err(e) => {
+                    safe_error! {
+                        safe: ("Failed to render Jupyter notebook; showing raw contents"),
+                        full: ("Failed to render Jupyter notebook: {e}")
+                    }
+                    Buffer::from_formatted_text(
+                        ipynb_parser::raw_fallback_formatted_text(state.text),
+                        callback,
+                        Box::new(|_, _| IndentBehavior::Ignore),
+                        selection_model.clone(),
+                        ctx,
+                    )
+                }
+            },
         };
 
         // Infer line ending from the new content and restore session_platform.

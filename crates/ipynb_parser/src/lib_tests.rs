@@ -372,17 +372,10 @@ fn test_strip_ansi_handles_csi_and_osc() {
 }
 
 #[test]
-fn test_truncate_chars_respects_char_boundary() {
-    // Multi-byte characters must not be split mid-codepoint.
-    assert_eq!(truncate_chars("héllo", 2), "hé");
-    assert_eq!(truncate_chars("abc", 10), "abc");
-}
-
-#[test]
-fn test_oversized_text_output_is_truncated() {
-    // A pathologically large stream output is truncated rather than rendered in
-    // full, so a single cell can't bloat the buffer.
-    let big = "a".repeat(MAX_TEXT_OUTPUT_CHARS + 100);
+fn test_large_text_output_is_preserved_verbatim() {
+    // Large outputs are rendered in full (no arbitrary truncation or synthetic
+    // placeholder text) so select-all/copy yields the canonical content.
+    let big = "a".repeat(250_000);
     let json = format!(
         r#"{{"nbformat": 4, "cells": [{{"cell_type": "code", "source": "x", "outputs": [{{"output_type": "stream", "name": "stdout", "text": "{big}"}}]}}]}}"#
     );
@@ -391,15 +384,10 @@ fn test_oversized_text_output_is_truncated() {
     let blocks = code_blocks(&ft);
     let output = &blocks[1].code;
     assert!(
-        output.contains("[output truncated]"),
-        "expected truncation marker"
+        !output.contains("[output truncated]"),
+        "output must not contain a synthetic truncation marker"
     );
-    // The rendered output is bounded near the limit, not the full oversized size.
-    assert!(
-        output.chars().count() <= MAX_TEXT_OUTPUT_CHARS + 200,
-        "output should be truncated near the limit, got {} chars",
-        output.chars().count()
-    );
+    assert_eq!(output.chars().count(), big.chars().count());
 }
 
 #[test]

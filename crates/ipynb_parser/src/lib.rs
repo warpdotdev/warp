@@ -20,10 +20,6 @@ use serde::Deserialize;
 /// The only nbformat major version this converter understands.
 const SUPPORTED_NBFORMAT: i64 = 4;
 
-/// Maximum number of characters rendered for a single text output before it is
-/// truncated. Prevents a single pathological output from bloating the buffer.
-const MAX_TEXT_OUTPUT_CHARS: usize = 100_000;
-
 /// Maximum length of a code-block language tag we will emit. Real language
 /// names are short; a longer value is treated as untrusted junk and dropped so
 /// it cannot bloat every code block.
@@ -190,24 +186,21 @@ fn output_lines(output: &Output) -> Vec<FormattedTextLine> {
     }
 }
 
-/// A text output as a plain (unhighlighted) code block, truncating oversized
-/// output. Empty output produces no lines.
-/// TODO: support UI to open the full text in another file, like VSCode
+/// A text output as a plain (unhighlighted) code block. Empty output produces
+/// no lines.
+///
+/// TODO: Bounding pathologically large outputs is left to
+/// a future change that models truncation without polluting buffer content
+/// (e.g. a "show more" affordance) rather than injecting placeholder text.
 fn text_output_lines(text: &str) -> Vec<FormattedTextLine> {
+    // TODO: Remove ANSI stripping once we support ANSI-color rendering (a color
+    // attribute on `FormattedTextStyles` + SGR parsing)
     let stripped = strip_ansi(text);
     let text = stripped.trim_end_matches('\n');
     if text.is_empty() {
         return Vec::new();
     }
-    if text.chars().count() > MAX_TEXT_OUTPUT_CHARS {
-        let truncated = format!(
-            "{}\n[output truncated]",
-            truncate_chars(text, MAX_TEXT_OUTPUT_CHARS)
-        );
-        code_block_lines("", &truncated)
-    } else {
-        code_block_lines("", text)
-    }
+    code_block_lines("", text)
 }
 
 /// An embedded image output as a base64 data-URI image. Empty payloads produce
@@ -228,14 +221,6 @@ fn image_lines(mime: &str, value: &serde_json::Value) -> Vec<FormattedTextLine> 
         }),
         FormattedTextLine::LineBreak,
     ]
-}
-
-/// Truncate a string to at most `max_chars` characters on a char boundary.
-fn truncate_chars(s: &str, max_chars: usize) -> &str {
-    match s.char_indices().nth(max_chars) {
-        Some((idx, _)) => &s[..idx],
-        None => s,
-    }
 }
 
 /// Strip ANSI escape sequences (CSI/SGR colors, OSC, and simple escapes) so
