@@ -8,13 +8,15 @@ use repo_metadata::RepositoryUpdate;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
 
 use super::util::{
-    for_each_dir_entry, has_name, is_config_file, parse_multi_launch_config_dir_entry,
-    parse_multi_workflow_dir_entry, parse_single_theme_dir_entry, parse_tab_config_dir_entry,
+    for_each_dir_entry, has_name, is_config_file, parse_model_config_dir_entry,
+    parse_multi_launch_config_dir_entry, parse_multi_workflow_dir_entry,
+    parse_single_theme_dir_entry, parse_tab_config_dir_entry,
 };
 use super::{
-    launch_configs_dir, tab_configs_dir, themes_dir, workflows_dir, WarpConfigUpdateEvent,
-    LAUNCH_CONFIG_COMMENT,
+    custom_model_routers_dir, launch_configs_dir, tab_configs_dir, themes_dir, workflows_dir,
+    WarpConfigUpdateEvent, LAUNCH_CONFIG_COMMENT,
 };
+use crate::ai::custom_model_routers::{CustomModelRouter, ModelConfigError};
 use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::tab_configs::{TabConfig, TabConfigError};
@@ -60,6 +62,19 @@ impl super::WarpConfig {
                 ctx.emit(WarpConfigUpdateEvent::LocalUserWorkflows);
             },
         );
+        if FeatureFlag::CustomModelRouters.is_enabled() {
+            let _ = ctx.spawn(
+                async move { load_model_configs(&custom_model_routers_dir()) },
+                |me, (models, errors), ctx| {
+                    me.custom_model_routers = models;
+                    me.custom_model_router_errors = errors;
+                    ctx.emit(WarpConfigUpdateEvent::ModelConfigs);
+                    // Don't emit ModelConfigErrors on startup — like tab configs,
+                    // the error toast should only appear when the user saves a
+                    // file, not on app restart.
+                },
+            );
+        }
         ctx.subscribe_to_model(
             &WarpManagedPathsWatcher::handle(ctx),
             Self::handle_warp_managed_paths_event,
@@ -127,6 +142,23 @@ impl super::WarpConfig {
             );
         }
 
+        if FeatureFlag::CustomModelRouters.is_enabled()
+            && update_touches_dir(update, &custom_model_routers_dir())
+        {
+            let dir_path = custom_model_routers_dir();
+            let _ = ctx.spawn(
+                async move { load_model_configs(&dir_path) },
+                |me, (models, errors), ctx| {
+                    me.custom_model_routers = models;
+                    me.custom_model_router_errors = errors.clone();
+                    ctx.emit(WarpConfigUpdateEvent::ModelConfigs);
+                    if !errors.is_empty() {
+                        ctx.emit(WarpConfigUpdateEvent::ModelConfigErrors(errors));
+                    }
+                },
+            );
+        }
+
         if FeatureFlag::SettingsFile.is_enabled()
             && update_touches_path(update, &crate::settings::user_preferences_toml_file_path())
         {
@@ -188,6 +220,30 @@ pub fn load_launch_configs(launch_config_path: &Path) -> Vec<LaunchConfig> {
         .into_iter()
         .flatten()
         .collect_vec()
+}
+
+/// Loads custom model routers from the config directory at `dir_path`
+/// (`~/.warp/custom_model_routers/`), where each file defines a single router.
+/// Returns the parsed routers (sorted by display name) and any per-file
+/// parse/validation errors. If the directory does not exist, returns empty vecs.
+pub fn load_model_configs(dir_path: &Path) -> (Vec<CustomModelRouter>, Vec<ModelConfigError>) {
+    let results = for_each_dir_entry(dir_path, parse_model_config_dir_entry);
+    let mut models = Vec::new();
+    let mut errors = Vec::new();
+    for result in results {
+        match result {
+            Ok(model) => models.push(model),
+            Err(error) => errors.push(error),
+        }
+    }
+    models.sort_by(|a, b| {
+        let a_name = a.info.display_name.to_lowercase();
+        let b_name = b.info.display_name.to_lowercase();
+        a_name
+            .cmp(&b_name)
+            .then_with(|| a.info.display_name.cmp(&b.info.display_name))
+    });
+    (models, errors)
 }
 
 /// Loads all tab configs from `tab_config_path`. Each tab config is an individual TOML file.
