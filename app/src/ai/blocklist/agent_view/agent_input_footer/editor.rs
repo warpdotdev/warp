@@ -181,14 +181,15 @@ impl AgentToolbarInlineEditor {
             }
         });
 
-        // Chip colors are derived from the theme, so refresh them when the theme
-        // changes to keep an open editor readable after a theme switch.
+        // Chip colors are derived from the theme, so rebuild the chips from
+        // settings when the theme changes to keep an open editor readable after a
+        // theme switch (this inline editor persists its arrangement on every
+        // edit, so reloading preserves the user's layout).
         ctx.subscribe_to_model(&Appearance::handle(ctx), |me, _, event, ctx| {
             if matches!(event, AppearanceEvent::ThemeChanged)
                 && me.chip_configurator.current_dragging_state.is_none()
             {
-                let appearance = Appearance::as_ref(ctx);
-                me.chip_configurator.refresh_appearance(appearance);
+                me.reset_from_settings(ctx);
                 ctx.notify();
             }
         });
@@ -308,16 +309,17 @@ fn save_toolbar_selection<V: View>(
 
 impl AgentToolbarEditorModal {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        // Chip colors are derived from the theme, so refresh them when the theme
-        // changes to keep an open editor readable after a theme switch. Preserves
-        // the current arrangement (including unsaved edits).
+        // Chip colors are derived from the theme, so rebuild the chips when the
+        // theme changes to keep an open editor readable after a theme switch.
+        // Only rebuild while the modal is actually open (has chips) and not
+        // mid-drag.
         ctx.subscribe_to_model(&Appearance::handle(ctx), |me, _, event, ctx| {
             if matches!(event, AppearanceEvent::ThemeChanged)
                 && me.chip_configurator.current_dragging_state.is_none()
                 && me.chip_configurator.has_items()
             {
-                let appearance = Appearance::as_ref(ctx);
-                me.chip_configurator.refresh_appearance(appearance);
+                let mode = me.mode;
+                open_toolbar_items_from_settings(&mut me.chip_configurator, mode, ctx);
                 ctx.notify();
             }
         });

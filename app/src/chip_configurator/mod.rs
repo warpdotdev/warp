@@ -429,34 +429,6 @@ impl ChipConfigurator {
             || !self.unused_chips.is_empty()
     }
 
-    /// Rebuild every chip against the current `appearance` so their theme-derived
-    /// colors update when the theme changes, while preserving the current
-    /// arrangement (including unsaved edits).
-    ///
-    /// Context-chip colors are derived from the theme when a chip is built, so
-    /// without this an open editor keeps the previous theme's colors after a
-    /// theme switch and can become unreadable. Only the `LeftRightZones` layout
-    /// (agent toolbelt) is rebuilt this way; `SingleZone` chips are built from
-    /// pre-made renderers and are refreshed by their owner.
-    pub fn refresh_appearance(&mut self, appearance: &Appearance) {
-        if self.layout != ChipConfiguratorLayout::LeftRightZones {
-            return;
-        }
-        fn rebuild_zone(
-            items: &[ConfigurableItem],
-            appearance: &Appearance,
-        ) -> Vec<ConfigurableItem> {
-            items
-                .iter()
-                .filter_map(|item| item.item_kind())
-                .filter_map(|kind| ConfigurableItem::from_toolbar_item(kind, appearance))
-                .collect()
-        }
-        self.left_chips = rebuild_zone(&self.left_chips, appearance);
-        self.right_chips = rebuild_zone(&self.right_chips, appearance);
-        self.unused_chips = rebuild_zone(&self.unused_chips, appearance);
-    }
-
     pub fn left_item_kinds(&self) -> Vec<AgentToolbarItemKind> {
         self.left_chips
             .iter()
