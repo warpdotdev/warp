@@ -461,6 +461,10 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
+# Headless terminal-UI front-end. Gates the `tui` module + `run_tui()` entry in
+# this crate; the `warp-tui` binary itself lives in the `warp_tui` crate. Empty
+# for now (step 1 is auth + stdout only; no warpui_core TUI backend yet).
+tui = []
 ai_resume_button = []
 autoupdate = []
 figma_detection = []

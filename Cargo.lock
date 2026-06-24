@@ -15347,6 +15347,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "warp_tui"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "warp",
+ "warp_core",
+]
+
+[[package]]
 name = "warp_util"
 version = "0.1.0"
 dependencies = [
