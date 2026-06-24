@@ -2792,6 +2792,16 @@ impl CodeReviewView {
                 ctx
             );
         }
+
+        // Return focus to the review pane after a comment is committed. The
+        // comment was just authored in a child editor (the inline line-comment
+        // editor or the pane-level composer), which leaves focus inside that
+        // editor. The "Send to Agent" shortcut only applies in the
+        // `CodeReviewView_NotEditing` context (i.e. when the pane, not a child
+        // editor, holds focus), so without this the user would have to click
+        // back into the pane before the shortcut would fire. Mirrors the
+        // focus_self() done after reverting a diff hunk.
+        ctx.focus_self();
     }
 
     /// Clears all review comments.
