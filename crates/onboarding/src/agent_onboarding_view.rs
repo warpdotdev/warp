@@ -20,7 +20,6 @@ use crate::slides::{
     ThemePickerSlide, ThemePickerSlideEvent, ThirdPartySlide,
 };
 use crate::telemetry::OnboardingEvent;
-use crate::AI_FEATURES;
 
 const APP_BECAME_ACTIVE_DEBOUNCE: Duration = Duration::from_secs(15);
 
@@ -447,9 +446,9 @@ impl AgentOnboardingView {
             appearance,
             FeatureOptOutDialog {
                 title: "Are you sure you don't want AI?",
-                body: "Warp is better with AI. By continuing, you won't have access to any of the \
-                       following features:",
-                features: AI_FEATURES,
+                body: "Warp is better with AI. By continuing without it, you'll miss out on the \
+                       best of what Warp has to offer.",
+                features: &[],
                 close_button,
                 cancel_button,
                 confirm_button,

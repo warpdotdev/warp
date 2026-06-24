@@ -95,16 +95,16 @@ fn confirm_no_ai_switches_to_terminal_path() {
 
         model.update(&mut app, |model, ctx| {
             model.next(ctx); // Intro → Intention
-            model.next(ctx); // Intention → AiSetup
-            model.request_no_ai_confirmation(NoAiConfirmationSource::AiSetup, ctx);
+            model.set_intention_terminal(ctx);
+            model.request_no_ai_confirmation(NoAiConfirmationSource::Intention, ctx);
         });
 
-        // The confirmation modal is shown without leaving the AI-setup slide yet.
-        assert_eq!(step(&app, &model), OnboardingStep::AiSetup);
+        // The confirmation modal is shown without leaving the intention slide yet.
+        assert_eq!(step(&app, &model), OnboardingStep::Intention);
         model.read(&app, |model, _| {
             assert_eq!(
                 model.no_ai_confirmation(),
-                Some(NoAiConfirmationSource::AiSetup)
+                Some(NoAiConfirmationSource::Intention)
             );
         });
 
@@ -173,31 +173,6 @@ fn cancel_no_ai_from_intention_routes_to_ai_setup() {
 }
 
 #[test]
-fn cancel_no_ai_from_ai_setup_stays_on_slide() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
-    App::test((), |mut app| async move {
-        let model = add_test_model(&mut app);
-
-        model.update(&mut app, |model, ctx| {
-            model.next(ctx); // Intro → Intention
-            model.next(ctx); // Intention → AiSetup
-            model.request_no_ai_confirmation(NoAiConfirmationSource::AiSetup, ctx);
-            model.cancel_no_ai(ctx);
-        });
-
-        // Already on the AI path, so cancelling just closes the modal in place.
-        assert_eq!(step(&app, &model), OnboardingStep::AiSetup);
-        model.read(&app, |model, _| {
-            assert_eq!(model.no_ai_confirmation(), None);
-            assert_eq!(
-                *model.intention(),
-                OnboardingIntention::AgentDrivenDevelopment
-            );
-        });
-    });
-}
-
-#[test]
 fn dismiss_no_ai_closes_without_changing_path() {
     let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
@@ -205,18 +180,15 @@ fn dismiss_no_ai_closes_without_changing_path() {
 
         model.update(&mut app, |model, ctx| {
             model.next(ctx); // Intro → Intention
-            model.next(ctx); // Intention → AiSetup
-            model.request_no_ai_confirmation(NoAiConfirmationSource::AiSetup, ctx);
+            model.set_intention_terminal(ctx);
+            model.request_no_ai_confirmation(NoAiConfirmationSource::Intention, ctx);
             model.dismiss_no_ai(ctx);
         });
 
-        assert_eq!(step(&app, &model), OnboardingStep::AiSetup);
+        assert_eq!(step(&app, &model), OnboardingStep::Intention);
         model.read(&app, |model, _| {
             assert_eq!(model.no_ai_confirmation(), None);
-            assert_eq!(
-                *model.intention(),
-                OnboardingIntention::AgentDrivenDevelopment
-            );
+            assert_eq!(*model.intention(), OnboardingIntention::Terminal);
         });
     });
 }

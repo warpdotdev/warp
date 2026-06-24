@@ -164,10 +164,6 @@ impl std::fmt::Display for AiAccessChoice {
 pub(crate) enum NoAiConfirmationSource {
     /// Triggered from the intention slide via "Just use the terminal" + Next.
     Intention,
-    /// Triggered from the AI-setup slide via "I don't want AI".
-    AiSetup,
-    /// Triggered from the "Customize your Warp Agent" slide via "I don't want AI".
-    Agent,
     /// Triggered from the "Choose how to access AI" slide via "I don't want AI".
     AiAccess,
 }
@@ -389,7 +385,7 @@ impl OnboardingStateModel {
     }
 
     /// "Give me AI features": abort the opt-out. From the intention slide this is
-    /// an explicit request for AI, so route onto the AI path; from the AI-setup
+    /// an explicit request for AI, so route onto the AI path; from the AI-access
     /// slide the user is already on the AI path, so just close the modal.
     pub(crate) fn cancel_no_ai(&mut self, ctx: &mut ModelContext<Self>) {
         send_telemetry_from_ctx!(OnboardingEvent::NoAiConfirmationCancelled, ctx);
@@ -398,10 +394,7 @@ impl OnboardingStateModel {
                 self.set_intention(OnboardingIntention::AgentDrivenDevelopment, ctx);
                 self.set_step(OnboardingStep::AiSetup, ctx);
             }
-            Some(NoAiConfirmationSource::AiSetup)
-            | Some(NoAiConfirmationSource::Agent)
-            | Some(NoAiConfirmationSource::AiAccess)
-            | None => {
+            Some(NoAiConfirmationSource::AiAccess) | None => {
                 ctx.emit(OnboardingStateEvent::NoAiConfirmationChanged);
                 ctx.notify();
             }
