@@ -88,23 +88,30 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("CodeReviewView_NotEditing"))
         .with_key_binding("f")
         .with_enabled(|| crate::features::FeatureFlag::GitOperationsInCodeReview.is_enabled()),
-        EditableBinding::new(
-            "code_review:submit_review_comments",
-            "Send code review comments to agent",
-            CodeReviewAction::SubmitReviewComments,
-        )
-        // Scoped to `_NotEditing` so it can't fire while a comment is being
-        // composed (the composer's own `cmdorctrl-enter` saves the comment).
-        .with_context_predicate(id!("CodeReviewView_NotEditing"))
-        .with_key_binding(CODE_REVIEW_SUBMIT_KEYSTROKE),
     ]);
 
-    app.register_fixed_bindings([FixedBinding::custom(
-        CustomAction::Undo,
-        CodeReviewAction::UndoRevert,
-        "Undo",
-        id!("CodeReviewView") & !id!("IMEOpen"),
-    )]);
+    app.register_fixed_bindings([
+        FixedBinding::custom(
+            CustomAction::Undo,
+            CodeReviewAction::UndoRevert,
+            "Undo",
+            id!("CodeReviewView") & !id!("IMEOpen"),
+        ),
+        // Registered as a *fixed* binding on purpose. The keystroke rendered on
+        // the "Send to Agent" button and on the comment composer's submit button
+        // both come from `CODE_REVIEW_SUBMIT_KEYSTROKE`, and comment submission
+        // itself is a fixed editor binding (`cmdorctrl-enter`). Keeping the
+        // trigger fixed (rather than editable) means the actual key, the two
+        // rendered chips, and the comment-submit binding all derive from the one
+        // constant and can never drift out of sync. Scoped to `_NotEditing` so
+        // it can't fire while a comment is being composed.
+        FixedBinding::new(
+            CODE_REVIEW_SUBMIT_KEYSTROKE,
+            CodeReviewAction::SubmitReviewComments,
+            id!("CodeReviewView_NotEditing"),
+        )
+        .with_command_description("Send code review comments to agent"),
+    ]);
 
     diff_menu::init(app);
     diff_selector::init(app);
