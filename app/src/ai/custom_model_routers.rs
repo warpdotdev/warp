@@ -263,6 +263,95 @@ pub fn is_local_custom_router_id(id: &str) -> bool {
     is_custom_router_id(id)
 }
 
+// ── Serialization back to YAML ───────────────────────────────────────────────
+
+/// A serialisable mirror of [`YamlCustomModelRouter`] used when writing a
+/// router back to disk via [`CustomModelRouter::to_yaml_string`].
+#[derive(Serialize)]
+struct YamlOutputRouter<'a> {
+    name: &'a str,
+    #[serde(rename = "type")]
+    model_type: &'static str,
+    default: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    routing: Option<serde_yaml::Value>,
+}
+
+/// A serialisable mirror of [`YamlComplexityRouting`] used by
+/// [`CustomModelRouter::to_yaml_string`].
+#[derive(Serialize)]
+struct YamlOutputComplexityRouting<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    easy: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    medium: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hard: Option<&'a str>,
+}
+
+/// A serialisable mirror of [`YamlPromptRule`] used by
+/// [`CustomModelRouter::to_yaml_string`].
+#[derive(Serialize)]
+struct YamlOutputPromptRule<'a> {
+    description: &'a str,
+    model: &'a str,
+}
+
+impl CustomModelRouter {
+    /// Serialises this router back to the YAML file format understood by
+    /// [`parse_model_config_yaml`]. The output is suitable for writing to a
+    /// `custom_model_routers/*.yaml` file.
+    pub fn to_yaml_string(&self) -> Result<String, serde_yaml::Error> {
+        let name = self.info.display_name.as_str();
+        match &self.routing {
+            CustomModelRouting::Complexity(c) => {
+                // Only emit a `routing:` block when at least one optional
+                // bucket is set; omit it entirely otherwise so the file stays
+                // as simple as possible.
+                let routing = if c.easy.is_some() || c.medium.is_some() || c.hard.is_some() {
+                    let complexity = YamlOutputComplexityRouting {
+                        easy: c.easy.as_deref(),
+                        medium: c.medium.as_deref(),
+                        hard: c.hard.as_deref(),
+                    };
+                    Some(serde_yaml::to_value(complexity)?)
+                } else {
+                    None
+                };
+                let out = YamlOutputRouter {
+                    name,
+                    model_type: "complexity",
+                    default: &c.default,
+                    routing,
+                };
+                serde_yaml::to_string(&out)
+            }
+            CustomModelRouting::Prompt(p) => {
+                let rules: Vec<YamlOutputPromptRule<'_>> = p
+                    .rules
+                    .iter()
+                    .map(|r| YamlOutputPromptRule {
+                        description: &r.description,
+                        model: &r.model,
+                    })
+                    .collect();
+                let routing = if rules.is_empty() {
+                    None
+                } else {
+                    Some(serde_yaml::to_value(&rules)?)
+                };
+                let out = YamlOutputRouter {
+                    name,
+                    model_type: "prompt",
+                    default: &p.default_model,
+                    routing,
+                };
+                serde_yaml::to_string(&out)
+            }
+        }
+    }
+}
+
 /// Describes a `custom_model_routers/` YAML file that failed to parse or validate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelConfigError {

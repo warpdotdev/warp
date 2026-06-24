@@ -289,7 +289,7 @@ use crate::pane_group::pane::ActionOrigin;
 use crate::pane_group::FilePane;
 use crate::pane_group::{
     self, AIFactPane, AnyPaneContent, ChildAgentOrigin, CodeDiffPane, CodePane, CodeReviewPanelArg,
-    Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
+    CustomRouterEditorPane, Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
     ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions, PaneGroup, PaneId, PanesLayout,
     TabBarHoverIndex, TerminalPaneId,
 };
@@ -8653,6 +8653,23 @@ impl Workspace {
         });
     }
 
+    /// Opens a custom model router editor pane in a right-split.
+    ///
+    /// Pass `existing = None` to create a new router or `existing = Some(router)` to edit one.
+    pub fn open_custom_router_editor_pane(
+        &mut self,
+        direction: Option<Direction>,
+        existing: Option<crate::ai::custom_model_routers::CustomModelRouter>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let pane = CustomRouterEditorPane::new(existing, ctx);
+        let direction = direction.unwrap_or(Direction::Right);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            pane_group
+                .add_pane_with_direction(direction, pane, true /* focus_new_pane */, ctx);
+        });
+    }
+
     /// Open the Environment Management pane in a split pane (default direction is right).
     pub fn open_environment_management_pane(
         &mut self,
@@ -14726,6 +14743,9 @@ impl Workspace {
                     },
                     ctx
                 );
+            }
+            SettingsViewEvent::OpenCustomRouterEditor(router) => {
+                self.open_custom_router_editor_pane(None, router.clone(), ctx);
             }
             SettingsViewEvent::OpenExecutionProfileEditor(profile_id) => {
                 self.open_execution_profile_editor_pane(None, *profile_id, ctx);

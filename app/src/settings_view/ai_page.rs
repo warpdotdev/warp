@@ -712,6 +712,12 @@ pub struct AISettingsPageView {
     profile_views: Vec<ViewHandle<ExecutionProfileView>>,
     add_profile_button: ViewHandle<ActionButton>,
 
+    // Custom model router views (gated on FeatureFlag::CustomModelRouters)
+    #[cfg(feature = "local_fs")]
+    router_views: Vec<ViewHandle<super::custom_router_view::CustomRouterView>>,
+    #[cfg(feature = "local_fs")]
+    add_router_button: ViewHandle<ActionButton>,
+
     // Custom inference (custom endpoints)
     custom_endpoint_modal_state: CustomEndpointModalViewState,
     remove_custom_endpoint_confirmation_dialog: ViewHandle<RemoveCustomEndpointConfirmationDialog>,
@@ -1679,6 +1685,26 @@ impl AISettingsPageView {
 
         let profile_views = Self::create_profile_views(ctx);
 
+        // Custom model router views
+        #[cfg(feature = "local_fs")]
+        let router_views = Self::create_router_views(ctx);
+        #[cfg(feature = "local_fs")]
+        let add_router_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("+ Add router", SecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::OpenAddCustomRouter);
+                })
+        });
+        #[cfg(feature = "local_fs")]
+        {
+            let is_enabled = warp_core::features::FeatureFlag::CustomModelRouters.is_enabled()
+                && is_any_ai_enabled;
+            add_router_button.update(ctx, |button, ctx| {
+                button.set_disabled(!is_enabled, ctx);
+            });
+        }
+
         let add_profile_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Add Profile", SecondaryTheme)
                 .with_icon(Icon::Plus)
@@ -1832,6 +1858,19 @@ impl AISettingsPageView {
                 }
             });
         }
+        // Subscribe to WarpConfig to refresh router views when files change.
+        #[cfg(feature = "local_fs")]
+        ctx.subscribe_to_model(
+            &crate::user_config::WarpConfig::handle(ctx),
+            |me, _, event, ctx| {
+                use crate::user_config::WarpConfigUpdateEvent;
+                if matches!(event, WarpConfigUpdateEvent::ModelConfigs) {
+                    me.router_views = Self::create_router_views(ctx);
+                    ctx.notify();
+                }
+            },
+        );
+
         Self {
             page: Self::build_page(None, ctx),
             active_subpage: None,
@@ -1881,6 +1920,10 @@ impl AISettingsPageView {
             conversation_layout_dropdown,
             profile_views,
             add_profile_button,
+            #[cfg(feature = "local_fs")]
+            router_views,
+            #[cfg(feature = "local_fs")]
+            add_router_button,
             custom_endpoint_modal_state,
             remove_custom_endpoint_confirmation_dialog,
             pending_remove_custom_endpoint_index: None,
@@ -2519,6 +2562,9 @@ impl AISettingsPageView {
                 widgets.push(Box::new(CloudHandoffWidget::default()));
                 widgets.push(Box::new(ApiKeysWidget::new(ctx)));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
+                if FeatureFlag::CustomModelRouters.is_enabled() {
+                    widgets.push(Box::new(CustomModelRoutersWidget));
+                }
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
                 if FeatureFlag::AgentModeComputerUse.is_enabled() {
@@ -3046,6 +3092,47 @@ impl AISettingsPageView {
         Self::refresh_menu_dropdown(menu, AISettingsPageAction::AddToMCPAllowlist, ctx);
     }
 
+    #[cfg(feature = "local_fs")]
+    fn create_router_views(
+        ctx: &mut ViewContext<Self>,
+    ) -> Vec<ViewHandle<super::custom_router_view::CustomRouterView>> {
+        use super::custom_router_view::{CustomRouterView, CustomRouterViewEvent};
+        use crate::user_config::WarpConfig;
+        if !warp_core::features::FeatureFlag::CustomModelRouters.is_enabled() {
+            return Vec::new();
+        }
+        let routers: Vec<crate::ai::custom_model_routers::CustomModelRouter> =
+            WarpConfig::as_ref(ctx).custom_model_routers().clone();
+        routers
+            .into_iter()
+            .map(|router| {
+                let router_clone = router.clone();
+                let view = ctx.add_typed_action_view(|ctx| CustomRouterView::new(router, ctx));
+                ctx.subscribe_to_view(&view, move |me, _, event, ctx| match event {
+                    CustomRouterViewEvent::Edit => {
+                        let r = router_clone.clone();
+                        ctx.emit(AISettingsPageEvent::OpenCustomRouterEditor(Some(r)));
+                    }
+                    CustomRouterViewEvent::Delete => {
+                        if let Some(path) = &router_clone.source_path {
+                            #[cfg(feature = "local_fs")]
+                            {
+                                if let Err(e) =
+                                    crate::user_config::WarpConfig::delete_custom_model_router(path)
+                                {
+                                    log::warn!("Failed to delete custom router: {e:?}");
+                                }
+                            }
+                            me.router_views = Self::create_router_views(ctx);
+                            ctx.notify();
+                        }
+                    }
+                });
+                view
+            })
+            .collect()
+    }
+
     fn create_profile_views(ctx: &mut ViewContext<Self>) -> Vec<ViewHandle<ExecutionProfileView>> {
         let profiles_model = AIExecutionProfilesModel::as_ref(ctx);
         let profile_ids = profiles_model.get_all_profile_ids();
@@ -3165,10 +3252,12 @@ impl View for AISettingsPageView {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum AISettingsPageEvent {
     FocusModal,
     OpenAIFactCollection,
     OpenMCPServerCollection,
+    OpenCustomRouterEditor(Option<crate::ai::custom_model_routers::CustomModelRouter>),
     OpenExecutionProfileEditor(ClientProfileId),
     SignupAnonymousUser,
     ShowModal,
@@ -3249,6 +3338,10 @@ pub enum AISettingsPageAction {
     ToggleFileBasedMcp,
     ToggleIncludeAgentCommandsInHistory,
     ToggleAgentAttribution,
+
+    // Custom model routers
+    #[cfg(feature = "local_fs")]
+    OpenAddCustomRouter,
 
     // Custom inference
     OpenAddCustomEndpointModal,
@@ -4033,6 +4126,10 @@ impl TypedActionView for AISettingsPageView {
                         .toggle_and_save_value(ctx));
                 });
                 ctx.notify();
+            }
+            #[cfg(feature = "local_fs")]
+            AISettingsPageAction::OpenAddCustomRouter => {
+                ctx.emit(AISettingsPageEvent::OpenCustomRouterEditor(None));
             }
             AISettingsPageAction::OpenAddCustomEndpointModal => {
                 self.show_add_custom_endpoint_modal(ctx);
@@ -8965,6 +9062,103 @@ impl SettingsWidget for AwsBedrockWidget {
         Container::new(column.finish())
             .with_margin_bottom(HEADER_PADDING)
             .finish()
+    }
+}
+
+#[derive(Default)]
+struct CustomModelRoutersWidget;
+
+impl SettingsWidget for CustomModelRoutersWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "custom model router complexity prompt auto model routing"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::CustomModelRouters.is_enabled()
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use super::custom_router_view::render_router_error_card;
+        use crate::user_config::WarpConfig;
+
+        let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
+        let header_color = styles::header_font_color(is_any_ai_enabled, app);
+
+        // Header row: "Custom Model Routers" + add button
+        let header_row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                warpui::elements::Shrinkable::new(
+                    1.,
+                    build_sub_header(appearance, "Custom Model Routers", Some(header_color))
+                        .finish(),
+                )
+                .finish(),
+            )
+            .with_child({
+                #[cfg(feature = "local_fs")]
+                {
+                    warpui::elements::Container::new(view.add_router_button.as_ref(app).render(app))
+                        .with_margin_left(16.)
+                        .finish()
+                }
+                #[cfg(not(feature = "local_fs"))]
+                {
+                    warpui::elements::Empty.finish()
+                }
+            })
+            .finish();
+
+        let mut column = Flex::column()
+            .with_child(render_separator(appearance))
+            .with_child(
+                Container::new(header_row)
+                    .with_padding_bottom(HEADER_PADDING)
+                    .finish(),
+            )
+            .with_child(render_ai_setting_description(
+                "Create named model routers that automatically pick the right model based on task complexity or prompt content.",
+                is_any_ai_enabled,
+                app,
+            ));
+
+        // Error cards (files that failed to parse) — shown first
+        #[cfg(feature = "local_fs")]
+        {
+            let errors = WarpConfig::as_ref(app).custom_model_router_errors();
+            for error in errors.iter() {
+                column.add_child(
+                    Container::new(render_router_error_card(
+                        &error.file_name,
+                        &error.error_message,
+                        appearance,
+                    ))
+                    .with_margin_top(8.)
+                    .finish(),
+                );
+            }
+        }
+
+        // Router summary cards
+        #[cfg(feature = "local_fs")]
+        for view_handle in &view.router_views {
+            column.add_child(
+                Container::new(warpui::elements::ChildView::new(view_handle).finish())
+                    .with_margin_top(8.)
+                    .finish(),
+            );
+        }
+
+        column.finish()
     }
 }
 

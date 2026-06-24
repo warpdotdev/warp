@@ -285,6 +285,8 @@ impl ModelSearchItem {
             is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app);
         let leading_icon = if is_using_bedrock {
             Icon::Aws
+        } else if is_custom_router {
+            Icon::Dataflow
         } else {
             llm.provider.icon().unwrap_or(Icon::Oz)
         };

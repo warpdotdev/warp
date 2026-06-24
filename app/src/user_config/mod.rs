@@ -137,6 +137,12 @@ impl WarpConfig {
         &self.custom_model_routers
     }
 
+    /// Parse errors for `custom_model_routers/` files that failed to load.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn custom_model_router_errors(&self) -> &Vec<ModelConfigError> {
+        &self.custom_model_router_errors
+    }
+
     /// Saving the newly created launch configuration to the WarpConfig that we currently
     /// have.
     pub fn append_launch_config(
