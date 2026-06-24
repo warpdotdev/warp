@@ -1,4 +1,4 @@
-use ui_components::{button, tooltip, Component as _, Options as _};
+use ui_components::{button, Component as _, Options as _};
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
@@ -27,7 +27,6 @@ use crate::slides::{bottom_nav, layout, slide_content};
 pub enum AiAccessSlideAction {
     SelectSubscription,
     SelectSetUpLater,
-    ChoosePlanClicked,
     CopyUpgradeUrlClicked,
     PasteAuthTokenFromClipboardClicked,
     BackClicked,
@@ -50,7 +49,6 @@ pub struct AiAccessSlide {
     onboarding_state: ModelHandle<OnboardingStateModel>,
     subscription_mouse_state: MouseStateHandle,
     set_up_later_mouse_state: MouseStateHandle,
-    choose_plan_button: button::Button,
     back_button: button::Button,
     next_button: button::Button,
     scroll_state: ClippedScrollStateHandle,
@@ -65,7 +63,6 @@ impl AiAccessSlide {
             onboarding_state,
             subscription_mouse_state: MouseStateHandle::default(),
             set_up_later_mouse_state: MouseStateHandle::default(),
-            choose_plan_button: button::Button::default(),
             back_button: button::Button::default(),
             next_button: button::Button::default(),
             scroll_state: ClippedScrollStateHandle::new(),
@@ -82,20 +79,6 @@ impl AiAccessSlide {
 
     fn choice(&self, app: &AppContext) -> AiAccessChoice {
         self.onboarding_state.as_ref(app).ai_access_choice()
-    }
-
-    /// Whether "Next" should be enabled. The subscription path advances via the
-    /// checkout return (auto-advance once billing flips to `PayingUser`), so
-    /// "Next" is only live there if the user is already paying. The "Set up
-    /// later" path is always skippable.
-    fn can_advance(&self, app: &AppContext) -> bool {
-        match self.choice(app) {
-            AiAccessChoice::Subscription => matches!(
-                self.onboarding_state.as_ref(app).auth_state(),
-                OnboardingAuthState::PayingUser
-            ),
-            AiAccessChoice::SetUpLater => true,
-        }
     }
 
     fn render_content(
@@ -283,30 +266,11 @@ impl AiAccessSlide {
         .with_line_height_ratio(1.2)
         .finish();
 
-        let choose_plan_button = self.choose_plan_button.render(
-            appearance,
-            button::Params {
-                content: button::Content::Label("Choose plan".into()),
-                theme: &button::themes::Secondary,
-                options: button::Options {
-                    on_click: Some(Box::new(|ctx, _app, _pos| {
-                        ctx.dispatch_typed_action(AiAccessSlideAction::ChoosePlanClicked);
-                    })),
-                    ..button::Options::default(appearance)
-                },
-            },
-        );
-
         let content = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(header_row)
             .with_child(Container::new(description).with_margin_top(12.).finish())
-            .with_child(
-                Container::new(choose_plan_button)
-                    .with_margin_top(16.)
-                    .finish(),
-            )
             .finish();
 
         Self::render_card_chrome(
@@ -387,7 +351,6 @@ impl AiAccessSlide {
             },
         );
 
-        let can_advance = self.can_advance(app);
         let enter = Keystroke::parse("enter").unwrap_or_default();
         let next_button = self.next_button.render(
             appearance,
@@ -395,20 +358,7 @@ impl AiAccessSlide {
                 content: button::Content::Label("Next".into()),
                 theme: &button::themes::Primary,
                 options: button::Options {
-                    disabled: !can_advance,
-                    // The user can only be blocked here if they picked a
-                    // subscription but haven't finished checkout yet.
-                    tooltip: (!can_advance).then(|| button::Tooltip {
-                        params: tooltip::Params {
-                            label: "Choose a plan to continue, or select \"Set up later\" to skip"
-                                .into(),
-                            options: tooltip::Options {
-                                keyboard_shortcut: None,
-                            },
-                        },
-                        alignment: button::TooltipAlignment::Right,
-                    }),
-                    keystroke: can_advance.then_some(enter),
+                    keystroke: Some(enter),
                     on_click: Some(Box::new(|ctx, _app, _pos| {
                         ctx.dispatch_typed_action(AiAccessSlideAction::NextClicked);
                     })),
@@ -435,9 +385,9 @@ impl AiAccessSlide {
     }
 
     /// Full-width bar pinned below the slide's two-column layout. Shown after
-    /// the user clicks "Choose plan", so they can fall back to copying the
-    /// upgrade URL (or pasting the returned auth token) if the browser didn't
-    /// launch automatically.
+    /// the user picks Subscription and clicks "Next", so they can fall back to
+    /// copying the upgrade URL (or pasting the returned auth token) if the
+    /// browser didn't launch automatically.
     fn render_auth_prompt_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
         const BAR_HEIGHT: f32 = 40.;
         const ICON_SIZE: f32 = 14.;
@@ -599,6 +549,33 @@ impl AiAccessSlide {
             model.next(ctx);
         });
     }
+
+    /// Primary "Next" action. On the subscription path this advances when the
+    /// user already has a plan, otherwise it launches checkout in the browser
+    /// (the slide auto-advances once billing flips to a paying plan). The "Set
+    /// up later" path always advances.
+    fn advance_or_upgrade(&mut self, ctx: &mut ViewContext<Self>) {
+        match self.choice(ctx) {
+            AiAccessChoice::Subscription => {
+                if matches!(
+                    self.onboarding_state.as_ref(ctx).auth_state(),
+                    OnboardingAuthState::PayingUser
+                ) {
+                    self.next(ctx);
+                } else {
+                    // Surface the manual-fallback bar in case the browser
+                    // doesn't launch; it's hidden again once billing flips to
+                    // PayingUser.
+                    self.show_auth_prompt_bar = true;
+                    self.onboarding_state.update(ctx, |model, ctx| {
+                        model.request_upgrade(ctx);
+                    });
+                    ctx.notify();
+                }
+            }
+            AiAccessChoice::SetUpLater => self.next(ctx),
+        }
+    }
 }
 
 impl OnboardingSlide for AiAccessSlide {
@@ -611,9 +588,7 @@ impl OnboardingSlide for AiAccessSlide {
     }
 
     fn on_enter(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.can_advance(ctx) {
-            self.next(ctx);
-        }
+        self.advance_or_upgrade(ctx);
     }
 }
 
@@ -628,21 +603,6 @@ impl TypedActionView for AiAccessSlide {
             AiAccessSlideAction::SelectSetUpLater => {
                 self.select_choice(AiAccessChoice::SetUpLater, ctx);
             }
-            AiAccessSlideAction::ChoosePlanClicked => {
-                self.select_choice(AiAccessChoice::Subscription, ctx);
-                // Surface the manual-fallback bar in case the browser doesn't
-                // launch; it's hidden again once billing flips to PayingUser.
-                if !matches!(
-                    self.onboarding_state.as_ref(ctx).auth_state(),
-                    OnboardingAuthState::PayingUser,
-                ) {
-                    self.show_auth_prompt_bar = true;
-                }
-                self.onboarding_state.update(ctx, |model, ctx| {
-                    model.request_upgrade(ctx);
-                });
-                ctx.notify();
-            }
             AiAccessSlideAction::CopyUpgradeUrlClicked => {
                 ctx.emit(AiAccessSlideEvent::CopyUpgradeUrlRequested);
             }
@@ -655,9 +615,7 @@ impl TypedActionView for AiAccessSlide {
                 });
             }
             AiAccessSlideAction::NextClicked => {
-                if self.can_advance(ctx) {
-                    self.next(ctx);
-                }
+                self.advance_or_upgrade(ctx);
             }
         }
     }
