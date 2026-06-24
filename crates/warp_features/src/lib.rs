@@ -892,10 +892,6 @@ pub enum FeatureFlag {
     /// Shows a warning in the agent view when the active conversation's
     /// provider-side prompt cache has expired.
     PromptCacheExpiryWarning,
-
-    /// Shows a chip in the agent input footer listing memories the server
-    /// fetched for the active conversation.
-    FetchedMemoriesChip,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -965,7 +961,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::PinnedTabs,
     FeatureFlag::ContextWindowUsageBreakdown,
-    FeatureFlag::FetchedMemoriesChip,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

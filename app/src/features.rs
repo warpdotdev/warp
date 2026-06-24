@@ -503,8 +503,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::GeminiEnterprise,
         #[cfg(feature = "prompt_cache_expiry_warning")]
         FeatureFlag::PromptCacheExpiryWarning,
-        #[cfg(feature = "fetched_memories_chip")]
-        FeatureFlag::FetchedMemoriesChip,
     ]);
 
     flags
