@@ -29,8 +29,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext, TuiPresentationContext,
-    TuiRect, TuiSize,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
+    TuiPresentationContext, TuiRect, TuiSize,
 };
 use crate::geometry::vector::Vector2F;
 use crate::{AppContext, Event};

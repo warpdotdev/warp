@@ -20,10 +20,16 @@ fn digits() -> TuiText {
 /// the rendered rows.
 fn lines(element: &mut dyn TuiElement, size: TuiSize) -> Vec<String> {
     let mut rendered_views = HashMap::new();
-    let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
     element.layout(TuiConstraint::tight(size), &mut ctx);
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
-    element.render(TuiRect::new(0, 0, size.width, size.height), &mut buffer, &mut ctx);
+    element.render(
+        TuiRect::new(0, 0, size.width, size.height),
+        &mut buffer,
+        &mut ctx,
+    );
     buffer.to_lines()
 }
 
@@ -105,13 +111,17 @@ fn mouse_wheel_inside_the_viewport_scrolls() {
             let handle = TuiScrollHandle::new();
             let mut scrollable = TuiScrollable::new(handle.clone(), digits());
             let area = TuiRect::new(0, 0, 1, 3);
-    let mut rendered_views_for_setup = HashMap::new();
-    let mut setup_ctx = TuiLayoutContext { rendered_views: &mut rendered_views_for_setup };
-    scrollable.layout(TuiConstraint::tight(area.as_size()), &mut setup_ctx);
+            let mut rendered_views_for_setup = HashMap::new();
+            let mut setup_ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views_for_setup,
+            };
+            scrollable.layout(TuiConstraint::tight(area.as_size()), &mut setup_ctx);
 
             let mut event_ctx = TuiEventContext::default();
             let mut rendered_views = HashMap::new();
-            let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
             // Wheel down (delta.y = -1) scrolls toward the bottom by WHEEL_STEP.
             let handled = scrollable.dispatch_event(
                 &scroll_wheel(vec2f(0.0, 0.0), -1.0),
@@ -135,12 +145,16 @@ fn mouse_wheel_outside_the_viewport_is_ignored() {
             let mut scrollable = TuiScrollable::new(handle.clone(), digits());
             let area = TuiRect::new(0, 0, 1, 3);
             let mut rendered_views_setup = HashMap::new();
-            let mut ctx_setup = TuiLayoutContext { rendered_views: &mut rendered_views_setup };
+            let mut ctx_setup = TuiLayoutContext {
+                rendered_views: &mut rendered_views_setup,
+            };
             scrollable.layout(TuiConstraint::tight(area.as_size()), &mut ctx_setup);
 
             let mut event_ctx = TuiEventContext::default();
             let mut rendered_views = HashMap::new();
-            let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
             // Row 5 lies below the three-row viewport.
             let handled = scrollable.dispatch_event(
                 &scroll_wheel(vec2f(0.0, 5.0), -1.0),
@@ -166,7 +180,9 @@ fn keyboard_scrolling_moves_by_line_page_and_to_the_ends() {
             let area = TuiRect::new(0, 0, 1, 3);
             let mut dispatch = |name: &str| {
                 let mut rendered_views = HashMap::new();
-                let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+                let mut ctx = TuiLayoutContext {
+                    rendered_views: &mut rendered_views,
+                };
                 scrollable.layout(TuiConstraint::tight(area.as_size()), &mut ctx);
                 let mut event_ctx = TuiEventContext::default();
                 scrollable.dispatch_event(&key(name), area, &mut event_ctx, &mut ctx, app_ctx)
@@ -196,9 +212,11 @@ fn offset_persists_in_the_handle_across_rebuilt_elements() {
     let handle = TuiScrollHandle::new();
     {
         let mut first = TuiScrollable::new(handle.clone(), digits());
-    let mut rendered_views = HashMap::new();
-    let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
-    first.layout(TuiConstraint::tight(TuiSize::new(1, 3)), &mut ctx);
+        let mut rendered_views = HashMap::new();
+        let mut ctx = TuiLayoutContext {
+            rendered_views: &mut rendered_views,
+        };
+        first.layout(TuiConstraint::tight(TuiSize::new(1, 3)), &mut ctx);
         handle.set_offset(5);
     }
     // A freshly built element (as a re-render produces) sees the same offset.

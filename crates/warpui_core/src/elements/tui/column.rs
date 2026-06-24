@@ -149,7 +149,9 @@ impl TuiElement for TuiColumn {
                     let slot = base + if flex_rank < remainder { 1 } else { 0 };
                     flex_rank += 1;
                     // Lay out with a tight height so the child fills its slot.
-                    child.element.layout(TuiConstraint::tight(TuiSize::new(width, slot)), ctx);
+                    child
+                        .element
+                        .layout(TuiConstraint::tight(TuiSize::new(width, slot)), ctx);
                     TuiSize::new(width, slot)
                 } else {
                     maybe_size.unwrap()
@@ -159,7 +161,6 @@ impl TuiElement for TuiColumn {
             TuiSize::new(width, constraint.max.height)
         }
     }
-
 
     fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
         let mut remaining = area;
@@ -199,7 +200,10 @@ impl TuiElement for TuiColumn {
                 break;
             }
             let (slot, rest) = remaining.split_top(size.height);
-            if child.element.dispatch_event(event, slot, event_ctx, ctx, app) {
+            if child
+                .element
+                .dispatch_event(event, slot, event_ctx, ctx, app)
+            {
                 return true;
             }
             remaining = rest;

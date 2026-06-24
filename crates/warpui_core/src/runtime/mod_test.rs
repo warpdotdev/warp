@@ -128,6 +128,28 @@ fn run_until_draws_view_text_and_exits_on_quit() {
     });
 }
 
+#[test]
+fn typed_action_from_embedded_child_reaches_parent_through_spawned_dispatch() {
+    App::test((), |mut app| async move {
+        let (window_id, root) = app.update(|ctx| {
+            ctx.add_tui_window(window_options(), |view_ctx| {
+                let child = view_ctx.add_tui_view(|_| BumpChildView);
+                BumpParentView { child, bumps: 0 }
+            })
+        });
+
+        let mut screen = TuiScreen::new(
+            window_id,
+            root.clone(),
+            TestTerminal::new(TuiSize::new(20, 3)),
+        );
+        app.update(|ctx| screen.draw(ctx).expect("initial draw"));
+        app.update(|ctx| handle_input_event(ctx, &mut screen, char_key('b')));
+
+        assert_eq!(root.read(&app, |view, _| view.bumps), 1);
+    });
+}
+
 /// The typed action only the parent view handles in the embedded-child test.
 #[derive(Debug)]
 struct Bump;
@@ -322,18 +344,23 @@ fn handled_input_invalidates_window_for_repaint() {
     App::test((), |mut app| async move {
         let (window_id, root) =
             app.update(|ctx| ctx.add_tui_window(window_options(), |_| KeyConsumingView));
-        let root_view_id = root.id();
 
         // Clear the window's creation invalidation so we observe only what input
         // dispatch produces.
         app.update(|ctx| {
             let _ = ctx.take_all_invalidations_for_window(window_id);
         });
+        let mut screen = TuiScreen::new(
+            window_id,
+            root.clone(),
+            TestTerminal::new(TuiSize::new(20, 3)),
+        );
+        app.update(|ctx| screen.draw(ctx).expect("initial draw"));
 
         // A handled key invalidates the window (mirrors `run_until`'s
         // "handled => redraw") even though the handler never calls `notify` — the
         // path a scrollable relies on to repaint after changing its offset.
-        app.update(|ctx| handle_input_event(ctx, window_id, root_view_id, char_key('x')));
+        app.update(|ctx| handle_input_event(ctx, &mut screen, char_key('x')));
         assert!(
             app.read(|ctx| ctx.has_window_invalidations(window_id)),
             "a handled input event should invalidate the window so the driver repaints"
@@ -343,7 +370,8 @@ fn handled_input_invalidates_window_for_repaint() {
         app.update(|ctx| {
             let _ = ctx.take_all_invalidations_for_window(window_id);
         });
-        app.update(|ctx| handle_input_event(ctx, window_id, root_view_id, char_key('z')));
+
+        app.update(|ctx| handle_input_event(ctx, &mut screen, char_key('z')));
         assert!(
             !app.read(|ctx| ctx.has_window_invalidations(window_id)),
             "an unhandled input event should not invalidate the window"

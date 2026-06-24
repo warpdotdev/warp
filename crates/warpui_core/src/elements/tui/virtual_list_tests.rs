@@ -1,9 +1,11 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::{TuiVirtualList, TuiVirtualListHandle, TuiVirtualListSource};
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEventContext, TuiRect, TuiSize, TuiStyle,
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext, TuiRect,
+    TuiSize, TuiStyle,
 };
 use crate::event::{KeyEventDetails, ModifiersState};
 use crate::geometry::vector::{vec2f, Vector2F};
@@ -82,10 +84,42 @@ impl TuiVirtualListSource for FakeSource {
 }
 
 fn lines(element: &mut dyn TuiElement, size: TuiSize) -> Vec<String> {
-    element.layout(TuiConstraint::tight(size));
+    let mut rendered_views = HashMap::new();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    element.layout(TuiConstraint::tight(size), &mut ctx);
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
-    element.render(TuiRect::new(0, 0, size.width, size.height), &mut buffer);
+    element.render(
+        TuiRect::new(0, 0, size.width, size.height),
+        &mut buffer,
+        &mut ctx,
+    );
     buffer.to_lines()
+}
+
+/// Lays out a leaf TUI element with no embedded child views.
+fn layout_element(element: &mut dyn TuiElement, size: TuiSize) {
+    let mut rendered_views = HashMap::new();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    element.layout(TuiConstraint::tight(size), &mut ctx);
+}
+
+/// Dispatches to a leaf TUI element with no embedded child views.
+fn dispatch_event(
+    element: &mut dyn TuiElement,
+    event: &Event,
+    area: TuiRect,
+    event_ctx: &mut TuiEventContext,
+    app_ctx: &crate::AppContext,
+) -> bool {
+    let mut rendered_views = HashMap::new();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    element.dispatch_event(event, area, event_ctx, &mut ctx, app_ctx)
 }
 
 fn source() -> FakeSource {
@@ -157,10 +191,10 @@ fn scrolling_up_from_bottom_disables_follow_bottom() {
             let handle = TuiVirtualListHandle::new();
             let mut list = TuiVirtualList::new(handle.clone(), source());
             let area = TuiRect::new(0, 0, 2, 4);
-            list.layout(TuiConstraint::tight(area.as_size()));
+            layout_element(&mut list, area.as_size());
 
             let mut event_ctx = TuiEventContext::default();
-            let handled = list.dispatch_event(&key("up"), area, &mut event_ctx, app_ctx);
+            let handled = dispatch_event(&mut list, &key("up"), area, &mut event_ctx, app_ctx);
 
             assert!(handled);
             assert!(!handle.is_following_bottom());
@@ -180,10 +214,10 @@ fn scrolling_down_to_tail_restores_follow_bottom() {
             handle.scroll_to_item(1, 1);
             let mut list = TuiVirtualList::new(handle.clone(), source());
             let area = TuiRect::new(0, 0, 2, 4);
-            list.layout(TuiConstraint::tight(area.as_size()));
+            layout_element(&mut list, area.as_size());
 
             let mut event_ctx = TuiEventContext::default();
-            let handled = list.dispatch_event(&key("down"), area, &mut event_ctx, app_ctx);
+            let handled = dispatch_event(&mut list, &key("down"), area, &mut event_ctx, app_ctx);
 
             assert!(handled);
             assert!(handle.is_following_bottom());
@@ -202,10 +236,11 @@ fn mouse_wheel_outside_viewport_is_ignored() {
             let handle = TuiVirtualListHandle::new();
             let mut list = TuiVirtualList::new(handle.clone(), source());
             let area = TuiRect::new(0, 0, 2, 4);
-            list.layout(TuiConstraint::tight(area.as_size()));
+            layout_element(&mut list, area.as_size());
 
             let mut event_ctx = TuiEventContext::default();
-            let handled = list.dispatch_event(
+            let handled = dispatch_event(
+                &mut list,
                 &scroll_wheel(vec2f(0.0, 10.0), -1.0),
                 area,
                 &mut event_ctx,

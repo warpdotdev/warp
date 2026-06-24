@@ -15,8 +15,14 @@ use crate::{App, Event};
 fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
     let mut rendered_views = HashMap::new();
-    let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
-    element.render(TuiRect::new(0, 0, size.width, size.height), &mut buffer, &mut ctx);
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    element.render(
+        TuiRect::new(0, 0, size.width, size.height),
+        &mut buffer,
+        &mut ctx,
+    );
     buffer.to_lines()
 }
 
@@ -37,7 +43,9 @@ fn centers_child_within_a_larger_area() {
     let mut center = TuiCenter::new(TuiText::new("hi"));
     let size = TuiSize::new(6, 3);
     let mut rendered_views = HashMap::new();
-    let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
     center.layout(TuiConstraint::tight(size), &mut ctx);
     // "hi" measures 2x1, so it lands at column 2, row 1 of the 6x3 area.
     assert_eq!(
@@ -50,7 +58,9 @@ fn centers_child_within_a_larger_area() {
 fn claims_the_whole_area() {
     let mut center = TuiCenter::new(TuiText::new("x"));
     let mut rendered_views = HashMap::new();
-    let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
     assert_eq!(
         center.layout(TuiConstraint::loose(TuiSize::new(8, 4)), &mut ctx),
         TuiSize::new(8, 4),
@@ -62,7 +72,9 @@ fn clamps_a_child_larger_than_the_area() {
     let mut center = TuiCenter::new(TuiText::new("hello").truncate());
     let size = TuiSize::new(3, 1);
     let mut rendered_views = HashMap::new();
-    let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
     center.layout(TuiConstraint::tight(size), &mut ctx);
     // The child's natural width (5) is clamped to the area width (3) with a zero
     // offset, and the row is truncated to fit.
@@ -80,7 +92,9 @@ fn dispatch_event_reaches_the_centered_child() {
                     .on_key("x", move |_, _, _| counter.set(counter.get() + 1)),
             );
             let mut rendered_views = HashMap::new();
-            let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
             center.layout(TuiConstraint::tight(TuiSize::new(10, 5)), &mut ctx);
 
             let mut event_ctx = TuiEventContext::default();

@@ -112,15 +112,23 @@ fn fallback_consumes_keys_that_match_no_binding() {
             let mut event_ctx = TuiEventContext::default();
 
             let mut rendered_views = HashMap::new();
-            let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
             // A key with no exact binding falls through to the fallback.
-            let handled = handler.dispatch_event(&key_event("a"), area, &mut event_ctx, &mut ctx, app_ctx);
+            let handled =
+                handler.dispatch_event(&key_event("a"), area, &mut event_ctx, &mut ctx, app_ctx);
             assert!(handled);
             assert_eq!(hits.get(), 1);
 
             // An exact binding still takes precedence over the fallback.
-            let handled =
-                handler.dispatch_event(&key_event("enter"), area, &mut event_ctx, &mut ctx, app_ctx);
+            let handled = handler.dispatch_event(
+                &key_event("enter"),
+                area,
+                &mut event_ctx,
+                &mut ctx,
+                app_ctx,
+            );
             assert!(handled);
             assert_eq!(hits.get(), 1);
         });
@@ -135,8 +143,11 @@ fn fallback_may_decline_so_the_event_propagates() {
             let area = TuiRect::new(0, 0, 4, 1);
             let mut event_ctx = TuiEventContext::default();
             let mut rendered_views = HashMap::new();
-            let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
-            let handled = handler.dispatch_event(&key_event("a"), area, &mut event_ctx, &mut ctx, app_ctx);
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let handled =
+                handler.dispatch_event(&key_event("a"), area, &mut event_ctx, &mut ctx, app_ctx);
             assert!(!handled);
         });
     });
