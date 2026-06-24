@@ -2073,7 +2073,7 @@ impl TerminalManager {
                     // Restore the sharer's frozen visual state. The buffer is cleared by
                     // system_clear_buffer when SentRequest fires from execute_agent_prompt_for_shared_session.
                     view.input().update(ctx, |input, ctx| {
-                        input.unfreeze_agent_input(ctx);
+                        input.unfreeze_agent_input(false, ctx);
                     });
 
                     view.ai_controller().update(ctx, |ai_controller, ctx| {

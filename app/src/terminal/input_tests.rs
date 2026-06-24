@@ -8661,7 +8661,7 @@ fn unfreeze_agent_input_does_not_clear_buffer() {
         );
 
         sharer_input.update(&mut app, |input, ctx| {
-            input.unfreeze_agent_input(ctx);
+            input.unfreeze_agent_input(false, ctx);
         });
 
         // Buffer must be unchanged — clearing is the responsibility of system_clear_buffer
@@ -8693,7 +8693,7 @@ fn unfreeze_agent_input_does_not_clear_buffer() {
         );
 
         viewer_input.update(&mut app, |input, ctx| {
-            input.unfreeze_agent_input(ctx);
+            input.unfreeze_agent_input(false, ctx);
         });
 
         assert_eq!(

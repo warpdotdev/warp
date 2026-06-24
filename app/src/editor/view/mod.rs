@@ -3244,6 +3244,14 @@ impl EditorView {
         });
     }
 
+    /// Shows an empty display-only ephemeral overlay for immediate visual feedback.
+    /// See [`EditorModel::show_display_only_empty_buffer`] for the full contract.
+    pub fn show_display_only_empty_buffer(&mut self, ctx: &mut ViewContext<Self>) {
+        self.editor_model.update(ctx, |model, ctx| {
+            model.show_display_only_empty_buffer(ctx);
+        });
+    }
+
     pub fn register_remote_peer(
         &mut self,
         replica_id: ReplicaId,

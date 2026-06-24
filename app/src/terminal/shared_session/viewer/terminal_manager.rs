@@ -1189,12 +1189,13 @@ impl TerminalManager {
                     return;
                 };
                 view.update(ctx, |terminal_view, ctx| {
-                    // Restore frozen visual state only. The sharer emits CRDT delete ops
-                    // (via system_clear_buffer in the SentRequest handler) which arrive
-                    // through InputUpdated and clear the buffer via the normal CRDT path.
-                    // Reinitializing here would corrupt CRDT state (lamport clock reset).
+                    // Restore frozen visual state. optimistically_show_empty=true creates
+                    // a display-only empty ephemeral for immediate UX feedback. Unlike a
+                    // regular ephemeral, this one discards its content on materialization
+                    // instead of restoring it to the regular buffer, so no spurious CRDT
+                    // delete ops are generated for concurrent edits by other viewers.
                     terminal_view.input().update(ctx, |input, ctx| {
-                        input.unfreeze_agent_input(ctx);
+                        input.unfreeze_agent_input(true, ctx);
                     });
                 });
             }
@@ -1210,7 +1211,7 @@ impl TerminalManager {
                     // failed so no CRDT delete ops were sent, and the user should be able
                     // to retry with their original text.
                     terminal_view.input().update(ctx, |input, ctx| {
-                        input.unfreeze_agent_input(ctx);
+                        input.unfreeze_agent_input(false, ctx);
                     });
                 });
             }

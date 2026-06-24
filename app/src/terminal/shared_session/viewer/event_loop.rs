@@ -221,7 +221,7 @@ impl EventLoop {
                                     // brief CRDT inconsistency is harmless. This pre-emptive
                                     // clear gives the viewer an empty buffer while the command
                                     // runs rather than showing the command text.
-                                    input.unfreeze_agent_input(ctx);
+                                    input.unfreeze_agent_input(false, ctx);
                                     let editor = input.editor().clone();
                                     editor.update(ctx, |editor, ctx| {
                                         editor.reinitialize_buffer(None, ctx);

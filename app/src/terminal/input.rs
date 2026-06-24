@@ -7374,11 +7374,25 @@ impl Input {
     /// (triggered when `BlocklistAIControllerEvent::SentRequest` fires). Viewers receive
     /// those delete ops through `InputUpdated` and apply them via the normal CRDT path.
     ///
-    /// For viewers, this also exits the ephemeral loading state created by
-    /// `freeze_input_in_loading_state`. That ephemeral buffer shadows the regular
-    /// collaborative buffer, so without exiting it the viewer never sees the regular
-    /// buffer update when the sharer's CRDT delete ops arrive.
-    pub fn unfreeze_agent_input(&mut self, ctx: &mut ViewContext<Self>) {
+    /// For viewers, this exits the ephemeral loading state created by
+    /// `freeze_input_in_loading_state`. When `optimistically_show_empty` is true (used
+    /// for `AgentPromptRequestInFlight`), a display-only empty ephemeral is then created
+    /// so the viewer sees an empty buffer immediately rather than briefly seeing the
+    /// original prompt text.
+    ///
+    /// The display-only ephemeral is safe for CRDT: when the viewer next makes an edit
+    /// (materializing the ephemeral), its empty content is **discarded** — no delete ops
+    /// are generated for the regular buffer's contents. The edit proceeds directly on
+    /// the regular buffer (which the sharer's delete ops will have cleared by then).
+    ///
+    /// When `optimistically_show_empty` is false (used for `AgentPromptRequestFailed`),
+    /// the regular buffer's original prompt text is shown instead, allowing the viewer
+    /// to retry.
+    pub fn unfreeze_agent_input(
+        &mut self,
+        optimistically_show_empty: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if matches!(
             self.model.lock().shared_session_status(),
             SharedSessionStatus::ActiveViewer { .. } | SharedSessionStatus::ActiveSharer
@@ -7390,9 +7404,16 @@ impl Input {
                     // reinstate role for viewers
                     editor.set_interaction_state(role.into(), ctx);
                     // Exit the ephemeral loading state so the regular CRDT buffer is
-                    // displayed. The sharer's delete ops (arriving via InputUpdated)
-                    // will then clear the regular buffer, making the viewer's buffer empty.
+                    // accessible. The sharer's delete ops (arriving via InputUpdated)
+                    // will clear the regular buffer.
                     editor.exit_ephemeral_loading_state(ctx);
+                    if optimistically_show_empty {
+                        // Create a display-only empty ephemeral for immediate visual
+                        // feedback. Unlike a regular ephemeral, materializing this one
+                        // discards its content instead of restoring it to the regular
+                        // buffer, so no spurious CRDT delete ops are generated.
+                        editor.show_display_only_empty_buffer(ctx);
+                    }
                 }
 
                 let appearance: &Appearance = Appearance::as_ref(ctx);
@@ -14441,7 +14462,7 @@ impl Input {
                         // Prepare request failed (e.g. attachment limit exceeded).
                         // Keep pending attachments so the user can retry, unfreeze input,
                         // and show an error toast.
-                        input.unfreeze_agent_input(ctx);
+                        input.unfreeze_agent_input(false, ctx);
                         let window_id = ctx.window_id();
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(
