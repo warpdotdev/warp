@@ -24,17 +24,17 @@ impl std::fmt::Display for OnboardingIntention {
 
 pub use callout::{OnboardingCalloutView, OnboardingKeybindings};
 
-/// User-facing names of the AI features enabled when the agent intention is selected.
+/// User-facing descriptions of the AI features enabled when the agent intention is selected.
 /// Shared by the intention slide's agent card checklist and the login slide's
 /// skip-login confirmation dialog so the two always stay in sync.
 pub const AI_FEATURES: &[&str] = &[
-    "Warp agents",
-    "Oz Cloud Agents Platform",
-    "Prompt suggestions",
-    "Next command predictions",
-    "Full Terminal Use",
-    "Codebase Context",
-    "Remote Control with Claude Code, Codex, and other agents",
+    "Warp Agent, a state-of-the-art harness",
+    "Oz, a cloud agent orchestration platform",
+    "Prompt suggestions for quick fixes to errors",
+    "AI-powered predictions for shell commands",
+    "Agentic control of any long-running commands or TUIs",
+    "Smarter codebase context",
+    "Remote control with Claude Code, Codex, and other agents",
 ];
 
 /// User-facing names of the Warp Drive features enabled when the terminal
