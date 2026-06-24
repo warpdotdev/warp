@@ -337,8 +337,9 @@ fn determine_agent_source(
             Some(crate::ai::ambient_agents::AgentSource::CloudMode)
         }
         // RemoteServerProxy and RemoteServerDaemon are headless server
-        // processes that don't use the agent subsystem; the TUI front-end has
-        // no agent harness wired up yet.
+        // processes that don't use the agent subsystem.
+        // TODO: the TUI front-end has no agent harness wired up yet; give it an
+        // appropriate `AgentSource` once that lands.
         LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon { .. } | LaunchMode::Tui => {
             None
         }
@@ -504,7 +505,8 @@ impl LaunchMode {
             }
             LaunchMode::App { .. } | LaunchMode::Test { .. } => true,
             LaunchMode::RemoteServerProxy => false,
-            // No agent harness is wired up for the TUI front-end yet.
+            // TODO: no agent harness is wired up for the TUI front-end yet;
+            // enable indexing once it is.
             LaunchMode::Tui => false,
         }
     }

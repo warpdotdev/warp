@@ -11,6 +11,13 @@ use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpSer
 use warp_core::AppId;
 
 fn main() -> Result<()> {
+    // TODO(follow-up): mirror the GUI app's per-channel setup. The GUI ships
+    // separate binaries (`app/src/bin/{local,dev,preview,stable,oss}.rs`), each
+    // selecting a `Channel` + channel-specific `ChannelConfig`, feature-flag set
+    // (LOCAL/DOGFOOD/PREVIEW flags), and build profile, with `cargo run`
+    // defaulting to the local channel. The TUI currently hardcodes a single
+    // production `Oss` channel; give it the same local/dev/preview/stable
+    // channels (e.g. per-channel `warp_tui` binaries or a `--channel` flag).
     let mut state = ChannelState::new(
         Channel::Oss,
         ChannelConfig {

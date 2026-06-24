@@ -157,19 +157,23 @@ impl AIExecutionProfilesModel {
                 }
 
                 let default_profile_state = match launch_mode {
-                    LaunchMode::App { .. } | LaunchMode::Test { .. } => match default_profile_from_cloud {
-                        Some(p) => {
-                            let execution_profile_id = ClientProfileId::new();
-                            profile_id_to_sync_id.insert(execution_profile_id, p.id);
-                            DefaultProfileState::Synced {
-                                id: execution_profile_id,
+                    // The TUI front-end is an app-style client, so it shares the
+                    // GUI app's cloud-synced default execution profile.
+                    LaunchMode::App { .. } | LaunchMode::Test { .. } | LaunchMode::Tui => {
+                        match default_profile_from_cloud {
+                            Some(p) => {
+                                let execution_profile_id = ClientProfileId::new();
+                                profile_id_to_sync_id.insert(execution_profile_id, p.id);
+                                DefaultProfileState::Synced {
+                                    id: execution_profile_id,
+                                }
                             }
+                            None => DefaultProfileState::Unsynced {
+                                id: ClientProfileId::new(),
+                                profile: super::create_default_from_legacy_settings(ctx),
+                            },
                         }
-                        None => DefaultProfileState::Unsynced {
-                            id: ClientProfileId::new(),
-                            profile: super::create_default_from_legacy_settings(ctx),
-                        },
-                    },
+                    }
                     // When running as a CLI, we ignore the GUI default and use a more permissive default.
                     LaunchMode::CommandLine { is_sandboxed, computer_use_override, .. } => {
                         DefaultProfileState::Cli {
@@ -178,13 +182,10 @@ impl AIExecutionProfilesModel {
                         }
                     }
                     // RemoteServerProxy and RemoteServerDaemon don't use AI
-                    // execution profiles and never reach this path (they skip
-                    // initialize_app). The TUI front-end does run
-                    // initialize_app, so it reaches here; give it the same
-                    // unsynced local default.
-                    LaunchMode::RemoteServerProxy
-                    | LaunchMode::RemoteServerDaemon { .. }
-                    | LaunchMode::Tui => DefaultProfileState::Unsynced {
+                    // execution profiles. They never reach this code path
+                    // since they don't go through initialize_app, but handle
+                    // exhaustively.
+                    LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon { .. } => DefaultProfileState::Unsynced {
                         id: ClientProfileId::new(),
                         profile: super::create_default_from_legacy_settings(ctx),
                     },
