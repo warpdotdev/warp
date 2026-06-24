@@ -428,13 +428,6 @@ pub enum CliCommand {
     #[command(subcommand)]
     Model(crate::model::ModelCommand),
 
-    /// Log in to Warp.
-    Login,
-    /// Log out of Warp.
-    Logout,
-    /// Print information about the logged-in user.
-    Whoami,
-
     /// Manage providers.
     #[command(subcommand)]
     Provider(crate::provider::ProviderCommand),
@@ -463,9 +456,6 @@ impl CliCommand {
             CliCommand::Environment(command) => command.as_str_for_tracing(),
             CliCommand::MCP(command) => command.as_str_for_tracing(),
             CliCommand::Model(command) => command.as_str_for_tracing(),
-            CliCommand::Login => "login",
-            CliCommand::Logout => "logout",
-            CliCommand::Whoami => "whoami",
             CliCommand::Provider(command) => command.as_str_for_tracing(),
             CliCommand::Integration(command) => command.as_str_for_tracing(),
             CliCommand::Secret(command) => command.as_str_for_tracing(),

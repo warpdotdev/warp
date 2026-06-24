@@ -226,11 +226,11 @@ fn subpage_from_str_parses_display_names() {
     );
     assert_eq!(
         SettingsSection::from_str("Oz Cloud API Keys"),
-        Ok(SettingsSection::OzCloudAPIKeys)
+        Ok(SettingsSection::ThirdPartyCLIAgents)
     );
     assert_eq!(
         SettingsSection::from_str("Agent API Keys"),
-        Ok(SettingsSection::OzCloudAPIKeys)
+        Ok(SettingsSection::ThirdPartyCLIAgents)
     );
 }
 

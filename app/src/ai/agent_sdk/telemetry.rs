@@ -23,12 +23,6 @@ pub(super) enum CliTelemetryEvent {
     MCPList,
     /// Executing `warp model list`
     ModelList,
-    /// Executing `warp login`
-    Login,
-    /// Executing `warp logout`
-    Logout,
-    /// Executing `warp whoami`
-    Whoami,
     /// Executing `warp provider setup`
     ProviderSetup,
     /// Executing `warp provider list`
@@ -76,9 +70,6 @@ impl TelemetryEvent for CliTelemetryEvent {
             CliTelemetryEvent::EnvironmentImageList => None,
             CliTelemetryEvent::MCPList => None,
             CliTelemetryEvent::ModelList => None,
-            CliTelemetryEvent::Login => None,
-            CliTelemetryEvent::Logout => None,
-            CliTelemetryEvent::Whoami => None,
             CliTelemetryEvent::ProviderSetup => None,
             CliTelemetryEvent::ProviderList => None,
             CliTelemetryEvent::IntegrationCreate => None,
@@ -127,9 +118,6 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::MCPList => "CLI.Execute.MCP.List",
             CliTelemetryEventDiscriminants::ModelList => "CLI.Execute.Model.List",
-            CliTelemetryEventDiscriminants::Login => "CLI.Execute.Login",
-            CliTelemetryEventDiscriminants::Logout => "CLI.Execute.Logout",
-            CliTelemetryEventDiscriminants::Whoami => "CLI.Execute.Whoami",
             CliTelemetryEventDiscriminants::ProviderSetup => "CLI.Execute.Provider.Setup",
             CliTelemetryEventDiscriminants::ProviderList => "CLI.Execute.Provider.List",
             CliTelemetryEventDiscriminants::IntegrationCreate => "CLI.Execute.Integration.Create",
@@ -170,9 +158,6 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::MCPList => "Listed MCP servers from the Warp CLI",
             CliTelemetryEventDiscriminants::ModelList => "Listed models from the Warp CLI",
-            CliTelemetryEventDiscriminants::Login => "Logged in via the Warp CLI",
-            CliTelemetryEventDiscriminants::Logout => "Logged out via the Warp CLI",
-            CliTelemetryEventDiscriminants::Whoami => "Printed current user info from the Warp CLI",
             CliTelemetryEventDiscriminants::ProviderSetup => "Set up a provider via the Warp CLI",
             CliTelemetryEventDiscriminants::ProviderList => "Listed providers from the Warp CLI",
             CliTelemetryEventDiscriminants::IntegrationCreate => {

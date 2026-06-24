@@ -43,25 +43,13 @@ fn model_list_parses() {
 }
 
 #[test]
-fn login_parses() {
-    let args = Args::try_parse_from(["warp", "login"]).unwrap();
-
-    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
-        panic!("Expected `warp login` command");
-    };
-
-    assert!(matches!(boxed_cmd.as_ref(), CliCommand::Login));
+fn login_is_not_available() {
+    assert!(Args::try_parse_from(["warp", "login"]).is_err());
 }
 
 #[test]
-fn logout_parses() {
-    let args = Args::try_parse_from(["warp", "logout"]).unwrap();
-
-    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
-        panic!("Expected `warp logout` command");
-    };
-
-    assert!(matches!(boxed_cmd.as_ref(), CliCommand::Logout));
+fn logout_is_not_available() {
+    assert!(Args::try_parse_from(["warp", "logout"]).is_err());
 }
 
 #[test]
@@ -683,7 +671,7 @@ fn hidden_server_overrides_parse_from_env() {
         "ws://127.0.0.1:8081",
     );
 
-    let args = Args::try_parse_from(["warp", "whoami"]).unwrap();
+    let args = Args::try_parse_from(["warp", "model", "list"]).unwrap();
 
     restore_env_var(SERVER_ROOT_URL_OVERRIDE_ENV, previous_server_root);
     restore_env_var(WS_SERVER_URL_OVERRIDE_ENV, previous_ws);

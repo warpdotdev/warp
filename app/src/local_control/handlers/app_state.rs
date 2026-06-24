@@ -117,13 +117,10 @@ pub(crate) fn handle(
             surface_command_search_open(instance_id, params, target, ctx)
         }
         ActionKind::SurfaceThemePickerOpen => surface_theme_picker_open(instance_id, target, ctx),
-        ActionKind::SurfaceWarpDriveToggle => workspace_action(
-            instance_id,
-            action,
-            WorkspaceAction::ToggleWarpDrive,
-            target,
-            ctx,
-        ),
+        ActionKind::SurfaceWarpDriveToggle => Err(ControlError::new(
+            ErrorCode::UnsupportedAction,
+            "Warp Drive has been removed.",
+        )),
         ActionKind::SurfaceResourceCenterToggle => workspace_action(
             instance_id,
             action,
@@ -161,14 +158,10 @@ pub(crate) fn handle(
             target,
             ctx,
         ),
-        ActionKind::SurfaceConversationListOpen => surface_workspace_action(
-            instance_id,
-            action,
-            SurfaceDestination::ConversationList,
-            WorkspaceAction::OpenConversationListView,
-            target,
-            ctx,
-        ),
+        ActionKind::SurfaceConversationListOpen => Err(ControlError::new(
+            ErrorCode::UnsupportedAction,
+            "Warp-native conversation list has been removed.",
+        )),
         ActionKind::SurfaceLeftPanelToggle => workspace_action(
             instance_id,
             action,

@@ -26,7 +26,6 @@ use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
 use crate::send_telemetry_sync_from_app_ctx;
 
-mod admin;
 mod api_key;
 mod artifact;
 pub(crate) mod artifact_upload;
@@ -93,9 +92,6 @@ fn dispatch_command(
         }
         CliCommand::MCP(mcp_cmd) => mcp::run(ctx, global_options, mcp_cmd),
         CliCommand::Model(model_cmd) => model::run(ctx, global_options, model_cmd),
-        CliCommand::Login => admin::login(ctx),
-        CliCommand::Logout => admin::logout(ctx),
-        CliCommand::Whoami => admin::whoami(ctx, global_options.output_format),
         CliCommand::Provider(provider_cmd) => {
             if !FeatureFlag::ProviderCommand.is_enabled() {
                 return Err(anyhow::anyhow!("invalid value 'provider'"));
@@ -184,9 +180,6 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::Model(model_cmd) => match model_cmd {
             ModelCommand::List => true,
         },
-        CliCommand::Login => false,
-        CliCommand::Logout => false,
-        CliCommand::Whoami => true,
         CliCommand::Provider(_) => true,
         CliCommand::Integration(_) => true,
         CliCommand::Secret(_) => true,
@@ -313,9 +306,6 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
         }
         CliCommand::MCP(MCPCommand::List) => CliTelemetryEvent::MCPList,
         CliCommand::Model(ModelCommand::List) => CliTelemetryEvent::ModelList,
-        CliCommand::Login => CliTelemetryEvent::Login,
-        CliCommand::Logout => CliTelemetryEvent::Logout,
-        CliCommand::Whoami => CliTelemetryEvent::Whoami,
         CliCommand::Provider(ProviderCommand::Setup(_)) => CliTelemetryEvent::ProviderSetup,
         CliCommand::Provider(ProviderCommand::List) => CliTelemetryEvent::ProviderList,
         CliCommand::Integration(integration_cmd) => match integration_cmd {
