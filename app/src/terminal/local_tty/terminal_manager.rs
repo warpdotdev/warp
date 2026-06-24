@@ -2839,7 +2839,7 @@ pub fn shutdown_all_pty_event_loops(ctx: &mut AppContext) {
         terminal_manager.update(ctx, |terminal_manager, _ctx| {
             if let Some(manager) = terminal_manager
                 .as_any_mut()
-                .downcast_mut::<TerminalManager>()
+                .downcast_mut::<TerminalManager<TerminalView>>()
             {
                 manager.shutdown_event_loop();
             }
