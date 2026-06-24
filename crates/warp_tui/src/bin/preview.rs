@@ -1,12 +1,13 @@
-// On Windows, we don't want to display a console window when the application is running in release
-// builds. See https://doc.rust-lang.org/reference/runtime.html#the-windows_subsystem-attribute.
-#![cfg_attr(feature = "release_bundle", windows_subsystem = "windows")]
+//! Preview-channel `warp-tui` binary.
+//!
+//! Mirrors `app/src/bin/preview.rs`: loads the `preview` channel config and
+//! enables the preview feature flags (plus forced login), then hands off to the
+//! shared TUI entry point.
 
 use anyhow::Result;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features;
 
-// Simple wrapper around warp::run() for feature preview channel builds.
 fn main() -> Result<()> {
     ChannelState::set(
         ChannelState::new(
@@ -17,5 +18,5 @@ fn main() -> Result<()> {
         .with_additional_features(&[features::FeatureFlag::ForceLogin]),
     );
 
-    warp::run()
+    warp::run_tui()
 }

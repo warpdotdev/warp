@@ -1,12 +1,12 @@
-// On Windows, we don't want to display a console window when the application is running in release
-// builds. See https://doc.rust-lang.org/reference/runtime.html#the-windows_subsystem-attribute.
-#![cfg_attr(feature = "release_bundle", windows_subsystem = "windows")]
+//! Dev-channel `warp-tui` binary (internal nightly builds).
+//!
+//! Mirrors `app/src/bin/dev.rs`: loads the internal `dev` channel config and
+//! layers the dev feature flags, then hands off to the shared TUI entry point.
 
 use anyhow::Result;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features;
 
-// Simple wrapper around warp::run() for dev channel builds.
 fn main() -> Result<()> {
     ChannelState::set(
         ChannelState::new(Channel::Dev, warp_channel_config::load_config!("dev"))
@@ -15,5 +15,5 @@ fn main() -> Result<()> {
             .with_additional_features(features::PREVIEW_FLAGS),
     );
 
-    warp::run()
+    warp::run_tui()
 }
