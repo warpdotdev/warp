@@ -456,12 +456,13 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         $HOST.UI.RawUI.WindowTitle = $newTitle
 
         $blockId = $script:nextBlockId++
+        $nextBlockId = "precmd-${global:_warpSessionId}-$blockId"
         $commandFinishedMsg = @{
             hook = 'CommandFinished'
             value = @{
                 session_id = $global:_warpSessionId
                 exit_code = $exitCode
-                next_block_id = "precmd-${global:_warpSessionId}-$blockId"
+                next_block_id = $nextBlockId
             }
         }
         Warp-Send-JsonMessage $commandFinishedMsg
@@ -480,6 +481,8 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             $precmdMsg = @{
                 hook = 'Precmd'
                 value = @{
+                    exit_code = $exitCode
+                    next_block_id = $nextBlockId
                     pwd = ''
                     ps1 = ''
                     git_head = ''
@@ -594,6 +597,8 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             $precmdMsg = @{
                 hook = 'Precmd'
                 value = @{
+                    exit_code = $exitCode
+                    next_block_id = $nextBlockId
                     pwd = (Get-Location).Path
                     # TODO(PLAT-687) - honor the PS1
                     ps1 = ''

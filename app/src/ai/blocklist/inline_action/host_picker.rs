@@ -4,8 +4,9 @@
 //! pickers; in custom mode it swaps the top bar for an inline editor that
 //! accepts a self-hosted worker slug. The layout mirrors the Oz webapp's
 //! host selector: workspace default first (badged "Default"), then warp,
-//! then connected worker hosts, then the user's most recent custom slug,
-//! then a "Custom host…" entry.
+//! then connected worker hosts, then the user's most recent custom slug
+//! marked as disconnected if it is not currently connected, then a
+//! "Custom host…" entry.
 
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
@@ -13,6 +14,7 @@ use warpui::elements::{
     Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
     PositionedElementAnchor, Radius,
 };
+use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
@@ -51,6 +53,8 @@ pub enum HostPickerEvent {
 
 const CUSTOM_HOST_LABEL: &str = "Custom host…";
 const DEFAULT_BADGE: &str = "Default";
+const CONNECTED_BADGE: &str = "Connected";
+const DISCONNECTED_BADGE: &str = "Disconnected";
 const EDITOR_PLACEHOLDER: &str = "my-worker-host";
 
 // ── Internal action plumbing ────────────────────────────────────────
@@ -248,9 +252,9 @@ impl HostPicker {
     }
 
     fn sync_dropdown_selection(&mut self, ctx: &mut ViewContext<Self>) {
-        let label = menu_label_for(&self.current_slug, self.default_host.as_deref());
+        let action = InternalAction::SelectKnown(self.current_slug.clone());
         self.dropdown.update(ctx, |dropdown, ctx_dropdown| {
-            dropdown.set_selected_by_name(&label, ctx_dropdown);
+            dropdown.set_selected_by_action(action, ctx_dropdown);
         });
     }
 
@@ -416,8 +420,9 @@ fn normalize_slug(slug: &str) -> String {
 }
 
 /// Builds the menu items shown in list mode, in the order: workspace default
-/// (badged "Default" if set), warp, connected worker hosts, recent custom
-/// slug (if any and not a duplicate), then a "Custom host…" entry.
+/// (badged "Default" if set), warp, connected worker hosts (badged
+/// "Connected"), recent custom slug (badged "Disconnected" when it is not
+/// currently connected), then a "Custom host…" entry.
 pub(crate) fn build_menu_items(
     default_host: Option<&str>,
     recent_host: Option<&str>,
@@ -451,7 +456,7 @@ pub(crate) fn build_menu_items(
         }
         items.push(menu_item_for_known(
             slug,
-            None,
+            Some(CONNECTED_BADGE),
             InternalAction::SelectKnown(slug.to_string()),
         ));
         known_slugs.push(slug.to_string());
@@ -462,10 +467,12 @@ pub(crate) fn build_menu_items(
             .any(|known| known.eq_ignore_ascii_case(slug))
         {
             // Recent hosts render as plain slugs; only the workspace
-            // default carries a badge.
+            // default carries a default badge. If the recent host is not in
+            // the connected set, keep it selectable but make the disconnected
+            // state explicit.
             items.push(menu_item_for_known(
                 slug,
-                None,
+                Some(DISCONNECTED_BADGE),
                 InternalAction::SelectKnown(slug.to_string()),
             ));
         }
@@ -481,6 +488,7 @@ pub(crate) fn build_menu_items(
 
 /// Returns the menu label corresponding to `slug`, including the "Default"
 /// badge when it matches the workspace default.
+#[cfg(test)]
 pub(crate) fn menu_label_for(slug: &str, default_host: Option<&str>) -> String {
     if default_host == Some(slug) {
         format_known_label(slug, Some(DEFAULT_BADGE))
@@ -489,6 +497,7 @@ pub(crate) fn menu_label_for(slug: &str, default_host: Option<&str>) -> String {
     }
 }
 
+#[cfg(test)]
 fn format_known_label(slug: &str, badge: Option<&str>) -> String {
     match badge {
         Some(badge) => format!("{slug}  ({badge})"),
@@ -501,10 +510,18 @@ fn menu_item_for_known(
     badge: Option<&str>,
     action: InternalAction,
 ) -> MenuItem<DropdownAction> {
-    MenuItem::Item(
-        MenuItemFields::new(format_known_label(slug, badge))
-            .with_on_select_action(DropdownAction::select_action_and_close(action)),
-    )
+    let mut fields = MenuItemFields::new(slug)
+        .with_on_select_action(DropdownAction::select_action_and_close(action));
+    if let Some(badge) = badge {
+        fields = fields.with_right_side_label(
+            badge,
+            Properties {
+                weight: Weight::Semibold,
+                ..Default::default()
+            },
+        );
+    }
+    MenuItem::Item(fields)
 }
 
 // ── Entity / View impls ─────────────────────────────────────────────

@@ -6,15 +6,10 @@ use base64::Engine;
 use blocking::unblock;
 use instant::Instant;
 use warp_core::channel::IapConfig;
-use warpui::r#async::{FutureExt as _, Timer};
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui_core::r#async::{BoxFuture, FutureExt as _, Timer};
+use warpui_core::{AppContext, Entity, ModelContext, SingletonEntity};
 #[cfg(not(target_family = "wasm"))]
 use websocket::connect_error_http_response;
-
-#[cfg(feature = "local_tty")]
-use crate::terminal::local_shell::LocalShellState;
-use crate::view_components::DismissibleToast;
-use crate::workspace::{ToastStack, WorkspaceAction};
 
 const PROACTIVE_REFRESH_BUFFER: Duration = Duration::from_secs(5 * 60);
 const INJECTED_TOKEN_ENV_VAR: &str = "WARP_IAP_TOKEN";
@@ -26,6 +21,8 @@ const MAX_FAILURE_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
 /// IAP challenge. i.e. so a persistently broken setup (no gcloud,
 /// bad credentials) doesn't loop forever.
 const MAX_FAILURE_RETRIES: u32 = 5;
+
+pub type PathResolver = Box<dyn Fn(&mut AppContext) -> BoxFuture<'static, Option<String>>>;
 
 #[derive(Debug, Clone)]
 pub struct CachedToken {
@@ -161,18 +158,30 @@ impl http_client::iap::IapTokenProvider for IapState {
 /// refresh, and reactive refresh on challenge events.
 pub struct IapManager {
     state: Option<Arc<IapState>>,
+    path_resolver: PathResolver,
     /// Number of consecutive failed fetches since the last success.
     consecutive_failures: u32,
 }
 
 pub enum IapManagerEvent {
     StateChanged,
+    RefreshFailed {
+        /// A human-readable error message describing why the refresh failed.
+        message: String,
+        /// Whether this is the first failure in a streak of failures.
+        is_first_failure_of_streak: bool,
+    },
 }
 
 impl IapManager {
-    pub fn new(state: Option<Arc<IapState>>, ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new(
+        state: Option<Arc<IapState>>,
+        path_resolver: PathResolver,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
         let mut manager = Self {
             state,
+            path_resolver,
             consecutive_failures: 0,
         };
         manager.start_refresh(ctx);
@@ -233,12 +242,7 @@ impl IapManager {
 
         // Make `gcloud` findable even when Warp is launched from the macOS GUI
         // (i.e. in environments without something like `~/.zshrc && WarpDev` happening to init cli path)
-        #[cfg(feature = "local_tty")]
-        let path_future = LocalShellState::handle(ctx).update(ctx, |shell_state, ctx| {
-            shell_state.get_interactive_path_env_var(ctx)
-        });
-        #[cfg(not(feature = "local_tty"))]
-        let path_future = futures::future::ready(None::<String>);
+        let path_future = (self.path_resolver)(ctx);
 
         ctx.spawn(
             async move {
@@ -287,9 +291,10 @@ impl IapManager {
                         log::warn!("Warp Staging IAP token fetch failed: {message}");
                         let is_first_failure_of_streak = manager.consecutive_failures == 0;
                         state.set_failed(message.clone());
-                        if is_first_failure_of_streak {
-                            manager.show_failure_toast(&message, ctx);
-                        }
+                        ctx.emit(IapManagerEvent::RefreshFailed {
+                            message,
+                            is_first_failure_of_streak,
+                        });
                         ctx.emit(IapManagerEvent::StateChanged);
                         ctx.notify();
                         manager.schedule_failure_retry(ctx);
@@ -339,21 +344,6 @@ impl IapManager {
         );
     }
 
-    fn show_failure_toast(&self, message: &str, ctx: &mut ModelContext<Self>) {
-        let window_id = ctx
-            .windows()
-            .active_window()
-            .or_else(|| ctx.windows().ordered_window_ids().first().copied());
-        let Some(window_id) = window_id else {
-            return;
-        };
-        let toast: DismissibleToast<WorkspaceAction> =
-            DismissibleToast::error(format!("IAP credential refresh failed: {message}"));
-        ToastStack::handle(ctx).update(ctx, |stack, ctx| {
-            stack.add_ephemeral_toast(toast, window_id, ctx);
-        });
-    }
-
     /// Inspects a websocket *handshake* connect error for an IAP challenge.
     /// If detected, triggers a refresh so the caller's retry loop can pick up
     /// a fresh token on the next attempt.
@@ -370,7 +360,7 @@ impl IapManager {
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn ws_connect_is_iap_challenge(err: &anyhow::Error) -> bool {
+pub fn ws_connect_is_iap_challenge(err: &anyhow::Error) -> bool {
     connect_error_http_response(err).is_some_and(|response| {
         http_client::iap::is_iap_challenge(response.status(), response.headers())
     })

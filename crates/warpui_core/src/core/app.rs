@@ -827,10 +827,16 @@ impl AppContext {
         // Register a variety of required/core singleton models.
         ctx.add_singleton_model(|_| fonts::Cache::new(font_db));
         ctx.add_singleton_model(|_| WindowManager::new(window_manager));
+        let image_cache = ImageCache::new();
         ctx.add_singleton_model(|ctx| {
-            AssetCache::new(asset_provider, foreground, ctx.background_executor())
+            AssetCache::new(
+                asset_provider,
+                image_cache.clone(),
+                foreground,
+                ctx.background_executor(),
+            )
         });
-        ctx.add_singleton_model(|_| ImageCache::new());
+        ctx.add_singleton_model(|_| image_cache);
         ctx.add_singleton_model(|_| FallbackFontModel::new());
 
         if !is_unit_test {

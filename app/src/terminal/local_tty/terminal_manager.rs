@@ -99,6 +99,7 @@ use crate::terminal::shared_session::{
 };
 use crate::terminal::shell::ShellName;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as TerminalViewEvent};
+use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
     init_pty_controller_model, init_remote_server_controller, wire_up_pty_controller_with_view,
@@ -1126,7 +1127,13 @@ impl TerminalManager {
                     .contains(&ContextChipKind::NodeVersion)
         };
 
-        let enable_ssh_wrapper = *SshSettings::as_ref(ctx).enable_ssh_wrapper.value();
+        // `enable_ssh_warpification` is the single source of truth for whether the SSH
+        // wrapper is active. The bootstrap scripts check `WARP_USE_SSH_WRAPPER` (derived
+        // from this value) before invoking `warp_ssh_helper`, which spawns the ControlMaster
+        // and opens agent-protocol channels.
+        let enable_ssh_wrapper = *WarpifySettings::as_ref(ctx)
+            .enable_ssh_warpification
+            .value();
 
         // Only meaningful when the legacy ControlMaster wrapper is active.
         let reuse_ssh_control_master = enable_ssh_wrapper

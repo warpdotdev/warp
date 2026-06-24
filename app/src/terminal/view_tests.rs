@@ -7521,6 +7521,96 @@ fn close_find_bar_preserves_options_on_async_find_path() {
     })
 }
 
+/// Regression test: selecting text inside an AI (rich content) block and copying
+/// must place the selected text on the clipboard.
+///
+/// AI blocks own their text selection independently of the point-based model
+/// selection, so the model must be told (via `AIBlockEvent::SelectionChanged`)
+/// which rich content block has an active selection. Otherwise
+/// `selection_to_string` returns nothing and the copy paths produce an empty
+/// clipboard (the regression introduced by the `mouse_down` `if !handled` guard
+/// in #12079).
+#[test]
+fn copy_selected_text_from_ai_block() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        // Insert an AI block with a user query.
+        terminal.update(&mut app, |view, ctx| {
+            append_exchange_and_handle_event(
+                view,
+                AIAgentInput::UserQuery {
+                    query: "the quick brown fox".to_owned(),
+                    context: Default::default(),
+                    static_query_type: None,
+                    referenced_attachments: Default::default(),
+                    user_query_mode: UserQueryMode::Normal,
+                    running_command: None,
+                    intended_agent: None,
+                },
+                ctx,
+            );
+        });
+
+        let ai_block = terminal.read(&app, |view, _| {
+            view.rich_content_views
+                .iter()
+                .find_map(|rich_content| {
+                    rich_content
+                        .ai_block_metadata()
+                        .map(|metadata| metadata.ai_block_handle.clone())
+                })
+                .expect("an AI block should have been inserted")
+        });
+
+        // Simulate a block-level text selection within the AI block and notify the
+        // terminal view (mirrors the `SelectableArea` selection callback plus the
+        // `AIBlockAction::SelectText` dispatch that happens on a real drag).
+        ai_block.update(&mut app, |block, ctx| {
+            block.set_block_level_selected_text_for_test(Some("quick brown".to_owned()));
+            block.handle_action(&AIBlockAction::SelectText, ctx);
+        });
+
+        // The model must now record that the AI block has an active text
+        // selection, which is what lets the copy/insert paths (via
+        // `selection_to_string`) find the selected text. This is the part the
+        // #12079 regression broke. We assert on the model record rather than the
+        // clipboard string because reading the selected text cross-view requires
+        // an active window, which the headless test harness does not provide (the
+        // end-to-end clipboard behavior is covered by manual/computer-use
+        // verification).
+        terminal.read(&app, |view, ctx| {
+            let semantic_selection = SemanticSelection::as_ref(ctx);
+            let model = view.model.lock();
+            assert!(
+                model
+                    .block_list()
+                    .has_renderable_selection(semantic_selection, false),
+                "the model must record the AI block's text selection so copy/insert can find it"
+            );
+        });
+
+        // Clearing the AI block's selection must clear the tracked model selection
+        // so stale text isn't returned by later copy/insert operations.
+        ai_block.update(&mut app, |block, ctx| {
+            block.set_block_level_selected_text_for_test(None);
+            block.handle_action(&AIBlockAction::SelectText, ctx);
+        });
+        terminal.read(&app, |view, ctx| {
+            let semantic_selection = SemanticSelection::as_ref(ctx);
+            let model = view.model.lock();
+            assert!(
+                !model
+                    .block_list()
+                    .has_renderable_selection(semantic_selection, false),
+                "clearing the AI block selection should clear the model's recorded selection"
+            );
+        });
+    })
+}
+
 #[test]
 fn cmd_k_does_not_clear_buffer_when_agent_is_driving_command() {
     App::test((), |mut app| async move {

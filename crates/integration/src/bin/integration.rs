@@ -404,6 +404,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     register_test!(test_middle_click_paste);
 
+    register_test!(test_copy_selection_within_ai_block);
     register_test!(test_selection_first_to_last_through_ai_simple);
     register_test!(test_copy_on_select_first_to_last_through_ai_simple);
     register_test!(test_selection_first_to_last_through_ai_semantic);
