@@ -312,6 +312,9 @@ fn run_agent(
                     "--claude-auth-secret is only valid with --harness claude."
                 ));
             }
+            if args.runner.is_some() && !FeatureFlag::CloudRunners.is_enabled() {
+                return Err(anyhow::anyhow!("unexpected argument '--runner' found"));
+            }
             ambient::run_ambient_agent(ctx, args)
         }
         AgentCommand::Profile(sub) => profiles::run(ctx, global_options, sub),

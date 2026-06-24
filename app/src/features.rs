@@ -83,6 +83,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ArtifactCommand,
         #[cfg(feature = "cloud_environments")]
         FeatureFlag::CloudEnvironments,
+        #[cfg(feature = "cloud_runners")]
+        FeatureFlag::CloudRunners,
         #[cfg(all(feature = "simulate_github_unauthed", debug_assertions))]
         FeatureFlag::SimulateGithubUnauthed,
         #[cfg(feature = "session_sharing_acls")]
