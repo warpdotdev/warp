@@ -37,6 +37,7 @@ impl ForTelemetry for AIAgentCitation {
             Self::AgentMemory {
                 memory_store_id,
                 memory_id,
+                ..
             } => Some(CitationForTelemetry::AgentMemory {
                 memory_store_id: memory_store_id.clone(),
                 memory_id: memory_id.clone(),

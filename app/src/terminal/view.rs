@@ -20229,6 +20229,7 @@ impl TerminalView {
                 AIAgentCitation::AgentMemory {
                     memory_store_id,
                     memory_id,
+                    ..
                 } => {
                     let oz_root_url = ChannelState::oz_root_url();
                     let url = format!(

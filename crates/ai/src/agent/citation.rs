@@ -1,14 +1,62 @@
 use std::fmt::Display;
+use std::hash::{Hash, Hasher};
 
 use warp_multi_agent_api as api;
 
 /// A citation listed in an AI response.
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum AIAgentCitation {
     WarpDriveObject { uid: String },
     WarpDocumentation { path: String },
     WebPage { url: String },
-    AgentMemory { memory_store_id: String, memory_id: String },
+    /// A memory from an attached memory store. `content` is the raw memory
+    /// text shown as a preview in the chip; `Hash`/`Eq` use only the IDs.
+    AgentMemory {
+        memory_store_id: String,
+        memory_id: String,
+        content: String,
+    },
+}
+
+impl PartialEq for AIAgentCitation {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::WarpDriveObject { uid: a }, Self::WarpDriveObject { uid: b }) => a == b,
+            (Self::WarpDocumentation { path: a }, Self::WarpDocumentation { path: b }) => a == b,
+            (Self::WebPage { url: a }, Self::WebPage { url: b }) => a == b,
+            (
+                Self::AgentMemory { memory_store_id: s1, memory_id: i1, .. },
+                Self::AgentMemory { memory_store_id: s2, memory_id: i2, .. },
+            ) => s1 == s2 && i1 == i2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for AIAgentCitation {}
+
+impl Hash for AIAgentCitation {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::WarpDriveObject { uid } => {
+                0u8.hash(state);
+                uid.hash(state);
+            }
+            Self::WarpDocumentation { path } => {
+                1u8.hash(state);
+                path.hash(state);
+            }
+            Self::WebPage { url } => {
+                2u8.hash(state);
+                url.hash(state);
+            }
+            Self::AgentMemory { memory_store_id, memory_id, .. } => {
+                3u8.hash(state);
+                memory_store_id.hash(state);
+                memory_id.hash(state);
+            }
+        }
+    }
 }
 
 impl Display for AIAgentCitation {
@@ -23,10 +71,7 @@ impl Display for AIAgentCitation {
             AIAgentCitation::WebPage { url } => {
                 write!(f, "Web Page: {url}")
             }
-            AIAgentCitation::AgentMemory {
-                memory_store_id,
-                memory_id,
-            } => {
+            AIAgentCitation::AgentMemory { memory_store_id, memory_id, .. } => {
                 write!(f, "Agent Memory: {memory_store_id}/{memory_id}")
             }
         }
@@ -67,6 +112,7 @@ impl TryFrom<api::Citation> for AIAgentCitation {
                 Ok(AIAgentCitation::AgentMemory {
                     memory_store_id,
                     memory_id,
+                    content: String::new(),
                 })
             }
             api::DocumentType::Unknown => Err(UnknownCitationTypeError),
