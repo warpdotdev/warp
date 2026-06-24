@@ -47,7 +47,7 @@ The Warp team is shipping cross-window tab drag (hotkey→standard direction) co
 
 **`workspace:move_active_tab_to_standard_window`**
 1. User invokes from the hotkey window.
-2. If another standard window is open, tabs are moved there.
+2. If another standard window is open, tabs are moved there — the most recently focused one.
 3. If no standard window is open, tabs are promoted into a newly created standard window.
 4. Focus moves to the target standard window.
 
@@ -58,7 +58,7 @@ The Warp team is shipping cross-window tab drag (hotkey→standard direction) co
 
 - **Hotkey window disabled in settings:** All three commands are hidden (gated behind `QUAKE_MODE_ENABLED_CONTEXT_FLAG`).
 - **Multi-tab hotkey window:** Moving tabs out leaves remaining tabs in place; the window does not auto-hide.
-- **Last tab moved:** Source window closes automatically (standard windows). See open questions for hotkey window behavior.
+- **Last tab moved:** Source window closes automatically.
 - **Multi-selection active:** All selected tabs transfer together. If no multi-selection, only the active tab transfers.
 - **Hotkey window closed at invocation:** Opened programmatically first.
 - **No standard window available:** A new standard window is created.
@@ -70,7 +70,7 @@ The Warp team is shipping cross-window tab drag (hotkey→standard direction) co
 2. `workspace:move_active_tab_to_standard_window` moves the active tab to an existing standard window, or creates a new one if none exists.
 3. `workspace:toggle_active_tab_window_type` moves the active tab(s) to the opposite window type from any window.
 4. Multi-selected tabs are transferred together by all three actions.
-5. When the last tab is moved out of a standard window, the window closes. (Hotkey window behavior — see open questions.)
+5. When the last tab is moved out of any window (standard or hotkey), the source window closes.
 6. All three commands are hidden in the command palette and keybindings UI when the dedicated hotkey window setting is disabled.
 7. Moving tabs out of a multi-tab hotkey window does not force the window to hide.
 8. The hotkey window ID is verified dynamically (not cached) to prevent targeting a closed window.
@@ -81,14 +81,7 @@ The Warp team is shipping cross-window tab drag (hotkey→standard direction) co
 - **Manual:** Enable hotkey window, invoke each command, verify transfer in both directions.
 - **Manual:** Multi-select 2+ tabs (requires `FeatureFlag::GroupedTabs`), invoke each action, verify all selected tabs move.
 - **Manual:** Disable hotkey window setting, confirm commands disappear from command palette.
-
-## Open questions
-
-- **Hotkey window lifecycle on last-tab-moved-out:** When the last tab is moved out of the hotkey window to a standard window, should the hotkey window close automatically (same as standard window behavior), or should it remain open as an empty quake overlay? An empty overlay is unusual for a quake-style window but keeps the hotkey available for immediate reuse.
-- **Empty hotkey window from the start:** If the user opens the hotkey window and immediately moves its single tab to a standard window, should the hotkey close? (Same lifecycle question as above.)
-
 ## Follow-ups
 
 - **Drag-and-drop standard→hotkey** — Extend the cross-window drag system to accept the hotkey overlay as a drop target (the reverse of what the team is shipping). The transfer primitives built here are the same ones a drop handler would call.
 - **Non-dedicated hotkey mode** — Deferred per maintainer signal. Would require a new `GlobalHotkeyMode` variant, a different window creation path, and changes to the quake state lifecycle.
-- Consider a setting to automatically close the hotkey window when its last tab is moved out.

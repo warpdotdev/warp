@@ -38,13 +38,15 @@ Add corresponding match arms in the `WorkspaceAction` impl block (around line 86
 
 ### 2. `app/src/workspace/mod.rs` (line 482)
 
-Register three `EditableBinding`s with context predicates:
+Register three `EditableBinding`s with both a context predicate and an enabled predicate:
 
-- `workspace:move_active_tab_to_dedicated_hotkey_window` — visible when `Workspace & Quake_Mode_Editor & !Workspace_InQuakeWindow`
-- `workspace:move_active_tab_to_standard_window` — visible when `Workspace & Quake_Mode_Editor & Workspace_InQuakeWindow`
-- `workspace:toggle_active_tab_window_type` — visible when `Workspace & Quake_Mode_Editor`
+| Command | Context predicate | Enabled predicate |
+|---|---|---|
+| `workspace:move_active_tab_to_dedicated_hotkey_window` | `Workspace & Quake_Mode_Editor & !Workspace_InQuakeWindow` | `quake_mode_enabled` |
+| `workspace:move_active_tab_to_standard_window` | `Workspace & Quake_Mode_Editor & Workspace_InQuakeWindow` | `quake_mode_enabled` |
+| `workspace:toggle_active_tab_window_type` | `Workspace & Quake_Mode_Editor` | `quake_mode_enabled` |
 
-The `Quake_Mode_Editor` flag (set by `root_view.rs` when `quake_mode_enabled` is true) gates on the setting. `Workspace_InQuakeWindow` (new) differentiates standard from hotkey windows.
+The `Quake_Mode_Editor` flag (set by `root_view.rs` when `quake_mode_enabled` is true) and the enabled predicate both gate on the same setting. The context predicate hides from the command palette and dispatch; the enabled predicate hides from the keybindings settings UI (following the `TOGGLE_VERTICAL_TABS_PANEL` pattern in the codebase). `Workspace_InQuakeWindow` (new) differentiates standard from hotkey windows.
 
 ### 3. `app/src/workspace/view.rs`
 
@@ -54,9 +56,9 @@ The `Quake_Mode_Editor` flag (set by `root_view.rs` when `quake_mode_enabled` is
 
 **New handler methods** (~line 27093):
 - `move_active_tab_to_dedicated_hotkey_window` — Verifies the hotkey window is open (opens it via the newly-`pub(crate)` `toggle_quake_mode_window` if needed), then calls `move_active_tab_to_window`.
-- `move_active_tab_to_standard_window` — Finds an existing standard window via `ctx.window_ids()` (excluding self and quake). If none exists, calls `create_transferred_window`. Calls `move_active_tab_to_window` in either case.
+- `move_active_tab_to_standard_window` — Finds an existing standard window via `ctx.window_ids()` (excluding self and quake) — the first non-self, non-quake ID corresponds to the most recently focused standard window. If none exists, calls `create_transferred_window`. Calls `move_active_tab_to_window` in either case.
 - `toggle_active_tab_window_type` — Dispatches to the appropriate directional method based on current window.
-- `move_active_tab_to_window(target_window_id, ctx)` — Core logic: gathers selected indices (multi-selection from `selected_tab_indices()` or fallback to `active_tab_index`), calls `get_tab_transfer_info_for_attach` / `prepare_for_transferred_tab_attach` / `transfer_view_tree_to_window` for each, removes from source (descending index to avoid shift issues), inserts at end of target, focuses target window.
+- `move_active_tab_to_window(target_window_id, ctx)` — Core logic: gathers selected indices (multi-selection from `selected_tab_indices()` or fallback to `active_tab_index`), collects transfer infos in ascending order, removes tabs from source in descending order (to avoid index shift), then inserts collected tabs at end of target in original ascending order, focuses target window.
 
 ### 4. `app/src/workspace/view/tab_grouping.rs:108`
 
