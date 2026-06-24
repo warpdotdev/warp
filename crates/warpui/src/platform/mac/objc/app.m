@@ -261,7 +261,8 @@ NSUInteger activeScreenId() {
 // kAEShutDown, kAERestart, and kAEReallyLogOut; a missing event or reason
 // (both accessors return 0 on nil) means the user or another process quit us.
 static BOOL isSystemInitiatedTermination(void) {
-    NSAppleEventDescriptor *event = [[NSAppleEventManager sharedAppleEventManager] currentAppleEvent];
+    NSAppleEventDescriptor *event =
+        [[NSAppleEventManager sharedAppleEventManager] currentAppleEvent];
     NSAppleEventDescriptor *reason = [event attributeDescriptorForKeyword:kAEQuitReason];
     switch ([reason typeCodeValue]) {
         case kAEQuitAll:
