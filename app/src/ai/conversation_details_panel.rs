@@ -621,6 +621,12 @@ pub enum ConversationDetailsPanelAction {
     OpenInOz,
 }
 
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug)]
+enum DetailsPanelLocalContinuationInfo {
+    Conversation(AIConversationId),
+}
+
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
@@ -729,7 +735,10 @@ impl ConversationDetailsPanel {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn continue_locally_conversation_id(&self, app: &AppContext) -> Option<AIConversationId> {
+    fn local_continuation_info(
+        &self,
+        app: &AppContext,
+    ) -> Option<DetailsPanelLocalContinuationInfo> {
         if !AISettings::as_ref(app).is_any_ai_enabled(app) {
             return None;
         }
@@ -744,20 +753,36 @@ impl ConversationDetailsPanel {
                 if status.is_in_progress() {
                     return None;
                 }
-                Some(*ai_conversation_id.as_ref()?)
+                Some(DetailsPanelLocalContinuationInfo::Conversation(
+                    *ai_conversation_id.as_ref()?,
+                ))
             }
             PanelMode::Task {
-                conversation_id, ..
+                display_status,
+                conversation_id,
+                ..
             } => {
-                // Hide for third-party harnesses (e.g. Claude, Gemini): they can't be
-                // forked into a local Warp conversation.
-                if matches!(self.data.harness, Some(h) if h != Harness::Unknown) {
+                let status = display_status.as_ref()?;
+                if status.is_working() {
                     return None;
                 }
 
-                let server_token = ServerConversationToken::new(conversation_id.as_ref()?.clone());
-                BlocklistAIHistoryModel::as_ref(app)
-                    .find_conversation_id_by_server_token(&server_token)
+                match self.data.harness {
+                    None => {
+                        let server_token =
+                            ServerConversationToken::new(conversation_id.as_ref()?.clone());
+                        BlocklistAIHistoryModel::as_ref(app)
+                            .find_conversation_id_by_server_token(&server_token)
+                            .map(DetailsPanelLocalContinuationInfo::Conversation)
+                    }
+                    Some(
+                        Harness::Claude
+                        | Harness::Codex
+                        | Harness::Gemini
+                        | Harness::OpenCode
+                        | Harness::Unknown,
+                    ) => None,
+                }
             }
         }
     }
@@ -1737,16 +1762,16 @@ impl View for ConversationDetailsPanel {
         let has_action_buttons = !self.action_buttons.as_ref(app).is_empty();
 
         #[cfg(not(target_family = "wasm"))]
-        let has_continue_locally = self.continue_locally_conversation_id(app).is_some();
+        let has_local_continuation_info = self.local_continuation_info(app).is_some();
         #[cfg(target_family = "wasm")]
-        let has_continue_locally = false;
+        let has_local_continuation_info = false;
         let has_oz_url = Self::oz_run_url(&self.data).is_some();
 
-        if has_continue_locally || has_oz_url {
+        if has_local_continuation_info || has_oz_url {
             let mut buttons_wrap = Wrap::row().with_spacing(8.).with_run_spacing(8.);
 
             #[cfg(not(target_family = "wasm"))]
-            if has_continue_locally {
+            if has_local_continuation_info {
                 buttons_wrap.add_child(ChildView::new(&self.continue_locally_button).finish());
             }
             if has_oz_url {
@@ -2188,14 +2213,18 @@ impl TypedActionView for ConversationDetailsPanel {
             }
             #[cfg(not(target_family = "wasm"))]
             ConversationDetailsPanelAction::ContinueLocally => {
-                if let Some(conversation_id) = self.continue_locally_conversation_id(ctx) {
+                if let Some(continuation_info) = self.local_continuation_info(ctx) {
                     send_telemetry_from_ctx!(
                         AgentManagementTelemetryEvent::DetailsPanelContinueLocally,
                         ctx
                     );
-                    ctx.dispatch_typed_action(&WorkspaceAction::ContinueConversationLocally {
-                        conversation_id,
-                    });
+                    match continuation_info {
+                        DetailsPanelLocalContinuationInfo::Conversation(conversation_id) => {
+                            ctx.dispatch_typed_action(
+                                &WorkspaceAction::ContinueConversationLocally { conversation_id },
+                            );
+                        }
+                    }
                 }
             }
             ConversationDetailsPanelAction::OpenInOz => {

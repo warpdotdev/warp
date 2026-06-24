@@ -362,11 +362,7 @@ impl OneTimeModalModel {
             .current_workspace()
             .map(|workspace| workspace.billing_metadata.customer_type);
         let is_warp_ai_enabled = *AISettings::as_ref(ctx).is_any_ai_enabled;
-        let has_byok_or_byoe = {
-            let manager = ApiKeyManager::as_ref(ctx);
-            let keys = manager.keys();
-            keys.has_any_key() || keys.has_custom_endpoints()
-        };
+        let has_byok_or_byoe = ApiKeyManager::as_ref(ctx).has_any_key();
         let completed_new_onboarding = has_completed_local_onboarding(ctx);
         let has_zero_base_credits = AIRequestUsageModel::as_ref(ctx).request_limit() == 0;
 

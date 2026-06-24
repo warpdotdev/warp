@@ -8,6 +8,8 @@ use warp_core::channel::ChannelState;
 use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
+#[cfg(not(target_family = "wasm"))]
+use warp_server_client::iap::{IapCredentialsState, IapManager, IapManagerEvent};
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
     Align, Border, CacheOption, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -37,8 +39,6 @@ use crate::auth::auth_state::AuthState;
 use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::autoupdate::{self, AutoupdateStage, AutoupdateState};
-#[cfg(not(target_family = "wasm"))]
-use crate::server::iap::{IapCredentialsState, IapManager, IapManagerEvent};
 use crate::server::ids::ServerId;
 use crate::settings::cloud_preferences::CloudPreferencesSettings;
 use crate::workspace::WorkspaceAction;
@@ -285,9 +285,9 @@ impl MainSettingsPageView {
             widgets.push(Box::new(IapCredentialsWidget::default()));
             let iap_manager_handle = IapManager::handle(ctx);
             ctx.subscribe_to_model(&iap_manager_handle, |_, _, e, ctx| {
-                match e {
-                    IapManagerEvent::StateChanged => ctx.notify(),
-                };
+                if matches!(e, IapManagerEvent::StateChanged) {
+                    ctx.notify();
+                }
             })
         }
 

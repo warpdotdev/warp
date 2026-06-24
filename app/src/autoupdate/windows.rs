@@ -45,7 +45,9 @@ pub(super) async fn download_update_and_cleanup(
         .rand_bytes(0)
         .suffix(&format!("{}-{}", version_info.version, installer_file_name))
         .make(|path| {
-            already_exists = path.is_file();
+            // Treat a 0-byte file as missing.
+            let non_empty = path.metadata().map(|m| m.len() > 0).unwrap_or(false);
+            already_exists = non_empty;
             if already_exists {
                 File::open(path)
             } else {

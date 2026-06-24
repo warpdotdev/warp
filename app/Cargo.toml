@@ -629,6 +629,7 @@ default = [
     "vertical_tabs_summary_mode",
     "tab_configs",
     "codex_notifications",
+    "codex_plugin",
     "trim_trailing_blank_lines",
     "open_warp_new_settings_modes",
     "skip_firebase_anonymous_user",
@@ -876,6 +877,7 @@ web_search_ui = []
 web_fetch_ui = []
 fork_from_command = []
 context_window_usage_v2 = []
+context_window_usage_breakdown = []
 global_search = []
 file_and_diff_set_comments = []
 revert_to_checkpoints = []
@@ -922,6 +924,7 @@ git_operations_in_code_review = []
 codex_notifications = []
 codex_plugin = []
 git_credential_refresh = []
+prompt_cache_expiry_warning = []
 
 [package.metadata.bundle.bin.zerp-oss]
 category = "public.app-category.developer-tools"

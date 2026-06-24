@@ -425,6 +425,9 @@ pub struct OutputModelInfo {
     pub model_id: LLMId,
     pub display_name: String,
     pub is_fallback: bool,
+    /// When the provider-side prompt cache for this request is expected to
+    /// expire. `None` means unknown / no cache-expiry info.
+    pub prompt_cache_expires_at: Option<DateTime<Local>>,
 }
 
 impl Display for AIAgentOutput {

@@ -203,7 +203,13 @@ pub(crate) fn initialize_app(app: &mut App) {
     // Register IapManager in a disabled state (no IapState). The settings
     // page's `IapManager::as_ref(ctx).is_enabled()` check panics if the
     // singleton isn't registered, even though it's a no-op on production.
-    app.add_singleton_model(|ctx| crate::server::iap::IapManager::new(None, ctx));
+    app.add_singleton_model(|ctx| {
+        warp_server_client::iap::IapManager::new(
+            None,
+            Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
+            ctx,
+        )
+    });
     app.add_singleton_model(|_| RestoredAgentConversations::new(vec![]));
     app.add_singleton_model(|ctx| {
         AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)

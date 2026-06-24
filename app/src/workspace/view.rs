@@ -41,6 +41,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ::settings::{Setting, ToggleableSetting};
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
+#[cfg(not(target_family = "wasm"))]
+use anyhow::Context as _;
 #[cfg(target_os = "macos")]
 use anyhow::Result;
 use autoupdate::AutoupdateStage;
@@ -154,6 +156,8 @@ use super::util::{
 use super::{util, ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::api::ServerConversationToken;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent::conversation::AIAgentHarness;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::agent::CancellationReason;
@@ -931,7 +935,6 @@ pub struct TransferredTab {
     pub is_right_panel_maximized: bool,
     pub draggable_state: DraggableState,
 }
-
 /// Per-`TabGroupId` hover state for the horizontal tab bar header.
 #[derive(Clone, Default)]
 struct HorizontalTabGroupMouseStates {
@@ -2600,10 +2603,10 @@ impl Workspace {
         );
     }
 
-    /// Subscribes to `WarpConfigUpdateEvent::TabConfigErrors` and shows a persistent
-    /// error toast for each tab config file that failed to parse.  Uses `object_id`
-    /// keyed by file path so that re-saving the same file auto-dismisses the stale
-    /// toast.
+    /// Subscribes to `WarpConfigUpdateEvent::TabConfigErrors` (and the equivalent
+    /// `ModelConfigErrors` for custom model router configs) and shows a persistent
+    /// error toast for each file that failed to parse.  Uses `object_id` keyed by
+    /// file path so that re-saving the same file auto-dismisses the stale toast.
     fn subscribe_to_tab_config_errors(
         toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
         ctx: &mut ViewContext<Self>,
@@ -2636,6 +2639,40 @@ impl Workspace {
                         );
                         let message = format!(
                             "Failed to load tab config {friendly_path}: {}",
+                            error.error_message
+                        );
+                        let path = error.file_path.clone();
+                        let toast = DismissibleToast::error(message)
+                            .with_object_id(object_id.clone())
+                            .with_link(
+                                ToastLink::new("Open file".to_string()).with_onclick_action(
+                                    WorkspaceAction::OpenTabConfigErrorFile {
+                                        path,
+                                        toast_object_id: object_id,
+                                    },
+                                ),
+                            );
+                        toast_stack.update(ctx, |toast_stack, ctx| {
+                            toast_stack.add_persistent_toast(toast, ctx);
+                        });
+                    }
+                }
+                WarpConfigUpdateEvent::ModelConfigs => {
+                    toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.dismiss_toasts_by_prefix("model_config_error:", ctx);
+                    });
+                }
+                WarpConfigUpdateEvent::ModelConfigErrors(errors) => {
+                    let home_dir = dirs::home_dir();
+                    for error in errors {
+                        let object_id = format!("model_config_error:{}", error.file_path.display());
+                        let raw_path = error.file_path.display().to_string();
+                        let friendly_path = user_friendly_path(
+                            &raw_path,
+                            home_dir.as_ref().and_then(|h| h.to_str()),
+                        );
+                        let message = format!(
+                            "Failed to load model config {friendly_path}: {}",
                             error.error_message
                         );
                         let path = error.file_path.clone();
@@ -4960,6 +4997,7 @@ impl Workspace {
                     subtitle,
                     window_id,
                     tab_index: tab_index + 1,
+                    color: tab.color(),
                 })
             })
             .collect()
@@ -12922,6 +12960,24 @@ impl Workspace {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn continue_third_party_conversation_locally(
+        &mut self,
+        task_id: AmbientAgentTaskId,
+        harness: AIAgentHarness,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let window_id = ctx.window_id();
+        log::info!(
+            "Ignoring third-party cloud transcript continuation for task {task_id:?} and harness {harness:?}"
+        );
+        WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            let toast = DismissibleToast::error(
+                "Cloud transcript continuation has been removed from this build.".to_owned(),
+            );
+            toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+        });
+    }
     /// Fork an existing AI conversation.
     /// Optionally summarizes the conversation after forking and/or sends an initial prompt.
     /// When cloud conversation storage is enabled and the source has a server token,
@@ -24143,6 +24199,10 @@ impl TypedActionView for Workspace {
                     ctx,
                 );
             }
+            #[cfg(not(target_family = "wasm"))]
+            ContinueThirdPartyConversationLocally { task_id, harness } => {
+                self.continue_third_party_conversation_locally(*task_id, *harness, ctx);
+            }
             SummarizeAIConversation {
                 prompt,
                 initial_prompt,
@@ -26747,6 +26807,14 @@ impl Workspace {
                         self.calculate_updated_tab_index(current_index, position, ctx)
                     };
                     if new_index != current_index {
+                        // Do not allow the placeholder to cross the pinned/unpinned
+                        // boundary, matching the constraint enforced by the normal
+                        // in-window reorder path.
+                        if self.is_tab_effectively_pinned(&self.tabs[current_index])
+                            != self.is_tab_effectively_pinned(&self.tabs[new_index])
+                        {
+                            return;
+                        }
                         self.tabs.swap(new_index, current_index);
                         if current_index == self.active_tab_index {
                             self.set_active_tab_index(new_index, ctx);

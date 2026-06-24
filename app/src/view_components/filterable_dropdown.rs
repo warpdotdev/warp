@@ -730,6 +730,23 @@ where
     pub fn set_menu_header_to_static(&mut self, header: &'static str) {
         self.static_menu_header = Some(header);
     }
+
+    /// Test-only: drive the filter input with `query` and re-filter the list,
+    /// mirroring what happens when a user types into the search field.
+    #[cfg(test)]
+    pub(crate) fn set_filter_query_for_test(&mut self, query: &str, ctx: &mut ViewContext<Self>) {
+        self.filter_editor.update(ctx, |editor, ctx| {
+            editor.select_all(ctx);
+            editor.insert_selected_text(query, ctx);
+        });
+        self.set_filtered_items(ctx);
+    }
+
+    /// Test-only: the number of items currently visible after filtering.
+    #[cfg(test)]
+    pub(crate) fn visible_items_len_for_test(&self, ctx: &AppContext) -> usize {
+        self.dropdown_items_len(ctx)
+    }
 }
 
 impl<A> Entity for FilterableDropdown<A>

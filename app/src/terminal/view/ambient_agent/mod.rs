@@ -86,9 +86,8 @@ pub fn create_cloud_mode_view(
         log::warn!("Cloud mode view was created without an ambient agent view model");
         return (terminal_view, terminal_manager);
     };
-    let view_model_for_subscription = view_model.clone();
     terminal_manager.update(ctx, |_, ctx| {
-        ctx.subscribe_to_model(&view_model, move |manager, _, event, ctx| {
+        ctx.subscribe_to_model(&view_model, move |manager, view_model, event, ctx| {
             let Some(manager) = manager
                 .as_any_mut()
                 .downcast_mut::<shared_session::viewer::TerminalManager>()
@@ -101,9 +100,8 @@ pub fn create_cloud_mode_view(
                     // conversation on chip click. Use append-mode scrollback
                     // + replay suppression so the cloud agent's replay doesn't
                     // duplicate the blocks we already have.
-                    let append_followup_scrollback = view_model_for_subscription
-                        .as_ref(ctx)
-                        .is_local_to_cloud_handoff();
+                    let append_followup_scrollback =
+                        view_model.as_ref(ctx).is_local_to_cloud_handoff();
                     if manager.connect_to_session(*session_id, append_followup_scrollback, ctx) {
                         manager.start_cloud_mode_setup_command_tracking();
                     }
