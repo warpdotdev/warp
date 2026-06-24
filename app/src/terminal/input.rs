@@ -7375,22 +7375,18 @@ impl Input {
     /// those delete ops through `InputUpdated` and apply them via the normal CRDT path.
     ///
     /// For viewers, this exits the ephemeral loading state created by
-    /// `freeze_input_in_loading_state`. When `optimistically_show_empty` is true (used
-    /// for `AgentPromptRequestInFlight`), a display-only empty ephemeral is then created
-    /// so the viewer sees an empty buffer immediately rather than briefly seeing the
-    /// original prompt text.
+    /// `freeze_input_in_loading_state`. When `is_shared_session_viewer_prompt_inflight` is true,
+    /// we optimistically clear the buffer using a display-only empty ephemeral
+    /// so the viewer sees an empty buffer immediately before crdt operations for actually clearing
+    /// the real buffer are received from the sharer.
     ///
     /// The display-only ephemeral is safe for CRDT: when the viewer next makes an edit
     /// (materializing the ephemeral), its empty content is **discarded** — no delete ops
     /// are generated for the regular buffer's contents. The edit proceeds directly on
     /// the regular buffer (which the sharer's delete ops will have cleared by then).
-    ///
-    /// When `optimistically_show_empty` is false (used for `AgentPromptRequestFailed`),
-    /// the regular buffer's original prompt text is shown instead, allowing the viewer
-    /// to retry.
     pub fn unfreeze_agent_input(
         &mut self,
-        optimistically_show_empty: bool,
+        is_shared_session_viewer_prompt_inflight: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         if matches!(
@@ -7407,9 +7403,11 @@ impl Input {
                     // accessible. The sharer's delete ops (arriving via InputUpdated)
                     // will clear the regular buffer.
                     editor.exit_ephemeral_loading_state(ctx);
-                    if optimistically_show_empty {
+                    if is_shared_session_viewer_prompt_inflight {
                         // Create a display-only empty ephemeral for immediate visual
-                        // feedback. Unlike a regular ephemeral, materializing this one
+                        // feedback. This is an optimistic clear for UI purposes, without
+                        // affecting the real buffer synced by crdt operations.
+                        // Unlike a regular ephemeral, materializing this one
                         // discards its content instead of restoring it to the regular
                         // buffer, so no spurious CRDT delete ops are generated.
                         editor.show_display_only_empty_buffer(ctx);
