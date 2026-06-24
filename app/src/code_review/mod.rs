@@ -56,6 +56,12 @@ pub enum DiffSetScope {
     File(String),
 }
 
+/// The keystroke that submits in the code review panel. Shared so that
+/// submitting a comment (the composer's "Comment" button) and sending queued
+/// comments to the agent (the comment tray's "Send to Agent" button and the
+/// `code_review:submit_review_comments` binding) all use the exact same binding.
+pub const CODE_REVIEW_SUBMIT_KEYSTROKE: &str = "cmdorctrl-enter";
+
 /// Register keybindings for code review functionality.
 pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
@@ -82,6 +88,15 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("CodeReviewView_NotEditing"))
         .with_key_binding("f")
         .with_enabled(|| crate::features::FeatureFlag::GitOperationsInCodeReview.is_enabled()),
+        EditableBinding::new(
+            "code_review:submit_review_comments",
+            "Send code review comments to agent",
+            CodeReviewAction::SubmitReviewComments,
+        )
+        // Scoped to `_NotEditing` so it can't fire while a comment is being
+        // composed (the composer's own `cmdorctrl-enter` saves the comment).
+        .with_context_predicate(id!("CodeReviewView_NotEditing"))
+        .with_key_binding(CODE_REVIEW_SUBMIT_KEYSTROKE),
     ]);
 
     app.register_fixed_bindings([FixedBinding::custom(

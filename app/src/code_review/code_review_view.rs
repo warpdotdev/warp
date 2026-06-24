@@ -350,6 +350,9 @@ pub enum CodeReviewAction {
     OpenCreatePrDialog,
     ViewPr(String),
     PublishBranch,
+    /// Send the queued review comments to an agent (keyboard equivalent of the
+    /// comment tray's "Send to Agent" button).
+    SubmitReviewComments,
 }
 
 pub struct FileState {
@@ -7537,6 +7540,15 @@ impl TypedActionView for CodeReviewView {
                     button.set_active(self.git_operations_menu_open, ctx);
                 });
                 ctx.notify();
+            }
+            CodeReviewAction::SubmitReviewComments => {
+                // Keyboard equivalent of the comment tray's "Send to Agent"
+                // button. Only act when sending is currently allowed, so the
+                // shortcut and the button agree (no-op when disabled).
+                if self.comment_list_view.as_ref(ctx).can_send(ctx) {
+                    self.handle_submit_review_with_comments(ctx);
+                    ctx.notify();
+                }
             }
         }
     }
