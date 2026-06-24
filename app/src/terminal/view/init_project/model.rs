@@ -53,7 +53,7 @@ pub enum InitStepStatus {
     Pending,
     /// Ready for user interaction (contains data for view to render)
     Ready(InitStepData),
-    /// User initiated action, e.g. AI generating WARP.md
+    /// User initiated action, e.g. AI generating AGENTS.md
     Running,
     /// Done (accepted, skipped, or auto-completed)
     Completed(InitActionResult),

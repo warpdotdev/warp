@@ -561,7 +561,7 @@ fn evaluate_entry(
 ) -> Result<EvaluatedEntry, BuildTreeError> {
     let is_dir = curr_path.is_dir();
 
-    // Only ignore symlinks to directories. Symlinks to files are preserved (e.g. WARP.md).
+    // Only ignore symlinks to directories. Symlinks to files are preserved (e.g. AGENTS.md).
     if curr_path.is_symlink() && is_dir {
         return Err(BuildTreeError::Symlink);
     }

@@ -52,7 +52,7 @@ const SEARCH_PLACEHOLDER_TEXT: &str = "Search rules";
 const ZERO_STATE_TEXT: &str =
     "Add a rule above, or drop one at ~/.agents/AGENTS.md to apply it across every project.";
 const ZERO_STATE_TEXT_PROJECT: &str =
-    "Once you generate a WARP.md rules file for a project, it will appear here.";
+    "Once you generate an AGENTS.md rules file for a project, it will appear here.";
 
 const DISABLED_BANNER_TEXT: &str =
     "Your rules are disabled and won't be used as context in sessions. You can ";
@@ -98,7 +98,7 @@ struct CloudRuleRow {
 }
 
 /// A rule row backed by a file on disk — used for both project-scoped rules
-/// (e.g. `<repo>/WARP.md`) and file-based global rules (e.g.
+/// (e.g. `<repo>/AGENTS.md`) and file-based global rules (e.g.
 /// `~/.agents/AGENTS.md`). The render path is identical for both: a path label
 /// plus an "Open file" button.
 #[derive(Debug, Clone)]

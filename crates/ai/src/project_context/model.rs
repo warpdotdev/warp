@@ -197,7 +197,7 @@ impl ProjectRules {
 }
 
 /// Singleton model that keeps track of mapping between paths and rule files
-/// Currently supports WARP.md files, but designed to be extensible
+/// Currently supports AGENTS.md files, but designed to be extensible
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 #[derive(Default)]
 pub struct ProjectContextModel {
@@ -530,9 +530,9 @@ impl ProjectContextModel {
     /// Returns the rules applicable to `path`, layering global rules on top of
     /// any project rules discovered up the directory tree.
     ///
-    /// Precedence is `global > project WARP.md > project AGENTS.md`. Globals
+    /// Precedence is `global > project AGENTS.md > project WARP.md`. Globals
     /// are always included (when present) regardless of project state; the
-    /// existing in-directory `WARP.md > AGENTS.md` shadow inside
+    /// existing in-directory `AGENTS.md > WARP.md` shadow inside
     /// [`RuleAtPath::respected_rule`] still applies to project rules.
     ///
     /// This is the entry point used by `BlocklistAIContextModel` when packing
