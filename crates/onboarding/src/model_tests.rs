@@ -238,21 +238,22 @@ fn terminal_settings_disable_ai() {
 }
 
 #[test]
-fn third_party_choice_disables_warp_ai() {
+fn agent_intent_keeps_ai_enabled_for_any_setup_choice() {
     let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
-        // Default agent intention + "Use Warp Agent" keeps Warp AI on.
+        // Default agent intention + "Use Warp Agent" enables AI.
         model.read(&app, |model, _| assert!(model.settings().is_ai_enabled()));
 
-        // "Use third party agents" turns Warp AI off.
+        // "Use third party agents" still keeps AI enabled: agent intent always
+        // means the user wants AI, even when bringing their own agents.
         model.update(&mut app, |model, ctx| {
             model.set_ai_setup_choice(AiSetupChoice::ThirdParty, ctx)
         });
-        model.read(&app, |model, _| assert!(!model.settings().is_ai_enabled()));
+        model.read(&app, |model, _| assert!(model.settings().is_ai_enabled()));
 
-        // Switching back to Warp Agent re-enables it.
+        // Switching back to Warp Agent also keeps AI enabled.
         model.update(&mut app, |model, ctx| {
             model.set_ai_setup_choice(AiSetupChoice::WarpAgent, ctx)
         });

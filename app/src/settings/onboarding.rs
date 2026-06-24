@@ -22,11 +22,13 @@ pub fn apply_onboarding_settings(selected_settings: &SelectedSettings, app: &mut
             ..
         } => {
             apply_agent_settings(agent_settings, app);
-            let is_ai_enabled = !agent_settings.disable_oz;
             if let Some(ui) = ui_customization {
                 apply_ui_customization_settings(ui, true, app);
             }
-            is_ai_enabled
+            // Agent-driven development always enables AI, even when the user
+            // brings their own agents (`disable_oz`) or skips creating an
+            // account during onboarding.
+            true
         }
         SelectedSettings::Terminal {
             ui_customization,

@@ -2165,30 +2165,36 @@ impl RootView {
                         .theme()
                         .name()
                         .unwrap_or_else(|| "Dark".to_string());
-                    let (use_vertical_tabs, intention) = match selected_settings {
-                        SelectedSettings::AgentDrivenDevelopment {
-                            ui_customization, ..
-                        } => (
-                            ui_customization
-                                .as_ref()
-                                .map(|c| c.use_vertical_tabs)
-                                .unwrap_or(true),
-                            OnboardingIntention::AgentDrivenDevelopment,
-                        ),
-                        SelectedSettings::Terminal {
-                            ui_customization, ..
-                        } => (
-                            ui_customization
-                                .as_ref()
-                                .map(|c| c.use_vertical_tabs)
-                                .unwrap_or(false),
-                            OnboardingIntention::Terminal,
-                        ),
-                    };
+                    let (use_vertical_tabs, intention, uses_third_party_agents) =
+                        match selected_settings {
+                            SelectedSettings::AgentDrivenDevelopment {
+                                ui_customization,
+                                agent_settings,
+                                ..
+                            } => (
+                                ui_customization
+                                    .as_ref()
+                                    .map(|c| c.use_vertical_tabs)
+                                    .unwrap_or(true),
+                                OnboardingIntention::AgentDrivenDevelopment,
+                                agent_settings.disable_oz,
+                            ),
+                            SelectedSettings::Terminal {
+                                ui_customization, ..
+                            } => (
+                                ui_customization
+                                    .as_ref()
+                                    .map(|c| c.use_vertical_tabs)
+                                    .unwrap_or(false),
+                                OnboardingIntention::Terminal,
+                                false,
+                            ),
+                        };
 
                     let login_slide_view = ctx.add_typed_action_view(|ctx| {
                         LoginSlideView::new(
                             ai_enabled,
+                            uses_third_party_agents,
                             &theme_name,
                             use_vertical_tabs,
                             intention,
@@ -2449,6 +2455,8 @@ impl RootView {
                 let login_slide_view = ctx.add_typed_action_view(|ctx| {
                     LoginSlideView::new(
                         ai_enabled,
+                        // Terminal intention is never the third-party-agent path.
+                        false,
                         &theme_name,
                         use_vertical_tabs,
                         OnboardingIntention::Terminal,
@@ -2497,6 +2505,9 @@ impl RootView {
                 let login_slide_view = ctx.add_typed_action_view(|ctx| {
                     LoginSlideView::new(
                         ai_enabled,
+                        // No agent setup choice has been made yet; default to the
+                        // Warp Agent login screen rather than the third-party copy.
+                        false,
                         &theme_name,
                         use_vertical_tabs,
                         // Existing-user login from the welcome slide happens before the user
