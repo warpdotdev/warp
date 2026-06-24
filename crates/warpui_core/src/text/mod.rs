@@ -190,19 +190,6 @@ pub trait TextBuffer {
 
     /// Returns the target [`Point`] for expanding a semantic (double-click) selection from
     /// `position` in the given `direction`, respecting the word-boundary `policy`.
-    ///
-    /// This faithfully mirrors the terminal grid's semantic selection
-    /// (`GridHandler::semantic_search_left`/`_right`) so rich-text selection behaves identically
-    /// to the terminal block list:
-    /// - Forward: include the character under `position`, then extend through a following word
-    ///   only if the character immediately after the cursor is itself part of a word. A boundary
-    ///   character right after the cursor stops the selection, so a run like `", "` or `"..."`
-    ///   never pulls in the next word, and trailing whitespace is never included.
-    /// - Backward: the mirror image, extending left through a preceding word only when the
-    ///   character immediately before the cursor is part of a word.
-    ///
-    /// The forward result is the *exclusive* end offset; the backward result is the *inclusive*
-    /// start offset.
     fn semantic_expansion_target<T: BufferIndex>(
         &self,
         position: T,
