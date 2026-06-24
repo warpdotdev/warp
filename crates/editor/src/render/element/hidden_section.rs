@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::time::Duration;
 
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
@@ -48,8 +49,9 @@ impl RenderableHiddenSection {
             let row = Flex::row()
                 .with_child(Empty::new().finish())
                 .with_cross_axis_alignment(CrossAxisAlignment::Center);
-            let hovered = state.is_hovered();
-            let background = if hovered {
+            // The hover highlight tracks the mouse immediately, while the tooltip
+            // below is gated on `is_hovered()` so it respects the hover-in delay.
+            let background = if state.is_mouse_over_element() {
                 hover_background
             } else {
                 base_background
@@ -58,7 +60,7 @@ impl RenderableHiddenSection {
                 .with_background(background)
                 .finish();
 
-            if !hovered {
+            if !state.is_hovered() {
                 return bar;
             }
 
@@ -66,7 +68,7 @@ impl RenderableHiddenSection {
             // centered just below the bar (mirrors how `Button` shows its tooltip).
             let mut stack = Stack::new().with_child(bar);
             let tooltip = ui_builder
-                .tool_tip("Double-click to expand".to_string())
+                .tool_tip("Double-click to expand all lines".to_string())
                 .build()
                 .finish();
             stack.add_positioned_overlay_child(
@@ -91,6 +93,7 @@ impl RenderableHiddenSection {
                 ctx.dispatch_typed_action(action);
             }
         })
+        .with_hover_in_delay(Duration::from_millis(500))
         .with_cursor(Cursor::PointingHand)
         .finish();
 
