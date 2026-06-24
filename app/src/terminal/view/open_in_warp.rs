@@ -159,7 +159,9 @@ impl TerminalView {
                     match banner_state.target.file_type {
                         OpenableFileType::Markdown => {
                             ctx.emit(Event::OpenFileInWarp {
-                                path: banner_state.target.path,
+                                path: warp_util::local_or_remote_path::LocalOrRemotePath::Local(
+                                    banner_state.target.path,
+                                ),
                                 session: banner_state.session,
                             });
                         }

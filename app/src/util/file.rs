@@ -2,6 +2,7 @@ pub mod external_editor;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 #[cfg(windows)]
 use warp_util::path::is_network_resource;
 use warp_util::path::{CleanPathResult, LineAndColumnArg};
@@ -106,14 +107,18 @@ impl FilePathType {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileLink {
     pub link: Link,
-    /// This path has been converted (if needed) into a native path from the shell.
-    pub absolute_path: PathBuf,
+    /// This path has been resolved in the session it came from.
+    pub location: LocalOrRemotePath,
     pub line_and_column_num: Option<LineAndColumnArg>,
 }
 
 impl FileLink {
     pub fn absolute_path(&self) -> Option<PathBuf> {
-        Some(self.absolute_path.clone())
+        self.location.to_local_path().map(Path::to_path_buf)
+    }
+
+    pub fn location(&self) -> &LocalOrRemotePath {
+        &self.location
     }
 }
 

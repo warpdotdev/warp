@@ -1726,7 +1726,7 @@ pub enum Event {
     },
     /// Tell the pane group to open a file within Warp.
     OpenFileInWarp {
-        path: PathBuf,
+        path: LocalOrRemotePath,
         /// The session that the file belongs to.
         session: Arc<Session>,
     },
@@ -18345,7 +18345,7 @@ impl TerminalView {
         position: &WithinModel<Point>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some(link) = self.highlighted_link.as_ref() else {
+        let Some(link) = self.highlighted_link.clone() else {
             return;
         };
         send_telemetry_from_ctx!(
@@ -18359,15 +18359,12 @@ impl TerminalView {
         match link {
             #[cfg(feature = "local_fs")]
             GridHighlightedLink::File(link) if link.contains(position) => {
-                let link = link.get_inner();
-                if let Some(path) = link.absolute_path() {
-                    self.open_file_path(path, link.line_and_column_num, ctx);
-                }
+                self.open_file_link(&link, ctx);
             }
             GridHighlightedLink::Url(url) if url.contains(position) => {
                 let model = self.model.lock();
                 ctx.notify();
-                ctx.open_url(&model.link_at_range(url, RespectObfuscatedSecrets::No));
+                ctx.open_url(&model.link_at_range(&url, RespectObfuscatedSecrets::No));
             }
             _ => (),
         }
@@ -18405,7 +18402,10 @@ impl TerminalView {
             .active_block_session_id()
             .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
         {
-            ctx.emit(Event::OpenFileInWarp { path, session })
+            ctx.emit(Event::OpenFileInWarp {
+                path: LocalOrRemotePath::Local(path),
+                session,
+            })
         }
     }
 
