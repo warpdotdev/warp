@@ -2149,6 +2149,23 @@ impl AIBlock {
                 .entry(citation.clone())
                 .or_default();
         }
+        // Also register handles for memory citations derived from fetched_memories,
+        // which are synthesized at render time and never go through output.citations.
+        if let Some(conversation) = self.model.conversation(ctx) {
+            for memory in conversation.fetched_memories() {
+                if memory.memory_store_id.is_empty() || memory.memory_id.is_empty() {
+                    continue;
+                }
+                self.state_handles
+                    .footer_citation_chip_handles
+                    .entry(AIAgentCitation::AgentMemory {
+                        memory_store_id: memory.memory_store_id.clone(),
+                        memory_id: memory.memory_id.clone(),
+                        content: memory.content.clone(),
+                    })
+                    .or_default();
+            }
+        }
 
         // Register element state for reasoning messages and track summarization timing.
         for message in &output.messages {
