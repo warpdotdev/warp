@@ -28,7 +28,6 @@ use super::ai_queries::AIQueriesDataSource;
 use super::env_var_collections::EnvVarCollectionDataSource;
 use super::history::history_data_source_for_session;
 use super::notebooks::notebooks_data_source;
-use super::warp_ai::WarpAIDataSource;
 use super::workflows::{cloud_workflows_data_source, WorkflowsDataSource};
 use super::zero_state::{CommandSearchZeroStateEvent, CommandSearchZeroStateView};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
@@ -218,7 +217,7 @@ impl CommandSearchView {
         &mut self,
         session_id: SessionId,
         session_context: Option<SessionContext>,
-        ai_execution_context: Option<WarpAiExecutionContext>,
+        _ai_execution_context: Option<WarpAiExecutionContext>,
         ctx: &mut ViewContext<Self>,
     ) {
         self.mixer.update(ctx, |mixer, ctx| {
@@ -227,23 +226,6 @@ impl CommandSearchView {
             // Add data sources in lowest->highest priority order.  If results from two
             // data sources produce the same ranking score, the data source added first
             // will show up higher in the list (i.e.: further away from the input).
-            if AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
-                mixer.add_sync_source(
-                    WarpAIDataSource::new(self.ai_client.clone(), None),
-                    HashSet::from([QueryFilter::NaturalLanguage]),
-                );
-                mixer.add_async_source(
-                    WarpAIDataSource::new(self.ai_client.clone(), ai_execution_context),
-                    HashSet::from([QueryFilter::NaturalLanguage]),
-                    AddAsyncSourceOptions {
-                        debounce_interval: Some(Duration::from_millis(50)),
-                        run_in_zero_state: false,
-                        run_when_unfiltered: false,
-                    },
-                    ctx,
-                );
-            }
-
             if WarpDriveSettings::is_warp_drive_enabled(ctx) {
                 mixer.add_sync_source(
                     WorkflowsDataSource::new(session_context.as_ref(), ctx),
@@ -500,9 +482,7 @@ impl CommandSearchView {
                 AcceptHistory(_)
                 | AcceptWorkflow(_)
                 | AcceptNotebook(_)
-                | OpenWarpAI
                 | AcceptEnvVarCollection(_)
-                | TranslateUsingWarpAI
                 | AcceptAIQuery(_) => false,
             };
 

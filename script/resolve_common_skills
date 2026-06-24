@@ -3,12 +3,12 @@
 set -eo pipefail
 
 COMMON_SKILLS_REPO="warpdotdev/common-skills"
-COMMON_SKILLS_REF="${WARP_COMMON_SKILLS_REF:-main}"
-RAW_BASE_URL="${WARP_COMMON_SKILLS_RAW_BASE_URL:-https://raw.githubusercontent.com/${COMMON_SKILLS_REPO}/${COMMON_SKILLS_REF}/scripts}"
+COMMON_SKILLS_REF="${ZERP_COMMON_SKILLS_REF:-main}"
+RAW_BASE_URL="${ZERP_COMMON_SKILLS_RAW_BASE_URL:-https://raw.githubusercontent.com/${COMMON_SKILLS_REPO}/${COMMON_SKILLS_REF}/scripts}"
 RESOLVER_NAME="resolve_common_skills"
 
 execute_resolver_from_dir() {
-  local script_path="${WARP_COMMON_SKILLS_SCRIPTS_DIR%/}/${RESOLVER_NAME}"
+  local script_path="${ZERP_COMMON_SKILLS_SCRIPTS_DIR%/}/${RESOLVER_NAME}"
 
   if [[ -x "${script_path}" ]]; then
     exec "${script_path}" "$@"
@@ -18,7 +18,7 @@ execute_resolver_from_dir() {
     exec bash "${script_path}" "$@"
   fi
 
-  echo "error: could not execute ${RESOLVER_NAME} from WARP_COMMON_SKILLS_SCRIPTS_DIR=${WARP_COMMON_SKILLS_SCRIPTS_DIR}" >&2
+  echo "error: could not execute ${RESOLVER_NAME} from ZERP_COMMON_SKILLS_SCRIPTS_DIR=${ZERP_COMMON_SKILLS_SCRIPTS_DIR}" >&2
   exit 1
 }
 
@@ -50,7 +50,7 @@ execute_resolver_from_remote() {
   return "${status}"
 }
 
-if [[ -n "${WARP_COMMON_SKILLS_SCRIPTS_DIR:-}" ]]; then
+if [[ -n "${ZERP_COMMON_SKILLS_SCRIPTS_DIR:-}" ]]; then
   execute_resolver_from_dir "$@"
 fi
 

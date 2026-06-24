@@ -15,19 +15,19 @@ Use the `computer_use` tool to visually test that Warp looks and behaves as inte
 
 Launch Warp from the repository root. The exact command depends on which environment variable holds the API key:
 
-- If `WARP_API_KEY` is already set, omit the flag entirely — the `--api-key` flag is bound to `WARP_API_KEY`, so Warp reads it automatically:
+- If `ZERP_API_KEY` is already set, omit the flag entirely — the `--api-key` flag is bound to `ZERP_API_KEY`, so Warp reads it automatically:
 
   ```bash
-  cargo run --bin warp
+  cargo run --bin zerp
   ```
 
-- If the key is in `STAGING_USER_WARP_API_KEY` instead, pass it explicitly via the flag:
+- If the key is in `STAGING_USER_ZERP_API_KEY` instead, pass it explicitly via the flag:
 
   ```bash
-  cargo run --bin warp -- --api-key $STAGING_USER_WARP_API_KEY
+  cargo run --bin zerp -- --api-key $STAGING_USER_ZERP_API_KEY
   ```
 
-Always pass `--bin warp` explicitly. That target builds the internal (dogfood) channel, which is the only channel that honors `--api-key` for the GUI app. A plain `cargo run` builds the OSS channel, which ignores the key and falls back to interactive onboarding.
+Always pass `--bin zerp` explicitly. That target builds the internal (dogfood) channel, which is the only channel that honors `--api-key` for the GUI app. A plain `cargo run` builds the OSS channel, which ignores the key and falls back to interactive onboarding.
 
 Authenticating this way starts the app directly without interactive login prompts.
 
@@ -51,7 +51,7 @@ Keep mocked changes minimal and focused — only change what's necessary to reac
 
 Call the `computer_use` tool with a task description that includes:
 
-- The command to build and launch Warp from the repo root: `cargo run --bin warp` when `WARP_API_KEY` is set in the environment, or `cargo run --bin warp -- --api-key $STAGING_USER_WARP_API_KEY` when the key is in `STAGING_USER_WARP_API_KEY` instead
+- The command to build and launch Warp from the repo root: `cargo run --bin zerp` when `ZERP_API_KEY` is set in the environment, or `cargo run --bin zerp -- --api-key $STAGING_USER_ZERP_API_KEY` when the key is in `STAGING_USER_ZERP_API_KEY` instead
 - Step-by-step instructions for navigating to the UI being tested
 - **Specific observations to report**: describe exactly what elements, text, colors, layout, or states the tool should observe and describe back
 - Do **not** include expected values in the task — the tool should report what it sees, not judge correctness

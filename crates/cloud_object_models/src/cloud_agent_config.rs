@@ -40,7 +40,6 @@ impl AgentConfig {
             profile_id: None,
             worker_host: None,
             skill_spec: None,
-            computer_use_enabled: None,
             harness: None,
             harness_auth_secrets: None,
         }

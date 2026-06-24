@@ -27,8 +27,6 @@ pub struct AgentConfigSnapshotFile {
     pub mcp_servers: Option<Map<String, Value>>,
     #[serde(default)]
     pub host: Option<String>,
-    #[serde(default)]
-    pub computer_use_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,10 +91,10 @@ fn parse_yaml(input: &str) -> anyhow::Result<AgentConfigSnapshotFile> {
 }
 
 fn supported_keys_context() -> String {
-    "Supported keys: name, environment_id, model_id, base_prompt, mcp_servers, host, computer_use_enabled".to_string()
+    "Supported keys: name, environment_id, model_id, base_prompt, mcp_servers, host".to_string()
 }
 
-/// Convert an unwrapped `mcp_servers` map into runtime MCP specs for AgentDriver.
+/// Convert an unwrapped `mcp_servers` map into runtime MCP specs.
 ///
 /// Behavior:
 /// - Entries with `warp_id` become `MCPSpec::Uuid`.
@@ -153,7 +151,6 @@ pub fn merge_with_precedence(
 
     let mcp_servers = merge_mcp_servers(file.mcp_servers.clone(), cli.mcp_servers);
     let worker_host = cli.worker_host.or_else(|| file.host.clone());
-    let computer_use_enabled = cli.computer_use_enabled.or(file.computer_use_enabled);
 
     AgentConfigSnapshot {
         name,
@@ -164,7 +161,6 @@ pub fn merge_with_precedence(
         profile_id: None,
         worker_host,
         skill_spec: cli.skill_spec,
-        computer_use_enabled,
         harness: cli.harness,
         harness_auth_secrets: cli.harness_auth_secrets,
     }

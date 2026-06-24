@@ -42,15 +42,23 @@ pub struct HarnessAvailability {
 }
 
 /// Default fallback used before the server responds.
-/// Oz is enabled by default so the UI is usable pre-fetch; the server
+/// Third-party CLI harnesses are enabled by default so the UI is usable pre-fetch; the server
 /// list (which respects admin overrides) replaces this once available.
 fn default_harnesses() -> Vec<HarnessAvailability> {
-    vec![HarnessAvailability {
-        harness: Harness::Oz,
-        display_name: "Warp".to_string(),
+    [
+        Harness::Codex,
+        Harness::Claude,
+        Harness::OpenCode,
+        Harness::Gemini,
+    ]
+    .into_iter()
+    .map(|harness| HarnessAvailability {
+        harness,
+        display_name: harness_display::display_name(harness).to_string(),
         enabled: true,
         available_models: vec![],
-    }]
+    })
+    .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -405,7 +413,6 @@ fn remove_deleted_auth_secret_entry(
 }
 fn harness_to_graphql_harness(harness: Harness) -> Option<warp_graphql::ai::AgentHarness> {
     match harness {
-        Harness::Oz => Some(warp_graphql::ai::AgentHarness::Oz),
         Harness::Claude => Some(warp_graphql::ai::AgentHarness::ClaudeCode),
         Harness::Gemini => Some(warp_graphql::ai::AgentHarness::Gemini),
         Harness::Codex => Some(warp_graphql::ai::AgentHarness::Codex),

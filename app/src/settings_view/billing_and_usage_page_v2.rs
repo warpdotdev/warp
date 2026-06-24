@@ -935,9 +935,6 @@ impl BillingAndUsagePageV2View {
                     ..Default::default()
                 })
                 .build()
-                .on_click(|ctx, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::AddAmbientAgentTab);
-                })
                 .finish();
             right_side.add_child(
                 Container::new(new_agent_button)
@@ -2146,7 +2143,7 @@ impl TypedActionView for BillingAndUsagePageV2View {
             BillingAndUsagePageAction::NavigateToByokSettings => {
                 ctx.dispatch_typed_action_deferred(WorkspaceAction::ShowSettingsPageWithSearch {
                     search_query: "api".to_string(),
-                    section: Some(SettingsSection::WarpAgent),
+                    section: Some(SettingsSection::ThirdPartyCLIAgents),
                 });
             }
         }

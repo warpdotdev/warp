@@ -1,6 +1,5 @@
 use warp_cli::agent::Harness;
 
-use crate::features::FeatureFlag;
 #[cfg(not(target_family = "wasm"))]
 use crate::util::path::resolve_executable;
 
@@ -9,8 +8,8 @@ pub(crate) const LOCAL_HARNESS_INSTALLATION_REQUIRED_TOOLTIP: &str =
     "Install Claude Code to use this local harness.";
 pub(crate) const LOCAL_CODEX_HARNESS_INSTALLATION_REQUIRED_TOOLTIP: &str =
     "Install Codex to use this local harness.";
-pub(crate) const LOCAL_CODEX_HARNESS_DISABLED_MESSAGE: &str =
-    "Local Codex child agents are temporarily disabled.";
+pub(crate) const LOCAL_CHILD_HARNESS_DISABLED_MESSAGE: &str =
+    "Local child agent orchestration is not available in this build.";
 
 /// Client-side readiness for using a harness in local orchestration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,18 +32,9 @@ impl LocalHarnessSetupState {
 /// Returns the product-level disabled reason for a local harness.
 pub(crate) fn local_harness_product_disabled_message(harness: Harness) -> Option<&'static str> {
     match harness {
-        Harness::Codex if !local_codex_harness_is_enabled() => {
-            Some(LOCAL_CODEX_HARNESS_DISABLED_MESSAGE)
-        }
-        Harness::Oz | Harness::Claude | Harness::OpenCode | Harness::Gemini | Harness::Unknown => {
-            None
-        }
-        Harness::Codex => None,
+        Harness::Unknown => Some(LOCAL_CHILD_HARNESS_DISABLED_MESSAGE),
+        Harness::Claude | Harness::OpenCode | Harness::Codex | Harness::Gemini => None,
     }
-}
-
-fn local_codex_harness_is_enabled() -> bool {
-    FeatureFlag::LocalClaudeCodexChildHarnesses.is_enabled()
 }
 
 /// Returns whether a local harness is exposed by product policy.
@@ -72,12 +62,12 @@ fn local_harness_setup_state_with_cli_resolver(
         Harness::Codex if !cli_is_installed("codex") => LocalHarnessSetupState::MissingHarness {
             tooltip: LOCAL_CODEX_HARNESS_INSTALLATION_REQUIRED_TOOLTIP,
         },
-        Harness::Oz
-        | Harness::Claude
-        | Harness::OpenCode
-        | Harness::Gemini
-        | Harness::Codex
-        | Harness::Unknown => LocalHarnessSetupState::Ready,
+        Harness::Claude | Harness::OpenCode | Harness::Gemini | Harness::Codex => {
+            LocalHarnessSetupState::Ready
+        }
+        Harness::Unknown => LocalHarnessSetupState::ProductDisabled {
+            message: LOCAL_CHILD_HARNESS_DISABLED_MESSAGE,
+        },
     }
 }
 
@@ -92,7 +82,3 @@ fn local_cli_is_installed(command: &str) -> bool {
         false
     }
 }
-
-#[cfg(test)]
-#[path = "local_harness_setup_tests.rs"]
-mod tests;

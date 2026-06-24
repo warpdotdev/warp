@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds the Integration-channel Oz CLI for Linux x86_64 (musl) and uploads it
+# Builds the Integration-channel Zerp CLI for Linux x86_64 (musl) and uploads it
 # to the SSH integration testing VM so that remote-server integration tests run
 # against the binary built from the current branch.
 #
@@ -26,10 +26,10 @@ WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TARGET="x86_64-unknown-linux-musl"
 CARGO_PROFILE="dev-remote"
 FEATURES="crash_reporting,standalone,agent_mode_debug,remote_codebase_indexing"
-WARP_BIN="integration"
+ZERP_BIN="integration"
 # The integration test runner uses Channel::Integration, which maps to
-# cli_command_name() = "oz-integration", remote_server_dir() = "~/.warp-dev/remote-server",
-# and remote_server_binary() = "oz-integration-${pinned_version}".
+# cli_command_name() = "zerp-cli-integration", remote_server_dir() = "~/.warp-dev/remote-server",
+# and remote_server_binary() = "zerp-cli-integration-${pinned_version}".
 # See crates/warp_core/src/channel/mod.rs, crates/remote_server/src/setup.rs,
 # and crates/integration/src/bin/integration.rs.
 #
@@ -123,18 +123,18 @@ if ! rustup target list --installed 2>/dev/null | grep -q "$TARGET"; then
 fi
 
 BUNDLE_VERSION="$(app_version)"
-BUNDLE_BINARY_NAME="oz-integration"
+BUNDLE_BINARY_NAME="zerp-cli-integration"
 BINARY_NAME="$BUNDLE_BINARY_NAME-$BUNDLE_VERSION"
 
 # ── Build ─────────────────────────────────────────────────────────
 
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT/target}"
 OUTPUT_DIR="$CARGO_TARGET_DIR/$TARGET/$CARGO_PROFILE"
-BUILT_BINARY="$OUTPUT_DIR/$WARP_BIN"
+BUILT_BINARY="$OUTPUT_DIR/$ZERP_BIN"
 LOCAL_BUNDLE_DIR="$OUTPUT_DIR/remote-server-integration-bundle"
 LOCAL_BUNDLE_TARBALL="$OUTPUT_DIR/remote-server-integration-bundle.tar.gz"
 
-echo "==> Building Integration-channel Oz CLI for $TARGET (profile=$CARGO_PROFILE)"
+echo "==> Building Integration-channel Zerp CLI for $TARGET (profile=$CARGO_PROFILE)"
 
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$MUSL_LINKER" \
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C symbol-mangling-version=v0" \
@@ -142,7 +142,7 @@ CC_x86_64_unknown_linux_musl="$MUSL_LINKER" \
 CXX_x86_64_unknown_linux_musl="$MUSL_CXX" \
   cargo build \
     -p warp \
-    --bin "$WARP_BIN" \
+    --bin "$ZERP_BIN" \
     --target "$TARGET" \
     --profile "$CARGO_PROFILE" \
     --features "$FEATURES"

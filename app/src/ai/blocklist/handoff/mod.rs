@@ -8,8 +8,7 @@
 //!   handoff pane bootstrap.
 //!
 //! The chip-click open path lives in `Workspace::start_local_to_cloud_handoff`
-//! and drives the conversation fork + async snapshot upload directly via
-//! `AIClient::fork_conversation` and `agent_sdk::driver::upload_snapshot_for_handoff`.
+//! and drives the conversation fork + async snapshot upload directly.
 //! The actual cloud-agent spawn happens inside the handoff pane's
 //! `AmbientAgentViewModel::submit_handoff`, which reads the cached
 //! `forked_conversation_id` and `snapshot_upload` off `PendingHandoff`.

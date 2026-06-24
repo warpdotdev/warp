@@ -48,9 +48,9 @@ pub struct SkillManager {
     /// alongside local home and project skills.
     remote_home_directories: HashMap<HostId, LocalOrRemotePath>,
     /// When true, all skills in `directory_skills` are in scope regardless of
-    /// the current working directory. Set by `AgentDriver` when a cloud
-    /// environment with configured repos is active, so the agent sees every
-    /// skill from every cloned repo.
+    /// the current working directory. Used when a cloud environment with
+    /// configured repos is active, so the agent sees every skill from every
+    /// cloned repo.
     is_cloud_environment: bool,
     #[allow(dead_code)]
     skill_watcher: ModelHandle<SkillWatcher>, // Can't remove this or it'll get cleaned up after new()

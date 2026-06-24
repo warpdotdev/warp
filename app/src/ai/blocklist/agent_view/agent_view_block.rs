@@ -271,7 +271,8 @@ impl View for AgentViewEntryBlock {
         }
 
         let agent_icon = render_icon_with_status(
-            IconWithStatusVariant::OzAgent {
+            IconWithStatusVariant::CLIAgent {
+                agent: crate::terminal::CLIAgent::Unknown,
                 status: Some(conversation.status().clone()),
                 is_ambient: false,
             },

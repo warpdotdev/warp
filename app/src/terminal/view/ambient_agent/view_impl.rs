@@ -21,8 +21,6 @@ use super::loading_screen::{
 use super::{AmbientAgentEntryBlock, AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::display_user_query_with_mode;
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::agent_sdk::driver::harness::auth_check_command_for;
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
@@ -35,11 +33,19 @@ use crate::terminal::view::{
     ConversationDetailsPanelAutoOpenPolicy, Event as TerminalViewEvent, TerminalView,
 };
 use crate::terminal::CLIAgent;
-use crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalVariant;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const CHILD_AGENT_GITHUB_AUTH_REQUIRED_BLOCKED_ACTION: &str =
     "GitHub authentication required before starting the child agent.";
+
+#[cfg(not(target_family = "wasm"))]
+fn local_auth_check_command_for(harness: Harness) -> Option<&'static str> {
+    match harness {
+        Harness::Claude => Some("claude auth status --json"),
+        Harness::Codex => Some("codex login status --json"),
+        Harness::OpenCode | Harness::Gemini | Harness::Unknown => None,
+    }
+}
 
 impl TerminalView {
     fn active_ambient_agent_conversation_id(&self, ctx: &AppContext) -> Option<AIConversationId> {
@@ -85,11 +91,7 @@ impl TerminalView {
             .current_workspace()
             .is_some_and(|workspace| workspace.billing_metadata.is_user_on_paid_plan());
 
-        if is_on_paid_plan {
-            ctx.emit(crate::terminal::view::Event::ShowCloudAgentCapacityModal {
-                variant: CloudAgentCapacityModalVariant::OutOfCredits,
-            });
-        } else {
+        if !is_on_paid_plan {
             AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
                 model.refresh_request_usage_async(ctx);
             });
@@ -273,18 +275,6 @@ impl TerminalView {
                 }
                 // Re-render to show the error state.
                 ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
-                ctx.notify();
-            }
-            AmbientAgentViewModelEvent::ShowCloudAgentCapacityModal => {
-                if FeatureFlag::CloudMode.is_enabled()
-                    && ambient_agent_view_model.as_ref(ctx).is_ambient_agent()
-                    && !self.model.lock().is_shared_ambient_agent_session()
-                {
-                    ctx.emit(crate::terminal::view::Event::ShowCloudAgentCapacityModal {
-                        variant: CloudAgentCapacityModalVariant::ConcurrentLimit,
-                    });
-                }
-
                 ctx.notify();
             }
             AmbientAgentViewModelEvent::ShowAICreditModal => {
@@ -630,23 +620,19 @@ impl TerminalView {
             return false;
         };
         let selected_harness = ambient_agent_view_model.as_ref(ctx).selected_harness();
-        // The auth-check preflight command (e.g. `claude auth status
-        // --json`, `codex login status`) shares the harness CLI prefix
-        // but is NOT the harness session start. Treat it as a setup
-        // command instead so it stays in the existing setup-commands
-        // group. The driver's harness impls are the single source of
-        // truth for what an auth check command looks like.
+        // Auth-check preflight commands share the harness CLI prefix but are
+        // not the harness session start. Treat them as setup commands so they
+        // stay in the existing setup-command group.
         #[cfg(not(target_family = "wasm"))]
         {
             let command_trimmed = command.trim();
-            if let Some(auth_cmd) = auth_check_command_for(selected_harness) {
+            if let Some(auth_cmd) = local_auth_check_command_for(selected_harness) {
                 if auth_cmd.trim() == command_trimmed {
                     return false;
                 }
             }
         }
         match selected_harness {
-            Harness::Oz => false,
             Harness::Claude => matches!(cli_agent, CLIAgent::Claude),
             Harness::OpenCode => matches!(cli_agent, CLIAgent::OpenCode),
             Harness::Gemini => matches!(cli_agent, CLIAgent::Gemini),

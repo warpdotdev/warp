@@ -1,0 +1,23 @@
+[Desktop Entry]
+# The version of the desktop entry spec this conforms to.
+Version=1.0
+
+Type=Application
+
+Name=Zerp
+GenericName=TerminalEmulator
+
+Exec=zerp-terminal %U
+StartupWMClass=dev.zerp.Zerp
+
+Keywords=shell;prompt;command;commandline;cmd;
+
+Icon=dev.zerp.Zerp
+
+Categories=System;TerminalEmulator;
+
+# Don't run this application within a terminal.
+Terminal=false
+
+# Register ourselves as the handler for zerp:// URLs.
+MimeType=x-scheme-handler/zerp;

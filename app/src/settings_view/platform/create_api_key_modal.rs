@@ -29,7 +29,6 @@ use crate::view_components::dropdown::{DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT};
 use crate::view_components::{Dropdown as DropdownView, DropdownItem};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
-const OZ_AGENTS_URL: &str = "https://oz.warp.dev/agents?new=true";
 const API_KEY_DOCS_URL: &str =
     "https://docs.warp.dev/reference/cli/api-keys/#personal-vs-agent-keys";
 
@@ -123,7 +122,6 @@ pub enum CreateApiKeyModalAction {
     CopyRawKey,
     SetExpiration(ExpirationOption),
     SelectAgent(String),
-    CreateNewAgent,
 }
 
 pub enum CreateApiKeyModalEvent {
@@ -728,26 +726,12 @@ impl View for CreateApiKeyModal {
 
                     if !self.is_loading_agents && available_agents.is_empty() {
                         let empty_text = Text::new(
-                            "No agents available. Create one first.",
+                            "No agents available in this build.",
                             appearance.ui_font_family(),
                             LABEL_FONT_SIZE,
                         )
                         .with_color(theme.nonactive_ui_text_color().into())
                         .finish();
-
-                        let create_agent_button = appearance
-                            .ui_builder()
-                            .button(
-                                ButtonVariant::Secondary,
-                                self.create_agent_button_mouse_state.clone(),
-                            )
-                            .with_text_label("Create agent".to_string())
-                            .with_style(button_style)
-                            .build()
-                            .on_click(|ctx, _, _| {
-                                ctx.dispatch_typed_action(CreateApiKeyModalAction::CreateNewAgent);
-                            })
-                            .finish();
 
                         col.add_child(
                             Container::new(
@@ -756,7 +740,6 @@ impl View for CreateApiKeyModal {
                                     .with_child(
                                         Container::new(empty_text).with_margin_bottom(8.).finish(),
                                     )
-                                    .with_child(create_agent_button)
                                     .finish(),
                             )
                             .with_border(Border::all(1.).with_border_fill(theme.outline()))
@@ -875,9 +858,6 @@ impl TypedActionView for CreateApiKeyModal {
             CreateApiKeyModalAction::SelectAgent(uid) => {
                 self.selected_agent_uid = Some(uid.clone());
                 ctx.notify();
-            }
-            CreateApiKeyModalAction::CreateNewAgent => {
-                ctx.open_url(OZ_AGENTS_URL);
             }
         }
     }

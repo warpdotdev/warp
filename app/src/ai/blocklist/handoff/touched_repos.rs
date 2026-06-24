@@ -373,8 +373,6 @@ fn extract_action_paths(
         | AIAgentActionType::ReadDocuments(_)
         | AIAgentActionType::EditDocuments(_)
         | AIAgentActionType::CreateDocuments(_)
-        | AIAgentActionType::UseComputer(_)
-        | AIAgentActionType::RequestComputerUse(_)
         | AIAgentActionType::ReadSkill(_)
         | AIAgentActionType::FetchConversation { .. }
         | AIAgentActionType::StartAgent { .. }

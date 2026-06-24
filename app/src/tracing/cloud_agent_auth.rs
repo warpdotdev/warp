@@ -8,7 +8,7 @@
 //!
 //! Refresh begins only after the application has an authenticated managed-secrets client. A
 //! successful mint replaces the dispatch credential only after the returned JWT's unverified
-//! payload contains a string `run_id` exactly matching the immutable startup `OZ_RUN_ID`. This
+//! payload contains a string `run_id` exactly matching the immutable startup `ZERP_RUN_ID`. This
 //! payload inspection is only a rejection gate; the collector remains responsible for verifying
 //! the token's signature, audience, expiry, and trusted trace resource attributes. Every refresh
 //! failure preserves the last valid credential and enters bounded jittered backoff.
@@ -35,9 +35,9 @@ use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 /// The environment variables form the immutable dispatch-time authentication bootstrap.
-const CLOUD_AGENT_OTLP_TOKEN: &str = "WARP_CLOUD_AGENT_OTLP_TOKEN";
-const CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT: &str = "WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT";
-const OZ_RUN_ID: &str = "OZ_RUN_ID";
+const CLOUD_AGENT_OTLP_TOKEN: &str = "ZERP_CLOUD_AGENT_OTLP_TOKEN";
+const CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT: &str = "ZERP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT";
+const ZERP_RUN_ID: &str = "ZERP_RUN_ID";
 /// The collector audience and requested lifetime are fixed by the cloud-agent trace contract.
 const COLLECTOR_AUDIENCE: &str = "warp-cloud-agent-otel";
 const REFRESHED_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
@@ -55,7 +55,7 @@ const REFRESH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Shared dispatch authentication state between the exporter and the later refresh coordinator.
 ///
 /// The optional expected run ID intentionally does not gate initial tracing: a valid dispatch
-/// credential remains usable when `OZ_RUN_ID` is missing or empty, but every refreshed credential
+/// credential remains usable when `ZERP_RUN_ID` is missing or empty, but every refreshed credential
 /// is rejected until an immutable expected run ID is available to the replacement gate.
 #[derive(Clone)]
 pub(super) struct AuthContext {
@@ -91,7 +91,7 @@ impl AuthContext {
             expires_at > Utc::now(),
             "Cloud-agent OTLP token is already expired"
         );
-        let expected_run_id = std::env::var(OZ_RUN_ID)
+        let expected_run_id = std::env::var(ZERP_RUN_ID)
             .ok()
             .filter(|run_id| !run_id.trim().is_empty());
 

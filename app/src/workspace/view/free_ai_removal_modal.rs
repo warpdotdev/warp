@@ -320,7 +320,7 @@ impl TypedActionView for FreeAiRemovalModal {
                 // the settings page this opens.
                 ctx.dispatch_typed_action_deferred(WorkspaceAction::ShowSettingsPageWithSearch {
                     search_query: "api".to_string(),
-                    section: Some(SettingsSection::WarpAgent),
+                    section: Some(SettingsSection::ThirdPartyCLIAgents),
                 });
                 ctx.emit(FreeAiRemovalModalEvent::Close);
             }

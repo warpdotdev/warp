@@ -105,7 +105,7 @@ pub fn test_settings_error_banner_on_reload_with_invalid_toml() -> Builder {
     new_builder()
         .with_setup(move |utils| {
             // Use a short watcher delay so the reload fires quickly.
-            utils.set_env("WARP_CONFIG_WATCHER_DELAY_MS", Some("10".to_string()));
+            utils.set_env("ZERP_CONFIG_WATCHER_DELAY_MS", Some("10".to_string()));
 
             // Create a valid settings file so the watcher is already tracking
             // it. The reload tests modify this file rather than creating a new
@@ -186,7 +186,7 @@ pub fn test_settings_error_banner_on_reload_with_invalid_value() -> Builder {
 
     new_builder()
         .with_setup(move |utils| {
-            utils.set_env("WARP_CONFIG_WATCHER_DELAY_MS", Some("10".to_string()));
+            utils.set_env("ZERP_CONFIG_WATCHER_DELAY_MS", Some("10".to_string()));
 
             // Create the settings file at startup so the watcher tracks it.
             let path = toml_file_path();

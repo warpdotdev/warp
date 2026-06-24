@@ -546,7 +546,7 @@ impl ProfileModelSelector {
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
                         search_query: "api".to_string(),
-                        section: Some(SettingsSection::WarpAgent),
+                        section: Some(SettingsSection::ThirdPartyCLIAgents),
                     });
                 })
         });
@@ -639,27 +639,26 @@ impl ProfileModelSelector {
             .is_some_and(|m| m.as_ref(app).is_ready_for_cloud_followup_prompt())
     }
 
-    /// Locked because a non-Oz cloud run (e.g. Claude Code, Codex) has been
+    /// Locked because a third-party CLI run (e.g. Claude Code, Codex) has been
     /// spawned. The harness owns model selection, so changing the model
     /// locally has no effect on the run. We lock silently in this case
     /// because the harness selection itself communicates the lock.
-    fn is_locked_for_non_oz_run(&self, app: &AppContext) -> bool {
+    fn is_locked_for_third_party_run(&self, app: &AppContext) -> bool {
         self.ambient_agent_view_model.as_ref().is_some_and(|m| {
             let model = m.as_ref(app);
-            model.task_id().is_some()
-                && !matches!(model.selected_harness(), Harness::Oz | Harness::Unknown)
+            model.task_id().is_some() && !matches!(model.selected_harness(), Harness::Unknown)
         })
     }
 
     fn is_model_locked(&self, app: &AppContext) -> bool {
-        self.is_locked_for_cloud_followup(app) || self.is_locked_for_non_oz_run(app)
+        self.is_locked_for_cloud_followup(app) || self.is_locked_for_third_party_run(app)
     }
 
-    /// True when a non-Oz harness is selected.
+    /// True when a third-party harness is selected.
     fn is_third_party_harness(&self, app: &AppContext) -> bool {
         self.ambient_agent_view_model.as_ref().is_some_and(|m| {
             let model = m.as_ref(app);
-            !matches!(model.selected_harness(), Harness::Oz | Harness::Unknown)
+            !matches!(model.selected_harness(), Harness::Unknown)
         })
     }
 
@@ -704,11 +703,11 @@ impl ProfileModelSelector {
             }
         };
 
-        // Non-Oz runs lock silently: the harness owns model selection, and the
+        // Third-party runs lock silently: the harness owns model selection, and the
         // user already knows that, so no tooltip is shown.
         let model_tooltip: Option<&str> = if self.is_locked_for_cloud_followup(ctx) {
             Some(MODEL_LOCKED_FOR_FOLLOWUP_TOOLTIP)
-        } else if self.is_locked_for_non_oz_run(ctx) {
+        } else if self.is_locked_for_third_party_run(ctx) {
             None
         } else {
             Some(MODEL_PICKER_TOOLTIP)
@@ -1734,8 +1733,8 @@ impl ProfileModelSelector {
             SavePosition::new(button, "profile_model_selector_model_button").finish();
 
         let is_locked_for_followup = self.is_locked_for_cloud_followup(app);
-        let is_locked_for_non_oz = self.is_locked_for_non_oz_run(app);
-        let is_locked = is_locked_for_followup || is_locked_for_non_oz;
+        let is_locked_for_third_party = self.is_locked_for_third_party_run(app);
+        let is_locked = is_locked_for_followup || is_locked_for_third_party;
         let can_interact = has_edit_access && !is_locked;
 
         let hoverable = Hoverable::new(self.model_mouse_state.clone(), move |state| {
@@ -1763,10 +1762,10 @@ impl ProfileModelSelector {
                 );
                 stack.finish()
             } else if state.is_hovered() {
-                // Non-Oz runs lock silently — skip the tooltip entirely.
+                // Third-party runs lock silently; skip the tooltip entirely.
                 let tooltip_text: Option<&str> = if is_locked_for_followup {
                     Some(MODEL_LOCKED_FOR_FOLLOWUP_TOOLTIP)
-                } else if is_locked_for_non_oz {
+                } else if is_locked_for_third_party {
                     None
                 } else {
                     Some(MODEL_REQUIRES_EDIT_ACCESS_TOOLTIP)

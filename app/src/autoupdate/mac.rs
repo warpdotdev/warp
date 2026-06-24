@@ -143,8 +143,8 @@ pub(super) fn relaunch() -> Result<()> {
     // If we're testing with a local copy of channel_versions.json, have the
     // newly-started binary also reference that same file (so we can test
     // displaying an updated changelog after an autoupdate).
-    if let Ok(path) = env::var("WARP_CHANNEL_VERSIONS_PATH") {
-        launch_command.push(format!(" --env WARP_CHANNEL_VERSIONS_PATH={path}"));
+    if let Ok(path) = env::var("ZERP_CHANNEL_VERSIONS_PATH") {
+        launch_command.push(format!(" --env ZERP_CHANNEL_VERSIONS_PATH={path}"));
     }
 
     // We need to make sure that the current Warp process is no longer running
@@ -728,12 +728,12 @@ fn dmg_name(channel: Channel) -> String {
 
 fn app_name_prefix(channel: Channel) -> &'static str {
     match channel {
-        Channel::Stable => "Warp",
-        Channel::Preview => "WarpPreview",
-        Channel::Local => "warp",
-        Channel::Integration => "integration",
-        Channel::Dev => "WarpDev",
-        Channel::Oss => "warp-oss",
+        Channel::Stable => "Zerp",
+        Channel::Preview => "ZerpPreview",
+        Channel::Local => "ZerpLocal",
+        Channel::Integration => "ZerpIntegration",
+        Channel::Dev => "ZerpDev",
+        Channel::Oss => "ZerpOss",
     }
 }
 
@@ -741,10 +741,10 @@ fn executable_name(channel: Channel) -> &'static str {
     match channel {
         Channel::Stable => "stable",
         Channel::Preview => "preview",
-        Channel::Local => "warp",
+        Channel::Local => "zerp",
         Channel::Integration => "integration",
         Channel::Dev => "dev",
-        Channel::Oss => "warp-oss",
+        Channel::Oss => "zerp-oss",
     }
 }
 

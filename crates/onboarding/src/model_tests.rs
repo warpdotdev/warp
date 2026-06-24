@@ -38,11 +38,9 @@ fn agent_path_routes_through_ai_setup() {
         model.update(&mut app, |model, ctx| model.next(ctx));
         assert_eq!(step(&app, &model), OnboardingStep::AiSetup);
 
-        // The default AI setup choice is the Warp agent.
+        // The default AI setup choice is third-party CLI agents.
         model.update(&mut app, |model, ctx| model.next(ctx));
-        assert_eq!(step(&app, &model), OnboardingStep::Agent);
-        model.update(&mut app, |model, ctx| model.next(ctx));
-        assert_eq!(step(&app, &model), OnboardingStep::AiAccess);
+        assert_eq!(step(&app, &model), OnboardingStep::ThirdParty);
         model.update(&mut app, |model, ctx| model.next(ctx));
         assert_eq!(step(&app, &model), OnboardingStep::Customize);
         model.update(&mut app, |model, ctx| model.next(ctx));
@@ -52,9 +50,7 @@ fn agent_path_routes_through_ai_setup() {
         model.update(&mut app, |model, ctx| model.back(ctx));
         assert_eq!(step(&app, &model), OnboardingStep::Customize);
         model.update(&mut app, |model, ctx| model.back(ctx));
-        assert_eq!(step(&app, &model), OnboardingStep::AiAccess);
-        model.update(&mut app, |model, ctx| model.back(ctx));
-        assert_eq!(step(&app, &model), OnboardingStep::Agent);
+        assert_eq!(step(&app, &model), OnboardingStep::ThirdParty);
         model.update(&mut app, |model, ctx| model.back(ctx));
         assert_eq!(step(&app, &model), OnboardingStep::AiSetup);
         model.update(&mut app, |model, ctx| model.back(ctx));
@@ -238,25 +234,20 @@ fn terminal_settings_disable_ai() {
 }
 
 #[test]
-fn third_party_choice_disables_warp_ai() {
+fn agent_intention_keeps_warp_ai_disabled() {
     let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
-        // Default agent intention + "Use Warp Agent" keeps Warp AI on.
-        model.read(&app, |model, _| assert!(model.settings().is_ai_enabled()));
+        // The agent intention only enables third-party CLI support in this build.
+        model.read(&app, |model, _| assert!(!model.settings().is_ai_enabled()));
 
-        // "Use third party agents" turns Warp AI off.
         model.update(&mut app, |model, ctx| {
             model.set_ai_setup_choice(AiSetupChoice::ThirdParty, ctx)
         });
         model.read(&app, |model, _| assert!(!model.settings().is_ai_enabled()));
 
-        // Switching back to Warp Agent re-enables it.
-        model.update(&mut app, |model, ctx| {
-            model.set_ai_setup_choice(AiSetupChoice::WarpAgent, ctx)
-        });
-        model.read(&app, |model, _| assert!(model.settings().is_ai_enabled()));
+        model.read(&app, |model, _| assert!(!model.settings().is_ai_enabled()));
     });
 }
 
@@ -287,19 +278,18 @@ fn terminal_path_skips_third_party() {
 }
 
 #[test]
-fn progress_reports_v3_positions_for_agent_path() {
+fn progress_reports_v3_positions_for_third_party_agent_path() {
     let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
-        // Warp Agent path: Intention → AiSetup → Agent → AiAccess → Customize → ThemePicker.
+        // Agent-driven onboarding uses the third-party CLI path in this build.
         let cases = [
-            (OnboardingStep::Intention, (0, 6)),
-            (OnboardingStep::AiSetup, (1, 6)),
-            (OnboardingStep::Agent, (2, 6)),
-            (OnboardingStep::AiAccess, (3, 6)),
-            (OnboardingStep::Customize, (4, 6)),
-            (OnboardingStep::ThemePicker, (5, 6)),
+            (OnboardingStep::Intention, (0, 5)),
+            (OnboardingStep::AiSetup, (1, 5)),
+            (OnboardingStep::ThirdParty, (2, 5)),
+            (OnboardingStep::Customize, (3, 5)),
+            (OnboardingStep::ThemePicker, (4, 5)),
         ];
         for (target, expected) in cases {
             model.update(&mut app, |model, ctx| model.set_step(target, ctx));
@@ -318,8 +308,7 @@ fn progress_reports_v3_positions_for_third_party_path() {
             model.set_ai_setup_choice(AiSetupChoice::ThirdParty, ctx)
         });
 
-        // Third-party path has no "Choose how to access AI" step, so it is one
-        // dot shorter than the Warp Agent path.
+        // Historical third-party choice matches the default path.
         let cases = [
             (OnboardingStep::Intention, (0, 5)),
             (OnboardingStep::AiSetup, (1, 5)),

@@ -161,7 +161,7 @@ impl ShellStarter {
         if let Some(warp_shell_env_var) = warp_shell_path() {
             let (warp_shell_path, shell_type) = supported_shell_path_and_type(&warp_shell_env_var)
                 .unwrap_or_else(|| {
-                    panic!("Cannot spawn shell; $WARP_SHELL_PATH is invalid: {warp_shell_env_var}")
+                    panic!("Cannot spawn shell; $ZERP_SHELL_PATH is invalid: {warp_shell_env_var}")
                 });
             let session_id = generate_session_id();
             let args = arguments_for_session_spawning_command(

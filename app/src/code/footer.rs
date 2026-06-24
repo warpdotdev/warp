@@ -1729,7 +1729,7 @@ impl View for CodeFooterView {
                     Self::render_status_text(
                         theme,
                         appearance,
-                        "Use Oz to update this config".to_string(),
+                        "Use AI to update this config".to_string(),
                     ),
                 )
                 .finish(),

@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>dev.warp.WarpDockTilePlugin</string>
+    <string>dev.zerp.ZerpDockTilePlugin</string>
     <key>CFBundleExecutable</key>
-    <string>WarpDockTilePlugin</string>
+    <string>ZerpDockTilePlugin</string>
     <key>CFBundleName</key>
-    <string>WarpDockTilePlugin</string>
+    <string>ZerpDockTilePlugin</string>
     <key>CFBundlePackageType</key>
     <string>BNDL</string>
     <key>CFBundleShortVersionString</key>
@@ -15,7 +15,7 @@
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>NSPrincipalClass</key>
-    <string>WarpDockTilePlugin</string>
+    <string>ZerpDockTilePlugin</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
 </dict>

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds a Warp binary and bundles it up for distribution.
+# Builds a Zerp binary and bundles it up for distribution.
 
 set -e
 
@@ -157,37 +157,37 @@ mkdir -p "$OUT_DIR"
 # APP_NAME here must match the value used in Rust as the
 # application name; see app/src/channel.rs.
 #
-# WARP_BIN is the name of the binary produced by cargo;
+# ZERP_BIN is the name of the binary produced by cargo;
 # BINARY_NAME is the desired name of the binary in the final package.
 if [[ $RELEASE_CHANNEL = "local" ]]; then
-  WARP_BIN="warp"
-  BINARY_NAME="warp-local"
-  APP_NAME="WarpLocal"
+  ZERP_BIN="zerp"
+  BINARY_NAME="zerp-terminal-local"
+  APP_NAME="ZerpLocal"
   FEATURES="$FEATURES,agent_mode_debug"
   export HANDLE_MARKDOWN=1
 elif [[ $RELEASE_CHANNEL = "dev" ]]; then
-  WARP_BIN="dev"
-  BINARY_NAME="warp-dev"
-  APP_NAME="WarpDev"
+  ZERP_BIN="dev"
+  BINARY_NAME="zerp-terminal-dev"
+  APP_NAME="ZerpDev"
   FEATURES="$FEATURES,agent_mode_debug"
   # Enable heap usage tracking & profiling using jemalloc through pprof.
   FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
   export HANDLE_MARKDOWN=1
 elif [[ $RELEASE_CHANNEL = "preview" ]]; then
-  WARP_BIN="preview"
-  BINARY_NAME="warp-preview"
-  APP_NAME="WarpPreview"
+  ZERP_BIN="preview"
+  BINARY_NAME="zerp-terminal-preview"
+  APP_NAME="ZerpPreview"
   FEATURES="$FEATURES,preview_channel"
   # Enable heap usage tracking & profiling using jemalloc through pprof.
   FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
 elif [[ $RELEASE_CHANNEL = "stable" ]]; then
-  WARP_BIN="stable"
-  BINARY_NAME="warp"
-  APP_NAME="Warp"
+  ZERP_BIN="stable"
+  BINARY_NAME="zerp-terminal"
+  APP_NAME="Zerp"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-  WARP_BIN="warp-oss"
-  BINARY_NAME="warp-oss"
-  APP_NAME="WarpOss"
+  ZERP_BIN="zerp-oss"
+  BINARY_NAME="zerp-terminal-oss"
+  APP_NAME="ZerpOss"
   # The OSS channel does not ship Sentry, so drop the crash_reporting feature
   # (which would otherwise pull in the Sentry SDK as a dependency).
   FEATURES="release_bundle"
@@ -195,14 +195,11 @@ fi
 
 # Artifact-specific binary naming
 if [[ "$ARTIFACT" == "cli" ]]; then
-  # For CLI artifacts, use oz instead of warp as the binary name.  The OSS
-  # channel is an exception: its CLI command name is `warp-oss`, matching
+  # CLI artifacts use channel-specific zerp-cli names that match
   # `Channel::cli_command_name` in the Rust source.
-  if [[ $RELEASE_CHANNEL != "oss" ]]; then
-    BINARY_NAME="${BINARY_NAME/warp/oz}"
-  fi
+  BINARY_NAME="${BINARY_NAME/zerp-terminal/zerp-cli}"
 elif [[ "$ARTIFACT" == "warpctrl" ]]; then
-  BINARY_NAME="warpctrl"
+  BINARY_NAME="zerpctrl"
   PACKAGES=()
 fi
 
@@ -220,8 +217,8 @@ if [[ -n "$EXTRA_FEATURES" ]]; then
   FEATURES="$FEATURES,$EXTRA_FEATURES"
 fi
 
-BUNDLE_ID="dev.warp.$APP_NAME"
-EXECUTABLE_PATH="$CARGO_TARGET_OUTPUT_DIR/$WARP_BIN"
+BUNDLE_ID="dev.zerp.$APP_NAME"
+EXECUTABLE_PATH="$CARGO_TARGET_OUTPUT_DIR/$ZERP_BIN"
 DEBUG_EXECUTABLE_PATH="$EXECUTABLE_PATH.debug"
 
 # Note that this variable must be set (and exported!) before we compile the
@@ -233,14 +230,14 @@ export APPIMAGE_NAME="$APP_NAME-$BUILD_ARCH.AppImage"
 # then exit.  We use this script to invoke `cargo check` to ensure that we are
 # using the same feature flags and profile that we would be using in production.
 if [[ "$CHECK_ONLY" == "true" ]]; then
-  cargo check -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES"
+  cargo check -p warp --profile "$CARGO_PROFILE" --bin "$ZERP_BIN" --features "$FEATURES"
   exit 0
 fi
 
 # Build the binary.
 if [[ "$BUILD" == "true" ]]; then
-  echo "Building and bundling Warp for channel $RELEASE_CHANNEL and bundle id $BUNDLE_ID"
-  cargo build -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES"
+  echo "Building and bundling Zerp for channel $RELEASE_CHANNEL and bundle id $BUNDLE_ID"
+  cargo build -p warp --profile "$CARGO_PROFILE" --bin "$ZERP_BIN" --features "$FEATURES"
   echo "Making debug copy of '$EXECUTABLE_PATH' at '$DEBUG_EXECUTABLE_PATH'"
   cp "$EXECUTABLE_PATH" "$DEBUG_EXECUTABLE_PATH"
 
@@ -259,14 +256,14 @@ else
 fi
 
 if [[ "$ARTIFACT" == "warpctrl" ]]; then
-  echo "Copying control-mode binary into $OUT_DIR/$WARP_BIN"
-  cp "$EXECUTABLE_PATH" "$OUT_DIR/$WARP_BIN"
-  WARPCTRL_SCRIPT_PATH="$OUT_DIR/warpctrl"
-  echo "Creating warpctrl wrapper script at $WARPCTRL_SCRIPT_PATH"
+  echo "Copying control-mode binary into $OUT_DIR/$ZERP_BIN"
+  cp "$EXECUTABLE_PATH" "$OUT_DIR/$ZERP_BIN"
+  WARPCTRL_SCRIPT_PATH="$OUT_DIR/zerpctrl"
+  echo "Creating zerpctrl wrapper script at $WARPCTRL_SCRIPT_PATH"
   cat > "$WARPCTRL_SCRIPT_PATH" << EOF
 #!/usr/bin/env bash
 script_dir="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-exec "\$script_dir/$WARP_BIN" --warpctrl "\$@"
+exec "\$script_dir/$ZERP_BIN" --warpctrl "\$@"
 EOF
   chmod +x "$WARPCTRL_SCRIPT_PATH"
 fi

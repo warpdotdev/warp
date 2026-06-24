@@ -1,6 +1,5 @@
 //! WASM-only view functions for the Workspace.
 
-use warp_core::channel::ChannelState;
 use warpui::elements::{ChildView, Element};
 use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
 
@@ -21,11 +20,6 @@ use crate::workspace::view::{NotebookSource, OpenWarpDriveObjectSettings, Worksp
 use crate::BlocklistAIHistoryModel;
 
 const TRANSCRIPT_PANEL_WIDTH: f32 = 280.0;
-
-/// Builds the OZ runs URL for viewing all cloud runs.
-fn build_oz_runs_url() -> String {
-    format!("{}/runs", ChannelState::oz_root_url())
-}
 
 impl Workspace {
     pub(super) fn build_wasm_nux_dialog(ctx: &mut ViewContext<Self>) -> ViewHandle<WasmNUXDialog> {
@@ -57,12 +51,7 @@ impl Workspace {
     pub(super) fn build_view_cloud_runs_button(
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<ActionButton> {
-        let url = build_oz_runs_url();
-        ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("View all cloud runs", SecondaryTheme).on_click(move |ctx| {
-                ctx.dispatch_typed_action(WorkspaceAction::OpenLink(url.clone()));
-            })
-        })
+        ctx.add_typed_action_view(|_ctx| ActionButton::new("View all cloud runs", SecondaryTheme))
     }
 
     pub(super) fn build_transcript_info_button(

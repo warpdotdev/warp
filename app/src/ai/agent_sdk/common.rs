@@ -2,18 +2,14 @@
 
 use std::fmt;
 use std::future::Future;
-use std::sync::Arc;
 use std::time::Duration;
 
 use futures::TryFutureExt;
 use inquire::{InquireError, Select};
-use warp_cli::agent::Harness;
 use warp_cli::environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs};
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, GetSingletonModelHandle, SingletonEntity as _, UpdateModel};
 
-use crate::ai::agent::conversation::ServerAIConversationMetadata;
-use crate::ai::agent_sdk::driver::{AgentDriverError, WARP_DRIVE_SYNC_TIMEOUT};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::llms::{LLMId, LLMPreferences};
@@ -21,13 +17,13 @@ use crate::auth::auth_state::AuthStateProvider;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Owner};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
-use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// How long to wait for workspace metadata to refresh.
 pub const WORKSPACE_METADATA_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+pub const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub fn validate_agent_mode_base_model_id(
     model_id: &str,
@@ -142,42 +138,6 @@ pub fn refresh_warp_drive(
         .initial_load_complete()
         .with_timeout(WARP_DRIVE_SYNC_TIMEOUT)
         .map_err(|_| anyhow::anyhow!("Timed out waiting for Warp Drive to sync"))
-}
-
-/// Fetch the conversation's server metadata and validate that its harness matches the caller's
-/// `--harness` choice. Returns the metadata on success so the caller can reuse it (e.g. for the
-/// server conversation token).
-///
-/// Called up-front before any task/config-build logic consumes `args.harness`, so a mismatch
-/// error surfaces before side effects like task creation. We deliberately do NOT auto-upgrade
-/// the harness: `Harness::Oz` default with a Claude conversation id is treated as a mismatch
-/// and errors out.
-pub(super) async fn fetch_and_validate_conversation_harness(
-    ai_client: Arc<dyn AIClient>,
-    conversation_id: &str,
-    args_harness: Harness,
-) -> Result<ServerAIConversationMetadata, AgentDriverError> {
-    let metadata = ai_client
-        .list_ai_conversation_metadata(Some(vec![conversation_id.to_string()]))
-        .await
-        .map_err(|e| AgentDriverError::ConversationLoadFailed(format!("{e:#}")))?
-        .into_iter()
-        .next()
-        .ok_or_else(|| {
-            AgentDriverError::ConversationLoadFailed(format!(
-                "conversation {conversation_id} not found or not accessible"
-            ))
-        })?;
-
-    if metadata.harness != args_harness {
-        return Err(AgentDriverError::ConversationHarnessMismatch {
-            conversation_id: conversation_id.to_string(),
-            expected: Harness::from(metadata.harness).to_string(),
-            got: args_harness.to_string(),
-        });
-    }
-
-    Ok(metadata)
 }
 
 /// Format an object owner for display in the CLI.

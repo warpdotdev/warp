@@ -338,8 +338,8 @@ impl TerminalView {
                     .selected_conversation(app)
                     .is_some())
         {
-            // Conversation-bound terminal: same shared helper — produces an OzAgent variant for
-            // local conversations and a CLIAgent variant for the (rare) CLI-backed terminal.
+            // Conversation-bound terminal: same shared helper; only third-party CLI agent
+            // sessions produce an agent variant.
             terminal_view_agent_icon_variant(self, app).map(render_agent_circle)
         } else {
             self.render_terminal_mode_indicator(app)

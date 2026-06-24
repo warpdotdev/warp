@@ -33,7 +33,7 @@ mod test_util;
 pub const PROMPT_CHARACTER_LIMIT: usize = 1000;
 
 pub const AI_ASSISTANT_FEATURE_NAME: &str = "Warp AI";
-pub const ASK_AI_ASSISTANT_TEXT: &str = "Ask Warp AI";
+pub const ASK_AI_ASSISTANT_TEXT: &str = "AI Assistant";
 
 pub const AI_ASSISTANT_SVG_PATH: &str = "bundled/svg/ai-assistant.svg";
 

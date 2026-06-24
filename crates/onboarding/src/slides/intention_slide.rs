@@ -215,7 +215,7 @@ impl IntentionSlide {
             let mut icon_row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Min)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center);
-            for (i, icon) in [Icon::Oz, Icon::ClaudeLogo, Icon::OpenAILogo]
+            for (i, icon) in [Icon::AiAssistant, Icon::ClaudeLogo, Icon::OpenAILogo]
                 .iter()
                 .enumerate()
             {

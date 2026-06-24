@@ -68,7 +68,7 @@ pub(crate) fn build_auth_url_with_next(
         return base_auth_url.to_string();
     };
 
-    let scheme_for_next = std::env::var("WARP_OAUTH_NEXT_SCHEME")
+    let scheme_for_next = std::env::var("ZERP_OAUTH_NEXT_SCHEME")
         .ok()
         .filter(|value| !value.is_empty())
         .or_else(|| {
@@ -150,7 +150,7 @@ fn build_next_url(
 }
 
 fn oauth_next_scheme() -> String {
-    if let Ok(override_value) = std::env::var("WARP_OAUTH_NEXT_SCHEME") {
+    if let Ok(override_value) = std::env::var("ZERP_OAUTH_NEXT_SCHEME") {
         if !override_value.is_empty() {
             return override_value;
         }

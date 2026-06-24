@@ -1856,7 +1856,10 @@ fn render_permissions_speedbump(
 
     let formatted_text = FormattedTextElement::new(
         FormattedText::new([FormattedTextLine::Line(vec![
-            FormattedTextFragment::hyperlink("Manage Agent permissions", "Settings > AI"),
+            FormattedTextFragment::hyperlink(
+                "Manage agent permissions",
+                "Settings > Third party CLI agents",
+            ),
         ])]),
         font_size,
         font_family,
@@ -1867,7 +1870,7 @@ fn render_permissions_speedbump(
     .with_hyperlink_font_color(blended_colors::accent_fg_strong(theme).into())
     .register_default_click_handlers(|_, ctx, _| {
         ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPage(
-            SettingsSection::WarpAgent,
+            SettingsSection::ThirdPartyCLIAgents,
         ));
     })
     .finish();

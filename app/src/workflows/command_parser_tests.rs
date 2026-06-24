@@ -9,7 +9,7 @@ lazy_static! {
     static ref WORKFLOW: Workflow = Workflow::Command {
         name: "Run single integration test with display".to_owned(),
         command:
-            "RUST_BACKTRACE=full WARP_SHELL_PATH={{shell_path}} cargo run -p integration --bin \
+            "RUST_BACKTRACE=full ZERP_SHELL_PATH={{shell_path}} cargo run -p integration --bin \
           integration --features=with_real_display_in_integration_tests -- {{test_name}}"
                 .to_owned(),
         arguments: vec![
@@ -166,7 +166,7 @@ fn test_compute_workflow_display_data_for_linked_history_command() {
     // It passes "/opt/homebrew/bin/fish" for the {{shell_path}} parameter and
     // test_command_search_loads_history for the {{test_name}} parameter.
     let linked_history_command =
-        "RUST_BACKTRACE=full WARP_SHELL_PATH=/opt/homebrew/bin/fish cargo run -p integration --bin \
+        "RUST_BACKTRACE=full ZERP_SHELL_PATH=/opt/homebrew/bin/fish cargo run -p integration --bin \
         integration --features=with_real_display_in_integration_tests -- \
         test_command_search_loads_history";
     let display_data =
@@ -299,7 +299,7 @@ fn test_compute_workflow_display_data_for_similar_but_unlinked_history_command()
     // This command is missing the "-p" from the workflow's command, so should not be linked to the
     // command.
     let similar_but_unlinked_history_command =
-        "RUST_BACKTRACE=full WARP_SHELL_PATH=/opt/homebrew/bin/fish cargo run integration --bin \
+        "RUST_BACKTRACE=full ZERP_SHELL_PATH=/opt/homebrew/bin/fish cargo run integration --bin \
         integration --features=with_real_display_in_integration_tests -- \
         test_command_search_loads_history";
     assert!(compute_workflow_display_data_for_history_command(

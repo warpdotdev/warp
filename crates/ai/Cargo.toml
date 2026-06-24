@@ -17,7 +17,6 @@ async-trait.workspace = true
 bincode.workspace = true
 bytes.workspace = true
 cfg-if.workspace = true
-computer_use.workspace = true
 dunce.workspace = true
 prost-types.workspace = true
 serde.workspace = true

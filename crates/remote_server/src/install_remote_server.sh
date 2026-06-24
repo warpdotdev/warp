@@ -15,7 +15,7 @@
 #   {download_base_url}         — e.g. https://app.warp.dev/download/cli
 #   {channel}                   — stable | preview | dev
 #   {install_dir}               — e.g. ~/.warp/remote-server
-#   {binary_name}               — e.g. oz | oz-dev | oz-preview
+#   {binary_name}               — e.g. zerp-cli | zerp-cli-dev | zerp-cli-preview
 #   {version_query}             — e.g. &version=v0.2026... (empty when no release tag)
 #   {version_suffix}            — e.g. -v0.2026...        (empty when no release tag)
 #   {bundled_resources_dir_name} — global resources directory name (e.g. bundled_resources)
@@ -73,27 +73,27 @@ if [ -n "$staging_tarball_path" ]; then
   case "$staging_tarball_path" in
     "~"|"~/"*) staging_tarball_path="${HOME}${staging_tarball_path#\~}" ;;
   esac
-  mv "$staging_tarball_path" "$tmpdir/oz.tar.gz"
+  mv "$staging_tarball_path" "$tmpdir/zerp-cli.tar.gz"
 else
   # Normal path: download via curl or wget.
   url="{download_base_url}?package=tar&os=$os_name&arch=$arch_name&channel={channel}{version_query}"
 
   if command -v curl >/dev/null 2>&1; then
-    curl -fSL --connect-timeout 15 "$url" -o "$tmpdir/oz.tar.gz"
+    curl -fSL --connect-timeout 15 "$url" -o "$tmpdir/zerp-cli.tar.gz"
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$tmpdir/oz.tar.gz" "$url"
+    wget -q -O "$tmpdir/zerp-cli.tar.gz" "$url"
   else
     echo "error: neither curl nor wget is available" >&2
     exit {no_http_client_exit_code}
   fi
 fi
 
-tar -xzf "$tmpdir/oz.tar.gz" -C "$tmpdir"
+tar -xzf "$tmpdir/zerp-cli.tar.gz" -C "$tmpdir"
 
 # The executable and its resources are siblings in the artifact. Exclude the
 # resources tree from the search: bundled skills may ship companion files
-# whose names also start with `oz`.
-bin=$(find "$tmpdir" -type f -name 'oz*' ! -name '*.tar.gz' ! -path '*/resources/*' | head -n1)
+# whose names also start with the CLI binary name.
+bin=$(find "$tmpdir" -type f -name '{binary_name}*' ! -name '*.tar.gz' ! -path '*/resources/*' | head -n1)
 if [ -z "$bin" ]; then echo "no binary found in tarball" >&2; exit 1; fi
 chmod +x "$bin"
 

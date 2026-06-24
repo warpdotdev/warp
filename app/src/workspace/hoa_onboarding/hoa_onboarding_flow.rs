@@ -189,8 +189,8 @@ pub struct HoaOnboardingFlow {
 
 impl HoaOnboardingFlow {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let show_oz = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
-        let session_types = session_config_rendering::visible_session_types(show_oz);
+        let show_agent = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
+        let session_types = session_config_rendering::visible_session_types(show_agent);
         let pill_mouse_states: Vec<_> = session_types
             .iter()
             .map(|_| MouseStateHandle::default())

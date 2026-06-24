@@ -2,9 +2,7 @@ use ai::LLMId;
 use warp_core::send_telemetry_from_ctx;
 use warpui_core::{Entity, ModelContext};
 
-use crate::slides::{
-    AgentAutonomy, AgentDevelopmentSettings, OnboardingModelInfo, ProjectOnboardingSettings,
-};
+use crate::slides::{AgentDevelopmentSettings, OnboardingModelInfo, ProjectOnboardingSettings};
 use crate::telemetry::OnboardingEvent;
 use crate::OnboardingIntention;
 
@@ -117,8 +115,6 @@ pub(crate) enum OnboardingStep {
     Intention,
     AiSetup,
     Customize,
-    Agent,
-    AiAccess,
     ThirdParty,
     Project,
     ThemePicker,
@@ -128,32 +124,13 @@ pub(crate) enum OnboardingStep {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AiSetupChoice {
     #[default]
-    WarpAgent,
     ThirdParty,
 }
 
 impl std::fmt::Display for AiSetupChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AiSetupChoice::WarpAgent => write!(f, "warp_agent"),
             AiSetupChoice::ThirdParty => write!(f, "third_party"),
-        }
-    }
-}
-
-/// The access method selected on the "Choose how to access AI" slide (Warp Agent path).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum AiAccessChoice {
-    #[default]
-    Subscription,
-    Byok,
-}
-
-impl std::fmt::Display for AiAccessChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AiAccessChoice::Subscription => write!(f, "subscription"),
-            AiAccessChoice::Byok => write!(f, "byok"),
         }
     }
 }
@@ -166,10 +143,6 @@ pub(crate) enum NoAiConfirmationSource {
     Intention,
     /// Triggered from the AI-setup slide via "I don't want AI".
     AiSetup,
-    /// Triggered from the "Customize your Warp Agent" slide via "I don't want AI".
-    Agent,
-    /// Triggered from the "Choose how to access AI" slide via "I don't want AI".
-    AiAccess,
 }
 
 #[derive(Clone, Debug)]
@@ -178,7 +151,6 @@ pub(crate) enum OnboardingStateEvent {
     SelectedSlideChanged,
     IntentionChanged,
     Completed,
-    UpgradeRequested,
     AuthStateChanged,
     NoAiConfirmationChanged,
 }
@@ -197,8 +169,6 @@ pub(crate) struct OnboardingStateModel {
     agent_modality_enabled: bool,
     /// The AI setup selected on the "Choose your AI setup" slide.
     ai_setup_choice: AiSetupChoice,
-    /// The access method selected on the "Choose how to access AI" slide.
-    ai_access_choice: AiAccessChoice,
     /// Auth / billing state of the user.
     auth_state: OnboardingAuthState,
     /// When set, the "Are you sure you don't want AI?" confirmation modal is
@@ -225,7 +195,6 @@ impl OnboardingStateModel {
             workspace_enforces_autonomy,
             agent_modality_enabled,
             ai_setup_choice: AiSetupChoice::default(),
-            ai_access_choice: AiAccessChoice::default(),
             auth_state,
             no_ai_confirmation: None,
         }
@@ -299,10 +268,6 @@ impl OnboardingStateModel {
         &self.project_settings
     }
 
-    pub(crate) fn workspace_enforces_autonomy(&self) -> bool {
-        self.workspace_enforces_autonomy
-    }
-
     pub(crate) fn agent_modality_enabled(&self) -> bool {
         self.agent_modality_enabled
     }
@@ -317,10 +282,6 @@ impl OnboardingStateModel {
 
     pub(crate) fn ai_setup_choice(&self) -> AiSetupChoice {
         self.ai_setup_choice
-    }
-
-    pub(crate) fn ai_access_choice(&self) -> AiAccessChoice {
-        self.ai_access_choice
     }
 
     pub(crate) fn set_ai_setup_choice(
@@ -339,26 +300,7 @@ impl OnboardingStateModel {
             ctx
         );
         self.ai_setup_choice = choice;
-        self.agent_settings.disable_oz = matches!(choice, AiSetupChoice::ThirdParty);
-        ctx.notify();
-    }
-
-    pub(crate) fn set_ai_access_choice(
-        &mut self,
-        choice: AiAccessChoice,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if self.ai_access_choice == choice {
-            return;
-        }
-        send_telemetry_from_ctx!(
-            OnboardingEvent::SettingChanged {
-                setting: "ai_access".to_string(),
-                value: choice.to_string(),
-            },
-            ctx
-        );
-        self.ai_access_choice = choice;
+        self.agent_settings.disable_oz = true;
         ctx.notify();
     }
 
@@ -398,10 +340,7 @@ impl OnboardingStateModel {
                 self.set_intention(OnboardingIntention::AgentDrivenDevelopment, ctx);
                 self.set_step(OnboardingStep::AiSetup, ctx);
             }
-            Some(NoAiConfirmationSource::AiSetup)
-            | Some(NoAiConfirmationSource::Agent)
-            | Some(NoAiConfirmationSource::AiAccess)
-            | None => {
+            Some(NoAiConfirmationSource::AiSetup) | None => {
                 ctx.emit(OnboardingStateEvent::NoAiConfirmationChanged);
                 ctx.notify();
             }
@@ -571,21 +510,6 @@ impl OnboardingStateModel {
         ctx.notify();
     }
 
-    pub(crate) fn set_disable_oz(&mut self, value: bool, ctx: &mut ModelContext<Self>) {
-        if self.agent_settings.disable_oz == value {
-            return;
-        }
-        send_telemetry_from_ctx!(
-            OnboardingEvent::SettingChanged {
-                setting: "disable_oz".to_string(),
-                value: value.to_string(),
-            },
-            ctx
-        );
-        self.agent_settings.disable_oz = value;
-        ctx.notify();
-    }
-
     pub(crate) fn set_workspace_enforces_autonomy(
         &mut self,
         value: bool,
@@ -596,10 +520,6 @@ impl OnboardingStateModel {
         }
         self.workspace_enforces_autonomy = value;
         ctx.notify();
-    }
-
-    pub(crate) fn models(&self) -> &Vec<OnboardingModelInfo> {
-        &self.models
     }
 
     fn set_intention(&mut self, intention: OnboardingIntention, ctx: &mut ModelContext<Self>) {
@@ -638,27 +558,6 @@ impl OnboardingStateModel {
         self.set_intention(OnboardingIntention::AgentDrivenDevelopment, ctx);
     }
 
-    pub(crate) fn request_upgrade(&mut self, ctx: &mut ModelContext<Self>) {
-        ctx.emit(OnboardingStateEvent::UpgradeRequested);
-    }
-
-    pub(crate) fn on_user_selected_model(&mut self, model_id: LLMId, ctx: &mut ModelContext<Self>) {
-        if self.agent_settings.selected_model_id == model_id {
-            return;
-        }
-
-        send_telemetry_from_ctx!(
-            OnboardingEvent::SettingChanged {
-                setting: "model".to_string(),
-                value: model_id.to_string(),
-            },
-            ctx
-        );
-
-        self.agent_settings.selected_model_id = model_id;
-        ctx.notify();
-    }
-
     /// Updates the list of available models.
     pub(crate) fn set_models(
         &mut self,
@@ -687,27 +586,6 @@ impl OnboardingStateModel {
 
         self.models = models;
         ctx.emit(OnboardingStateEvent::ModelsUpdated);
-        ctx.notify();
-    }
-
-    pub(crate) fn set_agent_autonomy(
-        &mut self,
-        autonomy: AgentAutonomy,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if self.workspace_enforces_autonomy || self.agent_settings.autonomy == Some(autonomy) {
-            return;
-        }
-
-        send_telemetry_from_ctx!(
-            OnboardingEvent::SettingChanged {
-                setting: "autonomy".to_string(),
-                value: autonomy.to_string(),
-            },
-            ctx
-        );
-
-        self.agent_settings.autonomy = Some(autonomy);
         ctx.notify();
     }
 
@@ -790,20 +668,9 @@ impl OnboardingStateModel {
                 OnboardingStep::AiSetup => Some(OnboardingStep::Intention),
                 OnboardingStep::Customize => {
                     if ai_setup_flow && agent_intention {
-                        match self.ai_setup_choice {
-                            AiSetupChoice::WarpAgent => Some(OnboardingStep::AiAccess),
-                            AiSetupChoice::ThirdParty => Some(OnboardingStep::ThirdParty),
-                        }
+                        Some(OnboardingStep::ThirdParty)
                     } else {
                         Some(OnboardingStep::Intention)
-                    }
-                }
-                OnboardingStep::AiAccess => Some(OnboardingStep::Agent),
-                OnboardingStep::Agent => {
-                    if ai_setup_flow {
-                        Some(OnboardingStep::AiSetup)
-                    } else {
-                        Some(OnboardingStep::Customize)
                     }
                 }
                 OnboardingStep::ThirdParty => Some(OnboardingStep::AiSetup),
@@ -817,11 +684,9 @@ impl OnboardingStateModel {
                 OnboardingStep::Intention => Some(OnboardingStep::ThemePicker),
                 // Unreachable in the legacy flow.
                 OnboardingStep::AiSetup => None,
-                OnboardingStep::AiAccess => None,
                 OnboardingStep::Customize => None,
-                OnboardingStep::ThirdParty => None,
-                OnboardingStep::Agent => Some(OnboardingStep::Intention),
-                OnboardingStep::Project => Some(OnboardingStep::Agent),
+                OnboardingStep::ThirdParty => Some(OnboardingStep::Intention),
+                OnboardingStep::Project => Some(OnboardingStep::ThirdParty),
             }
         };
 
@@ -858,10 +723,7 @@ impl OnboardingStateModel {
                         }
                     }
                 },
-                OnboardingStep::AiSetup => match self.ai_setup_choice {
-                    AiSetupChoice::WarpAgent => self.set_step(OnboardingStep::Agent, ctx),
-                    AiSetupChoice::ThirdParty => self.set_step(OnboardingStep::ThirdParty, ctx),
-                },
+                OnboardingStep::AiSetup => self.set_step(OnboardingStep::ThirdParty, ctx),
                 OnboardingStep::Customize => match self.intention {
                     OnboardingIntention::Terminal => {
                         self.set_step(OnboardingStep::ThemePicker, ctx)
@@ -870,18 +732,10 @@ impl OnboardingStateModel {
                         if ai_setup_flow {
                             self.set_step(OnboardingStep::ThemePicker, ctx)
                         } else {
-                            self.set_step(OnboardingStep::Agent, ctx)
+                            self.set_step(OnboardingStep::ThirdParty, ctx)
                         }
                     }
                 },
-                OnboardingStep::Agent => {
-                    if ai_setup_flow {
-                        self.set_step(OnboardingStep::AiAccess, ctx)
-                    } else {
-                        self.set_step(OnboardingStep::ThirdParty, ctx)
-                    }
-                }
-                OnboardingStep::AiAccess => self.set_step(OnboardingStep::Customize, ctx),
                 OnboardingStep::ThirdParty => {
                     if ai_setup_flow
                         && matches!(self.intention, OnboardingIntention::AgentDrivenDevelopment)
@@ -898,13 +752,11 @@ impl OnboardingStateModel {
             match self.step {
                 OnboardingStep::Intro => self.set_step(OnboardingStep::ThemePicker, ctx),
                 OnboardingStep::ThemePicker => self.set_step(OnboardingStep::Intention, ctx),
-                OnboardingStep::Intention => self.set_step(OnboardingStep::Agent, ctx),
+                OnboardingStep::Intention => self.set_step(OnboardingStep::ThirdParty, ctx),
                 // Unreachable in the legacy flow.
                 OnboardingStep::AiSetup => {}
-                OnboardingStep::AiAccess => {}
                 OnboardingStep::Customize => {}
-                OnboardingStep::ThirdParty => {}
-                OnboardingStep::Agent => self.set_step(OnboardingStep::Project, ctx),
+                OnboardingStep::ThirdParty => self.set_step(OnboardingStep::Project, ctx),
                 OnboardingStep::Project => {}
             }
         }
@@ -950,26 +802,10 @@ impl OnboardingStateModel {
                     ctx
                 );
             }
-            OnboardingStep::AiAccess => {
-                send_telemetry_from_ctx!(
-                    OnboardingEvent::SlideViewed {
-                        slide_name: "ai_access".to_string(),
-                    },
-                    ctx
-                );
-            }
             OnboardingStep::Customize => {
                 send_telemetry_from_ctx!(
                     OnboardingEvent::SlideViewed {
                         slide_name: "customize".to_string(),
-                    },
-                    ctx
-                );
-            }
-            OnboardingStep::Agent => {
-                send_telemetry_from_ctx!(
-                    OnboardingEvent::SlideViewed {
-                        slide_name: "agent".to_string(),
                     },
                     ctx
                 );
@@ -1003,40 +839,24 @@ impl OnboardingStateModel {
 
         let is_terminal = matches!(self.intention, OnboardingIntention::Terminal);
         if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            // Legacy flow: ThemePicker → Intention → Agent → Project.
+            // Legacy flow: ThemePicker → Intention → ThirdParty → Project.
             return match self.step {
                 OnboardingStep::Intro | OnboardingStep::ThemePicker => (0, 4),
                 OnboardingStep::Intention | OnboardingStep::AiSetup | OnboardingStep::Customize => {
                     (1, 4)
                 }
-                OnboardingStep::Agent | OnboardingStep::ThirdParty | OnboardingStep::AiAccess => {
-                    (2, 4)
-                }
+                OnboardingStep::ThirdParty => (2, 4),
                 OnboardingStep::Project => (3, 4),
             };
         }
 
-        // The Warp Agent path has the extra "Choose how to access AI" step, so it
-        // is one longer than the third-party-agent path.
-        let is_warp_agent_path =
-            !is_terminal && matches!(self.ai_setup_choice, AiSetupChoice::WarpAgent);
-        let step_count = if is_terminal {
-            3
-        } else if is_warp_agent_path {
-            6
-        } else {
-            5
-        };
+        let step_count = if is_terminal { 3 } else { 5 };
         let step_index = match self.step {
             OnboardingStep::Intro | OnboardingStep::Intention => 0,
             OnboardingStep::AiSetup => 1,
-            OnboardingStep::Agent => 2,
-            OnboardingStep::AiAccess => 3,
             OnboardingStep::Customize => {
                 if is_terminal {
                     1
-                } else if is_warp_agent_path {
-                    4
                 } else {
                     3
                 }

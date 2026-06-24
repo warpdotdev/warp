@@ -107,10 +107,10 @@ impl TipAction {
             TipAction::SplitPane => "pane_group:add_right",
             TipAction::HistorySearch => "input:search_command_history",
             TipAction::CommandSearch => "workspace:show_command_search",
-            TipAction::AiCommandSearch => "input:toggle_natural_language_command_search",
+            TipAction::AiCommandSearch => "workspace:show_command_search",
             TipAction::ThemePicker => "workspace:show_theme_chooser",
             TipAction::SaveNewLaunchConfig => "workspace:open_launch_config_save_modal",
-            TipAction::WarpAI => "workspace:toggle_ai_assistant",
+            TipAction::WarpAI => "workspace:toggle_command_palette",
             TipAction::OpenWarpDrive => "workspace:toggle_left_panel",
             // Slash commands are also registered as editable bindings, so callers can look them up here
             // the same way they do regular app actions.

@@ -82,7 +82,7 @@ fn overflow_drops_the_oldest_slot() {
 
 #[test]
 fn oversized_first_write_does_not_promote_empty_file_to_in_session_zero() {
-    // Regression for the Oz nit on #11000: when the very first write
+    // Regression for #11000: when the very first write
     // exceeds `max_bytes`, the rotator must NOT rename an empty active
     // file into `.in_session.0` — that would burn a retention slot
     // before any useful data exists. The oversized payload stays in the

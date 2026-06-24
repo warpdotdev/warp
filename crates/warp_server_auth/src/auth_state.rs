@@ -147,7 +147,7 @@ impl AuthState {
         }
 
         // Try WARP_USER_SECRET environment variable.
-        if let Some(persisted) = option_env!("WARP_USER_SECRET")
+        if let Some(persisted) = option_env!("ZERP_USER_SECRET")
             .and_then(|s| serde_json::from_str::<PersistedUser>(s).ok())
         {
             state.apply_persisted_user(persisted);

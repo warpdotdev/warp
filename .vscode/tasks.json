@@ -24,22 +24,22 @@
         {
             "type": "shell",
             "command": "./script/run --dont-open",
-            "label": "build_warplocal"
+            "label": "build_zerplocal"
         },
         {
             "type": "shell",
             "command": "./script/run --dont-open --features fast_dev",
-            "label": "build_warplocal_fastdev"
+            "label": "build_zerplocal_fastdev"
         },
         {
             "type": "shell",
             "command": "./script/run --dont-open --features fast_dev,with_local_session_sharing_server",
-            "label": "build_warplocal_fastdev_localsessionsharing"
+            "label": "build_zerplocal_fastdev_localsessionsharing"
         },
         {
             "type": "shell",
             "command": "./script/run --dont-open --features with_local_session_sharing_server",
-            "label": "build_warplocal_localsessionsharing"
+            "label": "build_zerplocal_localsessionsharing"
         }
         // TODO: If adding more configs that just add feature flags, consider argument passing from launch.json to tasks.json
     ]

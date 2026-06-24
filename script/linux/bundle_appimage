@@ -8,7 +8,7 @@
 #   - OUT_DIR: The directory into which we should place the final package.
 #   - CARGO_TARGET_OUTPUT_DIR: The cargo target directory containing build output.
 #   - RELEASE_CHANNEL: The release channel we're bundling (e.g.: "dev").
-#   - BUNDLE_ID: The app ID for the bundle (e.g.: "dev.warp.WarpDev").
+#   - BUNDLE_ID: The app ID for the bundle (e.g.: "dev.zerp.ZerpDev").
 #   - EXECUTABLE_PATH: The path to the compiled executable we want to install.
 #   - BINARY_NAME: The name that the compiled executable should have on the target machine.
 #   - APPIMAGE_NAME: The name of the AppImage file to produce.
@@ -18,11 +18,18 @@ APP_DIR="$DIST_DIR/AppDir"
 
 # Extract channel suffix from BINARY_NAME
 if [ "$ARTIFACT" = "cli" ]; then
-  CHANNEL_SUFFIX="${BINARY_NAME#oz}"
+  CHANNEL_SUFFIX="${BINARY_NAME#zerp-cli}"
 else
-  CHANNEL_SUFFIX="${BINARY_NAME#warp}"
+  CHANNEL_SUFFIX="${BINARY_NAME#zerp-terminal}"
 fi
-PACKAGE_NAME="warp-terminal$CHANNEL_SUFFIX"
+if [ "$ARTIFACT" = "cli" ]; then
+  if [ "$RELEASE_CHANNEL" = "stable" ]; then
+    CHANNEL_SUFFIX="-stable"
+  fi
+  PACKAGE_NAME="zerp-cli$CHANNEL_SUFFIX"
+else
+  PACKAGE_NAME="zerp-terminal$CHANNEL_SUFFIX"
+fi
 
 
 # Adding NO_STRIP to stop linuxdeploy from attempting to strip symbols
@@ -52,12 +59,12 @@ mkdir -p "$STAGE_DIR"
 
 # Populate the directory with the package contents, in the appropriate
 # locations.
-OPT_DIR="/opt/warpdotdev/$PACKAGE_NAME"
+OPT_DIR="/opt/zerpdotdev/$PACKAGE_NAME"
 source "$WORKSPACE_ROOT_DIR/script/linux/bundle_install" "$STAGE_DIR"
 
 # Modify the "Exec=" line in the .desktop file to use the name of the installed
 # binary and not our /usr/bin symlink (which doesn't exist in an AppImage).
-sed -i -E 's/Exec=warp-terminal/Exec=warp/' "$STAGE_DIR/usr/share/applications/$BUNDLE_ID.desktop"
+sed -i -E "s#^Exec=.*#Exec=$BINARY_NAME %U#" "$STAGE_DIR/usr/share/applications/$BUNDLE_ID.desktop"
 
 # Find all icon files from inside the package staging directory.
 ICON_FILES=( $(find "$STAGE_DIR/usr/share/icons" -name "*.png") )
@@ -68,14 +75,14 @@ rm -rf "$APP_DIR"
 # Run linuxdeploy to create an appropriately-structured AppDir and turn it into
 # an AppImage, located in OUT_DIR.
 #
-# We use a custom input plugin (bundled-resources) to copy Warp's bundled
+# We use a custom input plugin (bundled-resources) to copy Zerp's bundled
 # resources into the AppDir alongside the executable, since linuxdeploy only
 # deploys the binary, desktop file, and icons by default.
 cd "$OUT_DIR"
 echo "Running linuxdeploy to create the AppImage"
-export WARP_BINARY_NAME="$BINARY_NAME"
-export WARP_PACKAGE_NAME="$PACKAGE_NAME"
-export WARP_BUNDLED_RESOURCES_DIR="${STAGE_DIR}${OPT_DIR}/resources"
+export ZERP_BINARY_NAME="$BINARY_NAME"
+export ZERP_PACKAGE_NAME="$PACKAGE_NAME"
+export ZERP_BUNDLED_RESOURCES_DIR="${STAGE_DIR}${OPT_DIR}/resources"
 export PATH="$WORKSPACE_ROOT_DIR/script/linux:$PATH"
 linuxdeploy \
   --appdir "$APP_DIR" \

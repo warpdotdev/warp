@@ -27,7 +27,6 @@ fn make_request(model: &str, harness: &str, remote: bool) -> RunAgentsRequest {
             RunAgentsExecutionMode::Remote {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
-                computer_use_enabled: false,
             }
         } else {
             RunAgentsExecutionMode::Local
@@ -116,21 +115,6 @@ fn remote_empty_env_inherits_and_matches() {
     {
         *environment_id = String::new();
     }
-    assert!(matches_active_config(&request, &config));
-}
-
-#[test]
-fn computer_use_not_in_match_check() {
-    let config = make_config("auto", "oz", true);
-    let mut request = make_request("auto", "oz", true);
-    if let RunAgentsExecutionMode::Remote {
-        ref mut computer_use_enabled,
-        ..
-    } = request.execution_mode
-    {
-        *computer_use_enabled = true;
-    }
-    // computer_use_enabled differs but should still match
     assert!(matches_active_config(&request, &config));
 }
 

@@ -58,9 +58,9 @@ impl OrchestrationConfigStatus {
 /// card can be skipped (auto-launch).
 ///
 /// Empty/unset fields on the call are treated as inheriting from the
-/// config (and therefore matching). Fields not in the config
-/// (`computer_use_enabled`, `skills`, `base_prompt`, `agent_run_configs`,
-/// per-agent `title`) are excluded from the check.
+/// config (and therefore matching). Fields not in the config (`skills`,
+/// `base_prompt`, `agent_run_configs`, per-agent `title`) are excluded
+/// from the check.
 pub fn matches_active_config(request: &RunAgentsRequest, config: &OrchestrationConfig) -> bool {
     // model_id — empty on the call means "inherit from config" → matches.
     if !request.model_id.is_empty() && request.model_id != config.model_id {

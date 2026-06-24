@@ -17,8 +17,14 @@ fn terminal_command_prefix_is_none() {
 }
 
 #[test]
-fn oz_command_prefix_is_none() {
-    assert_eq!(SessionType::Oz.command_prefix(), None);
+fn visible_session_types_excludes_builtin_agent_and_includes_cli_agents() {
+    let session_types = super::super::session_config_rendering::visible_session_types(true);
+
+    assert!(session_types.contains(&SessionType::Terminal));
+    assert!(session_types.contains(&SessionType::CliAgent(CLIAgent::Claude)));
+    assert!(session_types.contains(&SessionType::CliAgent(CLIAgent::Codex)));
+    assert!(session_types.contains(&SessionType::CliAgent(CLIAgent::Gemini)));
+    assert!(session_types.contains(&SessionType::CliAgent(CLIAgent::OpenCode)));
 }
 
 #[test]
@@ -123,43 +129,6 @@ fn cli_agent_with_worktree() {
     );
     assert!(config.params.contains_key("worktree_branch_name"));
     assert_eq!(config.title.as_deref(), Some("{{worktree_branch_name}}"));
-}
-
-#[test]
-fn oz_no_worktree_same_as_terminal() {
-    let oz = build_tab_config(
-        &SessionType::Oz,
-        Path::new("/home/user/project"),
-        false,
-        true,
-    );
-    let terminal = build_tab_config(
-        &SessionType::Terminal,
-        Path::new("/home/user/project"),
-        false,
-        true,
-    );
-
-    assert_eq!(oz.panes[0].directory, terminal.panes[0].directory);
-    assert_eq!(oz.panes[0].commands, terminal.panes[0].commands);
-    assert_eq!(oz.params.len(), terminal.params.len());
-}
-
-#[test]
-fn oz_with_worktree_has_worktree_commands_but_no_agent_command() {
-    let config = build_tab_config(&SessionType::Oz, Path::new("/home/user/repo"), true, false);
-    let expected_worktree_path =
-        generated_worktree_path_string("/home/user/repo", "{{worktree_branch_name}}");
-
-    assert_eq!(
-        config.panes[0].commands.as_deref().unwrap(),
-        [
-            format!("git worktree add -b {{{{worktree_branch_name}}}} {expected_worktree_path}"),
-            format!("cd {expected_worktree_path}"),
-        ]
-        .as_ref()
-    );
-    assert!(config.params.contains_key("worktree_branch_name"));
 }
 
 #[test]

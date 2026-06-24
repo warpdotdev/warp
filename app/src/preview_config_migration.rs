@@ -12,7 +12,7 @@
 use std::path::Path;
 
 use warp_core::channel::{Channel, ChannelState};
-use warp_core::paths::{data_dir, WARP_CONFIG_DIR};
+use warp_core::paths::{data_dir, ZERP_CONFIG_DIR};
 
 /// Files that should not be symlinked during the Preview config directory
 /// migration. These are intentionally kept separate between Stable and
@@ -37,7 +37,7 @@ pub(crate) fn migrate_preview_config_dir_if_needed() {
         return;
     };
 
-    let old_dir = home.join(WARP_CONFIG_DIR);
+    let old_dir = home.join(ZERP_CONFIG_DIR);
     // `data_dir()` is already channel-aware; for Preview it resolves to
     // `~/.warp-preview`.
     let new_dir = data_dir();

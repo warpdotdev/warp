@@ -1,10 +1,8 @@
 use serde::{Deserialize, Serialize};
-use warpui::SingletonEntity;
 
 use super::editor::AgentToolbarEditorMode;
 use crate::context_chips::{agent_footer_available_chips, available_chips, ContextChipKind};
 use crate::features::FeatureFlag;
-use crate::settings::AISettings;
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::ui_components::icons::Icon;
 
@@ -70,7 +68,7 @@ pub enum AgentToolbarItemKind {
     // Agent view only – shows fast-forward (auto-approve) toggle in the footer
     FastForwardToggle,
 
-    // Agent view only – "Hand off to cloud" chip.
+    // Hidden compatibility item for persisted toolbar configs from older builds.
     HandoffToCloud,
 }
 
@@ -103,8 +101,7 @@ impl AgentToolbarItemKind {
             Self::Settings | Self::ShareSession | Self::FileExplorer => !status.is_viewer(),
             Self::FileAttach => !status.is_viewer() || is_cloud_mode,
             Self::FastForwardToggle => !status.is_viewer() || status.is_executor(),
-            // Handoff is host-initiated; viewers cannot hand off another user's conversation.
-            Self::HandoffToCloud => !status.is_viewer(),
+            Self::HandoffToCloud => false,
             Self::ContextChip(_)
             | Self::ModelSelector
             | Self::NLDToggle
@@ -127,7 +124,7 @@ impl AgentToolbarItemKind {
             Self::ShareSession => "/remote-control",
             Self::Settings => "Settings",
             Self::FastForwardToggle => "Fast Forward",
-            Self::HandoffToCloud => "Hand off to cloud",
+            Self::HandoffToCloud => "Unavailable",
         }
     }
 
@@ -144,9 +141,7 @@ impl AgentToolbarItemKind {
             Self::ShareSession => Some(Icon::Phone01),
             Self::Settings => Some(Icon::Settings),
             Self::FastForwardToggle => Some(Icon::FastForward),
-            // The bundled `upload-cloud-01.svg` (cloud-with-upward-arrow) is the
-            // closest fit among the existing icons for V0; design may swap it later.
-            Self::HandoffToCloud => Some(Icon::UploadCloud),
+            Self::HandoffToCloud => None,
         }
     }
 
@@ -174,8 +169,9 @@ impl AgentToolbarItemKind {
     /// Feature-flag checks live in `all_available()` / `default_*()`. This method
     /// handles runtime conditions that depend on user settings or workspace state.
     pub fn is_available(&self, app: &warpui::AppContext) -> bool {
+        let _ = app;
         match self {
-            Self::HandoffToCloud => AISettings::as_ref(app).is_cloud_handoff_enabled(app),
+            Self::HandoffToCloud => false,
             _ => true,
         }
     }
@@ -218,12 +214,6 @@ impl AgentToolbarItemKind {
         {
             items.push(Self::ShareSession);
         }
-        if FeatureFlag::OzHandoff.is_enabled()
-            && FeatureFlag::HandoffLocalCloud.is_enabled()
-            && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
-        {
-            items.push(Self::HandoffToCloud);
-        }
         items.push(Self::VoiceInput);
         items.push(Self::FileAttach);
         items
@@ -249,12 +239,6 @@ impl AgentToolbarItemKind {
             && FeatureFlag::HOARemoteControl.is_enabled()
         {
             items.push(Self::ShareSession);
-        }
-        if FeatureFlag::OzHandoff.is_enabled()
-            && FeatureFlag::HandoffLocalCloud.is_enabled()
-            && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
-        {
-            items.push(Self::HandoffToCloud);
         }
         items
     }

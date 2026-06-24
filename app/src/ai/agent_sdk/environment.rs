@@ -17,7 +17,7 @@ use warp_graphql::queries::user_repo_auth_status::UserRepoAuthStatusEnum;
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
-use crate::ai::agent_sdk::driver::WARP_DRIVE_SYNC_TIMEOUT;
+use crate::ai::agent_sdk::common::WARP_DRIVE_SYNC_TIMEOUT;
 use crate::ai::agent_sdk::oauth_flow::poll_oauth_until_terminal;
 use crate::ai::agent_sdk::output::{self, TableFormat};
 use crate::ai::cloud_environments::{

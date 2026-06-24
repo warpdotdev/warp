@@ -25,7 +25,7 @@ while [[ -L "\$wrapper_path" ]]; do
 done
 script_dir="\$(cd -P "\$(dirname "\$wrapper_path")" && pwd)"
 
-# Warp Control has a separate argument parser from the normal Warp/Oz parser.
+# Warp Control has a separate argument parser from the normal app/CLI parser.
 # The hidden flag selects it before normal CLI parsing or GUI startup.
 # Replace the wrapper process while preserving its invocation name as argv[0].
 exec -a "\$0" "\$script_dir/$BINARY_RELATIVE_PATH" --warpctrl "\$@"

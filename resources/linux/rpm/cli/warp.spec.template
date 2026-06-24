@@ -2,8 +2,8 @@
 # Package Spec
 ###############################################################################
 
-Summary:     The orchestration platform for cloud agents.
-Name:        oz@@CHANNEL_SUFFIX@@
+Summary:     Zerp command-line tools.
+Name:        zerp-cli@@CHANNEL_SUFFIX@@
 Version:     @@VERSION@@
 Release:     @@RELEASE@@
 Vendor:      Denver Technologies, Inc.
@@ -11,11 +11,6 @@ Url:         https://warp.dev
 Packager:    Warp Linux Maintainers <linux-maintainers@warp.dev>
 License:     https://warp.dev/terms-of-service
 Obsoletes:   warp-cli@@CHANNEL_SUFFIX@@ < %{version}
-Obsoletes:   oz = v0.2026.02.09.06.06.stable_00
-Obsoletes:   oz = v0.2026.02.09.06.06.stable_02
-Obsoletes:   oz = v0.2026.02.10.11.37.stable_00
-Obsoletes:   oz = v0.2026.02.10.11.37.stable_01
-Obsoletes:   oz = v0.2026.02.11.08.23.stable_00
 
 
 # The prefix specifies where the majority of the application files are,
@@ -31,12 +26,12 @@ prefix:      /opt
 ###############################################################################
 
 %description
-The Oz CLI is a tool for running, managing, and orchestrating coding agents at scale.
+The Zerp CLI is a tool for managing local Zerp integrations and account state.
 Use the CLI to:
-* Launch and inspect cloud agents
-* Schedule cloud agents to run in the future
-* Manage the environments that cloud agents run in
-* Upload secrets to Oz's secure storage
+* Manage local MCP servers
+* Inspect available models
+* Manage account and API-key state
+* Run hidden worker commands used by the app
 
 ###############################################################################
 # Build rule - how does the package get built?
@@ -54,11 +49,11 @@ Use the CLI to:
 # Populate the buildroot directory with the package contents, in the
 # appropriate locations.
 mkdir -p %{buildroot}
-OPT_DIR="%{prefix}/warpdotdev/%{name}" @@WORKSPACEROOT@@/script/linux/bundle_install %{buildroot}
+OPT_DIR="%{prefix}/zerpdotdev/%{name}" @@WORKSPACEROOT@@/script/linux/bundle_install %{buildroot}
 
 # Set up a symlink from the system's bin dir to our installed executable.
 mkdir -p %{buildroot}%{_bindir}
-ln -s %{prefix}/warpdotdev/%{name}/@@BINARY_NAME@@ %{buildroot}%{_bindir}/@@BINARY_NAME@@
+ln -s %{prefix}/zerpdotdev/%{name}/@@BINARY_NAME@@ %{buildroot}%{_bindir}/@@BINARY_NAME@@
 
 ###############################################################################
 # Files listing - what files will end up in the package?
@@ -66,7 +61,7 @@ ln -s %{prefix}/warpdotdev/%{name}/@@BINARY_NAME@@ %{buildroot}%{_bindir}/@@BINA
 %files
 
 # Most things go into this directory.
-%{prefix}/warpdotdev/%{name}
+%{prefix}/zerpdotdev/%{name}
 
 # We also install a symlink in the system bin directory.
 %{_bindir}/@@BINARY_NAME@@

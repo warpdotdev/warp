@@ -160,14 +160,8 @@ impl InitProjectModel {
         }
         self.compute_project_scoped_rules_step(&pwd_path, ctx);
 
-        // CreateEnvironment step is always Ready (no async computation)
-        self.set_step(
-            InitStepKind::CreateEnvironment,
-            Some(InitStep::new_ready(
-                InitStepKind::CreateEnvironment,
-                InitStepData::CreateEnvironment,
-            )),
-        );
+        // Cloud environments are outside this fork's supported third-party CLI-only scope.
+        self.set_step(InitStepKind::CreateEnvironment, None);
 
         // Emit welcome step immediately, then progress to next
         ctx.emit(InitProjectModelEvent::InsertStep(InitStepKind::Welcome));

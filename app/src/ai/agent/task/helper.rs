@@ -119,8 +119,6 @@ impl ToolExt for api::message::tool_call::Tool {
             Tool::EditDocuments(_) => "edit_documents",
             Tool::CreateDocuments(_) => "create_documents",
             Tool::ReadShellCommandOutput(_) => "read_shell_command_output",
-            Tool::UseComputer(_) => "use_computer",
-            Tool::RequestComputerUse(_) => "request_computer_use",
             Tool::FetchConversation(_) => "fetch_conversation",
             Tool::InsertReviewComments(_) => "insert_review_comments",
             Tool::ReadSkill(_) => "read_skill",
@@ -139,6 +137,8 @@ impl ToolExt for api::message::tool_call::Tool {
             Tool::AskUserQuestion(_) => "ask_user_question",
             Tool::SendMessageToAgent(_) => "send_message_to_agent",
             Tool::TransferShellCommandControlToUser(_) => "transfer_shell_command_control",
+            Tool::UseComputer(_) => "use_computer",
+            Tool::RequestComputerUse(_) => "request_computer_use",
             Tool::RunAgents(_) => "orchestrate",
             // Matches the legacy server-handled name so analytics don't
             // double-count the rollout.

@@ -13,8 +13,8 @@ use super::{
     push_normalized_unique_summary_label, search_fragments_contain_query,
     select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
     sort_summary_primary_labels_status_first, summary_overflow_count,
-    summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
-    terminal_pull_request_badge_label, terminal_search_text_fragments,
+    summary_search_text_fragments, summary_status_for_title_override, terminal_kind_badge_label,
+    terminal_primary_line_data, terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
     vtab_diff_stats_text, AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons,
     TerminalAgentText, TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
@@ -101,10 +101,6 @@ fn summary_pane_kind_icons_distinguish_agent_terminals_from_plain_terminals() {
                     is_ambient: false,
                 },
             ),
-            (
-                EntityId::from_usize(30),
-                SummaryPaneKind::OzAgent { is_ambient: false },
-            ),
         ]),
         Some(SummaryPaneKindIcons::Pair {
             primary: SummaryPaneKind::Terminal,
@@ -153,18 +149,17 @@ fn summary_pane_kind_icons_distinguish_ambient_claude_from_local_claude() {
 #[test]
 fn preferred_agent_tab_titles_default_to_title_like_text() {
     let agent_text = TerminalAgentText {
-        conversation_display_title: Some("Generated Oz title".to_string()),
-        conversation_latest_user_prompt: Some("Latest Oz prompt".to_string()),
+        conversation_display_title: Some("Generated Agent title".to_string()),
+        conversation_latest_user_prompt: Some("Latest Agent prompt".to_string()),
         cli_agent_title: Some("CLI summary".to_string()),
         cli_agent_latest_user_prompt: Some("Latest CLI prompt".to_string()),
-        is_oz_agent: true,
         cli_agent: Some(CLIAgent::Claude),
     };
 
     assert_eq!(
         preferred_agent_tab_titles(&agent_text, AgentTabTextPreference::ConversationTitle),
         (
-            Some("Generated Oz title".to_string()),
+            Some("Generated Agent title".to_string()),
             Some("CLI summary".to_string())
         )
     );
@@ -177,7 +172,6 @@ fn preferred_agent_tab_titles_do_not_use_cli_prompt_when_disabled() {
         conversation_latest_user_prompt: None,
         cli_agent_title: None,
         cli_agent_latest_user_prompt: Some("Latest CLI prompt".to_string()),
-        is_oz_agent: false,
         cli_agent: Some(CLIAgent::Claude),
     };
 
@@ -194,7 +188,6 @@ fn terminal_primary_line_uses_terminal_title_when_disabled_cli_has_only_prompt()
         conversation_latest_user_prompt: None,
         cli_agent_title: None,
         cli_agent_latest_user_prompt: Some("Latest CLI prompt".to_string()),
-        is_oz_agent: false,
         cli_agent: Some(CLIAgent::Claude),
     };
     let (conversation_title, cli_title) =
@@ -223,18 +216,17 @@ fn terminal_primary_line_uses_terminal_title_when_disabled_cli_has_only_prompt()
 #[test]
 fn preferred_agent_tab_titles_use_latest_prompt_when_enabled() {
     let agent_text = TerminalAgentText {
-        conversation_display_title: Some("Generated Oz title".to_string()),
-        conversation_latest_user_prompt: Some("Latest Oz prompt".to_string()),
+        conversation_display_title: Some("Generated Agent title".to_string()),
+        conversation_latest_user_prompt: Some("Latest Agent prompt".to_string()),
         cli_agent_title: Some("CLI summary".to_string()),
         cli_agent_latest_user_prompt: Some("Latest CLI prompt".to_string()),
-        is_oz_agent: true,
         cli_agent: Some(CLIAgent::Claude),
     };
 
     assert_eq!(
         preferred_agent_tab_titles(&agent_text, AgentTabTextPreference::LatestUserPrompt),
         (
-            Some("Latest Oz prompt".to_string()),
+            Some("Latest Agent prompt".to_string()),
             Some("Latest CLI prompt".to_string())
         )
     );
@@ -247,7 +239,6 @@ fn terminal_primary_line_uses_cli_prompt_when_enabled_cli_has_prompt() {
         conversation_latest_user_prompt: None,
         cli_agent_title: None,
         cli_agent_latest_user_prompt: Some("Latest CLI prompt".to_string()),
-        is_oz_agent: false,
         cli_agent: Some(CLIAgent::Claude),
     };
     let (conversation_title, cli_title) =
@@ -273,7 +264,6 @@ fn terminal_primary_line_uses_cli_prompt_when_enabled_cli_is_long_running() {
         conversation_latest_user_prompt: None,
         cli_agent_title: None,
         cli_agent_latest_user_prompt: Some("Latest CLI prompt".to_string()),
-        is_oz_agent: false,
         cli_agent: Some(CLIAgent::Claude),
     };
     let (conversation_title, cli_title) =
@@ -295,18 +285,17 @@ fn terminal_primary_line_uses_cli_prompt_when_enabled_cli_is_long_running() {
 #[test]
 fn preferred_agent_tab_titles_fall_back_when_preferred_text_is_missing() {
     let agent_text = TerminalAgentText {
-        conversation_display_title: Some("Generated Oz title".to_string()),
+        conversation_display_title: Some("Generated Agent title".to_string()),
         conversation_latest_user_prompt: None,
         cli_agent_title: None,
         cli_agent_latest_user_prompt: Some("Latest CLI prompt".to_string()),
-        is_oz_agent: true,
         cli_agent: Some(CLIAgent::Claude),
     };
 
     assert_eq!(
         preferred_agent_tab_titles(&agent_text, AgentTabTextPreference::LatestUserPrompt),
         (
-            Some("Generated Oz title".to_string()),
+            Some("Generated Agent title".to_string()),
             Some("Latest CLI prompt".to_string())
         )
     );
@@ -760,7 +749,7 @@ fn terminal_search_fragments_include_rendered_terminal_badges() {
         "Review the failing tests".to_string(),
         "~/warp".to_string(),
         Some("main".to_string()),
-        terminal_kind_badge_label(false, Some(CLIAgent::Claude)),
+        terminal_kind_badge_label(Some(CLIAgent::Claude)),
         Some(terminal_pull_request_badge_label(
             "https://github.com/warpdotdev/warp-internal/pull/12345",
         )),
@@ -1093,7 +1082,7 @@ fn summary_search_fragments_include_hidden_overflow_values() {
                 text: "Claude".to_string(),
                 status: Some(ConversationStatus::InProgress),
             },
-            label("Oz"),
+            label("Agent"),
             label("cargo"),
             label("code review"),
             label("hidden work"),
@@ -1141,4 +1130,37 @@ fn summary_search_fragments_include_hidden_overflow_values() {
     assert!(search_fragments_contain_query(&fragments, "#789"));
     assert!(search_fragments_contain_query(&fragments, "+2"));
     assert!(search_fragments_contain_query(&fragments, "-3"));
+}
+
+#[test]
+fn summary_title_override_uses_status_from_agent_label() {
+    let summary = VerticalTabsSummaryData {
+        primary_labels: vec![
+            label("plain terminal"),
+            VerticalTabsSummaryPrimaryLabel {
+                text: "renamed agent source".to_string(),
+                status: Some(ConversationStatus::InProgress),
+            },
+        ],
+        working_directories: Vec::new(),
+        branch_entries: Vec::new(),
+        has_unread_activity: false,
+    };
+
+    assert_eq!(
+        summary_status_for_title_override(&summary),
+        Some(&ConversationStatus::InProgress)
+    );
+}
+
+#[test]
+fn summary_title_override_has_no_status_without_agent_label() {
+    let summary = VerticalTabsSummaryData {
+        primary_labels: vec![label("plain terminal")],
+        working_directories: Vec::new(),
+        branch_entries: Vec::new(),
+        has_unread_activity: false,
+    };
+
+    assert_eq!(summary_status_for_title_override(&summary), None);
 }

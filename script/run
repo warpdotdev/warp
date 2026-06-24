@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# Cross-platform entrypoint for running a local Warp build.
+# Cross-platform entrypoint for running a local Zerp build.
 #
-# On macOS this delegates to `./script/macos/run`, which builds and runs Warp
+# On macOS this delegates to `./script/macos/run`, which builds and runs Zerp
 # as a real `.app` bundle (with code signing, plist updates, etc.). On Linux
 # and Windows it invokes `cargo run` directly for the appropriate binary.
 #
@@ -21,18 +21,18 @@ OS_TYPE="$(uname -s)"
 FEATURES="gui"
 INSTALL_COMMON_SKILLS=1
 FORCE_COMMON_SKILLS=0
-COMMON_SKILLS_TARGET="${WARP_COMMON_SKILLS_INSTALL_TARGET:-}"
+COMMON_SKILLS_TARGET="${ZERP_COMMON_SKILLS_INSTALL_TARGET:-}"
 
 ./script/install_channel_config || echo "Skipping internal channel config installation (no repo access)."
 
 
 # If warp_channel_config is on PATH, build the Local channel binary; otherwise build the OSS channel.
 if command -v warp-channel-config &>/dev/null; then
-    WARP_BIN_NAME="warp"
-    WARP_CHANNEL="local"
+    ZERP_BIN_NAME="zerp"
+    ZERP_CHANNEL="local"
 else
-    WARP_BIN_NAME="warp-oss"
-    WARP_CHANNEL="oss"
+    ZERP_BIN_NAME="zerp-oss"
+    ZERP_CHANNEL="oss"
 fi
 
 # Shared argument parsing. macOS-specific flags (--dont-open,
@@ -40,13 +40,13 @@ fi
 # silently ignored on other platforms.
 MAC_ARGS=()
 CARGO_PARAMS=()
-WARP_ARGS=()
+ZERP_ARGS=()
 
 while (( "$#" )); do
   case "$1" in
     --)
       shift
-      WARP_ARGS=("$@")
+      ZERP_ARGS=("$@")
       break
       ;;
     --features)
@@ -60,7 +60,7 @@ while (( "$#" )); do
       ;;
     --host-id)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
-        export WARP_CLOUD_MODE_DEFAULT_HOST="$2"
+        export ZERP_CLOUD_MODE_DEFAULT_HOST="$2"
         shift 2
       else
         echo "Error: Argument for $1 is missing" >&2
@@ -105,7 +105,7 @@ if [[ "$INSTALL_COMMON_SKILLS" -eq 1 ]]; then
   if [[ "${COMMON_SKILLS_TARGET}" = "project" || "${COMMON_SKILLS_TARGET}" = "global" ]]; then
     COMMON_SKILLS_ARGS=("--${COMMON_SKILLS_TARGET}")
   fi
-  if [[ "${WARP_SKIP_COMMON_SKILLS_INSTALL:-}" = "1" ]]; then
+  if [[ "${ZERP_SKIP_COMMON_SKILLS_INSTALL:-}" = "1" ]]; then
     :
   elif [[ "$FORCE_COMMON_SKILLS" -eq 1 ]]; then
     if [[ "${#COMMON_SKILLS_ARGS[@]}" -gt 0 ]]; then
@@ -140,21 +140,21 @@ for mapping in \
 done
 
 export FEATURES
-export WARP_BIN_NAME
-export WARP_CHANNEL
+export ZERP_BIN_NAME
+export ZERP_CHANNEL
 
 if [[ "$OS_TYPE" = "Darwin" ]]; then
-  if [[ ${#WARP_ARGS[@]} -gt 0 ]]; then
-    exec ./script/macos/run "${MAC_ARGS[@]}" -- "${WARP_ARGS[@]}"
+  if [[ ${#ZERP_ARGS[@]} -gt 0 ]]; then
+    exec ./script/macos/run "${MAC_ARGS[@]}" -- "${ZERP_ARGS[@]}"
   else
     exec ./script/macos/run "${MAC_ARGS[@]}"
   fi
 elif [[ "$OS_TYPE" = "Linux" ]] || [[ "$OS_TYPE" =~ ^(MINGW64_NT|MSYS_NT) ]]; then
-  echo "Running cargo run --bin $WARP_BIN_NAME --features \"$FEATURES\" ${CARGO_PARAMS[*]}"
-  if [[ ${#WARP_ARGS[@]} -gt 0 ]]; then
-    cargo run --bin "$WARP_BIN_NAME" --features "$FEATURES" "${CARGO_PARAMS[@]}" -- "${WARP_ARGS[@]}"
+  echo "Running cargo run --bin $ZERP_BIN_NAME --features \"$FEATURES\" ${CARGO_PARAMS[*]}"
+  if [[ ${#ZERP_ARGS[@]} -gt 0 ]]; then
+    cargo run --bin "$ZERP_BIN_NAME" --features "$FEATURES" "${CARGO_PARAMS[@]}" -- "${ZERP_ARGS[@]}"
   else
-    cargo run --bin "$WARP_BIN_NAME" --features "$FEATURES" "${CARGO_PARAMS[@]}"
+    cargo run --bin "$ZERP_BIN_NAME" --features "$FEATURES" "${CARGO_PARAMS[@]}"
   fi
 else
   echo "No run script defined for the current platform ($OS_TYPE)!" >&2

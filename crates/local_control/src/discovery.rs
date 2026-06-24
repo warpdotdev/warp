@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::protocol::{ActionMetadata, ControlError, ErrorCode, PROTOCOL_VERSION};
 
-const DISCOVERY_DIR_ENV: &str = "WARP_LOCAL_CONTROL_DISCOVERY_DIR";
+const DISCOVERY_DIR_ENV: &str = "ZERP_LOCAL_CONTROL_DISCOVERY_DIR";
 const BROKER_SOCKET_SUFFIX: &str = ".broker.sock";
 const TEMP_RECORD_SUFFIX: &str = ".json.tmp";
 const ORPHAN_SOCKET_GRACE_PERIOD: Duration = Duration::from_secs(60);
@@ -282,10 +282,10 @@ pub fn discovery_dir() -> PathBuf {
         return PathBuf::from(path);
     }
     if let Some(path) = std::env::var_os("XDG_RUNTIME_DIR") {
-        return PathBuf::from(path).join("warp").join("local-control");
+        return PathBuf::from(path).join("zerp").join("local-control");
     }
     let home = std::env::var_os("HOME").unwrap_or_else(|| ".".into());
-    PathBuf::from(home).join(".warp").join("local-control")
+    PathBuf::from(home).join(".zerp").join("local-control")
 }
 
 /// Returns compatible live instances from `channel` that pass an authenticated app ping.

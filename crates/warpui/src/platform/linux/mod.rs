@@ -57,7 +57,7 @@ pub fn is_wsl() -> bool {
 }
 
 pub fn is_wayland_env_var_set() -> bool {
-    std::env::var_os("WARP_ENABLE_WAYLAND")
+    std::env::var_os("ZERP_ENABLE_WAYLAND")
         .is_some_and(|warp_enable_wayland| warp_enable_wayland.eq_ignore_ascii_case("1"))
 }
 

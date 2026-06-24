@@ -105,7 +105,6 @@ fn merge_precedence_cli_over_file_and_merges_mcp() {
         profile_id: None,
         worker_host: None,
         skill_spec: None,
-        computer_use_enabled: None,
         harness: None,
         harness_auth_secrets: None,
     };
@@ -151,64 +150,4 @@ fn mcp_servers_map_converts_to_runtime_specs() {
 
     assert!(specs.iter().any(|s| matches!(s, MCPSpec::Uuid(_))));
     assert!(specs.iter().any(|s| matches!(s, MCPSpec::Json(_))));
-}
-
-#[test]
-fn loads_computer_use_enabled_from_json() {
-    let contents = json!({
-        "computer_use_enabled": true
-    })
-    .to_string();
-
-    let file = write_temp(".json", &contents);
-    let loaded = super::load_config_file(file.path()).unwrap();
-
-    assert_eq!(loaded.file.computer_use_enabled, Some(true));
-}
-
-#[test]
-fn loads_computer_use_enabled_from_yaml() {
-    let contents = "computer_use_enabled: false\n";
-
-    let file = write_temp(".yaml", contents);
-    let loaded = super::load_config_file(file.path()).unwrap();
-
-    assert_eq!(loaded.file.computer_use_enabled, Some(false));
-}
-
-#[test]
-fn merge_precedence_cli_computer_use_enabled_over_file() {
-    let contents = json!({
-        "computer_use_enabled": false
-    })
-    .to_string();
-
-    let file = write_temp(".json", &contents);
-    let loaded = super::load_config_file(file.path()).unwrap();
-
-    let cli = AgentConfigSnapshot {
-        computer_use_enabled: Some(true),
-        ..Default::default()
-    };
-
-    let merged = super::merge_with_precedence(Some(&loaded), cli);
-
-    assert_eq!(merged.computer_use_enabled, Some(true));
-}
-
-#[test]
-fn merge_precedence_file_computer_use_enabled_when_cli_none() {
-    let contents = json!({
-        "computer_use_enabled": true
-    })
-    .to_string();
-
-    let file = write_temp(".json", &contents);
-    let loaded = super::load_config_file(file.path()).unwrap();
-
-    let cli = AgentConfigSnapshot::default();
-
-    let merged = super::merge_with_precedence(Some(&loaded), cli);
-
-    assert_eq!(merged.computer_use_enabled, Some(true));
 }

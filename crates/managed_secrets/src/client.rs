@@ -72,7 +72,7 @@ pub trait ManagedSecretsClient: 'static + Send + Sync {
     async fn list_secrets(&self) -> Result<Vec<ManagedSecret>>;
 
     /// List managed secrets that authenticate the given harness.
-    /// Returns an empty list for harnesses that do not use auth secrets (e.g. Oz).
+    /// Returns an empty list for harnesses that do not use auth secrets.
     async fn list_harness_auth_secrets(
         &self,
         harness: warp_graphql::ai::AgentHarness,

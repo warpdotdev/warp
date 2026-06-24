@@ -148,8 +148,8 @@ mod appimage {
         // If we're testing with a local copy of channel_versions.json, have the
         // newly-started binary also reference that same file (so we can test
         // displaying an updated changelog after an autoupdate).
-        if let Ok(path) = std::env::var("WARP_CHANNEL_VERSIONS_PATH") {
-            command.env("WARP_CHANNEL_VERSIONS_PATH", path);
+        if let Ok(path) = std::env::var("ZERP_CHANNEL_VERSIONS_PATH") {
+            command.env("ZERP_CHANNEL_VERSIONS_PATH", path);
         }
 
         log::info!("Relaunching warp for update...");
@@ -296,8 +296,8 @@ mod package_manager {
         // If we're testing with a local copy of channel_versions.json, have the
         // newly-started binary also reference that same file (so we can test
         // displaying an updated changelog after an autoupdate).
-        if let Ok(path) = std::env::var("WARP_CHANNEL_VERSIONS_PATH") {
-            command.env("WARP_CHANNEL_VERSIONS_PATH", path);
+        if let Ok(path) = std::env::var("ZERP_CHANNEL_VERSIONS_PATH") {
+            command.env("ZERP_CHANNEL_VERSIONS_PATH", path);
         }
 
         log::info!("Relaunching warp for update...");
@@ -665,21 +665,21 @@ fn is_pacman_signing_key_installed() -> bool {
 
 fn package_name(channel: Channel) -> &'static str {
     match channel {
-        Channel::Stable => "warp-terminal",
-        Channel::Preview => "warp-terminal-preview",
-        Channel::Dev => "warp-terminal-dev",
-        Channel::Integration => "warp-terminal-integration",
-        Channel::Local => "warp-terminal-local",
-        Channel::Oss => "warp-oss",
+        Channel::Stable => "zerp-terminal",
+        Channel::Preview => "zerp-terminal-preview",
+        Channel::Dev => "zerp-terminal-dev",
+        Channel::Integration => "zerp-terminal-integration",
+        Channel::Local => "zerp-terminal-local",
+        Channel::Oss => "zerp-terminal-oss",
     }
 }
 
 fn repo_name(channel: Channel) -> String {
     let package_name = package_name(channel);
     let channel_suffix = package_name
-        .strip_prefix("warp-terminal")
+        .strip_prefix("zerp-terminal")
         .unwrap_or_default();
-    format!("warpdotdev{channel_suffix}")
+    format!("zerpdotdev{channel_suffix}")
 }
 
 #[cfg(test)]

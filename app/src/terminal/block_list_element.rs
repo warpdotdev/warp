@@ -61,15 +61,12 @@ use super::view::{
 use super::warpify::render::{draw_flag_pole, render_subshell_flag};
 use super::{heights_approx_eq, TerminalModel, HEIGHT_FUDGE_FACTOR_LINES};
 use crate::ai::blocklist::agent_view::{agent_view_bg_fill, AgentViewState};
-use crate::ai::blocklist::{ai_brand_color, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT};
-use crate::ai_assistant::{AI_ASSISTANT_SVG_PATH, ASK_AI_ASSISTANT_TEXT};
+use crate::ai::blocklist::ai_brand_color;
 use crate::appearance::Appearance;
 use crate::drive::settings::WarpDriveSettings;
 use crate::features::FeatureFlag;
 use crate::pane_group::SplitPaneState;
-use crate::settings::{
-    AISettings, DebugSettings, EnforceMinimumContrast, PrivacySettings, TerminalSpacing,
-};
+use crate::settings::{DebugSettings, EnforceMinimumContrast, PrivacySettings, TerminalSpacing};
 use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
 use crate::terminal::block_list_viewport::AutoscrollBehavior;
 use crate::terminal::blockgrid_renderer::BlockGridParams;
@@ -148,8 +145,6 @@ const LINEAR_SCROLLING: ScrollingAcceleration = ScrollingAcceleration::Polynomia
 /// Without making the vertical size fixed, for some reason some elements (bookmark, block filter, shared session avatar)
 /// have a height that extends down to the bottom of the window when there's a horizontal scroll bar, which messes with the on-hover behavior.
 const BLOCK_HOVER_BUTTON_HEIGHT: f32 = 28.;
-
-const TAG_AGENT_FOR_ASSISTANCE_TEXT: &str = "Tag agent for assistance";
 
 const SAVE_AS_WORKFLOW_TEXT: &str = "Save as Workflow";
 const SAVE_AS_WORKFLOW_SECRETS_TEXT: &str = "Blocks containing secrets cannot be saved.";
@@ -638,7 +633,6 @@ pub struct BlockListElement {
     hovered_block_index: Option<BlockIndex>,
     overflow_menu_button: Option<Box<dyn Element>>,
     snackbar_toggle_button: Option<Box<dyn Element>>,
-    ask_ai_assistant_button: Option<Box<dyn Element>>,
     save_as_workflow_button: Option<Box<dyn Element>>,
     restored_session_separator: Option<Box<dyn Element>>,
     inline_banners: HashMap<InlineBannerId, Box<dyn Element>>,
@@ -861,7 +855,6 @@ pub struct BlockListMouseStates {
     pub label_mouse_states: HashMap<BlockIndex, MouseStateHandle>,
     pub bookmark_mouse_states: HashMap<BlockIndex, MouseStateHandle>,
     pub overflow_menu_button_mouse_state: MouseStateHandle,
-    pub ai_assistant_button_mouse_state: MouseStateHandle,
     pub save_as_workflow_button_mouse_state: MouseStateHandle,
     pub filter_mouse_states: HashMap<BlockIndex, MouseStateHandle>,
     pub snackbar_toggle_button_mouse_state: MouseStateHandle,
@@ -929,7 +922,6 @@ impl BlockListElement {
             subshell_separator_height: terminal_spacing.subshell_separator_height,
             hovered_block_index: None,
             overflow_menu_button: None,
-            ask_ai_assistant_button: None,
             save_as_workflow_button: None,
             snackbar_toggle_button: None,
             restored_session_separator: None,
@@ -1133,71 +1125,6 @@ impl BlockListElement {
             })
             .finish(),
         );
-
-        if AISettings::as_ref(app).is_any_ai_enabled(app) {
-            let icon = Container::new(
-                ConstrainedBox::new(if FeatureFlag::AgentView.is_enabled() {
-                    UIIcon::Icon::Paperclip
-                        .to_warpui_icon(icon_color.into())
-                        .finish()
-                } else if FeatureFlag::AgentMode.is_enabled() {
-                    UIIcon::Icon::Stars
-                        .to_warpui_icon(icon_color.into())
-                        .finish()
-                } else {
-                    Icon::new(AI_ASSISTANT_SVG_PATH, icon_color).finish()
-                })
-                .with_height(16.)
-                .with_width(16.)
-                .finish(),
-            )
-            .with_vertical_padding(5.)
-            .with_padding_left(6.)
-            .with_padding_right(4.);
-
-            let (ai_button_action, ai_button_tooltip) = if FeatureFlag::AgentMode.is_enabled() {
-                let active_block = model.block_list().active_block();
-                let has_active_long_running_command = active_block.is_active_and_long_running();
-
-                if has_active_long_running_command && active_block.index() == block_index {
-                    (
-                        Some(TerminalAction::SetInputModeAgent),
-                        TAG_AGENT_FOR_ASSISTANCE_TEXT,
-                    )
-                } else {
-                    (
-                        Some(TerminalAction::AskAIAssistant { block_index }),
-                        *ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
-                    )
-                }
-            } else {
-                (
-                    Some(TerminalAction::AskAIAssistant { block_index }),
-                    ASK_AI_ASSISTANT_TEXT,
-                )
-            };
-
-            let tooltip = ToolbeltButtonTooltip {
-                label: ai_button_tooltip.to_owned(),
-                tool_tip_below_button: should_render_tooltip_below_button,
-            };
-
-            let element = render_hoverable_block_button(
-                icon,
-                Some(tooltip),
-                false,
-                true,
-                self.mouse_states.ai_assistant_button_mouse_state.clone(),
-                &self.warp_theme,
-                &self.ui_builder,
-                move |ctx: &mut EventContext, _, _| {
-                    if let Some(action) = ai_button_action.clone() {
-                        ctx.dispatch_typed_action(action);
-                    }
-                },
-            );
-            self.ask_ai_assistant_button = Some(element);
-        }
 
         if WarpDriveSettings::is_warp_drive_enabled(app) {
             let icon = Container::new(
@@ -3137,16 +3064,6 @@ impl Element for BlockListElement {
                 app,
             );
         }
-        if let Some(ask_ai_assistant_button) = &mut self.ask_ai_assistant_button {
-            ask_ai_assistant_button.layout(
-                SizeConstraint::new(
-                    vec2f(BLOCK_HOVER_BUTTON_HEIGHT, BLOCK_HOVER_BUTTON_HEIGHT),
-                    vec2f(150., 150.),
-                ),
-                ctx,
-                app,
-            );
-        }
         if let Some(save_as_workflow_button) = &mut self.save_as_workflow_button {
             save_as_workflow_button.layout(
                 // The size constraint needs to be big enough to cover the total rect when tooltip is rendered.
@@ -4083,16 +4000,15 @@ impl Element for BlockListElement {
 
                     let block_menu_rect_origin = block_menu_items_start_origin - vec2f(4., 4.);
                     let block_menu_rect_size = vec2f(
-                        124., // 4 icons of 26px width + 4px padding between icons x3 + 4px left padding + 4px right padding
-                        34.,  // 26px height icons + 4px top padding + 4px bottom padding
+                        94., // 3 icons of 26px width + 4px padding between icons x2 + 4px left padding + 4px right padding
+                        34., // 26px height icons + 4px top padding + 4px bottom padding
                     );
 
-                    // We add in increments of 30 as each icon is 26px wide + 4px gap between icons
-                    let ask_ai_assistant_button_origin = block_menu_items_start_origin;
-                    let bookmark_button_origin = block_menu_items_start_origin + vec2f(30., 0.);
+                    // We add in increments of 30 as each icon is 26px wide + 4px gap between icons.
+                    let bookmark_button_origin = block_menu_items_start_origin;
+                    let filter_button_origin = block_menu_items_start_origin + vec2f(30., 0.);
                     let overflow_menu_button_origin =
-                        block_menu_items_start_origin + vec2f(90., 0.);
-                    let filter_button_origin = block_menu_items_start_origin + vec2f(60., 0.);
+                        block_menu_items_start_origin + vec2f(60., 0.);
 
                     if let Some(snackbar_toggle_button_origin) =
                         self.compute_snackbar_toggle_button_draw_location(&block_grid_params)
@@ -4185,11 +4101,6 @@ impl Element for BlockListElement {
                     if is_block_hovered {
                         if let Some(overflow_icon) = self.overflow_menu_button.as_mut() {
                             overflow_icon.paint(overflow_menu_button_origin, ctx, app);
-                        }
-
-                        if let Some(ask_ai_assistant_button) = self.ask_ai_assistant_button.as_mut()
-                        {
-                            ask_ai_assistant_button.paint(ask_ai_assistant_button_origin, ctx, app);
                         }
 
                         if let Some(save_as_workflow_button) = self.save_as_workflow_button.as_mut()
@@ -4505,11 +4416,6 @@ impl Element for BlockListElement {
 
             if let Some(overflow_menu_button) = &mut self.overflow_menu_button {
                 handled_by_floating_button |= overflow_menu_button.dispatch_event(event, ctx, app);
-            }
-
-            if let Some(ask_ai_assistant_button) = &mut self.ask_ai_assistant_button {
-                handled_by_floating_button |=
-                    ask_ai_assistant_button.dispatch_event(event, ctx, app);
             }
 
             if let Some(save_as_workflow_button) = &mut self.save_as_workflow_button {

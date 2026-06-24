@@ -12,15 +12,6 @@ use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
 use crate::terminal::CLIAgent;
 use crate::themes::theme::Fill as ThemeFill;
 
-/// Background color used for the Oz agent's circle when it is running in an ambient (cloud)
-/// run. Matches the Oz brand purple used in the cloud-mode design spec.
-const OZ_AMBIENT_BACKGROUND_COLOR: ColorU = ColorU {
-    r: 203,
-    g: 176,
-    b: 247,
-    a: 255,
-};
-
 // Sub-component size ratios, expressed as fractions of `total_size`. The brand circle is
 // ~76% wide and the status badge is ~57% wide, with the badge's bottom-right anchored at
 // the box's bottom-right corner. With these ratios the badge center sits *inside* the
@@ -128,11 +119,6 @@ pub(crate) enum IconWithStatusVariant {
     },
     /// A pre-built icon element on an overlay background.
     NeutralElement { icon_element: Box<dyn Element> },
-    /// An Oz agent icon on the theme background.
-    OzAgent {
-        status: Option<ConversationStatus>,
-        is_ambient: bool,
-    },
     /// A CLI agent icon on the agent's brand color background.
     CLIAgent {
         agent: CLIAgent,
@@ -200,43 +186,6 @@ pub(crate) fn render_icon_with_status_with_badge_style(
             internal_colors::fg_overlay_2(theme),
             total_size,
         ),
-        IconWithStatusVariant::OzAgent { status, is_ambient } => {
-            let circle_background = if is_ambient {
-                ThemeFill::Solid(OZ_AMBIENT_BACKGROUND_COLOR)
-            } else {
-                theme.background()
-            };
-            // In ambient/cloud mode use the combined `OzCloud` silhouette (Oz + cloud),
-            // matching the treatment used in the agent view header. Non-ambient runs
-            // continue to use the plain `Oz` glyph.
-            let oz_glyph = if is_ambient {
-                WarpIcon::OzCloud
-            } else {
-                WarpIcon::Oz
-            };
-            // Cloud (ambient) runs use a black glyph on the light-purple background
-            // for consistency with the web app; local runs keep the theme text color.
-            let glyph_color = if is_ambient {
-                WarpThemeFill::Solid(ColorU::black())
-            } else {
-                theme.main_text_color(theme.background())
-            };
-            let circle = render_circle(
-                oz_glyph.to_warpui_icon(glyph_color).finish(),
-                circle_background,
-                total_size,
-            );
-            attach_status_overlay(
-                circle,
-                status.as_ref(),
-                is_ambient,
-                total_size,
-                overlay_extra_overhang_ratio,
-                badge_style,
-                theme,
-                status_container_background,
-            )
-        }
         IconWithStatusVariant::CLIAgent {
             agent,
             status,

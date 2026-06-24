@@ -189,7 +189,7 @@ impl EventLoop {
         sink: &mut impl Sink,
         is_honor_ps1_enabled: bool,
     ) -> anyhow::Result<()> {
-        let honor_ps1_env_var = format!(r#"WARP_HONOR_PS1="{}";"#, is_honor_ps1_enabled as u8);
+        let honor_ps1_env_var = format!(r#"ZERP_HONOR_PS1="{}";"#, is_honor_ps1_enabled as u8);
         sink.send(Message::new_binary(honor_ps1_env_var.as_bytes().to_vec()))
             .await?;
 

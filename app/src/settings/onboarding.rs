@@ -108,10 +108,10 @@ fn apply_ui_customization_settings(
 }
 
 fn apply_agent_settings(agent_settings: &AgentDevelopmentSettings, app: &mut AppContext) {
-    // Apply session default mode.
+    // Built-in Agent sessions are removed from this build; keep Terminal as the
+    // default shell mode while enabling third-party CLI agent affordances below.
     let default_mode = match agent_settings.session_default {
-        SessionDefault::Agent => DefaultSessionMode::Agent,
-        SessionDefault::Terminal => DefaultSessionMode::Terminal,
+        SessionDefault::Agent | SessionDefault::Terminal => DefaultSessionMode::Terminal,
     };
     AISettings::handle(app).update(app, |settings, ctx| {
         report_if_error!(settings

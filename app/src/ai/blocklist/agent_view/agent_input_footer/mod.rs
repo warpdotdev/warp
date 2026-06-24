@@ -968,7 +968,7 @@ impl AgentInputFooter {
                 .as_ref()
                 .map(|m| m.as_ref(app).selected_harness())
                 .is_none_or(|harness| match harness {
-                    Harness::Oz | Harness::Unknown => true,
+                    Harness::Unknown => true,
                     _ => HarnessAvailabilityModel::as_ref(app)
                         .models_for(harness)
                         .is_some_and(|models| !models.is_empty()),
@@ -2112,13 +2112,7 @@ impl AgentInputFooter {
             AgentToolbarItemKind::FastForwardToggle => FeatureFlag::FastForwardAutoexecuteButton
                 .is_enabled()
                 .then(|| ChildView::new(&self.fast_forward_button).finish()),
-            AgentToolbarItemKind::HandoffToCloud => {
-                if !AISettings::as_ref(app).is_cloud_handoff_enabled(app) || is_cloud_context {
-                    return None;
-                }
-
-                Some(ChildView::new(&self.handoff_to_cloud_button).finish())
-            }
+            AgentToolbarItemKind::HandoffToCloud => None,
             // Handled by the available_in() guard above; included for exhaustiveness.
             AgentToolbarItemKind::FileExplorer
             | AgentToolbarItemKind::RichInput

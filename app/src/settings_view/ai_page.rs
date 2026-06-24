@@ -88,9 +88,8 @@ use crate::settings::{
     LongRunningCommandSubmissionMode, MemoryEnabled, NLDInTerminalEnabled,
     NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode, PromptSubmissionMode,
     RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
-    ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
-    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
-    WarpDriveContextEnabled,
+    ShouldRenderUseAgentToolbarForUserCommands, ShowAgentTips, ShowConversationHistory,
+    ShowHintText, ThinkingDisplayMode, VoiceInputEnabled, WarpDriveContextEnabled,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
@@ -107,11 +106,11 @@ use crate::workspaces::user_workspaces::UserWorkspacesEvent;
 /// When `None`, the page shows all widgets (legacy/full view).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AISubpage {
-    /// The main "WarpAgent" page: global AI toggle + Active AI + Input + Other sections.
+    /// Legacy built-in agent page. No longer exposed.
     WarpAgent,
-    /// Agent profiles and permissions.
+    /// Legacy built-in agent profiles page. No longer exposed.
     Profiles,
-    /// Knowledge / Rules settings.
+    /// Legacy built-in knowledge/rules page. No longer exposed.
     Knowledge,
     /// Third-party CLI agent settings.
     ThirdPartyCLIAgents,
@@ -120,9 +119,6 @@ pub enum AISubpage {
 impl AISubpage {
     pub fn from_section(section: SettingsSection) -> Option<Self> {
         match section {
-            SettingsSection::WarpAgent => Some(Self::WarpAgent),
-            SettingsSection::AgentProfiles => Some(Self::Profiles),
-            SettingsSection::Knowledge => Some(Self::Knowledge),
             SettingsSection::ThirdPartyCLIAgents => Some(Self::ThirdPartyCLIAgents),
             // AgentMCPServers renders the standalone MCPServers page, not an AI subpage.
             _ => None,
@@ -289,29 +285,6 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         )
         .with_group(bindings::BindingGroup::WarpAi)
         .with_enabled(|| FeatureFlag::AgentTips.is_enabled())],
-        app,
-    );
-    ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::custom(
-            SettingActionPairDescriptions::new(
-                "Show Oz changelog in new agent conversation view",
-                "Hide Oz changelog in new agent conversation view",
-            ),
-            builder(SettingsAction::AI(
-                AISettingsPageAction::ToggleShowOzUpdatesInZeroState,
-            )),
-            SettingActionPairContexts::new(
-                context.clone()
-                    & id!(flags::IS_ANY_AI_ENABLED)
-                    & !id!(flags::SHOW_OZ_UPDATES_IN_ZERO_STATE_FLAG),
-                context.clone()
-                    & id!(flags::IS_ANY_AI_ENABLED)
-                    & id!(flags::SHOW_OZ_UPDATES_IN_ZERO_STATE_FLAG),
-            ),
-            None,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)
-        .with_enabled(|| FeatureFlag::AgentView.is_enabled())],
         app,
     );
     {
@@ -2424,117 +2397,15 @@ impl AISettingsPageView {
         }
     }
 
-    fn build_page(subpage: Option<AISubpage>, ctx: &mut ViewContext<Self>) -> PageType<Self> {
-        let ai_settings = AISettings::as_ref(ctx);
-
+    fn build_page(subpage: Option<AISubpage>, _ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let mut widgets: Vec<Box<dyn SettingsWidget<View = AISettingsPageView>>> = Vec::new();
 
-        // When viewing a specific subpage, only include its widgets.
-        // When subpage is None (legacy/backward-compat), show all widgets.
+        // The Zerp OSS build keeps third-party CLI agent support and removes
+        // Warp's built-in AI settings. Legacy subpage routes fall back here so
+        // deep links do not expose removed settings.
         match subpage {
-            None => {
-                // Full page: all widgets (legacy behavior)
-                widgets.push(Box::new(GlobalAIWidget::default()));
-                if !FeatureFlag::UsageBasedPricing.is_enabled() {
-                    widgets.push(Box::new(UsageWidget::default()));
-                }
-                if ai_settings
-                    .intelligent_autosuggestions_enabled_internal
-                    .is_supported_on_current_platform()
-                    || ai_settings
-                        .prompt_suggestions_enabled_internal
-                        .is_supported_on_current_platform()
-                    || (FeatureFlag::PredictAMQueries.is_enabled()
-                        && ai_settings
-                            .natural_language_autosuggestions_enabled_internal
-                            .is_supported_on_current_platform())
-                    || (FeatureFlag::SharedBlockTitleGeneration.is_enabled()
-                        && ai_settings
-                            .shared_block_title_generation_enabled_internal
-                            .is_supported_on_current_platform())
-                    || (FeatureFlag::GitOperationsInCodeReview.is_enabled()
-                        && ai_settings
-                            .git_operations_autogen_enabled_internal
-                            .is_supported_on_current_platform())
-                {
-                    widgets.push(Box::new(ActiveAIWidget::default()));
-                }
-                widgets.push(Box::new(AgentsWidget::default()));
-                widgets.push(Box::new(AIInputWidget::default()));
-                if MCPServersWidget::should_show_mcp() {
-                    widgets.push(Box::new(MCPServersWidget::default()));
-                }
-                if FeatureFlag::AIRules.is_enabled() {
-                    widgets.push(Box::new(AIFactWidget::default()));
-                }
-                if cfg!(feature = "voice_input")
-                    && ai_settings
-                        .voice_input_enabled_internal
-                        .is_supported_on_current_platform()
-                {
-                    widgets.push(Box::new(VoiceWidget::default()));
-                }
-                widgets.push(Box::new(CloudHandoffWidget::default()));
+            None | Some(AISubpage::WarpAgent | AISubpage::Profiles | AISubpage::Knowledge) => {
                 widgets.push(Box::new(CLIAgentWidget::default()));
-                widgets.push(Box::new(ApiKeysWidget::new(ctx)));
-                widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
-                widgets.push(Box::new(AgentAttributionWidget::default()));
-                widgets.push(Box::new(OtherAIWidget::default()));
-                if FeatureFlag::AgentModeComputerUse.is_enabled() {
-                    widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
-                }
-            }
-            Some(AISubpage::WarpAgent) => {
-                // Oz page: global toggle + Active AI + Input + Other
-                widgets.push(Box::new(GlobalAIWidget::default()));
-                if ai_settings
-                    .intelligent_autosuggestions_enabled_internal
-                    .is_supported_on_current_platform()
-                    || ai_settings
-                        .prompt_suggestions_enabled_internal
-                        .is_supported_on_current_platform()
-                    || (FeatureFlag::PredictAMQueries.is_enabled()
-                        && ai_settings
-                            .natural_language_autosuggestions_enabled_internal
-                            .is_supported_on_current_platform())
-                    || (FeatureFlag::SharedBlockTitleGeneration.is_enabled()
-                        && ai_settings
-                            .shared_block_title_generation_enabled_internal
-                            .is_supported_on_current_platform())
-                    || (FeatureFlag::GitOperationsInCodeReview.is_enabled()
-                        && ai_settings
-                            .git_operations_autogen_enabled_internal
-                            .is_supported_on_current_platform())
-                {
-                    widgets.push(Box::new(ActiveAIWidget::default()));
-                }
-                widgets.push(Box::new(AIInputWidget::default()));
-                let voice_supported = cfg!(feature = "voice_input")
-                    && ai_settings
-                        .voice_input_enabled_internal
-                        .is_supported_on_current_platform();
-                if voice_supported {
-                    widgets.push(Box::new(VoiceWidget::default()));
-                }
-                widgets.push(Box::new(CloudHandoffWidget::default()));
-                widgets.push(Box::new(ApiKeysWidget::new(ctx)));
-                widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
-                widgets.push(Box::new(AgentAttributionWidget::default()));
-                widgets.push(Box::new(OtherAIWidget::default()));
-                if FeatureFlag::AgentModeComputerUse.is_enabled() {
-                    widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
-                }
-            }
-            Some(AISubpage::Profiles) => {
-                if !FeatureFlag::UsageBasedPricing.is_enabled() {
-                    widgets.push(Box::new(UsageWidget::default()));
-                }
-                widgets.push(Box::new(AgentsWidget::default()));
-            }
-            Some(AISubpage::Knowledge) => {
-                if FeatureFlag::AIRules.is_enabled() {
-                    widgets.push(Box::new(AIFactWidget::default()));
-                }
             }
             Some(AISubpage::ThirdPartyCLIAgents) => {
                 widgets.push(Box::new(CLIAgentWidget::default()));
@@ -3201,7 +3072,6 @@ pub enum AISettingsPageAction {
     ToggleCodebaseContext,
     ToggleShowInputHintText,
     ToggleShowAgentTips,
-    ToggleShowOzUpdatesInZeroState,
     SetThinkingDisplayMode(ThinkingDisplayMode),
     SetOrchestrationMessageDisplayMode(OrchestrationMessageDisplayMode),
     SetPromptSubmissionMode(PromptSubmissionMode),
@@ -3245,7 +3115,6 @@ pub enum AISettingsPageAction {
     ToggleAwsBedrockAutoLogin,
     ToggleAwsBedrockCredentialsEnabled,
     RefreshAwsBedrockCredentials,
-    ToggleCloudAgentComputerUse,
     ToggleFileBasedMcp,
     ToggleIncludeAgentCommandsInHistory,
     ToggleAgentAttribution,
@@ -3652,14 +3521,6 @@ impl TypedActionView for AISettingsPageView {
                 });
                 ctx.notify();
             }
-            AISettingsPageAction::ToggleShowOzUpdatesInZeroState => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .should_show_oz_updates_in_zero_state
-                        .toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
             AISettingsPageAction::SetThinkingDisplayMode(mode) => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.thinking_display_mode.set_value(*mode, ctx));
@@ -3982,14 +3843,6 @@ impl TypedActionView for AISettingsPageView {
                 #[cfg(not(target_family = "wasm"))]
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                     drop(refresh_aws_credentials(manager, ctx));
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::ToggleCloudAgentComputerUse => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .cloud_agent_computer_use_enabled
-                        .toggle_and_save_value(ctx));
                 });
                 ctx.notify();
             }
@@ -4326,7 +4179,7 @@ impl SettingsWidget for GlobalAIWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "oz warp agent global ai a.i. active next command prompt code diffs suggestion suggested suggestions \
+        "warp agent global ai a.i. active next command prompt code diffs suggestion suggested suggestions \
                 agent mode natural language detection input hint api keys bring your own byo google anthropic openai"
     }
 
@@ -6047,7 +5900,7 @@ impl SettingsWidget for AIInputWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "oz agent ai input natural language detection autodetection prompt terminal command commands history shell executed execution queue interrupt submission submit auto-queue response while responding default long-running long running lrc"
+        "agent ai input natural language detection autodetection prompt terminal command commands history shell executed execution queue interrupt submission submit auto-queue response while responding default long-running long running lrc"
     }
 
     fn render(
@@ -6345,7 +6198,7 @@ impl SettingsWidget for MCPServersWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "oz agent mcp server servers model context protocol file-based file based project claude .mcp.json .claude/.mcp.json .codex config.toml .codex/config.toml"
+        "agent mcp server servers model context protocol file-based file based project claude .mcp.json .claude/.mcp.json .codex config.toml .codex/config.toml"
     }
 
     fn should_render(&self, _app: &AppContext) -> bool {
@@ -6597,7 +6450,7 @@ impl SettingsWidget for AIFactWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "agent oz ai a.i. knowledge fact memory memories rules warp drive context workflows notebooks environment variables"
+        "agent ai a.i. knowledge fact memory memories rules warp drive context workflows notebooks environment variables"
     }
 
     fn should_render(&self, _app: &AppContext) -> bool {
@@ -6725,7 +6578,7 @@ impl SettingsWidget for VoiceWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "voice agent oz ai a.i. speech input natural language talk english"
+        "voice agent ai a.i. speech input natural language talk english"
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
@@ -6757,7 +6610,6 @@ impl SettingsWidget for VoiceWidget {
 }
 #[derive(Default)]
 struct OtherAIWidget {
-    show_oz_updates_in_zero_state_toggle: SwitchStateHandle,
     use_agent_footer_toggle: SwitchStateHandle,
     show_conversation_history_toggle: SwitchStateHandle,
 }
@@ -6858,7 +6710,7 @@ impl SettingsWidget for OtherAIWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "other oz updates zero state empty changelog new conversation agent what's new use agent footer toolbar layout chip chips rearrange re-arrange thinking expanded reasoning collapse never show orchestration messages child agents collapse expand hide conversation history"
+        "other updates zero state empty changelog new conversation agent what's new use agent footer toolbar layout chip chips rearrange re-arrange thinking expanded reasoning collapse never show orchestration messages child agents collapse expand hide conversation history"
     }
 
     fn render(
@@ -6885,15 +6737,6 @@ impl SettingsWidget for OtherAIWidget {
 
         if FeatureFlag::AgentView.is_enabled() {
             let mut agent_view_column = Flex::column()
-                .with_child(render_ai_setting_toggle::<ShouldShowOzUpdatesInZeroState>(
-                    "Show Oz changelog in new conversation view",
-                    AISettingsPageAction::ToggleShowOzUpdatesInZeroState,
-                    *ai_settings.should_show_oz_updates_in_zero_state,
-                    is_toggleable,
-                    self.show_oz_updates_in_zero_state_toggle.clone(),
-                    &view.local_only_icon_tooltip_states,
-                    app,
-                ))
                 .with_child(render_ai_setting_toggle::<ShouldRenderUseAgentToolbarForUserCommands>(
                     "Show \"Use Agent\" footer",
                     AISettingsPageAction::ToggleUseAgentToolbar,
@@ -7321,7 +7164,7 @@ impl SettingsWidget for AgentAttributionWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "agent attribution commit pull request co-author author credit oz warp"
+        "agent attribution commit pull request co-author author credit warp"
     }
 
     fn render(
@@ -7397,7 +7240,7 @@ impl SettingsWidget for AgentAttributionWidget {
             )
             .with_child(toggle_row)
             .with_child(render_ai_setting_description(
-                "Oz can add attribution to commit messages and pull requests it creates",
+                "AI can add attribution to commit messages and pull requests it creates",
                 !state.is_disabled,
                 app,
             ))
@@ -7408,107 +7251,6 @@ impl SettingsWidget for AgentAttributionWidget {
 #[cfg(test)]
 #[path = "ai_page_tests.rs"]
 mod tests;
-
-#[derive(Default)]
-struct CloudAgentComputerUseWidget {
-    toggle: SwitchStateHandle,
-}
-
-impl SettingsWidget for CloudAgentComputerUseWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "oz cloud agent computer use orchestration multi-agent"
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        use crate::ai::execution_profiles::{
-            resolve_cloud_agent_computer_use_state, CloudAgentComputerUseState,
-        };
-
-        let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
-
-        // Determine toggle state based on workspace autonomy setting and user preference
-        let CloudAgentComputerUseState {
-            enabled: is_checked,
-            is_forced_by_org,
-        } = resolve_cloud_agent_computer_use_state(app);
-
-        // Toggle is disabled if forced by org settings OR if AI is globally disabled
-        let is_disabled = is_forced_by_org || !is_any_ai_enabled;
-
-        let ui_builder = appearance.ui_builder();
-        let toggle = if is_forced_by_org {
-            // Disabled by organization setting - show tooltip on hover
-            ui_builder
-                .switch(self.toggle.clone())
-                .check(is_checked)
-                .with_tooltip(TooltipConfig {
-                    text: "This option is enforced by your organization's settings and cannot be customized.".to_string(),
-                    styles: ui_builder.default_tool_tip_styles(),
-                })
-                .disable()
-                .build()
-                .finish()
-        } else if !is_any_ai_enabled {
-            // Disabled because AI is off globally - no tooltip needed
-            ui_builder
-                .switch(self.toggle.clone())
-                .check(is_checked)
-                .with_disabled(true)
-                .build()
-                .finish()
-        } else {
-            // Enabled - allow toggling
-            ui_builder
-                .switch(self.toggle.clone())
-                .check(is_checked)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(AISettingsPageAction::ToggleCloudAgentComputerUse);
-                })
-                .finish()
-        };
-
-        let toggle_row = build_toggle_element(
-            render_body_item_label::<AISettingsPageAction>(
-                "Computer use in Cloud Agents".to_string(),
-                Some(styles::header_font_color(!is_disabled, app)),
-                None,
-                LocalOnlyIconState::Hidden,
-                ToggleState::Enabled,
-                appearance,
-            ),
-            toggle,
-            appearance,
-            None,
-        );
-
-        Flex::column()
-            .with_child(render_separator(appearance))
-            .with_child(
-                build_sub_header(
-                    appearance,
-                    "Experimental",
-                    Some(styles::header_font_color(is_any_ai_enabled, app)),
-                )
-                .with_padding_bottom(HEADER_PADDING)
-                .finish(),
-            )
-            .with_child(toggle_row)
-            .with_child(render_ai_setting_description(
-                "Enable computer use in cloud agent conversations started from the Warp app.",
-                !is_disabled,
-                app,
-            ))
-            .finish()
-    }
-}
 
 #[derive(Default)]
 struct CloudHandoffWidget {

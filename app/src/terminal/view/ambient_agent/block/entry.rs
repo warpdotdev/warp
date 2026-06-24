@@ -208,13 +208,6 @@ impl AmbientAgentEntryBlock {
         let terminal_view = self.terminal_view.as_ref(app);
 
         match terminal_view_agent_icon_variant(terminal_view, app) {
-            Some(IconWithStatusVariant::OzAgent {
-                status: None,
-                is_ambient,
-            }) => IconWithStatusVariant::OzAgent {
-                status: fallback_status,
-                is_ambient,
-            },
             Some(IconWithStatusVariant::CLIAgent {
                 agent,
                 status: None,
@@ -225,7 +218,8 @@ impl AmbientAgentEntryBlock {
                 is_ambient,
             },
             Some(variant) => variant,
-            None => IconWithStatusVariant::OzAgent {
+            None => IconWithStatusVariant::CLIAgent {
+                agent: crate::terminal::CLIAgent::Unknown,
                 status: fallback_status,
                 is_ambient: true,
             },

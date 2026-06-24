@@ -95,13 +95,6 @@ fn maximize_warp_items(ctx: &mut ViewContext<ResourceCenterMainView>) -> Vec<Fea
         ctx,
     ));
 
-    maximize_warp_items.push(FeatureItem::new(
-        "AI command search",
-        "Generate shell commands with natural language.",
-        Tip::Action(TipAction::AiCommandSearch),
-        ctx,
-    ));
-
     if ContextFlag::CreateNewSession.is_enabled() {
         maximize_warp_items.push(FeatureItem::new(
             "Split panes",

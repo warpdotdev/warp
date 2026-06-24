@@ -334,22 +334,22 @@ pub fn parse_uname_output(
 
 /// Returns the remote directory where the binary is installed, keyed by channel.
 ///
-/// - stable:      `~/.warp/remote-server`
-/// - preview:     `~/.warp-preview/remote-server`
-/// - dev:         `~/.warp-dev/remote-server`
-/// - local:       `~/.warp-local/remote-server`
-/// - integration: `~/.warp-dev/remote-server`
-/// - warp-oss:    `~/.warp-oss/remote-server`
+/// - stable:      `~/.zerp/remote-server`
+/// - preview:     `~/.zerp-preview/remote-server`
+/// - dev:         `~/.zerp-dev/remote-server`
+/// - local:       `~/.zerp-local/remote-server`
+/// - integration: `~/.zerp-dev/remote-server`
+/// - zerp-oss:    `~/.zerp-oss/remote-server`
 pub fn remote_server_dir() -> String {
     let warp_dir = match ChannelState::channel() {
-        Channel::Stable => ".warp",
-        Channel::Preview => ".warp-preview",
-        Channel::Dev | Channel::Integration => ".warp-dev",
-        Channel::Local => ".warp-local",
+        Channel::Stable => ".zerp",
+        Channel::Preview => ".zerp-preview",
+        Channel::Dev | Channel::Integration => ".zerp-dev",
+        Channel::Local => ".zerp-local",
         Channel::Oss => {
             // TODO(alokedesai): need to figure out how remote server works with warp-oss
             // For now, return what Dev returns.
-            ".warp-dev"
+            ".zerp-dev"
         }
     };
     format!("~/{warp_dir}/remote-server")
@@ -462,7 +462,7 @@ pub fn daemon_pid_name() -> String {
 
 /// Returns the binary name, keyed by channel.
 ///
-/// Matches the CLI command names: `oz` (stable), `oz-preview`, `oz-dev`.
+/// Matches the CLI command names: `zerp-cli` (stable), `zerp-cli-preview`, `zerp-cli-dev`.
 pub fn binary_name() -> &'static str {
     ChannelState::channel().cli_command_name()
 }
@@ -567,7 +567,7 @@ const INSTALL_SCRIPT_TEMPLATE: &str = include_str!("install_remote_server.sh");
 /// at the current client version.
 ///
 /// The script detects the remote architecture via `uname -m`, downloads
-/// the correct Oz CLI tarball from the download URL, and installs it at
+/// the correct Zerp CLI tarball from the download URL, and installs it at
 /// the path returned by [`remote_server_binary`] so repeat invocations
 /// are idempotent. The `version_query` / `version_suffix` substitutions
 /// follow the same rule as [`remote_server_binary`]: empty on

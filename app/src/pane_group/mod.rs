@@ -62,7 +62,6 @@ use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDo
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
 use crate::ai::llms::LLMId;
 use crate::ai::restored_conversations::RestoredAgentConversations;
-use crate::ai_assistant::AskAIType;
 #[cfg(feature = "local_fs")]
 use crate::app_state::CodePaneSnapShot;
 use crate::app_state::{
@@ -504,7 +503,6 @@ pub enum Event {
     OpenAutoReloadModal {
         purchased_credits: i32,
     },
-    AskAIAssistant(AskAIType),
     /// Pass input sync event up from underlying TerminalViews
     /// to the Workspace to sync throughout the window.
     SyncInput(SyncEvent),
@@ -744,9 +742,6 @@ pub enum Event {
     /// Request to open LSP logs in a terminal pane
     OpenLspLogs {
         log_path: PathBuf,
-    },
-    ShowCloudAgentCapacityModal {
-        variant: crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalVariant,
     },
     FreeTierLimitCheckTriggered,
     #[cfg(not(target_family = "wasm"))]
@@ -3178,12 +3173,11 @@ impl PaneGroup {
         ViewHandle<TerminalView>,
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
-        let window_id = ctx.window_id();
-        crate::terminal::view::ambient_agent::create_cloud_mode_view(
+        let _ = enable_orchestration_polling;
+        Self::create_loading_terminal_manager_and_view(
             resources,
             view_bounds_size,
-            window_id,
-            enable_orchestration_polling,
+            ctx.window_id(),
             ctx,
         )
     }
@@ -3199,10 +3193,6 @@ impl PaneGroup {
     ) {
         let (terminal_view, terminal_manager) =
             Self::create_cloud_mode_terminal(resources, view_bounds_size, true, ctx);
-
-        terminal_view.update(ctx, |view, ctx| {
-            view.enter_ambient_agent_setup(None, ctx);
-        });
 
         (terminal_view, terminal_manager)
     }
@@ -7727,14 +7717,7 @@ impl PaneGroup {
 
     /// Add and focus a cloud mode pane.
     pub fn add_ambient_agent_pane(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::AgentView.is_enabled() || !FeatureFlag::CloudMode.is_enabled() {
-            return;
-        }
-
-        let pane_data = self.create_ambient_agent_pane(ctx);
-
-        // Add the pane to the right
-        let _ = self.add_pane(Direction::Right, None, Box::new(pane_data), true, ctx);
+        let _ = ctx;
     }
 
     /// Close overlays whose state is managed by this pane group or its terminal panes. Does not

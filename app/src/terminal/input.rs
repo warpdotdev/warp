@@ -251,10 +251,10 @@ use crate::server::server_api::ai::AttachmentFileInfo;
 use crate::server::server_api::ai::AttachmentInput;
 use crate::server::server_api::ServerApi;
 use crate::server::telemetry::{
-    AICommandSearchEntrypoint, AgentModeAutoDetectionFalsePositivePayload,
-    AgentModeAutoDetectionSettingOrigin, AnonymousUserSignupEntrypoint, CommandXRayTrigger,
-    EnvVarTelemetryMetadata, PaletteSource, QueuedPromptSendNowTrigger,
-    SlashCommandAcceptedDetails, SlashMenuSource, TelemetryEvent, WorkflowTelemetryMetadata,
+    AgentModeAutoDetectionFalsePositivePayload, AgentModeAutoDetectionSettingOrigin,
+    AnonymousUserSignupEntrypoint, CommandXRayTrigger, EnvVarTelemetryMetadata, PaletteSource,
+    QueuedPromptSendNowTrigger, SlashCommandAcceptedDetails, SlashMenuSource, TelemetryEvent,
+    WorkflowTelemetryMetadata,
 };
 use crate::session_management::SessionNavigationPromptElements;
 use crate::settings::{
@@ -479,7 +479,6 @@ const HISTORY_DETAILS_VIEW_WIDTH_REQUIREMENT: f32 = 1100.;
 
 const MIN_BUFFER_LEN_TO_SHOW_COMPLETIONS_WHILE_TYPING: usize = 2;
 
-const AI_COMMAND_SEARCH_TRIGGER: &str = "#";
 const QUEUED_PROMPT_INLINE_EDITOR_OPEN_CONTEXT: &str = "QueuedPromptInlineEditorOpen";
 
 /// If the editor buffer matches this prefix, AI input is enabled.
@@ -1136,7 +1135,6 @@ pub enum InputAction {
     PageDown,
     ClearScreen,
     SelectAndRefreshVoltron(VoltronItem),
-    ShowAiCommandSearch,
     /// Open the completions menu if the cursor is in a valid position to generate completion
     /// suggestions.
     MaybeOpenCompletionSuggestions,
@@ -1971,19 +1969,6 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([
         EditableBinding::new(
-            "input:toggle_natural_language_command_search",
-            "Open AI Command Suggestions",
-            InputAction::ShowAiCommandSearch,
-        )
-        .with_context_predicate(
-            id!("Input")
-                & !id!(SharedSessionStatus::reader().as_keymap_context())
-                & id!(flags::IS_ANY_AI_ENABLED)
-                & !id!("AIInput"),
-        )
-        .with_group(bindings::BindingGroup::WarpAi.as_str())
-        .with_custom_action(CustomAction::AISearch),
-        EditableBinding::new(
             START_NEW_CONVERSATION_KEYBINDING_NAME,
             "New agent conversation",
             InputAction::StartNewAgentConversation {
@@ -2354,7 +2339,7 @@ impl Input {
                             HostSelector::new(menu_positioning_provider.clone(), ctx)
                         });
                         // Env var takes priority over workspace setting for developer testing.
-                        let effective_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
+                        let effective_host = std::env::var("ZERP_CLOUD_MODE_DEFAULT_HOST")
                             .ok()
                             .filter(|s| !s.is_empty())
                             .or_else(|| {
@@ -2405,7 +2390,7 @@ impl Input {
                                 if !matches!(event, UserWorkspacesEvent::TeamsChanged) {
                                     return;
                                 }
-                                let effective_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
+                                let effective_host = std::env::var("ZERP_CLOUD_MODE_DEFAULT_HOST")
                                     .ok()
                                     .filter(|s| !s.is_empty())
                                     .or_else(|| {
@@ -2501,7 +2486,7 @@ impl Input {
                     }
                     AuthSecretFtuxViewEvent::Cancelled => {
                         vm_for_events.update(ctx, |model, ctx| {
-                            model.set_harness(Harness::Oz, ctx);
+                            model.set_harness(Harness::Codex, ctx);
                         });
                     }
                     AuthSecretFtuxViewEvent::Skipped { harness } => {
@@ -2965,15 +2950,7 @@ impl Input {
         };
 
         let terminal_input_message_bar = ctx.add_view(|ctx| {
-            TerminalInputMessageBar::new(
-                model.clone(),
-                ai_input_model.clone(),
-                buffer_model.clone(),
-                ai_context_model.clone(),
-                suggestions_mode_model.clone(),
-                inline_history_model,
-                ctx,
-            )
+            TerminalInputMessageBar::new(suggestions_mode_model.clone(), inline_history_model, ctx)
         });
 
         let agent_shortcut_view_model = ctx.add_model(|ctx| {
@@ -8656,26 +8633,7 @@ impl Input {
         filter_when_closed: &Option<QueryFilter>,
         ctx: &mut ViewContext<Self>,
     ) {
-        // We want to restore / preserve the buffer as follows when the buffer text is "#":
-        // - if command search was "#" when closed, keep the "#" in the buffer
-        //   because the user probably wanted "#" without command search.
-        // - if command search was "#: some_query" when closed, clear the buffer
-        //   because the user probably got their answer from ai command search.
-        // - if command search was empty when closed, clear the buffer
-        //   because the user probably backspace'd out of "#" and then hit escape.
-        let is_command_search_empty =
-            filter_when_closed.is_none() && query_when_closed.trim().is_empty();
-        let was_non_empty_ai_command_search =
-            matches!(filter_when_closed, Some(QueryFilter::NaturalLanguage))
-                && !query_when_closed.trim().is_empty();
-        let was_triggered_by_hashtag = self.buffer_text(ctx).trim() == AI_COMMAND_SEARCH_TRIGGER;
-
-        if (is_command_search_empty || was_non_empty_ai_command_search) && was_triggered_by_hashtag
-        {
-            self.editor().update(ctx, |editor, ctx| {
-                editor.clear_buffer(ctx);
-            });
-        }
+        let _ = (query_when_closed, filter_when_closed);
         self.focus_input_box(ctx);
     }
 
@@ -10044,20 +10002,6 @@ impl Input {
                     } else {
                         let _ = self.debounce_input_background_tx.try_send(mode);
                     }
-                }
-
-                if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-                    && self.editor_starts_with_command_search_trigger(ctx)
-                    && *edit_origin == EditOrigin::UserTyped
-                    && !self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
-                {
-                    // If last buffer didn't start with '#' and current buffer does,
-                    // then show command search.
-                    let last_buffer_text = self.editor.as_ref(ctx).last_buffer_text(ctx);
-                    if !last_buffer_text.starts_with(AI_COMMAND_SEARCH_TRIGGER) {
-                        self.show_ai_command_search(ctx);
-                    }
-                    ctx.notify();
                 }
 
                 let is_input_mode_locked = self.ai_input_model.as_ref(ctx).is_input_type_locked();
@@ -15477,7 +15421,7 @@ impl Input {
         }
 
         let welcome_tip_feature = match feature_item {
-            VoltronItem::AiCommands => Some(Tip::Action(TipAction::AiCommandSearch)),
+            VoltronItem::AiCommands => None,
             VoltronItem::History => Some(Tip::Action(TipAction::HistorySearch)),
             VoltronItem::Workflows => None,
         };
@@ -15512,58 +15456,12 @@ impl Input {
         ctx.notify();
     }
 
-    /// Returns whether AI command search should be displayed for the given
-    /// editor contents.
-    fn editor_starts_with_command_search_trigger(&self, ctx: &AppContext) -> bool {
-        self.buffer_text(ctx).starts_with(AI_COMMAND_SEARCH_TRIGGER)
-    }
-
     /// Returns whether the buffer contains any attachment patterns (blocks, drive objects, or diffs).
     /// These patterns indicate the user is referencing context that requires AI mode.
     fn buffer_contains_attachment_patterns(buffer_text: &str) -> bool {
         BLOCK_CONTEXT_ATTACHMENT_REGEX.is_match(buffer_text)
             || DRIVE_OBJECT_ATTACHMENT_REGEX.is_match(buffer_text)
             || DIFF_HUNK_ATTACHMENT_REGEX.is_match(buffer_text)
-    }
-
-    /// Shows the AI command search panel.
-    ///
-    /// This modifies the input buffer as needed to display the panel (i.e.:
-    /// inserting a leading #, which is the trigger when typed manually by the
-    /// user).
-    fn show_ai_command_search(&mut self, ctx: &mut ViewContext<Input>) {
-        // Should not show ai command search for read-only viewers
-        if self.model.lock().shared_session_status().is_reader() {
-            return;
-        }
-        // If the editor doesn't contain the necessary trigger for AI command
-        // search, update its buffer accordingly.
-        let buffer_starts_with_trigger = self.editor_starts_with_command_search_trigger(ctx);
-        if !buffer_starts_with_trigger {
-            let updated_text = format!("{AI_COMMAND_SEARCH_TRIGGER} {}", self.buffer_text(ctx));
-            self.editor.update(ctx, |editor, ctx| {
-                editor.set_buffer_text(&updated_text, ctx);
-            });
-        }
-
-        self.tips_completed.update(ctx, |tips_completed, ctx| {
-            mark_feature_used_and_write_to_user_defaults(
-                Tip::Action(TipAction::AiCommandSearch),
-                tips_completed,
-                ctx,
-            );
-            ctx.notify();
-        });
-
-        ctx.emit(Event::ShowCommandSearch(Default::default()));
-
-        let entrypoint = if buffer_starts_with_trigger {
-            AICommandSearchEntrypoint::ShortHandTrigger
-        } else {
-            AICommandSearchEntrypoint::Keybinding
-        };
-        send_telemetry_from_ctx!(TelemetryEvent::AICommandSearchOpened { entrypoint }, ctx);
-        ctx.notify();
     }
 
     /// Returns the SavePosition ID for the input.
@@ -15667,7 +15565,6 @@ impl TypedActionView for Input {
             InputAction::SelectAndRefreshVoltron(feature_name) => {
                 self.select_and_refresh_voltron(*feature_name, ctx);
             }
-            InputAction::ShowAiCommandSearch => self.show_ai_command_search(ctx),
             InputAction::MaybeOpenCompletionSuggestions => {
                 self.maybe_open_completion_suggestions(ctx);
             }

@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 use std::time::Duration;
-
-use itertools::Itertools as _;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
@@ -9,7 +7,7 @@ use warp_multi_agent_api as api;
 use crate::agent::action::{
     AIAgentActionType, AIAgentPtyWriteMode, CommentSide, FileEdit, InsertReviewComment,
     InsertedCommentLine, InsertedCommentLocation, ReadFilesRequest, SearchCodebaseRequest,
-    ShellCommandDelay, SuggestPromptRequest, UploadArtifactRequest, UseComputerRequest,
+    ShellCommandDelay, SuggestPromptRequest, UploadArtifactRequest,
 };
 use crate::agent::action_result::{AnyFileContent, FileContext};
 use crate::agent::convert::ToolToAIAgentActionError;
@@ -415,183 +413,11 @@ impl From<api::message::tool_call::TransferShellCommandControlToUser> for AIAgen
     }
 }
 
-impl TryFrom<api::message::tool_call::UseComputer> for AIAgentActionType {
-    type Error = ToolToAIAgentActionError;
-
-    fn try_from(value: api::message::tool_call::UseComputer) -> Result<Self, Self::Error> {
-        use api::message::tool_call::use_computer;
-
-        let actions = value
-            .actions
-            .into_iter()
-            .map(|action| {
-                let Some(action_type) = action.r#type else {
-                    return Err(ToolToAIAgentActionError::MissingComputerUseActionType);
-                };
-                match action_type {
-                    use_computer::action::Type::MouseMove(mouse_move) => {
-                        Ok(computer_use::Action::MouseMove {
-                            to: coordinates_to_vec(mouse_move.to.as_ref())?,
-                        })
-                    }
-                    use_computer::action::Type::MouseDown(mouse_down) => {
-                        Ok(computer_use::Action::MouseDown {
-                            button: to_computer_use_button(mouse_down.button()),
-                            at: coordinates_to_vec(mouse_down.at.as_ref())?,
-                        })
-                    }
-                    use_computer::action::Type::MouseUp(mouse_up) => {
-                        Ok(computer_use::Action::MouseUp {
-                            button: to_computer_use_button(mouse_up.button()),
-                        })
-                    }
-                    use_computer::action::Type::MouseWheel(mouse_wheel) => {
-                        let direction = to_scroll_direction(mouse_wheel.direction());
-                        let distance = to_scroll_distance(mouse_wheel.distance)?;
-                        Ok(computer_use::Action::MouseWheel {
-                            at: coordinates_to_vec(mouse_wheel.at.as_ref())?,
-                            direction,
-                            distance,
-                        })
-                    }
-                    use_computer::action::Type::Wait(wait) => {
-                        let duration = wait.duration.unwrap_or_default();
-                        if duration.seconds < 0 || duration.nanos < 0 {
-                            return Err(ToolToAIAgentActionError::InvalidComputerUseWaitDuration);
-                        }
-                        let duration = Duration::from_secs(duration.seconds as u64)
-                            + Duration::from_nanos(duration.nanos as u64);
-                        Ok(computer_use::Action::Wait(duration))
-                    }
-                    use_computer::action::Type::TypeText(type_text) => {
-                        Ok(computer_use::Action::TypeText {
-                            text: type_text.text,
-                        })
-                    }
-                    use_computer::action::Type::KeyDown(key_down) => {
-                        let key = convert_key(key_down.key)?;
-                        Ok(computer_use::Action::KeyDown { key })
-                    }
-                    use_computer::action::Type::KeyUp(key_up) => {
-                        let key = convert_key(key_up.key)?;
-                        Ok(computer_use::Action::KeyUp { key })
-                    }
-                }
-            })
-            .try_collect()?;
-        let screenshot_params = value
-            .post_actions_screenshot_params
-            .map(convert_screenshot_params);
-        Ok(AIAgentActionType::UseComputer(UseComputerRequest {
-            action_summary: value.action_summary,
-            actions,
-            screenshot_params,
-        }))
-    }
-}
-
-impl From<api::message::tool_call::RequestComputerUse> for AIAgentActionType {
-    fn from(value: api::message::tool_call::RequestComputerUse) -> Self {
-        use crate::agent::action::RequestComputerUseRequest;
-        AIAgentActionType::RequestComputerUse(RequestComputerUseRequest {
-            task_summary: value.task_summary,
-            screenshot_params: value.screenshot_params.map(convert_screenshot_params),
-        })
-    }
-}
-
 impl From<api::message::tool_call::FetchConversation> for AIAgentActionType {
     fn from(value: api::message::tool_call::FetchConversation) -> Self {
         AIAgentActionType::FetchConversation {
             conversation_id: value.conversation_id,
         }
-    }
-}
-
-/// Converts API ScreenshotParams to the internal computer_use type.
-fn convert_screenshot_params(
-    params: api::message::tool_call::ScreenshotParams,
-) -> computer_use::ScreenshotParams {
-    let region = params
-        .region
-        .and_then(|r| match (r.top_left.as_ref(), r.bottom_right.as_ref()) {
-            (Some(tl), Some(br)) => Some(computer_use::ScreenshotRegion {
-                top_left: computer_use::Vector2I::new(tl.x, tl.y),
-                bottom_right: computer_use::Vector2I::new(br.x, br.y),
-            }),
-            _ => None,
-        });
-
-    computer_use::ScreenshotParams {
-        max_long_edge_px: (params.max_long_edge_px > 0).then_some(params.max_long_edge_px as usize),
-        max_total_px: (params.max_total_px > 0).then_some(params.max_total_px as usize),
-        region,
-    }
-}
-
-fn coordinates_to_vec(
-    coords: Option<&api::Coordinates>,
-) -> Result<computer_use::Vector2I, ToolToAIAgentActionError> {
-    match coords {
-        Some(coords) => Ok(computer_use::Vector2I::new(coords.x, coords.y)),
-        None => Err(ToolToAIAgentActionError::MissingComputerUseCoordinates),
-    }
-}
-
-fn to_computer_use_button(
-    api_button: api::message::tool_call::use_computer::action::MouseButton,
-) -> computer_use::MouseButton {
-    use api::message::tool_call::use_computer::action::MouseButton;
-    match api_button {
-        MouseButton::Left => computer_use::MouseButton::Left,
-        MouseButton::Right => computer_use::MouseButton::Right,
-        MouseButton::Middle => computer_use::MouseButton::Middle,
-        MouseButton::Back => computer_use::MouseButton::Back,
-        MouseButton::Forward => computer_use::MouseButton::Forward,
-    }
-}
-
-fn to_scroll_direction(
-    api_direction: api::message::tool_call::use_computer::action::mouse_wheel::Direction,
-) -> computer_use::ScrollDirection {
-    use api::message::tool_call::use_computer::action::mouse_wheel::Direction;
-    match api_direction {
-        Direction::Up => computer_use::ScrollDirection::Up,
-        Direction::Down => computer_use::ScrollDirection::Down,
-        Direction::Left => computer_use::ScrollDirection::Left,
-        Direction::Right => computer_use::ScrollDirection::Right,
-    }
-}
-
-fn to_scroll_distance(
-    api_distance: Option<api::message::tool_call::use_computer::action::mouse_wheel::Distance>,
-) -> Result<computer_use::ScrollDistance, ToolToAIAgentActionError> {
-    use api::message::tool_call::use_computer::action::mouse_wheel::Distance;
-    match api_distance {
-        Some(Distance::Pixels(pixels)) => Ok(computer_use::ScrollDistance::Pixels(pixels)),
-        Some(Distance::Clicks(clicks)) => Ok(computer_use::ScrollDistance::Clicks(clicks)),
-        None => Err(ToolToAIAgentActionError::MissingComputerUseScrollDistance),
-    }
-}
-
-fn convert_key(
-    api_key: Option<api::message::tool_call::use_computer::action::Key>,
-) -> Result<computer_use::Key, ToolToAIAgentActionError> {
-    use api::message::tool_call::use_computer::action::key::Data;
-    let key = api_key.ok_or(ToolToAIAgentActionError::MissingComputerUseKey)?;
-    match key.data {
-        Some(Data::Keycode(keycode)) => Ok(computer_use::Key::Keycode(keycode)),
-        Some(Data::Char(char_str)) => {
-            let mut chars = char_str.chars();
-            let ch = chars
-                .next()
-                .ok_or(ToolToAIAgentActionError::InvalidComputerUseCharKey)?;
-            if chars.next().is_some() {
-                return Err(ToolToAIAgentActionError::InvalidComputerUseCharKey);
-            }
-            Ok(computer_use::Key::Char(ch))
-        }
-        None => Err(ToolToAIAgentActionError::MissingComputerUseKey),
     }
 }
 

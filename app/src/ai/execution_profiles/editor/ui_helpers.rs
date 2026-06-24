@@ -282,15 +282,6 @@ pub fn render_models_section(
         &view.full_terminal_use_model_dropdown,
     ));
 
-    if FeatureFlag::LocalComputerUse.is_enabled() {
-        column.add_child(render_filterable_dropdown_row(
-            appearance,
-            "Computer use model",
-            "The model used when the agent takes control of your computer to interact with graphical applications through mouse movements, clicks, and keyboard input.",
-            &view.computer_use_model_dropdown,
-        ));
-    }
-
     Container::new(column.finish())
         .with_margin_bottom(12.)
         .finish()
@@ -534,20 +525,6 @@ pub fn render_permissions_section(
             .clone(),
     ));
 
-    if FeatureFlag::LocalComputerUse.is_enabled() {
-        column.add_child(render_permission_row(
-            appearance,
-            Icon::Laptop,
-            "Computer use",
-            &view.computer_use_dropdown,
-            profile_data.computer_use.description(),
-            !ai_settings.is_computer_use_permissions_editable(app),
-            view.tooltip_mouse_state_handles
-                .computer_use_tooltip_mouse_state
-                .clone(),
-        ));
-    }
-
     column.add_child(render_permission_row(
         appearance,
         Icon::MessageText,
@@ -747,7 +724,7 @@ fn render_command_allowlist_section(
 
     render_list_section(
         "Command allowlist",
-        "Regular expressions to match commands that can be automatically executed by Oz.",
+        "Regular expressions to match commands that AI can execute automatically.",
         &profile_data.command_allowlist,
         &view.command_allowlist_mouse_state_handles,
         Some(&view.command_allowlist_editor),
@@ -813,7 +790,7 @@ fn render_command_denylist_section(
 
     let mut column = Flex::column().with_child(create_section_header(
         "Command denylist",
-        "Regular expressions to match commands that Oz should always ask permission to execute.",
+        "Regular expressions to match commands that AI should always ask permission to execute.",
         appearance,
     ));
     column = column.with_child(list);
@@ -841,7 +818,7 @@ fn render_mcp_allowlist_section(
 
     render_list_section(
         "MCP allowlist",
-        "MCP servers that are allowed to be called by Oz.",
+        "MCP servers that AI is allowed to call.",
         &profile_data.mcp_allowlist,
         &view.mcp_allowlist_mouse_state_handles,
         None,
@@ -867,7 +844,7 @@ fn render_mcp_denylist_section(
 
     render_list_section(
         "MCP denylist",
-        "MCP servers that are not allowed to be called by Oz.",
+        "MCP servers that AI is not allowed to call.",
         &profile_data.mcp_denylist,
         &view.mcp_denylist_mouse_state_handles,
         None,

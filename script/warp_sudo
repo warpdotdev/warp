@@ -7,7 +7,7 @@
 # the user a chance to see (and decline) every privileged action taken
 # during bootstrap, which is otherwise opaque.
 #
-# Skip the prompt by setting WARP_SKIP_SUDO_PROMPT=1 (also set automatically
+# Skip the prompt by setting ZERP_SKIP_SUDO_PROMPT=1 (also set automatically
 # by `./script/bootstrap -y` / `--yes`) or by running with stdin not
 # attached to a tty (e.g. CI). The prompt itself is read from /dev/tty,
 # so pipes like `curl ... | warp_sudo apt-key add -` continue to work.
@@ -15,7 +15,7 @@
 warp_sudo() {
   printf '\n>>> requires root: sudo %s\n' "$*" >&2
 
-  if [ "${WARP_SKIP_SUDO_PROMPT:-}" = "1" ]; then
+  if [ "${ZERP_SKIP_SUDO_PROMPT:-}" = "1" ]; then
     sudo "$@"
     return
   fi

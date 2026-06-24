@@ -385,13 +385,13 @@ fn test_toolbar_command_map_matched_agent() {
 }
 
 #[test]
-fn orchestration_is_enabled_when_ai_is_enabled() {
+fn orchestration_is_disabled_even_when_ai_is_enabled() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         add_ai_enablement_dependencies_for_test(&mut app);
 
         AISettings::handle(&app).read(&app, |settings, ctx| {
-            assert!(settings.is_orchestration_enabled(ctx));
+            assert!(!settings.is_orchestration_enabled(ctx));
         });
     });
 }

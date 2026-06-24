@@ -43,10 +43,6 @@ pub struct AgentConfigSnapshot {
     /// The skill is resolved at runtime in the agent environment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_spec: Option<String>,
-    /// Whether computer use is enabled for this agent run.
-    /// If None, the default behavior is used.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub computer_use_enabled: Option<bool>,
     /// Execution harness for the agent run.
     /// If None, we use Warp's default ("oz").
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,7 +132,6 @@ impl AgentConfigSnapshot {
             profile_id,
             worker_host,
             skill_spec,
-            computer_use_enabled,
             harness,
             harness_auth_secrets,
         } = self;
@@ -149,7 +144,6 @@ impl AgentConfigSnapshot {
             && profile_id.is_none()
             && worker_host.is_none()
             && skill_spec.is_none()
-            && computer_use_enabled.is_none()
             && harness.is_none()
             && harness_auth_secrets.is_none()
     }

@@ -13,7 +13,6 @@ use remote_server::proto::UploadHandoffSnapshotResponse;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{ModelHandle, SingletonEntity, ViewContext};
 
-use crate::ai::agent_sdk::driver::upload_snapshot_for_handoff;
 use crate::ai::blocklist::handoff::touched_repos::{derive_touched_workspace, TouchedWorkspace};
 use crate::remote_server::manager::RemoteServerManager;
 use crate::server::server_api::ai::{AIClient, InitialSnapshotToken};
@@ -45,7 +44,7 @@ pub(crate) enum HandoffUploadResult {
 /// calling [`spawn_handoff_snapshot_upload`], keeping session-awareness out of
 /// the upload function itself.
 pub(crate) enum SnapshotUploadTarget {
-    /// Run `derive_touched_workspace` + `upload_snapshot_for_handoff` locally.
+    /// Run local touched-workspace derivation.
     Local {
         ai_client: Arc<dyn AIClient>,
         http: Arc<http_client::Client>,
@@ -164,22 +163,11 @@ async fn upload_handoff_snapshot(
             (TouchedWorkspace::default(), result)
         }
         SnapshotUploadTarget::Local { ai_client, http } => {
+            let _ = (ai_client, http);
             let local_paths: Vec<PathBuf> =
                 paths.iter().map(|sp| sp.to_local_path_lossy()).collect();
             let workspace = derive_touched_workspace(local_paths).await;
-            let repo_paths: Vec<_> = workspace.repos.iter().map(|r| r.git_root.clone()).collect();
-            let upload_result = upload_snapshot_for_handoff(
-                repo_paths,
-                workspace.orphan_files.clone(),
-                ai_client,
-                http.as_ref(),
-            )
-            .await;
-            let result = match upload_result {
-                Ok(Some(token)) => Ok(HandoffUploadResult::Uploaded(token)),
-                Ok(None) => Ok(HandoffUploadResult::EmptyWorkspace),
-                Err(e) => Err(e),
-            };
+            let result = Ok(HandoffUploadResult::EmptyWorkspace);
             (workspace, result)
         }
     }
@@ -245,11 +233,8 @@ fn maybe_auto_submit_handoff(
     model_handle: &ModelHandle<AmbientAgentViewModel>,
     ctx: &mut ViewContext<Workspace>,
 ) {
-    let launch = model_handle.update(ctx, |model, ctx| model.maybe_auto_submit_handoff(ctx));
-    let Some(launch) = launch else {
+    let should_submit = model_handle.update(ctx, |model, ctx| model.maybe_auto_submit_handoff(ctx));
+    if !should_submit {
         return;
     };
-    model_handle.update(ctx, |model, ctx| {
-        model.submit_handoff(launch.prompt, launch.attachments.request_attachments, ctx);
-    });
 }

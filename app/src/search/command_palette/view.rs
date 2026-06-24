@@ -24,7 +24,6 @@ use super::super::palette_styles as styles;
 use super::CommandPaletteMixer;
 use crate::appearance::Appearance;
 use crate::drive::CloudObjectTypeAndId;
-use crate::features::FeatureFlag;
 use crate::palette::PaletteMode;
 use crate::root_view::OpenLaunchConfigArg;
 use crate::search::action::search_item::MatchedBinding;
@@ -53,7 +52,6 @@ lazy_static! {
     /// Set of hardcoded action names that we want to show in the command palette zero state.
     static ref SUGGESTED_ACTIONS: HashSet<&'static str> = HashSet::from_iter(
         [
-            if FeatureFlag::AgentMode.is_enabled() { "input:toggle_input_type" } else { "workspace:toggle_ai_assistant" },
             "workspace:show_theme_chooser",
             "workspace:create_personal_workflow",
         ]

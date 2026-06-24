@@ -10,7 +10,6 @@ use parking_lot::RwLock;
 use pathfinder_color::ColorU;
 use warp_cli::agent::Harness;
 use warp_cli::skill::SkillSpec;
-use warp_core::channel::ChannelState;
 use warp_core::ui::color::coloru_with_opacity;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{NewScrollable, SingleAxisConfig};
@@ -160,7 +159,7 @@ struct PrincipalInfo {
     pub display_name: String,
     /// Optional photo URL for the avatar.
     pub photo_url: Option<String>,
-    /// UID of the principal, when known (used for building Oz links).
+    /// UID of the principal, when known.
     pub uid: Option<String>,
     /// Whether this principal is a service account.
     pub is_service_account: bool,
@@ -332,7 +331,7 @@ impl ConversationDetailsData {
         let harness = conversation
             .server_metadata()
             .map(|m| Harness::from(m.harness))
-            .or(Some(Harness::Oz));
+            .or(Some(Harness::Unknown));
 
         ConversationDetailsData {
             mode: PanelMode::Conversation {
@@ -389,7 +388,7 @@ impl ConversationDetailsData {
                 .harness
                 .as_ref()
                 .map(|h| h.harness_type)
-                .or(Some(Harness::Oz))
+                .or(Some(Harness::Unknown))
         });
 
         ConversationDetailsData {
@@ -646,7 +645,7 @@ pub struct ConversationDetailsPanel {
     show_open_button: bool,
     #[cfg(not(target_family = "wasm"))]
     continue_locally_button: ViewHandle<ActionButton>,
-    /// Text button "View in Oz" shown next to "Continue locally".
+    /// Text button for opening a run in a web UI when that integration is available.
     open_in_oz_button: ViewHandle<ActionButton>,
     /// Tracks when each copy button was last clicked (for checkmark feedback).
     copy_feedback_times: HashMap<CopyButtonKind, Instant>,
@@ -679,8 +678,8 @@ impl ConversationDetailsPanel {
                 })
         });
         let open_in_oz_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("View in Oz", SecondaryTheme)
-                .with_tooltip("View this run in the Oz web app")
+            ActionButton::new("Open run", SecondaryTheme)
+                .with_tooltip("Open this run")
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(ConversationDetailsPanelAction::OpenInOz);
@@ -750,9 +749,9 @@ impl ConversationDetailsPanel {
             PanelMode::Task {
                 conversation_id, ..
             } => {
-                // Hide for non-Oz harnesses (e.g. Claude, Gemini): they can't be
+                // Hide for third-party harnesses (e.g. Claude, Gemini): they can't be
                 // forked into a local Warp conversation.
-                if matches!(self.data.harness, Some(h) if h != Harness::Oz) {
+                if matches!(self.data.harness, Some(h) if h != Harness::Unknown) {
                     return None;
                 }
 
@@ -802,18 +801,9 @@ impl ConversationDetailsPanel {
         }
     }
 
-    /// Builds the Oz web UI URL for a task, if a task_id is available.
-    fn oz_run_url(data: &ConversationDetailsData) -> Option<String> {
-        if let PanelMode::Task {
-            task_id: Some(task_id),
-            ..
-        } = &data.mode
-        {
-            let oz_root_url = ChannelState::oz_root_url();
-            Some(format!("{oz_root_url}/runs/{task_id}"))
-        } else {
-            None
-        }
+    /// Builds the external web UI URL for a task when that integration is available.
+    fn oz_run_url(_data: &ConversationDetailsData) -> Option<String> {
+        None
     }
 
     fn action_buttons_config_from_data(
@@ -1057,29 +1047,14 @@ impl ConversationDetailsPanel {
         .with_color(blended_colors::text_sub(theme, theme.surface_1()))
         .finish();
 
-        let agent_name_element = if let Some(uid) = &executor.uid {
-            let oz_root_url = ChannelState::oz_root_url();
-            let agent_url = format!("{oz_root_url}/agents/{}", urlencoding::encode(uid));
-            appearance
-                .ui_builder()
-                .link(
-                    executor.display_name.clone(),
-                    Some(agent_url),
-                    None,
-                    self.mouse_states.executor_agent_link.clone(),
-                )
-                .build()
-                .finish()
-        } else {
-            Text::new(
-                executor.display_name.clone(),
-                appearance.ui_font_family(),
-                ui_font_size,
-            )
-            .with_color(theme.foreground().into())
-            .with_selectable(true)
-            .finish()
-        };
+        let agent_name_element = Text::new(
+            executor.display_name.clone(),
+            appearance.ui_font_family(),
+            ui_font_size,
+        )
+        .with_color(theme.foreground().into())
+        .with_selectable(true)
+        .finish();
 
         Some(
             Flex::column()
@@ -1303,7 +1278,10 @@ impl ConversationDetailsPanel {
         if !availability.should_show_harness_selector() {
             return None;
         }
-        let harness = self.data.harness?;
+        let harness = self
+            .data
+            .harness
+            .filter(|h| !matches!(h, Harness::Unknown))?;
         let theme = appearance.theme();
         let ui_font_size = appearance.ui_font_size();
 
@@ -1384,21 +1362,6 @@ impl ConversationDetailsPanel {
         .with_selectable(true)
         .finish();
 
-        let oz_root_url = ChannelState::oz_root_url();
-        let encoded_skill_name = urlencoding::encode(&skill_name);
-        let skill_url = format!("{oz_root_url}/skills/{encoded_skill_name}");
-
-        let oz_link = appearance
-            .ui_builder()
-            .link(
-                "Open in Oz".to_string(),
-                Some(skill_url),
-                None,
-                self.mouse_states.skill_link.clone(),
-            )
-            .build()
-            .finish();
-
         let separator = || {
             Container::new(
                 Text::new("•".to_string(), appearance.ui_font_family(), ui_font_size)
@@ -1413,9 +1376,7 @@ impl ConversationDetailsPanel {
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(Container::new(icon).with_margin_right(4.).finish())
-            .with_child(Shrinkable::new(1., skill_name_text).finish())
-            .with_child(separator())
-            .with_child(Shrinkable::new(1., oz_link).finish());
+            .with_child(Shrinkable::new(1., skill_name_text).finish());
 
         // Add GitHub source link if we have enough info to construct it.
         if let (Some(org), Some(repo)) = (&skill_spec.org, &skill_spec.repo) {

@@ -80,7 +80,7 @@ const DIRS_IN_MSYS2_ROOT: [&[u8]; 14] = [
 /// \return any override shell launch path, reading from the WARP_SHELL_PATH variable.
 pub fn warp_shell_path() -> Option<String> {
     // TODO(peter): we ought to tolerate non-Unicode paths here.
-    env::var("WARP_SHELL_PATH").ok()
+    env::var("ZERP_SHELL_PATH").ok()
 }
 
 /// Abbreviates the session home directory in the given path to '~', if it is in the given path,

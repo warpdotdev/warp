@@ -171,7 +171,7 @@ const AUTH_TOKEN_INPUT_BORDER_RADIUS: Radius = Radius::Pixels(4.);
 pub struct LoginSlideView {
     /// Whether AI will be enabled once onboarding is applied. Used to hide the
     /// cloud-conversation-storage toggle in the privacy settings step when the
-    /// user has disabled Warp Agent during onboarding (or is on the terminal
+    /// user has disabled Warp AI during onboarding (or is on the terminal
     /// intention path, which disables AI). The actual `AISettings` value may
     /// not have been written yet at this point, since onboarding settings are
     /// applied after login.

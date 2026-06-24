@@ -50,24 +50,24 @@ impl Channel {
     /// Returns the CLI command name corresponding to this channel.
     pub fn cli_command_name(&self) -> &'static str {
         match self {
-            Channel::Stable => "oz",
-            Channel::Dev => "oz-dev",
-            Channel::Preview => "oz-preview",
-            Channel::Local => "oz-local",
-            Channel::Integration => "oz-integration",
-            Channel::Oss => "warp-oss",
+            Channel::Stable => "zerp-cli",
+            Channel::Dev => "zerp-cli-dev",
+            Channel::Preview => "zerp-cli-preview",
+            Channel::Local => "zerp-cli-local",
+            Channel::Integration => "zerp-cli-integration",
+            Channel::Oss => "zerp-cli-oss",
         }
     }
 
     /// Returns the Warp Control CLI command name corresponding to this channel.
     pub fn warpctrl_command_name(&self) -> &'static str {
         match self {
-            Channel::Stable => "warpctrl",
-            Channel::Dev => "warpctrl-dev",
-            Channel::Preview => "warpctrl-preview",
-            Channel::Local => "warpctrl-local",
-            Channel::Integration => "warpctrl-integration",
-            Channel::Oss => "warpctrl-oss",
+            Channel::Stable => "zerpctrl",
+            Channel::Dev => "zerpctrl-dev",
+            Channel::Preview => "zerpctrl-preview",
+            Channel::Local => "zerpctrl-local",
+            Channel::Integration => "zerpctrl-integration",
+            Channel::Oss => "zerpctrl-oss",
         }
     }
 }
@@ -80,7 +80,25 @@ impl fmt::Display for Channel {
             Channel::Dev => "dev",
             Channel::Integration => "integration",
             Channel::Local => "local",
-            Channel::Oss => "warp-oss",
+            Channel::Oss => "zerp-oss",
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Channel;
+
+    #[test]
+    fn cli_command_names_use_zerp_cli_branding() {
+        assert_eq!(Channel::Stable.cli_command_name(), "zerp-cli");
+        assert_eq!(Channel::Dev.cli_command_name(), "zerp-cli-dev");
+        assert_eq!(Channel::Preview.cli_command_name(), "zerp-cli-preview");
+        assert_eq!(Channel::Local.cli_command_name(), "zerp-cli-local");
+        assert_eq!(
+            Channel::Integration.cli_command_name(),
+            "zerp-cli-integration"
+        );
+        assert_eq!(Channel::Oss.cli_command_name(), "zerp-cli-oss");
     }
 }

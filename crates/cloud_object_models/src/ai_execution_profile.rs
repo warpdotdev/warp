@@ -8,7 +8,6 @@ use cloud_objects::ids::GenericStringObjectId;
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 
 use crate::{JsonModel, JsonSerializer};
@@ -451,32 +450,11 @@ impl AIExecutionProfile {
 
     /// This creates a CLI-specific profile that will never ask the user for permission,
     /// since we cannot do so in a non-interactive setting.
-    pub fn create_default_cli_profile(
-        is_sandboxed: bool,
-        computer_use_override: Option<bool>,
-    ) -> Self {
+    pub fn create_default_cli_profile(is_sandboxed: bool) -> Self {
         let command_denylist = if is_sandboxed {
             Vec::new()
         } else {
             DEFAULT_COMMAND_EXECUTION_DENYLIST.to_vec()
-        };
-
-        let computer_use_permission = match computer_use_override {
-            Some(true) => {
-                if is_sandboxed || FeatureFlag::LocalComputerUse.is_enabled() {
-                    ComputerUsePermission::AlwaysAllow
-                } else {
-                    ComputerUsePermission::Never
-                }
-            }
-            Some(false) => ComputerUsePermission::Never,
-            None => {
-                if is_sandboxed && ChannelState::channel().is_dogfood() {
-                    ComputerUsePermission::AlwaysAllow
-                } else {
-                    ComputerUsePermission::Never
-                }
-            }
         };
 
         Self {
@@ -494,7 +472,7 @@ impl AIExecutionProfile {
             directory_allowlist: Vec::new(),
             mcp_allowlist: Vec::new(),
             mcp_denylist: Vec::new(),
-            computer_use: computer_use_permission,
+            computer_use: ComputerUsePermission::Never,
             base_model: None,
             coding_model: None,
             cli_agent_model: None,

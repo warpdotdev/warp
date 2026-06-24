@@ -291,21 +291,20 @@ fn make_test_tarball(
     let tar_source = test_root.join(format!("tar-source-{tarball_name}"));
     let resources = tar_source.join("resources/bundled/skills/test-skill");
     let tarball = test_root.join(format!("{tarball_name}.tar.gz"));
+    let binary = binary_name();
+    let decoy = format!("{binary}-decoy.sh");
     fs::create_dir_all(&resources).unwrap();
     fs::write(
-        tar_source.join("oz-test"),
+        tar_source.join(binary),
         "#!/usr/bin/env bash\n[ \"$1\" = \"--version\" ]\n",
     )
     .unwrap();
     fs::write(resources.join("SKILL.md"), skill_content).unwrap();
     if include_decoy {
         // Decoy: skills may ship companion files whose names also start
-        // with `oz`. The installer must not mistake them for the executable.
-        fs::write(
-            resources.join("oz-decoy.sh"),
-            "#!/usr/bin/env bash\nexit 1\n",
-        )
-        .unwrap();
+        // with the CLI binary name. The installer must not mistake them for
+        // the executable.
+        fs::write(resources.join(&decoy), "#!/usr/bin/env bash\nexit 1\n").unwrap();
     }
 
     let tar_output = Command::new("tar")
@@ -313,7 +312,7 @@ fn make_test_tarball(
         .arg(&tarball)
         .arg("-C")
         .arg(&tar_source)
-        .arg("oz-test")
+        .arg(binary)
         .arg("resources")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -367,7 +366,10 @@ fn install_script_installs_binary_and_global_resources() {
     assert!(fs::metadata(&resources).unwrap().is_dir());
     assert_eq!(fs::read_to_string(&skill_md).unwrap(), "test skill");
     assert!(std::path::Path::new(&resources)
-        .join("bundled/skills/test-skill/oz-decoy.sh")
+        .join(format!(
+            "bundled/skills/test-skill/{}-decoy.sh",
+            binary_name()
+        ))
         .is_file());
 
     let check_output = Command::new("bash")
@@ -385,7 +387,10 @@ fn install_script_installs_binary_and_global_resources() {
     run_install_script(&second_tarball, &fake_home);
     assert_eq!(fs::read_to_string(&skill_md).unwrap(), "updated skill");
     assert!(!std::path::Path::new(&resources)
-        .join("bundled/skills/test-skill/oz-decoy.sh")
+        .join(format!(
+            "bundled/skills/test-skill/{}-decoy.sh",
+            binary_name()
+        ))
         .exists());
 
     // Removal deletes the binary but leaves the global resources for the
@@ -412,11 +417,12 @@ fn install_script_tolerates_tarball_without_resources() {
     ));
     let fake_home = test_root.join("home");
     let tar_source = test_root.join("tar-source");
-    let tarball = test_root.join("oz.tar.gz");
+    let tarball = test_root.join("zerp-cli.tar.gz");
     fs::create_dir_all(&fake_home).unwrap();
     fs::create_dir_all(&tar_source).unwrap();
+    let binary = binary_name();
     fs::write(
-        tar_source.join("oz-test"),
+        tar_source.join(binary),
         "#!/usr/bin/env bash\n[ \"$1\" = \"--version\" ]\n",
     )
     .unwrap();
@@ -426,7 +432,7 @@ fn install_script_tolerates_tarball_without_resources() {
         .arg(&tarball)
         .arg("-C")
         .arg(&tar_source)
-        .arg("oz-test")
+        .arg(binary)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

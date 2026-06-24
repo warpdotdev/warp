@@ -395,7 +395,6 @@ fn remote_arm_propagates_skills_into_skill_references() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: true,
         },
         "oz",
         "auto",
@@ -410,7 +409,6 @@ fn remote_arm_propagates_skills_into_skill_references() {
         worker_host,
         harness_type,
         model_id,
-        computer_use_enabled,
         title,
         auth_secret_name,
     } = mode
@@ -422,7 +420,6 @@ fn remote_arm_propagates_skills_into_skill_references() {
     assert_eq!(worker_host, "warp");
     assert_eq!(harness_type, "oz");
     assert_eq!(model_id, "auto");
-    assert!(computer_use_enabled);
     assert_eq!(title, "Child");
     assert_eq!(auth_secret_name, None);
 }
@@ -433,7 +430,6 @@ fn remote_arm_with_empty_skills_propagates_empty_vec() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
         },
         "claude",
         "auto",
@@ -457,7 +453,6 @@ fn remote_arm_rejects_opencode() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
         },
         "opencode",
         "auto",
@@ -509,7 +504,6 @@ fn remote_arm_propagates_claude_auth_secret_into_mode() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
         },
         "claude",
         "auto",
@@ -533,7 +527,6 @@ fn remote_arm_filters_whitespace_auth_secret_name_to_none() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
         },
         "codex",
         "auto",

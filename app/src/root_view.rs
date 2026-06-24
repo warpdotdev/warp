@@ -2250,11 +2250,6 @@ impl RootView {
                 self.start_autoupdate_polling(ctx);
                 ctx.notify();
             }
-            AgentOnboardingEvent::UpgradeRequested => {
-                let upgrade_url = AuthManager::handle(ctx)
-                    .update(ctx, |auth_manager, _| auth_manager.upgrade_url());
-                ctx.open_url(&upgrade_url);
-            }
             AgentOnboardingEvent::UpgradeCopyUrlRequested => {
                 let upgrade_url = AuthManager::handle(ctx)
                     .update(ctx, |auth_manager, _| auth_manager.upgrade_url());

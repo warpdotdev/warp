@@ -75,7 +75,7 @@ impl AgentSource {
             AgentSource::Cli => "CLI",
             AgentSource::ScheduledAgent => "Scheduled",
             AgentSource::Interactive | AgentSource::CloudMode => "Warp App",
-            AgentSource::WebApp => "Oz Web",
+            AgentSource::WebApp => "Web",
             AgentSource::GitHubAction => "GitHub Action",
         }
     }

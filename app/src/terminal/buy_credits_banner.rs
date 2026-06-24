@@ -606,7 +606,7 @@ impl BuyCreditsBanner {
             } else {
                 // Default message when not at limit
                 let banner_description = if has_admin_permissions {
-                    "Add more credits to your account to continue using Oz agents."
+                    "Add more credits to your account to continue using AI agents."
                 } else {
                     "Contact a team admin to purchase more credits to continue."
                 };

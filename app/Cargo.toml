@@ -1,6 +1,6 @@
 [package]
 authors = ["Warp Team <dev@warp.dev>"]
-default-run = "warp-oss"
+default-run = "zerp-oss"
 description = "The cloud-backed terminal for individuals and teams"
 edition = "2021"
 autobins = false
@@ -18,12 +18,12 @@ path = "src/lib.rs"
 # flag overrides). Otherwise these binaries are exactly identical to our main binary.
 
 [[bin]]
-name = "warp-oss"
+name = "zerp-oss"
 path = "src/bin/oss.rs"
 test = false
 
 [[bin]]
-name = "warp"
+name = "zerp"
 path = "src/bin/local.rs"
 test = false
 
@@ -88,7 +88,6 @@ cloud_objects.workspace = true
 command = { workspace = true }
 command-corrections.workspace = true
 command-signatures-v2 = { workspace = true, optional = true }
-computer_use.workspace = true
 crc.workspace = true
 content_inspector = "0.2.4"
 concat-idents.workspace = true
@@ -468,11 +467,9 @@ bundled_skills = []
 supergrok = []
 gemini_enterprise = []
 agent_mode = []
-agent_mode_computer_use = []
 agent_mode_debug = []
 agent_mode_primary_xml = []
 agent_mode_pre_plan_xml = []
-agent_onboarding = []
 agent_shared_sessions = []
 ask_user_question = []
 async_find = []
@@ -539,9 +536,6 @@ default = [
     "usage_based_pricing",
     "ai_context_menu",
     "at_menu_outside_of_ai_mode",
-    "agent_management_view",
-    "agent_management_details_view",
-    "interactive_conversation_management_view",
     "shared_block_title_generation",
     "tab_close_button_on_left",
     "ai_resume_button",
@@ -590,46 +584,21 @@ default = [
     "mcp_grouped_server_context",
     "fork_from_command",
     "context_window_usage_v2",
-    "ambient_agents_command_line",
-    "ambient_agents_image_upload",
-    "scheduled_ambient_agents",
     "warp_managed_secrets",
     "v4a_file_diffs",
     "classic_completions",
     "force_classic_completions",
     "team_api_keys",
     "named_agents",
-    "agent_tips",
     "pluggable_notifications",
-    "agent_onboarding",
     "global_search",
-    "cloud_conversations",
     "list_skills",
     "ask_user_question",
     "bundled_skills",
-    "ambient_agents_rtc",
-    "cloud_mode",
-    "cloud_mode_from_local_session",
-    "cloud_mode_image_context",
-    "agent_mode_computer_use",
-    "oz_platform_skills",
-    "oz_identity_federation",
-    "sync_ambient_plans",
-    "conversation_artifacts",
-    "agent_view",
-    "agent_view_block_context",
-    "agent_view_conversation_list_view",
-    "inline_slash_commands",
     "inline_history_menu",
-    "inline_model_selector",
-    "oz_launch_modal",
-    "open_warp_launch_modal",
-    "orchestration_launch_modal",
     "new_tab_styling",
     "richtext_multiselect",
-    "inline_profile_selector",
     "web_fetch_ui",
-    "oz_changelog_updates",
     "skill_arguments",
     "incremental_auto_reload",
     "active_conversation_requires_interaction",
@@ -651,7 +620,6 @@ default = [
     "rewind_slash_command",
     "hoa_code_review",
     "warpify_footer",
-    "agent_toolbar_editor",
     "configurable_toolbar",
     "transfer_control_tool",
     "hoa_notifications",
@@ -660,9 +628,6 @@ default = [
     "vertical_tabs",
     "vertical_tabs_summary_mode",
     "tab_configs",
-    "agent_harness",
-    "hoa_onboarding_flow",
-    "hoa_remote_control",
     "codex_notifications",
     "trim_trailing_blank_lines",
     "open_warp_new_settings_modes",
@@ -670,17 +635,6 @@ default = [
     "settings_file",
     "directory_tab_colors",
     "git_credential_refresh",
-    "oz_handoff",
-    "handoff_local_cloud",
-    "run_agents_tool",
-    "orchestration_viewer_streamer",
-    "owner_orchestration_ancestor_streamer",
-    "pending_user_query_indicator",
-    "queue_slash_command",
-    "queued_prompts_v2",
-    "cloud_mode_input_v2",
-    "cloud_mode_setup_v2",
-    "handoff_cloud_cloud",
     "remote_codebase_indexing",
     "solo_user_byok",
     "custom_inference_endpoints",
@@ -697,9 +651,6 @@ editable_markdown_mermaid = []
 default_adeberry_theme = []
 drag_tabs_to_windows = []
 embedded_code_review_comments = []
-agent_management_view = []
-agent_management_details_view = []
-interactive_conversation_management_view = []
 default_waterfall_mode = []
 enforce_revisions_to_cloud_objects = []
 suggested_agent_mode_workflows = []
@@ -738,11 +689,7 @@ agent_mode_evals = [
     "warpui/log_named_telemetry_events",
     "warp_logging/agent_mode_evals",
 ]
-ambient_agents_command_line = []
-ambient_agents_image_upload = []
-scheduled_ambient_agents = []
 allow_ignoring_input_suggestions = []
-inline_slash_commands = ["agent_view"]
 
 # Enable this feature to track heap usage and automatically produce a heap
 # profile report when app memory usage exceeds a 10GB threshold.
@@ -767,8 +714,6 @@ list_skills = []
 # support having a local tty/shell session.  It can be used to conditionally
 # include dependencies that should only exist in such environments.
 local_tty = []
-local_computer_use = []
-local_claude_codex_child_harnesses = []
 # This feature is enabled in build.rs when compiling for platforms which
 # have APIs for interacting with a local filesystem.  It can be used to
 # conditionally include dependencies that should only exist in such
@@ -787,7 +732,6 @@ mcp_server = []
 mcp_oauth = []
 mcp_debugging_ids = []
 notebook_parameter = []
-oz_changelog_updates = []
 personal_cloud_objects = []
 # Remote-backed tty that connects to a PTY-like interface via a server.
 remote_tty = []
@@ -874,7 +818,6 @@ suggested_rules = []
 command_correction_key = []
 full_source_code_embedding = []
 use_tantivy_search = []
-agent_management_popup = []
 simulate_github_unauthed = []
 reload_stale_conversation_files = []
 shared_block_title_generation = []
@@ -902,7 +845,6 @@ multi_profile = []
 pr_comments_slash_command = []
 pr_comments_v2 = []
 pr_comments_skill = []
-conversation_artifacts = []
 conversations_as_context = []
 conversation_api = []
 sync_ambient_plans = []
@@ -939,45 +881,23 @@ file_and_diff_set_comments = []
 revert_to_checkpoints = []
 rewind_slash_command = []
 agent_view = []
-agent_view_block_context = ["agent_view"]
 warp_managed_secrets = []
 v4a_file_diffs = []
-agent_tips = []
-agent_toolbar_editor = ["agent_view"]
-cloud_conversations = []
 agent_view_prompt_chip = ["agent_view"]
-ambient_agents_rtc = []
 team_api_keys = []
 named_agents = []
 classic_completions = []
-cloud_mode = []
-cloud_mode_from_local_session = []
-cloud_mode_image_context = []
 force_classic_completions = []
-agent_view_conversation_list_view = ["agent_view"]
 inline_history_menu = ["agent_view"]
 inline_repo_menu = ["agent_view"]
 summarization_via_message_replacement = []
 lsp_as_a_tool = []
-inline_model_selector = ["agent_view"]
-inline_profile_selector = ["agent_view"]
 restore_prompt_on_inline_model_selector_search = []
-oz_platform_skills = []
-oz_identity_federation = []
-oz_launch_modal = []
-open_warp_launch_modal = []
-orchestration_launch_modal = []
 new_tab_styling = []
 file_based_mcp = []
 skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
-run_agents_tool = []
-orchestration_viewer_streamer = []
-owner_orchestration_ancestor_streamer = []
-pending_user_query_indicator = []
-queue_slash_command = []
-queued_prompts_v2 = ["queue_slash_command"]
 inline_menu_headers = []
 directory_tab_colors = []
 open_warp_new_settings_modes = []
@@ -988,9 +908,6 @@ tab_configs = []
 grouped_tabs = []
 pinned_tabs = []
 warp_control_cli = []
-agent_harness = []
-oz_handoff = []
-handoff_local_cloud = []
 hoa_notifications = []
 open_code_notifications = []
 transfer_control_tool = []
@@ -1001,21 +918,16 @@ billing_and_usage_page_v2 = []
 gpt_configurable_context_window = []
 configurable_toolbar = []
 warpify_footer = []
-hoa_onboarding_flow = []
 git_operations_in_code_review = []
-hoa_remote_control = []
 codex_notifications = []
 codex_plugin = []
-cloud_mode_setup_v2 = ["cloud_mode"]
-cloud_mode_input_v2 = ["cloud_mode"]
-handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
 
-[package.metadata.bundle.bin.warp-oss]
+[package.metadata.bundle.bin.zerp-oss]
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"
-identifier = "dev.warp.WarpOss"
-name = "WarpOss"
+identifier = "dev.zerp.ZerpOss"
+name = "ZerpOss"
 resources = ["assets/onboarding"]
 icon = ["channels/oss/icon/no-padding/512x512.png", "channels/oss/icon/no-padding/icon.ico"]
 short_description = "The open-source, cloud-backed terminal for individuals and teams."
@@ -1023,8 +935,8 @@ short_description = "The open-source, cloud-backed terminal for individuals and 
 [package.metadata.bundle.bin.stable]
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"
-identifier = "dev.warp.Warp-Stable"
-name = "Warp"
+identifier = "dev.zerp.Zerp-Stable"
+name = "Zerp"
 osx_frameworks = [
     "frameworks/default/Sentry-Dynamic-WithARM64e.xcframework/macos-arm64_arm64e_x86_64/Sentry.framework",
 ]
@@ -1034,8 +946,8 @@ short_description = "The cloud-backed terminal for individuals and teams, stable
 [package.metadata.bundle.bin.preview]
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"
-identifier = "dev.warp.Warp-Preview"
-name = "WarpPreview"
+identifier = "dev.zerp.Zerp-Preview"
+name = "ZerpPreview"
 osx_frameworks = [
     "frameworks/default/Sentry-Dynamic-WithARM64e.xcframework/macos-arm64_arm64e_x86_64/Sentry.framework",
 ]
@@ -1045,19 +957,19 @@ short_description = "The cloud-backed terminal for individuals and teams, featur
 [package.metadata.bundle.bin.dev]
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"
-identifier = "dev.warp.Warp-Dev"
-name = "WarpDev"
+identifier = "dev.zerp.Zerp-Dev"
+name = "ZerpDev"
 osx_frameworks = [
     "frameworks/dev/Sentry-Dynamic-WithARM64e.xcframework/macos-arm64_arm64e_x86_64/Sentry.framework",
 ]
 resources = ["assets/onboarding"]
 short_description = "The cloud-backed terminal for individuals and teams, developer build."
 
-[package.metadata.bundle.bin.warp]
+[package.metadata.bundle.bin.zerp]
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"
-identifier = "dev.warp.Warp-Local"
-name = "WarpLocal"
+identifier = "dev.zerp.Zerp-Local"
+name = "ZerpLocal"
 resources = ["assets/onboarding"]
 short_description = "The cloud-backed terminal for individuals and teams, developer build."
 

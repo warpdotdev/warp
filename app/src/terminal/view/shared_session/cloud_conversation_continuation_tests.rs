@@ -222,7 +222,7 @@ impl AmbientAgentTaskTestExt for AmbientAgentTask {
 
     fn with_harness(mut self, harness: Harness) -> Self {
         self.agent_config_snapshot = Some(AgentConfigSnapshot {
-            harness: (harness != Harness::Oz).then_some(HarnessConfig {
+            harness: (harness != Harness::Unknown).then_some(HarnessConfig {
                 harness_type: harness,
                 model_id: None,
                 reasoning_level: None,

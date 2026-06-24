@@ -12,7 +12,6 @@ use crate::ai::agent::{
 pub mod github_auth_notifier;
 pub mod github_auth_url;
 pub mod scheduled;
-pub mod spawn;
 pub mod task;
 pub mod telemetry;
 

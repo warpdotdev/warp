@@ -128,7 +128,6 @@ fn convert_run_agents_execution_mode(
         Some(api::run_agents::ExecutionMode::Remote(remote)) => RunAgentsExecutionMode::Remote {
             environment_id: remote.environment_id,
             worker_host: remote.worker_host,
-            computer_use_enabled: remote.computer_use_enabled,
         },
         Some(api::run_agents::ExecutionMode::Local(_)) | None => RunAgentsExecutionMode::Local,
     }
@@ -190,7 +189,6 @@ fn convert_start_agent_v2_execution_mode(
                     })
                     .collect(),
                 model_id: remote.model_id,
-                computer_use_enabled: remote.computer_use_enabled,
                 worker_host: remote.worker_host,
                 harness_type: convert_start_agent_v2_harness_type(remote.harness)
                     .unwrap_or_default(),
@@ -765,11 +763,9 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
             api::message::tool_call::Tool::TransferShellCommandControlToUser(
                 transfer_shell_command_control_to_user,
             ) => create_standard_action(transfer_shell_command_control_to_user.into()),
-            api::message::tool_call::Tool::UseComputer(use_computer) => {
-                create_standard_action(use_computer.try_into()?)
-            }
-            api::message::tool_call::Tool::RequestComputerUse(request_computer_use) => {
-                create_standard_action(request_computer_use.into())
+            api::message::tool_call::Tool::UseComputer(_)
+            | api::message::tool_call::Tool::RequestComputerUse(_) => {
+                Ok(MaybeAIAgentAction::NoClientRepresentation)
             }
             api::message::tool_call::Tool::Subagent(subagent) => {
                 use api::message::tool_call::subagent::conversation_search_metadata::Target;

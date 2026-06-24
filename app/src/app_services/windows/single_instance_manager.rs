@@ -56,7 +56,7 @@ fn try_create_mutex() -> Result<Option<MutexHandle>, Error> {
     // NOTE: This lock name must stay in sync with `AppMutexName` in
     // `script/windows/windows-installer.iss`, which the installer uses to detect whether Warp is
     // running.
-    let name = format!("Local\\Warp{:?}_SingleInstance", ChannelState::channel())
+    let name = format!("Local\\Zerp{:?}_SingleInstance", ChannelState::channel())
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect::<Vec<u16>>();

@@ -144,12 +144,6 @@ impl TipsView {
                 ctx,
             ),
             TipItem::new(
-                "AI Command Search".to_string(),
-                "Generate shell commands with natural language.".to_string(),
-                TipAction::AiCommandSearch,
-                ctx,
-            ),
-            TipItem::new(
                 "Theme Picker".to_string(),
                 "Make Warp your own by choosing a built-in theme. Or create your own.".to_string(),
                 TipAction::ThemePicker,
@@ -599,7 +593,7 @@ impl View for TipsView {
             ),
         );
 
-        if tips_completed.completed_count() == WELCOME_TIP_FEATURE_LENGTH {
+        if tips_completed.completed_count() >= WELCOME_TIP_FEATURE_LENGTH {
             stack.add_positioned_child(
                 self.render_completed_overlay(appearance),
                 OffsetPositioning::offset_from_save_position_element(

@@ -1,4 +1,4 @@
-Package: warp-terminal@@CHANNEL_SUFFIX@@
+Package: zerp-terminal@@CHANNEL_SUFFIX@@
 Version: @@VERSION@@
 Section: devel
 Depends: fontconfig, libegl1, libwayland-client0, libwayland-egl1, libx11-6, libxcb1, libxcursor1, libxi6, libxkbcommon-x11-0, zlib1g

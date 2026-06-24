@@ -6,7 +6,6 @@ use super::*;
 #[test]
 fn harness_config_name_round_trips_for_known_variants() {
     for harness in [
-        Harness::Oz,
         Harness::Claude,
         Harness::OpenCode,
         Harness::Gemini,
@@ -18,6 +17,11 @@ fn harness_config_name_round_trips_for_known_variants() {
             "round-trip failed for {harness:?}",
         );
     }
+}
+
+#[test]
+fn harness_from_config_name_rejects_warp_native_harness() {
+    assert_eq!(Harness::from_config_name("oz"), None);
 }
 
 #[test]

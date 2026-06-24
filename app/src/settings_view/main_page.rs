@@ -1114,7 +1114,7 @@ impl SettingsWidget for IapCredentialsWidget {
             }
             IapCredentialsState::Failed { message, .. } => (format!("Failed: {message}"), ansi_red),
             IapCredentialsState::EnvInjected { .. } => {
-                ("Using injected token (WARP_IAP_TOKEN)".to_string(), active)
+                ("Using injected token (ZERP_IAP_TOKEN)".to_string(), active)
             }
         };
 

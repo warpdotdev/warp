@@ -2,7 +2,7 @@
 param(
     [switch]$Help,
     [switch]$InstallCommonSkills,
-    [string]$CommonSkillsTarget = $env:WARP_COMMON_SKILLS_INSTALL_TARGET
+    [string]$CommonSkillsTarget = $env:ZERP_COMMON_SKILLS_INSTALL_TARGET
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,14 +19,14 @@ function Show-Usage {
     Write-Output '  -CommonSkillsTarget   Install into project .agents/skills or global ~/.agents/skills.'
     Write-Output ''
     Write-Output 'Environment:'
-    Write-Output '  WARP_SKIP_COMMON_SKILLS_INSTALL=1'
+    Write-Output '  ZERP_SKIP_COMMON_SKILLS_INSTALL=1'
     Write-Output '      Skip installing common agent skills.'
-    Write-Output '  WARP_COMMON_SKILLS_INSTALL_TARGET=project|global'
+    Write-Output '  ZERP_COMMON_SKILLS_INSTALL_TARGET=project|global'
     Write-Output '      Choose the install target when -CommonSkillsTarget is omitted.'
     Write-Output '      Target prompting and duplicate checks are delegated to warpdotdev/common-skills/scripts/install_common_skills.'
-    Write-Output '  WARP_COMMON_SKILLS_SCRIPTS_DIR=/path/to/common-skills/scripts'
+    Write-Output '  ZERP_COMMON_SKILLS_SCRIPTS_DIR=/path/to/common-skills/scripts'
     Write-Output '      Override where common-skills management scripts are loaded from.'
-    Write-Output '  WARP_COMMON_SKILLS_REF=<git-ref>'
+    Write-Output '  ZERP_COMMON_SKILLS_REF=<git-ref>'
     Write-Output '      Override the remote warpdotdev/common-skills ref used when fetching scripts.'
 }
 
@@ -51,8 +51,8 @@ function Show-BootstrapPreview {
 
     if (-not $InstallCommonSkills) {
         Write-Output '  - Skip common agent skills unless -InstallCommonSkills is provided.'
-    } elseif ($env:WARP_SKIP_COMMON_SKILLS_INSTALL -eq '1') {
-        Write-Output '  - Skip common agent skills because WARP_SKIP_COMMON_SKILLS_INSTALL=1.'
+    } elseif ($env:ZERP_SKIP_COMMON_SKILLS_INSTALL -eq '1') {
+        Write-Output '  - Skip common agent skills because ZERP_SKIP_COMMON_SKILLS_INSTALL=1.'
     } elseif ($script:ResolvedCommonSkillsTarget -eq 'global') {
         Write-Output '  - Install or update common agent skills in ~/.agents/skills if needed.'
     } elseif ($script:ResolvedCommonSkillsTarget -eq 'project') {
@@ -91,15 +91,15 @@ $env:PATH = "$gitBinDir;$env:PATH"
 function Resolve-CommonSkillsScript {
     param([string]$ScriptName)
 
-    if ($env:WARP_COMMON_SKILLS_SCRIPTS_DIR) {
-        $scriptPath = Join-Path $env:WARP_COMMON_SKILLS_SCRIPTS_DIR $ScriptName
+    if ($env:ZERP_COMMON_SKILLS_SCRIPTS_DIR) {
+        $scriptPath = Join-Path $env:ZERP_COMMON_SKILLS_SCRIPTS_DIR $ScriptName
         if (Test-Path -PathType Leaf $scriptPath) { return $scriptPath }
-        throw "Could not find $ScriptName in WARP_COMMON_SKILLS_SCRIPTS_DIR=$env:WARP_COMMON_SKILLS_SCRIPTS_DIR."
+        throw "Could not find $ScriptName in ZERP_COMMON_SKILLS_SCRIPTS_DIR=$env:ZERP_COMMON_SKILLS_SCRIPTS_DIR."
     }
 
-    $commonSkillsRef = if ($env:WARP_COMMON_SKILLS_REF) { $env:WARP_COMMON_SKILLS_REF } else { 'main' }
-    $rawBaseUrl = if ($env:WARP_COMMON_SKILLS_RAW_BASE_URL) {
-        $env:WARP_COMMON_SKILLS_RAW_BASE_URL.TrimEnd('/')
+    $commonSkillsRef = if ($env:ZERP_COMMON_SKILLS_REF) { $env:ZERP_COMMON_SKILLS_REF } else { 'main' }
+    $rawBaseUrl = if ($env:ZERP_COMMON_SKILLS_RAW_BASE_URL) {
+        $env:ZERP_COMMON_SKILLS_RAW_BASE_URL.TrimEnd('/')
     } else {
         "https://raw.githubusercontent.com/warpdotdev/common-skills/$commonSkillsRef/scripts"
     }

@@ -252,7 +252,7 @@ pub struct RunAgentsCardView {
 /// for the picker display and should NOT run before auto-launch
 /// matching.
 ///
-/// 1. Defaults the Oz model to the conversation's base model.
+/// 1. Defaults an unset model to the harness default.
 /// 2. Defaults Remote worker_host to "warp".
 /// 3. Defaults a Remote environment from settings / recency.
 fn resolve_interactive_defaults(
@@ -263,10 +263,8 @@ fn resolve_interactive_defaults(
     if state.orch.model_id.is_empty() {
         let harness =
             warp_cli::agent::Harness::parse_orchestration_harness(&state.orch.harness_type);
-        if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None) {
-            if let Some(base) = block_model.base_model(ctx).map(|id| id.to_string()) {
-                state.orch.model_id = base;
-            }
+        if harness.is_none() {
+            state.orch.model_id.clear();
         }
     }
     if let RunAgentsExecutionMode::Remote {
@@ -523,10 +521,8 @@ impl RunAgentsCardView {
         if new_state.orch.model_id.is_empty() {
             let harness =
                 warp_cli::agent::Harness::parse_orchestration_harness(&new_state.orch.harness_type);
-            if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None) {
-                if let Some(base) = self.block_model.base_model(ctx).map(|id| id.to_string()) {
-                    new_state.orch.model_id = base;
-                }
+            if harness.is_none() {
+                new_state.orch.model_id.clear();
             }
         }
         // Re-seed an Unset selection from persisted per-harness settings,

@@ -19,12 +19,12 @@ mod namespace;
 /// Environment variable set by the server to identify the isolation platform.
 /// The value should match one of the `IsolationPlatformType` variants in snake_case.
 #[cfg(not(target_family = "wasm"))]
-const WARP_ISOLATION_PLATFORM_ENV: &str = "WARP_ISOLATION_PLATFORM";
+const WARP_ISOLATION_PLATFORM_ENV: &str = "ZERP_ISOLATION_PLATFORM";
 
 /// Environment variable containing the generic Warp-managed workload token that we use
 /// for isolation platforms that don't issue their own tokens.
 #[cfg(not(target_family = "wasm"))]
-const WARP_WORKLOAD_TOKEN_ENV: &str = "WARP_WORKLOAD_TOKEN";
+const WARP_WORKLOAD_TOKEN_ENV: &str = "ZERP_WORKLOAD_TOKEN";
 
 /// A kind of isolation platform. For our usage, isolation platforms are different ways where Warp
 /// can be sandboxed, such as VMs, containers, or cloud hosts. This may also include weaker forms
@@ -136,7 +136,7 @@ pub async fn issue_workload_token(
     }
 }
 
-/// Read a platform-agnostic workload token from the `WARP_WORKLOAD_TOKEN` environment variable.
+/// Read a platform-agnostic workload token from the `ZERP_WORKLOAD_TOKEN` environment variable.
 /// Returns a `WorkloadToken` with no expiration, or an error if the variable is missing/empty.
 #[cfg(not(target_family = "wasm"))]
 fn read_generic_workload_token() -> Result<WorkloadToken, IsolationPlatformError> {
@@ -151,7 +151,7 @@ fn read_generic_workload_token() -> Result<WorkloadToken, IsolationPlatformError
     })
 }
 
-/// Parse the `WARP_ISOLATION_PLATFORM` environment variable into a platform type.
+/// Parse the `ZERP_ISOLATION_PLATFORM` environment variable into a platform type.
 #[cfg(not(target_family = "wasm"))]
 fn platform_from_env() -> Option<IsolationPlatformType> {
     let value = std::env::var(WARP_ISOLATION_PLATFORM_ENV).ok()?;

@@ -171,9 +171,9 @@ impl AIExecutionProfilesModel {
                         },
                     },
                     // When running as a CLI, we ignore the GUI default and use a more permissive default.
-                    LaunchMode::CommandLine { is_sandboxed, computer_use_override, .. } => {
+                    LaunchMode::CommandLine { is_sandboxed, .. } => {
                         DefaultProfileState::Cli {
-                            profile: AIExecutionProfile::create_default_cli_profile(*is_sandboxed, *computer_use_override),
+                            profile: AIExecutionProfile::create_default_cli_profile(*is_sandboxed),
                             id: ClientProfileId::new()
                         }
                     }
@@ -1624,7 +1624,7 @@ impl AIExecutionProfilesModel {
         is_sandboxed: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        let cli_profile = AIExecutionProfile::create_default_cli_profile(is_sandboxed, None);
+        let cli_profile = AIExecutionProfile::create_default_cli_profile(is_sandboxed);
         self.edit_profile_internal(
             profile_id,
             move |profile| {

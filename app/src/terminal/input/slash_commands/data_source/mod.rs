@@ -305,7 +305,7 @@ impl SlashCommandDataSource {
         }
 
         // Hide /host when no default host is configured (env var or workspace setting).
-        let has_default_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
+        let has_default_host = std::env::var("ZERP_CLOUD_MODE_DEFAULT_HOST")
             .ok()
             .filter(|s| !s.is_empty())
             .is_some()
@@ -443,21 +443,11 @@ impl SlashCommandDataSource {
             return false;
         };
 
-        let Some(task) = AgentConversationsModel::as_ref(ctx).get_task_data(&task_id) else {
-            // Task data not yet fetched. Permissive default: assume Oz so the command
-            // is reachable while the fetch is in flight; once the fetch resolves,
-            // `TasksUpdated` triggers a recompute and a non-Oz task hides the command.
-            return true;
+        let Some(_task) = AgentConversationsModel::as_ref(ctx).get_task_data(&task_id) else {
+            return false;
         };
 
-        match task
-            .agent_config_snapshot
-            .as_ref()
-            .and_then(|s| s.harness.as_ref())
-        {
-            Some(config) => config.harness_type == Harness::Oz,
-            None => true,
-        }
+        false
     }
 }
 

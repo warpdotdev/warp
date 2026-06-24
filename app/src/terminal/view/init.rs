@@ -6,10 +6,7 @@ use warpui::platform::OperatingSystem;
 use warpui::units::IntoLines;
 use warpui::AppContext;
 
-use super::{
-    AgentOnboardingVersion, AskAISource, ContextMenuAction, OnboardingIntention, OnboardingVersion,
-    TerminalAction,
-};
+use super::{AgentOnboardingVersion, OnboardingIntention, OnboardingVersion, TerminalAction};
 use crate::ai::blocklist::agent_view::{
     AgentViewEntryOrigin, ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
 };
@@ -745,91 +742,6 @@ pub fn init(app: &mut AppContext) {
         ),
     ]);
 
-    app.register_editable_bindings([
-        EditableBinding::new(
-            "terminal:ask_ai_assistant",
-            BindingDescription::new("Attach Selected Block as Agent Context")
-                .with_custom_description(
-                    bindings::MAC_MENUS_CONTEXT,
-                    "Attach Selection as Agent Context",
-                ),
-            TerminalAction::ContextMenu(ContextMenuAction::AskAI(AskAISource::SelectedBlocks)),
-        )
-        .with_enabled(|| FeatureFlag::AgentMode.is_enabled())
-        .with_custom_action(CustomAction::AttachSelectionAsAgentModeContext)
-        .with_group(bindings::BindingGroup::WarpAi.as_str())
-        // When possible, prioritize the text selection action over attaching a block as
-        // context.
-        .with_context_predicate(
-            id!("Terminal")
-                & ne!("TerminalView_BlockSelectionCardinality", "None")
-                & !id!("ActiveBlockTextSelection")
-                & !id!("ActiveAltScreenSelection")
-                & id!(flags::IS_ANY_AI_ENABLED),
-        ),
-        EditableBinding::new(
-            "terminal:ask_ai_assistant",
-            BindingDescription::new("Attach Selected Text as Agent Context")
-                .with_custom_description(
-                    bindings::MAC_MENUS_CONTEXT,
-                    "Attach Selection as Agent Context",
-                ),
-            TerminalAction::ContextMenu(ContextMenuAction::AskAI(
-                AskAISource::SelectedTerminalText,
-            )),
-        )
-        .with_enabled(|| FeatureFlag::AgentMode.is_enabled())
-        .with_custom_action(CustomAction::AttachSelectionAsAgentModeContext)
-        .with_group(bindings::BindingGroup::WarpAi.as_str())
-        .with_context_predicate(
-            id!("Terminal")
-                & (id!("ActiveBlockTextSelection") | id!("ActiveAltScreenSelection"))
-                & id!(flags::IS_ANY_AI_ENABLED),
-        ),
-        // We register a single binding for either a selected block or selected text
-        // to avoid cluttering the keybindings UI. At the end of the day, these
-        // map to the same logic, and we should be able to distinguish whether
-        // this is a block selection or text selection later on.
-        EditableBinding::new(
-            "terminal:ask_ai_assistant",
-            "Ask Warp AI about Selection",
-            TerminalAction::ContextMenu(ContextMenuAction::AskAI(AskAISource::SelectedBlockOrText)),
-        )
-        .with_enabled(|| !FeatureFlag::AgentMode.is_enabled())
-        .with_custom_action(CustomAction::AttachSelectionAsAgentModeContext)
-        .with_group(bindings::BindingGroup::WarpAi.as_str())
-        .with_context_predicate(
-            id!("Terminal")
-                & id!(flags::IS_ANY_AI_ENABLED)
-                & (eq!("TerminalView_BlockSelectionCardinality", "One")
-                    | id!("ActiveBlockTextSelection")
-                    | id!("ActiveAltScreenSelection")),
-        ),
-    ]);
-
-    app.register_editable_bindings([
-        EditableBinding::new(
-            "terminal:ask_ai_assistant_last_block",
-            "Ask Warp AI about last block",
-            TerminalAction::ContextMenu(ContextMenuAction::AskAI(AskAISource::LastBlock)),
-        )
-        .with_enabled(|| !FeatureFlag::AgentMode.is_enabled())
-        .with_key_binding("ctrl-shift->")
-        .with_group(bindings::BindingGroup::WarpAi.as_str())
-        .with_context_predicate(
-            id!("Terminal") & id!("TerminalView_NonEmptyBlockList") & id!(flags::IS_ANY_AI_ENABLED),
-        ),
-        EditableBinding::new(
-            "terminal:ask_ai_assistant",
-            "Ask Warp AI",
-            TerminalAction::ContextMenu(ContextMenuAction::AskAI(AskAISource::SelectedInputText)),
-        )
-        .with_enabled(|| !FeatureFlag::AgentMode.is_enabled())
-        .with_group(bindings::BindingGroup::WarpAi.as_str())
-        .with_key_binding("ctrl-shift-space")
-        .with_context_predicate(id!("Input") & id!(flags::IS_ANY_AI_ENABLED)),
-    ]);
-
     if FeatureFlag::CommandCorrectionKey.is_enabled() {
         app.register_editable_bindings([EditableBinding::new(
             "input:insert_command_correction",
@@ -1114,36 +1026,6 @@ pub fn init(app: &mut AppContext) {
         .with_mac_key_binding("ctrl-alt-[")
         .with_linux_or_windows_key_binding("ctrl-alt-["),
     ]);
-
-    // Register bindings for starting a new cloud agent conversation.
-    {
-        app.register_fixed_bindings([FixedBinding::new_per_platform(
-            PerPlatformKeystroke {
-                mac: "cmd-alt-enter",
-                linux_and_windows: "ctrl-alt-enter",
-            },
-            TerminalAction::EnterCloudAgentView,
-            id!("Terminal") & id!(flags::IS_ANY_AI_ENABLED),
-        )
-        .with_enabled(|| {
-            FeatureFlag::AgentView.is_enabled()
-                && FeatureFlag::CloudMode.is_enabled()
-                && FeatureFlag::CloudModeFromLocalSession.is_enabled()
-        })
-        .with_group(bindings::BindingGroup::WarpAi.as_str())]);
-        if cfg!(target_os = "macos") {
-            // On MacOS, if the user has the 'Option as meta' setting enabled, the cmd-alt-enter
-            // binding above will not match.
-            //
-            // TODO(zachbai): Consider if, for the purposes of fixed bindings, alt/meta should work
-            // fungibly regardless of underlying setting.
-            app.register_fixed_bindings([FixedBinding::new(
-                "cmd-meta-enter",
-                TerminalAction::EnterCloudAgentView,
-                id!("Terminal") & id!(flags::IS_ANY_AI_ENABLED),
-            )]);
-        }
-    }
 }
 
 /// Registers bindings related to input modes.

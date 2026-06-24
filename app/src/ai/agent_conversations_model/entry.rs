@@ -352,7 +352,7 @@ fn task_harness(task: &AmbientAgentTask) -> Option<Harness> {
             .harness
             .as_ref()
             .map(|harness| harness.harness_type)
-            .or(Some(Harness::Oz))
+            .or(Some(Harness::Unknown))
     })
 }
 
@@ -629,7 +629,7 @@ fn entry_for_conversation_parts(
             harness: conversation_metadata
                 .and_then(|metadata| metadata.server_conversation_metadata.as_ref())
                 .map(|metadata| Harness::from(metadata.harness))
-                .or(Some(Harness::Oz)),
+                .or(Some(Harness::Unknown)),
             artifacts: conversation_artifacts(&metadata, history_model),
         },
         backing: AgentConversationBackingData {

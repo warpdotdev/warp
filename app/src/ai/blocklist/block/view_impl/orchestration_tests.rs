@@ -74,7 +74,6 @@ fn start_agent_copy_uses_remote_labels_for_remote_children() {
         environment_id: "env-123".to_string(),
         skill_references: vec![],
         model_id: String::new(),
-        computer_use_enabled: false,
         worker_host: String::new(),
         harness_type: String::new(),
         title: String::new(),

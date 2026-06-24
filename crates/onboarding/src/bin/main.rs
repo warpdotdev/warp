@@ -89,7 +89,7 @@ impl OnboardingMainView {
             OnboardingModelInfo {
                 id: LLMId::from("auto"),
                 title: "Auto".to_string(),
-                icon: Icon::Oz,
+                icon: Icon::AiAssistant,
                 is_default: true,
             },
             OnboardingModelInfo {
@@ -163,7 +163,6 @@ impl OnboardingMainView {
                 ctx.notify();
             }
             AgentOnboardingEvent::SyncWithOsToggled { .. }
-            | AgentOnboardingEvent::UpgradeRequested
             | AgentOnboardingEvent::UpgradeCopyUrlRequested
             | AgentOnboardingEvent::UpgradePasteTokenFromClipboardRequested
             | AgentOnboardingEvent::LoginFromWelcomeRequested

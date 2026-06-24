@@ -5,7 +5,7 @@
 #define MyAppPublisher "Denver Technologies, Inc."
 #define MyAppURL "https://www.warp.dev/"
 #ifndef MyAppName
-  #define MyAppName "WarpDev"
+  #define MyAppName "ZerpDev"
 #endif
 #ifndef MyAppVersion
   #define MyAppVersion "0.1.0"
@@ -30,13 +30,13 @@
   ((ReleaseChannel == "integration") ? "Integration" : \
   ((ReleaseChannel == "oss") ? "Oss" : \
   "Unknown")))))
-#define AppMutexName "Local\Warp" + ChannelPascalCase + "_SingleInstance"
+#define AppMutexName "Local\Zerp" + ChannelPascalCase + "_SingleInstance"
 
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
 ; (To generate a new GUID, click Tools | Generate GUID inside the IDE.)
-AppId=warp-terminal-{#ReleaseChannel}
+AppId=zerp-terminal-{#ReleaseChannel}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
@@ -108,8 +108,8 @@ Source: "{#AssetsDir}\{#Arch}\dxil.dll"; DestDir: "{app}"
 Source: "{#TargetProfileDir}\resources\*"; DestDir: "{app}\resources"; Flags: ignoreversion recursesubdirs
 
 [Registry]
-Root: HKCU; Subkey: "SOFTWARE\Warp.dev\{#MyAppName}"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "SOFTWARE\Warp.dev\{#MyAppName}"; ValueType: string; ValueName: "InstallationPath"; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "SOFTWARE\Zerp.dev\{#MyAppName}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "SOFTWARE\Zerp.dev\{#MyAppName}"; ValueType: string; ValueName: "InstallationPath"; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\{#MyAppExeName}"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletekey
 ; cleanup "Open Warp Here" registry entries
 Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}"; Flags: deletekey
@@ -135,13 +135,13 @@ Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Wind
 Name: addToPath; Description: "Add Warp to PATH"
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{userappdata}\warp\{#MyAppName}"
-Type: filesandordirs; Name: "{localappdata}\warp\{#MyAppName}"
+Type: filesandordirs; Name: "{userappdata}\zerp\{#MyAppName}"
+Type: filesandordirs; Name: "{localappdata}\zerp\{#MyAppName}"
 Type: filesandordirs; Name: "{app}\bin"
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; AppUserModelID: "dev.warp.{#MyAppName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; AppUserModelID: "dev.warp.{#MyAppName}"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; AppUserModelID: "dev.zerp.{#MyAppName}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; AppUserModelID: "dev.zerp.{#MyAppName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: postinstall runhidden nowait
@@ -244,17 +244,17 @@ begin
     { Determine the channel-specific script name.  These values must match
       `Channel::cli_command_name` in the Rust source. }
 #if ReleaseChannel == "stable"
-    CmdScriptName := 'oz.cmd'
+    CmdScriptName := 'zerp-cli.cmd'
 #elif ReleaseChannel == "oss"
-    CmdScriptName := 'warp-oss.cmd';
+    CmdScriptName := 'zerp-cli-oss.cmd';
 #else
-    CmdScriptName := 'oz-{#ReleaseChannel}.cmd';
+    CmdScriptName := 'zerp-cli-{#ReleaseChannel}.cmd';
 #endif
 
     { Create the helper CMD script }
     CmdScriptPath := BinDir + '\' + CmdScriptName;
     CmdScriptContent := '@echo off' + #13#10 +
-                       'set "WARP_CLI_MODE=1"' + #13#10 +
+                       'set "ZERP_CLI_MODE=1"' + #13#10 +
                        '"' + ExpandConstant('{app}\{#MyAppExeName}') + '" %*' + #13#10;
     
     SaveStringToFile(CmdScriptPath, CmdScriptContent, False);

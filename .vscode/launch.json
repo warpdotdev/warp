@@ -14,11 +14,11 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable 'warp'",
+      "name": "Debug executable 'zerp'",
       "cargo": {
-        "args": ["build", "--bin=warp"],
+        "args": ["build", "--bin=zerp"],
         "filter": {
-          "name": "warp",
+          "name": "zerp",
           "kind": "bin"
         }
       },
@@ -30,8 +30,8 @@
       "type": "lldb",
       "request": "launch",
       "name": "Debug MacOS executable",
-      "preLaunchTask": "build_warplocal",
-      "program": "${workspaceFolder}/target/debug/bundle/osx/WarpLocal.app/Contents/MacOS/warp",
+      "preLaunchTask": "build_zerplocal",
+      "program": "${workspaceFolder}/target/debug/bundle/osx/ZerpLocal.app/Contents/MacOS/zerp",
       "args": [],
       "cwd": "${workspaceFolder}",
       "sourceLanguages": ["rust"]
@@ -39,11 +39,11 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable 'warp' with fast_dev",
+      "name": "Debug executable 'zerp' with fast_dev",
       "cargo": {
-        "args": ["build", "--bin=warp", "--features=fast_dev"],
+        "args": ["build", "--bin=zerp", "--features=fast_dev"],
         "filter": {
-          "name": "warp",
+          "name": "zerp",
           "kind": "bin"
         }
       },
@@ -54,11 +54,11 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable 'warp' with with_local_server",
+      "name": "Debug executable 'zerp' with with_local_server",
       "cargo": {
-        "args": ["build", "--bin=warp", "--features=with_local_server"],
+        "args": ["build", "--bin=zerp", "--features=with_local_server"],
         "filter": {
-          "name": "warp",
+          "name": "zerp",
           "kind": "bin"
         }
       },
@@ -70,8 +70,8 @@
       "type": "lldb",
       "request": "launch",
       "name": "Debug MacOS executable local session sharing server",
-      "preLaunchTask": "build_warplocal_localsessionsharing",
-      "program": "${workspaceFolder}/target/debug/bundle/osx/WarpLocal.app/Contents/MacOS/warp",
+      "preLaunchTask": "build_zerplocal_localsessionsharing",
+      "program": "${workspaceFolder}/target/debug/bundle/osx/ZerpLocal.app/Contents/MacOS/zerp",
       "args": [],
       "cwd": "${workspaceFolder}",
       "sourceLanguages": ["rust"]
@@ -83,8 +83,8 @@
       "env": {
         "RUST_BACKTRACE": "1"
       },
-      "preLaunchTask": "build_warplocal_fastdev",
-      "program": "${workspaceFolder}/target/debug/bundle/osx/WarpLocal.app/Contents/MacOS/warp",
+      "preLaunchTask": "build_zerplocal_fastdev",
+      "program": "${workspaceFolder}/target/debug/bundle/osx/ZerpLocal.app/Contents/MacOS/zerp",
       "args": [],
       "cwd": "${workspaceFolder}",
       "sourceLanguages": ["rust"]
@@ -93,8 +93,8 @@
       "type": "lldb",
       "request": "launch",
       "name": "Debug MacOS executable with fast_dev + local session sharing server",
-      "preLaunchTask": "build_warplocal_fastdev_localsessionsharing",
-      "program": "${workspaceFolder}/target/debug/bundle/osx/WarpLocal.app/Contents/MacOS/warp",
+      "preLaunchTask": "build_zerplocal_fastdev_localsessionsharing",
+      "program": "${workspaceFolder}/target/debug/bundle/osx/ZerpLocal.app/Contents/MacOS/zerp",
       "args": [],
       "cwd": "${workspaceFolder}",
       "sourceLanguages": ["rust"]
@@ -102,11 +102,11 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug unit tests in executable 'warp'",
+      "name": "Debug unit tests in executable 'zerp'",
       "cargo": {
-        "args": ["test", "--no-run", "--bin=warp", "--package=warp"],
+        "args": ["test", "--no-run", "--bin=zerp", "--package=warp"],
         "filter": {
-          "name": "warp",
+          "name": "zerp",
           "kind": "bin"
         }
       },

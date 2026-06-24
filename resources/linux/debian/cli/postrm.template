@@ -4,4 +4,4 @@
 # postrm script.
 action="$1"
 
-rm -f /usr/bin/oz@@CHANNEL_SUFFIX@@
+rm -f /usr/bin/zerp-cli@@CHANNEL_SUFFIX@@

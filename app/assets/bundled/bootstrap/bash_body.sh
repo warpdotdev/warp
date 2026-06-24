@@ -1,10 +1,10 @@
-# Note that WARP_SESSION_ID is expected to have been set when executing commands to
+# Note that ZERP_SESSION_ID is expected to have been set when executing commands to
 # emit the InitShell payload, which includes the session ID.
 #
 # Throughout, command -p is used to call external binaries. command -p resolves the
 # given command using the system default $PATH, which ensures the shells can locate
 # the corresponding binaries even if the user has a clobbered value of $PATH.
-if [ -z "$WARP_BOOTSTRAPPED" ]; then
+if [ -z "$ZERP_BOOTSTRAPPED" ]; then
     # Byte sequence used to signal the start of a DCS. ([0x1b, 0x50, 0x24] which
     # maps to <ESC>, P, $ in ASCII.)
     DCS_START="$(printf '\eP$')"
@@ -37,9 +37,9 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
 
     # Attempt to cd to the desired initial working directory, swallowing any
     # errors.  If this fails, the user will end up in their home directory.
-    if [[ ! -z "$WARP_INITIAL_WORKING_DIR" ]]; then
-        cd "$WARP_INITIAL_WORKING_DIR" >/dev/null 2>&1
-        unset WARP_INITIAL_WORKING_DIR
+    if [[ ! -z "$ZERP_INITIAL_WORKING_DIR" ]]; then
+        cd "$ZERP_INITIAL_WORKING_DIR" >/dev/null 2>&1
+        unset ZERP_INITIAL_WORKING_DIR
     fi
 
     # We configure history to `ignorespace` to avoid leaking our bootstrap script
@@ -53,15 +53,15 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
 
     # The temporary files used to track generator PIDs.  We'll fill these in later,
     # if we execute any generator commands.
-    _WARP_GENERATOR_PIDS_STARTED_TMP_FILE=""
-    _WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE=""
+    _ZERP_GENERATOR_PIDS_STARTED_TMP_FILE=""
+    _ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE=""
     # Make sure we delete generator PID files when the shell exits, if they exist.
     __warp_generator_pid_file_cleanup() {
-      if [[ -f $_WARP_GENERATOR_PIDS_STARTED_TMP_FILE ]]; then
-        command -p rm $_WARP_GENERATOR_PIDS_STARTED_TMP_FILE
+      if [[ -f $_ZERP_GENERATOR_PIDS_STARTED_TMP_FILE ]]; then
+        command -p rm $_ZERP_GENERATOR_PIDS_STARTED_TMP_FILE
       fi
-      if [[ -f $_WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE ]]; then
-        command -p rm $_WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE
+      if [[ -f $_ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE ]]; then
+        command -p rm $_ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE
       fi
     }
     trap __warp_generator_pid_file_cleanup EXIT
@@ -74,8 +74,8 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         # one of the bytes in JSON is 9c (ST) or other (CAN, SUB, ESC).
         encoded_message=$(warp_hex_encode_string "$1")
         # We send the InitShell hook via OSCs when on WSL or MSYS2 or SSH from Windows and via DCSs otherwise.
-        # Note that $WARP_USING_WINDOWS_CON_PTY is set in the init shell script.
-        if [ "$WARP_USING_WINDOWS_CON_PTY" = true ]; then
+        # Note that $ZERP_USING_WINDOWS_CON_PTY is set in the init shell script.
+        if [ "$ZERP_USING_WINDOWS_CON_PTY" = true ]; then
           printf $OSC_START$DCS_JSON_MARKER$OSC_PARAM_SEPARATOR$encoded_message$OSC_END
         else
           printf $DCS_START$DCS_JSON_MARKER$encoded_message$DCS_END
@@ -89,7 +89,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     # waits on orphaned slave channels when the user ends their interactive
     # session.
     #
-    # Only relevant for remote SSH shells. WARP_IS_SSH is exported to "1"
+    # Only relevant for remote SSH shells. ZERP_IS_SSH is exported to "1"
     # by `warp_ssh_helper` on the remote side of a Warp-managed SSH session
     # and is unset everywhere else (local shells, subshells, docker
     # sandboxes, etc.), so the hook only fires where a remote-server-proxy
@@ -97,11 +97,11 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     #
     # Installed after warp_send_json_message is defined so the handler is
     # callable the moment the trap is registered.
-    if [[ "$WARP_IS_SSH" == "1" ]]; then
+    if [[ "$ZERP_IS_SSH" == "1" ]]; then
         __warp_emit_exit_shell() {
-            if [[ -n "$WARP_SESSION_ID" ]]; then
+            if [[ -n "$ZERP_SESSION_ID" ]]; then
                 warp_send_json_message \
-                    "{\"hook\": \"ExitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID}}"
+                    "{\"hook\": \"ExitShell\", \"value\": {\"session_id\": $ZERP_SESSION_ID}}"
             fi
         }
         # Bash allows only one handler per signal, so compose with the
@@ -115,7 +115,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     fi
 
     warp_maybe_send_reset_grid_osc () {
-        if [ "$WARP_USING_WINDOWS_CON_PTY" = true ]; then
+        if [ "$ZERP_USING_WINDOWS_CON_PTY" = true ]; then
             printf $RESET_GRID_OSC
         fi
     }
@@ -202,7 +202,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     }
 
     # Runs the given command in the background, records its PID in
-    # _WARP_GENERATOR_PIDS_STARTED_TMP_FILE, and adds its PID from the file when
+    # _ZERP_GENERATOR_PIDS_STARTED_TMP_FILE, and adds its PID from the file when
     # the job is completed.
     _warp_run_generator_command_internal() {
       # $@ must be double-quoted to prevent word-splitting, which would cause the given command to
@@ -211,7 +211,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       _warp_execute_command "$@" &
       # $! contains the PID of the most recently backgrounded command.
       local pid=$!
-      echo $pid >> $_WARP_GENERATOR_PIDS_STARTED_TMP_FILE
+      echo $pid >> $_ZERP_GENERATOR_PIDS_STARTED_TMP_FILE
       wait $pid 2> /dev/null
 
       # If the exit code of the backgrounded _warp_execute_command process is non-zero,
@@ -228,8 +228,8 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       # 
       # The completed generator PIDs file may not exist if this generator was (by
       # error) left running/not cancelled properly in warp_preexec.
-      if [[ -f $_WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE ]]; then
-        echo $pid >> $_WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE
+      if [[ -f $_ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE ]]; then
+        echo $pid >> $_ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE
       fi
     }
 
@@ -245,14 +245,14 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     warp_run_generator_command() {
       # Setting this environment variable prevents warp_precmd from emitting the
       # 'Block started' hook to the Rust app.
-      _WARP_GENERATOR_COMMAND=1
+      _ZERP_GENERATOR_COMMAND=1
 
       # Ensure the started and completed generator PID files exist.
-      if [[ -z $_WARP_GENERATOR_PIDS_STARTED_TMP_FILE || ! -f $_WARP_GENERATOR_PIDS_STARTED_TMP_FILE ]]; then
-        _WARP_GENERATOR_PIDS_STARTED_TMP_FILE="$(command -p mktemp)"
+      if [[ -z $_ZERP_GENERATOR_PIDS_STARTED_TMP_FILE || ! -f $_ZERP_GENERATOR_PIDS_STARTED_TMP_FILE ]]; then
+        _ZERP_GENERATOR_PIDS_STARTED_TMP_FILE="$(command -p mktemp)"
       fi
-      if [[ -z $_WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE || ! -f $_WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE ]]; then
-        _WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE="$(command -p mktemp)"
+      if [[ -z $_ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE || ! -f $_ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE ]]; then
+        _ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE="$(command -p mktemp)"
       fi
 
       # To minimize latency and prevent the user from being blocked from entering a command,
@@ -277,14 +277,14 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         # history to do so. This means that $1 is not the correct command if the executed command is ignored
         # by history (e.g. via $HISTCONTROL or $HISTIGNORE); for example, all in-band generators are ignored
         # by history.
-        if [ "$WARP_IN_MSYS2" = true ]; then
+        if [ "$ZERP_IN_MSYS2" = true ]; then
           warp_send_hook_via_kv_pairs_start "Preexec"
           warp_send_hook_kv_pair "command" "$BASH_COMMAND"
-          warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
+          warp_send_hook_kv_pair "session_id" "$ZERP_SESSION_ID"
           warp_send_hook_via_kv_pairs_end
         else
           local truncated_command=$(warp_escape_json "$BASH_COMMAND")
-          warp_send_json_message "{\"hook\": \"Preexec\", \"value\": {\"command\": \"$truncated_command\", \"session_id\": $WARP_SESSION_ID}}"
+          warp_send_json_message "{\"hook\": \"Preexec\", \"value\": {\"command\": \"$truncated_command\", \"session_id\": $ZERP_SESSION_ID}}"
         fi
         warp_maybe_send_reset_grid_osc
 
@@ -292,14 +292,14 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         # Since we did not early-return above, this hook is for a user-entered
         # command. Kill ongoing generator jobs so their output does not interfere
         # with the user command's output.
-        if [[ "$BASH_COMMAND" != warp_run_generator_command* ]] && [[ -f $_WARP_GENERATOR_PIDS_STARTED_TMP_FILE ]] && [[ -f $_WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE ]]
+        if [[ "$BASH_COMMAND" != warp_run_generator_command* ]] && [[ -f $_ZERP_GENERATOR_PIDS_STARTED_TMP_FILE ]] && [[ -f $_ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE ]]
         then
           # Read PIDs from the started generators tmp file that are not present in
           # the completed generators tmp file into a bash array.
           #
           # The logic used to be the following:
           #
-          # pids=($(command -p comm -23 $_WARP_GENERATOR_PIDS_STARTED_TMP_FILE $_WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE))
+          # pids=($(command -p comm -23 $_ZERP_GENERATOR_PIDS_STARTED_TMP_FILE $_ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE))
           #
           # However, that requires that the files are sorted, which we do not enforce (the OS can assign PIDs
           # in any order).  While we could sort the files and then compare them, the files are expected to be
@@ -308,7 +308,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           completed_pids=()
           while IFS= read -r pid; do
             completed_pids+=("$pid")
-          done < $_WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE
+          done < $_ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE
 
           pids=()
           while IFS= read -r pid; do
@@ -322,7 +322,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
             if (( found == 0 )); then
               pids+=("$pid")
             fi
-          done < $_WARP_GENERATOR_PIDS_STARTED_TMP_FILE
+          done < $_ZERP_GENERATOR_PIDS_STARTED_TMP_FILE
 
           # If the array is not empty, kill the ongoing pids.
           if [[ ! -z $pids ]]; then
@@ -337,7 +337,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     # Set terminal window and tab title to the same title value. Note that for values longer than 25
     # characters, we truncate the title and prepend "..".
     # Usage warp_title "title"
-    # Users can disable the auto title if they chose to by setting WARP_DISABLE_AUTO_TITLE.
+    # Users can disable the auto title if they chose to by setting ZERP_DISABLE_AUTO_TITLE.
     warp_title () {
       DISABLE_AUTO_TITLE="1"
 
@@ -357,8 +357,8 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
 
     # Runs before executing the command
     warp_set_title_idle_on_precmd () {
-      # If the user wants to set the title themselves, they can set the WARP_DISABLE_AUTO_TITLE flag.
-      if [ ! -z "$WARP_DISABLE_AUTO_TITLE" ]; then
+      # If the user wants to set the title themselves, they can set the ZERP_DISABLE_AUTO_TITLE flag.
+      if [ ! -z "$ZERP_DISABLE_AUTO_TITLE" ]; then
         return
       fi
 
@@ -371,7 +371,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       new_home='~'
       bash_term_tab_title="${PWD/#$HOME/$new_home}"
 
-      if [[ $WARP_IS_LOCAL_SHELL_SESSION == "1" ]]; then
+      if [[ $ZERP_IS_LOCAL_SHELL_SESSION == "1" ]]; then
         warp_title "$bash_term_tab_title"
       else
         bash_term_tab_title_remote="${HOSTNAME%%.*}:$bash_term_tab_title"
@@ -381,8 +381,8 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
 
     # Runs before executing the command
     warp_set_title_active_on_preexec () {
-      # If the user wants to set the title themselves, they can set the WARP_DISABLE_AUTO_TITLE flag.
-      if [ ! -z "$WARP_DISABLE_AUTO_TITLE" ]; then
+      # If the user wants to set the title themselves, they can set the ZERP_DISABLE_AUTO_TITLE flag.
+      if [ ! -z "$ZERP_DISABLE_AUTO_TITLE" ]; then
         return
       fi
 
@@ -435,35 +435,35 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         # executed within this block instead of the actual last
         # command that was run.
         local exit_code=$?
-        if [ "$WARP_IN_MSYS2" = true ]; then
+        if [ "$ZERP_IN_MSYS2" = true ]; then
           warp_send_hook_via_kv_pairs_start "CommandFinished"
           warp_send_hook_kv_pair "exit_code" "$exit_code"
-          warp_send_hook_kv_pair "next_block_id" "precmd-$WARP_SESSION_ID-$((block_id++))"
-          warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
+          warp_send_hook_kv_pair "next_block_id" "precmd-$ZERP_SESSION_ID-$((block_id++))"
+          warp_send_hook_kv_pair "session_id" "$ZERP_SESSION_ID"
           warp_send_hook_via_kv_pairs_end
         else
-          warp_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"precmd-$WARP_SESSION_ID-$((block_id++))\", \"session_id\": $WARP_SESSION_ID}}"
+          warp_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"precmd-$ZERP_SESSION_ID-$((block_id++))\", \"session_id\": $ZERP_SESSION_ID}}"
         fi
 
         warp_maybe_send_reset_grid_osc
 
         if [[ $PS1 == "" ]]; then
           # Use the saved PS1, if we've already unset it (due to active Warp prompt).
-          WARP_PS1="$SAVED_PS1"
+          ZERP_PS1="$SAVED_PS1"
         else
           # If we haven't unset it yet, then we can use the current PS1 value.
-          WARP_PS1="$PS1"
+          ZERP_PS1="$PS1"
         fi
 
         # If this is being called for a generator command, short circuit and send an unpopulated
         # precmd payload (except for pwd), since we don't re-render the prompt after generator commands
         # are run.
-        if [ ! -z  $_WARP_GENERATOR_COMMAND ]; then
+        if [ ! -z  $_ZERP_GENERATOR_COMMAND ]; then
             # Restore the user's precmd_functions, since they were un-registered prior to executing
             # the generator.
             precmd_functions=(${_USER_PRECMD_FUNCTIONS[@]})
 
-            unset _WARP_GENERATOR_COMMAND
+            unset _ZERP_GENERATOR_COMMAND
             warp_send_json_message "{\"hook\": \"Precmd\", \"value\": {
             \"pwd\": \"\",
             \"ps1\": \"\",
@@ -472,30 +472,30 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
             \"virtual_env\": \"\",
             \"conda_env\": \"\",
             \"node_version\": \"\",
-            \"session_id\": $WARP_SESSION_ID,
+            \"session_id\": $ZERP_SESSION_ID,
             \"is_after_in_band_command\": true
             }}"
             return 0
         fi
 
         # If the files for tracking generator PIDs exist, clear them.
-        if [[ -n $_WARP_GENERATOR_PIDS_STARTED_TMP_FILE && -f $_WARP_GENERATOR_PIDS_STARTED_TMP_FILE ]]; then
-          echo "" > $_WARP_GENERATOR_PIDS_STARTED_TMP_FILE
+        if [[ -n $_ZERP_GENERATOR_PIDS_STARTED_TMP_FILE && -f $_ZERP_GENERATOR_PIDS_STARTED_TMP_FILE ]]; then
+          echo "" > $_ZERP_GENERATOR_PIDS_STARTED_TMP_FILE
         fi
-        if [[ -n $_WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE && -f $_WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE ]]; then
-          echo "" > $_WARP_GENERATOR_PIDS_COMPLETED_TMP_FILE
+        if [[ -n $_ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE && -f $_ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE ]]; then
+          echo "" > $_ZERP_GENERATOR_PIDS_COMPLETED_TMP_FILE
         fi
 
-        if [[ -z $WARP_INPUT_REPORTING_SUPPORTED ]]; then
-          WARP_INPUT_REPORTING_SUPPORTED=$(warp_input_reporting_supported)
+        if [[ -z $ZERP_INPUT_REPORTING_SUPPORTED ]]; then
+          ZERP_INPUT_REPORTING_SUPPORTED=$(warp_input_reporting_supported)
         fi
 
         # If we haven't already, cache information about supported features.
-        if [[ -z $WARP_PS1_EXPANSION_SUPPORTED ]]; then
-          WARP_PS1_EXPANSION_SUPPORTED=$(warp_ps1_expanding_supported)
+        if [[ -z $ZERP_PS1_EXPANSION_SUPPORTED ]]; then
+          ZERP_PS1_EXPANSION_SUPPORTED=$(warp_ps1_expanding_supported)
         fi
 
-        if [[ $WARP_PS1_EXPANSION_SUPPORTED  == "1" ]]; then
+        if [[ $ZERP_PS1_EXPANSION_SUPPORTED  == "1" ]]; then
           # When evaluating the PS1, we want to ensure that it's aware of the last exit code.
           # Since we captured it already and executed multiple other commands, the actual
           # last exit code has changed. So before the evaluation, we want to trick the shell
@@ -504,17 +504,17 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
             return $1
           }
           exit_code_hack $exit_code
-          deref_ps1=${WARP_PS1@P}
+          deref_ps1=${ZERP_PS1@P}
         else
           # Tricking the shell into rendering the prompt
           # Note that in more modern versions of bash we could use ${PS1@P} to achieve the same,
           # but MacOS comes by default with a much older version of bash, and we want to be compatible.
-          deref_ps1=$(echo -e "\n" | PS1="$WARP_PS1" BASH_SILENCE_DEPRECATION_WARNING=1 "$BASH" --norc -i 2>&1 | command -p head -2 | command -p tail -1)
+          deref_ps1=$(echo -e "\n" | PS1="$ZERP_PS1" BASH_SILENCE_DEPRECATION_WARNING=1 "$BASH" --norc -i 2>&1 | command -p head -2 | command -p tail -1)
         fi
 
         # Escaped PS1 variable
         local escaped_ps1
-        if [ "$WARP_IN_MSYS2" = false ]; then
+        if [ "$ZERP_IN_MSYS2" = false ]; then
           escaped_ps1=$(warp_escape_ps1 "$(echo "$deref_ps1")")
         fi
 
@@ -529,7 +529,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
 
         # Reset the report-input binding in case the user's bashrc modified it.
         # This is arbitrarily bound to ESC-i in all supported shells ("i" for input).
-        if [[ $WARP_INPUT_REPORTING_SUPPORTED == "1" ]]; then
+        if [[ $ZERP_INPUT_REPORTING_SUPPORTED == "1" ]]; then
           bind -r '"\ei"'
           bind -x '"\ei":"warp_report_input"'
         fi
@@ -546,7 +546,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         bind -x '"\ew":"warp_change_prompt_modes_to_warp_prompt"'
 
         local escaped_pwd
-        if [ "$WARP_IN_MSYS2" = false ]; then
+        if [ "$ZERP_IN_MSYS2" = false ]; then
           if [ -n "$WSL_DISTRO_NAME" ]; then
             # In WSL, avoid symlinks b/c on Windows `std::fs` is unable to resolve symlink inside WSL containers.
             escaped_pwd=$(warp_escape_json "$(pwd -P)")
@@ -567,20 +567,20 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         # blocks created during the bootstrap process don't have visible
         # prompts, and we don't want to invoke `git` before we've sourced the
         # user's rcfiles and have a fully-populated PATH.
-        if [[ -n "$WARP_BOOTSTRAPPED" ]]; then
-          if [[ -n "$VIRTUAL_ENV" ]] && [ "$WARP_IN_MSYS2" = false ]; then
+        if [[ -n "$ZERP_BOOTSTRAPPED" ]]; then
+          if [[ -n "$VIRTUAL_ENV" ]] && [ "$ZERP_IN_MSYS2" = false ]; then
               escaped_virtual_env=$(warp_escape_json "$VIRTUAL_ENV")
           fi
 
-          if [[ -n "$CONDA_DEFAULT_ENV" ]] && [ "$WARP_IN_MSYS2" = false ]; then
+          if [[ -n "$CONDA_DEFAULT_ENV" ]] && [ "$ZERP_IN_MSYS2" = false ]; then
               escaped_conda_env=$(warp_escape_json "$CONDA_DEFAULT_ENV")
           fi
 
           # Get the Node.js version, but only when the Node.js Version chip is enabled.
-          # Warp sets WARP_PROMPT_NODE_VERSION_ENABLED to "0" when the chip is not in the
+          # Warp sets ZERP_PROMPT_NODE_VERSION_ENABLED to "0" when the chip is not in the
           # prompt (defaulting to enabled when unset), so we avoid spawning `node` on
           # every prompt when the chip is not shown.
-          if [[ "$WARP_PROMPT_NODE_VERSION_ENABLED" != "0" ]] && command -v node > /dev/null 2>&1 && [ "$WARP_IN_MSYS2" = false ]; then
+          if [[ "$ZERP_PROMPT_NODE_VERSION_ENABLED" != "0" ]] && command -v node > /dev/null 2>&1 && [ "$ZERP_IN_MSYS2" = false ]; then
               # Check for package.json in current directory and parent directories
               local current_dir="$PWD"
               local found_package_json=false
@@ -617,15 +617,15 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
                       # on `nvm use`). The cache vars are global (no `local`) so they
                       # persist across precmd invocations.
                       local node_cache_key="$PWD:$PATH"
-                      if [[ "$node_cache_key" == "$_WARP_NODE_VERSION_CACHE_KEY" ]]; then
-                          escaped_node_version="$_WARP_NODE_VERSION_CACHE_VALUE"
+                      if [[ "$node_cache_key" == "$_ZERP_NODE_VERSION_CACHE_KEY" ]]; then
+                          escaped_node_version="$_ZERP_NODE_VERSION_CACHE_VALUE"
                       else
                           local node_version=$(node --version 2>/dev/null)
                           if [[ -n "$node_version" ]]; then
                               escaped_node_version=$(warp_escape_json "$node_version")
                           fi
-                          _WARP_NODE_VERSION_CACHE_KEY="$node_cache_key"
-                          _WARP_NODE_VERSION_CACHE_VALUE="$escaped_node_version"
+                          _ZERP_NODE_VERSION_CACHE_KEY="$node_cache_key"
+                          _ZERP_NODE_VERSION_CACHE_VALUE="$escaped_node_version"
                       fi
                   fi
               fi
@@ -641,7 +641,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
             # The git branch the user is on, or the git commit hash if they're not on a branch.
             git_head="${git_branch:-$(warp_git rev-parse --short HEAD 2> /dev/null)}"
           fi
-          if [ "$WARP_IN_MSYS2" = false ]; then
+          if [ "$ZERP_IN_MSYS2" = false ]; then
             escaped_git_head=$(warp_escape_json "$git_head")
             escaped_git_branch=$(warp_escape_json "$git_branch")
           fi
@@ -655,11 +655,11 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         # as JS string literals of the form \uHEX, and will include
         # ctrl characters (like ESC) in the json, which will cause a JSON
         # parse error.
-        # Note WARP_SESSION_ID doesn't need to be escaped since it's a number
+        # Note ZERP_SESSION_ID doesn't need to be escaped since it's a number
         # We also pass the shell's notion of `honor_ps1` to ensure it's synced correctly on the Warp-side for prompt handling.
         # This is passed as a "real boolean" via the JSON payload (string interpolated into JSON string below).
         local honor_ps1
-        if [[ "$WARP_HONOR_PS1" == "1" ]]; then
+        if [[ "$ZERP_HONOR_PS1" == "1" ]]; then
           honor_ps1="true"
           # The Warp prompt preview can be rendered using the active prompt in this case (which uses prompt markers).
           escaped_ps1=""
@@ -668,7 +668,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           honor_ps1="false"
         fi
         # We send the escaped PS1, if we are in active Warp prompt mode, for prompt preview rendering (note the shell's PS1 is unset in this case).
-        if [ "$WARP_IN_MSYS2" = true ]; then
+        if [ "$ZERP_IN_MSYS2" = true ]; then
           warp_send_hook_via_kv_pairs_start "Precmd"
           warp_send_hook_kv_pair "pwd" "$PWD"
           warp_send_hook_kv_pair_escaped "ps1" "$deref_ps1"
@@ -679,7 +679,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           warp_send_hook_kv_pair "virtual_env" "$VIRTUAL_ENV"
           warp_send_hook_kv_pair "conda_env" "$CONDA_DEFAULT_ENV"
           warp_send_hook_kv_pair "node_version" "$node_version"
-          warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
+          warp_send_hook_kv_pair "session_id" "$ZERP_SESSION_ID"
           warp_send_hook_via_kv_pairs_end
         else
           local escaped_json="{\"hook\": \"Precmd\", \"value\": {
@@ -692,7 +692,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           \"virtual_env\": \"$escaped_virtual_env\",
           \"conda_env\": \"$escaped_conda_env\",
           \"node_version\": \"$escaped_node_version\",
-          \"session_id\": $WARP_SESSION_ID
+          \"session_id\": $ZERP_SESSION_ID
           }}"
           warp_send_json_message "$escaped_json"
         fi
@@ -779,14 +779,14 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     # Report the current input buffer contents to Warp. This only works correctly
     # if `warp_input_reporting_supported` returns "1".
     warp_report_input () {
-        if [ "$WARP_IN_MSYS2" = true ]; then
+        if [ "$ZERP_IN_MSYS2" = true ]; then
             warp_send_hook_via_kv_pairs_start "InputBuffer"
             warp_send_hook_kv_pair "buffer" "$READLINE_LINE"
-            warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
+            warp_send_hook_kv_pair "session_id" "$ZERP_SESSION_ID"
             warp_send_hook_via_kv_pairs_end
         else
             local escaped_input="$(warp_escape_json "$READLINE_LINE")"
-            warp_send_json_message "{ \"hook\": \"InputBuffer\", \"value\": { \"buffer\": \"$escaped_input\", \"session_id\": $WARP_SESSION_ID } }"
+            warp_send_json_message "{ \"hook\": \"InputBuffer\", \"value\": { \"buffer\": \"$escaped_input\", \"session_id\": $ZERP_SESSION_ID } }"
         fi
         # This prevents bash from re-printing typeahead after we've removed it.
         READLINE_LINE=""
@@ -801,7 +801,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       # https://gitlab.freedesktop.org/terminal-wg/specifications/-/merge_requests/6/diffs for details.
       local prompt_prefix=$'\e]133;A\a'
       local prompt_suffix=$'\e]133;B\a'
-      if [[ "$WARP_HONOR_PS1" != "1" ]] && [ "$WARP_USING_WINDOWS_CON_PTY" = true ]; then
+      if [[ "$ZERP_HONOR_PS1" != "1" ]] && [ "$ZERP_USING_WINDOWS_CON_PTY" = true ]; then
         local suffix="$prompt_suffix$RESET_GRID_OSC"
       else
         local suffix="$prompt_suffix"
@@ -819,7 +819,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       # product behavior of Warp prompt switches only taking effect in new sessions.
       # Certain prompt plugins can reset the prompt to a non-empty value, after we've initially unset it.
       # Confirm that it is unset, if using built-in Warp prompt (update prompt vars is forced to run as the last precmd fn).
-      if [[ "$WARP_HONOR_PS1" != "1" ]]; then
+      if [[ "$ZERP_HONOR_PS1" != "1" ]]; then
         if [[ "$PS1" != "" ]]; then
           # If the PS1 has its original value, then we save it in SAVED_PS1 so we can restore to this value, if we were to unset it for
           # the Warp prompt case, but the user wants to switch back to PS1 later.
@@ -850,7 +850,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       fi
 
       # Unset the PS1, if we are using the Warp prompt.
-      if [[ "$WARP_HONOR_PS1" != "1" ]]; then
+      if [[ "$ZERP_HONOR_PS1" != "1" ]]; then
         PS1=""
       # Otherwise, if we are using the PS1, we use the normal prompt markers.
       else
@@ -885,47 +885,47 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       precmd_functions+=("warp_update_prompt_vars")
     }
     
-    # Changes the WARP_HONOR_PS1 variable to 1, to indicate we want to use the PS1. Restores
+    # Changes the ZERP_HONOR_PS1 variable to 1, to indicate we want to use the PS1. Restores
     # the original PS1 value (which we unset for Warp prompt) and calls warp_update_prompt_vars
     # to refresh the prompt. Note that we use an "empty block" workaround to achieve instant
     # prompt switching in bash, since there is no built-in methods to repaint the prompt, unlike
     # Zsh/fish.
     function warp_change_prompt_modes_to_ps1() {
       PS1="$SAVED_PS1"
-      WARP_HONOR_PS1="1"
+      ZERP_HONOR_PS1="1"
 
       warp_update_prompt_vars
     }
 
-    # Changes the WARP_HONOR_PS1 variable to 0, to indicate we want to use the Warp prompt. Calls 
+    # Changes the ZERP_HONOR_PS1 variable to 0, to indicate we want to use the Warp prompt. Calls
     # warp_update_prompt_vars to refresh the prompt (note the PS1 will be unset in this logic). 
     # Note that we use an "empty block" workaround to achieve instant prompt switching in bash, 
     # since there is no built-in methods to repaint the prompt, unlike Zsh/fish.
     function warp_change_prompt_modes_to_warp_prompt() {
-      WARP_HONOR_PS1="0"
+      ZERP_HONOR_PS1="0"
 
       warp_update_prompt_vars
     }
 
     function clear() {
-        if [ "$WARP_IN_MSYS2" = true ]; then
+        if [ "$ZERP_IN_MSYS2" = true ]; then
             warp_send_hook_via_kv_pairs_start "Clear"
-            warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
+            warp_send_hook_kv_pair "session_id" "$ZERP_SESSION_ID"
             warp_send_hook_via_kv_pairs_end
         else
-            warp_send_json_message "{\"hook\": \"Clear\", \"value\": {\"session_id\": $WARP_SESSION_ID}}"
+            warp_send_json_message "{\"hook\": \"Clear\", \"value\": {\"session_id\": $ZERP_SESSION_ID}}"
         fi
     }
 
     function warp_finish_update {
       local update_id="$1"
-      if [ "$WARP_IN_MSYS2" = true ]; then
+      if [ "$ZERP_IN_MSYS2" = true ]; then
         warp_send_hook_via_kv_pairs_start "FinishUpdate"
         warp_send_hook_kv_pair "update_id" "$update_id"
-        warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
+        warp_send_hook_kv_pair "session_id" "$ZERP_SESSION_ID"
         warp_send_hook_via_kv_pairs_end
       else
-        warp_send_json_message "{ \"hook\": \"FinishUpdate\", \"value\": { \"update_id\": \"$update_id\", \"session_id\": $WARP_SESSION_ID} }"
+        warp_send_json_message "{ \"hook\": \"FinishUpdate\", \"value\": { \"update_id\": \"$update_id\", \"session_id\": $ZERP_SESSION_ID} }"
       fi
     }
 
@@ -955,7 +955,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
 
     # The SSH logic only applies to local sessions, because we don't yet have support for bootstrapping
     # recursive SSH sessions.
-    if [[ $WARP_IS_LOCAL_SHELL_SESSION == "1" ]]; then
+    if [[ $ZERP_IS_LOCAL_SHELL_SESSION == "1" ]]; then
         # This helper function determines whether the user's ssh arguments imply
         # creation of a non-interactive session or otherwise would conflict with
         # our SSH wrapper.  Returns 0 for an interactive session; >0 otherwise.
@@ -1006,7 +1006,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
             # Hex-encode the ZSH environment script we use to bootstrap remote zsh b/c it contains control characters
             # We decode on the SSH server using xxd if its available, otherwise fall back to a for-loop over each byte
             # and use printf to convert back to plaintext
-            local zsh_env_script=$(printf '%s' 'unsetopt ZLE; unset RCS; unset GLOBAL_RCS; WARP_SESSION_ID='$remote_session_id'; WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@; WARP_HONOR_PS1='$WARP_HONOR_PS1'; _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n); _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER); _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d '"'"' \n'"'"'); printf '"'"'\e]9278;d;%s\x07'"'"' $_msg; unset _hostname _user _msg' | command -p od -An -v -tx1 | command -p tr -d ' \n')
+            local zsh_env_script=$(printf '%s' 'unsetopt ZLE; unset RCS; unset GLOBAL_RCS; ZERP_SESSION_ID='$remote_session_id'; ZERP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@; ZERP_HONOR_PS1='$ZERP_HONOR_PS1'; _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n); _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER); _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $ZERP_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d '"'"' \n'"'"'); printf '"'"'\e]9278;d;%s\x07'"'"' $_msg; unset _hostname _user _msg' | command -p od -An -v -tx1 | command -p tr -d ' \n')
 
             # Optionally attach to an existing ControlMaster the user already
             # runs for this destination instead of creating our own. Resolve
@@ -1015,10 +1015,10 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
             # master is alive with `ssh -O check`. Both probes are local-only
             # commands. On any failure we fall back to creating a Warp-owned
             # master, preserving the existing behavior.
-            local control_path="$SSH_SOCKET_DIR/$WARP_SESSION_ID"
+            local control_path="$SSH_SOCKET_DIR/$ZERP_SESSION_ID"
             local control_master_mode="yes"
             local external_control_master="false"
-            if [[ "$WARP_SSH_REUSE_CONTROL_MASTER" == "1" ]]; then
+            if [[ "$ZERP_SSH_REUSE_CONTROL_MASTER" == "1" ]]; then
                 local user_control_path=$(command ssh -G "${@:1}" 2>/dev/null | command -p sed -n 's/^controlpath //p')
                 case "$user_control_path" in
                     "" | none)
@@ -1056,12 +1056,12 @@ export TERM_PROGRAM='WarpTerminal'
 # Mark the remote side of a Warp-managed SSH session so the bootstrap
 # body can distinguish it from local shells. Used to gate the ExitShell
 # hook which tears down the remote-server-proxy subprocess.
-export WARP_IS_SSH='1'
-test -n '$WARP_CLIENT_VERSION' && export WARP_CLIENT_VERSION='$WARP_CLIENT_VERSION'
+export ZERP_IS_SSH='1'
+test -n '$ZERP_CLIENT_VERSION' && export ZERP_CLIENT_VERSION='$ZERP_CLIENT_VERSION'
 # Only forward the protocol version if it was set locally (i.e. the HOANotifications feature flag is on).
-test -n '$WARP_CLI_AGENT_PROTOCOL_VERSION' && export WARP_CLI_AGENT_PROTOCOL_VERSION='$WARP_CLI_AGENT_PROTOCOL_VERSION'
+test -n '$ZERP_CLI_AGENT_PROTOCOL_VERSION' && export ZERP_CLI_AGENT_PROTOCOL_VERSION='$ZERP_CLI_AGENT_PROTOCOL_VERSION'
 
-hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$control_path'\", \"remote_shell\": \"%s\", \"session_id\": '"$WARP_SESSION_ID"', \"remote_session_id\": '"$remote_session_id"', \"external_control_master\": '"$external_control_master"'}}" "${SHELL##*/}" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
+hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$control_path'\", \"remote_shell\": \"%s\", \"session_id\": '"$ZERP_SESSION_ID"', \"remote_session_id\": '"$remote_session_id"', \"external_control_master\": '"$external_control_master"'}}" "${SHELL##*/}" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
 printf '$OSC_START$DCS_JSON_MARKER$OSC_PARAM_SEPARATOR%s$OSC_END' "'$hook'"
 
 if test "'"${SHELL##*/}" != "bash" -a "${SHELL##*/}" != "zsh"'"; then
@@ -1096,30 +1096,30 @@ case "'${SHELL##*/}'" in
       command -p stty raw
       HISTCONTROL=ignorespace
       HISTIGNORE=" *"
-      WARP_SESSION_ID='$remote_session_id'
-      WARP_HONOR_PS1="'$WARP_HONOR_PS1'"
+      ZERP_SESSION_ID='$remote_session_id'
+      ZERP_HONOR_PS1="'$ZERP_HONOR_PS1'"
       _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n)
       _user=$(command -v whoami >/dev/null 2>&1 && command whoami 2>/dev/null || echo $USER)
-      _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"bash\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
-      WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@
-      if [[ "'$OS'" == Windows_NT ]]; then WARP_IN_MSYS2=true; else WARP_IN_MSYS2=false; fi
+      _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $ZERP_SESSION_ID, \"shell\": \"bash\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
+      ZERP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@
+      if [[ "'$OS'" == Windows_NT ]]; then ZERP_IN_MSYS2=true; else ZERP_IN_MSYS2=false; fi
       printf '\''"'\e]9278;d;%s\x07'"'\'' \""'$_msg'"\"')
       unset _hostname _user _msg
       ;;
-  zsh) WARP_TMP_DIR="'$(command -p mktemp -d warptmp.XXXXXX)'"
+  zsh) ZERP_TMP_DIR="'$(command -p mktemp -d warptmp.XXXXXX)'"
 local ZSH_ENV_SCRIPT='$zsh_env_script'
 if [[ "'$?'" == 0 ]]; then
   if command -pv xxd >/dev/null 2>&1; then
-    echo "'$ZSH_ENV_SCRIPT'" | command -p xxd -p -r > "'$WARP_TMP_DIR'"/.zshenv
+    echo "'$ZSH_ENV_SCRIPT'" | command -p xxd -p -r > "'$ZERP_TMP_DIR'"/.zshenv
   else
     for i in {0..\$((\${#ZSH_ENV_SCRIPT} - 1))..2}; do
       builtin printf "'"\x${ZSH_ENV_SCRIPT:$i:2}"'"
-    done > "'$WARP_TMP_DIR'"/.zshenv
+    done > "'$ZERP_TMP_DIR'"/.zshenv
   fi
 else
   echo \"Failed to bootstrap warp. Continuing with a non-bootstrapped shell.\"
 fi
-TMPPREFIX="'$HOME/.zshtmp-'" WARP_SSH_RCFILES="'${ZDOTDIR:-$HOME}'" ZDOTDIR="'$WARP_TMP_DIR'" exec -l zsh -g $TRACE_FLAG_IF_WARP_SHELL_DEBUG_MODE
+TMPPREFIX="'$HOME/.zshtmp-'" ZERP_SSH_RCFILES="'${ZDOTDIR:-$HOME}'" ZDOTDIR="'$ZERP_TMP_DIR'" exec -l zsh -g $TRACE_FLAG_IF_ZERP_SHELL_DEBUG_MODE
       ;;
 esac
 "
@@ -1127,13 +1127,13 @@ esac
 
         function ssh() {
             if is_interactive_ssh_session "$@"; then
-                warp_send_json_message "{\"hook\": \"PreInteractiveSSHSession\", \"value\": {\"session_id\": $WARP_SESSION_ID}}"
+                warp_send_json_message "{\"hook\": \"PreInteractiveSSHSession\", \"value\": {\"session_id\": $ZERP_SESSION_ID}}"
 
                 # If the SSH wrapper is not enabled for this session, don't use it.
-                if [ "$WARP_USE_SSH_WRAPPER" = "1" ]; then
-                    local TRACE_FLAG_IF_WARP_SHELL_DEBUG_MODE=""
-                    if [[ "$WARP_SHELL_DEBUG_MODE" == "1" ]]; then
-                        TRACE_FLAG_IF_WARP_SHELL_DEBUG_MODE="-x"
+                if [ "$ZERP_USE_SSH_WRAPPER" = "1" ]; then
+                    local TRACE_FLAG_IF_ZERP_SHELL_DEBUG_MODE=""
+                    if [[ "$ZERP_SHELL_DEBUG_MODE" == "1" ]]; then
+                        TRACE_FLAG_IF_ZERP_SHELL_DEBUG_MODE="-x"
                     fi
                     warp_ssh_helper "$@"
                 else
@@ -1169,7 +1169,7 @@ esac
     # Do other shell startup first so we can ensure Warp goes last.
     #
     # If this is a subshell, the user and system RC files have already been sourced.
-    if [[ -z $WARP_IS_SUBSHELL ]]; then
+    if [[ -z $ZERP_IS_SUBSHELL ]]; then
         # Make sure we force the locale used for number formatting to "C", to avoid
         # issues in locales that use a comma as the decimal separator.
         rcfiles_start_time="$(LC_ALL="C"; echo $EPOCHREALTIME)"
@@ -1205,14 +1205,14 @@ esac
     # set initial values.
     #
     # For more context, see: https://github.com/warpdotdev/Warp/issues/1262
-    if [[ $HISTFILESIZE == $WARP_INITIAL_HISTFILESIZE ]]; then
+    if [[ $HISTFILESIZE == $ZERP_INITIAL_HISTFILESIZE ]]; then
         unset HISTFILESIZE
     fi
-    unset WARP_INITIAL_HISTFILESIZE
-    if [[ $HISTSIZE == $WARP_INITIAL_HISTSIZE ]]; then
+    unset ZERP_INITIAL_HISTFILESIZE
+    if [[ $HISTSIZE == $ZERP_INITIAL_HISTSIZE ]]; then
         unset HISTSIZE
     fi
-    unset WARP_INITIAL_HISTSIZE
+    unset ZERP_INITIAL_HISTSIZE
 
     # Save the value of HISTCONTROL as it existed just after reading the user's
     # rcfiles.
@@ -1285,11 +1285,11 @@ esac
     fi
 ## ----- Warp initialization -----
     
-    # Append additional PATH entries if provided via WARP_PATH_APPEND. This is after the user's RC
+    # Append additional PATH entries if provided via ZERP_PATH_APPEND. This is after the user's RC
     # files are sourced in case they reset PATH (/etc/profile on Debian does this, for example).
-    if [[ ! -z "$WARP_PATH_APPEND" ]]; then
-        export PATH="$PATH:$WARP_PATH_APPEND"
-        unset WARP_PATH_APPEND
+    if [[ ! -z "$ZERP_PATH_APPEND" ]]; then
+        export PATH="$PATH:$ZERP_PATH_APPEND"
+        unset ZERP_PATH_APPEND
     fi
 
     # Read through shell options to determine if the user has enabled vi mode.
@@ -1330,7 +1330,7 @@ esac
         precmd_functions+=(user_prompt_command)
     fi
 
-    WARP_BOOTSTRAPPED=1
+    ZERP_BOOTSTRAPPED=1
 
     warp_update_prompt_vars
 
@@ -1345,7 +1345,7 @@ esac
         local function_names="`compgen -A function`"
         local builtins="`compgen -b`"
         local keywords="`compgen -k`"
-        if [ "$WARP_IN_MSYS2" = false ]; then
+        if [ "$ZERP_IN_MSYS2" = false ]; then
           # Note that for now we don't support dynamically changing HISTFILE within a session.
           local escaped_histfile="$(warp_escape_json "$HISTFILE")"
           local escaped_abbrs=""
@@ -1370,7 +1370,7 @@ esac
           shell_plugins+=("starship")
         fi
 
-        if [ "$WARP_IN_MSYS2" = false ]; then
+        if [ "$ZERP_IN_MSYS2" = false ]; then
           local escaped_shell_plugins=$(warp_escape_json "$shell_plugins")
           local escaped_path="$(warp_escape_json "$PATH")"
           local escaped_shell_options=$(warp_escape_json "$shell_options")
@@ -1378,10 +1378,10 @@ esac
 
         local _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER)
         local _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n)
-        if [ "$WARP_IN_MSYS2" = true ]; then
+        if [ "$ZERP_IN_MSYS2" = true ]; then
           warp_send_hook_via_kv_pairs_start "Bootstrapped"
           warp_send_hook_kv_pair "histfile" "$HISTFILE"
-          warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
+          warp_send_hook_kv_pair "session_id" "$ZERP_SESSION_ID"
           warp_send_hook_kv_pair "shell" "bash"
           warp_send_hook_kv_pair "home_dir" "$HOME"
           warp_send_hook_kv_pair "user" "$_user"
@@ -1409,7 +1409,7 @@ esac
           local escaped_editor="$(warp_escape_json "$EDITOR")"
           local escaped_shell_path="$(warp_escape_json "$BASH")"
           local escaped_cdpath="$(warp_escape_json "$CDPATH")"
-          local escaped_json="{\"hook\": \"Bootstrapped\", \"value\": {\"histfile\": \"$escaped_histfile\", \"session_id\": $WARP_SESSION_ID, \"shell\": \"bash\",  \"home_dir\": \"$HOME\", \"user\":\"$_user\", \"host\":\"$_hostname\", \"path\": \"$escaped_path\", \"cdpath\": \"$escaped_cdpath\", \"editor\": \"$escaped_editor\", \"env_var_names\": \"$escaped_env_var_names\", \"abbreviations\": \"$escaped_abbrs\", \"aliases\": \"$escaped_aliases\", \"function_names\": \"$escaped_function_names\", \"builtins\": \"$escaped_builtins\", \"keywords\": \"$escaped_keywords\", \"shell_version\": \"$BASH_VERSION\", \"shell_options\": \"$escaped_shell_options\", \"rcfiles_start_time\": \"$rcfiles_start_time\", \"rcfiles_end_time\": \"$rcfiles_end_time\", \"vi_mode_enabled\": \"$vi_mode_enabled\", \"os_category\": \"$os_category\", \"linux_distribution\": \"$linux_distribution\", \"wsl_name\": \"$WSL_DISTRO_NAME\", \"shell_path\": \"$escaped_shell_path\"}}"
+          local escaped_json="{\"hook\": \"Bootstrapped\", \"value\": {\"histfile\": \"$escaped_histfile\", \"session_id\": $ZERP_SESSION_ID, \"shell\": \"bash\",  \"home_dir\": \"$HOME\", \"user\":\"$_user\", \"host\":\"$_hostname\", \"path\": \"$escaped_path\", \"cdpath\": \"$escaped_cdpath\", \"editor\": \"$escaped_editor\", \"env_var_names\": \"$escaped_env_var_names\", \"abbreviations\": \"$escaped_abbrs\", \"aliases\": \"$escaped_aliases\", \"function_names\": \"$escaped_function_names\", \"builtins\": \"$escaped_builtins\", \"keywords\": \"$escaped_keywords\", \"shell_version\": \"$BASH_VERSION\", \"shell_options\": \"$escaped_shell_options\", \"rcfiles_start_time\": \"$rcfiles_start_time\", \"rcfiles_end_time\": \"$rcfiles_end_time\", \"vi_mode_enabled\": \"$vi_mode_enabled\", \"os_category\": \"$os_category\", \"linux_distribution\": \"$linux_distribution\", \"wsl_name\": \"$WSL_DISTRO_NAME\", \"shell_path\": \"$escaped_shell_path\"}}"
           warp_send_json_message "$escaped_json"
         fi
     }

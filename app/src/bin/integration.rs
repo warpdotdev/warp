@@ -5,7 +5,7 @@ use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpSer
 use warp_core::AppId;
 
 #[derive(Debug, Default, Parser, Clone)]
-#[command(name = "warp-integration")]
+#[command(name = "zerp-integration")]
 #[clap(args_conflicts_with_subcommands = true)]
 pub struct Args {
     #[command(subcommand)]
@@ -18,14 +18,14 @@ pub fn main() -> Result<()> {
         ChannelConfig {
             app_id: AppId::new(
                 "dev",
-                "warp",
+                "zerp",
                 if cfg!(target_os = "macos") {
-                    "Warp-Integration"
+                    "Zerp-Integration"
                 } else {
-                    "WarpIntegration"
+                    "ZerpIntegration"
                 },
             ),
-            logfile_name: "warp_integration.log".into(),
+            logfile_name: "zerp_integration.log".into(),
             server_config: WarpServerConfig {
                 firebase_auth_api_key: "".into(),
                 // Use an IP in the IANA testing range, with the TCP discard port, to
@@ -36,9 +36,7 @@ pub fn main() -> Result<()> {
                 iap_config: None,
             },
             oz_config: OzConfig {
-                // Use an IP in the IANA testing range, with the TCP discard port, to
-                // black-hole server traffic.
-                oz_root_url: "http://192.0.2.0:9".into(),
+                oz_root_url: "".into(),
                 workload_audience_url: None,
             },
             telemetry_config: None,

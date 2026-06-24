@@ -14,4 +14,4 @@ pub const PLUGIN_HOST_FLAG: &str = "--plugin_host";
 
 /// The name of the environment variable used to pass connection address for the app server to the
 /// plugin host process.
-const PLUGIN_HOST_ADDRESS_ENV_VAR: &str = "WARP_PLUGIN_HOST_ADDRESS";
+const PLUGIN_HOST_ADDRESS_ENV_VAR: &str = "ZERP_PLUGIN_HOST_ADDRESS";

@@ -16,7 +16,7 @@ use crate::{LogConfig, LogDestination};
 
 const MAX_FILES_IN_GUI_ROTATION: usize = 5;
 const MAX_FILES_IN_CLI_ROTATION: usize = 10;
-const CLI_LOG_SUBDIRECTORY: &str = "oz";
+const CLI_LOG_SUBDIRECTORY: &str = "zerp-cli";
 const TEMP_LOG_FILE_SUFFIX: &str = "old.temp";
 
 /// Runtime logging state, computed from `LogConfig` during initialization.
@@ -288,8 +288,8 @@ pub fn init_for_crash_recovery_process() -> Result<()> {
 
 /// Initializes the global logger for the application.
 /// If `config.log_destination` is `Some`, always use the specified destination regardless of
-/// environment. If `config.is_cli` is true, logs are written to a separate "oz" subdirectory with
-/// a higher rotation limit so that CLI invocations don't evict GUI application logs.
+/// environment. If `config.is_cli` is true, logs are written to a separate CLI subdirectory with a
+/// higher rotation limit so that CLI invocations don't evict GUI application logs.
 pub fn init(config: LogConfig) -> Result<()> {
     init_internal(
         false, /* is_from_crash_recovery_process */
@@ -563,7 +563,7 @@ fn init_internal(
 
     let stdout_is_a_tty = std::io::stdout().is_terminal();
     let in_ci = env::var("CI").is_ok();
-    let integration_test = env::var("WARP_INTEGRATION").is_ok();
+    let integration_test = env::var("ZERP_INTEGRATION").is_ok();
     let use_logfile = match log_destination {
         Some(LogDestination::File) => true,
         Some(LogDestination::Stderr) => false,
@@ -658,7 +658,7 @@ fn init_log_directory() -> Result<std::path::PathBuf> {
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             Ok(warp_core::paths::state_dir())
         } else if #[cfg(windows)] {
-            Ok(warp_core::paths::state_dir().join(warp_core::paths::WARP_LOGS_DIR))
+            Ok(warp_core::paths::state_dir().join(warp_core::paths::ZERP_LOGS_DIR))
         } else {
             Err(anyhow::anyhow!("Have not configured file-based logging for the current platform!"))
         }

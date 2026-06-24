@@ -17,6 +17,7 @@ use warpui::{Element, EventContext};
 
 use crate::appearance::Appearance;
 use crate::tab_configs::session_config::SessionType;
+use crate::terminal::cli_agent::CLIAgent;
 use crate::ui_components::blended_colors;
 use crate::view_components::callout_bubble::{
     callout_checkbox, callout_label_color, phenomenon_accent_color, phenomenon_background_color,
@@ -549,13 +550,16 @@ where
 }
 
 /// All possible session types, in display order.
-const ALL_SESSION_TYPES: &[SessionType] = &[SessionType::Oz, SessionType::Terminal];
+const ALL_SESSION_TYPES: &[SessionType] = &[
+    SessionType::CliAgent(CLIAgent::Claude),
+    SessionType::CliAgent(CLIAgent::Codex),
+    SessionType::CliAgent(CLIAgent::Gemini),
+    SessionType::CliAgent(CLIAgent::OpenCode),
+    SessionType::Terminal,
+];
 
-/// Returns the session types to display, filtering out Oz when AI is disabled.
-pub fn visible_session_types(show_oz: bool) -> Vec<SessionType> {
-    ALL_SESSION_TYPES
-        .iter()
-        .filter(|st| show_oz || !matches!(st, SessionType::Oz))
-        .copied()
-        .collect()
+/// Returns the session types to display. Warp's built-in agent is intentionally
+/// not included; only third-party CLI agents and Terminal remain.
+pub fn visible_session_types(_show_agent: bool) -> Vec<SessionType> {
+    ALL_SESSION_TYPES.to_vec()
 }

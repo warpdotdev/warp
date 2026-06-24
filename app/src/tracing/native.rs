@@ -77,7 +77,7 @@ use crate::tracing::install_no_subscriber;
 /// spans we don't care about (e.g.: ones from dependencies).
 const CLOUD_AGENT_MARKER: &str = "tags.cloud_agent";
 /// The environment variable used to configure the cloud agent OTLP endpoint.
-const CLOUD_AGENT_OTLP_ENDPOINT: &str = "WARP_CLOUD_AGENT_OTLP_ENDPOINT";
+const CLOUD_AGENT_OTLP_ENDPOINT: &str = "ZERP_CLOUD_AGENT_OTLP_ENDPOINT";
 /// The environment variable used to configure the OTel service name.
 const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 /// The minimum interval between local export failure diagnostics.

@@ -20,7 +20,7 @@ The core pieces are:
 - `crates/integration/tests/common/mod.rs`
   - The outer Rust test harness used by `cargo test` and `cargo nextest`.
   - Shells out to the integration binary.
-  - Forwards a limited set of env vars (`PATH`, `RUST_*`, `WARP_*`, `WARPUI_*`, `WGPU_*`, display-related vars).
+  - Forwards a limited set of env vars (`PATH`, `RUST_*`, `ZERP_*`, `WARPUI_*`, `WGPU_*`, display-related vars).
   - Re-runs tests up to 10 times when the integration binary exits with the special rerun code.
 - `crates/integration/src/test.rs`
   - Module hub for integration tests.

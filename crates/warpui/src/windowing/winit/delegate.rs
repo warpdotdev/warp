@@ -138,7 +138,7 @@ pub fn open_url_in_system(url: &str) {
 fn use_wsl_browser() -> bool {
     static USE_WSL_BROWSER: OnceLock<bool> = OnceLock::new();
     USE_WSL_BROWSER
-        .get_or_init(|| std::env::var("WARP_FORCE_WSL_BROWSER").is_ok())
+        .get_or_init(|| std::env::var("ZERP_FORCE_WSL_BROWSER").is_ok())
         .to_owned()
 }
 

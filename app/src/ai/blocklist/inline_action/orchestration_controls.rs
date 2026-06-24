@@ -56,7 +56,7 @@ use crate::{report_if_error, LLMPreferences};
 
 /// Env var override for the workspace default host (developer testing).
 /// Mirrors the single-agent ambient flow.
-const DEFAULT_HOST_ENV_VAR: &str = "WARP_CLOUD_MODE_DEFAULT_HOST";
+const DEFAULT_HOST_ENV_VAR: &str = "ZERP_CLOUD_MODE_DEFAULT_HOST";
 
 // ── Shared constants ────────────────────────────────────────────────
 
@@ -197,7 +197,6 @@ impl OrchestrationEditState {
             } => RunAgentsExecutionMode::Remote {
                 environment_id: environment_id.clone(),
                 worker_host: worker_host.clone(),
-                computer_use_enabled: false,
             },
         };
         let mut state = Self {
@@ -223,7 +222,6 @@ impl OrchestrationEditState {
                 self.execution_mode = RunAgentsExecutionMode::Remote {
                     environment_id: String::new(),
                     worker_host: ORCHESTRATION_WARP_WORKER_HOST.to_string(),
-                    computer_use_enabled: false,
                 };
             }
         } else {
@@ -291,36 +289,11 @@ impl OrchestrationEditState {
     /// from the approved orchestration config. The plan config is the
     /// user-approved source of truth — the LLM's run_agents call may
     /// omit or set these differently, but the config always wins.
-    ///
-    /// `computer_use_enabled` is preserved from the current state when
-    /// both sides are Remote, since it is a per-call flag set by the LLM.
     pub fn override_from_approved_config(&mut self, config: &OrchestrationConfig) {
         self.model_id = config.model_id.clone();
         self.harness_type = config.harness_type.clone();
 
-        let preserve_computer_use = match (&self.execution_mode, &config.execution_mode) {
-            (
-                RunAgentsExecutionMode::Remote {
-                    computer_use_enabled,
-                    ..
-                },
-                OrchestrationExecutionMode::Remote { .. },
-            ) => Some(*computer_use_enabled),
-            _ => None,
-        };
-
         self.execution_mode = Self::from_orchestration_config(config).execution_mode;
-
-        if let (
-            Some(cue),
-            RunAgentsExecutionMode::Remote {
-                computer_use_enabled,
-                ..
-            },
-        ) = (preserve_computer_use, &mut self.execution_mode)
-        {
-            *computer_use_enabled = cue;
-        }
     }
 
     /// Converts to a native `OrchestrationConfig` for storage / match.
@@ -484,10 +457,10 @@ fn get_base_model_choices<'a>(
 }
 /// Populates the model picker based on the active harness.
 ///
-/// - **Oz / empty**: shows the Warp LLM catalog (existing behavior).
+/// - **Empty / unknown**: shows only a "Default model" entry.
 /// - **Local Codex**: shows only a "Default model" entry (no model delivery
 ///   possible for local Codex children).
-/// - **Other non-Oz harnesses**: shows "Default model" at the top, followed
+/// - **Other third-party harnesses**: shows "Default model" at the top, followed
 ///   by the server-provided harness model catalog from
 ///   `HarnessAvailabilityModel::models_for()`.
 pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>(
@@ -502,43 +475,10 @@ pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>
     dropdown.update(ctx, |dropdown, ctx_dropdown| {
         let harness = Harness::parse_orchestration_harness(&harness_type);
         match harness {
-            Some(Harness::Oz) | None => {
-                // Oz / unset: Warp LLM catalog. Custom models excluded for
-                // cloud runs (not supported by remote workers).
-                // Order: auto models first, then custom models, then other models.
-                let llm_prefs = LLMPreferences::as_ref(ctx_dropdown);
-                let (auto_models, rest): (Vec<_>, Vec<_>) =
-                    get_base_model_choices(llm_prefs, ctx_dropdown, is_local)
-                        .partition(|llm| llm.id.as_str().starts_with("auto"));
-                let (custom_models, other_models): (Vec<_>, Vec<_>) = rest
-                    .into_iter()
-                    .partition(|llm| llm_prefs.custom_llm_info_for_id(&llm.id).is_some());
-                let ordered_choices: Vec<_> = auto_models
-                    .into_iter()
-                    .chain(custom_models)
-                    .chain(other_models)
-                    .collect();
-                let selected_display_name = ordered_choices
-                    .iter()
-                    .find(|llm| llm.id.to_string() == initial_model_id)
-                    .map(|llm| llm.menu_display_name());
-                let items = available_model_menu_items(
-                    ordered_choices,
-                    move |llm| {
-                        DropdownAction::select_action_and_close(A::model_changed(
-                            llm.id.to_string(),
-                        ))
-                    },
-                    None,
-                    None,
-                    false,
-                    false,
-                    ctx_dropdown,
-                );
+            None => {
+                let items = vec![default_model_menu_item::<A>()];
                 dropdown.set_rich_items(items, ctx_dropdown);
-                if let Some(name) = &selected_display_name {
-                    dropdown.set_selected_by_name(name, ctx_dropdown);
-                }
+                dropdown.set_selected_by_name(DEFAULT_MODEL_LABEL, ctx_dropdown);
             }
             Some(Harness::Codex) if is_local => {
                 // Local Codex: only "Default model" entry.
@@ -547,7 +487,7 @@ pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>
                 dropdown.set_selected_by_name(DEFAULT_MODEL_LABEL, ctx_dropdown);
             }
             Some(harness) => {
-                // Non-Oz harness: "Default model" at top, then server-provided
+                // Third-party harness: "Default model" at top, then server-provided
                 // harness models.
                 let mut items: Vec<MenuItem<DropdownAction>> = vec![default_model_menu_item::<A>()];
                 let availability = HarnessAvailabilityModel::as_ref(ctx_dropdown);
@@ -604,11 +544,7 @@ pub fn is_model_in_filtered_choices<V: View>(
 ) -> bool {
     let harness = Harness::parse_orchestration_harness(harness_type);
     match harness {
-        Some(Harness::Oz) | None => {
-            let llm_prefs = LLMPreferences::as_ref(ctx);
-            get_base_model_choices(llm_prefs, ctx, is_local)
-                .any(|llm| llm.id.to_string() == model_id)
-        }
+        None => model_id.is_empty(),
         Some(Harness::Codex) if is_local => model_id.is_empty(),
         Some(harness) => {
             // Empty string is always valid (the "Default model" entry).
@@ -625,7 +561,7 @@ pub fn is_model_in_filtered_choices<V: View>(
 
 /// Returns the default model_id for the given harness.
 ///
-/// For Oz this is the first Warp LLM; for non-Oz harnesses it is an empty
+/// For third-party harnesses this is an empty
 /// string (the "Default model" entry).
 pub fn first_filtered_model_id<V: View>(
     harness_type: &str,
@@ -633,13 +569,7 @@ pub fn first_filtered_model_id<V: View>(
 ) -> Option<String> {
     let harness = Harness::parse_orchestration_harness(harness_type);
     match harness {
-        Some(Harness::Oz) | None => {
-            let llm_prefs = LLMPreferences::as_ref(ctx);
-            llm_prefs
-                .get_base_llm_choices_for_agent_mode(ctx)
-                .next()
-                .map(|llm| llm.id.to_string())
-        }
+        None => Some(String::new()),
         Some(_) => Some(String::new()),
     }
 }
@@ -665,7 +595,6 @@ pub fn populate_harness_picker<A: OrchestrationControlAction, V: View>(
 
         let resolve_entry_harness = |harness: Harness, display_name: &str| match harness {
             Harness::Unknown => [
-                Harness::Oz,
                 Harness::Claude,
                 Harness::OpenCode,
                 Harness::Gemini,
@@ -1054,8 +983,8 @@ pub fn persist_environment_selection<V: View>(environment_id: &str, ctx: &mut Vi
 // ── Auth secret helpers ────────────────────────────────────────────
 
 /// Returns `true` when the auth secret picker should be visible: Cloud +
-/// non-Oz + a harness with at least one supported auth-secret type. Local
-/// non-Oz children inherit auth from the user's shell environment.
+/// a third-party harness with at least one supported auth-secret type. Local
+/// children inherit auth from the user's shell environment.
 pub fn should_show_auth_secret_picker(state: &OrchestrationEditState) -> bool {
     if !state.execution_mode.is_remote() {
         return false;
@@ -1063,9 +992,6 @@ pub fn should_show_auth_secret_picker(state: &OrchestrationEditState) -> bool {
     let Some(harness) = Harness::parse_orchestration_harness(&state.harness_type) else {
         return false;
     };
-    if harness == Harness::Oz {
-        return false;
-    }
     !auth_secret_types_for_harness(harness).is_empty()
 }
 
@@ -1078,9 +1004,6 @@ pub fn resolve_default_auth_secret_for_harness(
     ctx: &AppContext,
 ) -> Option<String> {
     let harness = Harness::parse_orchestration_harness(harness_type)?;
-    if harness == Harness::Oz {
-        return None;
-    }
     let persisted = CloudAgentSettings::as_ref(ctx)
         .last_selected_auth_secret
         .value()
@@ -1111,9 +1034,6 @@ pub fn resolve_auth_secret_selection_for_harness(
     let Some(harness) = Harness::parse_orchestration_harness(harness_type) else {
         return AuthSecretSelection::Unset;
     };
-    if harness == Harness::Oz {
-        return AuthSecretSelection::Unset;
-    }
     // Explicit Inherit wins over a stale Named fallback.
     let inherit_chosen = CloudAgentSettings::as_ref(ctx)
         .inherit_auth_secret_harnesses
@@ -1131,7 +1051,7 @@ pub fn resolve_auth_secret_selection_for_harness(
 }
 
 /// `true` when the user must pick an API key (or Inherit) before Accept is
-/// allowed. Fires on `Unset` for any non-Oz cloud harness with managed-secret
+/// allowed. Fires on `Unset` for any cloud third-party harness with managed-secret
 /// types, regardless of fetch state — dispatching with an unintended
 /// `Inherit` while secrets are still loading would fail downstream.
 pub fn auth_secret_selection_required(state: &OrchestrationEditState, _ctx: &AppContext) -> bool {
@@ -1147,7 +1067,7 @@ pub fn auth_secret_selection_required(state: &OrchestrationEditState, _ctx: &App
     let Some(harness) = Harness::parse_orchestration_harness(&state.harness_type) else {
         return false;
     };
-    if harness == Harness::Oz || auth_secret_types_for_harness(harness).is_empty() {
+    if auth_secret_types_for_harness(harness).is_empty() {
         return false;
     }
     true
@@ -1194,9 +1114,6 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
     let Some(harness) = Harness::parse_orchestration_harness(harness_type) else {
         return;
     };
-    if harness == Harness::Oz {
-        return;
-    }
     // Trigger lazy fetch so the next paint shows real entries.
     HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
         model.ensure_auth_secrets_fetched(harness, ctx);
@@ -1332,7 +1249,7 @@ pub fn apply_created_auth_secret_if_matches<V: View>(
 /// `Named` writes to `last_selected_auth_secret` and clears any prior
 /// `Inherit` flag. `Inherit` clears the named entry and sets the inherit
 /// flag. `Unset`/`CreatingNew` clear both (no recorded choice). No-op for
-/// Oz / unknown.
+/// unknown.
 fn persist_auth_secret_selection<V: View>(
     harness_type: &str,
     selection: &AuthSecretSelection,
@@ -1341,9 +1258,6 @@ fn persist_auth_secret_selection<V: View>(
     let Some(harness) = Harness::parse_orchestration_harness(harness_type) else {
         return;
     };
-    if harness == Harness::Oz {
-        return;
-    }
     let key = harness.config_name().to_string();
     CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
         let mut named_map = settings.last_selected_auth_secret.value().clone();
@@ -1524,14 +1438,12 @@ pub fn repopulate_all_pickers<A: OrchestrationControlAction, V: View>(
     }
     // Drop any `Named(_)` selection whose secret no longer exists.
     if let Some(harness) = Harness::parse_orchestration_harness(&state.harness_type) {
-        if harness != Harness::Oz {
-            if let AuthSecretFetchState::Loaded(secrets) =
-                HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(harness)
-            {
-                if let AuthSecretSelection::Named(name) = &state.auth_secret_selection {
-                    if !secrets.iter().any(|s| s.name == *name) {
-                        state.auth_secret_selection = AuthSecretSelection::Unset;
-                    }
+        if let AuthSecretFetchState::Loaded(secrets) =
+            HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(harness)
+        {
+            if let AuthSecretSelection::Named(name) = &state.auth_secret_selection {
+                if !secrets.iter().any(|s| s.name == *name) {
+                    state.auth_secret_selection = AuthSecretSelection::Unset;
                 }
             }
         }
@@ -1574,13 +1486,7 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
         model_picker.update(ctx, |dropdown, ctx_dropdown| {
             let harness = Harness::parse_orchestration_harness(&harness_type);
             let display_name = match harness {
-                Some(Harness::Oz) | None => {
-                    let llm_prefs = LLMPreferences::as_ref(ctx_dropdown);
-                    llm_prefs
-                        .get_base_llm_choices_for_agent_mode(ctx_dropdown)
-                        .find(|llm| llm.id.to_string() == target_model_id)
-                        .map(|llm| llm.menu_display_name())
-                }
+                None => Some(DEFAULT_MODEL_LABEL.to_string()),
                 Some(harness) => {
                     if target_model_id.is_empty() {
                         Some(DEFAULT_MODEL_LABEL.to_string())
@@ -1609,7 +1515,8 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
             } else {
                 dropdown.set_disabled(ctx_dropdown);
             }
-            let target = Harness::parse_orchestration_harness(&harness_type).unwrap_or(Harness::Oz);
+            let target =
+                Harness::parse_orchestration_harness(&harness_type).unwrap_or(Harness::Codex);
             // Use the server-provided display_name from HarnessAvailabilityModel
             // so the selection matches the labels (which also use display_name).
             let display = HarnessAvailabilityModel::as_ref(ctx_dropdown)
@@ -1646,7 +1553,6 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
     if let Some(auth_secret_picker) = handles.auth_secret_picker.clone() {
         let selection = state.auth_secret_selection.clone();
         let supports_create_new = Harness::parse_orchestration_harness(&state.harness_type)
-            .filter(|h| *h != Harness::Oz)
             .map(|h| !auth_secret_types_for_harness(h).is_empty())
             .unwrap_or(false);
         auth_secret_picker.update(ctx, |dropdown, ctx_dropdown| {

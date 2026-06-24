@@ -17,12 +17,12 @@ pub const SCREENSHOT_PATH_KEY: &str = "pending_screenshot_path";
 /// Environment variable that enables automatic video recording for all
 /// integration test steps. When set, the driver starts recording at the
 /// beginning of the test and writes the video on completion.
-pub const VIDEO_ENABLED_ENV_VAR: &str = "WARP_INTEGRATION_TEST_VIDEO";
+pub const VIDEO_ENABLED_ENV_VAR: &str = "ZERP_INTEGRATION_TEST_VIDEO";
 
 /// Environment variable that sets the output directory for video recordings
 /// and screenshots. Defaults to `$TMPDIR/warp_integration_video_captures` when
 /// unset.
-pub const VIDEO_DIR_ENV_VAR: &str = "WARP_INTEGRATION_TEST_VIDEO_DIR";
+pub const VIDEO_DIR_ENV_VAR: &str = "ZERP_INTEGRATION_TEST_VIDEO_DIR";
 
 /// A captured frame paired with the wall-clock time it was taken.
 pub(super) struct TimestampedFrame {

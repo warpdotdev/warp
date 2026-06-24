@@ -8,7 +8,7 @@ pub struct ConfigFileArgs {
         short = 'f',
         long = "file",
         value_name = "PATH",
-        env = "WARP_AGENT_CONFIG_FILE"
+        env = "ZERP_AGENT_CONFIG_FILE"
     )]
     pub file: Option<PathBuf>,
 }

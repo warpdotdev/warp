@@ -226,13 +226,6 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                     | AIAgentActionResultType::EditDocuments(_)
                     | AIAgentActionResultType::CreateDocuments(_) => {}
 
-                    // TODO(AGENT-2282): figure out whether there's any reasonable way to
-                    // do redaction here (probably not).
-                    AIAgentActionResultType::UseComputer(_) => {}
-
-                    // Request computer use just contains screen dimensions, no secrets
-                    AIAgentActionResultType::RequestComputerUse(_) => {}
-
                     // FetchConversation results contain tasks returned from the server,
                     // which were already redacted before being sent as client inputs.
                     // (client inputs -> redaction -> server request -> task messages)

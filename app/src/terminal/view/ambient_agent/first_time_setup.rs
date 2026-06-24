@@ -144,20 +144,16 @@ impl FirstTimeCloudAgentSetupView {
 
         // Title - 20px medium weight
         column.add_child(
-            Text::new(
-                "Start a new Oz cloud agent",
-                appearance.ui_font_family(),
-                20.,
-            )
-            .with_style(Properties::default().weight(Weight::Medium))
-            .with_color(theme.foreground().into())
-            .finish(),
+            Text::new("Start a new cloud agent", appearance.ui_font_family(), 20.)
+                .with_style(Properties::default().weight(Weight::Medium))
+                .with_color(theme.foreground().into())
+                .finish(),
         );
 
         // Description with "Visit docs" link
         let description_fragments = vec![
             FormattedTextFragment::plain_text(
-                "Use Oz cloud agents to run parallel agents, build agents that run autonomously, and check in on your agents from anywhere. ",
+                "Use cloud agents to run parallel agents, build agents that run autonomously, and check in on your agents from anywhere. ",
             ),
             FormattedTextFragment::hyperlink(
                 "Visit docs",
@@ -222,12 +218,9 @@ impl FirstTimeCloudAgentSetupView {
 
         // Banner text - dynamic based on credits
         let credits_text = if credits == 1 {
-            "You have 1 free credit to use on Oz cloud agents.".to_string()
+            "You have 1 free credit to use on cloud agents.".to_string()
         } else {
-            format!(
-                "You have {} free credits to use on Oz cloud agents.",
-                credits
-            )
+            format!("You have {} free credits to use on cloud agents.", credits)
         };
         let text = Text::new(credits_text, appearance.ui_font_family(), 12.)
             .with_color(blended_colors::text_sub(theme, theme.surface_1()))

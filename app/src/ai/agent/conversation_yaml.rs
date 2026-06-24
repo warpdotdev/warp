@@ -522,8 +522,6 @@ fn write_tool_call_args(out: &mut String, tool: &Tool) {
         }
         // No additional args worth serializing.
         Tool::ReadShellCommandOutput(_)
-        | Tool::UseComputer(_)
-        | Tool::RequestComputerUse(_)
         | Tool::SuggestPlan(_)
         | Tool::SuggestCreatePlan(_)
         | Tool::SuggestNewConversation(_)
@@ -533,6 +531,8 @@ fn write_tool_call_args(out: &mut String, tool: &Tool) {
         | Tool::Server(_)
         | Tool::Subagent(_)
         | Tool::TransferShellCommandControlToUser(_)
+        | Tool::UseComputer(_)
+        | Tool::RequestComputerUse(_)
         | Tool::WaitForEvents(_) => {}
     }
 }
@@ -1094,13 +1094,13 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
         // No structured content worth serializing.
         ToolCallResultType::Server(_)
         | ToolCallResultType::Subagent(_)
-        | ToolCallResultType::UseComputer(_)
-        | ToolCallResultType::RequestComputerUseResult(_)
         | ToolCallResultType::SuggestNewConversation(_)
         | ToolCallResultType::SuggestPrompt(_)
         | ToolCallResultType::OpenCodeReview(_)
         | ToolCallResultType::InitProject(_)
         | ToolCallResultType::TransferShellCommandControlToUser(_)
+        | ToolCallResultType::UseComputer(_)
+        | ToolCallResultType::RequestComputerUseResult(_)
         | ToolCallResultType::SuggestCreatePlan(_)
         | ToolCallResultType::SuggestPlan(_) => {
             out.push_str("status: completed\n");

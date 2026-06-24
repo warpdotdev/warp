@@ -9,7 +9,7 @@
 #   - CARGO_TARGET_OUTPUT_DIR: The cargo target directory containing build output.
 #   - OPT_DIR: The absolute path to our install directory (under /opt) on the target machine.
 #   - RELEASE_CHANNEL: The release channel we're bundling (e.g.: "dev").
-#   - BUNDLE_ID: The app ID for the bundle (e.g.: "dev.warp.WarpDev").
+#   - BUNDLE_ID: The app ID for the bundle (e.g.: "dev.zerp.ZerpDev").
 #   - EXECUTABLE_PATH: The path to the compiled executable we want to install.
 #   - BINARY_NAME: The name that the compiled executable should have on the target machine.
 #   - ARTIFACT: Which artifact to build: app or cli.

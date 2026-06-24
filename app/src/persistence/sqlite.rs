@@ -118,7 +118,7 @@ diesel::define_sql_function! {
 const CHANNEL_SIZE: usize = 1024;
 const COMMANDS_COUNT_LIMIT: i64 = 10000;
 
-const WARP_SQLITE_FILE_NAME: &str = "warp.sqlite";
+const WARP_SQLITE_FILE_NAME: &str = "zerp.sqlite";
 
 /// Runs any migrations and creates the Sqlite database if it doesn't exist.
 /// Reads from the sqlite database to get the app state for session restoration.

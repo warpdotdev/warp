@@ -8,7 +8,7 @@
 #   - OUT_DIR: The directory into which we should place the final package.
 #   - CARGO_TARGET_OUTPUT_DIR: The cargo target directory containing build output.
 #   - RELEASE_CHANNEL: The release channel we're bundling (e.g.: "dev").
-#   - BUNDLE_ID: The app ID for the bundle (e.g.: "dev.warp.WarpDev").
+#   - BUNDLE_ID: The app ID for the bundle (e.g.: "dev.zerp.ZerpDev").
 #   - EXECUTABLE_PATH: The path to the compiled executable we want to install.
 #   - BINARY_NAME: The name that the compiled executable should have on the target machine.
 #   - ARTIFACT: Which artifact to build: app or cli.
@@ -17,24 +17,24 @@ set -e
 
 # Extract channel suffix from BINARY_NAME
 if [ "$ARTIFACT" = "cli" ]; then
-  CHANNEL_SUFFIX="${BINARY_NAME#oz}"
+  CHANNEL_SUFFIX="${BINARY_NAME#zerp-cli}"
 else
-  CHANNEL_SUFFIX="${BINARY_NAME#warp}"
+  CHANNEL_SUFFIX="${BINARY_NAME#zerp-terminal}"
 fi
-REPO_NAME="warpdotdev$CHANNEL_SUFFIX"
+REPO_NAME="zerpdotdev$CHANNEL_SUFFIX"
 
 # On Linux, we keep the `-stable` suffix for stable to avoid package conflicts.
-# The binary name is still `oz`, and the repo name is still `warpdotdev`.
+# The binary name is still `zerp-cli`, and the repo name is still `zerpdotdev`.
 if [ "$ARTIFACT" = "cli" -a "$RELEASE_CHANNEL" = "stable" ]; then
   CHANNEL_SUFFIX="-stable"
 fi
 
 case "$ARTIFACT" in
   app)
-    PACKAGE_NAME="warp-terminal$CHANNEL_SUFFIX"
+    PACKAGE_NAME="zerp-terminal$CHANNEL_SUFFIX"
     ;;
   cli)
-    PACKAGE_NAME="oz$CHANNEL_SUFFIX"
+    PACKAGE_NAME="zerp-cli$CHANNEL_SUFFIX"
     ;;
   *)
     echo "::error ::Unknown ARTIFACT: $ARTIFACT (expected 'app' or 'cli')"
@@ -46,8 +46,8 @@ TEMPLATE_DIR="$WORKSPACE_ROOT_DIR/resources/linux/debian/$ARTIFACT"
 # Add a simple test to make sure we're generating the appropriate repository
 # name for the stable channel.
 if [ "$RELEASE_CHANNEL" = "stable" ]; then
-  if [ "$REPO_NAME" != "warpdotdev" ]; then
-    echo "::error ::Unexpected repo name for $RELEASE_CHANNEL channel: $REPO_NAME (expected \"warpdotdev\")"
+  if [ "$REPO_NAME" != "zerpdotdev" ]; then
+    echo "::error ::Unexpected repo name for $RELEASE_CHANNEL channel: $REPO_NAME (expected \"zerpdotdev\")"
     exit 1
   fi
 fi
@@ -79,7 +79,7 @@ mkdir -p "$PKGDIR"
 
 # Populate the directory with the package contents, in the appropriate
 # locations.
-OPT_DIR="/opt/warpdotdev/$PACKAGE_NAME"
+OPT_DIR="/opt/zerpdotdev/$PACKAGE_NAME"
 source "$WORKSPACE_ROOT_DIR/script/linux/bundle_install" "$PKGDIR"
 
 # Move the Debian-specific package metadata into the package directory.

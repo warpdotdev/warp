@@ -34,11 +34,11 @@ fn host_bash_command_sets_history_size_sentinels() {
         Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
     );
     assert_eq!(
-        env_value(&command, "WARP_INITIAL_HISTFILESIZE"),
+        env_value(&command, "ZERP_INITIAL_HISTFILESIZE"),
         Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
     );
     assert_eq!(
-        env_value(&command, "WARP_INITIAL_HISTSIZE"),
+        env_value(&command, "ZERP_INITIAL_HISTSIZE"),
         Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
     );
 }
@@ -59,8 +59,8 @@ fn host_non_bash_command_does_not_set_history_size_sentinels() {
 
     assert_eq!(env_value(&command, "HISTFILESIZE"), None);
     assert_eq!(env_value(&command, "HISTSIZE"), None);
-    assert_eq!(env_value(&command, "WARP_INITIAL_HISTFILESIZE"), None);
-    assert_eq!(env_value(&command, "WARP_INITIAL_HISTSIZE"), None);
+    assert_eq!(env_value(&command, "ZERP_INITIAL_HISTFILESIZE"), None);
+    assert_eq!(env_value(&command, "ZERP_INITIAL_HISTSIZE"), None);
 }
 
 #[test]
@@ -87,11 +87,11 @@ fn docker_sandbox_command_sets_history_size_sentinels() {
         Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
     );
     assert_eq!(
-        env_value(&command, "WARP_INITIAL_HISTFILESIZE"),
+        env_value(&command, "ZERP_INITIAL_HISTFILESIZE"),
         Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
     );
     assert_eq!(
-        env_value(&command, "WARP_INITIAL_HISTSIZE"),
+        env_value(&command, "ZERP_INITIAL_HISTSIZE"),
         Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
     );
 }

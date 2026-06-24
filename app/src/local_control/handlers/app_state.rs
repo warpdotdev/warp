@@ -90,14 +90,10 @@ pub(crate) fn handle(
             target,
             ctx,
         ),
-        ActionKind::SurfaceAgentManagementOpen => surface_workspace_action(
-            instance_id,
-            action,
-            SurfaceDestination::AgentManagement,
-            WorkspaceAction::OpenAgentManagementView,
-            target,
-            ctx,
-        ),
+        ActionKind::SurfaceAgentManagementOpen => Err(ControlError::new(
+            ErrorCode::UnsupportedAction,
+            "surface.agent_management.open is unavailable",
+        )),
         ActionKind::SessionNext => workspace_action(
             instance_id,
             action,
@@ -135,13 +131,10 @@ pub(crate) fn handle(
             target,
             ctx,
         ),
-        ActionKind::SurfaceAiAssistantToggle => workspace_action(
-            instance_id,
-            action,
-            WorkspaceAction::ToggleAIAssistant,
-            target,
-            ctx,
-        ),
+        ActionKind::SurfaceAiAssistantToggle => Err(ControlError::new(
+            ErrorCode::UnsupportedAction,
+            "surface.ai_assistant.toggle is unavailable",
+        )),
         ActionKind::SurfaceCodeReviewOpen => surface_code_review_open(instance_id, target, ctx),
         ActionKind::SurfaceCodeReviewToggle | ActionKind::SurfaceRightPanelToggle => {
             workspace_action(

@@ -218,7 +218,7 @@ pub fn generate_session_id() -> SessionId {
 }
 
 /// Placeholder in init shell scripts that gets replaced with the client-generated session ID.
-pub(crate) const SESSION_ID_PLACEHOLDER: &str = "@@WARP_SESSION_ID@@";
+pub(crate) const SESSION_ID_PLACEHOLDER: &str = "@@ZERP_SESSION_ID@@";
 
 /// Returns the init shell script for the given `shell_type` (e.g. the script that emits the
 /// InitShell DCS hook).
@@ -277,7 +277,7 @@ fn init_subshell_script_for_shell(
 
     // Prepend environment variable settings to the script
     let env_setup_script = format!(
-        "export WARP_HONOR_PS1={}; {}",
+        "export ZERP_HONOR_PS1={}; {}",
         honor_ps1_env_var_value,
         env_vars
             .iter()

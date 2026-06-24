@@ -3331,7 +3331,6 @@ fn test_vertical_tabs_context_menu_does_not_show_hover_only_tab_bar() {
                     .set_value(WorkspaceDecorationVisibility::OnHover, ctx));
                 report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
             });
-            workspace.should_show_ai_assistant_warm_welcome = false;
             workspace.vertical_tabs_panel_open = true;
 
             workspace.show_tab_right_click_menu =
@@ -3357,8 +3356,6 @@ fn test_standard_tab_context_menu_shows_hover_only_tab_bar() {
                     .workspace_decoration_visibility
                     .set_value(WorkspaceDecorationVisibility::OnHover, ctx));
             });
-            workspace.should_show_ai_assistant_warm_welcome = false;
-
             workspace.show_tab_right_click_menu =
                 Some((0, TabContextMenuAnchor::Pointer(Vector2F::zero())));
 

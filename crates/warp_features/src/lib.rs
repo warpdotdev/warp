@@ -565,12 +565,6 @@ pub enum FeatureFlag {
     /// Enables agent tips displayed below the warping indicator in Agent Mode.
     AgentTips,
 
-    /// Allows agent mode to use computer use tools.
-    AgentModeComputerUse,
-
-    /// Enables computer use functionality in local clients.
-    LocalComputerUse,
-
     /// Enables team API key creation in the API key management UI.
     TeamApiKeys,
 
@@ -624,17 +618,6 @@ pub enum FeatureFlag {
     /// Enables auto-syncing ambient plans to Warp Drive.
     SyncAmbientPlans,
 
-    /// Enables platform skills support (--skill flag) for agent runs.
-    ///
-    /// Skills are loaded from `.agents/skills/`, `.warp/skills/`, `.claude/skills/`, and `.codex/skills/`
-    /// directories to provide base prompts for agent runs.
-    OzPlatformSkills,
-    /// Enables Oz identity federation commands.
-    OzIdentityFederation,
-
-    /// Gates populating/reading oz updates from channel versions in the changelog model.
-    OzChangelogUpdates,
-
     /// Enables image upload for ambient agents.
     AmbientAgentsImageUpload,
 
@@ -643,9 +626,6 @@ pub enum FeatureFlag {
 
     /// Enables loading and returning bundled skills in the SkillManager.
     BundledSkills,
-
-    /// Enables the Oz launch modal for introducing cloud agent features.
-    OzLaunchModal,
 
     /// Enables the OpenWarp launch modal announcing Warp going open-source.
     /// When enabled, the HOA onboarding flow is suppressed.
@@ -925,8 +905,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::FileAndDiffSetComments,
     FeatureFlag::FileGlobV2Warnings,
     FeatureFlag::SummarizationViaMessageReplacement,
-    FeatureFlag::LocalComputerUse,
-    FeatureFlag::OzLaunchModal,
     // These are enabled via 100% experiment on prod warp-server,
     // but we need to enable here for dogfood builds.
     FeatureFlag::CrossRepoContext,

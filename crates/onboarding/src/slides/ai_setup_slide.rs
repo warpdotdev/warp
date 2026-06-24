@@ -5,8 +5,7 @@ use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon;
 use warpui_core::elements::{
     Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    ParentElement, Radius,
+    Flex, FormattedTextElement, Hoverable, MainAxisSize, MouseStateHandle, ParentElement, Radius,
 };
 use warpui_core::fonts::Weight;
 use warpui_core::keymap::Keystroke;
@@ -23,17 +22,8 @@ use super::OnboardingSlide;
 use crate::model::{AiSetupChoice, NoAiConfirmationSource, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 
-/// Checklist shown on the "Use Warp agent" card.
-const WARP_AGENT_FEATURES: &[&str] = &[
-    "Best harness for terminal tasks and agentic coding",
-    "Frontier models from OpenAI, Anthropic, and Google",
-    "Model routing across frontier and open-weight models",
-    "Multi-agent orchestration",
-];
-
 #[derive(Debug, Clone)]
 pub enum AiSetupSlideAction {
-    SelectWarpAgent,
     SelectThirdParty,
     BackClicked,
     NextClicked,
@@ -41,12 +31,11 @@ pub enum AiSetupSlideAction {
 }
 
 /// The "Choose your AI setup" slide (DES-816 V3), shown on the AI-first path for
-/// users enrolled in the FREE_AI_REMOVAL experiment arm. Forks between the Warp
-/// agent (paid-plan path) and third-party agents (works on Free), with an
-/// "I don't want AI" escape onto the terminal-only path.
+/// users enrolled in the FREE_AI_REMOVAL experiment arm. This build keeps only
+/// the third-party agent path, with an "I don't want AI" escape onto the
+/// terminal-only path.
 pub struct AiSetupSlide {
     onboarding_state: ModelHandle<OnboardingStateModel>,
-    warp_agent_mouse_state: MouseStateHandle,
     third_party_mouse_state: MouseStateHandle,
     back_button: button::Button,
     next_button: button::Button,
@@ -58,7 +47,6 @@ impl AiSetupSlide {
     pub(crate) fn new(onboarding_state: ModelHandle<OnboardingStateModel>) -> Self {
         Self {
             onboarding_state,
-            warp_agent_mouse_state: MouseStateHandle::default(),
             third_party_mouse_state: MouseStateHandle::default(),
             back_button: button::Button::default(),
             next_button: button::Button::default(),
@@ -68,13 +56,9 @@ impl AiSetupSlide {
     }
 
     // The final DES-816 visual exports have not landed yet, so the right panel
-    // reuses existing bundled assets that match each choice: the agent
-    // experience for "Use Warp agent" and the CLI-agent toolbar for
-    // "Use third party agents".
-    pub(crate) const VISUAL_IMAGE_PATHS: &'static [&'static str] = &[
-        "async/png/onboarding/welcome_agent.png",
-        "async/png/onboarding/thirdparty_toolbar_enabled_vertical.png",
-    ];
+    // reuses the existing CLI-agent toolbar asset for third-party agents.
+    pub(crate) const VISUAL_IMAGE_PATHS: &'static [&'static str] =
+        &["async/png/onboarding/thirdparty_toolbar_enabled_vertical.png"];
 
     fn choice(&self, app: &AppContext) -> AiSetupChoice {
         self.onboarding_state.as_ref(app).ai_setup_choice()
@@ -120,7 +104,7 @@ impl AiSetupSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Choose if you'd like to use Warp Agent or third party agents.",
+            "Choose whether to use third-party CLI agents in Warp.",
             appearance.ui_font_family(),
             16.,
         )
@@ -144,12 +128,6 @@ impl AiSetupSlide {
     }
 
     fn render_options(&self, appearance: &Appearance, choice: AiSetupChoice) -> Box<dyn Element> {
-        let warp_agent_card = self.render_warp_agent_card(
-            appearance,
-            matches!(choice, AiSetupChoice::WarpAgent),
-            self.warp_agent_mouse_state.clone(),
-        );
-
         let third_party_card = self.render_third_party_card(
             appearance,
             matches!(choice, AiSetupChoice::ThirdParty),
@@ -160,11 +138,6 @@ impl AiSetupSlide {
             Flex::column()
                 .with_main_axis_size(MainAxisSize::Min)
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_child(
-                    Container::new(warp_agent_card)
-                        .with_margin_bottom(12.)
-                        .finish(),
-                )
                 .with_child(third_party_card)
                 .finish(),
         )
@@ -211,135 +184,6 @@ impl AiSetupSlide {
             ctx.dispatch_typed_action(select_action.clone());
         })
         .finish()
-    }
-
-    fn render_warp_agent_card(
-        &self,
-        appearance: &Appearance,
-        is_selected: bool,
-        mouse_state: MouseStateHandle,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let bg_solid = theme.background().into_solid();
-        let label_color = if is_selected {
-            internal_colors::text_main(theme, bg_solid)
-        } else {
-            internal_colors::text_sub(theme, bg_solid)
-        };
-        let description_color = internal_colors::text_sub(theme, bg_solid);
-
-        let header_row = {
-            let label = appearance
-                .ui_builder()
-                .paragraph("Use Warp Agent")
-                .with_style(UiComponentStyles {
-                    font_size: Some(16.),
-                    font_weight: Some(Weight::Semibold),
-                    font_color: Some(label_color),
-                    ..Default::default()
-                })
-                .build()
-                .finish();
-
-            let badge = {
-                let green = theme.ansi_fg_green();
-                let badge_text = appearance
-                    .ui_builder()
-                    .paragraph("Access more models")
-                    .with_style(UiComponentStyles {
-                        font_size: Some(12.),
-                        font_weight: Some(Weight::Normal),
-                        font_color: Some(green),
-                        ..Default::default()
-                    })
-                    .build()
-                    .finish();
-                Container::new(badge_text)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(11.)))
-                    .with_border(Border::all(1.).with_border_fill(Fill::Solid(green)))
-                    .with_horizontal_padding(8.)
-                    .with_vertical_padding(3.)
-                    .finish()
-            };
-
-            Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(label)
-                .with_child(badge)
-                .finish()
-        };
-
-        let description = FormattedTextElement::from_str(
-            "State of the art agent harness deeply integrated into the terminal.",
-            appearance.ui_font_family(),
-            14.,
-        )
-        .with_color(description_color)
-        .with_weight(Weight::Normal)
-        .with_alignment(TextAlignment::Left)
-        .with_line_height_ratio(1.2)
-        .finish();
-
-        let checklist = {
-            // When the card is selected, use the theme's green to match the
-            // "Blended ANSI/green_fg" token in the design.
-            let check_fill = if is_selected {
-                Fill::Solid(theme.ansi_fg_green())
-            } else {
-                Fill::Solid(label_color)
-            };
-            let mut col = Flex::column()
-                .with_main_axis_size(MainAxisSize::Min)
-                .with_cross_axis_alignment(CrossAxisAlignment::Start);
-            for &item in WARP_AGENT_FEATURES {
-                let icon_el = ConstrainedBox::new(Icon::Check.to_warpui_icon(check_fill).finish())
-                    .with_width(16.)
-                    .with_height(16.)
-                    .finish();
-                let text_el = appearance
-                    .ui_builder()
-                    .paragraph(item.to_string())
-                    .with_style(UiComponentStyles {
-                        font_size: Some(14.),
-                        font_weight: Some(Weight::Normal),
-                        font_color: Some(label_color),
-                        ..Default::default()
-                    })
-                    .build()
-                    .finish();
-                let row = Flex::row()
-                    .with_main_axis_size(MainAxisSize::Min)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(icon_el)
-                    .with_child(Container::new(text_el).with_margin_left(8.).finish())
-                    .finish();
-                col = col.with_child(
-                    Container::new(row)
-                        .with_padding_top(4.)
-                        .with_padding_bottom(4.)
-                        .finish(),
-                );
-            }
-            col.finish()
-        };
-
-        let content = Flex::column()
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(header_row)
-            .with_child(Container::new(description).with_margin_top(12.).finish())
-            .with_child(Container::new(checklist).with_margin_top(12.).finish())
-            .finish();
-
-        Self::render_card_chrome(
-            appearance,
-            is_selected,
-            mouse_state,
-            AiSetupSlideAction::SelectWarpAgent,
-            content,
-        )
     }
 
     fn render_third_party_card(
@@ -461,12 +305,8 @@ impl AiSetupSlide {
 
     fn render_visual(&self, choice: AiSetupChoice) -> Box<dyn Element> {
         match choice {
-            AiSetupChoice::WarpAgent => layout::onboarding_right_panel_with_bg(
-                Self::VISUAL_IMAGE_PATHS[0],
-                layout::FOREGROUND_LAYOUT_DEFAULT,
-            ),
             AiSetupChoice::ThirdParty => layout::onboarding_right_panel_with_bg(
-                Self::VISUAL_IMAGE_PATHS[1],
+                Self::VISUAL_IMAGE_PATHS[0],
                 layout::FOREGROUND_LAYOUT_THIRD_PARTY,
             ),
         }
@@ -511,7 +351,7 @@ impl AiSetupSlide {
 
 impl OnboardingSlide for AiSetupSlide {
     fn on_up(&mut self, ctx: &mut ViewContext<Self>) {
-        self.select_choice(AiSetupChoice::WarpAgent, ctx);
+        self.select_choice(AiSetupChoice::ThirdParty, ctx);
     }
 
     fn on_down(&mut self, ctx: &mut ViewContext<Self>) {
@@ -534,9 +374,6 @@ impl TypedActionView for AiSetupSlide {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            AiSetupSlideAction::SelectWarpAgent => {
-                self.select_choice(AiSetupChoice::WarpAgent, ctx);
-            }
             AiSetupSlideAction::SelectThirdParty => {
                 self.select_choice(AiSetupChoice::ThirdParty, ctx);
             }

@@ -13,7 +13,7 @@ use crate::ui_components::color_dot;
 pub static AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/agent",
     description: "Start a new conversation",
-    icon_path: "bundled/svg/oz.svg",
+    icon_path: "bundled/svg/ai-assistant.svg",
     availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
     argument: Some(Argument::optional().with_execute_on_selection()),
@@ -21,8 +21,8 @@ pub static AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 
 pub static CLOUD_AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/cloud-agent",
-    description: "Start a new cloud agent conversation",
-    icon_path: "bundled/svg/oz-cloud.svg",
+    description: "Unavailable legacy command",
+    icon_path: "bundled/svg/ai-assistant.svg",
     availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
     argument: Some(Argument::optional().with_execute_on_selection()),
@@ -48,7 +48,7 @@ pub const PR_COMMENTS: StaticCommand = StaticCommand {
 
 pub static CREATE_ENVIRONMENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/create-environment",
-    description: "Create an Oz environment (Docker image + repos) via guided setup",
+    description: "Unavailable legacy command",
     icon_path: "bundled/svg/dataflow.svg",
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: false,
@@ -70,7 +70,7 @@ pub const CREATE_DOCKER_SANDBOX: StaticCommand = StaticCommand {
 
 pub static CREATE_NEW_PROJECT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/create-new-project",
-    description: "Have Oz walk you through creating a new coding project",
+    description: "Have AI walk you through creating a new coding project",
     icon_path: "bundled/svg/plus.svg",
     availability: Availability::LOCAL | Availability::AI_ENABLED,
     auto_enter_ai_mode: true,
@@ -184,7 +184,7 @@ pub static FORK: LazyLock<StaticCommand> = LazyLock::new(|| {
 
 pub static MOVE_TO_CLOUD: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/handoff",
-    description: "Hand off this conversation to a cloud agent",
+    description: "Unavailable legacy command",
     icon_path: "bundled/svg/upload-cloud-01.svg",
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
@@ -309,7 +309,7 @@ pub static NEW: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 pub static MODEL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/model",
     description: "Switch the base agent model",
-    icon_path: "bundled/svg/oz.svg",
+    icon_path: "bundled/svg/ai-assistant.svg",
     availability: Availability::AGENT_VIEW | Availability::AI_ENABLED,
     auto_enter_ai_mode: true,
     argument: None,
@@ -317,8 +317,8 @@ pub static MODEL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 
 pub static HOST: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/host",
-    description: "Switch the cloud agent execution host",
-    icon_path: "bundled/svg/oz-cloud.svg",
+    description: "Unavailable legacy command",
+    icon_path: "bundled/svg/ai-assistant.svg",
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
         | Availability::CLOUD_MODE_V2_COMPOSER,
@@ -328,8 +328,8 @@ pub static HOST: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 
 pub static HARNESS: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/harness",
-    description: "Switch the cloud agent harness",
-    icon_path: "bundled/svg/oz.svg",
+    description: "Unavailable legacy command",
+    icon_path: "bundled/svg/ai-assistant.svg",
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
         | Availability::CLOUD_MODE_V2_COMPOSER,
@@ -339,7 +339,7 @@ pub static HARNESS: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 
 pub static ENVIRONMENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/environment",
-    description: "Switch the cloud agent environment",
+    description: "Unavailable legacy command",
     icon_path: "bundled/svg/globe-04.svg",
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
@@ -375,7 +375,7 @@ pub const ORCHESTRATE_NAME: &str = "/orchestrate";
 pub static ORCHESTRATE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: ORCHESTRATE_NAME,
     description: "Break a task into subtasks and run them in parallel with multiple agents",
-    icon_path: "bundled/svg/oz.svg",
+    icon_path: "bundled/svg/ai-assistant.svg",
     availability: Availability::LOCAL | Availability::AI_ENABLED,
     auto_enter_ai_mode: true,
     argument: Some(Argument::optional().with_hint_text("<describe your task>")),
@@ -462,7 +462,7 @@ pub static CONTINUE_LOCALLY: LazyLock<StaticCommand> = LazyLock::new(|| {
     let hint_text = "<optional prompt to send in local conversation>";
     StaticCommand {
         name: "/continue-locally",
-        description: "Continue this cloud conversation locally",
+        description: "Unavailable legacy command",
         icon_path: "bundled/svg/arrow-split.svg",
         availability: Availability::AGENT_VIEW
             | Availability::ACTIVE_CONVERSATION
@@ -625,25 +625,11 @@ impl Registry {
 fn all_commands() -> Vec<StaticCommand> {
     let mut commands = vec![
         ADD_MCP,
-        ADD_PROMPT.clone(),
-        ADD_RULE,
-        COST,
         FEEDBACK.clone(),
-        INDEX,
-        INIT,
         OPEN_PROJECT_RULES,
         OPEN_MCP_SERVERS,
-        OPEN_RULES,
-        AGENT.clone(),
-        NEW.clone(),
-        PLAN.clone(),
-        RENAME_CONVERSATION.clone(),
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
-        USAGE,
-        CONVERSATIONS,
-        EXPORT_TO_CLIPBOARD,
-        MODEL.clone(),
     ];
 
     if FeatureFlag::LocalDockerSandbox.is_enabled() {
@@ -666,35 +652,6 @@ fn all_commands() -> Vec<StaticCommand> {
 
     commands.push(OPEN_CODE_REVIEW);
 
-    if FeatureFlag::CreateEnvironmentSlashCommand.is_enabled() {
-        commands.push(CREATE_ENVIRONMENT.clone());
-    }
-
-    if FeatureFlag::CreateProjectFlow.is_enabled() {
-        commands.push(CREATE_NEW_PROJECT.clone());
-    }
-
-    if FeatureFlag::SummarizationConversationCommand.is_enabled() {
-        commands.push(COMPACT.clone());
-        commands.push(COMPACT_AND.clone());
-    }
-
-    if FeatureFlag::QueueSlashCommand.is_enabled() {
-        commands.push(QUEUE.clone());
-    }
-
-    if !cfg!(target_family = "wasm") {
-        commands.extend([
-            FORK.clone(),
-            FORK_AND_COMPACT.clone(),
-            CONTINUE_LOCALLY.clone(),
-        ]);
-
-        if FeatureFlag::ForkFromCommand.is_enabled() {
-            commands.push(FORK_FROM);
-        }
-    }
-
     if !cfg!(target_family = "wasm") {
         commands.extend([EDIT.clone(), EXPORT_TO_FILE.clone()]);
     }
@@ -710,40 +667,8 @@ fn all_commands() -> Vec<StaticCommand> {
         commands.push(PR_COMMENTS);
     }
 
-    if FeatureFlag::CloudMode.is_enabled() && FeatureFlag::CloudModeFromLocalSession.is_enabled() {
-        commands.push(CLOUD_AGENT.clone());
-    }
-
-    if FeatureFlag::OzHandoff.is_enabled()
-        && FeatureFlag::HandoffLocalCloud.is_enabled()
-        && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
-    {
-        commands.push(MOVE_TO_CLOUD.clone());
-    }
-
-    if FeatureFlag::InlineProfileSelector.is_enabled() {
-        commands.push(PROFILE.clone());
-    }
-
-    if FeatureFlag::RevertToCheckpoints.is_enabled() && FeatureFlag::RewindSlashCommand.is_enabled()
-    {
-        commands.push(REWIND);
-    }
-
-    if FeatureFlag::InlineRepoMenu.is_enabled() && !cfg!(target_family = "wasm") {
-        commands.push(OPEN_REPO);
-    }
-
-    commands.push(ORCHESTRATE.clone());
-
     if FeatureFlag::SettingsFile.is_enabled() && cfg!(feature = "local_fs") {
         commands.push(OPEN_SETTINGS_FILE);
-    }
-
-    if FeatureFlag::CloudModeInputV2.is_enabled() {
-        commands.push(HOST.clone());
-        commands.push(HARNESS.clone());
-        commands.push(ENVIRONMENT.clone());
     }
 
     commands

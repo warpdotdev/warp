@@ -457,7 +457,7 @@ fn test_project_scoped_cloud_scan_has_detected_servers_but_empty_wait_set() {
             assert_eq!(scan.detected_servers.len(), 2);
             assert!(
                 scan.wait_server_uuids.is_empty(),
-                "Project-scoped servers must not be included in the AgentDriver wait set, got: {:?}",
+                "Project-scoped servers must not be included in the wait set, got: {:?}",
                 scan.wait_server_uuids
             );
             assert!(

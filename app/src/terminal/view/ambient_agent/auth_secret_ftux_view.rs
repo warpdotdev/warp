@@ -744,7 +744,7 @@ impl AuthSecretFtuxView {
                 "Enter your credentials below.".to_string()
             } else {
                 let display_name = harness_display::display_name(self.harness);
-                format!("Select an API key type to use {display_name} in the cloud with Oz.")
+                format!("Select an API key type to use {display_name} in the cloud.")
             };
             Text::new_inline(description, font_family, DESCRIPTION_FONT_SIZE)
                 .with_color(theme.foreground().into())

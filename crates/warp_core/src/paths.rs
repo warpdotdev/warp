@@ -26,21 +26,21 @@ use crate::AppId;
 ///
 /// This should be used, for example, as the base directory under which
 /// repository workflows would be stored (in "./.warp/workflows").
-pub const WARP_CONFIG_DIR: &str = ".warp";
+pub const ZERP_CONFIG_DIR: &str = ".zerp";
 
 /// The name of the folder that stores Warp execution logs and network logs.
 /// This is currently only used on Windows to maintain backwards compatibility.
-pub const WARP_LOGS_DIR: &str = "logs";
+pub const ZERP_LOGS_DIR: &str = "logs";
 
 fn base_warp_config_dir_name() -> String {
     match ChannelState::channel() {
         // Preview shares the same directory as Stable for backward
         // compatibility — existing users already have config in `.warp`.
-        Channel::Stable | Channel::Preview => WARP_CONFIG_DIR.to_owned(),
-        Channel::Oss => format!("{WARP_CONFIG_DIR}-oss"),
-        Channel::Dev => format!("{WARP_CONFIG_DIR}-dev"),
-        Channel::Integration => format!("{WARP_CONFIG_DIR}-integration"),
-        Channel::Local => format!("{WARP_CONFIG_DIR}-local"),
+        Channel::Stable | Channel::Preview => ZERP_CONFIG_DIR.to_owned(),
+        Channel::Oss => format!("{ZERP_CONFIG_DIR}-oss"),
+        Channel::Dev => format!("{ZERP_CONFIG_DIR}-dev"),
+        Channel::Integration => format!("{ZERP_CONFIG_DIR}-integration"),
+        Channel::Local => format!("{ZERP_CONFIG_DIR}-local"),
     }
 }
 /// Returns the home-relative Warp config directory name for the current channel and data profile.
@@ -84,12 +84,12 @@ pub fn warp_home_mcp_config_file_path() -> Option<PathBuf> {
 #[cfg(target_os = "macos")]
 fn macos_config_dir_name() -> String {
     match ChannelState::channel() {
-        Channel::Stable => WARP_CONFIG_DIR.to_owned(),
-        Channel::Preview => format!("{WARP_CONFIG_DIR}-preview"),
-        Channel::Oss => format!("{WARP_CONFIG_DIR}-oss"),
-        Channel::Dev => format!("{WARP_CONFIG_DIR}-dev"),
-        Channel::Integration => format!("{WARP_CONFIG_DIR}-integration"),
-        Channel::Local => format!("{WARP_CONFIG_DIR}-local"),
+        Channel::Stable => ZERP_CONFIG_DIR.to_owned(),
+        Channel::Preview => format!("{ZERP_CONFIG_DIR}-preview"),
+        Channel::Oss => format!("{ZERP_CONFIG_DIR}-oss"),
+        Channel::Dev => format!("{ZERP_CONFIG_DIR}-dev"),
+        Channel::Integration => format!("{ZERP_CONFIG_DIR}-integration"),
+        Channel::Local => format!("{ZERP_CONFIG_DIR}-local"),
     }
 }
 
@@ -241,8 +241,11 @@ fn project_dirs_for_app_id(
             // match our Linux package name.
             let base_app_name = match app_id.application_name() {
                 "Warp" => "Warp-Terminal".to_owned(),
-                "WarpOss" => "Warp-Oss".to_owned(),
+                "WarpOss" => "Zerp-Oss".to_owned(),
                 other if other.starts_with("Warp") => other.replace("Warp", "Warp-Terminal-"),
+                "Zerp" => "Zerp-Terminal".to_owned(),
+                "ZerpOss" => "Zerp-Oss".to_owned(),
+                other if other.starts_with("Zerp") => other.replace("Zerp", "Zerp-Terminal-"),
                 _ => app_id.application_name().to_owned(),
             };
         } else {
@@ -273,7 +276,7 @@ pub fn app_group_container_path() -> Option<PathBuf> {
 
         let fm = NSFileManager::defaultManager();
         // Keep in sync with Entitlements.plist
-        let group_id = format!("{}.dev.warp", crate::macos::APPLE_TEAM_ID);
+        let group_id = format!("{}.dev.zerp", crate::macos::APPLE_TEAM_ID);
         let group_id = NSString::from_str(&group_id);
         // containerURLForSecurityApplicationGroupIdentifier always returns a value on macOS (unlike iOS).
         // We have to double-check that the path points to a directory we can actually use. In addition to

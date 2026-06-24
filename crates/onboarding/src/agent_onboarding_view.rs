@@ -15,16 +15,14 @@ use crate::model::{
     SelectedSettings,
 };
 use crate::slides::{
-    AgentSlide, AiAccessSlide, AiAccessSlideEvent, AiSetupSlide, CustomizeUISlide, IntentionSlide,
-    IntroSlide, IntroSlideEvent, OnboardingModelInfo, OnboardingSlide, ProjectSlide,
-    ThemePickerSlide, ThemePickerSlideEvent, ThirdPartySlide,
+    AiSetupSlide, CustomizeUISlide, IntentionSlide, IntroSlide, IntroSlideEvent,
+    OnboardingModelInfo, OnboardingSlide, ProjectSlide, ThemePickerSlide, ThemePickerSlideEvent,
+    ThirdPartySlide,
 };
 use crate::telemetry::OnboardingEvent;
 use crate::AI_FEATURES;
 
 const APP_BECAME_ACTIVE_DEBOUNCE: Duration = Duration::from_secs(15);
-
-const PLAN_ACTIVATED_TOAST_DURATION: Duration = Duration::from_secs(5);
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
@@ -33,15 +31,12 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::{Fill, WarpTheme};
 use warp_core::ui::Icon;
 use warpui_core::elements::{
-    Align, CacheOption, ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Dismiss, Empty,
-    Flex, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    Align, CacheOption, ChildAnchor, Container, Dismiss, Empty, Image, OffsetPositioning,
     ParentAnchor, ParentElement, ParentOffsetBounds, Rect, Shrinkable, Stack,
 };
-use warpui_core::fonts::Weight;
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{FixedBinding, Keystroke};
 use warpui_core::presenter::ChildView;
-use warpui_core::ui_components::components::{UiComponent as _, UiComponentStyles};
 use warpui_core::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
     ViewContext, ViewHandle,
@@ -64,7 +59,6 @@ pub enum AgentOnboardingEvent {
     /// `LoginSlideView` with `LoginSlideSource::PrivacySettingsFromTerminalIntentionTheme`)
     /// rely on that to select the right visual / back-routing behavior.
     PrivacySettingsFromTerminalThemeSlideRequested,
-    UpgradeRequested,
     UpgradeCopyUrlRequested,
     UpgradePasteTokenFromClipboardRequested,
     AddApiKeyRequested,
@@ -81,8 +75,6 @@ pub struct AgentOnboardingView {
     intention_slide: ViewHandle<IntentionSlide>,
     ai_setup_slide: ViewHandle<AiSetupSlide>,
     customize_slide: ViewHandle<CustomizeUISlide>,
-    agent_slide: ViewHandle<AgentSlide>,
-    ai_access_slide: ViewHandle<AiAccessSlide>,
     third_party_slide: ViewHandle<ThirdPartySlide>,
     project_slide: ViewHandle<ProjectSlide>,
     skippable: bool,
@@ -91,9 +83,7 @@ pub struct AgentOnboardingView {
     no_ai_cancel_button: button::Button,
     no_ai_close_button: button::Button,
     last_model_refresh: Option<Instant>,
-    show_plan_activated_toast: bool,
     last_auth_state: OnboardingAuthState,
-    plan_activated_close_mouse_state: MouseStateHandle,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -109,7 +99,6 @@ pub enum AgentOnboardingAction {
     NoAiConfirm,
     NoAiCancel,
     NoAiDismiss,
-    DismissPlanActivatedToast,
 }
 
 fn dispatch_onboarding_action_to_slide<V: OnboardingSlide>(
@@ -129,8 +118,7 @@ fn dispatch_onboarding_action_to_slide<V: OnboardingSlide>(
         // Parent-level actions are handled by the parent view, never routed to a slide.
         AgentOnboardingAction::NoAiConfirm
         | AgentOnboardingAction::NoAiCancel
-        | AgentOnboardingAction::NoAiDismiss
-        | AgentOnboardingAction::DismissPlanActivatedToast => {}
+        | AgentOnboardingAction::NoAiDismiss => {}
     }
 }
 
@@ -166,9 +154,6 @@ impl AgentOnboardingView {
             match event {
                 OnboardingStateEvent::Completed => {
                     me.handle_onboarding_completed(ctx);
-                }
-                OnboardingStateEvent::UpgradeRequested => {
-                    ctx.emit(AgentOnboardingEvent::UpgradeRequested);
                 }
                 OnboardingStateEvent::AuthStateChanged => {
                     me.handle_auth_state_changed(ctx);
@@ -218,31 +203,6 @@ impl AgentOnboardingView {
             me.handle_theme_picker_slide_event(event, ctx);
         });
 
-        let agent_slide = {
-            let onboarding_state = onboarding_state.clone();
-            ctx.add_typed_action_view(move |ctx| AgentSlide::new(onboarding_state, ctx))
-        };
-
-        let ai_access_slide = {
-            let onboarding_state = onboarding_state.clone();
-            ctx.add_typed_action_view(move |_| AiAccessSlide::new(onboarding_state))
-        };
-
-        ctx.subscribe_to_view(&ai_access_slide, |_me, _view, event, ctx| match event {
-            AiAccessSlideEvent::AddApiKeyRequested => {
-                ctx.emit(AgentOnboardingEvent::AddApiKeyRequested);
-            }
-            AiAccessSlideEvent::AddCustomEndpointRequested => {
-                ctx.emit(AgentOnboardingEvent::AddCustomEndpointRequested);
-            }
-            AiAccessSlideEvent::CopyUpgradeUrlRequested => {
-                ctx.emit(AgentOnboardingEvent::UpgradeCopyUrlRequested);
-            }
-            AiAccessSlideEvent::PasteAuthTokenFromClipboardRequested => {
-                ctx.emit(AgentOnboardingEvent::UpgradePasteTokenFromClipboardRequested);
-            }
-        });
-
         let third_party_slide = {
             let onboarding_state = onboarding_state.clone();
             ctx.add_typed_action_view(move |ctx| ThirdPartySlide::new(onboarding_state, ctx))
@@ -279,8 +239,6 @@ impl AgentOnboardingView {
             intention_slide,
             ai_setup_slide,
             customize_slide,
-            agent_slide,
-            ai_access_slide,
             third_party_slide,
             project_slide,
             skippable,
@@ -289,9 +247,7 @@ impl AgentOnboardingView {
             no_ai_cancel_button: button::Button::default(),
             no_ai_close_button: button::Button::default(),
             last_model_refresh: None,
-            show_plan_activated_toast: false,
             last_auth_state: auth_state,
-            plan_activated_close_mouse_state: MouseStateHandle::default(),
         }
     }
 
@@ -322,18 +278,13 @@ impl AgentOnboardingView {
         ctx.notify();
     }
 
-    /// Updates how many BYOK provider keys and custom endpoints the user has
-    /// configured. This drives the AI-access slide's "connected" status line and
-    /// gates "Next" on the bring-your-own path.
+    /// Compatibility no-op for the removed built-in AI access slide.
     pub fn set_byok_status(
         &mut self,
-        key_count: usize,
-        endpoint_count: usize,
-        ctx: &mut ViewContext<Self>,
+        _key_count: usize,
+        _endpoint_count: usize,
+        _ctx: &mut ViewContext<Self>,
     ) {
-        self.ai_access_slide.update(ctx, |slide, ctx| {
-            slide.set_byok_status(key_count, endpoint_count, ctx);
-        });
     }
 
     /// The current `use_vertical_tabs` value on the onboarding UI customization.
@@ -378,9 +329,6 @@ impl AgentOnboardingView {
             asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
         }
         for path in AiSetupSlide::VISUAL_IMAGE_PATHS {
-            asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
-        }
-        for path in AiAccessSlide::VISUAL_IMAGE_PATHS {
             asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
         }
         for path in CustomizeUISlide::VISUAL_IMAGE_PATHS {
@@ -462,101 +410,10 @@ impl AgentOnboardingView {
         ctx.emit(AgentOnboardingEvent::OnboardingCompleted(settings));
     }
 
-    /// Reacts to a billing/auth transition. When the user becomes a paying user
-    /// we show a success toast; if they're still on the AI-access slide we also
-    /// advance them, since selecting a plan was the remaining action there.
+    /// Reacts to a billing/auth transition.
     fn handle_auth_state_changed(&mut self, ctx: &mut ViewContext<Self>) {
         let new_state = self.onboarding_state.as_ref(ctx).auth_state();
-        let became_paying = new_state == OnboardingAuthState::PayingUser
-            && self.last_auth_state != OnboardingAuthState::PayingUser;
         self.last_auth_state = new_state;
-        if !became_paying {
-            return;
-        }
-
-        let on_ai_access = self.onboarding_state.as_ref(ctx).step() == OnboardingStep::AiAccess;
-        if on_ai_access {
-            self.onboarding_state
-                .update(ctx, |model, ctx| model.next(ctx));
-        }
-
-        self.show_plan_activated_toast = true;
-        let _ = ctx.spawn(
-            warpui_core::r#async::Timer::after(PLAN_ACTIVATED_TOAST_DURATION),
-            |me: &mut Self, _, ctx| {
-                if me.show_plan_activated_toast {
-                    me.show_plan_activated_toast = false;
-                    ctx.notify();
-                }
-            },
-        );
-    }
-
-    /// Green success pill shown after billing succeeds. Hosted at the view level
-    /// (not the slide) so it survives the auto-advance off the AI-access slide.
-    fn render_plan_activated_toast(&self, appearance: &Appearance) -> Box<dyn Element> {
-        const TOAST_MIN_HEIGHT: f32 = 40.;
-        const ICON_SIZE: f32 = 14.;
-        const CLOSE_SIZE: f32 = 16.;
-        const FONT_SIZE: f32 = 12.;
-
-        let theme = appearance.theme();
-        let toast_bg: Fill = theme.ansi_fg_green().into();
-        let text_color: ColorU = theme.font_color(toast_bg.into_solid()).into();
-        let ui_builder = appearance.ui_builder();
-
-        let check_icon = ConstrainedBox::new(Box::new(
-            Icon::CheckSkinny.to_warpui_icon(Fill::Solid(text_color)),
-        ))
-        .with_width(ICON_SIZE)
-        .with_height(ICON_SIZE)
-        .finish();
-
-        let text = ui_builder
-            .span("Plan successfully activated!")
-            .with_style(UiComponentStyles {
-                font_color: Some(text_color),
-                font_size: Some(FONT_SIZE),
-                font_weight: Some(Weight::Medium),
-                ..Default::default()
-            })
-            .build()
-            .finish();
-
-        let close_button = ui_builder
-            .close_button(CLOSE_SIZE, self.plan_activated_close_mouse_state.clone())
-            .with_style(UiComponentStyles {
-                font_color: Some(text_color),
-                ..Default::default()
-            })
-            .build()
-            .on_click(|ctx, _, _| {
-                ctx.dispatch_typed_action(AgentOnboardingAction::DismissPlanActivatedToast);
-            })
-            .finish();
-
-        let left = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(check_icon)
-            .with_child(Container::new(text).with_margin_left(8.).finish())
-            .finish();
-
-        let row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(left)
-            .with_child(close_button)
-            .finish();
-
-        ConstrainedBox::new(
-            Container::new(row)
-                .with_background(toast_bg)
-                .with_horizontal_padding(16.)
-                .finish(),
-        )
-        .with_min_height(TOAST_MIN_HEIGHT)
-        .finish()
     }
 
     fn handle_theme_picker_slide_event(
@@ -629,8 +486,6 @@ impl View for AgentOnboardingView {
             OnboardingStep::Intention => ChildView::new(&self.intention_slide).finish(),
             OnboardingStep::AiSetup => ChildView::new(&self.ai_setup_slide).finish(),
             OnboardingStep::Customize => ChildView::new(&self.customize_slide).finish(),
-            OnboardingStep::Agent => ChildView::new(&self.agent_slide).finish(),
-            OnboardingStep::AiAccess => ChildView::new(&self.ai_access_slide).finish(),
             OnboardingStep::ThirdParty => ChildView::new(&self.third_party_slide).finish(),
             OnboardingStep::Project => ChildView::new(&self.project_slide).finish(),
         };
@@ -688,14 +543,6 @@ impl View for AgentOnboardingView {
             );
         }
 
-        if self.show_plan_activated_toast {
-            stack.add_child(
-                Align::new(self.render_plan_activated_toast(appearance))
-                    .bottom_center()
-                    .finish(),
-            );
-        }
-
         stack.finish()
     }
 }
@@ -733,12 +580,6 @@ impl TypedActionView for AgentOnboardingView {
             return;
         }
 
-        if matches!(action, AgentOnboardingAction::DismissPlanActivatedToast) {
-            self.show_plan_activated_toast = false;
-            ctx.notify();
-            return;
-        }
-
         let selected_slide = self.onboarding_state.as_ref(ctx).step();
 
         match selected_slide {
@@ -755,12 +596,6 @@ impl TypedActionView for AgentOnboardingView {
                 dispatch_onboarding_action_to_slide(slide, *action, ctx)
             }),
             OnboardingStep::Customize => self.customize_slide.update(ctx, |slide, ctx| {
-                dispatch_onboarding_action_to_slide(slide, *action, ctx)
-            }),
-            OnboardingStep::Agent => self.agent_slide.update(ctx, |slide, ctx| {
-                dispatch_onboarding_action_to_slide(slide, *action, ctx)
-            }),
-            OnboardingStep::AiAccess => self.ai_access_slide.update(ctx, |slide, ctx| {
                 dispatch_onboarding_action_to_slide(slide, *action, ctx)
             }),
             OnboardingStep::ThirdParty => self.third_party_slide.update(ctx, |slide, ctx| {

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 pub const ARTIFACTS_KEY: &str = "test_artifacts";
 
-pub const ARTIFACTS_DIR_ENV_VAR: &str = "WARP_INTEGRATION_TEST_ARTIFACTS_DIR";
+pub const ARTIFACTS_DIR_ENV_VAR: &str = "ZERP_INTEGRATION_TEST_ARTIFACTS_DIR";
 
 pub struct TestArtifacts {
     dir: PathBuf,

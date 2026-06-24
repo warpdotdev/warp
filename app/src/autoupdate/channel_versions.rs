@@ -17,7 +17,7 @@ pub async fn fetch_channel_versions(
     include_changelogs: bool,
     is_daily: bool,
 ) -> Result<ChannelVersions> {
-    if let Ok(path) = env::var("WARP_CHANNEL_VERSIONS_PATH") {
+    if let Ok(path) = env::var("ZERP_CHANNEL_VERSIONS_PATH") {
         // Load channel versions from local filesystem. Used for testing both
         // autoupdate and changelog behavior.
         let path = shellexpand::tilde(&path);

@@ -244,9 +244,9 @@ pub async fn execute_command(
 // PATH is emitted between these sentinels so startup stdout from rc files
 // (fastfetch, MOTD banners, etc.) can't be mistaken for PATH content.
 #[cfg(feature = "local_tty")]
-const PATH_CAPTURE_START: &str = "__WARP_PATH_CAPTURE_START__";
+const PATH_CAPTURE_START: &str = "__ZERP_PATH_CAPTURE_START__";
 #[cfg(feature = "local_tty")]
-const PATH_CAPTURE_END: &str = "__WARP_PATH_CAPTURE_END__";
+const PATH_CAPTURE_END: &str = "__ZERP_PATH_CAPTURE_END__";
 
 /// Returns the text between the capture sentinels, or `None` if absent.
 #[cfg(feature = "local_tty")]

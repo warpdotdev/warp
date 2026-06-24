@@ -6,10 +6,10 @@ use super::*;
 
 #[test]
 fn ai_subpages_are_identified() {
-    assert!(SettingsSection::WarpAgent.is_ai_subpage());
-    assert!(SettingsSection::AgentProfiles.is_ai_subpage());
+    assert!(!SettingsSection::WarpAgent.is_ai_subpage());
+    assert!(!SettingsSection::AgentProfiles.is_ai_subpage());
     assert!(SettingsSection::AgentMCPServers.is_ai_subpage());
-    assert!(SettingsSection::Knowledge.is_ai_subpage());
+    assert!(!SettingsSection::Knowledge.is_ai_subpage());
     assert!(SettingsSection::ThirdPartyCLIAgents.is_ai_subpage());
 
     assert!(!SettingsSection::AI.is_ai_subpage());
@@ -28,8 +28,8 @@ fn code_subpages_are_identified() {
 
 #[test]
 fn cloud_platform_subpages_are_identified() {
-    assert!(SettingsSection::CloudEnvironments.is_cloud_platform_subpage());
-    assert!(SettingsSection::OzCloudAPIKeys.is_cloud_platform_subpage());
+    assert!(!SettingsSection::CloudEnvironments.is_cloud_platform_subpage());
+    assert!(!SettingsSection::OzCloudAPIKeys.is_cloud_platform_subpage());
 
     assert!(!SettingsSection::Account.is_cloud_platform_subpage());
     assert!(!SettingsSection::WarpAgent.is_cloud_platform_subpage());
@@ -43,8 +43,8 @@ fn is_subpage_covers_all_umbrella_types() {
     }
     assert!(SettingsSection::CodeIndexing.is_subpage());
     assert!(SettingsSection::EditorAndCodeReview.is_subpage());
-    assert!(SettingsSection::CloudEnvironments.is_subpage());
-    assert!(SettingsSection::OzCloudAPIKeys.is_subpage());
+    assert!(!SettingsSection::CloudEnvironments.is_subpage());
+    assert!(!SettingsSection::OzCloudAPIKeys.is_subpage());
 
     // Top-level pages should not be subpages.
     assert!(!SettingsSection::Account.is_subpage());
@@ -59,15 +59,15 @@ fn is_subpage_covers_all_umbrella_types() {
 fn ai_subpages_map_to_ai_backing_page() {
     assert_eq!(
         SettingsSection::WarpAgent.parent_page_section(),
-        SettingsSection::AI
+        SettingsSection::WarpAgent
     );
     assert_eq!(
         SettingsSection::AgentProfiles.parent_page_section(),
-        SettingsSection::AI
+        SettingsSection::AgentProfiles
     );
     assert_eq!(
         SettingsSection::Knowledge.parent_page_section(),
-        SettingsSection::AI
+        SettingsSection::Knowledge
     );
     assert_eq!(
         SettingsSection::ThirdPartyCLIAgents.parent_page_section(),
@@ -129,10 +129,10 @@ fn non_subpage_sections_map_to_themselves() {
 #[test]
 fn ai_subpages_list_contains_all_ai_subpage_variants() {
     let subpages = SettingsSection::ai_subpages();
-    assert!(subpages.contains(&SettingsSection::WarpAgent));
-    assert!(subpages.contains(&SettingsSection::AgentProfiles));
+    assert!(!subpages.contains(&SettingsSection::WarpAgent));
+    assert!(!subpages.contains(&SettingsSection::AgentProfiles));
     assert!(subpages.contains(&SettingsSection::AgentMCPServers));
-    assert!(subpages.contains(&SettingsSection::Knowledge));
+    assert!(!subpages.contains(&SettingsSection::Knowledge));
     assert!(subpages.contains(&SettingsSection::ThirdPartyCLIAgents));
 }
 
@@ -171,7 +171,7 @@ fn match_data_countable_zero_is_not_truthy() {
 
 #[test]
 fn subpage_display_names_are_correct() {
-    assert_eq!(SettingsSection::WarpAgent.to_string(), "Warp Agent");
+    assert_eq!(SettingsSection::WarpAgent.to_string(), "Legacy agent");
     assert_eq!(SettingsSection::AgentProfiles.to_string(), "Profiles");
     assert_eq!(SettingsSection::AgentMCPServers.to_string(), "MCP servers");
     assert_eq!(SettingsSection::Knowledge.to_string(), "Knowledge");
@@ -193,23 +193,20 @@ fn subpage_display_names_are_correct() {
     );
     assert_eq!(
         SettingsSection::OzCloudAPIKeys.to_string(),
-        "Oz Cloud API Keys"
+        "Agent API Keys"
     );
 }
 
 #[test]
 fn subpage_from_str_parses_display_names() {
-    // Both the legacy "Oz" name and the new "Warp Agent" display name must
-    // resolve to SettingsSection::WarpAgent so existing deep links, persisted
-    // telemetry strings, and external callers continue to work after the
-    // user-facing rename (see specs/GH1063/product.md, Behavior #8).
+    // Legacy names remain accepted, but redirect to the supported third-party CLI page.
     assert_eq!(
         SettingsSection::from_str("Oz"),
-        Ok(SettingsSection::WarpAgent)
+        Ok(SettingsSection::ThirdPartyCLIAgents)
     );
     assert_eq!(
         SettingsSection::from_str("Warp Agent"),
-        Ok(SettingsSection::WarpAgent)
+        Ok(SettingsSection::ThirdPartyCLIAgents)
     );
     assert_eq!(
         SettingsSection::from_str("Profiles"),
@@ -229,6 +226,10 @@ fn subpage_from_str_parses_display_names() {
     );
     assert_eq!(
         SettingsSection::from_str("Oz Cloud API Keys"),
+        Ok(SettingsSection::OzCloudAPIKeys)
+    );
+    assert_eq!(
+        SettingsSection::from_str("Agent API Keys"),
         Ok(SettingsSection::OzCloudAPIKeys)
     );
 }
@@ -257,7 +258,7 @@ fn visible_subpages(
 
 #[test]
 fn search_knowledge_shows_only_knowledge_subpage() {
-    // Simulate: searching "knowledge" matched the Knowledge subpage but not others.
+    // Knowledge is no longer exposed under the Agents umbrella.
     let mut filter = HashMap::new();
     filter.insert(SettingsSection::WarpAgent, MatchData::Countable(0));
     filter.insert(SettingsSection::AgentProfiles, MatchData::Countable(0));
@@ -269,12 +270,12 @@ fn search_knowledge_shows_only_knowledge_subpage() {
 
     let visible = visible_subpages(&filter, SettingsSection::ai_subpages());
 
-    assert_eq!(visible, vec![SettingsSection::Knowledge]);
+    assert_eq!(visible, Vec::<SettingsSection>::new());
 }
 
 #[test]
 fn search_agent_shows_profiles_and_cli_agents() {
-    // "agent" appears in both AgentProfiles and ThirdPartyCLIAgents search terms.
+    // "agent" should only surface the remaining third-party CLI agent subpage.
     let mut filter = HashMap::new();
     filter.insert(SettingsSection::WarpAgent, MatchData::Countable(0));
     filter.insert(SettingsSection::AgentProfiles, MatchData::Countable(2));
@@ -286,7 +287,7 @@ fn search_agent_shows_profiles_and_cli_agents() {
 
     let visible = visible_subpages(&filter, SettingsSection::ai_subpages());
 
-    assert!(visible.contains(&SettingsSection::AgentProfiles));
+    assert!(!visible.contains(&SettingsSection::AgentProfiles));
     assert!(visible.contains(&SettingsSection::ThirdPartyCLIAgents));
     assert!(!visible.contains(&SettingsSection::WarpAgent));
     assert!(!visible.contains(&SettingsSection::Knowledge));
@@ -438,10 +439,10 @@ fn umbrella_visible_when_any_subpage_matches() {
     let mut filter = HashMap::new();
     filter.insert(SettingsSection::WarpAgent, MatchData::Countable(0));
     filter.insert(SettingsSection::AgentProfiles, MatchData::Countable(0));
-    filter.insert(SettingsSection::Knowledge, MatchData::Countable(1));
+    filter.insert(SettingsSection::Knowledge, MatchData::Countable(0));
     filter.insert(
         SettingsSection::ThirdPartyCLIAgents,
-        MatchData::Countable(0),
+        MatchData::Countable(1),
     );
 
     assert!(umbrella_visible(&filter, SettingsSection::ai_subpages()));
@@ -505,13 +506,13 @@ fn auto_select_jumps_away_from_filtered_out_subpage() {
         "Knowledge should not be visible when it has 0 matches"
     );
 
-    // The nav order: Oz, Profiles, ..., Knowledge, ThirdPartyCLI
+    // The nav order under Agents now only includes MCP servers and ThirdPartyCLI.
     let nav_order = SettingsSection::ai_subpages();
     let first = first_visible_section(nav_order, &filter, &[]);
     assert_eq!(
         first,
-        Some(SettingsSection::AgentProfiles),
-        "Should auto-select Profiles as the first visible subpage"
+        Some(SettingsSection::ThirdPartyCLIAgents),
+        "Should auto-select ThirdPartyCLIAgents as the first visible subpage"
     );
 }
 
@@ -613,8 +614,8 @@ fn auto_select_with_no_matches_anywhere() {
 // ── Backward compatibility ──────────────────────────────────────────────────
 
 #[test]
-fn legacy_ai_section_maps_to_oz_default() {
-    // SettingsSection::AI should be treated as backward-compat and map to Oz
+fn legacy_ai_section_maps_to_agent_default() {
+    // SettingsSection::AI should be treated as backward-compat and map to the agent settings
     // via the code in set_and_refresh_current_page_internal.
     // Here we just verify the parent_page_section is still AI (for page lookup).
     assert_eq!(
@@ -669,9 +670,8 @@ fn collapsed_umbrella_is_a_single_nav_stop() {
     // All umbrellas default to collapsed.
     let stops = build_nav_stops(&nav_items, |_| true);
 
-    // Expect: Account, <Agents umbrella>, BillingAndUsage, <Code umbrella>,
-    // <Cloud platform umbrella>, Teams.
-    assert_eq!(stops.len(), 6);
+    // Expect: Account, <Agents umbrella>, BillingAndUsage, <Code umbrella>, Teams.
+    assert_eq!(stops.len(), 5);
     assert!(matches!(
         stops[0],
         NavStop::Section(SettingsSection::Account)
@@ -680,7 +680,7 @@ fn collapsed_umbrella_is_a_single_nav_stop() {
         stops[1],
         NavStop::CollapsedUmbrella {
             nav_index: 1,
-            first_subpage: SettingsSection::WarpAgent,
+            first_subpage: SettingsSection::AgentMCPServers,
             last_subpage: SettingsSection::ThirdPartyCLIAgents,
         }
     ));
@@ -696,15 +696,7 @@ fn collapsed_umbrella_is_a_single_nav_stop() {
             last_subpage: SettingsSection::EditorAndCodeReview,
         }
     ));
-    assert!(matches!(
-        stops[4],
-        NavStop::CollapsedUmbrella {
-            nav_index: 4,
-            first_subpage: SettingsSection::CloudEnvironments,
-            last_subpage: SettingsSection::OzCloudAPIKeys,
-        }
-    ));
-    assert!(matches!(stops[5], NavStop::Section(SettingsSection::Teams)));
+    assert!(matches!(stops[4], NavStop::Section(SettingsSection::Teams)));
 }
 
 #[test]
@@ -715,9 +707,8 @@ fn expanded_umbrella_produces_section_stop_per_subpage() {
 
     let stops = build_nav_stops(&nav_items, |_| true);
 
-    // Expect: Account, WarpAgent, AgentProfiles, AgentMCPServers, Knowledge,
-    // ThirdPartyCLIAgents, BillingAndUsage, <Code umbrella>,
-    // <Cloud platform umbrella>, Teams.
+    // Expect: Account, AgentMCPServers, ThirdPartyCLIAgents, BillingAndUsage,
+    // <Code umbrella>, Teams.
     let sections: Vec<_> = stops
         .iter()
         .map(|s| match s {
@@ -729,14 +720,10 @@ fn expanded_umbrella_produces_section_stop_per_subpage() {
         sections,
         vec![
             "Account",
-            "WarpAgent",
-            "AgentProfiles",
             "AgentMCPServers",
-            "Knowledge",
             "ThirdPartyCLIAgents",
             "BillingAndUsage",
             "Umbrella@3",
-            "Umbrella@4",
             "Teams",
         ]
     );
@@ -749,8 +736,8 @@ fn collapsed_umbrella_with_filtered_subpages_uses_first_visible_subpage() {
     let nav_items = realistic_nav_items();
 
     let stops = build_nav_stops(&nav_items, |section| {
-        // Hide WarpAgent (first AI subpage); keep the rest.
-        section != SettingsSection::WarpAgent
+        // Hide AgentMCPServers (first Agents subpage); keep the rest.
+        section != SettingsSection::AgentMCPServers
     });
 
     let agents_stop = stops
@@ -766,8 +753,8 @@ fn collapsed_umbrella_with_filtered_subpages_uses_first_visible_subpage() {
         } => {
             assert_eq!(
                 *first_subpage,
-                SettingsSection::AgentProfiles,
-                "WarpAgent is hidden by the filter, so the first visible subpage is AgentProfiles"
+                SettingsSection::ThirdPartyCLIAgents,
+                "AgentMCPServers is hidden by the filter, so the first visible subpage is ThirdPartyCLIAgents"
             );
             assert_eq!(
                 *last_subpage,
@@ -793,13 +780,11 @@ fn umbrella_with_no_visible_subpages_is_skipped_entirely() {
             .all(|s| !matches!(s, NavStop::CollapsedUmbrella { nav_index: 1, .. })),
         "Agents umbrella should not appear when none of its subpages are visible"
     );
-    // The still-visible Code / Cloud platform umbrellas remain as stops.
+    // The still-visible Code umbrella remains as a stop. Cloud platform has
+    // no remaining subpages and is skipped.
     assert!(stops
         .iter()
         .any(|s| matches!(s, NavStop::CollapsedUmbrella { nav_index: 3, .. })));
-    assert!(stops
-        .iter()
-        .any(|s| matches!(s, NavStop::CollapsedUmbrella { nav_index: 4, .. })));
 }
 
 #[test]
@@ -839,11 +824,11 @@ fn current_stop_index_maps_subpage_to_collapsed_umbrella() {
     let nav_items = realistic_nav_items();
     let stops = build_nav_stops(&nav_items, |_| true);
 
-    let idx = current_stop_index(&stops, &nav_items, SettingsSection::Knowledge);
+    let idx = current_stop_index(&stops, &nav_items, SettingsSection::ThirdPartyCLIAgents);
     assert_eq!(
         idx,
         Some(1),
-        "Knowledge is under the collapsed Agents umbrella at nav_index 1"
+        "ThirdPartyCLIAgents is under the collapsed Agents umbrella at nav_index 1"
     );
 }
 
@@ -920,7 +905,7 @@ fn arrow_down_from_account_with_collapsed_agents_lands_on_first_subpage() {
         SettingsSection::Account,
         CycleDirection::Down,
     );
-    assert_eq!(next, SettingsSection::WarpAgent);
+    assert_eq!(next, SettingsSection::AgentMCPServers);
 }
 
 #[test]
@@ -986,7 +971,7 @@ fn arrow_down_from_expanded_last_subpage_leaves_umbrella() {
 #[test]
 fn arrow_down_across_adjacent_collapsed_umbrellas() {
     let nav_items = realistic_nav_items();
-    // Both Code and Cloud platform umbrellas are collapsed.
+    // Code is collapsed. Cloud platform has no remaining subpages and is skipped.
     let stops = build_nav_stops(&nav_items, |_| true);
 
     // From BillingAndUsage, Down should land on the first Code subpage
@@ -1001,14 +986,14 @@ fn arrow_down_across_adjacent_collapsed_umbrellas() {
 
     // From the Code umbrella stop (i.e. the user is "on" CodeIndexing which
     // maps back to the collapsed umbrella), pressing Down again should land
-    // on the Cloud platform umbrella's first subpage.
+    // on Teams because Cloud platform has no remaining subpages.
     let next_after_code = simulate_cycle(
         &nav_items,
         &stops,
         SettingsSection::CodeIndexing,
         CycleDirection::Down,
     );
-    assert_eq!(next_after_code, SettingsSection::CloudEnvironments);
+    assert_eq!(next_after_code, SettingsSection::Teams);
 }
 
 #[test]

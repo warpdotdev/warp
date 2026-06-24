@@ -397,7 +397,6 @@ impl FileBasedMCPManager {
             wait_server_uuids.len()
         );
 
-        // Pass the UUIDs of auto-start-requested file-based MCP servers to the AgentDriver.
         ctx.emit(FileBasedMCPManagerEvent::CloudEnvMcpScanComplete {
             repo_path: repo_path.clone(),
             detected_servers,

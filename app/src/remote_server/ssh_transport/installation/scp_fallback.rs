@@ -7,7 +7,7 @@ use http_client::StatusCode;
 use remote_server::setup::RemotePlatform;
 use remote_server::transport::Error;
 
-const REMOTE_SERVER_TARBALL_CACHE_FILE_NAME: &str = "oz.tar.gz";
+const REMOTE_SERVER_TARBALL_CACHE_FILE_NAME: &str = "zerp-cli.tar.gz";
 
 const REMOTE_SERVER_TARBALL_DOWNLOAD_ATTEMPTS: usize = 3;
 // The local SCP fallback download can run over slow or captive networks. Match
@@ -38,7 +38,7 @@ pub(super) async fn install(socket_path: &Path) -> Result<(), Error> {
         .map_err(Error::Other)?;
     let timeout = remote_server::setup::SCP_INSTALL_TIMEOUT;
     let install_dir = remote_server::setup::remote_server_dir();
-    let remote_tarball_name = format!("oz-upload-{}.tar.gz", uuid::Uuid::new_v4());
+    let remote_tarball_name = format!("zerp-cli-upload-{}.tar.gz", uuid::Uuid::new_v4());
     let remote_tarball_path = format!("{install_dir}/{remote_tarball_name}");
 
     // The normal install script creates this directory before downloading, but

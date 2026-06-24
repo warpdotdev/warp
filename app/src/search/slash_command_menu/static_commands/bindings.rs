@@ -14,10 +14,6 @@ pub fn default_binding_for_command(name: &'static str) -> DefaultSlashCommandBin
             mac: "cmd-enter",
             linux_and_windows: "ctrl-shift-enter",
         }),
-        "/cloud-agent" => DefaultSlashCommandBinding::PerPlatform(PerPlatformKeystroke {
-            mac: "cmd-alt-enter",
-            linux_and_windows: "ctrl-alt-enter",
-        }),
         "/conversations" => DefaultSlashCommandBinding::PerPlatform(PerPlatformKeystroke {
             mac: "cmd-y",
             linux_and_windows: "ctrl-shift-Y",

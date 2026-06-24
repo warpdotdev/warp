@@ -69,3 +69,6 @@ __pycache__/
 
 # Project notes
 .note/
+
+# Trae local workspace state
+.trae/

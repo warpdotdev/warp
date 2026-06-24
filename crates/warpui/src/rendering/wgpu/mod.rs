@@ -32,7 +32,7 @@ pub fn reset_wgpu_instance(display_handle: Box<dyn wgpu::wgt::WgpuHasDisplayHand
 /// Initializes the global wgpu instance.  This MUST be called before [`get_wgpu_instance()`].
 pub fn init_wgpu_instance(display_handle: Box<dyn WgpuHasDisplayHandle>) {
     // Check whether DirectComposition should be explicitly disabled on Windows.
-    let disable_dcomp = std::env::var("WARP_USE_DIRECT_COMPOSITION")
+    let disable_dcomp = std::env::var("ZERP_USE_DIRECT_COMPOSITION")
         .ok()
         .is_some_and(|val| {
             let val = val.to_lowercase();

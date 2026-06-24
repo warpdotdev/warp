@@ -120,7 +120,7 @@ pub struct MinidumpGuard {
 pub fn run_server(socket_path: &Path) -> anyhow::Result<()> {
     // For troubleshooting, attempt to log from the minidump server. There's not much we can really
     // do if crash reporting fails, so creating the log file itself is best-effort.
-    let log_dir = warp_core::paths::state_dir().join(warp_core::paths::WARP_LOGS_DIR);
+    let log_dir = warp_core::paths::state_dir().join(warp_core::paths::ZERP_LOGS_DIR);
     let _ = std::fs::create_dir_all(&log_dir);
     let log_path = log_dir.join("warp-minidump.log");
     let log_target = File::create(log_path)

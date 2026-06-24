@@ -38,17 +38,17 @@ macOS, Linux, and Windows are all supported. Platform-specific setup is handled 
 
 ### Will my PR be reviewed by a human or by an agent?
 
-Both. When you open a PR, Oz is auto-assigned and produces an initial review. Once Oz approves, it automatically requests a follow-up review from a Warp team subject-matter expert. You don't need to assign reviewers manually.
+Both automated checks and humans may review your PR. Once automated checks pass, a Warp team subject-matter expert can do the final review. You don't need to assign reviewers manually.
 
 ### My PR has been sitting without review — what do I do?
 
-After you push changes that address Oz's feedback, comment `/oz-review` on the PR (up to three times per PR) to request a re-review. If something looks stuck or you've used your re-reviews, mention **@oss-maintainers** to escalate to the team.
+After you push changes, reply on the PR so review can continue. If something looks stuck, mention **@oss-maintainers** to escalate to the team.
 
 ### What's the difference between a contributor and a collaborator?
 
 A **contributor** is anyone who contributes to the project — by filing an issue, opening a PR, helping triage, or participating in discussion. Most people who help out are contributors. You don't need permission or a status of any kind; just file an issue or open a PR.
 
-A **collaborator** is a formal GitHub role we grant to contributors with a track record of merged PRs in this repo. Collaborators get expanded permissions: applying and managing issue labels, dispatching Oz directly with `@oz` on any ready issue, and using complimentary Oz credits for work in this repo.
+A **collaborator** is a formal GitHub role we grant to contributors with a track record of merged PRs in this repo. Collaborators get expanded permissions such as applying and managing issue labels.
 
 ### How do I become a collaborator?
 
@@ -58,29 +58,21 @@ Contributors with several merged PRs may be invited to become collaborators. The
 
 ### Can I use my own coding agent to contribute?
 
-Yes. Use whatever you like — Warp's built-in agent, Claude Code, Codex, Gemini CLI, Cursor, others, or no agent at all. The repo ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`WARP.md`](WARP.md)) that any harness supporting these formats can pick up.
+Yes. Use whatever you like — Claude Code, Codex, Gemini CLI, Cursor, others, or no agent at all. The repo ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`WARP.md`](WARP.md)) that any harness supporting these formats can pick up.
 
 ### Can I use Codex or Claude models with my existing subscriptions in Warp, or submit a PR to add that?
 
-Not today. Warp's built-in agent harness runs server-side and isn't open in this repo today.
-
-That said, we plan to support [ACP (agent client protocol)](https://agentclientprotocol.com/) in Warp, so you could connect other models or subscriptions directly and get a native Warp experience for your coding agent of choice.
+Warp focuses on third-party CLI agents in this repository. Bring your existing CLI agent and subscription directly; Warp does not provide its own hosted agent harness here.
 
 [This is tracked on our roadmap](https://github.com/warpdotdev/warp/issues/9233), and we will update the community as we explore this.
 
-### How can I get Oz to implement an issue for me?
-
-Mention **@oss-maintainers** on any issue with a readiness label and ask. Approved requests run on **complimentary Oz credits** — you don't need to set up your own Oz account or pay for compute.
-
-Once you're a collaborator, you can mention `@oz` directly on any ready issue to dispatch it without waiting for a maintainer.
-
 ### Do I have to pay anything to contribute here?
 
-No. Contributing by hand or with your own agent is free. Oz runs on Warp's credits for approved requests on this repo, and is free for collaborators contributing back to it.
+No. Contributing by hand or with your own agent is free.
 
 ### Are agent-generated PRs held to the same bar as human ones?
 
-Yes. The same Oz + SME review, the same tests, and the same `./script/format` / `cargo clippy` / presubmit checks apply regardless of who (or what) wrote the code. Whether a PR is hand-written or agent-written doesn't change the quality bar — it changes how quickly you can iterate to meet it.
+Yes. The same automated checks, team review, tests, and `./script/format` / `cargo clippy` / presubmit checks apply regardless of who (or what) wrote the code. Whether a PR is hand-written or agent-written doesn't change the quality bar.
 
 ### Will my issues, comments, or code be used to train models?
 
@@ -90,19 +82,19 @@ No. Warp does not use contributions to this repository, or the discussion around
 
 ### Is Warp fully open source?
 
-The Warp **client** is open source: the app and most crates are licensed under [AGPL v3](LICENSE-AGPL), and the UI framework crates (`warpui_core`, `warpui`) are licensed under [MIT](LICENSE-MIT). The **server**, the **Warp Drive backend**, and **Oz** (our agent orchestration layer) are not in this repository and remain proprietary today.
+The Warp **client** is open source: the app and most crates are licensed under [AGPL v3](LICENSE-AGPL), and the UI framework crates (`warpui_core`, `warpui`) are licensed under [MIT](LICENSE-MIT). The **server** and the **Warp Drive backend** are not in this repository and remain proprietary today.
 
 ### What lives in this repo and what doesn't?
 
 **In this repo:** the Warp client app, the WarpUI framework, integration tests, agent skills, and feature specs.
 
-**Not in this repo:** the server, the Drive backend, hosted authentication, and Oz orchestration.
+**Not in this repo:** the server, the Drive backend, and hosted authentication.
 
 ### Can I run Warp without signing in or using Warp's cloud?
 
 Some functionality works fully locally; other features (Drive sync, hosted-model agents, team features) require Warp's backend. We're working to make the locally-runnable surface clearer over time, including more explicit controls in onboarding.
 
-### Will the server or Oz ever be open-sourced?
+### Will the server ever be open-sourced?
 
 We haven't committed to a date and don't want to overpromise. Opening the client under AGPL is a one-way door, and opening the server would be a similar commitment — we'll be explicit when and if we make it.
 

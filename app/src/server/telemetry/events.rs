@@ -556,8 +556,6 @@ pub enum CommandCorrectionEvent {
 pub enum CommandSearchResultType {
     History,
     Workflow,
-    OpenWarpAI,
-    TranslateUsingWarpAI,
     Notebook,
     EnvVarCollection,
     ViewInWarpDrive,
@@ -573,8 +571,6 @@ impl From<&CommandSearchItemAction> for CommandSearchResultType {
             AcceptWorkflow(_) => Self::Workflow,
             AcceptNotebook(_) => Self::Notebook,
             AcceptEnvVarCollection(_) => Self::EnvVarCollection,
-            OpenWarpAI => Self::OpenWarpAI,
-            TranslateUsingWarpAI => Self::TranslateUsingWarpAI,
             AcceptAIQuery(_) | RunAIQuery(_) => Self::AIQuery,
         }
     }
@@ -757,7 +753,7 @@ pub enum AgentModeEntrypoint {
     #[serde(rename = "block_toolbelt")]
     BlockToolbelt,
 
-    /// The "Ask Agent Mode" option from AI command search.
+    /// The legacy natural-language command search option for Agent Mode.
     #[serde(rename = "ai_command_search")]
     AICommandSearch,
 
@@ -2815,25 +2811,6 @@ pub enum TelemetryEvent {
     CodexModalOpened,
     /// Emitted when the user clicks "Use Codex" in the Codex modal.
     CodexModalUseCodexClicked,
-    /// Emitted when the cloud agent capacity modal is opened.
-    CloudAgentCapacityModalOpened,
-    /// Emitted when the cloud agent capacity modal is dismissed.
-    CloudAgentCapacityModalDismissed,
-    /// Emitted when the user clicks the upgrade button in the cloud agent capacity modal.
-    CloudAgentCapacityModalUpgradeClicked,
-    /// Emitted when a RequestComputerUse action is approved (manually or auto-executed).
-    ComputerUseApproved {
-        client_conversation_id: AIConversationId,
-        server_conversation_id: Option<String>,
-        is_autoexecuted: bool,
-        ambient_agent_task_id: Option<AmbientAgentTaskId>,
-    },
-    /// Emitted when a RequestComputerUse action is cancelled/rejected.
-    ComputerUseCancelled {
-        client_conversation_id: AIConversationId,
-        server_conversation_id: Option<String>,
-        ambient_agent_task_id: Option<AmbientAgentTaskId>,
-    },
     /// Emitted when a warp://linear deeplink is opened.
     LinearIssueLinkOpened,
     /// Emitted when the free tier limit hit interstitial is displayed.
@@ -4763,29 +4740,6 @@ impl TelemetryEvent {
             TelemetryEvent::CodexModalOpened => None,
             TelemetryEvent::CodexModalUseCodexClicked => None,
             TelemetryEvent::LinearIssueLinkOpened => None,
-            TelemetryEvent::CloudAgentCapacityModalOpened => None,
-            TelemetryEvent::CloudAgentCapacityModalDismissed => None,
-            TelemetryEvent::CloudAgentCapacityModalUpgradeClicked => None,
-            TelemetryEvent::ComputerUseApproved {
-                client_conversation_id,
-                server_conversation_id,
-                is_autoexecuted,
-                ambient_agent_task_id,
-            } => Some(json!({
-                "client_conversation_id": client_conversation_id,
-                "server_conversation_id": server_conversation_id,
-                "is_autoexecuted": is_autoexecuted,
-                "ambient_agent_task_id": ambient_agent_task_id.map(|id| id.to_string()),
-            })),
-            TelemetryEvent::ComputerUseCancelled {
-                client_conversation_id,
-                server_conversation_id,
-                ambient_agent_task_id,
-            } => Some(json!({
-                "client_conversation_id": client_conversation_id,
-                "server_conversation_id": server_conversation_id,
-                "ambient_agent_task_id": ambient_agent_task_id.map(|id| id.to_string()),
-            })),
             TelemetryEvent::FreeTierLimitHitInterstitialDisplayed => None,
             TelemetryEvent::FreeTierLimitHitInterstitialUpgradeButtonClicked => None,
             TelemetryEvent::FreeTierLimitHitInterstitialClosed => None,
@@ -5267,11 +5221,6 @@ impl TelemetryEvent {
             | TelemetryEvent::CodexModalOpened
             | TelemetryEvent::CodexModalUseCodexClicked
             | TelemetryEvent::LinearIssueLinkOpened
-            | TelemetryEvent::CloudAgentCapacityModalOpened
-            | TelemetryEvent::CloudAgentCapacityModalDismissed
-            | TelemetryEvent::CloudAgentCapacityModalUpgradeClicked
-            | TelemetryEvent::ComputerUseApproved { .. }
-            | TelemetryEvent::ComputerUseCancelled { .. }
             | TelemetryEvent::FreeTierLimitHitInterstitialDisplayed
             | TelemetryEvent::FreeTierLimitHitInterstitialUpgradeButtonClicked
             | TelemetryEvent::FreeTierLimitHitInterstitialClosed
@@ -5830,14 +5779,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ToggleUseAgentToolbarSetting { .. } => EnablementState::Always,
             Self::CodexModalOpened | Self::CodexModalUseCodexClicked => EnablementState::Always,
             Self::LinearIssueLinkOpened => EnablementState::Always,
-            Self::CloudAgentCapacityModalOpened
-            | Self::CloudAgentCapacityModalDismissed
-            | Self::CloudAgentCapacityModalUpgradeClicked => {
-                EnablementState::Flag(FeatureFlag::CloudMode)
-            }
-            Self::ComputerUseApproved | Self::ComputerUseCancelled => {
-                EnablementState::Flag(FeatureFlag::AgentModeComputerUse)
-            }
             Self::FreeTierLimitHitInterstitialDisplayed { .. } => EnablementState::Always,
             Self::FreeTierLimitHitInterstitialUpgradeButtonClicked { .. } => {
                 EnablementState::Always
@@ -6402,13 +6343,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::CodexModalOpened => "CodexModal.Opened",
             Self::CodexModalUseCodexClicked => "CodexModal.UseCodexClicked",
             Self::LinearIssueLinkOpened => "Linear.IssueLinkOpened",
-            Self::CloudAgentCapacityModalOpened => "AmbientAgent.ConcurrencyModal.Opened",
-            Self::CloudAgentCapacityModalDismissed => "AmbientAgent.ConcurrencyModal.Dismissed",
-            Self::CloudAgentCapacityModalUpgradeClicked => {
-                "AmbientAgent.ConcurrencyModal.UpgradeClicked"
-            }
-            Self::ComputerUseApproved => "ComputerUse.Approved",
-            Self::ComputerUseCancelled => "ComputerUse.Cancelled",
             Self::FreeTierLimitHitInterstitialDisplayed { .. } => {
                 "FreeTierLimitHitInterstitial.Displayed"
             }
@@ -6750,7 +6684,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::InputAICommandSearch => {
                 "Opened AI Command Search via the Input Editor's context menu (right clicking the buffer)"
             }
-            Self::InputAskWarpAI => "Clicked \"Ask Warp AI\" from the Input Editor's context menu",
+            Self::InputAskWarpAI => "Clicked legacy input AI assistant from the Input Editor's context menu",
             Self::SaveAsWorkflowModal => {
                 "Opened the modal to create a new workflow using a Block's context--command, etc."
             }
@@ -7263,17 +7197,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::LinearIssueLinkOpened => {
                 "User opened a warp://linear deeplink to work on an issue"
             }
-            Self::CloudAgentCapacityModalOpened => "User opened the cloud agent capacity modal",
-            Self::CloudAgentCapacityModalDismissed => {
-                "User dismissed the cloud agent capacity modal"
-            }
-            Self::CloudAgentCapacityModalUpgradeClicked => {
-                "User clicked the upgrade button in the cloud agent capacity modal"
-            }
-            Self::ComputerUseApproved => {
-                "A RequestComputerUse action was approved (manually or auto-executed)"
-            }
-            Self::ComputerUseCancelled => "A RequestComputerUse action was cancelled/rejected",
             Self::FreeTierLimitHitInterstitialDisplayed { .. } => {
                 "The free tier limit hit interstitial was displayed"
             }

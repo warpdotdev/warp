@@ -509,9 +509,6 @@ impl Input {
         };
         let vm = view_model.as_ref(app);
         let harness = vm.selected_harness();
-        if harness == Harness::Oz {
-            return false;
-        }
         // Skip FTUX for harnesses that have no auth secret types defined.
         if crate::ai::auth_secret_types::auth_secret_types_for_harness(harness).is_empty() {
             return false;
@@ -600,8 +597,10 @@ impl Input {
             let harness = self
                 .ambient_agent_view_model()
                 .map(|m| m.as_ref(app).selected_harness())
-                .unwrap_or(warp_cli::agent::Harness::Oz);
-            if harness != warp_cli::agent::Harness::Oz && !self.should_show_auth_secret_ftux(app) {
+                .unwrap_or(warp_cli::agent::Harness::Codex);
+            if harness != warp_cli::agent::Harness::Unknown
+                && !self.should_show_auth_secret_ftux(app)
+            {
                 row.add_child(ChildView::new(auth_secret_selector).finish());
             }
         }

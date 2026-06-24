@@ -106,9 +106,7 @@ impl LocalAgentTaskSyncModel {
     }
 
     /// Registers a terminal view as a tracked CLI agent session so that
-    /// status changes from `CLIAgentSessionsModel` are reported to the
-    /// server. Called by `AgentDriver` when setting up a third-party
-    /// harness run.
+    /// status changes from `CLIAgentSessionsModel` are reported to the server.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn register_cli_session(
         &mut self,

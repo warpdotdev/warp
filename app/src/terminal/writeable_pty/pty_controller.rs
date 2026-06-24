@@ -127,7 +127,7 @@ impl<T: EventLoopSender> PtyController<T> {
                 me.is_bracketed_paste_enabled = false;
             }
             ModelEvent::HonorPS1OutOfSync => {
-                // We force re-sync the PS1 state of Warp settings with the shell's environment variable, $WARP_HONOR_PS1, via
+                // We force re-sync the PS1 state of Warp settings with the shell's environment variable, $ZERP_HONOR_PS1, via
                 // a bindkey (which triggers a shell function).
                 let honor_ps1 = *SessionSettings::as_ref(ctx).honor_ps1;
                 if honor_ps1 {

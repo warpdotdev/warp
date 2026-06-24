@@ -220,11 +220,6 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
         }
     }
 
-    if FeatureFlag::AgentModeComputerUse.is_enabled() && params.computer_use_enabled {
-        supported_tools.extend(&[api::ToolType::UseComputer]);
-        supported_tools.extend(&[api::ToolType::RequestComputerUse])
-    }
-
     if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
         supported_tools.push(api::ToolType::InsertReviewComments);
     }

@@ -295,8 +295,8 @@ pub(super) fn relaunch() -> Result<()> {
 fn installer_file_name() -> Result<String> {
     let app_name_prefix = app_name_prefix(ChannelState::channel());
 
-    // For example, on arm64 this is WarpSetup-arm64.exe and on x64 this is
-    // WarpSetup.exe.
+    // For example, on arm64 this is ZerpSetup-arm64.exe and on x64 this is
+    // ZerpSetup.exe.
     if cfg!(target_arch = "aarch64") {
         Ok(format!("{app_name_prefix}Setup-arm64.exe"))
     } else if cfg!(target_arch = "x86_64") {
@@ -310,12 +310,12 @@ fn installer_file_name() -> Result<String> {
 
 fn app_name_prefix(channel: Channel) -> &'static str {
     match channel {
-        Channel::Stable => "Warp",
-        Channel::Preview => "WarpPreview",
-        Channel::Local => "warp",
-        Channel::Integration => "integration",
-        Channel::Dev => "WarpDev",
-        Channel::Oss => "warp-oss",
+        Channel::Stable => "Zerp",
+        Channel::Preview => "ZerpPreview",
+        Channel::Local => "ZerpLocal",
+        Channel::Integration => "ZerpIntegration",
+        Channel::Dev => "ZerpDev",
+        Channel::Oss => "ZerpOss",
     }
 }
 

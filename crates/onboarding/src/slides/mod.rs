@@ -1,5 +1,4 @@
-mod agent_slide;
-mod ai_access_slide;
+mod agent_settings;
 mod ai_setup_slide;
 mod bottom_nav;
 mod customize_slide;
@@ -13,10 +12,8 @@ pub mod slide_content;
 mod theme_picker_slide;
 mod third_party_slide;
 mod toggle_card;
-mod two_line_button;
 
-pub use agent_slide::{AgentAutonomy, AgentDevelopmentSettings, AgentSlide, OnboardingModelInfo};
-pub use ai_access_slide::{AiAccessSlide, AiAccessSlideEvent};
+pub use agent_settings::{AgentAutonomy, AgentDevelopmentSettings, OnboardingModelInfo};
 pub use ai_setup_slide::AiSetupSlide;
 pub use bottom_nav::onboarding_bottom_nav;
 pub use customize_slide::CustomizeUISlide;

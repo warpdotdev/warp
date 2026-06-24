@@ -11,14 +11,14 @@ if [[ ! -d "script" ]]; then
     exit 1
 fi
 
-if [[ -z "$WARP_PLIST_PATH" ]]; then
-  echo 'Must set $WARP_PLIST_PATH'
+if [[ -z "$ZERP_PLIST_PATH" ]]; then
+  echo 'Must set $ZERP_PLIST_PATH'
   exit 1
 fi
 
 if [[ -n "$GIT_RELEASE_TAG" ]]; then
   echo "Updating plist Warp version to $GIT_RELEASE_TAG"
-  plutil -insert WarpVersion -string "$GIT_RELEASE_TAG" "$WARP_PLIST_PATH"
+  plutil -insert WarpVersion -string "$GIT_RELEASE_TAG" "$ZERP_PLIST_PATH"
 
   # We convert our version format to be period-separated integers only to align better with
   # Apple's guidance on values for `CFBundleVersion` / `CFBundleShortVersionString`.
@@ -37,21 +37,21 @@ if [[ -n "$GIT_RELEASE_TAG" ]]; then
     FORMATTED_VERSION="${MAJOR}.${YEAR}.${MONTH}.${DAY}.${HOUR}.${MINUTE}.${BUILD}"
     
     echo "Updating plist version to $FORMATTED_VERSION"
-    plutil -replace CFBundleShortVersionString -string "$FORMATTED_VERSION" "$WARP_PLIST_PATH"
-    plutil -replace CFBundleVersion -string "$FORMATTED_VERSION" "$WARP_PLIST_PATH"
+    plutil -replace CFBundleShortVersionString -string "$FORMATTED_VERSION" "$ZERP_PLIST_PATH"
+    plutil -replace CFBundleVersion -string "$FORMATTED_VERSION" "$ZERP_PLIST_PATH"
   else
     echo "Warning: GIT_RELEASE_TAG '$GIT_RELEASE_TAG' does not match expected format vN.YYYY.MM.DD.HH.MM.channel_NN"
   fi
 fi
 
-if [[ -n "$WARP_SCHEME_NAME" ]]; then
+if [[ -n "$ZERP_SCHEME_NAME" ]]; then
   echo "Updating plist to support a custom url scheme"
   # Update the plist that cargo bundle creates to add support for custom URL schemes. Unfortunately, cargo bundle does not support
   # setting arbitrary plist fields, so we must do this after the fact.
-  plutil -insert CFBundleURLTypes -xml "<array><dict><key>CFBundleURLName</key><string>Custom App</string><key>CFBundleURLSchemes</key><array><string>$WARP_SCHEME_NAME</string></array></dict></array>" "$WARP_PLIST_PATH"
+  plutil -insert CFBundleURLTypes -xml "<array><dict><key>CFBundleURLName</key><string>Custom App</string><key>CFBundleURLSchemes</key><array><string>$ZERP_SCHEME_NAME</string></array></dict></array>" "$ZERP_PLIST_PATH"
 fi
 
-if [[ -z "$WARP_PLIST_NO_FILE_TYPES" ]]; then
+if [[ -z "$ZERP_PLIST_NO_FILE_TYPES" ]]; then
   echo "Updating plist with supported file types"
   plutil -insert CFBundleDocumentTypes -xml "
   <array>
@@ -245,7 +245,7 @@ if [[ -z "$WARP_PLIST_NO_FILE_TYPES" ]]; then
         <string>public.data</string>
       </array>
     </dict>
-  </array>" "$WARP_PLIST_PATH"
+  </array>" "$ZERP_PLIST_PATH"
 fi
 
 # Unfortunately, there isn't a single standard UTI (what goes in LSItemContentTypes) for Markdown
@@ -254,13 +254,13 @@ fi
 # https://blog.smittytone.net/2021/01/19/how-tools-try-to-own-markdown/
 
 echo "Updating plist with permissions descriptions"
-plutil -insert NSAppleEventsUsageDescription -string "A program in Warp wants to use AppleScript." "$WARP_PLIST_PATH"
-plutil -insert NSCameraUsageDescription -string "A program in Warp wants to use the camera." "$WARP_PLIST_PATH"
-plutil -insert NSMicrophoneUsageDescription -string "A program in Warp wants to use your microphone." "$WARP_PLIST_PATH"
-plutil -insert NSContactsUsageDescription -string "A program in Warp wants to use your contacts." "$WARP_PLIST_PATH"
-plutil -insert NSCalendarsUsageDescription -string "A program in Warp wants to use your calendar." "$WARP_PLIST_PATH"
-plutil -insert NSLocationUsageDescription -string "A program in Warp wants to use your location information." "$WARP_PLIST_PATH"
-plutil -insert NSPhotoLibraryUsageDescription -string "A program in Warp wants to use your photo library." "$WARP_PLIST_PATH"
+plutil -insert NSAppleEventsUsageDescription -string "A program in Warp wants to use AppleScript." "$ZERP_PLIST_PATH"
+plutil -insert NSCameraUsageDescription -string "A program in Warp wants to use the camera." "$ZERP_PLIST_PATH"
+plutil -insert NSMicrophoneUsageDescription -string "A program in Warp wants to use your microphone." "$ZERP_PLIST_PATH"
+plutil -insert NSContactsUsageDescription -string "A program in Warp wants to use your contacts." "$ZERP_PLIST_PATH"
+plutil -insert NSCalendarsUsageDescription -string "A program in Warp wants to use your calendar." "$ZERP_PLIST_PATH"
+plutil -insert NSLocationUsageDescription -string "A program in Warp wants to use your location information." "$ZERP_PLIST_PATH"
+plutil -insert NSPhotoLibraryUsageDescription -string "A program in Warp wants to use your photo library." "$ZERP_PLIST_PATH"
 
 echo "Disabling use of Liquid Glass on macOS Tahoe"
-plutil -insert UIDesignRequiresCompatibility -bool true "$WARP_PLIST_PATH"
+plutil -insert UIDesignRequiresCompatibility -bool true "$ZERP_PLIST_PATH"

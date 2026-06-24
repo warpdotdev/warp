@@ -17,7 +17,7 @@ use warpui::{
 
 use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin,
-    ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE, ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
+    ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
 };
 use crate::appearance::Appearance;
 use crate::settings::{AISettings, AISettingsChangedEvent, InputModeSettings};
@@ -44,7 +44,6 @@ pub enum TerminalViewZeroStateAction {
 struct StateHandles {
     dismiss_button: MouseStateHandle,
     start_new_conversation: MouseStateHandle,
-    start_cloud_conversation: MouseStateHandle,
     open_history_menu: MouseStateHandle,
     open_code_review: MouseStateHandle,
     nld_checkbox: MouseStateHandle,
@@ -195,21 +194,6 @@ impl View for TerminalViewZeroStateBlock {
                         });
                     },
                     self.state_handles.start_new_conversation.clone(),
-                )]),
-                app,
-            ),
-            render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(
-                            ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone(),
-                        ),
-                        MessageItem::text("start a new cloud agent conversation"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::EnterCloudAgentView);
-                    },
-                    self.state_handles.start_cloud_conversation.clone(),
                 )]),
                 app,
             ),

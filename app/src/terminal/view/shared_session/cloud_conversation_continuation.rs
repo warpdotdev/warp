@@ -240,9 +240,8 @@ fn task_harness(task: &AmbientAgentTask) -> AIAgentHarness {
         .as_ref()
         .and_then(|config| config.harness.as_ref())
         .map(|harness| harness.harness_type)
-        .unwrap_or(Harness::Oz)
+        .unwrap_or(Harness::Unknown)
     {
-        Harness::Oz => AIAgentHarness::Oz,
         Harness::Claude => AIAgentHarness::ClaudeCode,
         Harness::Gemini => AIAgentHarness::Gemini,
         Harness::Codex => AIAgentHarness::Codex,

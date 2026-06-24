@@ -248,7 +248,7 @@ impl ModelSelector {
             return;
         };
         let harness = ambient_model.as_ref(ctx).selected_harness();
-        if matches!(harness, Harness::Oz | Harness::Unknown) {
+        if matches!(harness, Harness::Unknown) {
             return;
         }
         if ambient_model
@@ -383,7 +383,7 @@ impl ModelSelector {
         });
 
         let active_label = match self.active_harness(ctx) {
-            Some(harness) if !matches!(harness, Harness::Oz | Harness::Unknown) => self
+            Some(harness) if !matches!(harness, Harness::Unknown) => self
                 .resolved_harness_selection(harness, ctx)
                 .and_then(|selection| {
                     HarnessAvailabilityModel::as_ref(ctx)
@@ -418,12 +418,12 @@ impl ModelSelector {
         let query = self.search_query.trim().to_lowercase();
 
         // Branch on harness: third-party harnesses show their own model list (e.g. opus,
-        // sonnet, haiku), while Oz / no-harness fall back to the Agent Mode LLM list.
+        // sonnet, haiku), while Unknown / no-harness fall back to the Agent Mode LLM list.
         let (mut items, selected_action): (
             Vec<MenuItem<ModelSelectorAction>>,
             ModelSelectorAction,
         ) = match self.active_harness(ctx) {
-            Some(harness) if !matches!(harness, Harness::Oz | Harness::Unknown) => {
+            Some(harness) if !matches!(harness, Harness::Unknown) => {
                 self.build_harness_menu_items(harness, &query, hover_background, ctx)
             }
             _ => self.build_oz_menu_items(&query, hover_background, ctx),

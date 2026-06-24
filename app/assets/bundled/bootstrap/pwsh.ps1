@@ -135,7 +135,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
     }
 
     function Warp-Bootstrapped {
-        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', 'WARP_BOOTSTRAPPED', Justification = 'False positive as we are assigning to global')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', 'ZERP_BOOTSTRAPPED', Justification = 'False positive as we are assigning to global')]
         param([decimal]$rcStartTime, [decimal]$rcEndTime)
 
         $envVarNames = (Get-ChildItem env: | Select-Object -ExpandProperty Name | ForEach-Object { 'env:' + $_ }) + `
@@ -241,7 +241,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             }
         }
         Warp-Send-JsonMessage $bootstrappedMsg
-        $global:WARP_BOOTSTRAPPED = 1
+        $global:ZERP_BOOTSTRAPPED = 1
     }
 
     function Warp-Preexec([string]$command) {
@@ -385,14 +385,14 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         # Sets the prompt mode to custom prompt (PS1)
         # Is the equivalent of warp_change_prompt_modes_to_ps1 in other shells
         Set-PSReadLineKeyHandler -Chord 'Alt+p' -ScriptBlock {
-            $env:WARP_HONOR_PS1 = '1'
+            $env:ZERP_HONOR_PS1 = '1'
             Warp-Redraw-Prompt
         }
 
         # Sets the prompt mode to warp prompt
         # Is the equivalent of warp_change_prompt_modes_to_warp_prompt in other shells
         Set-PSReadLineKeyHandler -Chord 'Alt+w' -ScriptBlock {
-            $env:WARP_HONOR_PS1 = '0'
+            $env:ZERP_HONOR_PS1 = '0'
             Warp-Redraw-Prompt
         }
 
@@ -505,7 +505,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             # blocks created during the bootstrap process don't have visible
             # prompts, and we don't want to invoke 'git' before we've sourced the
             # user's rcfiles and have a fully-populated PATH.
-            if ($global:WARP_BOOTSTRAPPED -eq 1) {
+            if ($global:ZERP_BOOTSTRAPPED -eq 1) {
                 if (Test-Path env:VIRTUAL_ENV) {
                     $virtualEnv = $env:VIRTUAL_ENV
                 }
@@ -517,11 +517,11 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 }
 
                 # Compute the Node.js version only when the Node.js Version chip is enabled
-                # (WARP_PROMPT_NODE_VERSION_ENABLED is '0' when the chip is not shown; default
+                # (ZERP_PROMPT_NODE_VERSION_ENABLED is '0' when the chip is not shown; default
                 # enabled when unset) and node is available. Cache the result keyed on the
                 # current location + PATH so we only spawn node when the directory or PATH
                 # changes (PATH changes on version-manager switches like `nvm use`).
-                $nodeChipEnabled = "$env:WARP_PROMPT_NODE_VERSION_ENABLED" -ne '0'
+                $nodeChipEnabled = "$env:ZERP_PROMPT_NODE_VERSION_ENABLED" -ne '0'
                 $hasNodeCommand = if ($nodeChipEnabled) { Get-Command -CommandType Application node 2>$null } else { $null }
                 if ($hasNodeCommand) {
                     try {
@@ -589,7 +589,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 }
             }
 
-            $honor_ps1 = "$env:WARP_HONOR_PS1" -eq '1'
+            $honor_ps1 = "$env:ZERP_HONOR_PS1" -eq '1'
 
             $precmdMsg = @{
                 hook = 'Precmd'
@@ -831,7 +831,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         # Wrap prompt in Prompt Marker OSCs
         $startPromptMarker = "$e]133;A$oscEnd"
         $startRPromptMarker = "$e]133;P;k=r$oscEnd"
-        if ("$env:WARP_HONOR_PS1" -eq '0') {
+        if ("$env:ZERP_HONOR_PS1" -eq '0') {
             $endPromptMarker = "$e]133;B$oscEnd$oscResetGrid"
         } else {
             $endPromptMarker = "$e]133;B$oscEnd"
@@ -901,9 +901,9 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         return $decoratedPrompt
     }
 
-    if ((Test-Path env:WARP_INITIAL_WORKING_DIR) -and -not [String]::IsNullOrEmpty($env:WARP_INITIAL_WORKING_DIR)) {
-        Set-Location $env:WARP_INITIAL_WORKING_DIR 2> $null
-        Remove-Item -Path env:WARP_INITIAL_WORKING_DIR
+    if ((Test-Path env:ZERP_INITIAL_WORKING_DIR) -and -not [String]::IsNullOrEmpty($env:ZERP_INITIAL_WORKING_DIR)) {
+        Set-Location $env:ZERP_INITIAL_WORKING_DIR 2> $null
+        Remove-Item -Path env:ZERP_INITIAL_WORKING_DIR
     }
 
     # In some cases, the Clear-Host command will not interface properly with the blocklist.
@@ -1017,11 +1017,11 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         }
     }
 
-    # Append additional PATH entries if provided via WARP_PATH_APPEND.
+    # Append additional PATH entries if provided via ZERP_PATH_APPEND.
     # This happens after we source RC files in case they reset PATH.
-    if (-not [String]::IsNullOrEmpty($env:WARP_PATH_APPEND)) {
-        $env:PATH = '{0}{1}{2}' -f $env:PATH, [IO.Path]::PathSeparator, $env:WARP_PATH_APPEND
-        Remove-Item -Path env:WARP_PATH_APPEND
+    if (-not [String]::IsNullOrEmpty($env:ZERP_PATH_APPEND)) {
+        $env:PATH = '{0}{1}{2}' -f $env:PATH, [IO.Path]::PathSeparator, $env:ZERP_PATH_APPEND
+        Remove-Item -Path env:ZERP_PATH_APPEND
     }
 
     # This is a workaround for oh-my-posh's "transient prompt" feature. When enabled, it causes the

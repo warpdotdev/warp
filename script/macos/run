@@ -1,24 +1,24 @@
 #!/bin/bash
 #
 # macOS-specific implementation of `./script/run`. Runs a local version of
-# Warp as a real 'app' instead of a bare executable, so macOS can treat it
+# Zerp as a real 'app' instead of a bare executable, so macOS can treat it
 # like a real signed app (custom URL schemes, user notifications, etc.).
 #
 # This script is invoked by `./script/run`, which handles cross-platform
 # setup (install_channel_config, binary name detection, feature-to-env-var
 # mapping). The following env vars are expected to be set by the caller:
-#   WARP_BIN_NAME  — "warp" (internal local build) or "warp-oss"
-#   WARP_CHANNEL   — "local" or "oss"
+#   ZERP_BIN_NAME  — "zerp" (internal local build) or "zerp-oss"
+#   ZERP_CHANNEL   — "local" or "oss"
 #   FEATURES       — comma-separated cargo features (already normalized)
-# Must be called from the root directory of the warp repo.
+# Must be called from the root directory of the Zerp repo.
 
 set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
 cd "${REPO_ROOT}"
 
-: "${WARP_BIN_NAME:?WARP_BIN_NAME must be set (invoke via ./script/run)}"
-: "${WARP_CHANNEL:?WARP_CHANNEL must be set (invoke via ./script/run)}"
+: "${ZERP_BIN_NAME:?ZERP_BIN_NAME must be set (invoke via ./script/run)}"
+: "${ZERP_CHANNEL:?ZERP_CHANNEL must be set (invoke via ./script/run)}"
 : "${FEATURES:?FEATURES must be set (invoke via ./script/run)}"
 
 # Resolve Cargo's actual target directory rather than assuming ./target. This
@@ -29,25 +29,25 @@ if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
     TARGET_DIR="${REPO_ROOT}/target"
 fi
 
-if [ "$WARP_CHANNEL" = "local" ]; then
-    WARP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/WarpLocal.app"
-    WARP_SCHEME_NAME="warplocal"
+if [ "$ZERP_CHANNEL" = "local" ]; then
+    ZERP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/ZerpLocal.app"
+    ZERP_SCHEME_NAME="zerplocal"
 else
-    WARP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/WarpOss.app"
-    WARP_SCHEME_NAME="warposs"
+    ZERP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/ZerpOss.app"
+    ZERP_SCHEME_NAME="zerposs"
 fi
 DONT_OPEN=false
-# Launches the binary with "open", meaning the Warp process is
+# Launches the binary with "open", meaning the Zerp process is
 # launched by the MacOS application launcher instead of a shell session.
-# Note that since Warp isn't launched as a child process, using ctrl+c
+# Note that since Zerp isn't launched as a child process, using ctrl+c
 # won't kill the app (but will kill the tail process displaying output).
-# tl;dr better simulates running Warp Dev/Stable
+# tl;dr better simulates running Zerp Dev/Stable
 OPEN_WITH_LAUNCHD=false
 
-# Arguments to pass directly Warp (specified after --)
+# Arguments to pass directly to Zerp (specified after --)
 # This is not supported when opening with launchd, as passing CLI arguments to
 # an application doesn't make sense.
-WARP_ARGS=()
+ZERP_ARGS=()
 
 # Export this variable so it can be referenced by app/build.rs later when
 # running `cargo bundle`.
@@ -58,7 +58,7 @@ while (( "$#" )); do
   case "$1" in
     --)
       shift
-      WARP_ARGS=("$@")
+      ZERP_ARGS=("$@")
       break
       ;;
     --dont-open)
@@ -67,10 +67,10 @@ while (( "$#" )); do
       ;;
     --release)
       echo "Detected release build, pointing at release bundle under ${TARGET_DIR}/release/bundle"
-      if [ "$WARP_CHANNEL" = "local" ]; then
-          WARP_APP_PATH="${TARGET_DIR}/release/bundle/osx/WarpLocal.app"
+      if [ "$ZERP_CHANNEL" = "local" ]; then
+          ZERP_APP_PATH="${TARGET_DIR}/release/bundle/osx/ZerpLocal.app"
       else
-          WARP_APP_PATH="${TARGET_DIR}/release/bundle/osx/WarpOss.app"
+          ZERP_APP_PATH="${TARGET_DIR}/release/bundle/osx/ZerpOss.app"
       fi
       PARAMS="$PARAMS $1"
       shift
@@ -78,10 +78,10 @@ while (( "$#" )); do
     --profile)
       PROFILE="$2"
       shift 2
-      if [ "$WARP_CHANNEL" = "local" ]; then
-          WARP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/WarpLocal.app"
+      if [ "$ZERP_CHANNEL" = "local" ]; then
+          ZERP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/ZerpLocal.app"
       else
-          WARP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/WarpOss.app"
+          ZERP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/ZerpOss.app"
       fi
       PARAMS="$PARAMS --profile $PROFILE"
       ;;
@@ -100,68 +100,73 @@ while (( "$#" )); do
   esac
 done
 
-rm -rf "$WARP_APP_PATH"
+rm -rf "$ZERP_APP_PATH"
 
 pushd app > /dev/null
-echo "Bundling app (bin: $WARP_BIN_NAME)..."
-cargo bundle --bin "$WARP_BIN_NAME" --features "$FEATURES" $PARAMS
+echo "Bundling app (bin: $ZERP_BIN_NAME)..."
+cargo bundle --bin "$ZERP_BIN_NAME" --features "$FEATURES" $PARAMS
 echo "Successfully bundled..."
 popd > /dev/null
 
 if [[ ",$FEATURES," =~ ",cocoa_sentry," ]]; then
   echo "Copying Sentry framework into app bundle..."
   SENTRY_FRAMEWORK="app/frameworks/dev/Sentry-Dynamic-WithARM64e.xcframework/macos-arm64_arm64e_x86_64/Sentry.framework"
-  mkdir -p "$WARP_APP_PATH/Contents/Frameworks"
-  cp -a "$SENTRY_FRAMEWORK" "$WARP_APP_PATH/Contents/Frameworks/"
+  mkdir -p "$ZERP_APP_PATH/Contents/Frameworks"
+  cp -a "$SENTRY_FRAMEWORK" "$ZERP_APP_PATH/Contents/Frameworks/"
 fi
 echo "Adding rpath to support mac frameworks (e.g. Sentry)"
-install_name_tool -add_rpath "@executable_path/../Frameworks" "$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$ZERP_APP_PATH/Contents/MacOS/$ZERP_BIN_NAME"
 
-export WARP_SCHEME_NAME
-export WARP_PLIST_PATH="$WARP_APP_PATH/Contents/Info.plist"
+export ZERP_SCHEME_NAME
+export ZERP_PLIST_PATH="$ZERP_APP_PATH/Contents/Info.plist"
 ./script/update_plist
 
 echo "Preparing bundled resources..."
 if [ "${GENERATE_SCHEMA:-false}" != "true" ]; then
   export SKIP_SETTINGS_SCHEMA=1
 fi
-NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" "$WARP_APP_PATH/Contents/Resources" "$WARP_CHANNEL"
+NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" "$ZERP_APP_PATH/Contents/Resources" "$ZERP_CHANNEL"
 
-"${REPO_ROOT}/script/compile_icon" "$WARP_CHANNEL" "$WARP_APP_PATH"
+"${REPO_ROOT}/script/compile_icon" "$ZERP_CHANNEL" "$ZERP_APP_PATH"
 
 if [[ ",$FEATURES," =~ ",heap_usage_tracking," ]]; then
   echo "Bundling pprof..."
-  HELPERS_DIR="$WARP_APP_PATH/Contents/Helpers"
+  HELPERS_DIR="$ZERP_APP_PATH/Contents/Helpers"
   "${REPO_ROOT}/script/prepare_bundled_pprof" "$HELPERS_DIR"
 fi
 
 if [[ ",$FEATURES," =~ ",warp_control_cli," ]]; then
-  WARPCTRL_SCRIPT_PATH="$WARP_APP_PATH/Contents/Resources/bin/warpctrl-$WARP_CHANNEL"
-  echo "Creating warpctrl wrapper script at $WARPCTRL_SCRIPT_PATH..."
+  if [ "$ZERP_CHANNEL" = "local" ]; then
+    WARPCTRL_COMMAND_NAME="zerpctrl-local"
+  else
+    WARPCTRL_COMMAND_NAME="zerpctrl-oss"
+  fi
+  WARPCTRL_SCRIPT_PATH="$ZERP_APP_PATH/Contents/Resources/bin/$WARPCTRL_COMMAND_NAME"
+  echo "Creating zerpctrl wrapper script at $WARPCTRL_SCRIPT_PATH..."
   "${REPO_ROOT}/script/macos/create_warpctrl_wrapper" \
     "$WARPCTRL_SCRIPT_PATH" \
-    "../../MacOS/$WARP_BIN_NAME"
+    "../../MacOS/$ZERP_BIN_NAME"
 fi
 
 echo "Codesigning app..."
 SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)"
-codesign --force --deep --options runtime --sign "${SIGNING_CERT:--}" "$WARP_APP_PATH" --entitlements script/Debug-Entitlements.plist
+codesign --force --deep --options runtime --sign "${SIGNING_CERT:--}" "$ZERP_APP_PATH" --entitlements script/Debug-Entitlements.plist
 
 if [ "$DONT_OPEN" = false ] ; then
     if  [ "$OPEN_WITH_LAUNCHD" = true ]; then
         echo "Launching with MacOS application launcher"
-        PATH="" /usr/bin/open "$WARP_APP_PATH"
-        if [ "$WARP_CHANNEL" = "local" ]; then
-            LOG_FILE=~/Library/Logs/warp_local.log
-        elif [ "$WARP_CHANNEL" = "oss" ]; then
-            LOG_FILE=~/Library/Logs/warp-oss.log
+        PATH="" /usr/bin/open "$ZERP_APP_PATH"
+        if [ "$ZERP_CHANNEL" = "local" ]; then
+            LOG_FILE=~/Library/Logs/zerp_local.log
+        elif [ "$ZERP_CHANNEL" = "oss" ]; then
+            LOG_FILE=~/Library/Logs/zerp-oss.log
         else
-            echo "Warning: unrecognized WARP_CHANNEL '$WARP_CHANNEL', defaulting to OSS log path" >&2
-            LOG_FILE=~/Library/Logs/warp-oss.log
+            echo "Warning: unrecognized ZERP_CHANNEL '$ZERP_CHANNEL', defaulting to OSS log path" >&2
+            LOG_FILE=~/Library/Logs/zerp-oss.log
         fi
         tail -F "$LOG_FILE"
     else
-        echo "Opening app at $WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
-        "$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME" "${WARP_ARGS[@]}"
+        echo "Opening app at $ZERP_APP_PATH/Contents/MacOS/$ZERP_BIN_NAME"
+        "$ZERP_APP_PATH/Contents/MacOS/$ZERP_BIN_NAME" "${ZERP_ARGS[@]}"
     fi
 fi

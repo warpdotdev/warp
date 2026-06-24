@@ -13,7 +13,6 @@ fn remote_claude_state() -> OrchestrationEditState {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
         },
     )
 }
@@ -56,7 +55,6 @@ fn harness_picker_stays_visible_for_remote_mode() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
         },
     );
 
@@ -81,7 +79,6 @@ fn from_orchestration_config_preserves_remote_claude() {
         RunAgentsExecutionMode::Remote {
             ref environment_id,
             ref worker_host,
-            computer_use_enabled: false,
         } if environment_id == "env-1" && worker_host == "warp"
     ));
 }
@@ -94,7 +91,6 @@ fn toggle_to_local_sanitizes_disabled_codex() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
         },
     );
 
@@ -116,7 +112,6 @@ fn toggle_to_local_preserves_claude() {
         &RunAgentsExecutionMode::Remote {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
-            computer_use_enabled: false,
         },
     );
 

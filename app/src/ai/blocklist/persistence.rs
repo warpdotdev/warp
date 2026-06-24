@@ -14,8 +14,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentActionType, AIAgentAttachment, AIAgentContext, AIAgentExchangeId, AIAgentInput,
     AIAgentPtyWriteMode, AskUserQuestionItem, FileLocations, PassiveSuggestionResultType,
-    ReadFilesRequest, RequestComputerUseRequest, SearchCodebaseRequest, UseComputerRequest,
-    UserQueryMode,
+    ReadFilesRequest, SearchCodebaseRequest, UserQueryMode,
 };
 use crate::ai::llms::LLMId;
 use crate::terminal::model::block::{BlockId, SerializedBlock};
@@ -196,15 +195,6 @@ pub(crate) enum PersistedAIAgentActionType {
     SuggestPrompt,
     OpenCodeReview,
     InitProject,
-    UseComputer {
-        action_summary: String,
-        actions: Vec<computer_use::Action>,
-        screenshot_params: Option<computer_use::ScreenshotParams>,
-    },
-    RequestComputerUse {
-        task_summary: String,
-        screenshot_params: Option<computer_use::ScreenshotParams>,
-    },
     AskUserQuestion {
         questions: Vec<AskUserQuestionItem>,
     },
@@ -300,15 +290,6 @@ impl From<&AIAgentActionType> for PersistedAIAgentActionType {
             | AIAgentActionType::ReadSkill(_)
             | AIAgentActionType::UploadArtifact(_)
             | AIAgentActionType::TransferShellCommandControlToUser { .. } => Self::NotPersisted,
-            AIAgentActionType::UseComputer(req) => Self::UseComputer {
-                action_summary: req.action_summary.clone(),
-                actions: req.actions.clone(),
-                screenshot_params: req.screenshot_params,
-            },
-            AIAgentActionType::RequestComputerUse(req) => Self::RequestComputerUse {
-                task_summary: req.task_summary.clone(),
-                screenshot_params: req.screenshot_params,
-            },
             AIAgentActionType::AskUserQuestion { questions } => Self::AskUserQuestion {
                 questions: questions.clone(),
             },
@@ -421,22 +402,6 @@ impl TryFrom<PersistedAIAgentActionType> for AIAgentActionType {
             }
             PersistedAIAgentActionType::OpenCodeReview => Ok(Self::OpenCodeReview),
             PersistedAIAgentActionType::InitProject => Ok(Self::InitProject),
-            PersistedAIAgentActionType::UseComputer {
-                action_summary,
-                actions,
-                screenshot_params,
-            } => Ok(Self::UseComputer(UseComputerRequest {
-                action_summary,
-                actions,
-                screenshot_params,
-            })),
-            PersistedAIAgentActionType::RequestComputerUse {
-                task_summary,
-                screenshot_params,
-            } => Ok(Self::RequestComputerUse(RequestComputerUseRequest {
-                task_summary,
-                screenshot_params,
-            })),
             PersistedAIAgentActionType::AskUserQuestion { questions } => {
                 Ok(Self::AskUserQuestion { questions })
             }

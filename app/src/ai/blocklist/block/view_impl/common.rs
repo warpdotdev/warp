@@ -3222,7 +3222,7 @@ fn render_invalid_api_key_error(
         .on_click(move |ctx, _, _| {
             ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
                 search_query: "api keys".to_string(),
-                section: Some(SettingsSection::WarpAgent),
+                section: Some(SettingsSection::ThirdPartyCLIAgents),
             });
         })
         .finish();

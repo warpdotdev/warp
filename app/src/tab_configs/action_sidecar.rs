@@ -20,7 +20,7 @@ const SIDECAR_PADDING: f32 = 12.;
 /// Describes what the sidecar is showing, which determines which buttons appear.
 #[derive(Clone, Debug)]
 pub(crate) enum SidecarItemKind {
-    /// A built-in item (Terminal, a specific shell, Agent, Cloud Oz).
+    /// A built-in item (Terminal, a specific shell, or legacy agent config).
     BuiltIn {
         name: String,
         default_mode: DefaultSessionMode,

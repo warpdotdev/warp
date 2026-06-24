@@ -6,10 +6,10 @@ workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "$temp_dir"' EXIT
 
-bundle_dir="$temp_dir/WarpDev.app/Contents"
-wrapper_path="$bundle_dir/Resources/bin/warpctrl-dev"
+bundle_dir="$temp_dir/ZerpDev.app/Contents"
+wrapper_path="$bundle_dir/Resources/bin/zerpctrl-dev"
 binary_path="$bundle_dir/MacOS/dev"
-installed_path="$temp_dir/usr/local/bin/warpctrl-dev"
+installed_path="$temp_dir/usr/local/bin/zerpctrl-dev"
 forwarded_args_file="$temp_dir/forwarded-args"
 expected_args_file="$temp_dir/expected-args"
 

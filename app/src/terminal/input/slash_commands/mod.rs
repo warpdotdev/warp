@@ -455,20 +455,7 @@ impl Input {
                     origin: AgentViewEntryOrigin::SlashCommand { trigger },
                 });
             }
-            cloud_agent if command.name == commands::CLOUD_AGENT.name => {
-                let prompt = argument.and_then(|argument| {
-                    let trimmed = argument.trim();
-                    if trimmed.is_empty() {
-                        None
-                    } else {
-                        Some(trimmed.to_owned())
-                    }
-                });
-
-                ctx.emit(Event::EnterCloudAgentView {
-                    initial_prompt: prompt,
-                });
-            }
+            cloud_agent if command.name == commands::CLOUD_AGENT.name => return false,
             create_docker_sandbox if command.name == commands::CREATE_DOCKER_SANDBOX.name => {
                 ctx.emit(Event::CreateDockerSandbox);
             }
@@ -1027,7 +1014,7 @@ impl Input {
 
                 if !conversation_is_cloud_oz_for_slash_command(conversation_id, ctx) {
                     show_error_toast(
-                        "/continue-locally is only available for cloud Oz conversations".to_owned(),
+                        "/continue-locally is only available for cloud conversations".to_owned(),
                         ctx,
                     );
                     return true;
@@ -1412,20 +1399,11 @@ pub(crate) fn conversation_is_cloud_oz_for_slash_command(
         return false;
     };
 
-    let Some(task) = AgentConversationsModel::as_ref(ctx).get_task_data(&task_id) else {
-        // Permissive: not yet fetched. Matches the data-source default so the command isn't
-        // wrongly blocked while the task fetch is in flight.
-        return true;
+    let Some(_task) = AgentConversationsModel::as_ref(ctx).get_task_data(&task_id) else {
+        return false;
     };
 
-    match task
-        .agent_config_snapshot
-        .as_ref()
-        .and_then(|s| s.harness.as_ref())
-    {
-        Some(config) => config.harness_type == Harness::Oz,
-        None => true,
-    }
+    false
 }
 
 /// Tooltip and slash command name for the fork button, returned as a unit so

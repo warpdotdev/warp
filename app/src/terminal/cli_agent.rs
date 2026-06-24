@@ -182,12 +182,9 @@ impl CLIAgent {
         serde_json::from_value(name.into()).unwrap_or(CLIAgent::Unknown)
     }
 
-    /// Returns the [`CLIAgent`] corresponding to a cloud-agent [`Harness`] when it represents a
-    /// third-party agent. Returns `None` for [`Harness::Oz`] (Warp's built-in harness has no
-    /// distinct CLI agent identity).
+    /// Returns the [`CLIAgent`] corresponding to a third-party CLI [`Harness`].
     pub fn from_harness(harness: Harness) -> Option<Self> {
         match harness {
-            Harness::Oz => None,
             Harness::Claude => Some(CLIAgent::Claude),
             Harness::Gemini => Some(CLIAgent::Gemini),
             Harness::OpenCode => Some(CLIAgent::OpenCode),

@@ -10,7 +10,6 @@ use std::hash::{Hash, Hasher};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
-use warp_core::channel::ChannelState;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::blend::Blend;
@@ -282,7 +281,7 @@ pub enum OrchestrationPillBarAction {
     OpenInNewPane(AIConversationId),
     /// Menu item: open this child in a new tab.
     OpenInNewTab(AIConversationId),
-    /// Menu item: open this child's run in the Oz web app.
+    /// Menu item: open this child's run.
     ViewInOz(AIConversationId),
     /// Menu item: stop the in-progress task.
     Stop(AIConversationId),
@@ -479,8 +478,8 @@ impl OrchestrationPillBar {
         };
         if Self::oz_run_url_for_conversation(conversation_id, ctx).is_some() {
             items.push(item(
-                "View in Oz",
-                Icon::Oz,
+                "Open run",
+                Icon::LinkExternal,
                 OrchestrationPillBarAction::ViewInOz(conversation_id),
             ));
         }
@@ -535,14 +534,10 @@ impl OrchestrationPillBar {
     }
 
     fn oz_run_url_for_conversation(
-        conversation_id: AIConversationId,
-        app: &AppContext,
+        _conversation_id: AIConversationId,
+        _app: &AppContext,
     ) -> Option<String> {
-        let run_id = BlocklistAIHistoryModel::as_ref(app)
-            .conversation(&conversation_id)?
-            .run_id()?;
-        let oz_root_url = ChannelState::oz_root_url();
-        Some(format!("{oz_root_url}/runs/{run_id}"))
+        None
     }
 
     fn set_hovered_pill(
@@ -1452,9 +1447,10 @@ fn render_hover_card(
     let mut chips: Vec<Box<dyn Element>> = Vec::new();
 
     // Harness chip: prefer the spawn-time `orchestration_harness_type`
-    // so child agents report their harness immediately; fall back to
-    // Oz so the chip slot stays populated.
-    let harness = conversation.orchestration_harness().unwrap_or(Harness::Oz);
+    // so child agents report their harness immediately.
+    let harness = conversation
+        .orchestration_harness()
+        .unwrap_or(Harness::Unknown);
     let harness_icon = harness_display::icon_for(harness);
     let harness_label = harness_display::display_name(harness).to_string();
     let harness_color = harness_display::brand_color(harness).unwrap_or(sub_text);

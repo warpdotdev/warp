@@ -63,7 +63,7 @@ pub(crate) fn terminal_view_agent_icon_variant(
                 .as_ref()
                 .and_then(|config| config.harness.as_ref())
                 .map(|harness| harness.harness_type)
-                .unwrap_or(Harness::Oz);
+                .unwrap_or(Harness::Unknown);
             return Some(agent_icon_variant_for_run(harness, status, !is_local_child));
         }
     }
@@ -97,7 +97,7 @@ pub(crate) fn agent_conversation_entry_icon_variant(
         || entry.backing.has_ambient_run
         || entry.identity.ambient_agent_task_id.is_some();
     agent_icon_variant_for_run(
-        entry.display.harness.unwrap_or(Harness::Oz),
+        entry.display.harness.unwrap_or(Harness::Unknown),
         status,
         is_ambient,
     )
@@ -166,21 +166,12 @@ fn agent_icon_variant_from_terminal_inputs(
         }
     }
 
-    // 3. Selected conversation OR ambient (Oz) terminal: Oz agent variant.
-    if inputs.has_selected_conversation || inputs.is_ambient {
-        return Some(IconWithStatusVariant::OzAgent {
-            status: inputs.selected_conversation_status.clone(),
-            is_ambient: inputs.is_ambient,
-        });
-    }
-
     None
 }
 
 /// Pure run-card logic: maps a [`Harness`], status, and ambient flag into an
-/// [`IconWithStatusVariant`]. Falls back to the Oz variant for [`Harness::Oz`] and
-/// [`Harness::Unknown`], the latter so a future-server harness this client doesn't
-/// recognize doesn't render an unbranded gray circle.
+/// [`IconWithStatusVariant`]. Unknown harnesses render as a generic CLI agent instead of
+/// falling back to Warp's removed native harness.
 pub(crate) fn agent_icon_variant_for_run(
     harness: Harness,
     status: ConversationStatus,
@@ -194,7 +185,8 @@ pub(crate) fn agent_icon_variant_for_run(
             status: Some(status),
             is_ambient,
         },
-        None => IconWithStatusVariant::OzAgent {
+        None => IconWithStatusVariant::CLIAgent {
+            agent: CLIAgent::Unknown,
             status: Some(status),
             is_ambient,
         },

@@ -17,18 +17,18 @@ use crate::terminal::focus_env::{FOCUS_URL_ENV, TERMINAL_SESSION_UUID_ENV};
 use crate::terminal::local_tty::shell::{extra_path_entries, ssh_socket_dir, ShellStarter};
 use crate::terminal::local_tty::PtyOptions;
 
-const HONOR_PS1_NAME: &str = "WARP_HONOR_PS1";
-const PROMPT_NODE_VERSION_ENABLED_NAME: &str = "WARP_PROMPT_NODE_VERSION_ENABLED";
-const INITIAL_WORKING_DIR_NAME: &str = "WARP_INITIAL_WORKING_DIR";
-const USE_SSH_WRAPPER_NAME: &str = "WARP_USE_SSH_WRAPPER";
-const SSH_REUSE_CONTROL_MASTER_NAME: &str = "WARP_SSH_REUSE_CONTROL_MASTER";
-const SHELL_DEBUG_MODE_NAME: &str = "WARP_SHELL_DEBUG_MODE";
+const HONOR_PS1_NAME: &str = "ZERP_HONOR_PS1";
+const PROMPT_NODE_VERSION_ENABLED_NAME: &str = "ZERP_PROMPT_NODE_VERSION_ENABLED";
+const INITIAL_WORKING_DIR_NAME: &str = "ZERP_INITIAL_WORKING_DIR";
+const USE_SSH_WRAPPER_NAME: &str = "ZERP_USE_SSH_WRAPPER";
+const SSH_REUSE_CONTROL_MASTER_NAME: &str = "ZERP_SSH_REUSE_CONTROL_MASTER";
+const SHELL_DEBUG_MODE_NAME: &str = "ZERP_SHELL_DEBUG_MODE";
 const TERM_PROGRAM_NAME: &str = "TERM_PROGRAM";
-const IS_LOCAL_SESSION_NAME: &str = "WARP_IS_LOCAL_SHELL_SESSION";
+const IS_LOCAL_SESSION_NAME: &str = "ZERP_IS_LOCAL_SHELL_SESSION";
 const SSH_SOCKET_DIR: &str = "SSH_SOCKET_DIR";
-const PATH_APPEND_NAME: &str = "WARP_PATH_APPEND";
-const CLIENT_VERSION_NAME: &str = "WARP_CLIENT_VERSION";
-const CLI_AGENT_PROTOCOL_VERSION_NAME: &str = "WARP_CLI_AGENT_PROTOCOL_VERSION";
+const PATH_APPEND_NAME: &str = "ZERP_PATH_APPEND";
+const CLIENT_VERSION_NAME: &str = "ZERP_CLIENT_VERSION";
+const CLI_AGENT_PROTOCOL_VERSION_NAME: &str = "ZERP_CLI_AGENT_PROTOCOL_VERSION";
 const WSLENV: &str = "WSLENV";
 const HISTIGNORE: &str = "HISTIGNORE";
 
@@ -154,7 +154,7 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
         },
     );
 
-    // Set WARP_PATH_APPEND with additional PATH entries to append
+    // Set ZERP_PATH_APPEND with additional PATH entries to append
     let path_append = extra_path_entries()
         .map(|p| p.to_string_lossy().into_owned())
         .join(";");

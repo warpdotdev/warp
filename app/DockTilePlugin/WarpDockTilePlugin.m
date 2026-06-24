@@ -25,7 +25,7 @@
             NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
             [formatter setDateFormat:@"yyyy-MM-dd_HH-mm-ss"];
             NSString *timestamp = [formatter stringFromDate:[NSDate date]];
-            NSString *logPath = [NSString stringWithFormat:@"/tmp/warp_docktile_%@.log", timestamp];
+            NSString *logPath = [NSString stringWithFormat:@"/tmp/zerp_docktile_%@.log", timestamp];
             NSError *error = nil;
             [[NSFileManager defaultManager] createFileAtPath:logPath contents:nil attributes:nil];
             _logFileHandle = [NSFileHandle fileHandleForWritingAtPath:logPath];

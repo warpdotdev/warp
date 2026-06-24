@@ -10,8 +10,8 @@ use crate::scope::ObjectScope;
 pub enum SecretCommand {
     /// Create a new secret.
     ///
-    /// Use `oz secret create claude api-key <NAME>` to create a Claude/Anthropic auth secret,
-    /// or `oz secret create codex api-key <NAME>` to create a Codex/OpenAI auth secret.
+    /// Use `zerp-cli secret create claude api-key <NAME>` to create a Claude/Anthropic auth secret,
+    /// or `zerp-cli secret create codex api-key <NAME>` to create a Codex/OpenAI auth secret.
     Create(CreateSecretArgs),
     /// Delete a secret.
     Delete(DeleteSecretArgs),
