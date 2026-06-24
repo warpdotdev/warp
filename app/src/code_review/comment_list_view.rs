@@ -234,14 +234,11 @@ impl CommentListView {
         });
 
         // Keep the stored button state in sync when AI availability changes.
-        ctx.subscribe_to_model(
-            &AIRequestUsageModel::handle(ctx),
-            |me, _, event, ctx| {
-                if let AIRequestUsageModelEvent::RequestUsageUpdated = event {
-                    me.sync_send_button(ctx);
-                }
-            },
-        );
+        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, _, event, ctx| {
+            if let AIRequestUsageModelEvent::RequestUsageUpdated = event {
+                me.sync_send_button(ctx);
+            }
+        });
 
         Self {
             parent,
