@@ -2413,7 +2413,10 @@ pub fn render_cursor(
     hint_text: Option<&mut Box<dyn Element>>,
     app: &AppContext,
 ) {
-    let CursorGeometry { rect: cursor_rect, line_top_origin } = compute_cursor_rect(
+    let CursorGeometry {
+        rect: cursor_rect,
+        line_top_origin,
+    } = compute_cursor_rect(
         grid_render_params,
         cursor_point,
         is_cursor_on_wide_char,
