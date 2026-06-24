@@ -56,10 +56,8 @@ pub enum DiffSetScope {
     File(String),
 }
 
-/// The keystroke that submits in the code review panel. Shared so that
-/// submitting a comment (the composer's "Comment" button) and sending queued
-/// comments to the agent (the comment tray's "Send to Agent" button and the
-/// `code_review:submit_review_comments` binding) all use the exact same binding.
+/// The keystroke that submits in the code review panel. Meant to mirror the keystroke for
+/// [`EditorViewEvent::CmdEnter`].
 pub const CODE_REVIEW_SUBMIT_KEYSTROKE: &str = "cmdorctrl-enter";
 
 /// Register keybindings for code review functionality.
@@ -97,14 +95,6 @@ pub fn init(app: &mut AppContext) {
             "Undo",
             id!("CodeReviewView") & !id!("IMEOpen"),
         ),
-        // Registered as a *fixed* binding on purpose. The keystroke rendered on
-        // the "Send to Agent" button and on the comment composer's submit button
-        // both come from `CODE_REVIEW_SUBMIT_KEYSTROKE`, and comment submission
-        // itself is a fixed editor binding (`cmdorctrl-enter`). Keeping the
-        // trigger fixed (rather than editable) means the actual key, the two
-        // rendered chips, and the comment-submit binding all derive from the one
-        // constant and can never drift out of sync. Scoped to `_NotEditing` so
-        // it can't fire while a comment is being composed.
         FixedBinding::new(
             CODE_REVIEW_SUBMIT_KEYSTROKE,
             CodeReviewAction::SubmitReviewComments,

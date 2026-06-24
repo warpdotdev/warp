@@ -350,8 +350,6 @@ pub enum CodeReviewAction {
     OpenCreatePrDialog,
     ViewPr(String),
     PublishBranch,
-    /// Send the queued review comments to an agent (keyboard equivalent of the
-    /// comment tray's "Send to Agent" button).
     SubmitReviewComments,
 }
 
@@ -2793,14 +2791,6 @@ impl CodeReviewView {
             );
         }
 
-        // Return focus to the review pane after a comment is committed. The
-        // comment was just authored in a child editor (the inline line-comment
-        // editor or the pane-level composer), which leaves focus inside that
-        // editor. The "Send to Agent" shortcut only applies in the
-        // `CodeReviewView_NotEditing` context (i.e. when the pane, not a child
-        // editor, holds focus), so without this the user would have to click
-        // back into the pane before the shortcut would fire. Mirrors the
-        // focus_self() done after reverting a diff hunk.
         ctx.focus_self();
     }
 
@@ -7552,9 +7542,6 @@ impl TypedActionView for CodeReviewView {
                 ctx.notify();
             }
             CodeReviewAction::SubmitReviewComments => {
-                // Keyboard equivalent of the comment tray's "Send to Agent"
-                // button. Only act when sending is currently allowed, so the
-                // shortcut and the button agree (no-op when disabled).
                 if self.comment_list_view.as_ref(ctx).can_send(ctx) {
                     self.handle_submit_review_with_comments(ctx);
                     ctx.notify();

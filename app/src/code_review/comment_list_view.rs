@@ -211,10 +211,6 @@ impl CommentListView {
                 })
         });
 
-        // "Send to Agent" is an ActionButton (rather than a plain ui_builder
-        // button) so it can render the shared `cmdorctrl-enter` keystroke chip,
-        // matching the comment composer's "Comment" button. The same binding is
-        // also wired as a keyboard shortcut in `code_review::init`.
         let send_button = ctx.add_view(|ctx| {
             ActionButton::new("Send to Agent", PrimaryTheme)
                 .with_keybinding(
@@ -889,7 +885,7 @@ impl CommentListView {
             .with_main_axis_alignment(MainAxisAlignment::End)
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
         right_section.add_child(self.render_cancel_button(appearance));
-        right_section.add_child(self.render_send_button());
+        right_section.add_child(ChildView::new(&self.send_button).finish());
         right_section.finish()
     }
 
@@ -920,8 +916,6 @@ impl CommentListView {
     }
 
     /// Whether the queued review comments can currently be sent to an agent.
-    /// Mirrors the "Send to Agent" button's enabled state so the button and the
-    /// `cmdorctrl-enter` keyboard shortcut agree on when sending is allowed.
     pub fn can_send(&self, ctx: &AppContext) -> bool {
         let has_sendable_comments = self.has_non_outdated_comments();
         match &self.review_destination {
@@ -934,8 +928,8 @@ impl CommentListView {
         }
     }
 
-    /// Keep the stored "Send to Agent" button's enabled state and tooltip in
-    /// sync with the current destination / comment / AI-availability state.
+    /// Keep the stored "Send to Agent" button's enabled state and tooltip in sync with the current
+    /// destination / comment / AI-availability state.
     fn sync_send_button(&mut self, ctx: &mut ViewContext<Self>) {
         let ai_available = AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx);
         let ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
@@ -979,13 +973,6 @@ impl CommentListView {
         } else {
             Cow::Borrowed("Send diff comments to Agent")
         }
-    }
-
-    fn render_send_button(&self) -> Box<dyn Element> {
-        // The button's enabled state, tooltip, and `cmdorctrl-enter` keystroke
-        // chip are kept current via `sync_send_button`; here we only embed the
-        // stored view.
-        ChildView::new(&self.send_button).finish()
     }
 
     fn render_comment(
