@@ -4,6 +4,7 @@
 //! "Add router" or "Edit" on an existing router card. Writes changes to
 //! `~/.warp/custom_model_routers/` via [`WarpConfig::save_custom_model_router`].
 
+use itertools::Itertools;
 use warpui::elements::{
     Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CrossAxisAlignment, Expanded, Flex, Hoverable, MainAxisSize, MouseStateHandle, ParentElement,
@@ -18,6 +19,7 @@ use crate::ai::custom_model_routers::{
     is_auto_target, ComplexityRouting, CustomModelRouter, CustomModelRouting, PromptRouting,
     PromptRule,
 };
+use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::editor::{EditorView, SingleLineEditorOptions, TextOptions};
@@ -29,15 +31,13 @@ use crate::user_config::WarpConfig;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, DangerSecondaryTheme, PrimaryTheme, SecondaryTheme,
 };
-use crate::view_components::{Dropdown, DropdownItem};
+use crate::view_components::dropdown::DropdownAction;
+use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
 
 pub const HEADER_TEXT: &str = "Router Editor";
 
 const EDITOR_CONTENT_WIDTH: f32 = 340.;
-
-/// Sentinel used as the dropdown selection for "inherit default" in optional
-/// complexity-bucket dropdowns.
-const INHERIT_DEFAULT: &str = "__inherit_default__";
+const MODEL_MENU_WIDTH: f32 = 340.;
 
 #[derive(Debug, Clone)]
 pub enum CustomRouterEditorEvent {
@@ -68,7 +68,7 @@ pub enum RouterEditorType {
 
 struct PromptRuleRow {
     description_editor: ViewHandle<EditorView>,
-    model_dropdown: ViewHandle<Dropdown<CustomRouterEditorAction>>,
+    model_dropdown: ViewHandle<FilterableDropdown<CustomRouterEditorAction>>,
     remove_mouse_state: MouseStateHandle,
     current_model: String,
 }
@@ -83,17 +83,17 @@ pub struct CustomRouterEditorView {
     router_type: RouterEditorType,
     type_dropdown: ViewHandle<Dropdown<CustomRouterEditorAction>>,
 
-    complexity_default_dropdown: ViewHandle<Dropdown<CustomRouterEditorAction>>,
-    complexity_easy_dropdown: ViewHandle<Dropdown<CustomRouterEditorAction>>,
-    complexity_medium_dropdown: ViewHandle<Dropdown<CustomRouterEditorAction>>,
-    complexity_hard_dropdown: ViewHandle<Dropdown<CustomRouterEditorAction>>,
+    complexity_default_dropdown: ViewHandle<FilterableDropdown<CustomRouterEditorAction>>,
+    complexity_easy_dropdown: ViewHandle<FilterableDropdown<CustomRouterEditorAction>>,
+    complexity_medium_dropdown: ViewHandle<FilterableDropdown<CustomRouterEditorAction>>,
+    complexity_hard_dropdown: ViewHandle<FilterableDropdown<CustomRouterEditorAction>>,
 
     complexity_default: String,
     complexity_easy: Option<String>,
     complexity_medium: Option<String>,
     complexity_hard: Option<String>,
 
-    prompt_default_dropdown: ViewHandle<Dropdown<CustomRouterEditorAction>>,
+    prompt_default_dropdown: ViewHandle<FilterableDropdown<CustomRouterEditorAction>>,
     prompt_default_model: String,
     prompt_rules: Vec<PromptRuleRow>,
 
@@ -101,6 +101,7 @@ pub struct CustomRouterEditorView {
     cancel_button: ViewHandle<ActionButton>,
     delete_button: ViewHandle<ActionButton>,
 
+    upgrade_footer_mouse_state: MouseStateHandle,
     save_error: Option<String>,
 }
 
@@ -196,49 +197,52 @@ impl CustomRouterEditorView {
             d
         });
 
-        // Model choices (concrete, non-auto)
-        let choices = concrete_model_choices(ctx);
+        // Model dropdowns — searchable, with icons and display names.
+        let upgrade_footer_mouse_state = MouseStateHandle::default();
 
-        let complexity_default_dropdown = make_model_dropdown(
-            &choices,
-            false,
+        let complexity_default_dropdown = make_filterable_model_dropdown(
             &init_cdefault,
             CustomRouterEditorAction::SetComplexityDefault,
+            &upgrade_footer_mouse_state,
             ctx,
         );
-        let complexity_easy_dropdown = make_model_dropdown(
-            &choices,
-            true,
-            init_ceasy.as_deref().unwrap_or(INHERIT_DEFAULT),
+        let complexity_easy_dropdown = make_filterable_model_dropdown(
+            init_ceasy.as_deref().unwrap_or_default(),
             CustomRouterEditorAction::SetComplexityEasy,
+            &upgrade_footer_mouse_state,
             ctx,
         );
-        let complexity_medium_dropdown = make_model_dropdown(
-            &choices,
-            true,
-            init_cmedium.as_deref().unwrap_or(INHERIT_DEFAULT),
+        let complexity_medium_dropdown = make_filterable_model_dropdown(
+            init_cmedium.as_deref().unwrap_or_default(),
             CustomRouterEditorAction::SetComplexityMedium,
+            &upgrade_footer_mouse_state,
             ctx,
         );
-        let complexity_hard_dropdown = make_model_dropdown(
-            &choices,
-            true,
-            init_chard.as_deref().unwrap_or(INHERIT_DEFAULT),
+        let complexity_hard_dropdown = make_filterable_model_dropdown(
+            init_chard.as_deref().unwrap_or_default(),
             CustomRouterEditorAction::SetComplexityHard,
+            &upgrade_footer_mouse_state,
             ctx,
         );
-        let prompt_default_dropdown = make_model_dropdown(
-            &choices,
-            false,
+        let prompt_default_dropdown = make_filterable_model_dropdown(
             &init_pdefault,
             CustomRouterEditorAction::SetPromptDefault,
+            &upgrade_footer_mouse_state,
             ctx,
         );
 
         let prompt_rules = init_prules
             .iter()
             .enumerate()
-            .map(|(i, rule)| make_prompt_rule_row(i, &rule.description, &rule.model, &choices, ctx))
+            .map(|(i, rule)| {
+                make_prompt_rule_row(
+                    i,
+                    &rule.description,
+                    &rule.model,
+                    &upgrade_footer_mouse_state,
+                    ctx,
+                )
+            })
             .collect();
 
         let save_button = ctx.add_typed_action_view(|_| {
@@ -280,6 +284,7 @@ impl CustomRouterEditorView {
             save_button,
             cancel_button,
             delete_button,
+            upgrade_footer_mouse_state,
             save_error: None,
         };
 
@@ -303,73 +308,52 @@ impl CustomRouterEditorView {
     // ------------------------------------------------------------------
 
     fn refresh_all_model_dropdowns(&mut self, ctx: &mut ViewContext<Self>) {
-        let choices = concrete_model_choices(ctx);
-        repopulate(
+        let ms = self.upgrade_footer_mouse_state.clone();
+        repopulate_filterable(
             &self.complexity_default_dropdown,
-            &choices,
-            false,
             &self.complexity_default,
             CustomRouterEditorAction::SetComplexityDefault,
+            &ms,
             ctx,
         );
-        let easy = self
-            .complexity_easy
-            .as_deref()
-            .unwrap_or(INHERIT_DEFAULT)
-            .to_string();
-        repopulate(
+        repopulate_filterable(
             &self.complexity_easy_dropdown,
-            &choices,
-            true,
-            &easy,
+            self.complexity_easy.as_deref().unwrap_or_default(),
             CustomRouterEditorAction::SetComplexityEasy,
+            &ms,
             ctx,
         );
-        let med = self
-            .complexity_medium
-            .as_deref()
-            .unwrap_or(INHERIT_DEFAULT)
-            .to_string();
-        repopulate(
+        repopulate_filterable(
             &self.complexity_medium_dropdown,
-            &choices,
-            true,
-            &med,
+            self.complexity_medium.as_deref().unwrap_or_default(),
             CustomRouterEditorAction::SetComplexityMedium,
+            &ms,
             ctx,
         );
-        let hard = self
-            .complexity_hard
-            .as_deref()
-            .unwrap_or(INHERIT_DEFAULT)
-            .to_string();
-        repopulate(
+        repopulate_filterable(
             &self.complexity_hard_dropdown,
-            &choices,
-            true,
-            &hard,
+            self.complexity_hard.as_deref().unwrap_or_default(),
             CustomRouterEditorAction::SetComplexityHard,
+            &ms,
             ctx,
         );
-        repopulate(
+        repopulate_filterable(
             &self.prompt_default_dropdown,
-            &choices,
-            false,
             &self.prompt_default_model,
             CustomRouterEditorAction::SetPromptDefault,
+            &ms,
             ctx,
         );
         for (i, row) in self.prompt_rules.iter_mut().enumerate() {
             let sel = row.current_model.clone();
-            repopulate(
+            repopulate_filterable(
                 &row.model_dropdown,
-                &choices,
-                false,
                 &sel,
                 move |id| CustomRouterEditorAction::SetPromptRuleModel {
                     index: i,
                     model_id: id,
                 },
+                &ms,
                 ctx,
             );
         }
@@ -485,9 +469,9 @@ impl CustomRouterEditorView {
     }
 
     fn add_prompt_rule(&mut self, ctx: &mut ViewContext<Self>) {
-        let choices = concrete_model_choices(ctx);
         let index = self.prompt_rules.len();
-        let row = make_prompt_rule_row(index, "", "", &choices, ctx);
+        let ms = self.upgrade_footer_mouse_state.clone();
+        let row = make_prompt_rule_row(index, "", "", &ms, ctx);
         self.prompt_rules.push(row);
         ctx.notify();
     }
@@ -746,25 +730,13 @@ impl TypedActionView for CustomRouterEditorView {
                 self.complexity_default = id.clone();
             }
             CustomRouterEditorAction::SetComplexityEasy(id) => {
-                self.complexity_easy = if id == INHERIT_DEFAULT {
-                    None
-                } else {
-                    Some(id.clone())
-                };
+                self.complexity_easy = Some(id.clone());
             }
             CustomRouterEditorAction::SetComplexityMedium(id) => {
-                self.complexity_medium = if id == INHERIT_DEFAULT {
-                    None
-                } else {
-                    Some(id.clone())
-                };
+                self.complexity_medium = Some(id.clone());
             }
             CustomRouterEditorAction::SetComplexityHard(id) => {
-                self.complexity_hard = if id == INHERIT_DEFAULT {
-                    None
-                } else {
-                    Some(id.clone())
-                };
+                self.complexity_hard = Some(id.clone());
             }
             CustomRouterEditorAction::SetPromptDefault(id) => {
                 self.prompt_default_model = id.clone();
@@ -831,97 +803,82 @@ impl BackingView for CustomRouterEditorView {
 // Module-level helper functions
 // ------------------------------------------------------------------
 
-fn concrete_model_choices(ctx: &mut ViewContext<CustomRouterEditorView>) -> Vec<String> {
-    LLMPreferences::as_ref(ctx)
-        .get_base_llm_choices_for_agent_mode(ctx)
-        .filter(|llm| !is_auto_target(llm.id.as_str()))
-        .map(|llm| llm.id.to_string())
-        .collect()
-}
-
-fn make_model_dropdown<F>(
-    choices: &[String],
-    optional: bool,
-    selected: &str,
+/// Creates and populates a [`FilterableDropdown`] for model selection.
+///
+/// Items are built via [`available_model_menu_items`] so they carry provider
+/// icons and display names. The current selection is restored by action.
+fn make_filterable_model_dropdown<F>(
+    selected_id: &str,
     make_action: F,
+    upgrade_mouse_state: &MouseStateHandle,
     ctx: &mut ViewContext<CustomRouterEditorView>,
-) -> ViewHandle<Dropdown<CustomRouterEditorAction>>
+) -> ViewHandle<FilterableDropdown<CustomRouterEditorAction>>
 where
     F: Fn(String) -> CustomRouterEditorAction + 'static + Clone,
 {
-    let choices_owned = choices.to_vec();
-    let selected_owned = selected.to_string();
+    let selected_owned = selected_id.to_string();
+    let ms = upgrade_mouse_state.clone();
     ctx.add_typed_action_view(move |ctx| {
-        let mut d = Dropdown::new(ctx);
-        fill_dropdown_items(
-            &mut d,
-            &choices_owned,
-            optional,
-            &selected_owned,
-            make_action.clone(),
-            ctx,
-        );
+        let mut d = FilterableDropdown::new(ctx);
+        d.set_menu_width(MODEL_MENU_WIDTH, ctx);
+        fill_filterable_dropdown(ctx, &mut d, &selected_owned, make_action.clone(), &ms);
         d
     })
 }
 
-fn repopulate<F>(
-    dropdown: &ViewHandle<Dropdown<CustomRouterEditorAction>>,
-    choices: &[String],
-    optional: bool,
-    selected: &str,
+/// Repopulates an existing [`FilterableDropdown`] after model choices change.
+fn repopulate_filterable<F>(
+    dropdown: &ViewHandle<FilterableDropdown<CustomRouterEditorAction>>,
+    selected_id: &str,
     make_action: F,
+    upgrade_mouse_state: &MouseStateHandle,
     ctx: &mut ViewContext<CustomRouterEditorView>,
 ) where
     F: Fn(String) -> CustomRouterEditorAction + Clone,
 {
-    let choices_owned = choices.to_vec();
-    let selected_owned = selected.to_string();
+    let selected_owned = selected_id.to_string();
+    let ms = upgrade_mouse_state.clone();
     dropdown.update(ctx, move |d, ctx| {
-        fill_dropdown_items(
-            d,
-            &choices_owned,
-            optional,
-            &selected_owned,
-            make_action.clone(),
-            ctx,
-        );
+        fill_filterable_dropdown(ctx, d, &selected_owned, make_action.clone(), &ms);
     });
 }
 
-fn fill_dropdown_items<F>(
-    dropdown: &mut Dropdown<CustomRouterEditorAction>,
-    choices: &[String],
-    optional: bool,
-    selected: &str,
+/// Inner helper: fills a [`FilterableDropdown`] with rich model items.
+fn fill_filterable_dropdown<F>(
+    ctx: &mut warpui::ViewContext<FilterableDropdown<CustomRouterEditorAction>>,
+    dropdown: &mut FilterableDropdown<CustomRouterEditorAction>,
+    selected_id: &str,
     make_action: F,
-    ctx: &mut warpui::ViewContext<Dropdown<CustomRouterEditorAction>>,
+    upgrade_mouse_state: &MouseStateHandle,
 ) where
-    F: Fn(String) -> CustomRouterEditorAction,
+    F: Fn(String) -> CustomRouterEditorAction + Clone,
 {
-    let mut items: Vec<DropdownItem<CustomRouterEditorAction>> = Vec::new();
-    if optional {
-        items.push(DropdownItem::new(
-            "Inherit default",
-            make_action(INHERIT_DEFAULT.to_string()),
-        ));
+    let items = available_model_menu_items(
+        LLMPreferences::as_ref(ctx)
+            .get_base_llm_choices_for_agent_mode(ctx)
+            .filter(|llm| !is_auto_target(llm.id.as_str()))
+            .collect_vec(),
+        |llm| DropdownAction::select_action_and_close(make_action(llm.id.to_string())),
+        None,
+        None,
+        false,
+        false,
+        ctx,
+    );
+    dropdown.set_rich_items(items, ctx);
+    dropdown.clear_footer(ctx);
+
+    if !selected_id.is_empty() {
+        dropdown.set_selected_by_action(make_action(selected_id.to_string()), ctx);
     }
-    for id in choices {
-        items.push(DropdownItem::new(id.clone(), make_action(id.clone())));
-    }
-    dropdown.set_items(items, ctx);
-    if selected.is_empty() || (optional && selected == INHERIT_DEFAULT) {
-        dropdown.set_selected_by_name("Inherit default", ctx);
-    } else {
-        dropdown.set_selected_by_name(selected, ctx);
-    }
+    let _ = upgrade_mouse_state; // reserved for future upgrade footer
 }
 
 fn make_prompt_rule_row(
     index: usize,
     description: &str,
     model: &str,
-    choices: &[String],
+    upgrade_mouse_state: &MouseStateHandle,
     ctx: &mut ViewContext<CustomRouterEditorView>,
 ) -> PromptRuleRow {
     let desc_owned = description.to_string();
@@ -937,21 +894,20 @@ fn make_prompt_rule_row(
             },
             ctx,
         );
-        editor.set_placeholder_text("Describe when to use this model…", ctx);
+        editor.set_placeholder_text("Describe when to use this model\u{2026}", ctx);
         if !desc_owned.is_empty() {
             editor.set_buffer_text(&desc_owned, ctx);
         }
         editor
     });
 
-    let model_dropdown = make_model_dropdown(
-        choices,
-        false,
+    let model_dropdown = make_filterable_model_dropdown(
         model,
         move |id| CustomRouterEditorAction::SetPromptRuleModel {
             index,
             model_id: id,
         },
+        upgrade_mouse_state,
         ctx,
     );
 
@@ -977,7 +933,7 @@ fn editor_row(editor: &ViewHandle<EditorView>, appearance: &Appearance) -> Box<d
 
 fn labeled_dropdown(
     label: impl Into<String>,
-    dropdown: &ViewHandle<Dropdown<CustomRouterEditorAction>>,
+    dropdown: &ViewHandle<FilterableDropdown<CustomRouterEditorAction>>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let sub = appearance
