@@ -41,6 +41,7 @@ use super::execution_profile_view::{ExecutionProfileView, ExecutionProfileViewEv
 use super::remove_custom_endpoint_confirmation_dialog::{
     RemoveCustomEndpointConfirmationDialog, RemoveCustomEndpointConfirmationDialogEvent,
 };
+use super::set_default_model_modal::{SetDefaultModelModalBody, SetDefaultModelModalBodyEvent};
 use super::settings_page::{
     build_sub_header, build_toggle_element, render_body_item_label,
     render_body_item_label_with_icon, render_custom_size_header, render_dropdown_item,
@@ -67,7 +68,10 @@ use crate::ai::execution_profiles::{
     long_context_pricing_warning_title, AIExecutionProfile, AIExecutionProfileAppExt,
     ActionPermission, WriteToPtyPermission,
 };
-use crate::ai::llms::{LLMContextWindow, LLMId, LLMPreferences, LLMPreferencesEvent};
+use crate::ai::llms::{
+    is_using_api_key_for_provider, LLMContextWindow, LLMId, LLMPreferences, LLMPreferencesEvent,
+    LLMProvider,
+};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::paths::host_native_absolute_path;
 use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
@@ -724,6 +728,10 @@ pub struct AISettingsPageView {
     pending_remove_custom_endpoint_index: Option<usize>,
     custom_inference_add_button: ViewHandle<ActionButton>,
     custom_endpoint_edit_buttons: Vec<ViewHandle<ActionButton>>,
+
+    // Prompt offering to switch the default Agent Mode model after a BYO key or
+    // custom endpoint is saved while the default isn't backed by a credential.
+    set_default_model_modal: ModalViewState<Modal<SetDefaultModelModalBody>>,
 
     // In-flight fallback exchange for a pasted SuperGrok authorization code.
     // This stores only the PKCE verifier clone needed by the manual path while
@@ -1780,6 +1788,37 @@ impl AISettingsPageView {
         let custom_endpoint_modal_state =
             CustomEndpointModalViewState::new(ModalViewState::new(custom_endpoint_modal_view));
 
+        let set_default_model_modal_body = ctx.add_typed_action_view(SetDefaultModelModalBody::new);
+        ctx.subscribe_to_view(&set_default_model_modal_body, |me, _, event, ctx| {
+            me.handle_set_default_model_modal_event(event, ctx);
+        });
+        let set_default_model_modal_view = ctx.add_typed_action_view(|ctx| {
+            Modal::new(
+                Some("Set your default model".to_string()),
+                set_default_model_modal_body.clone(),
+                ctx,
+            )
+            .with_modal_style(UiComponentStyles {
+                width: Some(480.),
+                height: Some(360.),
+                ..Default::default()
+            })
+            .with_body_style(UiComponentStyles {
+                height: Some(260.),
+                ..Default::default()
+            })
+            .with_background_opacity(100)
+            .with_dismiss_on_click()
+            .with_dismiss_keystroke(Keystroke::parse("escape").unwrap())
+        });
+        ctx.subscribe_to_view(
+            &set_default_model_modal_view,
+            |me, _, event, ctx| match event {
+                ModalEvent::Close => me.hide_set_default_model_modal(ctx),
+            },
+        );
+        let set_default_model_modal = ModalViewState::new(set_default_model_modal_view);
+
         let remove_custom_endpoint_confirmation_dialog =
             ctx.add_typed_action_view(RemoveCustomEndpointConfirmationDialog::new);
         ctx.subscribe_to_view(
@@ -1929,6 +1968,7 @@ impl AISettingsPageView {
             pending_remove_custom_endpoint_index: None,
             custom_inference_add_button,
             custom_endpoint_edit_buttons,
+            set_default_model_modal,
             #[cfg(not(target_family = "wasm"))]
             grok_oauth_attempt: None,
             #[cfg(not(target_family = "wasm"))]
@@ -1952,6 +1992,8 @@ impl AISettingsPageView {
     pub fn get_modal_content(&self, app: &AppContext) -> Option<Box<dyn Element>> {
         if self.custom_endpoint_modal_state.is_open() {
             Some(self.custom_endpoint_modal_state.render())
+        } else if self.set_default_model_modal.is_open() {
+            Some(self.set_default_model_modal.render())
         } else if self
             .remove_custom_endpoint_confirmation_dialog
             .as_ref(app)
@@ -1961,6 +2003,165 @@ impl AISettingsPageView {
         } else {
             None
         }
+    }
+
+    fn handle_set_default_model_modal_event(
+        &mut self,
+        event: &SetDefaultModelModalBodyEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            SetDefaultModelModalBodyEvent::Close => self.hide_set_default_model_modal(ctx),
+            SetDefaultModelModalBodyEvent::SetDefault(id) => {
+                // Mirror `AISettingsPageAction::SetBaseModel`: set the active
+                // profile's base model and clear any stale context-window limit.
+                AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
+                    let profile_id = *profiles_model.active_profile(None, ctx).id();
+                    profiles_model.set_base_model(profile_id, Some(id.clone()), ctx);
+                    profiles_model.set_context_window_limit(profile_id, None, ctx);
+                });
+                self.sync_context_window_editor(ctx, true);
+                self.hide_set_default_model_modal(ctx);
+
+                let window_id = ctx.window_id();
+                crate::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    let toast = crate::view_components::DismissibleToast::success(
+                        "Default model updated".to_string(),
+                    );
+                    toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+                });
+                ctx.notify();
+            }
+        }
+    }
+
+    fn hide_set_default_model_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.set_default_model_modal.close();
+        ctx.emit(AISettingsPageEvent::HideModal);
+        ctx.notify();
+    }
+
+    fn show_set_default_model_modal(
+        &mut self,
+        description: String,
+        choices: Vec<(LLMId, String)>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.set_default_model_modal.view.update(ctx, |modal, ctx| {
+            modal.body().update(ctx, |body, ctx| {
+                body.set_choices(description, choices, ctx);
+            });
+        });
+        self.set_default_model_modal.open();
+        ctx.emit(AISettingsPageEvent::ShowModal);
+        ctx.notify();
+    }
+
+    /// Returns `true` when the active Agent Mode default model is already served
+    /// by a credential the user has: a BYO key/subscription for its provider, or
+    /// one of their custom-endpoint models. `auto` models report `false` since
+    /// they always consume Warp credits.
+    fn active_base_model_is_byo_covered(ctx: &AppContext) -> bool {
+        let (active_id, active_provider) = {
+            let prefs = LLMPreferences::as_ref(ctx);
+            let active = prefs.get_active_base_model(ctx, None);
+            (active.id.clone(), active.provider.clone())
+        };
+        if LLMPreferences::as_ref(ctx)
+            .custom_llm_info_for_id(&active_id)
+            .is_some()
+        {
+            return true;
+        }
+        is_using_api_key_for_provider(&active_provider, ctx)
+    }
+
+    /// The stored BYO key for a single-provider slot, if any.
+    fn stored_provider_key(provider: &LLMProvider, ctx: &AppContext) -> Option<String> {
+        let keys = ApiKeyManager::as_ref(ctx).keys();
+        match provider {
+            LLMProvider::OpenAI => keys.openai.clone(),
+            LLMProvider::Anthropic => keys.anthropic.clone(),
+            LLMProvider::Google => keys.google.clone(),
+            LLMProvider::Xai | LLMProvider::Unknown => None,
+        }
+    }
+
+    /// After a BYO provider key is added, offer to switch the default Agent Mode
+    /// model to one from that provider, unless the current default is already
+    /// served by a credential the user has.
+    fn maybe_prompt_set_default_model_for_provider(
+        &mut self,
+        provider: LLMProvider,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Only prompt when the key is actually usable for requests (BYO enabled).
+        if !is_using_api_key_for_provider(&provider, ctx) {
+            return;
+        }
+        if Self::active_base_model_is_byo_covered(ctx) {
+            return;
+        }
+        let choices: Vec<(LLMId, String)> = LLMPreferences::as_ref(ctx)
+            .get_base_llm_choices_for_agent_mode(ctx)
+            .filter(|llm| llm.provider == provider)
+            .map(|llm| (llm.id.clone(), llm.menu_display_name()))
+            .collect();
+        if choices.is_empty() {
+            return;
+        }
+        let provider_name = provider.display_name();
+        let description = format!(
+            "You added your {provider_name} API key. Set your default Agent Mode model to one from \
+             {provider_name} so requests use your key instead of Warp credits."
+        );
+        self.show_set_default_model_modal(description, choices, ctx);
+    }
+
+    /// After a custom endpoint is added or saved, offer to switch the default
+    /// Agent Mode model to one of its models, unless the current default is
+    /// already served by a credential the user has.
+    fn maybe_prompt_set_default_model_for_custom_endpoint(
+        &mut self,
+        endpoint_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !Self::can_use_custom_inference_controls(ctx) {
+            return;
+        }
+        if Self::active_base_model_is_byo_covered(ctx) {
+            return;
+        }
+        let Some(endpoint) = ApiKeyManager::as_ref(ctx)
+            .keys()
+            .custom_endpoints
+            .get(endpoint_index)
+            .cloned()
+        else {
+            return;
+        };
+        // Build directly from the endpoint's models rather than the synthetic
+        // `custom_llms`, which are rebuilt asynchronously on `KeysUpdated`.
+        let choices: Vec<(LLMId, String)> = endpoint
+            .models
+            .iter()
+            .filter(|m| !m.name.trim().is_empty() && !m.config_key.is_empty())
+            .map(|m| {
+                (
+                    LLMId::from(m.config_key.clone()),
+                    m.display_label().to_string(),
+                )
+            })
+            .collect();
+        if choices.is_empty() {
+            return;
+        }
+        let description = format!(
+            "You added the \"{}\" endpoint. Set your default Agent Mode model to one from this \
+             endpoint so requests use it instead of Warp credits.",
+            endpoint.name
+        );
+        self.show_set_default_model_modal(description, choices, ctx);
     }
 
     fn sync_custom_endpoint_buttons(&mut self, ctx: &mut ViewContext<Self>) {
@@ -2114,6 +2315,14 @@ impl AISettingsPageView {
                     );
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
+
+                // The new endpoint is appended last.
+                let new_index = ApiKeyManager::as_ref(ctx)
+                    .keys()
+                    .custom_endpoints
+                    .len()
+                    .saturating_sub(1);
+                self.maybe_prompt_set_default_model_for_custom_endpoint(new_index, ctx);
                 ctx.notify();
             }
             CustomEndpointModalEvent::SaveEndpoint {
@@ -2146,6 +2355,7 @@ impl AISettingsPageView {
                     );
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
+                self.maybe_prompt_set_default_model_for_custom_endpoint(*index, ctx);
                 ctx.notify();
             }
             CustomEndpointModalEvent::RemoveEndpoint { index } => {
@@ -7814,7 +8024,7 @@ impl ApiKeysWidget {
         // A helper macro to create and configure an API key editor.  This avoids a lot
         // of code duplication and ensures consistency between the editors.
         macro_rules! create_api_key_editor {
-            ($editor:ident, $key:ident, $set_func:ident, $placeholder:literal) => {
+            ($editor:ident, $key:ident, $set_func:ident, $placeholder:literal, $provider:expr) => {
                 let $editor = ctx.add_typed_action_view(move |ctx| {
                     let appearance = Appearance::handle(ctx).as_ref(ctx);
                     let options = SingleLineEditorOptions {
@@ -7843,13 +8053,20 @@ impl ApiKeysWidget {
                     is_any_ai_enabled && is_byo_enabled,
                     ctx,
                 );
-                ctx.subscribe_to_view(&$editor, |_, $editor, event, ctx| {
+                ctx.subscribe_to_view(&$editor, |me, $editor, event, ctx| {
                     if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                         let buffer_text = $editor.as_ref(ctx).buffer_text(ctx);
                         let key = buffer_text.is_empty().not().then_some(buffer_text);
+                        // Only prompt when a key is newly added or changed, so a
+                        // no-op blur on an already-saved key doesn't re-prompt.
+                        let key_added = key.is_some()
+                            && key != AISettingsPageView::stored_provider_key(&$provider, ctx);
                         ApiKeyManager::handle(ctx).update(ctx, |model, ctx| {
                             model.$set_func(key, ctx);
                         });
+                        if key_added {
+                            me.maybe_prompt_set_default_model_for_provider($provider, ctx);
+                        }
                     }
                 });
                 let editor_clone = $editor.clone();
@@ -7882,18 +8099,26 @@ impl ApiKeysWidget {
             };
         }
 
-        create_api_key_editor!(openai_api_key_editor, openai_key, set_openai_key, "sk-...");
+        create_api_key_editor!(
+            openai_api_key_editor,
+            openai_key,
+            set_openai_key,
+            "sk-...",
+            LLMProvider::OpenAI
+        );
         create_api_key_editor!(
             anthropic_api_key_editor,
             anthropic_key,
             set_anthropic_key,
-            "sk-ant-..."
+            "sk-ant-...",
+            LLMProvider::Anthropic
         );
         create_api_key_editor!(
             google_api_key_editor,
             google_key,
             set_google_key,
-            "AIzaSy..."
+            "AIzaSy...",
+            LLMProvider::Google
         );
 
         // Editor text colors are snapshotted at construction via
