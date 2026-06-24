@@ -461,7 +461,6 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
-ai_resume_button = []
 autoupdate = []
 figma_detection = []
 bundled_skills = []
@@ -544,7 +543,6 @@ default = [
     "interactive_conversation_management_view",
     "shared_block_title_generation",
     "tab_close_button_on_left",
-    "ai_resume_button",
     "code_find_replace",
     "ai_context_menu_code",
     "agent_decides_command_execution",

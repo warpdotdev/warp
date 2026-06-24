@@ -295,9 +295,6 @@ pub enum FeatureFlag {
     /// Enables the AI context menu outside of AI input mode.
     AtMenuOutsideOfAIMode,
 
-    /// Enables the resume button for cancelled AI conversations.
-    AIResumeButton,
-
     /// Enables the agent to decide whether to execute a command.
     AgentDecidesCommandExecution,
 
