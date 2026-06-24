@@ -152,10 +152,11 @@ enum LoginSlideOverlay {
     SkipDialog,
 }
 
-/// Why the login slide is being shown, which drives its copy. The Terminal+Drive
-/// path requires an account for cloud sync, so skipping is framed as losing Warp
-/// Drive; the Warp-agent and third-party paths keep AI enabled regardless of the
-/// account, so skipping is framed as deferring sign-in (you can sign in later).
+/// Why the login slide is being shown, which drives its copy. All three paths
+/// need an account: Terminal+Drive for cloud sync, and the Warp-agent and
+/// third-party paths because Warp's AI features run on a Warp account. Skipping
+/// therefore defers sign-in and leaves the gated features off until the user
+/// creates an account.
 enum LoginPurpose {
     WarpAgent,
     WarpDrive,
@@ -169,16 +170,16 @@ enum LoginPurpose {
 const AUTH_TOKEN_INPUT_BORDER_RADIUS: Radius = Radius::Pixels(4.);
 
 pub struct LoginSlideView {
-    /// Whether AI will be enabled once onboarding is applied. Used to gate the
-    /// cloud-conversation-storage toggle and AI wording in the privacy settings
-    /// step: agent intent always enables AI, while the terminal intention path
-    /// disables it. The actual `AISettings` value may not have been written yet
-    /// at this point, since onboarding settings are applied after login.
+    /// Whether this path wants AI (agent intent) vs. not (terminal intention).
+    /// Used to gate the cloud-conversation-storage toggle and AI wording in the
+    /// privacy settings step. This reflects intent, not the final state: AI runs
+    /// on a Warp account, so skipping login leaves it off even when this is true.
+    /// The actual `AISettings` value is written when settings are applied.
     ai_enabled: bool,
     /// Whether the user chose third-party (BYO) agents during onboarding. Drives
     /// the agent-path login copy ("Create an account" for third-party vs. "Get
     /// started with AI" for Warp Agent); it does not affect whether AI is
-    /// enabled, since agent intent always keeps AI on.
+    /// enabled, which depends on the user creating an account.
     uses_third_party_agents: bool,
     /// Onboarding intention selected by the user, used to render Drive-focused
     /// copy on the Terminal+Drive path. On the login slide, `intention ==
@@ -962,13 +963,13 @@ impl LoginSlideView {
             ),
             LoginPurpose::WarpAgent => (
                 "Skip signing in for now?",
-                "Warp's AI features run on your Warp account. You can keep exploring and sign in anytime to start using them.",
+                "Warp's AI features run on your Warp account. You can skip signing in for now, but you won't have access to any agentic features until you create an account. Creating an account is free.",
                 &[],
                 "Sign in",
             ),
             LoginPurpose::ThirdParty => (
                 "Skip creating an account?",
-                "Warp is better with an account. You can keep exploring and sign in anytime. Your AI features stay on either way.",
+                "An account is required to access Warp's agentic and collaborative features. You can create an account at any time.",
                 &[],
                 "Create an account",
             ),

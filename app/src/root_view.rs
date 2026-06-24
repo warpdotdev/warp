@@ -2094,8 +2094,9 @@ impl RootView {
                 };
                 let workspace = target.to_workspace(ctx);
                 // User opted out of login: apply locally (no cloud race).
+                // Skipping leaves the user without an account, so AI is disabled.
                 if let Some(selected_settings) = self.pending_post_auth_onboarding_settings.take() {
-                    apply_onboarding_settings(&selected_settings, ctx);
+                    apply_onboarding_settings(&selected_settings, false, ctx);
                 }
                 self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
@@ -2218,7 +2219,7 @@ impl RootView {
                     return;
                 }
 
-                apply_onboarding_settings(selected_settings, ctx);
+                apply_onboarding_settings(selected_settings, is_logged_in, ctx);
 
                 if is_logged_in {
                     AuthManager::handle(ctx)
@@ -3151,7 +3152,8 @@ impl RootView {
                     if let Some(selected_settings) =
                         self.pending_post_auth_onboarding_settings.take()
                     {
-                        apply_onboarding_settings(&selected_settings, ctx);
+                        // Skipped login → no account → AI disabled.
+                        apply_onboarding_settings(&selected_settings, false, ctx);
                     }
                     self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                     ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
@@ -3356,7 +3358,8 @@ impl RootView {
         let Some(selected_settings) = self.pending_post_auth_onboarding_settings.take() else {
             return;
         };
-        apply_onboarding_settings(&selected_settings, ctx);
+        // Reached only after a successful login, so the user has an account.
+        apply_onboarding_settings(&selected_settings, true, ctx);
     }
 
     /// If onboarding stored a pending tutorial (because login was required first),

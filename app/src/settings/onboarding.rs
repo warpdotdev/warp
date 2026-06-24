@@ -14,7 +14,15 @@ use crate::workspace::tab_settings::TabSettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Applies onboarding settings based on the user's selected mode.
-pub fn apply_onboarding_settings(selected_settings: &SelectedSettings, app: &mut AppContext) {
+///
+/// `has_account` indicates whether the user has (or is creating) a real Warp
+/// account. Warp's AI features run on a Warp account, so agent intent only
+/// enables AI when `has_account` is true; skipping login leaves AI off.
+pub fn apply_onboarding_settings(
+    selected_settings: &SelectedSettings,
+    has_account: bool,
+    app: &mut AppContext,
+) {
     let is_ai_enabled = match selected_settings {
         SelectedSettings::AgentDrivenDevelopment {
             agent_settings,
@@ -25,10 +33,11 @@ pub fn apply_onboarding_settings(selected_settings: &SelectedSettings, app: &mut
             if let Some(ui) = ui_customization {
                 apply_ui_customization_settings(ui, true, app);
             }
-            // Agent-driven development always enables AI, even when the user
-            // brings their own agents (`disable_oz`) or skips creating an
-            // account during onboarding.
-            true
+            // Agent intent means the user wants AI, but Warp's AI features run
+            // on a Warp account, so AI is only enabled once they have one.
+            // Skipping login leaves AI off even for agent intent (including the
+            // bring-your-own-agents `disable_oz` path).
+            has_account
         }
         SelectedSettings::Terminal {
             ui_customization,

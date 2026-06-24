@@ -81,10 +81,11 @@ impl SelectedSettings {
     pub fn is_ai_enabled(&self) -> bool {
         use warp_core::features::FeatureFlag;
         match self {
-            // Agent-driven development always means "I want AI", even when the
-            // user brings their own (third-party) agents (`disable_oz`) and
-            // skips Warp's inference, so AI stays enabled regardless of the
-            // account or `disable_oz` choice.
+            // Agent-driven development always means "I want AI" (including the
+            // bring-your-own-agents `disable_oz` path). This reflects intent and
+            // is used to decide that an account/login is required; whether AI is
+            // actually enabled is applied later based on whether the user has an
+            // account (see `apply_onboarding_settings`).
             SelectedSettings::AgentDrivenDevelopment { .. } => true,
             SelectedSettings::Terminal { .. } => {
                 // With old onboarding (no OpenWarpNewSettingsModes), Terminal
