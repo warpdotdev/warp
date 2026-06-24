@@ -74,8 +74,8 @@ pub use permissions::{BlocklistAIPermissions, CommandExecutionPermissionAllowedR
 pub(crate) use persistence::PersistedAIInputType;
 pub(crate) use persistence::{PersistedAIInput, SerializedBlockListItem};
 pub(crate) use queued_query::{
-    AutofireAction, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
-    QueuedQueryOrigin,
+    is_lrc_auto_queue_active, AutofireAction, QueuedQuery, QueuedQueryEvent, QueuedQueryId,
+    QueuedQueryModel, QueuedQueryOrigin,
 };
 pub use suggestion_chip_view::*;
 pub use view_util::error_color;

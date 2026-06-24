@@ -39,13 +39,13 @@ use session_sharing_protocol::sharer::{
     UpstreamMessage,
 };
 use warp_core::features::FeatureFlag;
+use warp_server_client::iap::IapManager;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
 use websocket::{Message, Sink, Stream, WebSocket, WebsocketMessage as _};
 
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::editor::{CrdtOperation, ReplicaId};
-use crate::server::iap::IapManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shared_session::{
@@ -1254,10 +1254,11 @@ impl Network {
     }
 
     fn process_websocket_message(&mut self, message: Message, ctx: &mut ModelContext<Self>) {
-        let Some(downstream_message) = message
-            .text()
-            .and_then(|t| DownstreamMessage::from_json(t).ok())
-        else {
+        // Ignore non-text frames (e.g. ping frames sent by the server).
+        let Some(text) = message.text() else {
+            return;
+        };
+        let Some(downstream_message) = DownstreamMessage::from_json(text).ok() else {
             sharer_warn!(
                 self,
                 "Received unexpected message from shared session websocket as sharer"

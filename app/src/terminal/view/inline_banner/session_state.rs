@@ -22,7 +22,7 @@ impl ByoLlmAuthBannerSessionState {
             .value();
 
         // Subscribe to changes in the permanent dismissal setting
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |state, event, ctx| {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |state, _, event, ctx| {
             if let AISettingsChangedEvent::AwsBedrockLoginBannerDismissed { .. } = event {
                 let permanently_dismissed = *AISettings::as_ref(ctx)
                     .aws_bedrock_login_banner_dismissed

@@ -1,6 +1,6 @@
 use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use warp_util::remote_path::RemotePath;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{GitRepoStatusEvent, GitStatusMetadata};
 use crate::remote_server::proto;
@@ -36,6 +36,7 @@ impl RemoteGitRepoStatusModel {
 
     fn handle_manager_event(
         &mut self,
+        _: ModelHandle<RemoteServerManager>,
         event: &RemoteServerManagerEvent,
         ctx: &mut ModelContext<Self>,
     ) {

@@ -255,7 +255,7 @@ impl DelayRendering {
         model.render_state.update(ctx, move |render_state, _| {
             let should_autoscroll = self.should_autoscroll;
             for (delta, content_version) in self.edits {
-                render_state.add_pending_edit(delta.clone(), content_version);
+                render_state.add_pending_edit(delta, content_version);
             }
             match should_autoscroll {
                 ShouldAutoscroll::Yes => render_state.request_autoscroll(),
@@ -332,7 +332,7 @@ impl CodeEditorModel {
         content.update(ctx, |buffer, _| {
             buffer.set_session_platform(session_platform);
         });
-        ctx.subscribe_to_model(&content, |me, event, ctx| {
+        ctx.subscribe_to_model(&content, |me, _, event, ctx| {
             me.handle_content_model_event(event, ctx);
         });
 
@@ -343,12 +343,12 @@ impl CodeEditorModel {
         let buffer_handle = content.downgrade();
         let syntax_tree =
             ctx.add_model(|_ctx| SyntaxTreeState::new(buffer_handle, buffer_version, color_map));
-        ctx.subscribe_to_model(&syntax_tree, |me, event, ctx| {
+        ctx.subscribe_to_model(&syntax_tree, |me, _, event, ctx| {
             me.handle_syntax_tree_model_event(event, ctx);
         });
 
         let diff = ctx.add_model(|_ctx| DiffModel::new());
-        ctx.subscribe_to_model(&diff, |me, event, ctx| {
+        ctx.subscribe_to_model(&diff, |me, _, event, ctx| {
             me.handle_diff_model_event(event, ctx);
         });
 
@@ -359,7 +359,7 @@ impl CodeEditorModel {
             RenderState::new(text_styles, lazy_layout, Some(hidden_lines.clone()), ctx)
                 .with_width_setting(WidthSetting::InfiniteWidth)
         });
-        ctx.subscribe_to_model(&render_state, |me, event, ctx| {
+        ctx.subscribe_to_model(&render_state, |me, _, event, ctx| {
             me.handle_render_state_model_event(event, ctx);
         });
         let selection = ctx.add_model(|ctx| {

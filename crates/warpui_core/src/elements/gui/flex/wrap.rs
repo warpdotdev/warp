@@ -3,10 +3,10 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 
 use super::{
-    cross_axis_size, AppContext, Axis, CrossAxisAlignment, Element, EventContext, LayoutContext,
-    MainAxisSize, PaintContext, Point, SizeConstraint, Vector2FExt,
+    cross_axis_size, main_axis_size, size_along_axis, AppContext, Axis, CrossAxisAlignment,
+    Element, EventContext, LayoutContext, LayoutState, MainAxisSize, PaintContext, Point,
+    SizeConstraint, Vector2FExt,
 };
-use crate::elements::flex::{main_axis_size, size_along_axis, LayoutState};
 use crate::elements::{AxisOrientation, MainAxisAlignment};
 use crate::event::DispatchedEvent;
 use crate::ClipBounds;

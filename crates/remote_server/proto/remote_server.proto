@@ -120,11 +120,11 @@ message ServerMessage {
     GitCreatePrResponse git_create_pr_response = 29;
     GitGenerateCommitMessageResponse git_generate_commit_message_response = 31;
     GitGetCommittedBranchFilesResponse git_get_committed_branch_files_response = 32;
-    BundledSkillsSnapshot bundled_skills_snapshot = 33;
     GitStatusPush git_status_push = 34;
     GitHubPrInfoPush github_pr_info_push = 35;
     GitHubRepositoryInfoPush github_repository_info_push = 36;
     RipgrepSearchResponse ripgrep_search_response = 37;
+    RemoteAgentContextSnapshot remote_agent_context_snapshot = 33;
   }
 }
 
@@ -246,31 +246,45 @@ message ErrorResponse {
   string message = 2;
 }
 
-// ── Bundled skills ────────────────────────────────────────────────
+// ── Remote Agent Mode context ─────────────────────────────────────
 
-// One bundled skill, pre-parsed and handlebars-rendered by the daemon
-// against its own filesystem. Named with the `Proto` suffix (like
-// `FileContextProto`) to avoid colliding with the app's `BundledSkill`.
-message BundledSkillProto {
-  // Directory-based skill ID (unique within the bundled catalog).
+// Metadata specific to a skill bundled with Warp.
+message BundledSkillMetadata {
+  // Directory-based skill ID, unique within the bundled catalog.
   string id = 1;
-  string name = 2;
-  string description = 3;
-  // Absolute path to the skill's SKILL.md on this host.
-  string path = 4;
-  // Skill content with handlebars variables rendered for this host.
-  string content = 5;
   // When set, the skill is only active while the named MCP integration
   // is running on the client (e.g. "figma"). Evaluated client-side.
-  optional string requires_mcp = 6;
+  optional string requires_mcp = 2;
 }
 
-// Server → client push: the daemon's bundled skill catalog. Sent to a
-// connection after its Initialize completes (when parsing has already
-// finished) and broadcast to all connections when parsing completes.
-// Never blocks the initialize handshake.
-message BundledSkillsSnapshot {
-  repeated BundledSkillProto skills = 1;
+// Marker metadata for a file-based skill from the daemon host's home directory.
+message HomeSkillMetadata {}
+
+// One already-read remote skill published by the daemon.
+message RemoteSkillProto {
+  // Absolute path to the file on this host.
+  string path = 1;
+  string content = 2;
+  oneof source {
+    BundledSkillMetadata bundled = 3;
+    HomeSkillMetadata home = 4;
+  }
+}
+
+// One already-read remote context file published by the daemon.
+message RemoteContextFileProto {
+  // Absolute path to the file on this host.
+  string path = 1;
+  string content = 2;
+}
+
+// Revisioned full replacement of the daemon host's Agent Mode context. Source
+// discovery and reading happen daemon-side before this snapshot is published.
+message RemoteAgentContextSnapshot {
+  uint64 revision = 1;
+  string home_dir = 2;
+  repeated RemoteSkillProto skills = 3;
+  repeated RemoteContextFileProto global_rules = 4;
 }
 
 // ── Shared repo metadata sub-messages ─────────────────────────────

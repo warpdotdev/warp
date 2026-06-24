@@ -190,19 +190,22 @@ pub struct AIDocumentModel {
 
 impl AIDocumentModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&UpdateManager::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&UpdateManager::handle(ctx), |me, _, event, ctx| {
             me.handle_update_manager_event(event, ctx);
         });
-        ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, event, ctx| {
             me.handle_cloud_model_event(event, ctx);
         });
 
         // Subscribe to history events so we can hydrate the orchestration
         // config from OrchestrationConfigSnapshot messages that arrive
         // in the conversation's task message list.
-        ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, event, ctx| {
-            me.handle_history_event_for_orchestration_config(event, ctx);
-        });
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |me, _, event, ctx| {
+                me.handle_history_event_for_orchestration_config(event, ctx);
+            },
+        );
 
         // Setup throttled save channel
         let (save_tx, save_rx) = async_channel::unbounded();
@@ -625,7 +628,7 @@ impl AIDocumentModel {
         let editor = Self::create_editor_model(content, file_link_resolution_context, ctx);
 
         // Subscribe to editor content changes
-        ctx.subscribe_to_model(&editor, move |me, event, ctx| {
+        ctx.subscribe_to_model(&editor, move |me, _, event, ctx| {
             me.handle_editor_event(&id, event, ctx);
         });
 

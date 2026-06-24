@@ -1454,7 +1454,7 @@ fn test_debounced_resizes() {
         let render_state = app.read(|ctx| model_handle.as_ref(ctx).render_state().clone());
         let model2 = render_state.clone();
         let _observer = app.add_model::<Observer, _>(move |ctx| {
-            ctx.subscribe_to_model(&model2, move |_, event, _| {
+            ctx.subscribe_to_model(&model2, move |_, _, event, _| {
                 block_on(events_tx.send(*event)).unwrap();
             });
             Observer {}

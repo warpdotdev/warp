@@ -89,12 +89,12 @@ impl SlashCommandDataSource {
             terminal_view_id,
             ambient_agent_view_model,
         } = args;
-        ctx.subscribe_to_model(&active_session, |me, event, ctx| match event {
+        ctx.subscribe_to_model(&active_session, |me, _, event, ctx| match event {
             ActiveSessionEvent::UpdatedPwd | ActiveSessionEvent::Bootstrapped => {
                 me.recompute_active_commands(ctx);
             }
         });
-        ctx.subscribe_to_model(&cli_subagent_controller, |me, event, ctx| {
+        ctx.subscribe_to_model(&cli_subagent_controller, |me, _, event, ctx| {
             if let CLISubagentEvent::SpawnedSubagent { .. }
             | CLISubagentEvent::FinishedSubagent { .. }
             | CLISubagentEvent::UpdatedControl { .. } = event
@@ -102,14 +102,14 @@ impl SlashCommandDataSource {
                 me.recompute_active_commands(ctx);
             }
         });
-        ctx.subscribe_to_model(&agent_view_controller, |me, event, ctx| match event {
+        ctx.subscribe_to_model(&agent_view_controller, |me, _, event, ctx| match event {
             AgentViewControllerEvent::EnteredAgentView { .. }
             | AgentViewControllerEvent::ExitedAgentView { .. } => {
                 me.recompute_active_commands(ctx);
             }
             _ => (),
         });
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
             if matches!(
                 event,
                 AISettingsChangedEvent::IsAnyAIEnabled { .. }
@@ -118,7 +118,7 @@ impl SlashCommandDataSource {
                 me.recompute_active_commands(ctx);
             }
         });
-        ctx.subscribe_to_model(&PrivacySettings::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&PrivacySettings::handle(ctx), |me, _, event, ctx| {
             if matches!(
                 event,
                 PrivacySettingsChangedEvent::UpdateIsCloudConversationStorageEnabled { .. }
@@ -126,7 +126,7 @@ impl SlashCommandDataSource {
                 me.recompute_active_commands(ctx);
             }
         });
-        ctx.subscribe_to_model(&InputSettings::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&InputSettings::handle(ctx), |me, _, event, ctx| {
             if matches!(
                 event,
                 InputSettingsChangedEvent::EnableSlashCommandsInTerminal { .. }
@@ -134,7 +134,7 @@ impl SlashCommandDataSource {
                 me.recompute_active_commands(ctx);
             }
         });
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
             if matches!(
                 event,
                 UserWorkspacesEvent::CodebaseContextEnablementChanged
@@ -145,7 +145,7 @@ impl SlashCommandDataSource {
         });
         ctx.subscribe_to_model(
             &CLIAgentSessionsModel::handle(ctx),
-            move |me, event, ctx| {
+            move |me, _, event, ctx| {
                 if let CLIAgentSessionsModelEvent::InputSessionChanged {
                     terminal_view_id: event_terminal_view_id,
                     ..
@@ -159,26 +159,32 @@ impl SlashCommandDataSource {
         );
         // Recompute when the active conversation switches so commands gated on the active
         // conversation's task (e.g. /continue-locally) update on navigation.
-        ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), |me, event, ctx| {
-            if matches!(
-                event,
-                BlocklistAIHistoryEvent::SetActiveConversation { .. }
-                    | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
-            ) {
-                me.recompute_active_commands(ctx);
-            }
-        });
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |me, _, event, ctx| {
+                if matches!(
+                    event,
+                    BlocklistAIHistoryEvent::SetActiveConversation { .. }
+                        | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
+                ) {
+                    me.recompute_active_commands(ctx);
+                }
+            },
+        );
         // Recompute when task data is updated so commands gated on a conversation's task
         // harness (e.g. /continue-locally) appear once the task fetch resolves.
-        ctx.subscribe_to_model(&AgentConversationsModel::handle(ctx), |me, event, ctx| {
-            if matches!(
-                event,
-                AgentConversationsModelEvent::TasksUpdated
-                    | AgentConversationsModelEvent::NewTasksReceived
-            ) {
-                me.recompute_active_commands(ctx);
-            }
-        });
+        ctx.subscribe_to_model(
+            &AgentConversationsModel::handle(ctx),
+            |me, _, event, ctx| {
+                if matches!(
+                    event,
+                    AgentConversationsModelEvent::TasksUpdated
+                        | AgentConversationsModelEvent::NewTasksReceived
+                ) {
+                    me.recompute_active_commands(ctx);
+                }
+            },
+        );
 
         let mut me = Self {
             active_session,
@@ -289,10 +295,12 @@ impl SlashCommandDataSource {
         }
 
         if self.is_cloud_mode_v2 && FeatureFlag::CloudModeInputV2.is_enabled() {
-            session_context |= Availability::CLOUD_AGENT_V2;
+            session_context |= Availability::CLOUD_MODE_V2_COMPOSER;
         }
 
-        if !self.is_cloud_mode(ctx) {
+        if self.is_cloud_mode(ctx) {
+            session_context |= Availability::CLOUD_AGENT;
+        } else {
             session_context |= Availability::NOT_CLOUD_AGENT;
         }
 
@@ -329,9 +337,15 @@ impl SlashCommandDataSource {
         if command.name == commands::MOVE_TO_CLOUD.name && !context.is_cloud_handoff_enabled {
             return false;
         }
-        // /continue-locally only applies to cloud Oz conversations. Local conversations
-        // and non-Oz cloud runs (Claude, Gemini) are filtered out so the slash menu
-        // doesn't surface a no-op command.
+        if command.name == commands::FORK.name
+            && context
+                .session_context
+                .contains(Availability::CLOUD_MODE_V2_COMPOSER)
+        {
+            return false;
+        }
+        // /continue-locally only applies to cloud Oz conversations. Non-Oz cloud runs
+        // (Claude, Gemini) are filtered out so the slash menu doesn't surface a no-op command.
         #[cfg(not(target_family = "wasm"))]
         if command.name == commands::CONTINUE_LOCALLY.name
             && !context.active_conversation_is_cloud_oz

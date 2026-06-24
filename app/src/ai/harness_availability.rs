@@ -105,7 +105,7 @@ impl HarnessAvailabilityModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let harnesses = get_cached(ctx).unwrap_or_else(default_harnesses);
 
-        ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, _, event, ctx| {
             if let NetworkStatusEvent::NetworkStatusChanged {
                 new_status: NetworkStatusKind::Online,
             } = event
@@ -114,7 +114,7 @@ impl HarnessAvailabilityModel {
             }
         });
 
-        ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, _, event, ctx| {
             if let AuthManagerEvent::AuthComplete = event {
                 let cached_harnesses: Vec<Harness> = me.auth_secrets.keys().copied().collect();
                 for harness in cached_harnesses {
@@ -124,7 +124,7 @@ impl HarnessAvailabilityModel {
             }
         });
 
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
                 me.refresh(ctx);
             }

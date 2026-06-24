@@ -272,7 +272,7 @@ impl TerminalDriver {
             });
         }
 
-        ctx.subscribe_to_view(&terminal_view, move |me, event, ctx| {
+        ctx.subscribe_to_view(&terminal_view, move |me, _, event, ctx| {
             me.handle_terminal_view_event(event, &mut session_share_tx, ctx);
         });
 

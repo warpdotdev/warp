@@ -129,8 +129,9 @@ impl CustomizeUISlide {
         appearance: &Appearance,
         intention: OnboardingIntention,
         ui: &UICustomizationSettings,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        let bottom_nav = Align::new(self.render_bottom_nav(appearance, intention)).finish();
+        let bottom_nav = Align::new(self.render_bottom_nav(appearance, app)).finish();
 
         slide_content::onboarding_slide_content(
             vec![
@@ -404,11 +405,7 @@ impl CustomizeUISlide {
 
     // --- Bottom nav ---
 
-    fn render_bottom_nav(
-        &self,
-        appearance: &Appearance,
-        intention: OnboardingIntention,
-    ) -> Box<dyn Element> {
+    fn render_bottom_nav(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
@@ -439,8 +436,7 @@ impl CustomizeUISlide {
             },
         );
 
-        let is_terminal = matches!(intention, OnboardingIntention::Terminal);
-        let (step_index, step_count) = if is_terminal { (1, 4) } else { (1, 5) };
+        let (step_index, step_count) = self.onboarding_state.as_ref(app).progress();
         bottom_nav::onboarding_bottom_nav(
             appearance,
             step_index,
@@ -642,7 +638,7 @@ impl View for CustomizeUISlide {
         let ui = self.model_ui_customization(app);
 
         layout::static_left(
-            || self.render_content(appearance, intention, &ui),
+            || self.render_content(appearance, intention, &ui, app),
             || self.render_visual(appearance, intention, &ui),
         )
     }

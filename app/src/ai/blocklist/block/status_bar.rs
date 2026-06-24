@@ -333,7 +333,7 @@ impl BlocklistAIStatusBar {
             ctx.notify();
         });
 
-        let agent_message_bar = ctx.add_view(|ctx| {
+        let agent_message_bar = ctx.add_typed_action_view(|ctx| {
             AgentMessageBar::new(
                 agent_view_controller.clone(),
                 ephemeral_message_model.clone(),
@@ -839,8 +839,11 @@ impl BlocklistAIStatusBar {
                     ButtonProps {
                         button_handle: &self.state_handles.queue_next_prompt_button,
                         keystroke: self.queue_next_prompt_keystroke.as_ref(),
-                        is_active: QueuedQueryModel::as_ref(app)
-                            .is_queue_next_prompt_enabled(conversation.id()),
+                        is_active: QueuedQueryModel::as_ref(app).is_queue_next_prompt_enabled(
+                            conversation.id(),
+                            active_block,
+                            app,
+                        ),
                     },
                 ),
                 stop_button: Some(ButtonProps {

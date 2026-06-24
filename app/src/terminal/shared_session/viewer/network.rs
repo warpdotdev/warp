@@ -28,6 +28,7 @@ use session_sharing_protocol::viewer::{
     ViewerRemovedReason,
 };
 use warp_core::features::FeatureFlag;
+use warp_server_client::iap::IapManager;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
     Entity, ModelContext, ModelHandle, RequestState, RetryOption, SingletonEntity, WeakViewHandle,
@@ -37,7 +38,6 @@ use websocket::{Message, Sink, Stream, WebsocketMessage as _};
 use crate::auth::auth_state::AuthState;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::editor::{CrdtOperation, ReplicaId};
-use crate::server::iap::IapManager;
 use crate::server::server_api::auth::AuthClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::telemetry_context;
@@ -520,10 +520,11 @@ impl Network {
     }
 
     fn process_websocket_message(&mut self, message: Message, ctx: &mut ModelContext<Self>) {
-        let Some(msg) = message
-            .text()
-            .and_then(|t| DownstreamMessage::from_json(t).ok())
-        else {
+        // Ignore non-text frames (e.g. ping frames sent by the server).
+        let Some(text) = message.text() else {
+            return;
+        };
+        let Some(msg) = DownstreamMessage::from_json(text).ok() else {
             log::warn!("Got unexpected message from shared session viewer websocket");
             return;
         };

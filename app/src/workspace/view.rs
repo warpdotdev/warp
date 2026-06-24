@@ -5,6 +5,7 @@ pub(crate) mod codex_modal;
 pub mod conversation_list;
 #[cfg(enable_crash_recovery)]
 mod crash_recovery;
+pub(crate) mod free_ai_removal_modal;
 pub(crate) mod free_tier_limit_hit_modal;
 pub mod global_search;
 pub(crate) mod launch_modal;
@@ -42,6 +43,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ::settings::{Setting, ToggleableSetting};
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
+#[cfg(not(target_family = "wasm"))]
+use anyhow::Context as _;
+#[cfg(target_os = "macos")]
+use anyhow::Result;
 use autoupdate::AutoupdateStage;
 #[cfg(target_os = "macos")]
 use command::blocking::Command;
@@ -153,6 +158,8 @@ use super::util::{
 use super::{util, ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::api::ServerConversationToken;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent::conversation::AIAgentHarness;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::agent::CancellationReason;
@@ -170,6 +177,8 @@ use crate::ai::agent_management::notifications::NotificationFilter;
 use crate::ai::agent_management::telemetry::AgentManagementTelemetryEvent;
 use crate::ai::agent_management::view::{AgentManagementView, AgentManagementViewEvent};
 use crate::ai::agent_management::AgentManagementEvent;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::driver::harness::{claude_transcript, codex_transcript};
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::ambient_agents::telemetry::{HandoffEntryPoint, HandoffInjectionPath};
@@ -307,6 +316,7 @@ use crate::search::command_search::searcher::{
 };
 use crate::search::command_search::settings::CommandSearchSettings;
 use crate::search::command_search::view::{CommandSearchEvent, CommandSearchView};
+#[cfg(target_family = "wasm")]
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::search::{self, QueryFilter};
 use crate::server::cloud_objects::update_manager::{
@@ -372,6 +382,8 @@ use crate::terminal::enable_auto_reload_modal::{
     EnableAutoReloadModal, EnableAutoReloadModalEvent,
 };
 use crate::terminal::general_settings::GeneralSettings;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::input::{Input, MenuPositioning};
 use crate::terminal::keys_settings::KeysSettings;
 use crate::terminal::ligature_settings::should_use_ligature_rendering;
@@ -490,6 +502,10 @@ use crate::workspace::view::cloud_agent_capacity_modal::{
     CloudAgentCapacityModal, CloudAgentCapacityModalEvent, CloudAgentCapacityModalVariant,
 };
 use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
+use crate::workspace::view::free_ai_removal_modal::{
+    FreeAiRemovalModal, FreeAiRemovalModalEvent, FreeAiRemovalModalTelemetryEvent,
+    FreeAiRemovalModalVariant,
+};
 use crate::workspace::view::free_tier_limit_hit_modal::{
     FreeTierLimitHitModal, FreeTierLimitHitModalEvent,
 };
@@ -945,6 +961,10 @@ pub struct TransferredTab {
     pub is_right_panel_maximized: bool,
     pub draggable_state: DraggableState,
 }
+#[cfg(not(target_family = "wasm"))]
+struct ThirdPartyLocalContinuationLaunch {
+    command: String,
+}
 
 /// Per-`TabGroupId` hover state for the horizontal tab bar header.
 #[derive(Clone, Default)]
@@ -1070,6 +1090,10 @@ pub struct Workspace {
     cloud_agent_capacity_modal: ViewHandle<CloudAgentCapacityModal>,
     free_tier_limit_hit_modal: ViewHandle<FreeTierLimitHitModal>,
     free_tier_limit_check_triggered: bool,
+    free_ai_removal_modal: ViewHandle<FreeAiRemovalModal>,
+    /// Second instance of the free-AI-removal modal, opened on demand when a
+    /// Free user activates Prompt Suggestions while out of credits.
+    prompt_suggestions_unavailable_modal: ViewHandle<FreeAiRemovalModal>,
     toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
     agent_toast_stack: ViewHandle<AgentToastStack>,
     update_toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
@@ -2892,6 +2916,23 @@ impl Workspace {
             me.handle_free_tier_limit_modal_event(event, ctx);
         });
 
+        let free_ai_removal_modal = ctx.add_typed_action_view(|ctx| {
+            FreeAiRemovalModal::new(FreeAiRemovalModalVariant::Notice, ctx)
+        });
+        ctx.subscribe_to_view(&free_ai_removal_modal, |me, _, event, ctx| {
+            me.handle_free_ai_removal_modal_event(event, ctx);
+        });
+
+        let prompt_suggestions_unavailable_modal = ctx.add_typed_action_view(|ctx| {
+            FreeAiRemovalModal::new(FreeAiRemovalModalVariant::PromptSuggestions, ctx)
+        });
+        ctx.subscribe_to_view(
+            &prompt_suggestions_unavailable_modal,
+            |me, _, event, ctx| {
+                me.handle_prompt_suggestions_unavailable_modal_event(event, ctx);
+            },
+        );
+
         let require_login_modal = Self::build_require_login_modal(ctx);
 
         let auth_override_warning_modal = Self::build_auth_override_warning_modal(ctx);
@@ -3250,6 +3291,8 @@ impl Workspace {
                         me.focus_orchestration_launch_modal(ctx);
                     } else if model_ref.is_auto_handoff_sleep_modal_open() {
                         me.focus_auto_handoff_sleep_modal(ctx);
+                    } else if model_ref.is_free_ai_removal_modal_open() {
+                        me.focus_free_ai_removal_modal(ctx);
                     } else if model_ref.is_hoa_onboarding_open() {
                         me.show_hoa_onboarding_flow(ctx);
                     } else if model_ref.is_build_plan_migration_modal_open() {
@@ -3398,6 +3441,8 @@ impl Workspace {
             cloud_agent_capacity_modal,
             free_tier_limit_hit_modal,
             free_tier_limit_check_triggered: false,
+            free_ai_removal_modal,
+            prompt_suggestions_unavailable_modal,
             lightbox_view: None,
             hoa_onboarding_flow: None,
             hoa_vtabs_callout_pinned_position: None,
@@ -5090,6 +5135,7 @@ impl Workspace {
                     subtitle,
                     window_id,
                     tab_index: tab_index + 1,
+                    color: tab.color(),
                 })
             })
             .collect()
@@ -8258,8 +8304,24 @@ impl Workspace {
         layout: EditorLayout,
         ctx: &mut ViewContext<Self>,
     ) {
-        // TODO(ben): It might be worth managing file-based notebooks via NotebookManager
-        //   (e.g. for open-or-switch behavior). See if it overcomplicates things.
+        let existing_file_pane = {
+            let pane_group = self.active_tab_pane_group();
+            pane_group
+                .as_ref(ctx)
+                .file_notebook_panes(ctx)
+                .find(|(pane_id, file_view)| {
+                    !pane_group.as_ref(ctx).is_pane_hidden_for_close(*pane_id)
+                        && file_view.as_ref(ctx).path() == Some(&path)
+                })
+                .map(|(pane_id, _)| pane_id)
+        };
+
+        if let Some(pane_id) = existing_file_pane {
+            self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                pane_group.focus_pane_by_id(pane_id, ctx);
+            });
+            return;
+        }
         let pane = FilePane::new(
             Some(path),
             session,
@@ -8678,57 +8740,99 @@ impl Workspace {
         }
     }
 
-    /// Install the Warp CLI by creating a symlink in /usr/local/bin
+    /// Show an ephemeral success toast or persistent failure toast for a CLI command operation.
     #[cfg(target_os = "macos")]
-    fn install_cli(&mut self, ctx: &mut ViewContext<Self>) {
-        ctx.spawn(async { cli_install::install_cli() }, |view, result, ctx| {
-            match result {
-                Ok(_) => {
-                    let command_name = ChannelState::channel().cli_command_name();
-                    let message = format!("Successfully installed the Oz CLI! You can now run '{command_name}' from the command line.");
-                    view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::success(message.to_string())
-                            .with_link(
-                                ToastLink::new("Learn more".to_string()).with_href(
-                                    "https://docs.warp.dev/reference/cli".to_string(),
-                                ),
-                            );
-                        toast_stack.add_ephemeral_toast(toast, ctx);
-                    });
-                }
-                Err(error) => {
-                    let error_message = format!("Failed to install Oz command: {error}");
-                    log::error!("{error_message}");
-                    view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::error(error_message);
-                        toast_stack.add_persistent_toast(toast, ctx);
-                    });
-                }
+    fn handle_cli_command_result(
+        &mut self,
+        result: Result<()>,
+        success_toast: DismissibleToast<WorkspaceAction>,
+        failure_message: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match result {
+            Ok(()) => {
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(success_toast, ctx);
+                });
             }
+            Err(error) => {
+                let error_message = format!("{failure_message}: {error}");
+                log::warn!("{error_message}");
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    let toast = DismissibleToast::error(error_message);
+                    toast_stack.add_persistent_toast(toast, ctx);
+                });
+            }
+        }
+    }
+
+    /// Install the Oz CLI by creating a symlink in /usr/local/bin
+    #[cfg(target_os = "macos")]
+    fn install_oz(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.spawn(async { cli_install::install_oz() }, |view, result, ctx| {
+            let command_name = ChannelState::channel().cli_command_name();
+            let message = format!("Successfully installed the Oz CLI! You can now run '{command_name}' from the command line.");
+            let toast = DismissibleToast::success(message).with_link(
+                ToastLink::new("Learn more".to_string())
+                    .with_href("https://docs.warp.dev/reference/cli".to_string()),
+            );
+            view.handle_cli_command_result(result, toast, "Failed to install Oz command", ctx);
         });
     }
 
-    /// Uninstall the Warp CLI by removing the symlink from /usr/local/bin
+    /// Uninstall the Oz CLI by removing the symlink from /usr/local/bin
     #[cfg(target_os = "macos")]
-    fn uninstall_cli(&mut self, ctx: &mut ViewContext<Self>) {
+    fn uninstall_oz(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(
-            async { cli_install::uninstall_cli() },
-            |view, result, ctx| match result {
-                Ok(_) => {
-                    let message = "Successfully uninstalled the Oz command.";
-                    view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::success(message.to_string());
-                        toast_stack.add_ephemeral_toast(toast, ctx);
-                    });
-                }
-                Err(error) => {
-                    let error_message = format!("Failed to uninstall Oz command: {error}");
-                    log::error!("{error_message}");
-                    view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::error(error_message);
-                        toast_stack.add_persistent_toast(toast, ctx);
-                    });
-                }
+            async { cli_install::uninstall_oz() },
+            |view, result, ctx| {
+                let toast = DismissibleToast::success(
+                    "Successfully uninstalled the Oz command.".to_string(),
+                );
+                view.handle_cli_command_result(
+                    result,
+                    toast,
+                    "Failed to uninstall Oz command",
+                    ctx,
+                );
+            },
+        );
+    }
+
+    /// Install the Warp Control CLI by creating a symlink in /usr/local/bin
+    #[cfg(target_os = "macos")]
+    fn install_warpctrl(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.spawn(
+            async { cli_install::install_warpctrl() },
+            |view, result, ctx| {
+                let command_name = ChannelState::channel().warpctrl_command_name();
+                let message = format!("Successfully installed the Warp Control CLI! You can now run '{command_name}' from the command line.");
+                let toast = DismissibleToast::success(message);
+                view.handle_cli_command_result(
+                    result,
+                    toast,
+                    "Failed to install Warp Control command",
+                    ctx,
+                );
+            },
+        );
+    }
+
+    /// Uninstall the Warp Control CLI by removing the symlink from /usr/local/bin
+    #[cfg(target_os = "macos")]
+    fn uninstall_warpctrl(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.spawn(
+            async { cli_install::uninstall_warpctrl() },
+            |view, result, ctx| {
+                let toast = DismissibleToast::success(
+                    "Successfully uninstalled the Warp Control command.".to_string(),
+                );
+                view.handle_cli_command_result(
+                    result,
+                    toast,
+                    "Failed to uninstall Warp Control command",
+                    ctx,
+                );
             },
         );
     }
@@ -13040,6 +13144,95 @@ impl Workspace {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn continue_third_party_conversation_locally(
+        &mut self,
+        task_id: AmbientAgentTaskId,
+        harness: AIAgentHarness,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let window_id = ctx.window_id();
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+
+        ctx.spawn(
+            async move {
+                let transcript_file = tempfile::Builder::new()
+                    .prefix("warp_run_transcript_")
+                    .suffix(".json")
+                    .tempfile()
+                    .context("Failed to create temporary transcript file")?;
+                let transcript_path = transcript_file.path().to_path_buf();
+
+                ai_client
+                    .download_run_transcript_to_path(&task_id, &transcript_path)
+                    .await
+                    .context("Failed to download run transcript")?;
+
+                let file = std::fs::File::open(&transcript_path)
+                    .context("Failed to open downloaded run transcript")?;
+                match harness {
+                    AIAgentHarness::ClaudeCode => {
+                        let launch =
+                            claude_transcript::rehydrate_claude_transcript_from_reader(file)?;
+                        Ok(ThirdPartyLocalContinuationLaunch {
+                            command: launch.command,
+                        })
+                    }
+                    AIAgentHarness::Codex => {
+                        let launch =
+                            codex_transcript::rehydrate_codex_transcript_from_reader(file)?;
+                        Ok(ThirdPartyLocalContinuationLaunch {
+                            command: launch.command,
+                        })
+                    }
+                    _ => anyhow::bail!(
+                        "Local continuation is not supported for this harness"
+                    ),
+                }
+            },
+            move |workspace, result, ctx| {
+                let launch = match result {
+                    Ok(launch) => launch,
+                    Err(err) => {
+                        log::warn!(
+                            "Failed to continue third-party conversation locally: {err:#}"
+                        );
+                        WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                            let toast = DismissibleToast::error(
+                                "Couldn't continue this conversation locally. Check the logs for details."
+                                    .to_owned(),
+                            );
+                            toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+                        });
+                        return;
+                    }
+                };
+
+                let active_pane_group = workspace.active_tab_pane_group().clone();
+                let new_pane_id = active_pane_group.update(ctx, |pane_group, ctx| {
+                    pane_group.add_terminal_pane_ignoring_default_session_mode(
+                        PaneGroupDirection::Right,
+                        None,
+                        ctx,
+                    )
+                });
+
+                let Some(terminal_view) = active_pane_group
+                    .as_ref(ctx)
+                    .terminal_view_from_pane_id(new_pane_id, ctx)
+                else {
+                    log::error!(
+                        "Could not get terminal view handle when continuing third-party conversation locally."
+                    );
+                    return;
+                };
+
+                terminal_view.update(ctx, |terminal, ctx| {
+                    terminal.set_pending_command(&launch.command, ctx);
+                });
+            },
+        );
+    }
     /// Fork an existing AI conversation.
     /// Optionally summarizes the conversation after forking and/or sends an initial prompt.
     /// When cloud conversation storage is enabled and the source has a server token,
@@ -18547,6 +18740,50 @@ impl Workspace {
         }
     }
 
+    fn handle_free_ai_removal_modal_event(
+        &mut self,
+        event: &FreeAiRemovalModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            FreeAiRemovalModalEvent::Close => {
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.mark_free_ai_removal_modal_dismissed(ctx);
+                });
+                self.focus_active_tab(ctx);
+                ctx.notify();
+            }
+        }
+    }
+
+    fn handle_prompt_suggestions_unavailable_modal_event(
+        &mut self,
+        event: &FreeAiRemovalModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            FreeAiRemovalModalEvent::Close => {
+                self.current_workspace_state
+                    .is_prompt_suggestions_unavailable_modal_open = false;
+                self.focus_active_tab(ctx);
+                ctx.notify();
+            }
+        }
+    }
+
+    pub fn open_prompt_suggestions_unavailable_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.current_workspace_state
+            .is_prompt_suggestions_unavailable_modal_open = true;
+        send_telemetry_from_ctx!(
+            FreeAiRemovalModalTelemetryEvent::Shown {
+                variant: FreeAiRemovalModalVariant::PromptSuggestions,
+            },
+            ctx
+        );
+        ctx.focus(&self.prompt_suggestions_unavailable_modal);
+        ctx.notify();
+    }
+
     fn handle_codex_modal_event(&mut self, event: &CodexModalEvent, ctx: &mut ViewContext<Self>) {
         use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
         use crate::AIExecutionProfilesModel;
@@ -22634,6 +22871,17 @@ impl Workspace {
             }
         }
 
+        match ai_settings.long_running_command_submission_mode {
+            crate::settings::LongRunningCommandSubmissionMode::SendImmediately => {
+                context.set.insert(flags::LRC_SUBMISSION_SEND_IMMEDIATELY);
+            }
+            crate::settings::LongRunningCommandSubmissionMode::QueueUntilCommandCompletes => {
+                context
+                    .set
+                    .insert(flags::LRC_SUBMISSION_QUEUE_UNTIL_COMMAND_COMPLETES);
+            }
+        }
+
         if input_settings.is_terminal_input_message_bar_enabled() {
             context
                 .set
@@ -22851,6 +23099,10 @@ impl Workspace {
 
     fn focus_build_plan_migration_modal(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.focus(&self.build_plan_migration_modal);
+    }
+
+    fn focus_free_ai_removal_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.focus(&self.free_ai_removal_modal);
     }
 
     fn open_left_panel_view(&mut self, action: &LeftPanelAction, ctx: &mut ViewContext<Self>) {
@@ -23407,6 +23659,9 @@ impl TypedActionView for Workspace {
                 search_query,
                 section,
             } => self.show_settings_with_search(search_query, *section, ctx),
+            OpenPromptSuggestionsUnavailableModal => {
+                self.open_prompt_suggestions_unavailable_modal(ctx)
+            }
             ShowThemeChooser(mode) => self.show_theme_chooser(Some(*mode), ctx),
             ShowThemeChooserForActiveTheme => self.show_theme_chooser_for_active_theme(ctx),
             IncreaseFontSize => self.increase_font_size(ctx),
@@ -23470,9 +23725,13 @@ impl TypedActionView for Workspace {
                 });
             }
             #[cfg(target_os = "macos")]
-            InstallCLI => self.install_cli(ctx),
+            InstallOz => self.install_oz(ctx),
             #[cfg(target_os = "macos")]
-            UninstallCLI => self.uninstall_cli(ctx),
+            UninstallOz => self.uninstall_oz(ctx),
+            #[cfg(target_os = "macos")]
+            InstallWarpctrl => self.install_warpctrl(ctx),
+            #[cfg(target_os = "macos")]
+            UninstallWarpctrl => self.uninstall_warpctrl(ctx),
             UndoRevertInCodeReviewPane { window_id, view_id } => {
                 self.undo_revert_in_code_review_pane(*window_id, *view_id, ctx)
             }
@@ -24643,6 +24902,10 @@ impl TypedActionView for Workspace {
                     ctx,
                 );
             }
+            #[cfg(not(target_family = "wasm"))]
+            ContinueThirdPartyConversationLocally { task_id, harness } => {
+                self.continue_third_party_conversation_locally(*task_id, *harness, ctx);
+            }
             SummarizeAIConversation {
                 prompt,
                 initial_prompt,
@@ -24653,11 +24916,28 @@ impl TypedActionView for Workspace {
                 self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
                     if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                         terminal_view.update(ctx, |terminal, ctx| {
+                            #[cfg(target_family = "wasm")]
+                            let command_name = commands::FORK.name;
+
+                            #[cfg(not(target_family = "wasm"))]
+                            let command_name = {
+                                let is_cloud_agent_context = terminal.is_ambient_agent_session(ctx)
+                                    || terminal
+                                        .input()
+                                        .as_ref(ctx)
+                                        .is_cloud_mode_input_v2_composing(ctx);
+                                let conversation_id =
+                                    terminal.active_conversation_id(ctx).or_else(|| {
+                                        BlocklistAIHistoryModel::as_ref(ctx)
+                                            .active_conversation(terminal.id())
+                                            .map(|conv| conv.id())
+                                    });
+                                fork_button_action(conversation_id, is_cloud_agent_context, ctx)
+                                    .command_name
+                            };
+
                             terminal.input().update(ctx, |input, ctx| {
-                                input.replace_buffer_content(
-                                    &format!("{} ", commands::FORK.name),
-                                    ctx,
-                                );
+                                input.replace_buffer_content(&format!("{} ", command_name), ctx);
                                 ctx.focus_self();
                             });
                         });
@@ -24869,6 +25149,25 @@ impl TypedActionView for Workspace {
                     "Orchestration launch modal state: old={old_value}, new={new_value}, feature_flag_enabled={}",
                     FeatureFlag::OrchestrationLaunchModal.is_enabled()
                 );
+            }
+            #[cfg(debug_assertions)]
+            OpenFreeAiRemovalModal => {
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.force_open_free_ai_removal_modal(ctx);
+                });
+                ctx.notify();
+            }
+            #[cfg(debug_assertions)]
+            ResetFreeAiRemovalModalState => {
+                AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
+                    if let Err(e) = ai_settings
+                        .did_check_to_trigger_free_ai_removal_modal
+                        .set_value(false, ctx)
+                    {
+                        log::warn!("Failed to reset free AI removal modal seen setting: {e}");
+                    }
+                });
+                log::info!("Free AI removal modal seen state has been reset");
             }
             #[cfg(debug_assertions)]
             InstallOpenCodeWarpPlugin => {
@@ -26184,6 +26483,17 @@ impl View for Workspace {
             stack.add_child(ChildView::new(&self.auto_handoff_sleep_modal).finish());
         }
 
+        if should_show_modal && one_time_modal_model.is_free_ai_removal_modal_open() {
+            stack.add_child(ChildView::new(&self.free_ai_removal_modal).finish());
+        }
+
+        if self
+            .current_workspace_state
+            .is_prompt_suggestions_unavailable_modal_open
+        {
+            stack.add_child(ChildView::new(&self.prompt_suggestions_unavailable_modal).finish());
+        }
+
         if let Some(hoa_flow) = &self.hoa_onboarding_flow {
             let step = hoa_flow.as_ref(app).step();
 
@@ -26905,14 +27215,14 @@ impl Workspace {
             return self.tabs.len();
         };
 
-        // Pre-compute the bounding rects of the tab bar / vertical tabs panel
-        // so we can defensively reject `tab_position_<index>` / group cache
-        // entries that don't lie within either of them. This guards
-        // `tab_insertion_index_for_cursor` against any future overlay / chip /
-        // preview that accidentally shares a SavePosition key with a real tab
-        // — see the `for_drag_ghost` flag on `TabComponent` and
-        // `vertical_tabs::render_tab_group_internal` for the original offender
-        // (the cross-window drag ghost chip).
+        // Pre-compute the bounding rect of the active tab presentation
+        // (vertical tabs panel or horizontal tab bar) so we can defensively
+        // reject `tab_position_<index>` cache entries that don't lie within
+        // it. This guards `tab_insertion_index_for_cursor` against any future
+        // overlay / chip / preview that accidentally shares a SavePosition
+        // key with a real tab — see the `for_drag_ghost` flag on
+        // `TabComponent` and `vertical_tabs::render_tab_group_internal` for
+        // the original offender (the cross-window drag ghost chip).
         let tab_bar_rects = tab_bar_rects_for_window(window_id, ctx);
 
         let cursor_in_window = cursor_position_on_screen - window_bounds.origin();
@@ -27238,10 +27548,12 @@ impl Workspace {
         if current_index >= self.tabs.len() {
             return;
         }
-        // Only detach when the drag leaves every tab-bar presentation on its
-        // perpendicular axis. Windows with vertical tabs still render the
-        // horizontal bar, so checking only the horizontal rect would make
-        // vertical reorders (which move along Y) spuriously trip the detach.
+        // Only detach when the drag leaves the active tab presentation on its
+        // perpendicular axis. `tab_bar_rects_for_window` returns just the rect
+        // for the layout that actually holds the tabs (the vertical panel in
+        // vertical-tabs mode, otherwise the horizontal bar), so a vertical
+        // reorder — which moves along Y inside the vertical panel — is tested
+        // on the panel's X axis and won't spuriously trip the detach.
         let drag_center = position.center();
         let rects = tab_bar_rects_for_window(ctx.window_id(), ctx);
         let is_drag_outside_tab_bar = if rects.is_empty() {
@@ -27273,8 +27585,42 @@ impl Workspace {
                         tab.draggable_state.adjust_mouse_position(adjustment);
                     }
                 }
-                DragResult::HandoffNeeded { target } => {
-                    self.perform_handoff(target, ctx);
+                DragResult::ReorderInSource => {
+                    // The cursor is back over the source window's own tab bar.
+                    // Reorder the existing detached placeholder in place, just
+                    // like an in-window drag, and report its new index so the
+                    // eventual drop puts the real tab back at this position.
+                    // Deliberately skip the group-reassignment logic used by
+                    // the normal reorder path below: the placeholder is
+                    // detached mid cross-window drag and shouldn't churn group
+                    // membership.
+                    let use_vertical_tabs = FeatureFlag::VerticalTabs.is_enabled()
+                        && *TabSettings::as_ref(ctx).use_vertical_tabs;
+                    let new_index = if use_vertical_tabs {
+                        self.calculate_updated_tab_index_vertical(current_index, position, ctx)
+                    } else {
+                        self.calculate_updated_tab_index(current_index, position, ctx)
+                    };
+                    if new_index != current_index {
+                        // Do not allow the placeholder to cross the pinned/unpinned
+                        // boundary, matching the constraint enforced by the normal
+                        // in-window reorder path.
+                        if self.is_tab_effectively_pinned(&self.tabs[current_index])
+                            != self.is_tab_effectively_pinned(&self.tabs[new_index])
+                        {
+                            return;
+                        }
+                        self.tabs.swap(new_index, current_index);
+                        if current_index == self.active_tab_index {
+                            self.set_active_tab_index(new_index, ctx);
+                        } else if new_index == self.active_tab_index {
+                            self.set_active_tab_index(current_index, ctx);
+                        }
+                        ctx.notify();
+                    }
+                    CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                        drag.set_source_placeholder_index(new_index);
+                    });
                 }
             }
             return;
@@ -27997,20 +28343,36 @@ pub(super) fn group_has_single_member(tabs: &[TabData], group_id: TabGroupId) ->
     group_member_index_range(tabs, group_id).is_some_and(|(first, last)| first == last)
 }
 
-/// Returns every tab-bar-equivalent rect laid out in `window_id` (horizontal
-/// tab bar and/or vertical tabs panel). Both must be considered because a
-/// window with vertical tabs still renders the horizontal bar at the top.
+/// Returns the save-position id of the tab presentation laid out for the
+/// current tab layout: the vertical tabs panel when vertical tabs are in use,
+/// otherwise the horizontal tab bar.
+///
+/// Uses the shared `uses_vertical_tabs` predicate — the same
+/// `FeatureFlag::VerticalTabs` + `use_vertical_tabs` check the tab bar uses to
+/// decide what to render (see `render_tab_bar_contents`) — so the id always
+/// points at wherever the tab strip is actually shown.
+pub(crate) fn active_tab_bar_position_id(app: &AppContext) -> &'static str {
+    if uses_vertical_tabs(app) {
+        VERTICAL_TABS_PANEL_POSITION_ID
+    } else {
+        TAB_BAR_POSITION_ID
+    }
+}
+
+/// Returns the tab-bar rect for `window_id`'s **active** tab layout, or an
+/// empty `Vec` if that presentation isn't laid out this frame.
+///
+/// Only the active presentation is a valid cross-window drop zone. In
+/// vertical-tabs mode the tabs live in the vertical panel and the horizontal
+/// bar at the top renders only toolbar controls (no tab strip), so it must
+/// not register as a drop target; in horizontal-tabs mode the reverse holds.
+/// Returning the inactive presentation's rect would light up a spurious
+/// insertion placeholder when a tab is dragged over it. Returned as a `Vec`
+/// (at most one rect) so callers can iterate uniformly.
 pub(crate) fn tab_bar_rects_for_window(window_id: WindowId, app: &AppContext) -> Vec<RectF> {
-    let mut rects = Vec::with_capacity(2);
-    if let Some(rect) = app.element_position_by_id_at_last_frame(window_id, TAB_BAR_POSITION_ID) {
-        rects.push(rect);
-    }
-    if let Some(rect) =
-        app.element_position_by_id_at_last_frame(window_id, VERTICAL_TABS_PANEL_POSITION_ID)
-    {
-        rects.push(rect);
-    }
-    rects
+    app.element_position_by_id_at_last_frame(window_id, active_tab_bar_position_id(app))
+        .into_iter()
+        .collect()
 }
 
 // Checks that the tab/group rect is not clipped by overflow area

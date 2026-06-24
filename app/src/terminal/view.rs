@@ -254,16 +254,17 @@ use crate::ai::blocklist::usage::conversation_usage_view::{
 use crate::ai::blocklist::{
     ai_brand_color, block_context_from_terminal_model,
     get_ai_block_overflow_menu_element_position_id, get_attached_blocks_chip_element_position_id,
-    AIBlock, AIBlockEvent, AutofireAction, BlocklistAIActionEvent, BlocklistAIActionModel,
-    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    BlocklistAIInputEvent, BlocklistAIInputModel, ClientIdentifiers, ConversationStatusUpdate,
-    InputConfig, InputType, InputTypeAutoDetectionSource, LegacyPassiveSuggestionsEvent,
-    LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel,
-    PassiveSuggestionsModels, PendingAttachment, PendingQueryState, QueuedQuery, QueuedQueryId,
-    QueuedQueryModel, QueuedQueryOrigin, RequestFileEditsFormatKind, ShellCommandExecutor,
-    ShellCommandExecutorEvent, SlashCommandRequest, StartAgentExecutor, StartAgentExecutorEvent,
-    StartAgentRequest, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
+    is_lrc_auto_queue_active, AIBlock, AIBlockEvent, AutofireAction, BlocklistAIActionEvent,
+    BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
+    BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, ClientIdentifiers,
+    ConversationStatusUpdate, InputConfig, InputType, InputTypeAutoDetectionSource,
+    LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
+    MaaPassiveSuggestionsModel, PassiveSuggestionsModels, PendingAttachment, PendingQueryState,
+    QueuedQuery, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin, RequestFileEditsFormatKind,
+    ShellCommandExecutor, ShellCommandExecutorEvent, SlashCommandRequest, StartAgentExecutor,
+    StartAgentExecutorEvent, StartAgentRequest, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
+    PRE_REWIND_PREFIX,
 };
 use crate::ai::conversation_details_panel::ConversationDetailsPanelEvent;
 use crate::ai::conversation_utils;
@@ -406,6 +407,8 @@ use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::grid_size_util::grid_cell_dimensions;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::input::{
     CommandExecutionSource, InputAction, InputEmptyStateChangeReason, InputState, MenuPositioning,
     MenuPositioningProvider,
@@ -4732,7 +4735,7 @@ impl TerminalView {
                     }
                     RemoteServerManagerEvent::SessionConnecting { .. }
                     | RemoteServerManagerEvent::HostConnected { .. }
-                    | RemoteServerManagerEvent::BundledSkillsSnapshot { .. }
+                    | RemoteServerManagerEvent::RemoteAgentContextSnapshot { .. }
                     | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
                     | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
                     | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
@@ -5049,7 +5052,9 @@ impl TerminalView {
         chips.iter().any(|chip| {
             matches!(
                 chip,
-                ContextChipKind::GitDiffStats | ContextChipKind::GithubPullRequest
+                ContextChipKind::GitBranchStatus
+                    | ContextChipKind::GitDiffStats
+                    | ContextChipKind::GithubPullRequest
             )
         })
     }
@@ -5570,6 +5575,51 @@ impl TerminalView {
                     }
                 }
             }
+        }
+    }
+
+    /// Sends the leading prompts that were auto-queued during an agent-requested long-running
+    /// command ([`QueuedQueryOrigin::LrcAutoQueue`]) to the agent, in queue order. Invoked when the
+    /// command finishes — these rows were queued "until the command finishes", unlike other queued
+    /// rows, which wait for the end of the full response.
+    pub(crate) fn send_lrc_queued_prompts(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let editing_front_lrc_row = QueuedQueryModel::as_ref(ctx)
+            .editing_row(conversation_id)
+            .is_some_and(|query_id| {
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .first()
+                    .is_some_and(|row| {
+                        row.id() == query_id && row.origin() == QueuedQueryOrigin::LrcAutoQueue
+                    })
+            });
+        if editing_front_lrc_row {
+            let queued_prompts_panel = self.input.as_ref(ctx).queued_prompts_panel().cloned();
+            let Some(queued_prompts_panel) = queued_prompts_panel else {
+                return;
+            };
+            queued_prompts_panel.update(ctx, |panel, ctx| {
+                panel.commit_edit(ctx);
+            });
+        }
+
+        let rows: Vec<(QueuedQueryId, String)> = QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .iter()
+            .take_while(|row| row.origin() == QueuedQueryOrigin::LrcAutoQueue)
+            .map(|row| (row.id(), row.text().to_owned()))
+            .collect();
+        for (query_id, text) in rows {
+            self.input.update(ctx, |input, ctx| {
+                input.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx);
+            });
+            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.remove_fired_row(conversation_id, query_id, ctx);
+            });
         }
     }
 
@@ -6627,6 +6677,16 @@ impl TerminalView {
             } => {
                 self.cli_subagent_views.remove(block_id);
 
+                // The command ended — drop any LRC-scoped auto-queue override so the
+                // conversation reverts to its pre-command queue state, then deliver the
+                // prompts that were queued "until the command finishes".
+                if let Some(conversation_id) = conversation_id {
+                    QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.clear_queue_next_lrc_prompt_override(*conversation_id, ctx);
+                    });
+                    self.send_lrc_queued_prompts(*conversation_id, ctx);
+                }
+
                 if FeatureFlag::AgentView.is_enabled() {
                     let Some(conversation_id) = conversation_id else {
                         return;
@@ -6792,6 +6852,7 @@ impl TerminalView {
             tool_calls: tool_usage.total_tool_calls(),
             models: conversation.token_usage().to_vec(),
             context_window_usage: conversation.context_window_usage(),
+            context_window_segments: conversation.context_window_segments().to_vec(),
             files_changed: tool_usage.apply_file_diff_stats.files_changed,
             lines_added: tool_usage.apply_file_diff_stats.lines_added,
             lines_removed: tool_usage.apply_file_diff_stats.lines_removed,
@@ -8615,7 +8676,9 @@ impl TerminalView {
     /// (e.g. another session).
     ///
     /// Skips the steal when the user is navigating another AI block / code diff
-    /// (e.g. arrowing diff hunks), unless the target block is blocked on user input.
+    /// (e.g. arrowing diff hunks), unless the target block is blocked on user input. Also skips
+    /// while the queued-prompt inline editor is focused so async AI/tool updates don't commit and
+    /// close the edit by blurring it.
     ///
     /// Warning: this should not be called when focusing the [`TerminalView`]. It could
     /// lead to a focus cycle because [`AIBlock::try_focus`] conditionally yields focus
@@ -8626,6 +8689,9 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         if !ctx.is_self_or_child_focused() {
+            return;
+        }
+        if self.is_queued_prompt_inline_editor_focused(ctx) {
             return;
         }
         let target_needs_attention = block.as_ref(ctx).is_blocked_on_user_confirmation(ctx);
@@ -8642,6 +8708,12 @@ impl TerminalView {
                 .ai_block_metadata()
                 .is_some_and(|metadata| metadata.ai_block_handle.is_self_or_child_focused(ctx))
         })
+    }
+
+    fn is_queued_prompt_inline_editor_focused(&self, ctx: &AppContext) -> bool {
+        self.input
+            .as_ref(ctx)
+            .is_queued_prompt_inline_editor_focused(ctx)
     }
 
     #[cfg(not(windows))]
@@ -10798,11 +10870,12 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         // Only reset focus if this terminal is focused; don't steal it from another part
-        // of the app, or from an AI block / code diff the user is navigating.
+        // of the app, or from an interactive child the user is navigating/editing.
         let reset_focus = ctx.is_self_or_child_focused()
             && !self.find_bar.is_self_or_child_focused(ctx)
             && !self.block_filter_editor.is_self_or_child_focused(ctx)
-            && !self.is_any_ai_block_focused(ctx);
+            && !self.is_any_ai_block_focused(ctx)
+            && !self.is_queued_prompt_inline_editor_focused(ctx);
         if reset_focus {
             self.redetermine_global_focus_with_policy(selection_focus_policy, ctx);
         }
@@ -13376,6 +13449,7 @@ impl TerminalView {
         // doing the decoration to ensure we don't erroneously apply error
         // underlines to valid commands.
         let input = self.input().clone();
+        let session_clone = session.clone();
         ctx.spawn(
             async move { session.load_external_commands().await },
             move |me, _, ctx| {
@@ -13388,6 +13462,10 @@ impl TerminalView {
                 me.refresh_warp_prompt(ctx);
             },
         );
+
+        ctx.background_executor()
+            .spawn(async move { session_clone.load_all_function_names().await })
+            .detach();
 
         // If we were waiting for a successful warpification, it's come. Stop the timeout.
         self.warpify_state.abort_ssh_warpify_timeout();
@@ -20206,13 +20284,37 @@ impl TerminalView {
                 self.handle_resume_conversation(conversation_id, ctx);
             }
             AIBlockEvent::InsertForkSlashCommand => {
+                #[cfg(target_family = "wasm")]
+                let command_name = commands::FORK.name;
+
+                #[cfg(not(target_family = "wasm"))]
+                let command_name = {
+                    let is_cloud_agent_context = self.is_ambient_agent_session(ctx)
+                        || self.input.as_ref(ctx).is_cloud_mode_input_v2_composing(ctx);
+                    let conversation_id = self
+                        .agent_view_controller
+                        .as_ref(ctx)
+                        .agent_view_state()
+                        .active_conversation_id()
+                        .or_else(|| {
+                            BlocklistAIHistoryModel::as_ref(ctx)
+                                .active_conversation(self.view_id)
+                                .map(|conv| conv.id())
+                        });
+                    fork_button_action(conversation_id, is_cloud_agent_context, ctx).command_name
+                };
+
                 self.input.update(ctx, |input, ctx| {
-                    input.replace_buffer_content(&format!("{} ", commands::FORK.name), ctx);
+                    input.replace_buffer_content(&format!("{} ", command_name), ctx);
                     ctx.focus_self();
                 });
             }
             AIBlockEvent::ChildViewTextSelected => {
                 self.clear_selected_text_except(Some(block.id()), ctx);
+                self.sync_ai_block_model_selection(&block, ctx);
+            }
+            AIBlockEvent::SelectionChanged => {
+                self.sync_ai_block_model_selection(&block, ctx);
             }
             AIBlockEvent::CopiedEmptyText => {
                 self.copy(ctx);
@@ -20298,6 +20400,36 @@ impl TerminalView {
             }
         }
         ctx.notify();
+    }
+
+    /// Keeps the terminal model's record of which rich content (AI) block has an
+    /// active text selection in sync with the block's own selection state.
+    ///
+    /// Rich content blocks render and own their text selections independently of
+    /// the point-based model selection used for regular command blocks, so the
+    /// model can't derive this on its own. Mirroring it here is what allows the
+    /// copy/insert paths (which go through
+    /// [`BlockList::selection_to_string`](crate::terminal::model::TerminalModel))
+    /// to find text selected inside an AI block.
+    fn sync_ai_block_model_selection(
+        &mut self,
+        block: &ViewHandle<AIBlock>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // While a point-based block/text selection drag is in progress (which may
+        // span command and AI blocks), that selection owns the model state; don't
+        // clobber it with the AI block's own selection.
+        if self.is_selecting {
+            return;
+        }
+        let view_id = block.id();
+        let has_selection = block.as_ref(ctx).selected_text(ctx).is_some();
+        let mut model = self.model.lock();
+        if has_selection {
+            model.block_list_mut().set_rich_content_selection(view_id);
+        } else {
+            model.block_list_mut().clear_rich_content_selection(view_id);
+        }
     }
 
     fn imported_comments_panel_arg(&self) -> CodeReviewPanelArg {
@@ -22633,6 +22765,18 @@ impl TerminalView {
                 ctx.view_id(),
                 ctx,
             )
+        });
+
+        // Subscribe to the dummy block's events so it behaves like a real AI
+        // block in tests (e.g. so selection events are mirrored into the model
+        // for copy). The production insertion path subscribes the same way.
+        ctx.subscribe_to_view(&ai_block, move |me, block, event, ctx| {
+            me.handle_ai_block_event(
+                block.clone(),
+                false, // is_restored
+                event,
+                ctx,
+            );
         });
 
         self.insert_rich_content(
@@ -26752,8 +26896,22 @@ impl TypedActionView for TerminalView {
                 else {
                     return;
                 };
+                // While LRC auto-queue is active, the toggle is scoped to that command so the
+                // conversation reverts to its pre-command queue state once the command ends.
+                let lrc_auto_queue_active = {
+                    let terminal_model = self.model.lock();
+                    is_lrc_auto_queue_active(
+                        terminal_model.block_list().active_block(),
+                        conversation_id,
+                        ctx,
+                    )
+                };
                 QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.toggle_queue_next_prompt(conversation_id, ctx);
+                    if lrc_auto_queue_active {
+                        model.toggle_queue_next_prompt_during_lrc(conversation_id, ctx);
+                    } else {
+                        model.toggle_queue_next_prompt(conversation_id, ctx);
+                    }
                 });
                 ctx.notify();
             }

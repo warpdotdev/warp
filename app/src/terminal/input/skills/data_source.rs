@@ -76,7 +76,7 @@ impl SkillSelectorDataSource {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&active_session, |_, event, ctx| match event {
+        ctx.subscribe_to_model(&active_session, |_, _, event, ctx| match event {
             // Emit event so the mixer can re-run its query with the new pwd
             ActiveSessionEvent::UpdatedPwd | ActiveSessionEvent::Bootstrapped => {
                 ctx.emit(UpdatedAvailableSkills);

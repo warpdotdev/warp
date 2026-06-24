@@ -512,6 +512,10 @@ pub enum FeatureFlag {
     /// Enables v2 of the context window usage UI.
     ContextWindowUsageV2,
 
+    /// Dev-only: enables the expandable per-segment context window usage
+    /// breakdown in the conversation usage card.
+    ContextWindowUsageBreakdown,
+
     /// Enables global search
     GlobalSearch,
 
@@ -884,6 +888,10 @@ pub enum FeatureFlag {
     /// Gates the custom model router feature, which allows users to define
     /// their own model routers.
     CustomModelRouters,
+
+    /// Shows a warning in the agent view when the active conversation's
+    /// provider-side prompt cache has expired.
+    PromptCacheExpiryWarning,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -947,19 +955,21 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::RemoteCodebaseIndexing,
-    FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
     FeatureFlag::CustomModelRouters,
+    FeatureFlag::PromptCacheExpiryWarning,
+    FeatureFlag::PinnedTabs,
+    FeatureFlag::ContextWindowUsageBreakdown,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     #[cfg(target_os = "macos")]
-    FeatureFlag::DragTabsToWindows,
     FeatureFlag::GroupedTabs,
+    FeatureFlag::AsyncFind,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
@@ -975,6 +985,8 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    FeatureFlag::DragTabsToWindows,
 ];
 
 /// Flags that we want to allow to switch at runtime (assuming RuntimeFeatureFlags is set)
@@ -1067,6 +1079,9 @@ impl FeatureFlag {
                 "Enables commit, push, and create-PR actions directly from the code review panel.",
             ),
             GroupedTabs => Some("Enables organizing tabs into named, collapsible groups."),
+            AsyncFind => Some(
+                "Runs terminal find on a background thread to keep the UI responsive while searching large outputs.",
+            ),
             _ => None,
         }
     }

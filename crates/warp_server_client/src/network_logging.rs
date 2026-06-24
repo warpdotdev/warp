@@ -2,10 +2,7 @@ use std::fmt;
 
 use bounded_vec_deque::BoundedVecDeque;
 use chrono::{DateTime, FixedOffset};
-use enclose::enclose;
-use warpui::{Entity, ModelContext, SingletonEntity};
-
-use crate::server::server_api::ServerApiProvider;
+use warpui_core::{Entity, ModelContext, SingletonEntity};
 
 /// Maximum number of network log items retained in memory. Matches the
 /// previous file-rotation threshold so the pane surface behaves consistently
@@ -18,7 +15,7 @@ const NETWORK_LOGGING_MAX_ITEMS: usize = 50;
 const NETWORK_LOGGING_MAX_QUEUE_SIZE: usize = 100;
 
 /// In-memory store of the most recent network log items. Populated by
-/// [`init`] and read by the network log pane. Holds at most
+/// [`Self::install_on_clients`] and read by the network log pane. Holds at most
 /// [`NETWORK_LOGGING_MAX_ITEMS`] entries; older entries are dropped when new
 /// ones arrive.
 pub struct NetworkLogModel {
@@ -57,9 +54,51 @@ impl NetworkLogModel {
         out
     }
 
+    /// Installs network logging hooks that listen for requests that pass
+    /// through the provided HTTP clients and forward them to this model.
+    ///
+    /// The logging happens via an async channel so that request hooks never
+    /// block on the main thread. Items are delivered to the model on the main
+    /// thread through [`ModelContext::spawn_stream_local`].
+    pub fn install_on_clients<'a>(
+        &mut self,
+        http_clients: impl IntoIterator<Item = &'a mut http_client::Client>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let (tx, rx) = async_channel::bounded::<NetworkLogItem>(NETWORK_LOGGING_MAX_QUEUE_SIZE);
+        ctx.spawn_stream_local(rx, |model, item, ctx| model.push(item, ctx), |_, _| {});
+
+        for client in http_clients {
+            let request_tx = tx.clone();
+            client.set_before_request_fn(Box::new(move |request, serialized_payload| {
+                if !request_tx.is_closed()
+                    && let Err(error) = request_tx.try_send(NetworkLogItem::request(
+                        request,
+                        serialized_payload.clone(),
+                        chrono::Local::now().fixed_offset(),
+                    ))
+                {
+                    log::error!("Error sending request from HTTP client to logging task: {error}");
+                }
+            }));
+
+            let response_tx = tx.clone();
+            client.set_after_response_fn(Box::new(move |response| {
+                if !response_tx.is_closed()
+                    && let Err(error) = response_tx.try_send(NetworkLogItem::response(
+                        response,
+                        chrono::Local::now().fixed_offset(),
+                    ))
+                {
+                    log::error!("Error sending response from HTTP client to logging task: {error}");
+                }
+            }));
+        }
+    }
+
     /// Number of items currently retained. Exposed for tests.
     #[cfg(test)]
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.items.len()
     }
 }
@@ -69,55 +108,6 @@ impl Entity for NetworkLogModel {
 }
 
 impl SingletonEntity for NetworkLogModel {}
-
-/// Initializes a network logging task that listens for requests that pass
-/// through the provided HTTP clients and forwards them to the in-memory
-/// [`NetworkLogModel`].
-///
-/// The logging happens via an async channel so that request hooks never block
-/// on the main thread. Items are delivered to the model on the main thread via
-/// [`ModelContext::spawn_stream_local`], mirroring how `ServerApiProvider`
-/// consumes its own event stream.
-pub(super) fn init<'a>(
-    http_clients: impl IntoIterator<Item = &'a mut http_client::Client>,
-    ctx: &mut ModelContext<ServerApiProvider>,
-) {
-    let (tx, rx) = async_channel::bounded::<NetworkLogItem>(NETWORK_LOGGING_MAX_QUEUE_SIZE);
-
-    ctx.spawn_stream_local(
-        rx,
-        move |_, item, ctx| {
-            NetworkLogModel::handle(ctx).update(ctx, |model, ctx| {
-                model.push(item, ctx);
-            });
-        },
-        |_, _| {},
-    );
-
-    for client in http_clients.into_iter() {
-        client.set_before_request_fn(Box::new(enclose!((tx) move |request, serialized_payload| {
-            if !tx.is_closed() {
-                if let Err(e) = tx.try_send(NetworkLogItem::request(
-                    request,
-                    serialized_payload.clone(),
-                    chrono::Local::now().fixed_offset(),
-                )) {
-                    log::error!(
-                        "Error sending request from http client to logging task: {e}"
-                    );
-                }
-            }
-        })));
-
-        client.set_after_response_fn(Box::new(enclose!((tx) move |response| {
-            if !tx.is_closed() {
-                if let Err(e) = tx.try_send(NetworkLogItem::response(response, chrono::Local::now().fixed_offset())) {
-                    log::error!("Error sending request from http client to logging task: {e}");
-                }
-            }
-        })));
-    }
-}
 
 /// Represents an item (either a request or response) captured for the network
 /// activity log. The inner string contains a timestamp and the

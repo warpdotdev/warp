@@ -18,6 +18,16 @@ pub enum IntegrationCommand {
     List,
 }
 
+impl IntegrationCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            IntegrationCommand::Create(_) => "integration create",
+            IntegrationCommand::Update(_) => "integration update",
+            IntegrationCommand::List => "integration list",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct CreateIntegrationArgs {
     /// Provider to create the integration for.

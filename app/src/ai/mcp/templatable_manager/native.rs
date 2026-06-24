@@ -229,7 +229,7 @@ impl TemplatableMCPServerManager {
     ) -> Self {
         // Subscribe to FileBasedMCPManager events.
         let file_based_mcp_manager = FileBasedMCPManager::handle(ctx);
-        ctx.subscribe_to_model(&file_based_mcp_manager, |me, event, ctx| match event {
+        ctx.subscribe_to_model(&file_based_mcp_manager, |me, _, event, ctx| match event {
             FileBasedMCPManagerEvent::SpawnServers { installations } => {
                 me.spawn_file_based_servers(installations, ctx);
             }
@@ -247,7 +247,7 @@ impl TemplatableMCPServerManager {
 
         // TemplatableMCPServerManager is the source of truth for templatable MCP servers stored on the cloud
         let cloud_model = CloudModel::handle(ctx);
-        ctx.subscribe_to_model(&cloud_model, |me, event, ctx| match event {
+        ctx.subscribe_to_model(&cloud_model, |me, _, event, ctx| match event {
             CloudModelEvent::ObjectUpdated {
                 type_and_id:
                     CloudObjectTypeAndId::GenericStringObject {
@@ -1504,6 +1504,7 @@ impl TemplatableMCPServerManager {
         let ParsedTemplatableMCPServerResult {
             templatable_mcp_server,
             templatable_mcp_server_installation,
+            ..
         } = parsed_result.clone();
         let template_uuid = templatable_mcp_server.uuid;
         self.create_templatable_mcp_server(templatable_mcp_server, space, initiated_by, ctx);

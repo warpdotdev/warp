@@ -3859,7 +3859,7 @@ dependencies = [
 [[package]]
 name = "dagre_rust"
 version = "0.0.5"
-source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=79aecc74187c29a027e85e18d070ff0dd884a0a7#79aecc74187c29a027e85e18d070ff0dd884a0a7"
+source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=8d3f789c2eb49335d7bf247a06bb649f59b6d4ed#8d3f789c2eb49335d7bf247a06bb649f59b6d4ed"
 dependencies = [
  "graphlib_rust",
  "ordered_hashmap",
@@ -8035,7 +8035,7 @@ dependencies = [
 [[package]]
 name = "mermaid_to_svg"
 version = "0.1.0"
-source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=79aecc74187c29a027e85e18d070ff0dd884a0a7#79aecc74187c29a027e85e18d070ff0dd884a0a7"
+source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=8d3f789c2eb49335d7bf247a06bb649f59b6d4ed#8d3f789c2eb49335d7bf247a06bb649f59b6d4ed"
 dependencies = [
  "dagre_rust",
  "graphlib_rust",
@@ -14810,7 +14810,7 @@ dependencies = [
 [[package]]
 name = "warp-command-signatures"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=a1000677e302b8fdcefb08365f3f7a81bbba23b3#a1000677e302b8fdcefb08365f3f7a81bbba23b3"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=a937ae35dfe20eaed030664ad52b36657390b162#a937ae35dfe20eaed030664ad52b36657390b162"
 dependencies = [
  "cfg-if",
  "itertools 0.10.5",
@@ -14828,7 +14828,7 @@ dependencies = [
 [[package]]
 name = "warp-completion-metadata"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=a1000677e302b8fdcefb08365f3f7a81bbba23b3#a1000677e302b8fdcefb08365f3f7a81bbba23b3"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=a937ae35dfe20eaed030664ad52b36657390b162#a937ae35dfe20eaed030664ad52b36657390b162"
 dependencies = [
  "html-escape",
  "itertools 0.10.5",
@@ -15169,6 +15169,7 @@ dependencies = [
  "tink-core",
  "tink-hybrid",
  "tink-proto",
+ "tracing",
  "vec1",
  "warp_core",
  "warp_graphql",
@@ -15263,14 +15264,20 @@ dependencies = [
 name = "warp_server_client"
 version = "0.1.0"
 dependencies = [
+ "aha-reqwest-eventsource",
  "anyhow",
  "async-channel",
  "async-trait",
+ "base64 0.22.1",
  "bincode",
+ "blocking",
+ "bounded-vec-deque",
+ "cfg-if",
  "chrono",
  "cloud_object_client",
  "cloud_object_models",
  "cloud_objects",
+ "command",
  "cynic",
  "derivative",
  "diesel",
@@ -15283,10 +15290,14 @@ dependencies = [
  "lasso",
  "log",
  "mockall",
+ "mockito",
  "oauth2",
+ "parking_lot",
  "pathfinder_geometry",
+ "reqwest",
  "schemars",
  "serde",
+ "serde_json",
  "session-sharing-protocol",
  "settings_value",
  "thiserror 2.0.17",
@@ -15294,8 +15305,10 @@ dependencies = [
  "uuid",
  "warp_core",
  "warp_graphql",
+ "warp_isolation_platform",
  "warp_server_auth",
  "warpui_core",
+ "websocket",
 ]
 
 [[package]]
@@ -15490,6 +15503,7 @@ dependencies = [
  "chrono",
  "command",
  "concat-idents",
+ "crossterm",
  "ctor",
  "ctrlc",
  "dashmap",
@@ -15543,6 +15557,8 @@ dependencies = [
  "tokio",
  "tracing",
  "trait-set",
+ "unicode-segmentation",
+ "unicode-width 0.1.14",
  "vec1",
  "warp_util",
  "warpui_core",
