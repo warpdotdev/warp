@@ -30,17 +30,18 @@ use settings::Setting as _;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::{send_telemetry_from_ctx, SessionId};
 use warpui::r#async::executor::Background;
-use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
+use warpui::{
+    AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WindowId,
+};
 #[cfg(unix)]
 use {
     super::terminal_attributes::TerminalAttributesPoller,
     crate::terminal::local_tty::terminal_attributes::Event as TerminalAttributesPollerEvent,
-    crate::terminal::model::terminal_model::BlockIndex,
-    crate::terminal::session_settings::NotificationsMode, nix::sys::termios::LocalFlags,
+    crate::terminal::model::terminal_model::BlockIndex, nix::sys::termios::LocalFlags,
 };
 
 use super::event_loop::EventLoop;
-use super::shell::{ShellStarter, ShellStarterSource};
+use super::shell::{ShellStarter, ShellStarterSource, ShellStarterSourceOrWslName};
 use super::{mio_channel, recorder};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversation;
@@ -72,9 +73,9 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::local_tty::{Pty, PtyOptions};
-use crate::terminal::model::session::Sessions;
+use crate::terminal::model::session::{ExecutorCommandEvent, Sessions};
 use crate::terminal::model::terminal_model::ExitReason;
-use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::model_events::{ModelEvent as TerminalModelEvent, ModelEventDispatcher};
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::session_settings::{
     SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
@@ -102,13 +103,13 @@ use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as Termi
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
-    init_pty_controller_model, init_remote_server_controller, wire_up_pty_controller_with_view,
+    init_pty_controller_model, init_remote_server_controller, wire_up_pty_controller_with_surface,
     wire_up_remote_server_controller_with_view,
 };
-use crate::terminal::writeable_pty::{self, Message};
+use crate::terminal::writeable_pty::{self, Message, PtyIntent, TerminalSurface};
 use crate::terminal::{
-    terminal_manager, ShellLaunchData, ShellLaunchState, TerminalManager as _, TerminalModel,
-    TerminalView, PTY_READS_BROADCAST_CHANNEL_SIZE,
+    terminal_manager, ShellLaunchData, ShellLaunchState, TerminalModel, TerminalView,
+    PTY_READS_BROADCAST_CHANNEL_SIZE,
 };
 use crate::view_components::ToastFlavor;
 use crate::{send_telemetry_on_executor, NetworkStatus};
@@ -131,18 +132,27 @@ fn should_skip_sharer_op(is_ambient_session: bool, op: &CrdtOperation) -> bool {
 /// The TerminalManager is responsible for
 /// - creating the terminal model
 /// - starting the local PTY
-/// - creating the TerminalView
-/// - wiring up the view with any dependencies necessary
+/// - creating the terminal surface (e.g. `TerminalView`)
+/// - wiring up the surface with any dependencies necessary
 ///
 /// It also holds onto any data that needs to live as long as the session does
 /// (e.g. the event loop join handle).
-pub struct TerminalManager {
+///
+/// `TerminalView` is the only surface in this PR, so existing GUI code continues
+/// to use `TerminalManager` (shorthand for `TerminalManager<TerminalView>`).
+/// A future non-GUI frontend can opt in with `TerminalManager<MySurface>`.
+pub struct TerminalManager<S = TerminalView> {
     event_loop_tx: Arc<Mutex<mio_channel::Sender<Message>>>,
     /// This is an `Option` so that we can take ownership of the inner
     /// `JoinHandle` in `TerminalManager::drop`.
     event_loop_handle: Option<JoinHandle<()>>,
     model: Arc<FairMutex<TerminalModel>>,
-    view: ViewHandle<TerminalView>,
+    view: ViewHandle<S>,
+
+    /// Dispatcher for terminal model events. Used by surface-agnostic
+    /// subscriptions such as the Unix password-prompt poller.
+    #[allow(dead_code)]
+    model_events: ModelHandle<ModelEventDispatcher>,
 
     /// The manager is responsible for managing the lifetime
     /// of the terminal attributes poller. None if the event loop has not yet started.
@@ -173,18 +183,25 @@ pub struct TerminalManager {
 
     /// The model responsible for implementing the sharer's side of the
     /// session sharing protocol. Only [`Some`] when there is a shared session
-    /// connection ongoing.
+    /// connection ongoing. GUI-only state; a non-GUI surface leaves this unset.
     #[allow(dead_code)]
     session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>>,
 }
 
-impl Drop for TerminalManager {
+impl<S> Drop for TerminalManager<S> {
     fn drop(&mut self) {
         self.shutdown_event_loop();
     }
 }
 
-impl TerminalManager {
+impl<S> TerminalManager<S> {
+    /// Returns the backing terminal model. This is the generic equivalent of the
+    /// object-safe `TerminalManager::model` trait method, available to surfaces that
+    /// do not implement that GUI-shaped trait.
+    fn model(&self) -> Arc<FairMutex<TerminalModel>> {
+        self.model.clone()
+    }
+
     /// Sends a shutdown message to the PTY event loop and waits for it to
     /// process that event.
     fn shutdown_event_loop(&mut self) {
@@ -204,7 +221,213 @@ impl TerminalManager {
 
         self.inactive_pty_reads_rx.close();
     }
+}
 
+/// Reusable session construction products that are independent of the terminal
+/// surface. A future non-GUI constructor can call [`create_session_core`] to obtain
+/// these without constructing a `TerminalView`.
+struct SessionCore {
+    event_loop_tx: mio_channel::Sender<Message>,
+    event_loop_rx: mio_channel::Receiver<Message>,
+    wakeups_rx: async_channel::Receiver<()>,
+    executor_command_rx: async_channel::Receiver<ExecutorCommandEvent>,
+    inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
+    channel_event_proxy: ChannelEventListener,
+    sessions: ModelHandle<Sessions>,
+    model_events: ModelHandle<ModelEventDispatcher>,
+    preferred_shell: AvailableShell,
+    wsl_name_or_shell_starter: Option<ShellStarterSourceOrWslName>,
+}
+
+/// Creates the surface-agnostic core of a terminal session: communication channels,
+/// `Sessions`/`ModelEventDispatcher` models, AWS credential-refresh registration, and
+/// shell-starter resolution. The caller is responsible for creating the terminal model
+/// and surface-specific wiring around these products.
+fn create_session_core(chosen_shell: Option<AvailableShell>, ctx: &mut AppContext) -> SessionCore {
+    let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let (executor_command_tx, executor_command_rx) = async_channel::unbounded();
+    let (event_loop_tx, event_loop_rx) = mio_channel::channel();
+
+    // Deactivate the PTY reads broadcast immediately; we only activate receivers as needed.
+    let (pty_reads_tx, pty_reads_rx) = async_broadcast::broadcast(PTY_READS_BROADCAST_CHANNEL_SIZE);
+    let inactive_pty_reads_rx = pty_reads_rx.deactivate();
+
+    let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
+
+    let sessions = ctx.add_model(|ctx| Sessions::new(executor_command_tx.clone(), ctx));
+    let model_events =
+        ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
+
+    // ApiKeyManager subscribes to block completion events for AWS credential refresh.
+    ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+        manager.register_model_event_dispatcher(&model_events, ctx);
+    });
+
+    let preferred_shell = chosen_shell.unwrap_or_else(|| {
+        AvailableShells::handle(ctx).read(ctx, |shells, ctx| shells.get_user_preferred_shell(ctx))
+    });
+    let wsl_name_or_shell_starter = ShellStarter::init(preferred_shell.clone());
+
+    SessionCore {
+        event_loop_tx,
+        event_loop_rx,
+        wakeups_rx,
+        executor_command_rx,
+        inactive_pty_reads_rx,
+        channel_event_proxy,
+        sessions,
+        model_events,
+        preferred_shell,
+        wsl_name_or_shell_starter,
+    }
+}
+
+/// Fully-assembled session state that is independent of the terminal surface: the
+/// `TerminalModel`, `PtyController`, `RemoteServerController`, sessions/model-event
+/// dispatchers, and the communication channels. A future non-GUI constructor can
+/// call [`create_session_state`] to obtain all of these without constructing a
+/// `TerminalView`.
+struct SessionState {
+    event_loop_tx: mio_channel::Sender<Message>,
+    event_loop_rx: mio_channel::Receiver<Message>,
+    wakeups_rx: async_channel::Receiver<()>,
+    inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
+    channel_event_proxy: ChannelEventListener,
+    sessions: ModelHandle<Sessions>,
+    model_events: ModelHandle<ModelEventDispatcher>,
+    model: Arc<FairMutex<TerminalModel>>,
+    colors: crate::terminal::color::List,
+    pty_controller: ModelHandle<PtyController>,
+    remote_server_controller: ModelHandle<RemoteServerController>,
+    wsl_name_or_shell_starter: Option<ShellStarterSourceOrWslName>,
+}
+
+/// Builds a [`SessionState`] from a [`SessionCore`]: creates the `TerminalModel` with
+/// the given restored blocks, records PTY throughput, applies the shared-session
+/// creator status, and registers the `PtyController` and `RemoteServerController`.
+///
+/// `all_restored_blocks` is the already-merged block list (caller resolves GUI-only
+/// conversation restoration into this before calling).
+fn create_session_state(
+    core: SessionCore,
+    startup_directory: Option<PathBuf>,
+    all_restored_blocks: Option<&Vec<SerializedBlockListItem>>,
+    initial_size: Vector2F,
+    is_shared_session_creator: IsSharedSessionCreator,
+    ctx: &mut AppContext,
+) -> SessionState {
+    let SessionCore {
+        event_loop_tx,
+        event_loop_rx,
+        wakeups_rx,
+        executor_command_rx,
+        inactive_pty_reads_rx,
+        channel_event_proxy,
+        sessions,
+        model_events,
+        preferred_shell,
+        wsl_name_or_shell_starter,
+    } = core;
+
+    log::info!(
+        "Creating terminal model with {} restored blocks",
+        all_restored_blocks
+            .as_ref()
+            .map(|blocks| blocks.len())
+            .unwrap_or(0)
+    );
+    let model = terminal_manager::create_terminal_model(
+        startup_directory,
+        all_restored_blocks,
+        initial_size,
+        channel_event_proxy.clone(),
+        ShellLaunchState::DeterminingShell {
+            available_shell: Some(preferred_shell),
+            display_name: wsl_name_or_shell_starter
+                .as_ref()
+                .map(|wsl_name_or_shell_starter| wsl_name_or_shell_starter.name())
+                .unwrap_or(ShellName::LessDescriptive("Shell".to_owned())),
+        },
+        ctx,
+    );
+    let colors = model.colors();
+    let model = Arc::new(FairMutex::new(model));
+
+    // This is purely for measuring throughput on WarpDev.
+    if FeatureFlag::RecordPtyThroughput.is_enabled() {
+        record_pty_throughput(inactive_pty_reads_rx.clone(), model.clone(), ctx);
+    }
+
+    // If this session should be a shared-session creator, configure its initial
+    // shared-session state before the surface is constructed, so that bootstrap
+    // events can observe the correct pending status and source type.
+    match is_shared_session_creator {
+        IsSharedSessionCreator::Yes { source }
+            if FeatureFlag::CreatingSharedSessions.is_enabled() =>
+        {
+            model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::SharePendingPreBootstrap {
+                    source,
+                });
+            log::info!("Configured terminal to start sharing after bootstrap");
+        }
+        IsSharedSessionCreator::Yes { .. } => {
+            log::warn!(
+                "Session sharing was requested, but CreatingSharedSessions is disabled; \
+                 skipping shared-session startup"
+            );
+        }
+        IsSharedSessionCreator::No => {}
+    }
+
+    let pty_controller = init_pty_controller_model(
+        event_loop_tx.clone(),
+        executor_command_rx,
+        model_events.clone(),
+        sessions.clone(),
+        model.clone(),
+        ctx,
+    );
+    let remote_server_controller =
+        init_remote_server_controller(&pty_controller, &model_events, ctx);
+
+    SessionState {
+        event_loop_tx,
+        event_loop_rx,
+        wakeups_rx,
+        inactive_pty_reads_rx,
+        channel_event_proxy,
+        sessions,
+        model_events,
+        model,
+        colors,
+        pty_controller,
+        remote_server_controller,
+        wsl_name_or_shell_starter,
+    }
+}
+
+/// Records the PTY throughput by emitting a metric whenever the throughput
+/// is non-zero over some time interval.
+fn record_pty_throughput(
+    pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
+    model: Arc<FairMutex<TerminalModel>>,
+    ctx: &mut AppContext,
+) {
+    if FeatureFlag::RecordPtyThroughput.is_enabled() {
+        let auth_state = AuthStateProvider::as_ref(ctx).get();
+        recorder::record_pty_throughput(
+            pty_reads_rx.activate(),
+            model,
+            auth_state.clone(),
+            ctx.background_executor().to_owned(),
+        );
+    }
+}
+
+impl TerminalManager<TerminalView> {
     /// Creates a terminal manager model. Note that the order of operations
     /// in this constructor are important! Specifically, we want to
     /// 1. Create the TerminalModel.
@@ -230,42 +453,14 @@ impl TerminalManager {
         initial_input_config: Option<InputConfig>,
         ctx: &mut AppContext,
     ) -> ModelHandle<Box<dyn crate::terminal::TerminalManager>> {
-        // Create all the necessary channels we need for communication.
-        let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
-        let (events_tx, events_rx) = async_channel::unbounded();
-        let (executor_command_tx, executor_command_rx) = async_channel::unbounded();
-        let (event_loop_tx, event_loop_rx) = mio_channel::channel();
-
-        // Create the broadcast channel to receive data from the PTY, but deactivate it immediately.
-        // We only want to create active receivers as necessary.
-        let (pty_reads_tx, pty_reads_rx) =
-            async_broadcast::broadcast(PTY_READS_BROADCAST_CHANNEL_SIZE);
-        let inactive_pty_reads_rx = pty_reads_rx.deactivate();
-
-        let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
-
-        // Initialize the sessions model.
-        let sessions = ctx.add_model(|ctx| Sessions::new(executor_command_tx.clone(), ctx));
-
-        let model_events =
-            ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
-
-        // Have ApiKeyManager subscribe to block completion events for AWS credential refresh
-        ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-            manager.register_model_event_dispatcher(&model_events, ctx);
-        });
-
-        let preferred_shell = chosen_shell.unwrap_or_else(|| {
-            AvailableShells::handle(ctx)
-                .read(ctx, |shells, ctx| shells.get_user_preferred_shell(ctx))
-        });
+        // Build the surface-agnostic session core: channels, sessions, model events,
+        // AWS credential-refresh registration, and shell-starter resolution.
+        let core = create_session_core(chosen_shell, ctx);
 
         let session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>> = Rc::new(RefCell::new(None));
-        let wsl_name_or_shell_starter = ShellStarter::init(preferred_shell.clone());
 
-        // If we have explicit non-empty restored_blocks, prioritize those (these come from db on startup).
-        // Otherwise if there's a conversation we're restoring, get blocks from those (including when
-        // restored_blocks is missing or an empty vec).
+        // GUI-only restored-block resolution: merge explicit restored blocks with
+        // conversation restoration. A non-GUI constructor would supply its own block list.
         let all_restored_blocks = restored_blocks
             .filter(|blocks| !blocks.is_empty())
             .cloned()
@@ -290,71 +485,30 @@ impl TerminalManager {
                 _ => None,
             });
 
-        // Create the terminal model with all restored blocks
-        log::info!(
-            "Creating terminal model with {} restored blocks",
-            all_restored_blocks
-                .as_ref()
-                .map(|blocks| blocks.len())
-                .unwrap_or(0)
-        );
-        let model = terminal_manager::create_terminal_model(
+        // Build the surface-agnostic session state: terminal model, PTY controller,
+        // remote-server controller, throughput recording, and shared-session creator status.
+        let state = create_session_state(
+            core,
             startup_directory.clone(),
             all_restored_blocks.as_ref(),
             initial_size,
-            channel_event_proxy.clone(),
-            ShellLaunchState::DeterminingShell {
-                available_shell: Some(preferred_shell),
-                display_name: wsl_name_or_shell_starter
-                    .as_ref()
-                    .map(|wsl_name_or_shell_starter| wsl_name_or_shell_starter.name())
-                    .unwrap_or(ShellName::LessDescriptive("Shell".to_owned())),
-            },
+            is_shared_session_creator,
             ctx,
         );
-        let colors = model.colors();
-
-        let model = Arc::new(FairMutex::new(model));
-
-        // This is purely for measuring throughput on WarpDev.
-        if FeatureFlag::RecordPtyThroughput.is_enabled() {
-            Self::record_pty_throughput(inactive_pty_reads_rx.clone(), model.clone(), ctx);
-        }
-
-        // If this session should be a shared-session creator, configure its initial
-        // shared-session state before we construct the view, so that bootstrap
-        // events can observe the correct pending status and source type.
-        match is_shared_session_creator {
-            IsSharedSessionCreator::Yes { source }
-                if FeatureFlag::CreatingSharedSessions.is_enabled() =>
-            {
-                model.lock().set_shared_session_status(
-                    SharedSessionStatus::SharePendingPreBootstrap { source },
-                );
-                log::info!("Configured terminal to start sharing after bootstrap");
-            }
-            IsSharedSessionCreator::Yes { .. } => {
-                log::warn!(
-                    "Session sharing was requested, but CreatingSharedSessions is disabled; \
-                     skipping shared-session startup"
-                );
-            }
-            IsSharedSessionCreator::No => {}
-        }
-
-        // Initialize the PtyController.
-        let pty_controller = init_pty_controller_model(
-            event_loop_tx.clone(),
-            executor_command_rx,
-            model_events.clone(),
-            sessions.clone(),
-            model.clone(),
-            ctx,
-        );
-
-        // Initialize the RemoteServerController.
-        let remote_server_controller =
-            init_remote_server_controller(&pty_controller, &model_events, ctx);
+        let SessionState {
+            event_loop_tx,
+            event_loop_rx,
+            wakeups_rx,
+            inactive_pty_reads_rx,
+            channel_event_proxy,
+            sessions,
+            model_events,
+            model,
+            colors,
+            pty_controller,
+            remote_server_controller,
+            wsl_name_or_shell_starter,
+        } = state;
 
         let current_prompt = ctx.add_model(|ctx| {
             CurrentPrompt::new_with_model_events(sessions.clone(), Some(&model_events), ctx)
@@ -455,7 +609,7 @@ impl TerminalManager {
             });
         }
 
-        wire_up_pty_controller_with_view(
+        wire_up_pty_controller_with_surface(
             &pty_controller,
             &view,
             model.clone(),
@@ -809,6 +963,7 @@ impl TerminalManager {
             model,
             event_loop_handle: None,
             view,
+            model_events,
             #[cfg(unix)]
             terminal_attributes_poller: None,
             pty_controller,
@@ -842,7 +997,8 @@ impl TerminalManager {
                         return;
                     };
 
-                    terminal_manager.on_shell_determined(
+                    on_shell_determined(
+                        terminal_manager,
                         startup_directory,
                         env_vars,
                         user_default_shell_unsupported_banner_model_handle,
@@ -861,178 +1017,190 @@ impl TerminalManager {
 
         terminal_manager_model
     }
+}
 
-    /// Callback invoked upon determining the shell to be spawned when starting the event loop.
-    #[allow(clippy::too_many_arguments)]
-    fn on_shell_determined(
-        &mut self,
-        startup_directory: Option<PathBuf>,
-        env_vars: HashMap<OsString, OsString>,
-        user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
-        #[cfg(windows)] event_loop_tx: mio_channel::Sender<Message>,
-        event_loop_rx: mio_channel::Receiver<Message>,
-        channel_event_proxy: ChannelEventListener,
-        shell_starter_source: Option<ShellStarterSource>,
-        ctx: &mut ModelContext<Box<dyn crate::terminal::TerminalManager>>,
-    ) {
-        // This is executed as a callback and the window could be closed in the interim.
-        if !ctx.is_window_open(self.view.window_id(ctx)) {
-            log::warn!("Window was closed before shell was determined, aborting shell startup.");
-            return;
-        }
-
-        log::debug!("Using shell starter source {shell_starter_source:?}");
-        let bg_executor = ctx.background_executor();
-        let auth_state = AuthStateProvider::as_ref(ctx).get();
-
-        let is_fallback_shell = matches!(
-            shell_starter_source,
-            Some(ShellStarterSource::Fallback { .. })
-        );
-        let shell_starter = shell_starter_source
-            .map(|source| get_shell_starter_internal(source, bg_executor, auth_state));
-        let shell_starter = match shell_starter {
-            Some(shell_starter) => shell_starter,
-            None => {
-                log::error!("Could not compute fallback shell");
-                self.view.update(ctx, |terminal_view, ctx| {
-                    terminal_view.on_pty_spawn_failed(
-                        anyhow::Error::msg("Could not find a fallback shell. If you have PowerShell or WSL installed, please file an issue."),
-                        ctx,
-                    );
-                });
-                self.model().lock().exit(ExitReason::ShellNotFound);
-                return;
-            }
-        };
-
-        // In WSL, default to the WSL home directory, not the native Windows home directory.
-        let startup_directory = if let (ShellStarter::Wsl(wsl_shell_starter), None) =
-            (&shell_starter, &startup_directory)
-        {
-            wsl_shell_starter.home_directory()
-        } else {
-            startup_directory
-        };
-
-        // Show a "shell unsupported" banner, if applicable.
-        if is_fallback_shell
-            && user_default_shell_unsupported_banner_model_handle.as_ref(ctx)
-                == &BannerState::NotDismissed
-        {
-            user_default_shell_unsupported_banner_model_handle.update(ctx, |model, ctx| {
-                *model = BannerState::Open;
-                ctx.notify();
-            })
-        }
-
-        self.model()
-            .lock()
-            .set_login_shell_spawned(shell_starter.shell_type());
-
-        let shell_launch_data = match &shell_starter {
-            ShellStarter::Direct(shell_starter) => ShellLaunchData::Executable {
-                executable_path: shell_starter.logical_shell_path().to_owned(),
-                shell_type: shell_starter.shell_type(),
-            },
-            ShellStarter::DockerSandbox(docker_starter) => ShellLaunchData::Executable {
-                executable_path: docker_starter.logical_shell_path().to_owned(),
-                shell_type: docker_starter.shell_type(),
-            },
-            ShellStarter::Wsl(shell_starter) => ShellLaunchData::WSL {
-                distro: shell_starter.distribution().to_owned(),
-            },
-            ShellStarter::MSYS2(shell_starter) => ShellLaunchData::MSYS2 {
-                executable_path: shell_starter.logical_shell_path().to_owned(),
-                shell_type: shell_starter.shell_type(),
-            },
-        };
-
-        // This needs to be done before bootstrapping starts (i.e. before spawning the event loop below).
-        self.model()
-            .lock()
-            .set_pending_shell_launch_data(shell_launch_data.clone());
-
-        // Register the session ID that was generated during shell starter construction.
-        // For bash, fish, and PowerShell, the session ID is already baked into the command
-        // args. For zsh and MSYS2, enqueue_init_script injects this same ID.
-        let generated_session_id = match &shell_starter {
-            ShellStarter::Direct(starter) | ShellStarter::MSYS2(starter) => starter.session_id(),
-            ShellStarter::DockerSandbox(starter) => starter.session_id(),
-            ShellStarter::Wsl(starter) => starter.session_id(),
-        };
-        self.model()
-            .lock()
-            .register_session_id(generated_session_id);
-
-        // Enqueue the init shell script (for shells that need it), then create
-        // the PTY and start its corresponding event loop.
-        let model = self.model();
-        let pty = match self
-            .enqueue_init_script(&shell_starter, generated_session_id)
-            .context("Failed to write shell init script to the pty")
-            .and_then(|_| {
-                Self::create_pty(
-                    startup_directory,
-                    shell_starter,
-                    env_vars,
-                    model.clone(),
-                    #[cfg(windows)]
-                    event_loop_tx,
-                    ctx,
-                )
-            }) {
-            Ok(pty) => pty,
-            Err(err) => {
-                log::error!("Failed to spawn pty: {err:#}");
-                self.view.update(ctx, |terminal_view, ctx| {
-                    terminal_view.on_pty_spawn_failed(err, ctx);
-                });
-                self.model().lock().exit(ExitReason::PtySpawnFailed);
-                return;
-            }
-        };
-
-        #[cfg(feature = "integration_tests")]
-        let pid = pty.get_pid();
-        #[cfg(unix)]
-        let fd = pty.get_fd();
-
-        // Create the channel above and pass the receving side to the event loop.
-        let event_loop_handle = Self::start_pty_event_loop(
-            pty,
-            event_loop_rx,
-            model.clone(),
-            channel_event_proxy.clone(),
-        );
-
-        self.event_loop_handle = Some(event_loop_handle);
-        #[cfg(feature = "integration_tests")]
-        {
-            self.pid = Some(pid);
-        }
-
-        self.view.update(ctx, |terminal_view, ctx| {
-            terminal_view.on_shell_determined(ctx);
-            terminal_view.on_active_shell_launch_data_updated(Some(shell_launch_data), ctx);
-        });
-
-        // Initialize the terminal attributes poller.
-        // TODO(CORE-2297): Implement TerminalPoller on Windows.
-        #[cfg(unix)]
-        {
-            let terminal_attributes_poller = ctx.add_model(|_| TerminalAttributesPoller::new(fd));
-            TerminalManager::wire_up_terminal_attribute_poller_with_view(
-                &terminal_attributes_poller,
-                &self.view,
-                model.clone(),
-                ctx,
-            );
-
-            self.terminal_attributes_poller = Some(terminal_attributes_poller);
-        }
+/// Callback invoked upon determining the shell to be spawned when starting the event loop.
+///
+/// This is a free function rather than an inherent method so the `S: TerminalSurface` bound
+/// stays off the public `TerminalManager<S>` inherent-impl surface (avoiding `private_bounds`
+/// leakage of the `pub(crate)` surface trait).
+#[allow(clippy::too_many_arguments)]
+fn on_shell_determined<S: TerminalSurface>(
+    manager: &mut TerminalManager<S>,
+    startup_directory: Option<PathBuf>,
+    env_vars: HashMap<OsString, OsString>,
+    user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
+    #[cfg(windows)] event_loop_tx: mio_channel::Sender<Message>,
+    event_loop_rx: mio_channel::Receiver<Message>,
+    channel_event_proxy: ChannelEventListener,
+    shell_starter_source: Option<ShellStarterSource>,
+    ctx: &mut ModelContext<Box<dyn crate::terminal::TerminalManager>>,
+) where
+    for<'a> Option<PtyIntent>: From<&'a <S as Entity>::Event>,
+{
+    // This is executed as a callback and the window could be closed in the interim.
+    if !ctx.is_window_open(manager.view.window_id(ctx)) {
+        log::warn!("Window was closed before shell was determined, aborting shell startup.");
+        return;
     }
 
+    log::debug!("Using shell starter source {shell_starter_source:?}");
+    let bg_executor = ctx.background_executor();
+    let auth_state = AuthStateProvider::as_ref(ctx).get();
+
+    let is_fallback_shell = matches!(
+        shell_starter_source,
+        Some(ShellStarterSource::Fallback { .. })
+    );
+    let shell_starter = shell_starter_source
+        .map(|source| get_shell_starter_internal(source, bg_executor, auth_state));
+    let shell_starter = match shell_starter {
+        Some(shell_starter) => shell_starter,
+        None => {
+            log::error!("Could not compute fallback shell");
+            manager.view.update(ctx, |surface, ctx| {
+                surface.on_pty_spawn_failed(
+                    anyhow::Error::msg("Could not find a fallback shell. If you have PowerShell or WSL installed, please file an issue."),
+                    ctx,
+                );
+            });
+            manager.model().lock().exit(ExitReason::ShellNotFound);
+            return;
+        }
+    };
+
+    // In WSL, default to the WSL home directory, not the native Windows home directory.
+    let startup_directory = if let (ShellStarter::Wsl(wsl_shell_starter), None) =
+        (&shell_starter, &startup_directory)
+    {
+        wsl_shell_starter.home_directory()
+    } else {
+        startup_directory
+    };
+
+    // Show a "shell unsupported" banner, if applicable.
+    if is_fallback_shell
+        && user_default_shell_unsupported_banner_model_handle.as_ref(ctx)
+            == &BannerState::NotDismissed
+    {
+        user_default_shell_unsupported_banner_model_handle.update(ctx, |model, ctx| {
+            *model = BannerState::Open;
+            ctx.notify();
+        })
+    }
+
+    manager
+        .model()
+        .lock()
+        .set_login_shell_spawned(shell_starter.shell_type());
+
+    let shell_launch_data = match &shell_starter {
+        ShellStarter::Direct(shell_starter) => ShellLaunchData::Executable {
+            executable_path: shell_starter.logical_shell_path().to_owned(),
+            shell_type: shell_starter.shell_type(),
+        },
+        ShellStarter::DockerSandbox(docker_starter) => ShellLaunchData::Executable {
+            executable_path: docker_starter.logical_shell_path().to_owned(),
+            shell_type: docker_starter.shell_type(),
+        },
+        ShellStarter::Wsl(shell_starter) => ShellLaunchData::WSL {
+            distro: shell_starter.distribution().to_owned(),
+        },
+        ShellStarter::MSYS2(shell_starter) => ShellLaunchData::MSYS2 {
+            executable_path: shell_starter.logical_shell_path().to_owned(),
+            shell_type: shell_starter.shell_type(),
+        },
+    };
+
+    // This needs to be done before bootstrapping starts (i.e. before spawning the event loop below).
+    manager
+        .model()
+        .lock()
+        .set_pending_shell_launch_data(shell_launch_data.clone());
+
+    // Register the session ID that was generated during shell starter construction.
+    // For bash, fish, and PowerShell, the session ID is already baked into the command
+    // args. For zsh and MSYS2, enqueue_init_script injects this same ID.
+    let generated_session_id = match &shell_starter {
+        ShellStarter::Direct(starter) | ShellStarter::MSYS2(starter) => starter.session_id(),
+        ShellStarter::DockerSandbox(starter) => starter.session_id(),
+        ShellStarter::Wsl(starter) => starter.session_id(),
+    };
+    manager
+        .model()
+        .lock()
+        .register_session_id(generated_session_id);
+
+    // Enqueue the init shell script (for shells that need it), then create
+    // the PTY and start its corresponding event loop.
+    let model = manager.model();
+    let pty = match manager
+        .enqueue_init_script(&shell_starter, generated_session_id)
+        .context("Failed to write shell init script to the pty")
+        .and_then(|_| {
+            TerminalManager::<S>::create_pty(
+                startup_directory,
+                shell_starter,
+                env_vars,
+                model.clone(),
+                #[cfg(windows)]
+                event_loop_tx,
+                ctx,
+            )
+        }) {
+        Ok(pty) => pty,
+        Err(err) => {
+            log::error!("Failed to spawn pty: {err:#}");
+            manager.view.update(ctx, |surface, ctx| {
+                surface.on_pty_spawn_failed(err, ctx);
+            });
+            manager.model().lock().exit(ExitReason::PtySpawnFailed);
+            return;
+        }
+    };
+
+    #[cfg(feature = "integration_tests")]
+    let pid = pty.get_pid();
+    #[cfg(unix)]
+    let fd = pty.get_fd();
+
+    // Create the channel above and pass the receving side to the event loop.
+    let event_loop_handle = TerminalManager::<S>::start_pty_event_loop(
+        pty,
+        event_loop_rx,
+        model.clone(),
+        channel_event_proxy.clone(),
+    );
+
+    manager.event_loop_handle = Some(event_loop_handle);
+    #[cfg(feature = "integration_tests")]
+    {
+        manager.pid = Some(pid);
+    }
+
+    manager.view.update(ctx, |surface, ctx| {
+        surface.on_shell_determined(ctx);
+        surface.on_active_shell_launch_data_updated(Some(shell_launch_data), ctx);
+    });
+
+    // Initialize the terminal attributes poller.
+    // TODO(CORE-2297): Implement TerminalPoller on Windows.
+    #[cfg(unix)]
+    {
+        let terminal_attributes_poller = ctx.add_model(|_| TerminalAttributesPoller::new(fd));
+        wire_up_terminal_attribute_poller_with_surface(
+            &terminal_attributes_poller,
+            &manager.view,
+            &manager.model_events,
+            model.clone(),
+            ctx,
+        );
+
+        manager.terminal_attributes_poller = Some(terminal_attributes_poller);
+    }
+}
+
+impl<S> TerminalManager<S> {
     /// Sends bindkey to notify shell process to switch to PS1 logic for prompt
     /// with the combined prompt/command grid (we restore the saved PS1 value).
     pub fn send_switch_to_ps1_bindkey(&self, app_ctx: &mut AppContext) {
@@ -1048,24 +1216,6 @@ impl TerminalManager {
         self.pty_controller.update(app_ctx, |pty_controller, ctx| {
             pty_controller.send_switch_to_warp_prompt_bindkey(ctx);
         });
-    }
-
-    /// Records the PTY throughput by emitting a metric whenever the throughput
-    /// is non-zero over some time interval.
-    fn record_pty_throughput(
-        pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
-        model: Arc<FairMutex<TerminalModel>>,
-        ctx: &mut AppContext,
-    ) {
-        if FeatureFlag::RecordPtyThroughput.is_enabled() {
-            let auth_state = AuthStateProvider::as_ref(ctx).get();
-            recorder::record_pty_throughput(
-                pty_reads_rx.activate(),
-                model,
-                auth_state.clone(),
-                ctx.background_executor().to_owned(),
-            );
-        }
     }
 
     fn enqueue_init_script(
@@ -1179,146 +1329,114 @@ impl TerminalManager {
         // to the terminal.
         event_loop.spawn()
     }
+}
 
-    /// Configures bi-directional communication between the terminal attributes poller
-    /// and the terminal view.
-    ///
-    /// NOTE: we cannot simply use the strong references (the handle arguments to this wire_up fn)
-    /// in the subscription callbacks because that will create a reference cycle. Instead,
-    /// we should use weak handles and upgrade them lazily.
-    ///
-    /// TODO: while there is a lot of notification-heavy logic below, this will eventually
-    /// be in a dedicated terminal::NotificationSender. For now though, this logic cannot
-    /// live in TerminalView (because termios is a *nix thing).
-    #[cfg(unix)]
-    fn wire_up_terminal_attribute_poller_with_view(
-        terminal_attributes_poller: &ModelHandle<TerminalAttributesPoller>,
-        terminal_view: &ViewHandle<TerminalView>,
-        model: Arc<FairMutex<TerminalModel>>,
-        ctx: &mut ModelContext<Box<dyn crate::terminal::TerminalManager>>,
-    ) {
-        let poller_weak_handle = terminal_attributes_poller.downgrade();
-        let view_weak_handle = terminal_view.downgrade();
-        let view_weak_handle_2 = view_weak_handle.clone();
+/// Wires the Unix terminal-attributes poller to a terminal surface.
+///
+/// The poller is driven off `ModelEventDispatcher` block start/complete events
+/// rather than surface-specific view events, and termios results are routed back
+/// through the [`TerminalSurface`] Unix hooks so the manager stays surface-agnostic.
+///
+/// This is a free function rather than an inherent method so the `S: TerminalSurface`
+/// bound stays off the public `TerminalManager<S>` inherent-impl surface.
+///
+/// NOTE: we cannot simply use the strong references (the handle arguments to this
+/// wire_up fn) in the subscription callbacks because that will create a reference
+/// cycle. Instead, we use weak handles and upgrade them lazily.
+#[cfg(unix)]
+fn wire_up_terminal_attribute_poller_with_surface<S: TerminalSurface>(
+    terminal_attributes_poller: &ModelHandle<TerminalAttributesPoller>,
+    surface: &ViewHandle<S>,
+    model_events: &ModelHandle<ModelEventDispatcher>,
+    model: Arc<FairMutex<TerminalModel>>,
+    ctx: &mut ModelContext<Box<dyn crate::terminal::TerminalManager>>,
+) where
+    for<'a> Option<PtyIntent>: From<&'a <S as Entity>::Event>,
+{
+    let poller_weak_handle = terminal_attributes_poller.downgrade();
+    let poller_weak_handle_for_termios = poller_weak_handle.clone();
+    let surface_weak_handle = surface.downgrade();
+    let surface_weak_handle_for_termios = surface_weak_handle.clone();
 
-        // Used to track the index of the started block across the view <-> poller interactions.
-        let block_index: Rc<RefCell<Option<BlockIndex>>> = Rc::new(RefCell::new(None));
-        let block_index_clone = block_index.clone();
+    // Tracks the index of the started block across the model-event <-> poller interactions.
+    let block_index: Rc<RefCell<Option<BlockIndex>>> = Rc::new(RefCell::new(None));
+    let block_index_for_termios = block_index.clone();
 
-        // Whenever we get a BlockStarted, we want to start the terminal attribute poller.
-        // Whenever the block is completed, we can stop the terminal attribute poller.
-        ctx.subscribe_to_view(terminal_view, move |_view, _, event, ctx| {
-            let Some(poller) = poller_weak_handle.upgrade(ctx) else {
+    // On block start, record the active block index and ask the surface whether
+    // password-prompt polling is useful before starting the poller. On block
+    // completion, stop polling and let the surface react to the completed block.
+    ctx.subscribe_to_model(model_events, move |_manager, _dispatcher, event, ctx| {
+        let Some(poller) = poller_weak_handle.upgrade(ctx) else {
+            return;
+        };
+
+        match event {
+            TerminalModelEvent::AfterBlockStarted {
+                is_for_in_band_command: false,
+                ..
+            } => {
+                *block_index.borrow_mut() = Some(model.lock().block_list().active_block_index());
+
+                let should_poll = surface_weak_handle.upgrade(ctx).is_some_and(|surface| {
+                    surface.read(ctx, |surface, ctx| {
+                        surface.should_poll_for_password_prompt(ctx)
+                    })
+                });
+                if should_poll {
+                    poller.update(ctx, |poller, ctx| {
+                        poller.start_polling(ctx);
+                    });
+                }
+            }
+            TerminalModelEvent::BlockCompleted(completed) => {
+                poller.update(ctx, |poller, _ctx| {
+                    poller.stop_polling();
+                });
+                if let Some(surface) = surface_weak_handle.upgrade(ctx) {
+                    surface.update(ctx, |surface, ctx| {
+                        surface.on_polled_block_completed(completed, ctx);
+                    });
+                }
+            }
+            _ => {}
+        }
+    });
+
+    // When the poller detects termios consistent with a password prompt, route the
+    // result through the surface and stop after the first detection to preserve
+    // today's one-notification-per-command behavior.
+    ctx.subscribe_to_model(
+        terminal_attributes_poller,
+        move |_manager, _poller, event, ctx| {
+            let TerminalAttributesPollerEvent::TermiosQueryFinished { termios } = event;
+
+            // A PTY likely has a password prompt if ECHO is disabled but ICANON is
+            // still enabled. Apps like neovim disable both in raw mode, so requiring
+            // ICANON avoids false positives.
+            let might_be_password_prompt = !termios.local_flags.contains(LocalFlags::ECHO)
+                && termios.local_flags.contains(LocalFlags::ICANON);
+            if !might_be_password_prompt {
+                return;
+            }
+
+            let Some(surface) = surface_weak_handle_for_termios.upgrade(ctx) else {
                 return;
             };
+            let block_index = block_index_for_termios.borrow_mut().take();
+            surface.update(ctx, |surface, ctx| {
+                surface.on_possible_password_prompt(block_index, ctx);
+            });
 
-            match event {
-                TerminalViewEvent::BlockStarted {
-                    is_for_in_band_command,
-                } if !is_for_in_band_command => {
-                    *block_index.borrow_mut() =
-                        Some(model.lock().block_list().active_block_index());
-
-                    let password_notification_setting_on = show_password_notifications(ctx);
-                    let pane_handling_ssh_upload =
-                        view_weak_handle_2.upgrade(ctx).is_some_and(|view| {
-                            view.update(ctx, |terminal_view, _ctx| terminal_view.is_ssh_uploader())
-                        });
-                    let should_poll_for_password_prompt = password_notification_setting_on
-                        || (pane_handling_ssh_upload && FeatureFlag::SshDragAndDrop.is_enabled());
-
-                    if should_poll_for_password_prompt {
-                        poller.update(ctx, |model, ctx| {
-                            model.start_polling(ctx);
-                        });
-                    }
-                }
-                TerminalViewEvent::BlockCompleted { block, .. } => {
-                    // If the poller was turned on, that means that the next BlockCompleted
-                    // event would have been for the same block.
-                    poller.update(ctx, |model, _ctx| {
-                        model.stop_polling();
-                    });
-
-                    if let Some(view) = view_weak_handle_2.upgrade(ctx) {
-                        view.update(ctx, |terminal_view, ctx| {
-                            if terminal_view.is_ssh_uploader() {
-                                let exit_code = block.exit_code;
-                                terminal_view.propagate_upload_finished_event(exit_code, ctx);
-                            }
-                        })
-                    }
-                }
-                _ => {}
+            if let Some(poller) = poller_weak_handle_for_termios.upgrade(ctx) {
+                poller.update(ctx, |poller, _ctx| {
+                    poller.stop_polling();
+                });
             }
-        });
+        },
+    );
+}
 
-        // Whenever the terminal attribute poller yields a termios struct, we might
-        // want to trigger a password notification depending on the termios attributes.
-        // TODO: eventually, this logic will be in a terminal::NotificationSender where
-        // it makes far more sense to be reading the termios struct. For now though,
-        // this logic can't live in TerminalView (because termios is a *nix thing).
-        ctx.subscribe_to_model(
-            terminal_attributes_poller,
-            move |terminal_manager, _, event, ctx| {
-                let Some(view) = view_weak_handle.upgrade(ctx) else {
-                    return;
-                };
-
-                let TerminalAttributesPollerEvent::TermiosQueryFinished { termios } = event;
-
-                // A PTY likely has a password prompt if it is not echoing characters back (ECHO disabled)
-                // AND is in canonical mode (ICANON enabled).
-                //
-                // We need to check ICANON because apps like neovim disable both ECHO and ICANON
-                // when entering raw mode (for character-by-character input handling), which would
-                // otherwise cause false positive password notifications. A real password prompt
-                // typically keeps ICANON enabled since password entry is still line-based.
-                let might_be_password_prompt = !termios.local_flags.contains(LocalFlags::ECHO)
-                    && termios.local_flags.contains(LocalFlags::ICANON);
-
-                if might_be_password_prompt {
-                    if FeatureFlag::SshDragAndDrop.is_enabled() {
-                        view.update(ctx, |view, ctx| {
-                            view.propagate_password_request(ctx);
-                        });
-                    }
-
-                    // Only send the notification if the user is navigated away from the window
-                    // when the password prompt appears. If the password prompt appears and they
-                    // are not navigated away, don't poll again since we would then send a notification
-                    // for something the user already knows.
-                    let is_navigated_away_from_window =
-                        ctx.windows().active_window() != Some(view.window_id(ctx));
-                    let password_notification_setting_on = show_password_notifications(ctx);
-                    if is_navigated_away_from_window && password_notification_setting_on {
-                        if let Some(block_index) = block_index_clone.borrow_mut().take() {
-                            view.update(ctx, |view, ctx| {
-                                view.maybe_send_password_notification(block_index, ctx);
-                            });
-                        }
-                    }
-
-                    // TODO: this stops the notification stream for a single command
-                    // after one password notification. We should track the output progress
-                    // instead so that we can send multiple notifications for a single command.
-                    let Some(terminal_manager) =
-                        crate::terminal::TerminalManager::as_any_mut(terminal_manager.as_mut())
-                            .downcast_mut::<TerminalManager>()
-                    else {
-                        return;
-                    };
-
-                    if let Some(poller) = &mut terminal_manager.terminal_attributes_poller {
-                        poller.update(ctx, |poller, _ctx| {
-                            poller.stop_polling();
-                        });
-                    }
-                }
-            },
-        );
-    }
-
+impl TerminalManager<TerminalView> {
     /// Streams all historical agent conversations from this terminal to viewers.
     /// This is called when starting a shared  session mid-conversation so that viewers
     /// can see all conversation history and properly continue conversations.
@@ -2646,28 +2764,16 @@ impl TerminalManager {
         });
     }
 
-    #[cfg(feature = "integration_tests")]
-    pub fn pid(&self) -> Option<u32> {
-        self.pid
-    }
-
     #[cfg(test)]
     pub fn session_sharer(&self) -> Rc<RefCell<Option<ModelHandle<Network>>>> {
         self.session_sharer.clone()
     }
-}
 
-/// Determine whether to show password notifications based on the user's settings.
-/// This returns true if the user hasn't set notification settings yet, or if
-/// they have explicitly enabled notifications for password prompts.
-#[cfg(unix)]
-fn show_password_notifications(
-    ctx: &ModelContext<Box<dyn crate::terminal::TerminalManager>>,
-) -> bool {
-    let notification_settings = &SessionSettings::as_ref(ctx).notifications;
-    matches!(notification_settings.mode, NotificationsMode::Unset)
-        || (matches!(notification_settings.mode, NotificationsMode::Enabled)
-            && notification_settings.is_needs_attention_enabled)
+    /// Returns the PTY process id, for integration tests.
+    #[cfg(feature = "integration_tests")]
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
+    }
 }
 
 pub fn get_shell_starter(
@@ -2743,7 +2849,7 @@ pub fn shutdown_all_pty_event_loops(ctx: &mut AppContext) {
     })
 }
 
-impl crate::terminal::TerminalManager for TerminalManager {
+impl crate::terminal::TerminalManager for TerminalManager<TerminalView> {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
     }

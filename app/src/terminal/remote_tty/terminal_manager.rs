@@ -18,7 +18,7 @@ use crate::terminal::remote_tty::event_loop::EventLoop;
 use crate::terminal::shell::{ShellName, ShellType};
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
-    init_pty_controller_model, wire_up_pty_controller_with_view,
+    init_pty_controller_model, wire_up_pty_controller_with_surface,
 };
 use crate::terminal::writeable_pty::{self, Message};
 use crate::terminal::{terminal_manager, ShellLaunchState, SizeInfo, TerminalModel, TerminalView};
@@ -127,7 +127,7 @@ impl TerminalManager {
             )
         });
 
-        wire_up_pty_controller_with_view(
+        wire_up_pty_controller_with_surface(
             &pty_controller,
             &view,
             model.clone(),
