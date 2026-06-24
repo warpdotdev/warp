@@ -269,7 +269,14 @@ impl Input {
                         .is_some_and(|argument| argument.is_empty())
                     && self.suggestions_mode_model.as_ref(ctx).is_closed()
                 {
-                    self.open_completion_suggestions(CompletionsTrigger::Keybinding, ctx);
+                    // Use `SlashCommandAutoOpen` rather than `Keybinding` here: this open is
+                    // triggered automatically by detecting an empty `/open-file` argument, not by
+                    // an explicit user keybinding. With `Keybinding`, a directory containing a
+                    // single file would have that file immediately re-inserted as the user
+                    // backspaces the argument back to empty, making it impossible to clear (see
+                    // #12990). `SlashCommandAutoOpen` still generates file-path completions but
+                    // shows them in the menu instead of force-inserting a lone result.
+                    self.open_completion_suggestions(CompletionsTrigger::SlashCommandAutoOpen, ctx);
                 }
             }
             SlashCommandEntryState::SkillCommand(detected_skill) => {
