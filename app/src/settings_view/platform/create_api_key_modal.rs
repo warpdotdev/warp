@@ -170,7 +170,9 @@ impl CreateApiKeyModal {
             ctx.add_typed_action_view(FilterableDropdown::<CreateApiKeyModalAction>::new);
         agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_top_bar_max_width(INPUT_WIDTH);
-            dropdown.set_menu_width(INPUT_WIDTH, ctx);
+            // Match the open menu width to the rendered top-bar (input) width so
+            // the dropdown doesn't overhang the search field.
+            dropdown.set_match_menu_width_to_top_bar(true, ctx);
         });
 
         let api_key_type_control = ctx.add_typed_action_view(move |ctx| {
