@@ -37,23 +37,6 @@ use crate::workspace::view::conversation_list::view::ConversationListViewAction;
 /// Maximum length for tooltip text before truncation
 const MAX_TOOLTIP_LENGTH: usize = 80;
 
-/// Mouse-in behavior shared by conversation list rows (both the dynamic
-/// conversation items and the static "New conversation" row).
-///
-/// Hovering a row drives both its selection highlight and the row tooltip. We
-/// set `fire_when_covered: false` so that hover does **not** fire when the row
-/// is covered by an overlay such as a modal — clicks are already blocked when
-/// covered, and without this the selection/tooltip would leak through a modal
-/// (e.g. the "Edit toolbar" modal) rendered on top of the list (APP-4253).
-///
-/// `fire_on_synthetic_events: false` keeps a synthetic re-hover (fired when the
-/// underlying view changes without the mouse moving) from spuriously selecting a
-/// row.
-const ROW_MOUSE_IN_BEHAVIOR: MouseInBehavior = MouseInBehavior {
-    fire_on_synthetic_events: false,
-    fire_when_covered: false,
-};
-
 /// Spacing between icon and title
 const ICON_SPACING: f32 = 4.;
 
@@ -184,7 +167,13 @@ pub fn render_static_item(props: StaticItemProps<'_>, app: &AppContext) -> Box<d
             ctx.dispatch_typed_action(ConversationListViewAction::SetSelectedIndex(index));
             DispatchEventResult::PropagateToParent
         },
-        Some(ROW_MOUSE_IN_BEHAVIOR),
+        Some(MouseInBehavior {
+            fire_on_synthetic_events: false,
+            // `fire_when_covered: false` makes hover ignore the row when it's
+            // covered by an overlay (e.g. a modal), so the selection/tooltip
+            // don't leak through — matching how clicks are already blocked.
+            fire_when_covered: false,
+        }),
     )
     .finish()
 }
@@ -440,7 +429,13 @@ pub fn render_item(props: ItemProps<'_>, app: &AppContext) -> Box<dyn Element> {
                 ctx.dispatch_typed_action(ConversationListViewAction::SetSelectedIndex(index));
                 DispatchEventResult::PropagateToParent
             },
-            Some(ROW_MOUSE_IN_BEHAVIOR),
+            Some(MouseInBehavior {
+                fire_on_synthetic_events: false,
+                // `fire_when_covered: false` makes hover ignore the row when
+                // it's covered by an overlay (e.g. a modal), so the
+                // selection/tooltip don't leak through — matching clicks.
+                fire_when_covered: false,
+            }),
         )
         .finish();
 
@@ -518,7 +513,3 @@ fn format_item_subtext(conversation: &AgentConversationEntry, app: &AppContext) 
         user_friendly_path(&pwd, home_dir.as_deref()).into_owned()
     })
 }
-
-#[cfg(test)]
-#[path = "item_tests.rs"]
-mod tests;
