@@ -502,10 +502,10 @@ impl BlocklistAIController {
                 .conversation(&conv_id)
                 .map(|conversation| stream_finished::ConversationUsageMetadata {
                     context_window_usage: conversation.context_window_usage(),
-                    total_input_tokens: 0,
                     credits_spent: conversation.inference_credits_spent(),
                     platform_credits_spent: conversation.platform_credits_spent(),
                     summarized: conversation.was_summarized(),
+                    total_input_tokens: 0,
                     #[allow(deprecated)]
                     token_usage: conversation
                         .token_usage()
