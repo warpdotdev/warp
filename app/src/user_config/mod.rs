@@ -95,6 +95,7 @@ pub struct WarpConfig {
     theme_config: WarpThemeConfig,
     local_user_workflows: Vec<Workflow>,
     /// User-defined custom model routers loaded from `~/.warp/custom_model_routers/`.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     custom_model_routers: Vec<CustomModelRouter>,
     /// Errors for `custom_model_routers/` files that failed to parse.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -131,6 +132,7 @@ impl WarpConfig {
     }
 
     /// The local (YAML-sourced) custom model routers.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn custom_model_routers(&self) -> &Vec<CustomModelRouter> {
         &self.custom_model_routers
     }
@@ -210,6 +212,7 @@ pub fn tab_configs_dir() -> PathBuf {
 
 /// Returns the path to the directory containing the user's custom model router
 /// configs (`~/.warp/custom_model_routers/`). Each file defines a single router.
+#[cfg_attr(target_family = "wasm", expect(dead_code))]
 pub fn custom_model_routers_dir() -> PathBuf {
     base_dir().join("custom_model_routers")
 }

@@ -621,7 +621,7 @@ impl LLMPreferences {
         // Rebuild custom model routers whenever the local `model_configs/` directory
         // changes, and reconcile any now-stale local selection.
         if FeatureFlag::CustomModelRouters.is_enabled() {
-            ctx.subscribe_to_model(&WarpConfig::handle(ctx), |me, event, ctx| {
+            ctx.subscribe_to_model(&WarpConfig::handle(ctx), |me, _, event, ctx| {
                 if matches!(event, WarpConfigUpdateEvent::ModelConfigs) {
                     me.rebuild_custom_model_routers(ctx);
                     me.reconcile_stale_custom_router_selection(ctx);
@@ -1344,6 +1344,14 @@ impl LLMPreferences {
         }
 
         self.reconcile_disabled_model_preferences(ctx);
+
+        // Re-evaluate custom model routers now that the server catalog is fresh.
+        // A router that was excluded at startup (because its target wasn't in the
+        // cached catalog) is reconsidered here with the authoritative model list.
+        if FeatureFlag::CustomModelRouters.is_enabled() {
+            self.rebuild_custom_model_routers(ctx);
+            self.reconcile_stale_custom_router_selection(ctx);
+        }
 
         let new_choices =
             get_new_agent_mode_choices(&old.agent_mode, &self.models_by_feature.agent_mode);
