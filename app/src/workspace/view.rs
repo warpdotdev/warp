@@ -19522,6 +19522,10 @@ impl Workspace {
     /// [Header (spacer)(tab1)(tab2)...(spacer)]
     const GROUP_EDGE_SPACER_FLEX: f32 = 0.06;
 
+    /// Upper bound on each edge spacer's rendered width, proportional to
+    /// tab's max width (tabs have flex 1 and max width of 200).
+    const GROUP_EDGE_SPACER_MAX_WIDTH: f32 = Self::GROUP_EDGE_SPACER_FLEX * 200.0;
+
     /// Renders a contiguous run of grouped tabs as one tab-bar slot: header
     /// + (when expanded) member tabs.
     #[allow(clippy::too_many_arguments)]
@@ -19569,9 +19573,16 @@ impl Workspace {
         );
 
         if !is_collapsed {
-            // Edge spacer before the first member (own flex slot, doesn't shrink tabs).
+            // Edge spacer before the first member (own flex slot, doesn't
+            // shrink tabs).
             row.add_child(
-                Expanded::new(Self::GROUP_EDGE_SPACER_FLEX, Empty::new().finish()).finish(),
+                Shrinkable::new(
+                    Self::GROUP_EDGE_SPACER_FLEX,
+                    ConstrainedBox::new(Empty::new().finish())
+                        .with_max_width(Self::GROUP_EDGE_SPACER_MAX_WIDTH)
+                        .finish(),
+                )
+                .finish(),
             );
             let close_button_position = if FeatureFlag::TabCloseButtonOnLeft.is_enabled() {
                 TabSettings::as_ref(ctx).close_button_position
@@ -19611,19 +19622,25 @@ impl Workspace {
             // Matching edge spacer after the last member. The trailing divider
             // lives inside this spacer's own flex slot (drawn at its right edge,
             // which is the group's far edge), so it doesn't steal width from the
-            // members the way a border on the group container would.
+            // members the way a border on the group container would. Same loose
+            // flex cap as the leading spacer so the group shrink-wraps instead
+            // of this spacer ballooning out toward the bar's trailing edge.
             row.add_child(
-                Expanded::new(
+                Shrinkable::new(
                     Self::GROUP_EDGE_SPACER_FLEX,
-                    Container::new(Empty::new().finish())
-                        .with_border(
-                            Border::all(1.)
-                                .with_sides(false, false, false, true)
-                                .with_border_fill(internal_colors::fg_overlay_1(
-                                    appearance.theme(),
-                                )),
-                        )
-                        .finish(),
+                    ConstrainedBox::new(
+                        Container::new(Empty::new().finish())
+                            .with_border(
+                                Border::all(1.)
+                                    .with_sides(false, false, false, true)
+                                    .with_border_fill(internal_colors::fg_overlay_1(
+                                        appearance.theme(),
+                                    )),
+                            )
+                            .finish(),
+                    )
+                    .with_max_width(Self::GROUP_EDGE_SPACER_MAX_WIDTH)
+                    .finish(),
                 )
                 .finish(),
             );
