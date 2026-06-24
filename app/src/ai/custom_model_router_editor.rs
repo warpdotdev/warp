@@ -378,10 +378,20 @@ impl CustomRouterEditorView {
 
         let routing = match self.router_type {
             RouterEditorType::Complexity => {
-                if self.complexity_default.is_empty() {
-                    self.save_error = Some("A default model is required.".to_string());
-                    ctx.notify();
-                    return;
+                for (field, val) in [
+                    ("Default", self.complexity_default.as_str()),
+                    ("Easy", self.complexity_easy.as_deref().unwrap_or_default()),
+                    (
+                        "Medium",
+                        self.complexity_medium.as_deref().unwrap_or_default(),
+                    ),
+                    ("Hard", self.complexity_hard.as_deref().unwrap_or_default()),
+                ] {
+                    if val.is_empty() {
+                        self.save_error = Some(format!("{field} model is required."));
+                        ctx.notify();
+                        return;
+                    }
                 }
                 CustomModelRouting::Complexity(ComplexityRouting {
                     default: self.complexity_default.clone(),
@@ -513,7 +523,7 @@ impl CustomRouterEditorView {
             ))
             .with_child(
                 Container::new(labeled_dropdown(
-                    "Easy (optional)",
+                    "Easy (required)",
                     &self.complexity_easy_dropdown,
                     appearance,
                 ))
@@ -522,7 +532,7 @@ impl CustomRouterEditorView {
             )
             .with_child(
                 Container::new(labeled_dropdown(
-                    "Medium (optional)",
+                    "Medium (required)",
                     &self.complexity_medium_dropdown,
                     appearance,
                 ))
@@ -531,7 +541,7 @@ impl CustomRouterEditorView {
             )
             .with_child(
                 Container::new(labeled_dropdown(
-                    "Hard (optional)",
+                    "Hard (required)",
                     &self.complexity_hard_dropdown,
                     appearance,
                 ))
