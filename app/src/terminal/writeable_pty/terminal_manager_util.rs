@@ -11,28 +11,38 @@ use crate::terminal::model::session::{ExecutorCommandEvent, Sessions};
 use crate::terminal::model::terminal_model::ExitReason;
 use crate::terminal::writeable_pty::command_history::update_command_history;
 use crate::terminal::writeable_pty::pty_controller::EventLoopSender;
+use crate::terminal::writeable_pty::terminal_surface::{PtySurfaceIntent, TerminalSurface};
 use crate::terminal::writeable_pty::{PtyController, PtyControllerEvent};
 use crate::terminal::{view, ModelEventDispatcher, TerminalModel, TerminalView};
 
-/// Wires up bi-directional communication between the PtyController and the TerminalView.
-/// Note that this interaction can't live in the TerminalView because the view must be manager-agnostic.
+/// Wires up bi-directional communication between the PtyController and a
+/// [`TerminalSurface`]. The surface emits events that translate (via
+/// [`TerminalSurface::pty_intent`]) into `PtyController` calls; inbound
+/// `PtyDisconnected` exits the model. View-agnostic, so the same wiring drives
+/// the GUI [`TerminalView`] and the headless TUI surface.
 ///
 /// NOTE: we cannot simply use the strong references (the handle arguments to this wire_up fn)
 /// in the subscription callbacks because that will create a reference cycle. Instead,
 /// we should use weak handles and upgrade them lazily.
-pub fn wire_up_pty_controller_with_view<T: EventLoopSender>(
+pub fn wire_up_pty_controller_with_surface<T: EventLoopSender, S: TerminalSurface>(
     pty_controller: &ModelHandle<PtyController<T>>,
-    terminal_view: &ViewHandle<TerminalView>,
+    surface: &ViewHandle<S>,
     model: Arc<FairMutex<TerminalModel>>,
     sessions: ModelHandle<Sessions>,
     model_event_sender: Option<SyncSender<ModelEvent>>,
     ctx: &mut AppContext,
-) {
+) where
+    for<'a> Option<PtySurfaceIntent>: From<&'a S::Event>,
+{
     let controller_weak_handle = pty_controller.downgrade();
-    let view_weak_handle = terminal_view.downgrade();
+    let surface_weak_handle = surface.downgrade();
     let model_clone = model.clone();
 
-    ctx.subscribe_to_view(terminal_view, move |_view, event, ctx| {
+    ctx.subscribe_to_view(surface, move |_surface, event, ctx| {
+        let Some(intent) = Option::<PtySurfaceIntent>::from(event) else {
+            return;
+        };
+
         // NOTE: we cannot simply use the strong reference (the model handle argument to this wire_up fn)
         // because it'll create a reference cycle with the `subscribe_to_model` usage below. Instead,
         // we should use a weak handle and upgrade it lazily.
@@ -40,34 +50,33 @@ pub fn wire_up_pty_controller_with_view<T: EventLoopSender>(
             return;
         };
 
-        match event {
-            view::Event::CtrlD => {
+        match intent {
+            PtySurfaceIntent::CtrlD => {
                 controller.update(ctx, |controller, ctx| {
                     controller.write_end_of_transmission_char(ctx);
                 });
             }
-            view::Event::ShutdownPty => {
+            PtySurfaceIntent::ShutdownPty => {
                 controller.update(ctx, |controller, ctx| {
                     controller.shutdown_pty(ctx);
                 });
             }
-            view::Event::WriteBytesToPty { bytes } => {
+            PtySurfaceIntent::WriteBytes(bytes) => {
                 controller.update(ctx, |controller, ctx| {
-                    // TODO: the underlying bytes should be wrapped in an Arc and copied out only when they need to be written to the PTY.
-                    controller.write_bytes(bytes.clone(), ctx);
+                    controller.write_bytes(bytes, ctx);
                 });
             }
-            view::Event::WriteAgentInputToPty { bytes, mode } => {
+            PtySurfaceIntent::WriteAgentInput { bytes, mode } => {
                 controller.update(ctx, |controller, ctx| {
-                    controller.write_agent_bytes(bytes.clone(), mode, ctx);
+                    controller.write_agent_bytes(bytes, &mode, ctx);
                 });
             }
-            view::Event::Resize { size_update } => {
+            PtySurfaceIntent::Resize(size_update) => {
                 controller.update(ctx, |controller, ctx| {
-                    controller.resize_pty(*size_update, ctx);
+                    controller.resize_pty(size_update, ctx);
                 });
             }
-            view::Event::ExecuteCommand(event) => {
+            PtySurfaceIntent::ExecuteCommand(event) => {
                 let Some(shell_type) = sessions
                     .as_ref(ctx)
                     .get(event.session_id)
@@ -84,7 +93,7 @@ pub fn wire_up_pty_controller_with_view<T: EventLoopSender>(
 
                 if event.should_add_command_to_history {
                     update_command_history(
-                        event,
+                        &event,
                         &model_clone,
                         model_event_sender.as_ref(),
                         &sessions,
@@ -92,24 +101,27 @@ pub fn wire_up_pty_controller_with_view<T: EventLoopSender>(
                     );
                 }
             }
-            view::Event::RunNativeShellCompletions { buffer_text, results_tx  } => {
+            PtySurfaceIntent::RunNativeShellCompletions {
+                buffer_text,
+                results_tx,
+            } => {
                 controller.update(ctx, |controller, ctx| {
-                    controller.run_native_shell_completions(buffer_text.clone(), results_tx.clone(), ctx);
+                    controller.run_native_shell_completions(buffer_text, results_tx, ctx);
                 });
             }
-            _ => {}
         }
     });
 
     ctx.subscribe_to_model(pty_controller, move |_pty_controller, event, ctx| {
-        let Some(view) = view_weak_handle.upgrade(ctx) else {
+        // Skip if the surface is gone; its session is being torn down.
+        if surface_weak_handle.upgrade(ctx).is_none() {
             return;
         };
 
         match event {
-            PtyControllerEvent::PtyDisconnected => view.update(ctx, |_, _| {
+            PtyControllerEvent::PtyDisconnected => {
                 model.lock().exit(ExitReason::PtyDisconnected);
-            }),
+            }
         }
     });
 }

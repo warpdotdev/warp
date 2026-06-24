@@ -16,8 +16,8 @@
 //! dispatching).
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext, TuiPresentationContext,
-    TuiRect, TuiSize,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
+    TuiPresentationContext, TuiRect, TuiSize,
 };
 use crate::{AppContext, Event};
 

@@ -618,57 +618,27 @@ fn apply_scroll_multiplier(event: &mut Event, app: &AppContext) {
     }
 }
 
-/// Runs the shared Warp executable as the app or as one of its command-line modes.
+/// Dispatches a worker/CLI subcommand if one is present on the command line,
+/// returning `Some(result)` when this process ran as that subcommand (and the
+/// caller should return it), or `None` when no subcommand was present and the
+/// caller should launch its default mode.
 ///
-/// The bundled Warp Control wrapper injects `--warpctrl`, which is dispatched
-/// before the normal Warp/Oz parser. Oz subcommands are part of that normal
-/// parser and therefore do not require a separate mode flag.
-#[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
-pub fn run() -> Result<()> {
-    // Perform any necessary platform-specific initialization.
-    platform::init();
+/// Shared by [`run`] (which falls through to the GUI app) and [`run_tui`] (which
+/// falls through to the headless TUI). Routing the TUI entry point through here
+/// is load-bearing: the terminal server is spawned by re-exec'ing the current
+/// binary with a worker subcommand, so `warp-tui` must dispatch that subcommand
+/// here rather than launching another TUI (which would fork bomb).
+fn dispatch_cli_command(args: &warp_cli::Args) -> Option<Result<()>> {
+    let command = args.command()?;
 
-    // Ensure feature flags are initialized before parsing command-line arguments.
-    features::init_feature_flags();
-    if let Some(args) = warp_cli::local_control::ControlArgs::from_control_mode_env() {
-        #[cfg(windows)]
+    #[cfg(windows)]
+    if command.prints_to_stdout() {
+        // We attach a console to ensure that all standard output gets printed correctly.
         warp_util::windows::attach_to_parent_console();
-        warp_cli::local_control::run_and_exit(args);
     }
 
-    // Parse command-line arguments.
-    let args = warp_cli::Args::from_env();
-
-    // Server URL overrides are only honored on internal dev channels. Release channels silently
-    // ignore `--server-root-url` / `--ws-server-url` / `--session-sharing-server-url` (and their
-    // `WARP_*` env-var equivalents) so shipped builds can't be redirected away from their
-    // baked-in server URLs. See `Channel::allows_server_url_overrides`.
-    if ChannelState::channel().allows_server_url_overrides() {
-        if let Some(url) = args.server_root_url() {
-            if let Err(e) = ChannelState::override_server_root_url(url.to_owned()) {
-                eprintln!("Error: Invalid server root URL: {e:#}");
-            }
-        }
-
-        if let Some(url) = args.ws_server_url() {
-            if let Err(e) = ChannelState::override_ws_server_url(url.to_owned()) {
-                eprintln!("Error: Invalid websocket server URL: {e:#}");
-            }
-        }
-
-        if let Some(url) = args.session_sharing_server_url() {
-            if let Err(e) = ChannelState::override_session_sharing_server_url(url.to_owned()) {
-                eprintln!("Error: Invalid session sharing server URL: {e:#}");
-            }
-        }
-    }
-
-    if let Some(command) = args.command() {
-        #[cfg(windows)]
-        if command.prints_to_stdout() {
-            // We attach a console to ensure that all standard output gets printed correctly.
-            warp_util::windows::attach_to_parent_console();
-        }
+    // An inner closure so `?` inside the arms propagates as the returned `Result`.
+    Some((|| -> Result<()> {
         match command {
             #[cfg(all(feature = "local_tty", unix))]
             warp_cli::Command::Worker(warp_cli::WorkerCommand::TerminalServer(args)) => {
@@ -778,6 +748,57 @@ pub fn run() -> Result<()> {
                 return TelemetryEvent::print_telemetry_events_json();
             }
         }
+    })())
+}
+
+/// Runs the shared Warp executable as the app or as one of its command-line modes.
+///
+/// The bundled Warp Control wrapper injects `--warpctrl`, which is dispatched
+/// before the normal Warp/Oz parser. Oz subcommands are part of that normal
+/// parser and therefore do not require a separate mode flag.
+#[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
+pub fn run() -> Result<()> {
+    // Perform any necessary platform-specific initialization.
+    platform::init();
+
+    // Ensure feature flags are initialized before parsing command-line arguments.
+    features::init_feature_flags();
+    if let Some(args) = warp_cli::local_control::ControlArgs::from_control_mode_env() {
+        #[cfg(windows)]
+        warp_util::windows::attach_to_parent_console();
+        warp_cli::local_control::run_and_exit(args);
+    }
+
+    // Parse command-line arguments.
+    let args = warp_cli::Args::from_env();
+
+    // Server URL overrides are only honored on internal dev channels. Release channels silently
+    // ignore `--server-root-url` / `--ws-server-url` / `--session-sharing-server-url` (and their
+    // `WARP_*` env-var equivalents) so shipped builds can't be redirected away from their
+    // baked-in server URLs. See `Channel::allows_server_url_overrides`.
+    if ChannelState::channel().allows_server_url_overrides() {
+        if let Some(url) = args.server_root_url() {
+            if let Err(e) = ChannelState::override_server_root_url(url.to_owned()) {
+                eprintln!("Error: Invalid server root URL: {e:#}");
+            }
+        }
+
+        if let Some(url) = args.ws_server_url() {
+            if let Err(e) = ChannelState::override_ws_server_url(url.to_owned()) {
+                eprintln!("Error: Invalid websocket server URL: {e:#}");
+            }
+        }
+
+        if let Some(url) = args.session_sharing_server_url() {
+            if let Err(e) = ChannelState::override_session_sharing_server_url(url.to_owned()) {
+                eprintln!("Error: Invalid session sharing server URL: {e:#}");
+            }
+        }
+    }
+
+    // Dispatch any worker/CLI subcommand. If one ran, return its result.
+    if let Some(result) = dispatch_cli_command(&args) {
+        return result;
     }
 
     // If running as a standalone CLI binary or invoked as "oz", print help
@@ -811,6 +832,17 @@ pub fn run_integration_test(driver: TestDriver) -> Result<()> {
 /// (headless) app and renders through the `tui`-gated WarpUI backend.
 #[cfg(feature = "tui")]
 pub fn run_tui() -> Result<()> {
+    // The `warp-tui` binary's `main` calls this directly without going through
+    // `run`, so dispatch any worker subcommand here first. This is what lets the
+    // TUI host a terminal server: the server is spawned by re-exec'ing this
+    // binary with a worker subcommand, and without this dispatch the re-exec
+    // would launch another TUI (a fork bomb) instead of the server.
+    features::init_feature_flags();
+    let args = warp_cli::Args::from_env();
+    if let Some(result) = dispatch_cli_command(&args) {
+        return result;
+    }
+
     run_internal(LaunchMode::Tui)
 }
 
@@ -1000,20 +1032,15 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // files, modified signal handlers, etc.) to avoid unexpected effects on
     // spawned ptys.
     //
-    // The TUI front-end has no PTYs, so it skips this entirely. This is also
-    // load-bearing: the terminal server is spawned by re-exec'ing the current
-    // binary, but `warp-tui`'s `main` always runs the TUI (it doesn't dispatch
-    // worker subcommands), so spawning a server here would recursively launch
-    // more TUIs — a fork bomb.
+    // This spawns the backing terminal server by re-exec'ing the current binary
+    // with a worker subcommand. Every front-end (including the TUI) dispatches
+    // that subcommand at startup before launching its UI (see
+    // `dispatch_cli_command`), so the re-exec runs the server rather than
+    // recursively launching more UIs.
     #[cfg(feature = "local_tty")]
-    let pty_spawner = if matches!(launch_mode, LaunchMode::Tui) {
-        None
-    } else {
-        Some(
-            terminal::local_tty::spawner::PtySpawner::new()
-                .context("Failed to create pty spawner")?,
-        )
-    };
+    let pty_spawner = Some(
+        terminal::local_tty::spawner::PtySpawner::new().context("Failed to create pty spawner")?,
+    );
 
     // The TUI front-end skips the GUI/agent model graph, so the GUI lifecycle
     // callbacks (which reach for singletons like `NotebookManager` that the TUI
@@ -1111,16 +1138,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         crate::util::bindings::custom_tag_to_keystroke,
     );
 
-    // The TUI front-end bootstraps the real (headless) app but renders through
-    // the WarpUI TUI backend instead of the GUI workspace, so it skips the full
-    // GUI/agent model graph (`initialize_app`/`launch`).
-    #[cfg(feature = "tui")]
-    if matches!(launch_mode, LaunchMode::Tui) {
-        return app_builder.run(move |ctx| {
-            crate::tui::init(ctx);
-        });
-    }
-
     app_builder.run(move |ctx| {
         #[cfg(not(target_family = "wasm"))]
         // Rotate the log files in the background.
@@ -1138,12 +1155,12 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         #[cfg(feature = "crash_reporting")]
         crate::crash_reporting::set_client_type_tag(launch_mode.execution_mode().client_id());
 
-        // Add the terminal server singleton to the application. (The TUI front-end
-        // returns before this closure runs, so `pty_spawner` is always `Some` here.)
+        // Register the pty spawner singleton. The `Option` guards builds and
+        // platforms that don't have one.
         #[cfg(feature = "local_tty")]
-        ctx.add_singleton_model(move |_ctx| {
-            pty_spawner.expect("pty spawner is created for all non-TUI launch modes")
-        });
+        if let Some(pty_spawner) = pty_spawner {
+            ctx.add_singleton_model(move |_ctx| pty_spawner);
+        }
 
         // Register user preferences.  This must be done before initializing
         // feature flags or experiments, both of which check user preferences for
@@ -1169,6 +1186,15 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
         if ImprovedPaletteSearch::improved_search_enabled(ctx) {
             FeatureFlag::UseTantivySearch.set_enabled(true);
+        }
+
+        // The TUI front-end renders through the WarpUI TUI backend instead of
+        // the GUI workspace, so it stops after `initialize_app` (which registers
+        // the singletons the session core needs) and never enters `launch`.
+        #[cfg(feature = "tui")]
+        if matches!(launch_mode, LaunchMode::Tui) {
+            crate::tui::init(ctx);
+            return;
         }
 
         launch(ctx, app_state, launch_mode);
@@ -2031,7 +2057,12 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| OpenedFilesModel::new());
     ctx.add_singleton_model(NotebookKeybindings::new);
     ctx.add_singleton_model(TerminalKeybindings::new);
-    ctx.add_singleton_model(|_| ActiveSession::default());
+    // The TUI front-end owns its own session and has no GUI workspace/active
+    // pane, so it skips the `ActiveSession` singleton (part of the agent cluster
+    // not wired up for Tui).
+    if !matches!(launch_mode, LaunchMode::Tui) {
+        ctx.add_singleton_model(|_| ActiveSession::default());
+    }
     ctx.add_singleton_model(|ctx| {
         Listener::new(
             server_api_provider.as_ref(ctx).get_cloud_objects_client(),

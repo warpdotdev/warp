@@ -1,11 +1,12 @@
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use ratatui::text::Text;
 
 use crate::elements::tui::{
-    rasterize_text, TuiBuffer, TuiBufferExt, TuiCanvas, TuiCanvasCache, TuiElement, TuiRect,
-    TuiStyle,
+    rasterize_text, TuiBuffer, TuiBufferExt, TuiCanvas, TuiCanvasCache, TuiConstraint, TuiElement,
+    TuiLayoutContext, TuiRect, TuiSize, TuiStyle,
 };
 
 /// Builds a content buffer sized to `lines` (width = longest line) with each
@@ -22,6 +23,27 @@ fn buffer_with(lines: &[&str]) -> TuiBuffer {
         buffer.set_string(0, row as u16, line, TuiStyle::default());
     }
     buffer
+}
+
+/// Measures a leaf TUI element with no embedded child views.
+fn layout_size(element: &mut dyn TuiElement, width: u16) -> TuiSize {
+    let mut rendered_views = HashMap::new();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    element.layout(
+        TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
+        &mut ctx,
+    )
+}
+
+/// Renders a leaf TUI element with no embedded child views.
+fn render_to_buffer(element: &dyn TuiElement, area: TuiRect, buffer: &mut TuiBuffer) {
+    let mut rendered_views = HashMap::new();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    element.render(area, buffer, &mut ctx);
 }
 
 #[test]
@@ -43,13 +65,13 @@ fn rasterize_text_zero_width_is_empty() {
 
 #[test]
 fn canvas_reports_grid_height_and_blits_cells() {
-    let canvas = TuiCanvas::new(TuiCanvasCache::new(), 0, |_width| {
+    let mut canvas = TuiCanvas::new(TuiCanvasCache::new(), 0, |_width| {
         buffer_with(&["ab", "cd"])
     });
-    assert_eq!(canvas.desired_height(10), 2);
+    assert_eq!(layout_size(&mut canvas, 10).height, 2);
 
     let mut dest = TuiBuffer::empty(TuiRect::new(0, 0, 4, 3));
-    canvas.render(TuiRect::new(0, 0, 4, 3), &mut dest);
+    render_to_buffer(&canvas, TuiRect::new(0, 0, 4, 3), &mut dest);
     assert_eq!(
         dest.to_lines(),
         vec!["ab  ".to_string(), "cd  ".to_string(), "    ".to_string()]
@@ -70,18 +92,18 @@ fn canvas_regenerates_on_width_or_generation_change() {
     };
 
     // Same width + generation: produced once, then reused.
-    let gen0 = canvas(0);
-    assert_eq!(gen0.desired_height(8), 1);
-    assert_eq!(gen0.desired_height(8), 1);
+    let mut gen0 = canvas(0);
+    assert_eq!(layout_size(&mut gen0, 8).height, 1);
+    assert_eq!(layout_size(&mut gen0, 8).height, 1);
     assert_eq!(calls.get(), 1);
 
     // A new width (same generation) regenerates.
-    gen0.desired_height(4);
+    layout_size(&mut gen0, 4);
     assert_eq!(calls.get(), 2);
 
     // A new generation (same width) regenerates: this is the streaming case.
-    let gen1 = canvas(1);
-    gen1.desired_height(4);
+    let mut gen1 = canvas(1);
+    layout_size(&mut gen1, 4);
     assert_eq!(calls.get(), 3);
 }
 
@@ -91,6 +113,6 @@ fn canvas_clips_to_a_smaller_area() {
         buffer_with(&["abcd", "efgh"])
     });
     let mut dest = TuiBuffer::empty(TuiRect::new(0, 0, 2, 1));
-    canvas.render(TuiRect::new(0, 0, 2, 1), &mut dest);
+    render_to_buffer(&canvas, TuiRect::new(0, 0, 2, 1), &mut dest);
     assert_eq!(dest.to_lines(), vec!["ab".to_string()]);
 }

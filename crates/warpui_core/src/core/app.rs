@@ -1104,9 +1104,13 @@ impl AppContext {
     }
 
     /// Subscribes to a [`ViewHandle`] for changes, calling `callback` with the emitted event whenever the view is invalidated.
+    ///
+    /// Bounded on [`Entity`] (not [`View`]) so headless/TUI views — which are
+    /// `Entity` but not GPU `View`s — can be subscribed to as well, matching
+    /// [`ViewContext::subscribe_to_view`]. The body only needs `S::Event`.
     pub fn subscribe_to_view<S, F>(&mut self, handle: &ViewHandle<S>, mut callback: F)
     where
-        S: View,
+        S: Entity,
         S::Event: 'static,
         F: 'static + FnMut(ViewHandle<S>, &S::Event, &mut AppContext),
     {

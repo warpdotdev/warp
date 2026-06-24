@@ -5,8 +5,8 @@ use std::rc::Rc;
 use super::TuiColumn;
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEventContext,
-    TuiEventHandler, TuiInputLine, TuiLayoutContext, TuiParentElement, TuiPresentationContext,
-    TuiRect, TuiSize, TuiText,
+    TuiEventHandler, TuiInputLine, TuiLayoutContext, TuiPresentationContext, TuiRect, TuiSize,
+    TuiText,
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
@@ -183,7 +183,9 @@ fn forwards_cursor_position_offset_by_slot() {
         .child(TuiText::new("a\nb").truncate())
         .child(TuiInputLine::new("hi", 2));
     let mut rendered_views = HashMap::new();
-    let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
     column.layout(TuiConstraint::tight(TuiSize::new(10, 5)), &mut ctx);
     assert_eq!(
         column.cursor_position(TuiRect::new(0, 0, 10, 5), &mut ctx),
@@ -200,8 +202,13 @@ fn flex_child_fills_height_left_after_fixed_children() {
     // With a flex child the column fills the height it is offered (5), not the
     // content total (7).
     let mut rendered_views = HashMap::new();
-    let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
-    let size = column.layout(TuiConstraint::new(TuiSize::ZERO, TuiSize::new(1, 5)), &mut ctx);
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = column.layout(
+        TuiConstraint::new(TuiSize::ZERO, TuiSize::new(1, 5)),
+        &mut ctx,
+    );
     assert_eq!(size, TuiSize::new(1, 5));
 
     // The header takes row 0; the flex body fills the remaining four rows, and
@@ -221,7 +228,9 @@ fn multiple_flex_children_split_remaining_height_evenly() {
 
     // Seven rows: one for the header, the remaining six split evenly (3 + 3).
     let mut rendered_views = HashMap::new();
-    let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
     column.layout(TuiConstraint::tight(TuiSize::new(1, 7)), &mut ctx);
     assert_eq!(
         render_to_lines(&column, TuiSize::new(1, 7)),
@@ -238,7 +247,9 @@ fn flex_remainder_favors_earlier_children() {
     // Five rows across two flex children: base 2 each, the odd remainder going
     // to the first => 3 + 2.
     let mut rendered_views = HashMap::new();
-    let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
     column.layout(TuiConstraint::tight(TuiSize::new(1, 5)), &mut ctx);
     assert_eq!(
         render_to_lines(&column, TuiSize::new(1, 5)),

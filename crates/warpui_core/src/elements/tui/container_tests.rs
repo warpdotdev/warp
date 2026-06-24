@@ -91,7 +91,9 @@ fn forwards_cursor_position_offset_by_inset() {
     // by (1, 1) into the container's own coordinate space.
     let mut container = TuiContainer::new(TuiInputLine::new("hi", 2)).with_border();
     let mut rendered_views = HashMap::new();
-    let mut ctx = TuiLayoutContext { rendered_views: &mut rendered_views };
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
     container.layout(TuiConstraint::tight(TuiSize::new(10, 3)), &mut ctx);
     assert_eq!(
         container.cursor_position(TuiRect::new(0, 0, 10, 3), &mut ctx),

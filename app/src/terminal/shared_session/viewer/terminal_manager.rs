@@ -1773,13 +1773,18 @@ impl TerminalManager {
     }
 }
 
+impl TerminalManager {
+    /// Returns the terminal view this viewer manager drives. Inherent (the
+    /// object-safe `TerminalManager` trait no longer exposes `view`); callers
+    /// capture the view at construction.
+    pub fn view(&self) -> ViewHandle<TerminalView> {
+        self.view.clone()
+    }
+}
+
 impl crate::terminal::TerminalManager for TerminalManager {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
-    }
-
-    fn view(&self) -> ViewHandle<TerminalView> {
-        self.view.clone()
     }
 
     fn on_view_detached(&self, detach_type: DetachType, app: &mut AppContext) {

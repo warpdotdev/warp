@@ -35,6 +35,7 @@ mod input_line;
 mod parent;
 mod scrollable;
 mod text;
+mod virtual_list;
 
 pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiStyle};
 pub use canvas::{rasterize_text, TuiCanvas, TuiCanvasCache};
@@ -50,6 +51,9 @@ pub use input_line::TuiInputLine;
 pub use parent::TuiParentElement;
 pub use scrollable::{TuiScrollHandle, TuiScrollable};
 pub use text::TuiText;
+pub use virtual_list::{
+    PositionedItem, TuiVirtualList, TuiVirtualListHandle, TuiVirtualListSource,
+};
 
 /// Carries the pre-rendered per-view element map through the layout pass,
 /// mirroring the GUI's `LayoutContext`. [`TuiChildView`] uses it to look up
@@ -219,4 +223,3 @@ impl<'a> TuiPresentationContext<'a> {
         Some(result)
     }
 }
-

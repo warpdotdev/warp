@@ -249,6 +249,7 @@ reqwest = { version = "0.13", features = [
 reqwest-eventsource = { package = "aha-reqwest-eventsource", version = "0.1" }
 resvg = "0.47.0"
 rust-embed = { version = "8.7.0", features = ["include-exclude"] }
+crossterm = "0.29"
 rustc-hash = "2.1.1"
 rustls = "0.23.39"
 schemars = { version = "1", features = ["chrono04"] }

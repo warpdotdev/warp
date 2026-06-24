@@ -15918,15 +15918,6 @@ impl TerminalView {
         }
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    pub(super) fn on_shell_determined(&self, ctx: &mut ViewContext<Self>) {
-        if !self.model.lock().shared_session_status().is_viewer() {
-            // Start a timer for the initial session bootstrapping, so that we can log and show a
-            // banner to the user if the bootstrapping takes too long
-            self.start_bootstrap_timer(BOOTSTRAP_FAILED_DURATION, ctx);
-        }
-    }
-
     pub fn is_login_shell_bootstrapped(&self) -> bool {
         self.is_login_shell_bootstrapped
     }
@@ -28481,6 +28472,117 @@ fn is_rich_input_chip_in_cli_toolbar(app: &AppContext) -> bool {
         .iter()
         .chain(sel.right_items().iter())
         .any(|item| matches!(item, AgentToolbarItemKind::RichInput))
+}
+
+/// Projects the GUI terminal's event enum onto the shared PTY intent
+/// vocabulary, used by the manager's PTY wiring. Returns `None` for events that
+/// don't drive the PTY.
+#[cfg(not(target_family = "wasm"))]
+impl<'a> From<&'a Event>
+    for Option<crate::terminal::writeable_pty::terminal_surface::PtySurfaceIntent>
+{
+    fn from(event: &'a Event) -> Self {
+        use crate::terminal::writeable_pty::terminal_surface::PtySurfaceIntent as Intent;
+        match event {
+            Event::CtrlD => Some(Intent::CtrlD),
+            Event::ShutdownPty => Some(Intent::ShutdownPty),
+            Event::WriteBytesToPty { bytes } => Some(Intent::WriteBytes(bytes.clone())),
+            Event::WriteAgentInputToPty { bytes, mode } => Some(Intent::WriteAgentInput {
+                bytes: bytes.clone(),
+                mode: *mode,
+            }),
+            Event::Resize { size_update } => Some(Intent::Resize(*size_update)),
+            Event::ExecuteCommand(command_event) => {
+                Some(Intent::ExecuteCommand(command_event.clone()))
+            }
+            Event::RunNativeShellCompletions {
+                buffer_text,
+                results_tx,
+            } => Some(Intent::RunNativeShellCompletions {
+                buffer_text: buffer_text.clone(),
+                results_tx: results_tx.clone(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Drives the GUI terminal as a [`TerminalSurface`] so a generic
+/// `TerminalManager<TerminalView>` can own and drive it. The lifecycle hooks
+/// delegate to the view's existing methods; the unix poller hooks implement the
+/// password-notification and SSH-upload reactions the manager used to call
+/// directly.
+#[cfg(not(target_family = "wasm"))]
+impl crate::terminal::writeable_pty::terminal_surface::TerminalSurface for TerminalView {
+    fn on_shell_determined(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.model.lock().shared_session_status().is_viewer() {
+            // Start a timer for the initial session bootstrapping, so that we can
+            // log and show a banner to the user if the bootstrapping takes too long.
+            self.start_bootstrap_timer(BOOTSTRAP_FAILED_DURATION, ctx);
+        }
+    }
+
+    fn on_active_shell_launch_data_updated(
+        &mut self,
+        shell_launch_data: Option<ShellLaunchData>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.on_active_shell_launch_data_updated(shell_launch_data, ctx);
+    }
+
+    fn on_pty_spawn_failed(&mut self, error: anyhow::Error, ctx: &mut ViewContext<Self>) {
+        self.on_pty_spawn_failed(error, ctx);
+    }
+
+    #[cfg(unix)]
+    fn wants_password_poll(&self, ctx: &AppContext) -> bool {
+        let notification_settings = &SessionSettings::as_ref(ctx).notifications;
+        let setting_on = matches!(notification_settings.mode, NotificationsMode::Unset)
+            || (matches!(notification_settings.mode, NotificationsMode::Enabled)
+                && notification_settings.is_needs_attention_enabled);
+        setting_on || (self.is_ssh_uploader() && FeatureFlag::SshDragAndDrop.is_enabled())
+    }
+
+    #[cfg(unix)]
+    fn on_possible_password_prompt(
+        &mut self,
+        block_index: Option<BlockIndex>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if FeatureFlag::SshDragAndDrop.is_enabled() {
+            self.propagate_password_request(ctx);
+        }
+
+        let setting_on = {
+            let notification_settings = &SessionSettings::as_ref(ctx).notifications;
+            matches!(notification_settings.mode, NotificationsMode::Unset)
+                || (matches!(notification_settings.mode, NotificationsMode::Enabled)
+                    && notification_settings.is_needs_attention_enabled)
+        };
+        if self.is_navigated_away_from_window(ctx) && setting_on {
+            if let Some(block_index) = block_index {
+                self.maybe_send_password_notification(block_index, ctx);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn on_block_completed(
+        &mut self,
+        completed: &crate::terminal::event::BlockCompletedEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.is_ssh_uploader() {
+            return;
+        }
+        let exit_code = match &completed.block_type {
+            crate::terminal::event::BlockType::User(user_block) => {
+                user_block.serialized_block.exit_code
+            }
+            _ => return,
+        };
+        self.propagate_upload_finished_event(exit_code, ctx);
+    }
 }
 
 #[cfg(test)]

@@ -2661,21 +2661,19 @@ fn test_stop_shared_session() {
 
         // Start the shared session.
         pane_group.update(&mut app, |pane_group, ctx| {
-            let terminal_pane = pane_group.terminal_session_by_pane_index(0).unwrap();
-            terminal_pane
-                .terminal_manager(ctx)
-                .update(ctx, |terminal_manager, ctx| {
-                    let terminal_view = terminal_manager.view();
-                    terminal_view.update(ctx, |terminal_view, ctx| {
-                        terminal_view.attempt_to_share_session(
-                            SharedSessionScrollbackType::None,
-                            None,
-                            SharedSessionSource::user(None),
-                            false,
-                            ctx,
-                        );
-                    });
-                })
+            let terminal_view = pane_group
+                .terminal_view_at_pane_index(0, ctx)
+                .unwrap()
+                .to_owned();
+            terminal_view.update(ctx, |terminal_view, ctx| {
+                terminal_view.attempt_to_share_session(
+                    SharedSessionScrollbackType::None,
+                    None,
+                    SharedSessionSource::user(None),
+                    false,
+                    ctx,
+                );
+            });
         });
 
         // Wait for one tick of the event loop for the share to be started.
@@ -2695,16 +2693,13 @@ fn test_stop_shared_session() {
 
         // Stop the shared session.
         pane_group.update(&mut app, |pane_group, ctx| {
-            let terminal_pane = pane_group.terminal_session_by_pane_index(0).unwrap();
-            terminal_pane
-                .terminal_manager(ctx)
-                .update(ctx, |terminal_manager, ctx| {
-                    let terminal_view = terminal_manager.view();
-                    terminal_view.update(ctx, |terminal_view, ctx| {
-                        terminal_view
-                            .stop_sharing_session(SharedSessionActionSource::PaneHeader, ctx);
-                    });
-                });
+            let terminal_view = pane_group
+                .terminal_view_at_pane_index(0, ctx)
+                .unwrap()
+                .to_owned();
+            terminal_view.update(ctx, |terminal_view, ctx| {
+                terminal_view.stop_sharing_session(SharedSessionActionSource::PaneHeader, ctx);
+            });
         });
 
         // Ensure the state is correct after stopping.

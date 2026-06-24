@@ -18,7 +18,7 @@ use crate::terminal::remote_tty::event_loop::EventLoop;
 use crate::terminal::shell::{ShellName, ShellType};
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
-    init_pty_controller_model, wire_up_pty_controller_with_view,
+    init_pty_controller_model, wire_up_pty_controller_with_surface,
 };
 use crate::terminal::writeable_pty::{self, Message};
 use crate::terminal::{terminal_manager, ShellLaunchState, SizeInfo, TerminalModel, TerminalView};
@@ -33,8 +33,6 @@ pub struct TerminalManager {
     _pty_controller: ModelHandle<PtyController>,
 
     _event_loop: ModelHandle<EventLoop>,
-
-    view: ViewHandle<TerminalView>,
 }
 
 impl TerminalManager {
@@ -46,7 +44,10 @@ impl TerminalManager {
         window_id: WindowId,
         initial_input_config: Option<InputConfig>,
         ctx: &mut AppContext,
-    ) -> ModelHandle<Box<dyn crate::terminal::TerminalManager>> {
+    ) -> (
+        ModelHandle<Box<dyn crate::terminal::TerminalManager>>,
+        ViewHandle<TerminalView>,
+    ) {
         // Create all the necessary channels we need for communication.
         let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
         let (events_tx, events_rx) = async_channel::unbounded();
@@ -127,7 +128,7 @@ impl TerminalManager {
             )
         });
 
-        wire_up_pty_controller_with_view(
+        wire_up_pty_controller_with_surface(
             &pty_controller,
             &view,
             model.clone(),
@@ -139,15 +140,15 @@ impl TerminalManager {
         // Create the terminal manager itself.
         let terminal_manager = Self {
             model,
-            view,
             _pty_controller: pty_controller,
             _event_loop: event_loop,
         };
 
-        ctx.add_model(|_ctx| {
+        let terminal_manager_model = ctx.add_model(|_ctx| {
             let manager: Box<dyn crate::terminal::TerminalManager> = Box::new(terminal_manager);
             manager
-        })
+        });
+        (terminal_manager_model, view)
     }
 
     fn create_and_start_event_loop(
@@ -172,10 +173,6 @@ impl TerminalManager {
 impl super::super::TerminalManager for TerminalManager {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
-    }
-
-    fn view(&self) -> ViewHandle<TerminalView> {
-        self.view.clone()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

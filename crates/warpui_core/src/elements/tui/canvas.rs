@@ -24,7 +24,7 @@ use std::rc::Rc;
 use ratatui::text::Text;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
-use super::{TuiBuffer, TuiConstraint, TuiElement, TuiRect, TuiSize};
+use super::{TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiRect, TuiSize};
 
 /// Rasterizes a ratatui [`Text`] into a [`TuiBuffer`] of the given width,
 /// word-wrapping long lines (whitespace preserved). Returns an empty buffer for
@@ -104,13 +104,13 @@ impl TuiCanvas {
 }
 
 impl TuiElement for TuiCanvas {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
+    fn layout(&mut self, constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
         let width = constraint.constrain_width(constraint.max.width);
         let height = self.with_buffer(width, |buffer| buffer.area.height);
         constraint.clamp(TuiSize::new(width, height))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {
         if area.is_empty() {
             return;
         }
@@ -129,10 +129,6 @@ impl TuiElement for TuiCanvas {
                 }
             }
         });
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.with_buffer(width, |buffer| buffer.area.height)
     }
 }
 

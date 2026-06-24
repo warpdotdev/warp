@@ -81,7 +81,7 @@ mod terminal_size_element;
 pub mod view;
 pub mod warpify;
 mod waterfall_gap_element;
-mod writeable_pty;
+pub(crate) mod writeable_pty;
 #[cfg(windows)]
 pub mod wsl;
 
@@ -228,6 +228,19 @@ pub struct SizeUpdate {
 }
 
 impl SizeUpdate {
+    /// Builds a [`SizeUpdate`] for a headless (TUI) resize: no gap height or
+    /// shared-session adjustments, just the old and new cell-grid sizes.
+    pub(crate) fn new_for_headless_resize(last_size: SizeInfo, new_size: SizeInfo) -> Self {
+        Self {
+            update_reason: SizeUpdateReason::AfterLayout,
+            last_size,
+            new_size,
+            new_gap_height: None,
+            natural_rows: new_size.rows(),
+            natural_cols: new_size.columns(),
+        }
+    }
+
     /// Whether the reason for the update is a refresh.
     pub fn is_refresh(&self) -> bool {
         matches!(self.update_reason, SizeUpdateReason::Refresh)
