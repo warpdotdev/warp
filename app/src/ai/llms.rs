@@ -11,7 +11,7 @@ use warp_core::user_preferences::GetUserPreferences;
 use warp_multi_agent_api as api;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
-use super::custom_model_routers::{self, CustomModelRouter};
+use super::custom_model_routers::{self, CustomModelRouter, ModelConfigError};
 use super::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
@@ -280,6 +280,12 @@ pub fn dedupe_model_display_names<'a>(
 impl LLMInfo {
     /// Returns the display name for the LLM, to be used in the LLM selector menu.
     pub fn menu_display_name(&self) -> String {
+        // Custom model routers carry a routing/source description that belongs in
+        // the sidecar detail panel, not inline in the chip label. Appending it
+        // here would produce a redundant "(Routes by … · …)" suffix.
+        if custom_model_routers::is_custom_router_id(self.id.as_str()) {
+            return self.display_name.clone();
+        }
         // Base label includes optional description in parentheses
         match &self.description {
             // This is a temporary implementation that won't scale well for longer
@@ -959,6 +965,7 @@ impl LLMPreferences {
                 deduped.push(model);
             }
         }
+        let mut validation_errors: Vec<ModelConfigError> = Vec::new();
         deduped.retain(|router| {
             let unknown: Vec<&str> = router
                 .all_targets()
@@ -968,13 +975,30 @@ impl LLMPreferences {
             if unknown.is_empty() {
                 return true;
             }
+            let error_message = format!("unknown target model(s): {}", unknown.join(", "));
             log::warn!(
-                "Custom model router '{}': unknown target model(s) [{}] — excluding from picker",
+                "Custom model router '{}': {} — excluding from picker",
                 router.info.display_name,
-                unknown.join(", ")
+                error_message,
             );
+            validation_errors.push(ModelConfigError {
+                file_name: router
+                    .source_path
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(router.info.display_name.as_str())
+                    .to_owned(),
+                file_path: router.source_path.clone().unwrap_or_default(),
+                error_message,
+            });
             false
         });
+        if !validation_errors.is_empty() {
+            WarpConfig::handle(ctx).update(ctx, |_, ctx| {
+                ctx.emit(WarpConfigUpdateEvent::ModelConfigErrors(validation_errors));
+            });
+        }
 
         // vision is supported only when every concrete target model supports it.
         for router in &mut deduped {

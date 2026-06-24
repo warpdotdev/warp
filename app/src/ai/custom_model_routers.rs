@@ -74,6 +74,9 @@ pub struct PromptRule {
 pub struct CustomModelRouter {
     pub info: LLMInfo,
     pub routing: CustomModelRouting,
+    /// The file this router was loaded from. Used to surface validation errors
+    /// (e.g. unknown target model IDs) as toasts with an "Open file" link.
+    pub source_path: Option<PathBuf>,
 }
 
 impl CustomModelRouter {
@@ -120,7 +123,11 @@ impl CustomModelRouter {
             discount_percentage: None,
             context_window: LLMContextWindow::default(),
         };
-        Self { info, routing }
+        Self {
+            info,
+            routing,
+            source_path: source_path.map(|p| p.to_path_buf()),
+        }
     }
 
     /// The `config_key` that identifies this router in the picker and request
