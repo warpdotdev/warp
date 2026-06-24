@@ -137,4 +137,3 @@ If no standard window exists: collect all transfer infos in ascending order, cal
 
 - **Drag-and-drop standard→hotkey** — The team is shipping hotkey→standard drag this cycle. The reverse direction would extend the cross-window drag system (`Workspace::drag_tab_over`, `tab_insertion_index_for_cursor`) to accept `WindowStyle::Pin` windows as valid drop targets.
 - **Non-dedicated hotkey mode** — Deferred per maintainer signal. Would require a new `GlobalHotkeyMode` variant, different window creation path, changes to quake state lifecycle.
-- Consider auto-hide on last-tab-moved-out from hotkey window.
