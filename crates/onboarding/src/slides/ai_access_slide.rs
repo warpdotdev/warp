@@ -105,7 +105,7 @@ impl AiAccessSlide {
 
         let title = appearance
             .ui_builder()
-            .paragraph("Choose how to access AI")
+            .paragraph("Get AI access")
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
