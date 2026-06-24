@@ -16,7 +16,7 @@ use warpui::platform::{Cursor, OperatingSystem};
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, Entity, EntityId, SingletonEntity as _};
+use warpui::{AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _};
 
 use super::model_spec_scores::{
     render_model_spec_header, render_model_spec_scores, CostRow, CostRowTooltip,
@@ -41,6 +41,7 @@ use crate::terminal::input::inline_menu::{
     InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
 };
 use crate::terminal::input::message_bar::{Message, MessageItem};
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -133,11 +134,25 @@ fn model_specs_width(app: &AppContext) -> f32 {
 
 pub struct ModelSelectorDataSource {
     terminal_view_id: EntityId,
+    ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
 }
 
 impl ModelSelectorDataSource {
-    pub fn new(terminal_view_id: EntityId) -> Self {
-        Self { terminal_view_id }
+    pub fn new(
+        terminal_view_id: EntityId,
+        ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
+    ) -> Self {
+        Self {
+            terminal_view_id,
+            ambient_agent_view_model,
+        }
+    }
+
+    /// Returns whether a model should appear in the inline picker.
+    /// Custom-endpoint models are suppressed in Oz cloud agent panes because
+    /// they cannot route through Warp's cloud inference infrastructure.
+    pub(crate) fn include_model_in_picker(is_cloud_pane: bool, is_custom_endpoint: bool) -> bool {
+        !is_cloud_pane || !is_custom_endpoint
     }
 
     fn order_model_choices<'a>(
@@ -195,11 +210,22 @@ impl SyncDataSource for ModelSelectorDataSource {
                 .clone()
         };
 
+        let is_cloud_pane = self.ambient_agent_view_model.is_some();
         let choices = if is_full_terminal {
-            llm_preferences.get_cli_agent_llm_choices(app).collect_vec()
+            llm_preferences
+                .get_cli_agent_llm_choices(app)
+                .filter(|llm| {
+                    let is_custom = llm_preferences.custom_llm_info_for_id(&llm.id).is_some();
+                    Self::include_model_in_picker(is_cloud_pane, is_custom)
+                })
+                .collect_vec()
         } else {
             llm_preferences
                 .get_base_llm_choices_for_agent_mode(app)
+                .filter(|llm| {
+                    let is_custom = llm_preferences.custom_llm_info_for_id(&llm.id).is_some();
+                    Self::include_model_in_picker(is_cloud_pane, is_custom)
+                })
                 .collect_vec()
         };
         let choices = Self::order_model_choices(llm_preferences, choices);
