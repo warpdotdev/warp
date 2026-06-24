@@ -57,13 +57,16 @@ use crate::util::extensions::TrimStringExt;
 /// Used to match equal brackets, when performing a bracket-pair selection.
 const BRACKET_PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
 
-/// Maximum number of characters to scan across soft-wrapped lines when
-/// detecting a file link. A soft-wrapped path is one logical line split over
-/// several visual rows, so this budget must be large enough to span a whole
-/// path rather than a single visual row; it is sized to comfortably cover real
-/// file paths (filesystem `PATH_MAX` is typically 4096). Without enough budget,
-/// a long path that wraps in a wide terminal would only be detected up to the
-/// first wrap boundary (see issue #9193).
+/// Hard upper bound on how many characters the cross-soft-wrap file-link scan
+/// will walk. This is only a backstop: the scan normally stops much earlier
+/// because it extends into an adjacent soft-wrapped row only while the wrap
+/// boundary continues a single separator-free run (see
+/// [`GridHandler::soft_wrap_continues_path`]). A soft-wrapped path is one
+/// logical line split over several visual rows, so this must still be large
+/// enough to span a whole path; it is sized to filesystem `PATH_MAX` (typically
+/// 4096). With too small a budget, a long path that wraps in a wide terminal
+/// would only be detected up to the first wrap boundary (see issue #9193);
+/// the contiguity check keeps the common case from ever scanning that far.
 const LINK_NUM_CHARACTER_SCAN: usize = 4096;
 
 /// Max number of characters to scan for a URL.
@@ -1173,6 +1176,29 @@ impl GridHandler {
         FragmentBoundary(fragment_start..fragment_end)
     }
 
+    /// Whether the soft-wrap boundary between `upper_row` and the `lower_row` it
+    /// wraps into continues a single separator-free run — i.e. the last cell of
+    /// `upper_row` and the first cell of `lower_row` are both non-separators.
+    ///
+    /// File-link detection only needs to follow a path across a soft wrap while
+    /// the path itself continues across that wrap. Using this to bound the
+    /// cross-wrap scan keeps a hover over ordinary wrapped text (which breaks at
+    /// a separator almost immediately) from walking many rows, while still
+    /// letting a genuinely long path be followed to its end.
+    fn soft_wrap_continues_path(&self, upper_row: usize, lower_row: usize) -> bool {
+        let (upper, lower) = match (self.row(upper_row), self.row(lower_row)) {
+            (Some(upper), Some(lower)) => (upper, lower),
+            _ => return false,
+        };
+        let last_upper_col = self.columns().saturating_sub(1);
+        match (upper.get(last_upper_col), lower.get(0)) {
+            (Some(upper_cell), Some(lower_cell)) => {
+                !is_file_link_separator(upper_cell.c) && !is_file_link_separator(lower_cell.c)
+            }
+            _ => false,
+        }
+    }
+
     /// Return all possible file paths containing the grid point ordered from longest to shortest.
     pub fn possible_file_paths_at_point(&self, displayed_point: Point) -> Vec<PossiblePath> {
         let point = self.maybe_translate_point_from_displayed_to_original(displayed_point);
@@ -1185,6 +1211,7 @@ impl GridHandler {
         while first_prefix_row > 0
             && self.row_wraps(first_prefix_row - 1)
             && scanned_prefix_width < LINK_NUM_CHARACTER_SCAN
+            && self.soft_wrap_continues_path(first_prefix_row - 1, first_prefix_row)
         {
             first_prefix_row -= 1;
             scanned_prefix_width += self.columns();
@@ -1218,6 +1245,7 @@ impl GridHandler {
         while last_suffix_row + 1 < self.total_rows()
             && self.row_wraps(last_suffix_row)
             && scanned_suffix_width < LINK_NUM_CHARACTER_SCAN
+            && self.soft_wrap_continues_path(last_suffix_row, last_suffix_row + 1)
         {
             last_suffix_row += 1;
             scanned_suffix_width += self.columns();
