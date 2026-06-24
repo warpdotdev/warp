@@ -1,18 +1,23 @@
 use warpui::elements::{
-    ChildView, Container, CrossAxisAlignment, Element, Flex, MainAxisAlignment, MainAxisSize,
-    ParentElement, Text,
+    ChildView, Container, CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Flex,
+    MainAxisAlignment, MainAxisSize, ParentElement, Text,
 };
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use warpui::{
+    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    WeakViewHandle,
+};
 
 use crate::ai::llms::LLMId;
 use crate::appearance::Appearance;
 use crate::view_components::action_button::{ActionButton, NakedTheme, PrimaryTheme};
-use crate::view_components::dropdown::{Dropdown, DropdownItem};
+use crate::view_components::{DropdownItem, FilterableDropdown, FilterableDropdownEvent};
 
 /// Width shared by the model dropdown's top bar and open menu so long model
 /// names stay readable inside the modal.
 const MODEL_DROPDOWN_WIDTH: f32 = 400.;
-const MODEL_DROPDOWN_MAX_HEIGHT: f32 = 250.;
+/// The body's `ui_font_size`-based default reads too small in the modal, so the
+/// description uses an explicit, slightly larger size.
+const DESCRIPTION_FONT_SIZE: f32 = 14.;
 
 pub enum SetDefaultModelModalBodyEvent {
     /// The user dismissed the prompt without choosing a model.
@@ -29,8 +34,8 @@ pub enum SetDefaultModelModalBodyAction {
     Cancel,
 }
 
-/// Body of the "set your default model" prompt that appears after a BYO API key
-/// or custom endpoint is saved. It is hosted inside a [`crate::modal::Modal`],
+/// Body of the "change your default model" prompt that appears after a BYO API
+/// key or custom endpoint is saved. It is hosted inside a [`crate::modal::Modal`],
 /// which supplies the title, close button, and backdrop.
 pub struct SetDefaultModelModalBody {
     description: String,
@@ -38,19 +43,27 @@ pub struct SetDefaultModelModalBody {
     /// through [`SetDefaultModelModalBodyEvent::SetDefault`] on save.
     model_choices: Vec<(LLMId, String)>,
     selected_index: usize,
-    model_dropdown: ViewHandle<Dropdown<SetDefaultModelModalBodyAction>>,
+    model_dropdown: ViewHandle<FilterableDropdown<SetDefaultModelModalBodyAction>>,
     cancel_button: ViewHandle<ActionButton>,
     save_button: ViewHandle<ActionButton>,
+    self_handle: WeakViewHandle<Self>,
 }
 
 impl SetDefaultModelModalBody {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let model_dropdown = ctx.add_typed_action_view(|ctx| {
-            let mut dropdown = Dropdown::new(ctx);
+            let mut dropdown = FilterableDropdown::new(ctx);
             dropdown.set_top_bar_max_width(MODEL_DROPDOWN_WIDTH);
             dropdown.set_menu_width(MODEL_DROPDOWN_WIDTH, ctx);
-            dropdown.set_menu_max_height(MODEL_DROPDOWN_MAX_HEIGHT, ctx);
             dropdown
+        });
+        // When the dropdown closes (selection or dismiss), return focus to the
+        // body so Escape closes the modal rather than no-op'ing on the hidden
+        // filter input.
+        ctx.subscribe_to_view(&model_dropdown, |_, _, event, ctx| {
+            if let FilterableDropdownEvent::Close = event {
+                ctx.focus_self();
+            }
         });
 
         let cancel_button = ctx.add_typed_action_view(|_| {
@@ -60,7 +73,7 @@ impl SetDefaultModelModalBody {
         });
 
         let save_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Set as default", PrimaryTheme).on_click(|ctx| {
+            ActionButton::new("Change default model", PrimaryTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(SetDefaultModelModalBodyAction::Save);
             })
         });
@@ -72,11 +85,13 @@ impl SetDefaultModelModalBody {
             model_dropdown,
             cancel_button,
             save_button,
+            self_handle: ctx.handle(),
         }
     }
 
-    /// Populates the prompt for a freshly added credential. The first model is
-    /// pre-selected so a user can accept without opening the dropdown.
+    /// Populates the prompt for a freshly added credential and focuses the body
+    /// so Escape closes the modal. The first model is pre-selected so the user
+    /// can accept without opening the dropdown.
     pub fn set_choices(
         &mut self,
         description: String,
@@ -102,6 +117,7 @@ impl SetDefaultModelModalBody {
             dropdown.set_items(items, ctx);
             dropdown.set_selected_by_index(0, ctx);
         });
+        ctx.focus_self();
         ctx.notify();
     }
 }
@@ -123,7 +139,7 @@ impl View for SetDefaultModelModalBody {
             Text::new(
                 self.description.clone(),
                 appearance.ui_font_family(),
-                appearance.ui_font_size(),
+                DESCRIPTION_FONT_SIZE,
             )
             .with_color(theme.nonactive_ui_text_color().into())
             .soft_wrap(true)
@@ -148,11 +164,29 @@ impl View for SetDefaultModelModalBody {
             )
             .finish();
 
-        Flex::column()
+        let content = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(description)
             .with_child(dropdown)
             .with_child(buttons_row)
+            .finish();
+
+        // Close the modal on Escape when the body itself is focused. While the
+        // dropdown is open it owns Escape (to close itself); on close it hands
+        // focus back to the body via the `Close` subscription above.
+        let self_handle = self.self_handle.clone();
+        EventHandler::new(content)
+            .on_keydown(move |ctx, app, keystroke| {
+                let body_focused = self_handle
+                    .upgrade(app)
+                    .is_some_and(|handle| handle.is_focused(app));
+                if body_focused && keystroke.is_unmodified_key("escape") {
+                    ctx.dispatch_typed_action(SetDefaultModelModalBodyAction::Cancel);
+                    DispatchEventResult::StopPropagation
+                } else {
+                    DispatchEventResult::PropagateToParent
+                }
+            })
             .finish()
     }
 }

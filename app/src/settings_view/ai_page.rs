@@ -15,6 +15,7 @@ use warp_core::ui::color::contrast::MinimumAllowedContrast;
 use warp_core::ui::color::ContrastingColor;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warp_editor::editor::NavigationKey;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Dismiss, Empty, Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable,
@@ -80,7 +81,10 @@ use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::GenericStringObjectFormat::Json;
 use crate::cloud_object::{JsonObjectType, ObjectType};
-use crate::editor::{EditorOptions, InteractionState, SingleLineEditorOptions, TextColors};
+use crate::editor::{
+    EditorOptions, InteractionState, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextColors,
+};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::settings::{
     AIAutoDetectionEnabled, AICommandDenylist, AISettingsChangedEvent,
@@ -732,6 +736,9 @@ pub struct AISettingsPageView {
     // Prompt offering to switch the default Agent Mode model after a BYO key or
     // custom endpoint is saved while the default isn't backed by a credential.
     set_default_model_modal: ModalViewState<Modal<SetDefaultModelModalBody>>,
+    // Snapshot of the provider keys from the last `KeysUpdated`, used to detect a
+    // newly added key and prompt the user to switch their default model.
+    last_seen_provider_keys: ApiKeys,
 
     // In-flight fallback exchange for a pasted SuperGrok authorization code.
     // This stores only the PKCE verifier clone needed by the manual path while
@@ -1158,6 +1165,10 @@ impl AISettingsPageView {
             Self::refresh_coding_model_menu(&me.coding_model_dropdown, ctx);
             me.sync_context_window_editor(ctx, false);
             me.sync_custom_endpoint_buttons(ctx);
+            // Driving the prompt off the key-store update (rather than the editor's
+            // blur/Enter) means it fires reliably however the key was committed —
+            // clicking outside the field, pressing Enter, or tabbing away.
+            me.maybe_prompt_for_newly_added_provider_key(ctx);
             ctx.notify();
         });
 
@@ -1794,17 +1805,17 @@ impl AISettingsPageView {
         });
         let set_default_model_modal_view = ctx.add_typed_action_view(|ctx| {
             Modal::new(
-                Some("Set your default model".to_string()),
+                Some("Change your default model?".to_string()),
                 set_default_model_modal_body.clone(),
                 ctx,
             )
             .with_modal_style(UiComponentStyles {
                 width: Some(480.),
-                height: Some(360.),
+                height: Some(380.),
                 ..Default::default()
             })
             .with_body_style(UiComponentStyles {
-                height: Some(260.),
+                height: Some(300.),
                 ..Default::default()
             })
             .with_background_opacity(100)
@@ -1818,6 +1829,7 @@ impl AISettingsPageView {
             },
         );
         let set_default_model_modal = ModalViewState::new(set_default_model_modal_view);
+        let last_seen_provider_keys = ApiKeyManager::as_ref(ctx).keys().clone();
 
         let remove_custom_endpoint_confirmation_dialog =
             ctx.add_typed_action_view(RemoveCustomEndpointConfirmationDialog::new);
@@ -1969,6 +1981,7 @@ impl AISettingsPageView {
             custom_inference_add_button,
             custom_endpoint_edit_buttons,
             set_default_model_modal,
+            last_seen_provider_keys,
             #[cfg(not(target_family = "wasm"))]
             grok_oauth_attempt: None,
             #[cfg(not(target_family = "wasm"))]
@@ -2053,6 +2066,9 @@ impl AISettingsPageView {
             });
         });
         self.set_default_model_modal.open();
+        // Focus the modal so Escape closes it (the modal's escape binding only
+        // fires while something inside the modal holds focus).
+        ctx.focus(&self.set_default_model_modal.view);
         ctx.emit(AISettingsPageEvent::ShowModal);
         ctx.notify();
     }
@@ -2076,20 +2092,68 @@ impl AISettingsPageView {
         is_using_api_key_for_provider(&active_provider, ctx)
     }
 
-    /// The stored BYO key for a single-provider slot, if any.
-    fn stored_provider_key(provider: &LLMProvider, ctx: &AppContext) -> Option<String> {
-        let keys = ApiKeyManager::as_ref(ctx).keys();
-        match provider {
-            LLMProvider::OpenAI => keys.openai.clone(),
-            LLMProvider::Anthropic => keys.anthropic.clone(),
-            LLMProvider::Google => keys.google.clone(),
-            LLMProvider::Xai | LLMProvider::Unknown => None,
+    /// The display name of the user's current default Agent Mode model, used in
+    /// the prompt copy (e.g. "auto (cost-efficient)").
+    fn active_base_model_display_name(ctx: &AppContext) -> String {
+        LLMPreferences::as_ref(ctx)
+            .get_active_base_model(ctx, None)
+            .display_name
+            .clone()
+    }
+
+    /// Whether to offer switching the default model. Scoped to free-plan users
+    /// who are out of monthly (base-plan) credits, since only they hit the
+    /// "no credits" error with an `auto` model. Also skips when the current
+    /// default is already served by a BYO credential.
+    fn should_offer_default_model_switch(ctx: &AppContext) -> bool {
+        let is_free_plan = UserWorkspaces::as_ref(ctx)
+            .current_workspace()
+            .is_some_and(|workspace| workspace.billing_metadata.is_free_plan());
+        let out_of_monthly_credits = !AIRequestUsageModel::as_ref(ctx).has_requests_remaining();
+        is_free_plan && out_of_monthly_credits && !Self::active_base_model_is_byo_covered(ctx)
+    }
+
+    /// Detects a provider key that was just added (absent -> present) by diffing
+    /// against the last-seen keys, then offers to switch the default model. Run
+    /// from `ApiKeyManagerEvent::KeysUpdated` so it fires regardless of how the
+    /// key editor was committed.
+    fn maybe_prompt_for_newly_added_provider_key(&mut self, ctx: &mut ViewContext<Self>) {
+        let current = ApiKeyManager::as_ref(ctx).keys().clone();
+        let newly_added = [
+            (
+                LLMProvider::OpenAI,
+                &self.last_seen_provider_keys.openai,
+                &current.openai,
+            ),
+            (
+                LLMProvider::Anthropic,
+                &self.last_seen_provider_keys.anthropic,
+                &current.anthropic,
+            ),
+            (
+                LLMProvider::Google,
+                &self.last_seen_provider_keys.google,
+                &current.google,
+            ),
+        ]
+        .into_iter()
+        .find_map(|(provider, previous_key, current_key)| {
+            let was_present = previous_key
+                .as_deref()
+                .is_some_and(|key| !key.trim().is_empty());
+            let now_present = current_key
+                .as_deref()
+                .is_some_and(|key| !key.trim().is_empty());
+            (!was_present && now_present).then_some(provider)
+        });
+        self.last_seen_provider_keys = current;
+        if let Some(provider) = newly_added {
+            self.maybe_prompt_set_default_model_for_provider(provider, ctx);
         }
     }
 
     /// After a BYO provider key is added, offer to switch the default Agent Mode
-    /// model to one from that provider, unless the current default is already
-    /// served by a credential the user has.
+    /// model to one from that provider.
     fn maybe_prompt_set_default_model_for_provider(
         &mut self,
         provider: LLMProvider,
@@ -2099,7 +2163,7 @@ impl AISettingsPageView {
         if !is_using_api_key_for_provider(&provider, ctx) {
             return;
         }
-        if Self::active_base_model_is_byo_covered(ctx) {
+        if !Self::should_offer_default_model_switch(ctx) {
             return;
         }
         let choices: Vec<(LLMId, String)> = LLMPreferences::as_ref(ctx)
@@ -2111,16 +2175,17 @@ impl AISettingsPageView {
             return;
         }
         let provider_name = provider.display_name();
+        let current_default = Self::active_base_model_display_name(ctx);
         let description = format!(
-            "You added your {provider_name} API key. Set your default Agent Mode model to one from \
-             {provider_name} so requests use your key instead of Warp credits."
+            "You added your own {provider_name} API key, but your default model is currently set \
+             to {current_default}, which won't work without Warp credits. Would you like to change \
+             your default model?"
         );
         self.show_set_default_model_modal(description, choices, ctx);
     }
 
     /// After a custom endpoint is added or saved, offer to switch the default
-    /// Agent Mode model to one of its models, unless the current default is
-    /// already served by a credential the user has.
+    /// Agent Mode model to one of its models.
     fn maybe_prompt_set_default_model_for_custom_endpoint(
         &mut self,
         endpoint_index: usize,
@@ -2129,7 +2194,7 @@ impl AISettingsPageView {
         if !Self::can_use_custom_inference_controls(ctx) {
             return;
         }
-        if Self::active_base_model_is_byo_covered(ctx) {
+        if !Self::should_offer_default_model_switch(ctx) {
             return;
         }
         let Some(endpoint) = ApiKeyManager::as_ref(ctx)
@@ -2156,9 +2221,11 @@ impl AISettingsPageView {
         if choices.is_empty() {
             return;
         }
+        let current_default = Self::active_base_model_display_name(ctx);
         let description = format!(
-            "You added the \"{}\" endpoint. Set your default Agent Mode model to one from this \
-             endpoint so requests use it instead of Warp credits.",
+            "You added the \"{}\" custom endpoint, but your default model is currently set to \
+             {current_default}, which won't work without Warp credits. Would you like to change \
+             your default model?",
             endpoint.name
         );
         self.show_set_default_model_modal(description, choices, ctx);
@@ -8024,11 +8091,16 @@ impl ApiKeysWidget {
         // A helper macro to create and configure an API key editor.  This avoids a lot
         // of code duplication and ensures consistency between the editors.
         macro_rules! create_api_key_editor {
-            ($editor:ident, $key:ident, $set_func:ident, $placeholder:literal, $provider:expr) => {
+            ($editor:ident, $key:ident, $set_func:ident, $placeholder:literal) => {
                 let $editor = ctx.add_typed_action_view(move |ctx| {
                     let appearance = Appearance::handle(ctx).as_ref(ctx);
                     let options = SingleLineEditorOptions {
                         is_password: true,
+                        // Emit Tab/Shift-Tab as navigation events instead of
+                        // inserting whitespace, so focus can move between the
+                        // key fields (see the focus wiring below).
+                        propagate_and_no_op_vertical_navigation_keys:
+                            PropagateAndNoOpNavigationKeys::Always,
                         text: TextOptions {
                             font_size_override: Some(appearance.ui_font_size()),
                             font_family_override: Some(appearance.monospace_font_family()),
@@ -8053,20 +8125,16 @@ impl ApiKeysWidget {
                     is_any_ai_enabled && is_byo_enabled,
                     ctx,
                 );
-                ctx.subscribe_to_view(&$editor, |me, $editor, event, ctx| {
+                // The default-model prompt is driven off `KeysUpdated` (see the
+                // `ApiKeyManager` subscription), so this only needs to persist
+                // the key on commit.
+                ctx.subscribe_to_view(&$editor, |_, $editor, event, ctx| {
                     if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                         let buffer_text = $editor.as_ref(ctx).buffer_text(ctx);
                         let key = buffer_text.is_empty().not().then_some(buffer_text);
-                        // Only prompt when a key is newly added or changed, so a
-                        // no-op blur on an already-saved key doesn't re-prompt.
-                        let key_added = key.is_some()
-                            && key != AISettingsPageView::stored_provider_key(&$provider, ctx);
                         ApiKeyManager::handle(ctx).update(ctx, |model, ctx| {
                             model.$set_func(key, ctx);
                         });
-                        if key_added {
-                            me.maybe_prompt_set_default_model_for_provider($provider, ctx);
-                        }
                     }
                 });
                 let editor_clone = $editor.clone();
@@ -8099,27 +8167,46 @@ impl ApiKeysWidget {
             };
         }
 
-        create_api_key_editor!(
-            openai_api_key_editor,
-            openai_key,
-            set_openai_key,
-            "sk-...",
-            LLMProvider::OpenAI
-        );
+        create_api_key_editor!(openai_api_key_editor, openai_key, set_openai_key, "sk-...");
         create_api_key_editor!(
             anthropic_api_key_editor,
             anthropic_key,
             set_anthropic_key,
-            "sk-ant-...",
-            LLMProvider::Anthropic
+            "sk-ant-..."
         );
         create_api_key_editor!(
             google_api_key_editor,
             google_key,
             set_google_key,
-            "AIzaSy...",
-            LLMProvider::Google
+            "AIzaSy..."
         );
+
+        // Tab / Shift-Tab move focus between the provider key fields instead of
+        // inserting whitespace.
+        let provider_key_editors = [
+            openai_api_key_editor.clone(),
+            anthropic_api_key_editor.clone(),
+            google_api_key_editor.clone(),
+        ];
+        for (index, editor) in provider_key_editors.iter().enumerate() {
+            let next = provider_key_editors.get(index + 1).cloned();
+            let previous = index
+                .checked_sub(1)
+                .and_then(|prev_index| provider_key_editors.get(prev_index).cloned());
+            ctx.subscribe_to_view(editor, move |_, _, event, ctx| match event {
+                EditorEvent::Navigate(NavigationKey::Tab) => {
+                    if let Some(next) = &next {
+                        ctx.focus(next);
+                    }
+                }
+                EditorEvent::Navigate(NavigationKey::ShiftTab) => {
+                    if let Some(previous) = &previous {
+                        ctx.focus(previous);
+                    }
+                }
+                _ => {}
+            });
+        }
 
         // Editor text colors are snapshotted at construction via
         // `text_colors_override`, so refresh them whenever the theme changes.
