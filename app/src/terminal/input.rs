@@ -4823,11 +4823,10 @@ impl Input {
             .is_profile_selector()
         {
             self.suggestions_mode_model.update(ctx, |model, ctx| {
-                model.set_mode(InputSuggestionsMode::Closed, ctx);
+                model.close_and_restore_buffer(ctx);
             });
             ctx.notify();
         }
-        self.clear_buffer_and_reset_undo_stack(ctx);
         self.focus_input_box(ctx);
     }
 
