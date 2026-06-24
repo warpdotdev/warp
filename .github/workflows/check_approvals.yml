@@ -11,7 +11,7 @@ jobs:
     name: Check OWNERS approval
     runs-on: ubuntu-latest
     # Skip draft PRs.
-    if: github.repository == 'warpdotdev/warp' && github.event.pull_request.draft == false
+    if: github.repository_owner == 'warpdotdev' && github.event.pull_request.draft == false
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6

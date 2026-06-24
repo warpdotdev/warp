@@ -48,7 +48,7 @@ jobs:
     # Also, don't run CI for repo-sync PRs _unless_ there is a merge conflict - for those,
     # we'll want to make sure that the conflict resolution doesn't introduce any issues.
     if: >-
-      github.repository == 'warpdotdev/warp' &&
+      github.repository_owner == 'warpdotdev' &&
       github.event.pull_request.draft == false &&
       (!startsWith(github.event.pull_request.head.ref, 'repo-sync/') || contains(github.event.pull_request.labels.*.name, 'repo-sync:conflict'))
     outputs:
@@ -128,7 +128,7 @@ jobs:
             extra_test_args: "--exclude command-signatures-v2 --exclude warp_js"
     runs-on: ${{ matrix.runner }}
     needs: params
-    if: ${{ github.repository == 'warpdotdev/warp' }}
+    if: ${{ github.repository_owner == 'warpdotdev' }}
     # Make sure an ID token is created with the necessary permissions to use
     # GCP's Workload Identity Federation (for service account authentication).
     permissions:
@@ -547,7 +547,7 @@ jobs:
     timeout-minutes: 5
     runs-on: ubuntu-latest
     needs: params
-    if: ${{ github.repository == 'warpdotdev/warp' && needs.params.outputs.affects-database-schema == 'true' }}
+    if: ${{ github.repository_owner == 'warpdotdev' && needs.params.outputs.affects-database-schema == 'true' }}
     steps:
       - name: Checkout sources
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -602,7 +602,7 @@ jobs:
             clippy_excludes: "--exclude warp_js --exclude command-signatures-v2"
     runs-on: ${{ matrix.runner }}
     needs: params
-    if: ${{ github.repository == 'warpdotdev/warp' }}
+    if: ${{ github.repository_owner == 'warpdotdev' }}
     #    if: ${{ needs.params.outputs.affects-rust-sources == 'true' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -655,7 +655,7 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-latest
     needs: params
-    if: ${{ github.repository == 'warpdotdev/warp' }}
+    if: ${{ github.repository_owner == 'warpdotdev' }}
     steps:
       - name: Checkout sources
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -714,7 +714,7 @@ jobs:
       fail-fast: false
     runs-on: ${{ fromJSON(needs.params.outputs.wasm-runner) }}
     needs: params
-    if: ${{ github.repository == 'warpdotdev/warp' }}
+    if: ${{ github.repository_owner == 'warpdotdev' }}
     steps:
       - name: Compute IS_SELF_HOSTED
         id: is_self_hosted
@@ -783,7 +783,7 @@ jobs:
             null_device: "/dev/null"
     runs-on: ${{ matrix.runner }}
     needs: params
-    if: ${{ github.repository == 'warpdotdev/warp' }}
+    if: ${{ github.repository_owner == 'warpdotdev' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -818,7 +818,7 @@ jobs:
     runs-on: ubuntu-latest
     # Always run this job, as it needs to check the results of all of the other
     # jobs. If we skipped CI checks (e.g. on a draft PR), also skip this one.
-    if: ${{ github.repository == 'warpdotdev/warp' && !cancelled() && needs.params.result != 'skipped' }}
+    if: ${{ github.repository_owner == 'warpdotdev' && !cancelled() && needs.params.result != 'skipped' }}
     needs:
       - params
       - database-migration

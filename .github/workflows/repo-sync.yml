@@ -15,7 +15,7 @@ on:
 
 jobs:
   sync:
-    if: github.repository == 'warpdotdev/warp' && (github.event_name == 'push' || inputs.action == 'sync')
+    if: github.repository_owner == 'warpdotdev' && (github.event_name == 'push' || inputs.action == 'sync')
     uses: warpdotdev/repo-sync/.github/workflows/sync.yml@main
     with:
       repo_sync_ref: main
@@ -30,7 +30,7 @@ jobs:
     # Run the restack workflow on PRs for `repo-sync/`-prefixed branches
     # when they merge or are labelled with `repo-sync:needs-restack`.
     if: >-
-      github.repository == 'warpdotdev/warp' &&
+      github.repository_owner == 'warpdotdev' &&
       github.event_name == 'pull_request' &&
       startsWith(github.event.pull_request.head.ref, 'repo-sync/') &&
       (
@@ -49,7 +49,7 @@ jobs:
 
   approve:
     if: >-
-      github.repository == 'warpdotdev/warp' &&
+      github.repository_owner == 'warpdotdev' &&
       github.event_name == 'pull_request' &&
       github.event.action != 'closed' &&
       startsWith(github.event.pull_request.head.ref, 'repo-sync/')
@@ -63,7 +63,7 @@ jobs:
       approver_app_private_key: ${{ secrets.REPO_SYNC_APPROVER_APP_PRIVATE_KEY }}
 
   escalation:
-    if: github.repository == 'warpdotdev/warp' && inputs.action == 'escalation'
+    if: github.repository_owner == 'warpdotdev' && inputs.action == 'escalation'
     uses: warpdotdev/repo-sync/.github/workflows/escalation.yml@main
     with:
       repo_sync_ref: main

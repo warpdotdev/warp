@@ -14,7 +14,7 @@ jobs:
   analyze:
     name: Analyze feature flags
     runs-on: namespace-profile-ubuntu-small
-    if: ${{ github.repository == 'warpdotdev/warp' }}
+    if: ${{ github.repository_owner == 'warpdotdev' }}
     permissions:
       contents: read
       pull-requests: read
@@ -150,7 +150,7 @@ jobs:
   cleanup:
     name: Run cleanup agent
     needs: analyze
-    if: ${{ github.repository == 'warpdotdev/warp' && needs.analyze.outputs.flag_name && needs.analyze.outputs.flag_name != 'null' }}
+    if: ${{ github.repository_owner == 'warpdotdev' && needs.analyze.outputs.flag_name && needs.analyze.outputs.flag_name != 'null' }}
     runs-on: namespace-profile-ubuntu-small
     permissions:
       contents: read
@@ -206,7 +206,7 @@ jobs:
   create_pr:
     name: Create cleanup PR
     needs: [analyze, cleanup]
-    if: ${{ github.repository == 'warpdotdev/warp' && needs.analyze.outputs.flag_name && needs.analyze.outputs.flag_name != 'null' }}
+    if: ${{ github.repository_owner == 'warpdotdev' && needs.analyze.outputs.flag_name && needs.analyze.outputs.flag_name != 'null' }}
     runs-on: namespace-profile-ubuntu-small
     permissions:
       contents: write
