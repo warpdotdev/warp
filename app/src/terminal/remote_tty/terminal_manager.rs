@@ -21,7 +21,10 @@ use crate::terminal::writeable_pty::terminal_manager_util::{
     init_pty_controller_model, wire_up_pty_controller_with_surface,
 };
 use crate::terminal::writeable_pty::{self, Message};
-use crate::terminal::{terminal_manager, ShellLaunchState, SizeInfo, TerminalModel, TerminalView};
+use crate::terminal::{
+    terminal_manager, ShellLaunchState, SizeInfo, TerminalManager as TerminalManagerTrait,
+    TerminalModel, TerminalView,
+};
 
 type PtyController = writeable_pty::PtyController<Sender<Message>>;
 
@@ -47,7 +50,7 @@ impl TerminalManager {
         initial_input_config: Option<InputConfig>,
         ctx: &mut AppContext,
     ) -> (
-        ModelHandle<Box<dyn crate::terminal::TerminalManager>>,
+        ModelHandle<Box<dyn TerminalManagerTrait>>,
         ViewHandle<TerminalView>,
     ) {
         // Create all the necessary channels we need for communication.
@@ -152,7 +155,7 @@ impl TerminalManager {
         };
 
         let manager_model = ctx.add_model(|_ctx| {
-            let manager: Box<dyn crate::terminal::TerminalManager> = Box::new(terminal_manager);
+            let manager: Box<dyn TerminalManagerTrait> = Box::new(terminal_manager);
             manager
         });
         (manager_model, terminal_view)

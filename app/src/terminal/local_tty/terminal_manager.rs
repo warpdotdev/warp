@@ -10,6 +10,8 @@ use std::thread::JoinHandle;
 
 use anyhow::Context as _;
 use async_broadcast::InactiveReceiver;
+#[cfg(unix)]
+use nix::sys::termios::LocalFlags;
 use parking_lot::{FairMutex, Mutex};
 use pathfinder_geometry::vector::Vector2F;
 use session_sharing_protocol::common::{
@@ -30,16 +32,14 @@ use settings::Setting as _;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::{send_telemetry_from_ctx, SessionId};
 use warpui::r#async::executor::Background;
-use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
-#[cfg(unix)]
-use {
-    super::terminal_attributes::TerminalAttributesPoller,
-    crate::terminal::local_tty::terminal_attributes::Event as TerminalAttributesPollerEvent,
-    crate::terminal::model::terminal_model::BlockIndex, nix::sys::termios::LocalFlags,
+use warpui::{
+    AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WindowId,
 };
 
 use super::event_loop::EventLoop;
 use super::shell::{ShellStarter, ShellStarterSource, ShellStarterSourceOrWslName};
+#[cfg(unix)]
+use super::terminal_attributes::TerminalAttributesPoller;
 use super::{mio_channel, recorder};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversation;
@@ -69,9 +69,14 @@ use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
+use crate::terminal::color::List as ColorList;
 use crate::terminal::event_listener::ChannelEventListener;
+#[cfg(unix)]
+use crate::terminal::local_tty::terminal_attributes::Event as TerminalAttributesPollerEvent;
 use crate::terminal::local_tty::{Pty, PtyOptions};
 use crate::terminal::model::session::Sessions;
+#[cfg(unix)]
+use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model::terminal_model::ExitReason;
 use crate::terminal::model_events::{ModelEvent as TerminalModelEvent, ModelEventDispatcher};
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
@@ -106,7 +111,8 @@ use crate::terminal::writeable_pty::terminal_manager_util::{
 };
 use crate::terminal::writeable_pty::{self, Message, PtyIntentEvent, TerminalSurface};
 use crate::terminal::{
-    terminal_manager, ShellLaunchData, ShellLaunchState, TerminalModel, TerminalView,
+    terminal_manager, ShellLaunchData, ShellLaunchState, SizeInfo,
+    TerminalManager as TerminalManagerTrait, TerminalModel, TerminalView,
     PTY_READS_BROADCAST_CHANNEL_SIZE,
 };
 use crate::view_components::ToastFlavor;
@@ -203,7 +209,7 @@ impl<S> TerminalManager<S> {
     ) -> Self
     where
         S: TerminalSurface,
-        <S as warpui::Entity>::Event: PtyIntentEvent,
+        <S as Entity>::Event: PtyIntentEvent,
     {
         wire_up_pty_controller_with_surface(
             &pty_controller,
@@ -269,7 +275,7 @@ struct LocalTerminalSessionParts {
     sessions: ModelHandle<Sessions>,
     model_events: ModelHandle<ModelEventDispatcher>,
     model: Arc<FairMutex<TerminalModel>>,
-    colors: crate::terminal::color::List,
+    colors: ColorList,
     pty_controller: ModelHandle<PtyController>,
     remote_server_controller: ModelHandle<RemoteServerController>,
     wsl_name_or_shell_starter: Option<ShellStarterSourceOrWslName>,
@@ -425,7 +431,7 @@ impl TerminalManager<TerminalView> {
         initial_input_config: Option<InputConfig>,
         ctx: &mut AppContext,
     ) -> (
-        ModelHandle<Box<dyn crate::terminal::TerminalManager>>,
+        ModelHandle<Box<dyn TerminalManagerTrait>>,
         ViewHandle<TerminalView>,
     ) {
         // TerminalView-specific restored-block resolution: merge explicit restored
@@ -597,8 +603,7 @@ impl TerminalManager<TerminalView> {
         );
 
         let terminal_manager_model = ctx.add_model(|ctx| {
-            let terminal_manager: Box<dyn crate::terminal::TerminalManager> =
-                Box::new(terminal_manager);
+            let terminal_manager: Box<dyn TerminalManagerTrait> = Box::new(terminal_manager);
 
             ctx.spawn(
                 async move {
@@ -607,11 +612,11 @@ impl TerminalManager<TerminalView> {
                         None => None,
                     }
                 },
-                move |terminal_manager: &mut Box<dyn crate::terminal::TerminalManager>,
+                move |terminal_manager: &mut Box<dyn TerminalManagerTrait>,
                       shell_starter_source,
                       ctx| {
                     let Some(terminal_manager) =
-                        crate::terminal::TerminalManager::as_any_mut(terminal_manager.as_mut())
+                        TerminalManagerTrait::as_any_mut(terminal_manager.as_mut())
                             .downcast_mut::<TerminalManager<TerminalView>>()
                     else {
                         return;
@@ -650,9 +655,9 @@ fn on_shell_determined<S: TerminalSurface>(
     event_loop_rx: mio_channel::Receiver<Message>,
     channel_event_proxy: ChannelEventListener,
     shell_starter_source: Option<ShellStarterSource>,
-    ctx: &mut ModelContext<Box<dyn crate::terminal::TerminalManager>>,
+    ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
 ) where
-    <S as warpui::Entity>::Event: PtyIntentEvent,
+    <S as Entity>::Event: PtyIntentEvent,
 {
     // This is executed as a callback and the window could be closed in the interim.
     if !ctx.is_window_open(manager.view.window_id(ctx)) {
@@ -907,7 +912,7 @@ impl<S> TerminalManager<S> {
                 .reuse_existing_control_master
                 .value();
 
-        let size: crate::terminal::SizeInfo = model.lock().block_list().size().to_owned();
+        let size: SizeInfo = model.lock().block_list().size().to_owned();
         let options = PtyOptions {
             size,
             window_id: None,
@@ -962,9 +967,9 @@ fn wire_up_terminal_attribute_poller_with_surface<S: TerminalSurface>(
     surface: &ViewHandle<S>,
     model_events: &ModelHandle<ModelEventDispatcher>,
     model: Arc<FairMutex<TerminalModel>>,
-    ctx: &mut ModelContext<Box<dyn crate::terminal::TerminalManager>>,
+    ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
 ) where
-    <S as warpui::Entity>::Event: PtyIntentEvent,
+    <S as Entity>::Event: PtyIntentEvent,
 {
     let poller_weak_handle = terminal_attributes_poller.downgrade();
     let poller_weak_handle_for_termios = poller_weak_handle.clone();
@@ -2842,7 +2847,7 @@ pub fn shutdown_all_pty_event_loops(ctx: &mut AppContext) {
     })
 }
 
-impl crate::terminal::TerminalManager for TerminalManager<TerminalView> {
+impl TerminalManagerTrait for TerminalManager<TerminalView> {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
     }

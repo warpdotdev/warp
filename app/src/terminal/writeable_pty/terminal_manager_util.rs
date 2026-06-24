@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use async_channel::Receiver;
 use parking_lot::FairMutex;
-use warpui::{AppContext, ModelHandle, ViewHandle};
+use warpui::{AppContext, Entity, ModelHandle, ViewHandle};
 
 use crate::persistence::ModelEvent;
 use crate::terminal::line_editor_status::LineEditorStatus;
@@ -31,7 +31,7 @@ pub fn wire_up_pty_controller_with_surface<T: EventLoopSender, S: TerminalSurfac
     model_event_sender: Option<SyncSender<ModelEvent>>,
     ctx: &mut AppContext,
 ) where
-    <S as warpui::Entity>::Event: PtyIntentEvent,
+    <S as Entity>::Event: PtyIntentEvent,
 {
     let controller_weak_handle = pty_controller.downgrade();
     let surface_weak_handle = surface.downgrade();

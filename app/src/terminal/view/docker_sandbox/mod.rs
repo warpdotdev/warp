@@ -1,3 +1,7 @@
+#[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
+use std::collections::HashMap;
+#[cfg(feature = "local_tty")]
+use std::path::PathBuf;
 #[cfg(feature = "local_tty")]
 use std::sync::mpsc::SyncSender;
 
@@ -22,6 +26,8 @@ use crate::ai::agent_sdk::driver::{
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+#[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
+use crate::banner::BannerState;
 #[cfg(feature = "local_tty")]
 use crate::pane_group::TerminalViewResources;
 #[cfg(feature = "local_tty")]
@@ -32,12 +38,18 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 #[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
 use crate::server::server_api::ServerApiProvider;
+#[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
+use crate::terminal::available_shells::AvailableShell;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::local_tty::docker_sandbox::DOCKER_SANDBOX_HOME_DIR;
+#[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
+use crate::terminal::local_tty::TerminalManager as LocalTtyTerminalManager;
 #[cfg(feature = "remote_tty")]
 use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
+#[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
+use crate::terminal::shared_session::IsSharedSessionCreator;
 #[cfg(feature = "local_tty")]
 use crate::terminal::TerminalManager;
 
@@ -59,7 +71,7 @@ fn create_docker_sandbox_view(
     resources: TerminalViewResources,
     initial_size: Vector2F,
     model_event_sender: Option<SyncSender<ModelEvent>>,
-    #[allow(dead_code)] sbx_path: std::path::PathBuf,
+    #[allow(dead_code)] sbx_path: PathBuf,
     ctx: &mut ViewContext<TerminalView>,
 ) -> (
     ViewHandle<TerminalView>,
@@ -77,17 +89,17 @@ fn create_docker_sandbox_view(
             );
         } else if #[cfg(feature = "local_tty")] {
             let user_default_shell_unsupported_banner_model_handle =
-                ctx.add_model(|_| crate::banner::BannerState::default());
+                ctx.add_model(|_| BannerState::default());
 
-            let chosen_shell = Some(crate::terminal::available_shells::AvailableShell::new_docker_sandbox_shell(
+            let chosen_shell = Some(AvailableShell::new_docker_sandbox_shell(
                 sbx_path,
                 DEFAULT_DOCKER_SANDBOX_BASE_IMAGE.map(str::to_owned),
             ));
 
-            let (terminal_manager, terminal_view) = crate::terminal::local_tty::TerminalManager::create_model(
+            let (terminal_manager, terminal_view) = LocalTtyTerminalManager::create_model(
                 None,
-                std::collections::HashMap::new(),
-                crate::terminal::shared_session::IsSharedSessionCreator::No,
+                HashMap::new(),
+                IsSharedSessionCreator::No,
                 resources,
                 None, /* restored_blocks */
                 None, /* conversation_restoration */
@@ -101,10 +113,10 @@ fn create_docker_sandbox_view(
             );
         } else {
             log::info!("USING MOCK TERMINAL MANAGER!!!!!");
+            use crate::terminal::MockTerminalManager;
             use crate::terminal::shell::{ShellName, ShellType};
             use crate::terminal::ShellLaunchState;
-
-            let (terminal_manager, terminal_view) = crate::terminal::MockTerminalManager::create_model(
+            let (terminal_manager, terminal_view) = MockTerminalManager::create_model(
                 ShellLaunchState::ShellSpawned {
                     available_shell: None,
                     display_name: ShellName::blank(),
@@ -153,7 +165,7 @@ impl TerminalView {
     #[cfg(feature = "local_tty")]
     fn create_and_push_docker_sandbox_with_sbx(
         &self,
-        sbx_path: std::path::PathBuf,
+        sbx_path: PathBuf,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(pane_stack) = self

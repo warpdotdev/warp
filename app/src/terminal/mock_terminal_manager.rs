@@ -30,7 +30,7 @@ impl MockTerminalManager {
         window_id: WindowId,
         ctx: &mut AppContext,
     ) -> (
-        ModelHandle<Box<dyn crate::terminal::TerminalManager>>,
+        ModelHandle<Box<dyn TerminalManager>>,
         ViewHandle<TerminalView>,
     ) {
         // Create all the necessary channels we need for communication.
@@ -96,7 +96,7 @@ impl MockTerminalManager {
         let terminal_view = view.clone();
         let terminal_manager = Self { model, view };
         let manager_model = ctx.add_model(|_ctx| {
-            let manager: Box<dyn crate::terminal::TerminalManager> = Box::new(terminal_manager);
+            let manager: Box<dyn TerminalManager> = Box::new(terminal_manager);
             manager
         });
         (manager_model, terminal_view)

@@ -121,9 +121,11 @@ use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::focus_env::add_session_focus_env_vars;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
-use crate::terminal::local_tty;
+use crate::terminal::local_tty::TerminalManager as LocalTtyTerminalManager;
 use crate::terminal::model::session::Session;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
+#[cfg(feature = "remote_tty")]
+use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
 use crate::terminal::session_settings::{NewSessionSource, SessionSettings};
 use crate::terminal::shared_session::render_util::ParticipantAvatarParams;
 use crate::terminal::shared_session::role_change_modal::{
@@ -2469,8 +2471,8 @@ impl PaneGroup {
                         .update(app, |terminal_manager, ctx| {
                             if let Some(manager) = terminal_manager
                                 .as_any()
-                                .downcast_ref::<local_tty::TerminalManager<TerminalView>>(
-                            ) {
+                                .downcast_ref::<LocalTtyTerminalManager<TerminalView>>()
+                            {
                                 if honor_ps1 {
                                     manager.send_switch_to_ps1_bindkey(ctx);
                                 } else {
@@ -5902,7 +5904,7 @@ impl PaneGroup {
 
         cfg_if::cfg_if! {
             if #[cfg(feature = "remote_tty")] {
-                let (terminal_manager, terminal_view) = crate::terminal::remote_tty::TerminalManager::create_model(
+                let (terminal_manager, terminal_view) = RemoteTtyTerminalManager::create_model(
                     resources,
                     initial_size,
                     model_event_sender,
@@ -5911,7 +5913,7 @@ impl PaneGroup {
                     ctx,
                 );
             } else if #[cfg(feature = "local_tty")] {
-                let (terminal_manager, terminal_view) = crate::terminal::local_tty::TerminalManager::create_model(
+                let (terminal_manager, terminal_view) = LocalTtyTerminalManager::create_model(
                     startup_directory,
                     env_vars,
                     is_shared_session,
@@ -5929,7 +5931,7 @@ impl PaneGroup {
             } else {
                 use crate::terminal::{ShellLaunchState, shell::{ShellName, ShellType}};
 
-                let (terminal_manager, terminal_view) = crate::terminal::MockTerminalManager::create_model(
+                let (terminal_manager, terminal_view) = MockTerminalManager::create_model(
                     ShellLaunchState::ShellSpawned {
                         available_shell: chosen_shell,
                         display_name: ShellName::blank(),
