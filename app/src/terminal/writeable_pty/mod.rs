@@ -10,4 +10,4 @@ pub(crate) mod terminal_surface;
 
 pub use message::Message;
 pub use pty_controller::{PtyController, PtyControllerEvent};
-pub(crate) use terminal_surface::{PtyIntent, TerminalSurface};
+pub(crate) use terminal_surface::{PtyIntent, PtyIntentEvent, TerminalSurface};

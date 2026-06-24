@@ -30,9 +30,7 @@ use settings::Setting as _;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::{send_telemetry_from_ctx, SessionId};
 use warpui::r#async::executor::Background;
-use warpui::{
-    AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WindowId,
-};
+use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
 #[cfg(unix)]
 use {
     super::terminal_attributes::TerminalAttributesPoller,
@@ -73,7 +71,7 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::local_tty::{Pty, PtyOptions};
-use crate::terminal::model::session::{ExecutorCommandEvent, Sessions};
+use crate::terminal::model::session::Sessions;
 use crate::terminal::model::terminal_model::ExitReason;
 use crate::terminal::model_events::{ModelEvent as TerminalModelEvent, ModelEventDispatcher};
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
@@ -106,7 +104,7 @@ use crate::terminal::writeable_pty::terminal_manager_util::{
     init_pty_controller_model, init_remote_server_controller, wire_up_pty_controller_with_surface,
     wire_up_remote_server_controller_with_view,
 };
-use crate::terminal::writeable_pty::{self, Message, PtyIntent, TerminalSurface};
+use crate::terminal::writeable_pty::{self, Message, PtyIntentEvent, TerminalSurface};
 use crate::terminal::{
     terminal_manager, ShellLaunchData, ShellLaunchState, TerminalModel, TerminalView,
     PTY_READS_BROADCAST_CHANNEL_SIZE,
@@ -129,19 +127,12 @@ fn should_skip_sharer_op(is_ambient_session: bool, op: &CrdtOperation) -> bool {
     is_ambient_session && matches!(op, CrdtOperation::UpdateSelections(_))
 }
 
-/// The TerminalManager is responsible for
-/// - creating the terminal model
-/// - starting the local PTY
-/// - creating the terminal surface (e.g. `TerminalView`)
-/// - wiring up the surface with any dependencies necessary
+/// Owns a local terminal session: the terminal model, PTY event loop, PTY
+/// controller, and a terminal surface.
 ///
-/// It also holds onto any data that needs to live as long as the session does
-/// (e.g. the event loop join handle).
-///
-/// `TerminalView` is the only surface in this PR, so existing GUI code continues
-/// to use `TerminalManager` (shorthand for `TerminalManager<TerminalView>`).
-/// A future non-GUI frontend can opt in with `TerminalManager<MySurface>`.
-pub struct TerminalManager<S = TerminalView> {
+/// Holds onto data that needs to live as long as the session does (e.g. the
+/// event loop join handle).
+pub struct TerminalManager<S> {
     event_loop_tx: Arc<Mutex<mio_channel::Sender<Message>>>,
     /// This is an `Option` so that we can take ownership of the inner
     /// `JoinHandle` in `TerminalManager::drop`.
@@ -149,9 +140,9 @@ pub struct TerminalManager<S = TerminalView> {
     model: Arc<FairMutex<TerminalModel>>,
     view: ViewHandle<S>,
 
-    /// Dispatcher for terminal model events. Used by surface-agnostic
-    /// subscriptions such as the Unix password-prompt poller.
-    #[allow(dead_code)]
+    /// Dispatcher for terminal model events. Read by the Unix password-prompt poller
+    /// wiring; retained on all platforms so the manager owns the dispatcher's lifetime.
+    #[cfg_attr(not(unix), allow(dead_code))]
     model_events: ModelHandle<ModelEventDispatcher>,
 
     /// The manager is responsible for managing the lifetime
@@ -181,9 +172,8 @@ pub struct TerminalManager<S = TerminalView> {
     #[allow(dead_code)]
     inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
 
-    /// The model responsible for implementing the sharer's side of the
-    /// session sharing protocol. Only [`Some`] when there is a shared session
-    /// connection ongoing. GUI-only state; a non-GUI surface leaves this unset.
+    /// The sharer side of the session sharing protocol. [`Some`] only when a
+    /// shared session connection is ongoing.
     #[allow(dead_code)]
     session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>>,
 }
@@ -195,9 +185,53 @@ impl<S> Drop for TerminalManager<S> {
 }
 
 impl<S> TerminalManager<S> {
-    /// Returns the backing terminal model. This is the generic equivalent of the
-    /// object-safe `TerminalManager::model` trait method, available to surfaces that
-    /// do not implement that GUI-shaped trait.
+    /// Assembles a `TerminalManager` around a pre-constructed surface. Wires the
+    /// PTY controller to the surface.
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        surface: ViewHandle<S>,
+        event_loop_tx: mio_channel::Sender<Message>,
+        inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
+        sessions: ModelHandle<Sessions>,
+        model_events: ModelHandle<ModelEventDispatcher>,
+        model: Arc<FairMutex<TerminalModel>>,
+        pty_controller: ModelHandle<PtyController>,
+        remote_server_controller: ModelHandle<RemoteServerController>,
+        session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>>,
+        model_event_sender: Option<SyncSender<ModelEvent>>,
+        ctx: &mut AppContext,
+    ) -> Self
+    where
+        S: TerminalSurface,
+        <S as warpui::Entity>::Event: PtyIntentEvent,
+    {
+        wire_up_pty_controller_with_surface(
+            &pty_controller,
+            &surface,
+            model.clone(),
+            sessions,
+            model_event_sender,
+            ctx,
+        );
+
+        Self {
+            event_loop_tx: Arc::new(Mutex::new(event_loop_tx)),
+            model,
+            event_loop_handle: None,
+            view: surface,
+            model_events,
+            #[cfg(unix)]
+            terminal_attributes_poller: None,
+            pty_controller,
+            remote_server_controller,
+            #[cfg(feature = "integration_tests")]
+            pid: None,
+            inactive_pty_reads_rx,
+            session_sharer,
+        }
+    }
+
+    /// Returns the terminal model owned by this manager.
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
     }
@@ -223,27 +257,40 @@ impl<S> TerminalManager<S> {
     }
 }
 
-/// Reusable session construction products that are independent of the terminal
-/// surface. A future non-GUI constructor can call [`create_session_core`] to obtain
-/// these without constructing a `TerminalView`.
-struct SessionCore {
+/// Construction-output bundle for a local terminal session: all the models,
+/// controllers, channels, and shell-starter data needed to assemble a
+/// `TerminalManager<S>` and create a terminal surface.
+struct LocalTerminalSessionParts {
     event_loop_tx: mio_channel::Sender<Message>,
     event_loop_rx: mio_channel::Receiver<Message>,
     wakeups_rx: async_channel::Receiver<()>,
-    executor_command_rx: async_channel::Receiver<ExecutorCommandEvent>,
     inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
     channel_event_proxy: ChannelEventListener,
     sessions: ModelHandle<Sessions>,
     model_events: ModelHandle<ModelEventDispatcher>,
-    preferred_shell: AvailableShell,
+    model: Arc<FairMutex<TerminalModel>>,
+    colors: crate::terminal::color::List,
+    pty_controller: ModelHandle<PtyController>,
+    remote_server_controller: ModelHandle<RemoteServerController>,
     wsl_name_or_shell_starter: Option<ShellStarterSourceOrWslName>,
 }
 
-/// Creates the surface-agnostic core of a terminal session: communication channels,
-/// `Sessions`/`ModelEventDispatcher` models, AWS credential-refresh registration, and
-/// shell-starter resolution. The caller is responsible for creating the terminal model
-/// and surface-specific wiring around these products.
-fn create_session_core(chosen_shell: Option<AvailableShell>, ctx: &mut AppContext) -> SessionCore {
+/// Creates all shared model/session/controller/channel pieces for a local terminal
+/// session in one pass: communication channels, `Sessions`, `ModelEventDispatcher`,
+/// `TerminalModel`, `PtyController`, `RemoteServerController`, colors, PTY-read
+/// receivers, and shell-starter source.
+///
+/// `all_restored_blocks` is the resolved block list used to initialize the
+/// `TerminalModel`.
+#[allow(clippy::too_many_arguments)]
+fn build_local_terminal_session_parts(
+    chosen_shell: Option<AvailableShell>,
+    startup_directory: Option<PathBuf>,
+    all_restored_blocks: Option<&Vec<SerializedBlockListItem>>,
+    initial_size: Vector2F,
+    is_shared_session_creator: IsSharedSessionCreator,
+    ctx: &mut AppContext,
+) -> LocalTerminalSessionParts {
     let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
     let (events_tx, events_rx) = async_channel::unbounded();
     let (executor_command_tx, executor_command_rx) = async_channel::unbounded();
@@ -268,67 +315,6 @@ fn create_session_core(chosen_shell: Option<AvailableShell>, ctx: &mut AppContex
         AvailableShells::handle(ctx).read(ctx, |shells, ctx| shells.get_user_preferred_shell(ctx))
     });
     let wsl_name_or_shell_starter = ShellStarter::init(preferred_shell.clone());
-
-    SessionCore {
-        event_loop_tx,
-        event_loop_rx,
-        wakeups_rx,
-        executor_command_rx,
-        inactive_pty_reads_rx,
-        channel_event_proxy,
-        sessions,
-        model_events,
-        preferred_shell,
-        wsl_name_or_shell_starter,
-    }
-}
-
-/// Fully-assembled session state that is independent of the terminal surface: the
-/// `TerminalModel`, `PtyController`, `RemoteServerController`, sessions/model-event
-/// dispatchers, and the communication channels. A future non-GUI constructor can
-/// call [`create_session_state`] to obtain all of these without constructing a
-/// `TerminalView`.
-struct SessionState {
-    event_loop_tx: mio_channel::Sender<Message>,
-    event_loop_rx: mio_channel::Receiver<Message>,
-    wakeups_rx: async_channel::Receiver<()>,
-    inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
-    channel_event_proxy: ChannelEventListener,
-    sessions: ModelHandle<Sessions>,
-    model_events: ModelHandle<ModelEventDispatcher>,
-    model: Arc<FairMutex<TerminalModel>>,
-    colors: crate::terminal::color::List,
-    pty_controller: ModelHandle<PtyController>,
-    remote_server_controller: ModelHandle<RemoteServerController>,
-    wsl_name_or_shell_starter: Option<ShellStarterSourceOrWslName>,
-}
-
-/// Builds a [`SessionState`] from a [`SessionCore`]: creates the `TerminalModel` with
-/// the given restored blocks, records PTY throughput, applies the shared-session
-/// creator status, and registers the `PtyController` and `RemoteServerController`.
-///
-/// `all_restored_blocks` is the already-merged block list (caller resolves GUI-only
-/// conversation restoration into this before calling).
-fn create_session_state(
-    core: SessionCore,
-    startup_directory: Option<PathBuf>,
-    all_restored_blocks: Option<&Vec<SerializedBlockListItem>>,
-    initial_size: Vector2F,
-    is_shared_session_creator: IsSharedSessionCreator,
-    ctx: &mut AppContext,
-) -> SessionState {
-    let SessionCore {
-        event_loop_tx,
-        event_loop_rx,
-        wakeups_rx,
-        executor_command_rx,
-        inactive_pty_reads_rx,
-        channel_event_proxy,
-        sessions,
-        model_events,
-        preferred_shell,
-        wsl_name_or_shell_starter,
-    } = core;
 
     log::info!(
         "Creating terminal model with {} restored blocks",
@@ -356,7 +342,13 @@ fn create_session_state(
 
     // This is purely for measuring throughput on WarpDev.
     if FeatureFlag::RecordPtyThroughput.is_enabled() {
-        record_pty_throughput(inactive_pty_reads_rx.clone(), model.clone(), ctx);
+        let auth_state = AuthStateProvider::as_ref(ctx).get();
+        recorder::record_pty_throughput(
+            inactive_pty_reads_rx.clone().activate(),
+            model.clone(),
+            auth_state.clone(),
+            ctx.background_executor().to_owned(),
+        );
     }
 
     // If this session should be a shared-session creator, configure its initial
@@ -393,7 +385,7 @@ fn create_session_state(
     let remote_server_controller =
         init_remote_server_controller(&pty_controller, &model_events, ctx);
 
-    SessionState {
+    LocalTerminalSessionParts {
         event_loop_tx,
         event_loop_rx,
         wakeups_rx,
@@ -409,34 +401,14 @@ fn create_session_state(
     }
 }
 
-/// Records the PTY throughput by emitting a metric whenever the throughput
-/// is non-zero over some time interval.
-fn record_pty_throughput(
-    pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
-    model: Arc<FairMutex<TerminalModel>>,
-    ctx: &mut AppContext,
-) {
-    if FeatureFlag::RecordPtyThroughput.is_enabled() {
-        let auth_state = AuthStateProvider::as_ref(ctx).get();
-        recorder::record_pty_throughput(
-            pty_reads_rx.activate(),
-            model,
-            auth_state.clone(),
-            ctx.background_executor().to_owned(),
-        );
-    }
-}
-
 impl TerminalManager<TerminalView> {
-    /// Creates a terminal manager model. Note that the order of operations
-    /// in this constructor are important! Specifically, we want to
-    /// 1. Create the TerminalModel.
-    /// 2. Set the pending local shell path on the model.
-    /// 3. Start the PTY and its corresponding event loop.
-    /// 4. Initialize the PtyController.
-    /// 5. Create the TerminalView.
-    /// 6. Wire up any dependencies between the view and any of the models.
-    /// 7. Finally create the TerminalManager.
+    /// GUI adapter that resolves `TerminalView`-specific inputs (conversation
+    /// restoration, prompt/presence/LLM/input-mode broadcast wiring, shared-session
+    /// sharer setup, agent-view registration, remote-server choice wiring), creates
+    /// the `TerminalView`, boxes the manager, and returns `(manager, view)`.
+    ///
+    /// Surface-agnostic session construction is delegated to
+    /// [`build_local_terminal_session_parts`].
     #[allow(clippy::too_many_arguments)]
     pub fn create_model(
         startup_directory: Option<PathBuf>,
@@ -452,15 +424,12 @@ impl TerminalManager<TerminalView> {
         chosen_shell: Option<AvailableShell>,
         initial_input_config: Option<InputConfig>,
         ctx: &mut AppContext,
-    ) -> ModelHandle<Box<dyn crate::terminal::TerminalManager>> {
-        // Build the surface-agnostic session core: channels, sessions, model events,
-        // AWS credential-refresh registration, and shell-starter resolution.
-        let core = create_session_core(chosen_shell, ctx);
-
-        let session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>> = Rc::new(RefCell::new(None));
-
-        // GUI-only restored-block resolution: merge explicit restored blocks with
-        // conversation restoration. A non-GUI constructor would supply its own block list.
+    ) -> (
+        ModelHandle<Box<dyn crate::terminal::TerminalManager>>,
+        ViewHandle<TerminalView>,
+    ) {
+        // TerminalView-specific restored-block resolution: merge explicit restored
+        // blocks with conversation restoration.
         let all_restored_blocks = restored_blocks
             .filter(|blocks| !blocks.is_empty())
             .cloned()
@@ -485,17 +454,20 @@ impl TerminalManager<TerminalView> {
                 _ => None,
             });
 
-        // Build the surface-agnostic session state: terminal model, PTY controller,
-        // remote-server controller, throughput recording, and shared-session creator status.
-        let state = create_session_state(
-            core,
+        // Build the surface-agnostic local terminal session parts: channels, sessions,
+        // model events, terminal model, PTY controller, remote-server controller,
+        // throughput recording, and shared-session creator status.
+        let parts = build_local_terminal_session_parts(
+            chosen_shell,
             startup_directory.clone(),
             all_restored_blocks.as_ref(),
             initial_size,
             is_shared_session_creator,
             ctx,
         );
-        let SessionState {
+        // Destructure `parts` into fields consumed by the surface, the shell-starter
+        // spawn, and the generic manager constructor.
+        let LocalTerminalSessionParts {
             event_loop_tx,
             event_loop_rx,
             wakeups_rx,
@@ -508,33 +480,12 @@ impl TerminalManager<TerminalView> {
             pty_controller,
             remote_server_controller,
             wsl_name_or_shell_starter,
-        } = state;
+        } = parts;
 
         let current_prompt = ctx.add_model(|ctx| {
             CurrentPrompt::new_with_model_events(sessions.clone(), Some(&model_events), ctx)
         });
         let prompt_type = ctx.add_model(|ctx| PromptType::new_dynamic(current_prompt.clone(), ctx));
-        let session_sharer_clone = session_sharer.clone();
-
-        // Send warp prompt updates.
-        ctx.observe_model(&current_prompt, move |current_prompt, ctx| {
-            // If for some reason ctx.notify() was called on the warp prompt but we're using ps1, do nothing.
-            if *SessionSettings::as_ref(ctx).honor_ps1 {
-                return
-            }
-            let prompt_snapshot = current_prompt.read(ctx, |current_prompt, ctx| {
-                PromptSnapshot::from_current_prompt(current_prompt, ctx)
-            });
-            if let Some(network) = session_sharer_clone.borrow().as_ref() {
-                let Ok(serialized_prompt) = serde_json::to_string(&prompt_snapshot) else {
-                    log::error!("Failed to serialize prompt snapshot to send active prompt update to shared session server");
-                    return
-                };
-                network.update(ctx, |network, _| {
-                    network.send_active_prompt_update_if_changed(session_sharing_protocol::common::ActivePrompt::WarpPrompt(serialized_prompt))
-                });
-            }
-        });
 
         let has_restored_command_blocks = all_restored_blocks
             .as_ref()
@@ -576,9 +527,8 @@ impl TerminalManager<TerminalView> {
             )
         });
 
-        // We need to append the session restoration separator to the block list if there are any
+        // Append the session restoration separator to the block list if there are any
         // restored blocks (command blocks or AI conversations) to show.
-        // Add separator if we have restored command blocks or we're restoring from historical or startup.
         let should_show_restoration_separator = (has_conversation_restoration
             || has_restored_command_blocks)
             && !should_use_live_appearance;
@@ -609,372 +559,42 @@ impl TerminalManager<TerminalView> {
             });
         }
 
-        wire_up_pty_controller_with_surface(
-            &pty_controller,
-            &view,
-            model.clone(),
-            sessions,
-            model_event_sender,
-            ctx,
-        );
-
         wire_up_remote_server_controller_with_view(&remote_server_controller, &view, ctx);
 
-        let session_sharer_clone = session_sharer.clone();
-        ctx.subscribe_to_model(&SessionSettings::handle(ctx), move |_, event, ctx| {
-            if let SessionSettingsChangedEvent::HonorPS1 { .. } = event {
-                if !*SessionSettings::as_ref(ctx).honor_ps1 {
-                    // We don't need to send a WarpPrompt message here when turning off PS1 because this will be sent
-                    // as part of observing the warp prompt and sending messages on updates.
-                    return;
-                }
-                if let Some(network) = session_sharer_clone.borrow().as_ref() {
-                    network.update(ctx, |network, _| {
-                        network.send_active_prompt_update_if_changed(
-                            session_sharing_protocol::common::ActivePrompt::PS1,
-                        )
-                    });
-                }
-            }
-        });
-
-        let sharer_remote_update_guard = RemoteUpdateGuard::new();
-
-        // Send model selection updates during session sharing
-        let session_sharer_for_models = session_sharer.clone();
-        let terminal_view_id = view.id();
-        let model_remote_update_guard = sharer_remote_update_guard.clone();
-        ctx.subscribe_to_model(&LLMPreferences::handle(ctx), move |_prefs, event, ctx| {
-            // Only react to agent mode LLM changes
-            if !matches!(event, LLMPreferencesEvent::UpdatedActiveAgentModeLLM) {
-                return;
-            }
-
-            if !model_remote_update_guard.should_broadcast() {
-                return;
-            }
-
-            if let Some(network) = session_sharer_for_models.borrow().as_ref() {
-                let llm_prefs = LLMPreferences::as_ref(ctx);
-                let selected_model_id: String = llm_prefs
-                    .get_active_base_model(ctx, Some(terminal_view_id))
-                    .id
-                    .clone()
-                    .into();
-
-                // The send method will check if it actually changed and skip if not
-                network.update(ctx, |network, _| {
-                    network.send_universal_developer_input_context_update(
-                        UniversalDeveloperInputContextUpdate {
-                            selected_model: Some(SelectedAgentModel::new(selected_model_id)),
-                            ..Default::default()
-                        },
-                    )
-                });
-            }
-        });
-
-        // Send input mode updates during session sharing.
-        // When AgentView is enabled, we only send updates when in an active agent view.
-        // For ambient agent sessions, input mode is controlled locally, so we skip sending updates.
-        let session_sharer_for_input_mode = session_sharer.clone();
-        let ai_input_model = view.as_ref(ctx).ai_input_model().clone();
-        let agent_view_controller_for_input_mode = view.as_ref(ctx).agent_view_controller().clone();
-        let model_for_input_mode = model.clone();
-        let input_mode_remote_update_guard = sharer_remote_update_guard.clone();
-        ctx.subscribe_to_model(&ai_input_model, move |_, event, ctx| {
-            if !input_mode_remote_update_guard.should_broadcast() {
-                return;
-            }
-
-            // In ambient agent sessions, input mode is controlled locally.
-            if model_for_input_mode
-                .lock()
-                .is_shared_ambient_agent_session()
-            {
-                return;
-            }
-
-            // When AgentView is enabled, only send input mode updates when in an active agent view.
-            if FeatureFlag::AgentView.is_enabled()
-                && !agent_view_controller_for_input_mode.as_ref(ctx).is_active()
-            {
-                return;
-            }
-
-            let config = event.updated_config();
-            if let Some(network) = session_sharer_for_input_mode.borrow().as_ref() {
-                // The send method will check if it actually changed and skip if not
-                network.update(ctx, |network, _| {
-                    network.send_universal_developer_input_context_update(
-                        UniversalDeveloperInputContextUpdate {
-                            input_mode: Some((*config).into()),
-                            ..Default::default()
-                        },
-                    )
-                });
-            }
-        });
-
-        let agent_view_controller = view.as_ref(ctx).agent_view_controller().clone();
-        let active_session = view.as_ref(ctx).active_session().clone();
-        ActiveAgentViewsModel::handle(ctx).update(ctx, |model, ctx| {
-            model.register_agent_view_controller(
-                &agent_view_controller,
-                &active_session,
-                terminal_view_id,
+        // Wire up TerminalView-specific session sharing (sharer setup, prompt/presence/LLM/
+        // input-mode/conversation broadcasts, agent-view registration, network status).
+        let session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>> =
+            wire_up_terminal_view_session_sharing(
+                &view,
+                current_prompt,
+                prompt_type,
+                model.clone(),
+                window_id,
                 ctx,
             );
-        });
-
-        let ai_context_model = view.as_ref(ctx).ai_context_model().clone();
-
-        // Send selected conversation updates during session sharing.
-        if FeatureFlag::AgentView.is_enabled() {
-            // When agent view is enabled, we listen to the agent view controller
-            // as the authoritative source for which conversation is selected.
-            let session_sharer_for_conversation = session_sharer.clone();
-            let ai_context_model_for_conversation = ai_context_model.clone();
-            let conversation_remote_update_guard = sharer_remote_update_guard.clone();
-            ctx.subscribe_to_model(
-                &agent_view_controller,
-                move |agent_view_controller, event, ctx| match event {
-                    AgentViewControllerEvent::EnteredAgentView { .. } => {
-                        if conversation_remote_update_guard.should_broadcast() {
-                            Self::send_selected_conversation_update_for_sharer(
-                                &session_sharer_for_conversation,
-                                &agent_view_controller,
-                                &ai_context_model_for_conversation,
-                                ctx,
-                            );
-                        }
-                    }
-                    AgentViewControllerEvent::ExitedAgentView {
-                        origin,
-                        final_exchange_count,
-                        ..
-                    } => {
-                        if conversation_remote_update_guard.should_broadcast() {
-                            Self::send_selected_conversation_update_for_sharer(
-                                &session_sharer_for_conversation,
-                                &agent_view_controller,
-                                &ai_context_model_for_conversation,
-                                ctx,
-                            );
-                        }
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::AgentViewExited {
-                                origin: TelemetryAgentViewEntryOrigin::from(origin.clone()),
-                                was_empty: *final_exchange_count == 0,
-                            },
-                            ctx
-                        );
-                    }
-                    AgentViewControllerEvent::ExitConfirmed { .. } => {}
-                },
-            );
-        } else {
-            // When agent view is disabled, we fallback to the legacy behavior
-            // of listening for pending query state changes to know which conversation is selected.
-            let session_sharer_for_conversation = session_sharer.clone();
-            let agent_view_controller_for_conversation = agent_view_controller.clone();
-            let conversation_remote_update_guard = sharer_remote_update_guard.clone();
-            ctx.subscribe_to_model(&ai_context_model, move |ai_context_model, event, ctx| {
-                if !matches!(event, BlocklistAIContextEvent::PendingQueryStateUpdated) {
-                    return;
-                }
-
-                if !conversation_remote_update_guard.should_broadcast() {
-                    return;
-                }
-
-                Self::send_selected_conversation_update_for_sharer(
-                    &session_sharer_for_conversation,
-                    &agent_view_controller_for_conversation,
-                    &ai_context_model,
-                    ctx,
-                );
-            });
-        }
-        // Also send after a request is submitted so viewers stay pinned to the intended conversation
-        let session_sharer_for_sent_request = session_sharer.clone();
-        let agent_view_controller_for_sent_request = agent_view_controller.clone();
-        let ai_context_model_for_sent_request = ai_context_model.clone();
-        let ai_controller_for_sent_request = view.as_ref(ctx).ai_controller().clone();
-        ctx.subscribe_to_model(&ai_controller_for_sent_request, move |_, event, ctx| {
-            if let BlocklistAIControllerEvent::SentRequest { .. } = event {
-                Self::send_selected_conversation_update_for_sharer(
-                    &session_sharer_for_sent_request,
-                    &agent_view_controller_for_sent_request,
-                    &ai_context_model_for_sent_request,
-                    ctx,
-                );
-            }
-        });
-        // Finally, when the server assigns a token, resend with the concrete token,
-        // & when the user toggles auto-approve, fan out an update.
-        let session_sharer_for_stream_init = session_sharer.clone();
-        let view_id_for_stream_init = view.id();
-        let weak_view_for_stream_init = view.downgrade();
-        let auto_approve_remote_update_guard = sharer_remote_update_guard.clone();
-        ctx.subscribe_to_model(
-            &BlocklistAIHistoryModel::handle(ctx),
-            move |_, event, ctx| {
-                match event {
-                    BlocklistAIHistoryEvent::UpdatedStreamingExchange {
-                        terminal_view_id,
-                        conversation_id,
-                        ..
-                    } => {
-                        if *terminal_view_id != view_id_for_stream_init {
-                            return;
-                        }
-
-                        let Some(view) = weak_view_for_stream_init.upgrade(ctx) else {
-                            return;
-                        };
-                        let ai_context_model = view.as_ref(ctx).ai_context_model().clone();
-                        let agent_view_controller =
-                            view.as_ref(ctx).agent_view_controller().clone();
-
-                        let history_model = BlocklistAIHistoryModel::handle(ctx);
-
-                        // if the conversation is not selected or does not have a token,
-                        // don't emit an update.
-                        if !ai_context_model
-                            .as_ref(ctx)
-                            .selected_conversation_id(ctx)
-                            .is_some_and(|sel| sel == *conversation_id)
-                        {
-                            return;
-                        }
-                        if history_model
-                            .as_ref(ctx)
-                            .conversation(conversation_id)
-                            .and_then(|c| c.server_conversation_token())
-                            .is_none()
-                        {
-                            return;
-                        }
-
-                        Self::send_selected_conversation_update_for_sharer(
-                            &session_sharer_for_stream_init,
-                            &agent_view_controller,
-                            &ai_context_model,
-                            ctx,
-                        );
-                    }
-                    BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { terminal_view_id } => {
-                        if *terminal_view_id != view_id_for_stream_init {
-                            return;
-                        }
-
-                        if !auto_approve_remote_update_guard.should_broadcast() {
-                            return;
-                        }
-
-                        let Some(view) = weak_view_for_stream_init.upgrade(ctx) else {
-                            return;
-                        };
-                        let ai_context_model = view.as_ref(ctx).ai_context_model().clone();
-
-                        if let Some(network) = session_sharer_for_stream_init.borrow().as_ref() {
-                            let auto_approve = ai_context_model
-                                .as_ref(ctx)
-                                .pending_query_autoexecute_override(ctx)
-                                .is_autoexecute_any_action();
-
-                            network.update(ctx, |network, _| {
-                                network.send_universal_developer_input_context_update(
-                                    UniversalDeveloperInputContextUpdate {
-                                        auto_approve_agent_actions: Some(auto_approve),
-                                        ..Default::default()
-                                    },
-                                );
-                            });
-                        }
-                    }
-                    // Upgrade a manual `User` share's sidecar `source_task_id`
-                    // from `None` to `Some(_)` once the active conversation
-                    // gets its `task_id`, so inherited child shares can
-                    // discover the orchestrator task. Existing viewers stay
-                    // on the old value (the protocol has no
-                    // `UpdateSourceType` upstream message) until they
-                    // reconnect.
-                    BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
-                        terminal_view_id,
-                        conversation_id,
-                    } => {
-                        if *terminal_view_id != view_id_for_stream_init {
-                            return;
-                        }
-
-                        let Some(view) = weak_view_for_stream_init.upgrade(ctx) else {
-                            return;
-                        };
-
-                        let model = view.as_ref(ctx).model.clone();
-                        let needs_upgrade = {
-                            let model_lock = model.lock();
-                            model_lock.shared_session_source().is_some_and(|s| {
-                                matches!(s.source_type, SessionSourceType::User)
-                                    && s.source_task_id.is_none()
-                            })
-                        };
-                        if !needs_upgrade {
-                            return;
-                        }
-
-                        let task_id = BlocklistAIHistoryModel::as_ref(ctx)
-                            .conversation(conversation_id)
-                            .and_then(|c| c.task_id());
-                        let Some(task_id) = task_id else {
-                            return;
-                        };
-
-                        model
-                            .lock()
-                            .set_shared_session_source_task_id(Some(task_id.to_string()));
-                    }
-                    _ => {}
-                }
-            },
-        );
-
-        // Always wire up the model but check the flag when a share is attempted.
-        Self::wire_up_session_sharer_with_view(
-            &view,
-            prompt_type,
-            session_sharer.clone(),
-            model.clone(),
-            window_id,
-            sharer_remote_update_guard,
-            ctx,
-        );
-
-        Self::handle_network_status_events(&view, session_sharer.clone(), ctx);
 
         #[cfg(windows)]
         let event_loop_tx_clone = event_loop_tx.clone();
 
-        // Create the terminal manager itself.
-        let terminal_manager = Self {
-            event_loop_tx: Arc::new(Mutex::new(event_loop_tx)),
-            model,
-            event_loop_handle: None,
+        // Clone the view before moving it into the manager so the caller can
+        // receive it alongside the boxed manager.
+        let terminal_view = view.clone();
+
+        // Assemble the manager via the generic construction path, which wires the
+        // PTY controller to the surface.
+        let terminal_manager = TerminalManager::new(
             view,
+            event_loop_tx,
+            inactive_pty_reads_rx,
+            sessions,
             model_events,
-            #[cfg(unix)]
-            terminal_attributes_poller: None,
+            model,
             pty_controller,
             remote_server_controller,
-
-            #[cfg(feature = "integration_tests")]
-            pid: None,
-
-            inactive_pty_reads_rx,
             session_sharer,
-        };
+            model_event_sender,
+            ctx,
+        );
 
         let terminal_manager_model = ctx.add_model(|ctx| {
             let terminal_manager: Box<dyn crate::terminal::TerminalManager> =
@@ -992,7 +612,7 @@ impl TerminalManager<TerminalView> {
                       ctx| {
                     let Some(terminal_manager) =
                         crate::terminal::TerminalManager::as_any_mut(terminal_manager.as_mut())
-                            .downcast_mut::<TerminalManager>()
+                            .downcast_mut::<TerminalManager<TerminalView>>()
                     else {
                         return;
                     };
@@ -1015,15 +635,11 @@ impl TerminalManager<TerminalView> {
             terminal_manager
         });
 
-        terminal_manager_model
+        (terminal_manager_model, terminal_view)
     }
 }
 
 /// Callback invoked upon determining the shell to be spawned when starting the event loop.
-///
-/// This is a free function rather than an inherent method so the `S: TerminalSurface` bound
-/// stays off the public `TerminalManager<S>` inherent-impl surface (avoiding `private_bounds`
-/// leakage of the `pub(crate)` surface trait).
 #[allow(clippy::too_many_arguments)]
 fn on_shell_determined<S: TerminalSurface>(
     manager: &mut TerminalManager<S>,
@@ -1036,7 +652,7 @@ fn on_shell_determined<S: TerminalSurface>(
     shell_starter_source: Option<ShellStarterSource>,
     ctx: &mut ModelContext<Box<dyn crate::terminal::TerminalManager>>,
 ) where
-    for<'a> Option<PtyIntent>: From<&'a <S as Entity>::Event>,
+    <S as warpui::Entity>::Event: PtyIntentEvent,
 {
     // This is executed as a callback and the window could be closed in the interim.
     if !ctx.is_window_open(manager.view.window_id(ctx)) {
@@ -1337,9 +953,6 @@ impl<S> TerminalManager<S> {
 /// rather than surface-specific view events, and termios results are routed back
 /// through the [`TerminalSurface`] Unix hooks so the manager stays surface-agnostic.
 ///
-/// This is a free function rather than an inherent method so the `S: TerminalSurface`
-/// bound stays off the public `TerminalManager<S>` inherent-impl surface.
-///
 /// NOTE: we cannot simply use the strong references (the handle arguments to this
 /// wire_up fn) in the subscription callbacks because that will create a reference
 /// cycle. Instead, we use weak handles and upgrade them lazily.
@@ -1351,7 +964,7 @@ fn wire_up_terminal_attribute_poller_with_surface<S: TerminalSurface>(
     model: Arc<FairMutex<TerminalModel>>,
     ctx: &mut ModelContext<Box<dyn crate::terminal::TerminalManager>>,
 ) where
-    for<'a> Option<PtyIntent>: From<&'a <S as Entity>::Event>,
+    <S as warpui::Entity>::Event: PtyIntentEvent,
 {
     let poller_weak_handle = terminal_attributes_poller.downgrade();
     let poller_weak_handle_for_termios = poller_weak_handle.clone();
@@ -1434,6 +1047,386 @@ fn wire_up_terminal_attribute_poller_with_surface<S: TerminalSurface>(
             }
         },
     );
+}
+
+/// Wires up `TerminalView`-specific session sharing: the local sharer (`Network`),
+/// prompt/presence/LLM/input-mode/conversation broadcasts, agent-view registration, and
+/// network-status reconnection handling. Returns the sharer cell the manager stores.
+///
+/// This is the GUI session-sharing boundary. The reusable protocol/model pieces
+/// (`shared_session::sharer::Network`, ordered terminal event flow, shared handlers)
+/// remain unchanged; this helper groups the `TerminalView`-dependent wiring so it is
+/// easy to identify and work on separately from the generic manager.
+#[allow(clippy::too_many_arguments)]
+fn wire_up_terminal_view_session_sharing(
+    view: &ViewHandle<TerminalView>,
+    current_prompt: ModelHandle<CurrentPrompt>,
+    prompt_type: ModelHandle<PromptType>,
+    model: Arc<FairMutex<TerminalModel>>,
+    window_id: WindowId,
+    ctx: &mut AppContext,
+) -> Rc<RefCell<Option<ModelHandle<Network>>>> {
+    let session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>> = Rc::new(RefCell::new(None));
+    let session_sharer_clone = session_sharer.clone();
+
+    // Send warp prompt updates.
+    ctx.observe_model(&current_prompt, move |current_prompt, ctx| {
+        // If for some reason ctx.notify() was called on the warp prompt but we're using ps1, do nothing.
+        if *SessionSettings::as_ref(ctx).honor_ps1 {
+            return
+        }
+        let prompt_snapshot = current_prompt.read(ctx, |current_prompt, ctx| {
+            PromptSnapshot::from_current_prompt(current_prompt, ctx)
+        });
+        if let Some(network) = session_sharer_clone.borrow().as_ref() {
+            let Ok(serialized_prompt) = serde_json::to_string(&prompt_snapshot) else {
+                log::error!("Failed to serialize prompt snapshot to send active prompt update to shared session server");
+                return
+            };
+            network.update(ctx, |network, _| {
+                network.send_active_prompt_update_if_changed(session_sharing_protocol::common::ActivePrompt::WarpPrompt(serialized_prompt))
+            });
+        }
+    });
+
+    let session_sharer_clone = session_sharer.clone();
+    ctx.subscribe_to_model(&SessionSettings::handle(ctx), move |_, event, ctx| {
+        if let SessionSettingsChangedEvent::HonorPS1 { .. } = event {
+            if !*SessionSettings::as_ref(ctx).honor_ps1 {
+                // We don't need to send a WarpPrompt message here when turning off PS1 because this will be sent
+                // as part of observing the warp prompt and sending messages on updates.
+                return;
+            }
+            if let Some(network) = session_sharer_clone.borrow().as_ref() {
+                network.update(ctx, |network, _| {
+                    network.send_active_prompt_update_if_changed(
+                        session_sharing_protocol::common::ActivePrompt::PS1,
+                    )
+                });
+            }
+        }
+    });
+
+    let sharer_remote_update_guard = RemoteUpdateGuard::new();
+
+    // Send model selection updates during session sharing
+    let session_sharer_for_models = session_sharer.clone();
+    let terminal_view_id = view.id();
+    let model_remote_update_guard = sharer_remote_update_guard.clone();
+    ctx.subscribe_to_model(&LLMPreferences::handle(ctx), move |_prefs, event, ctx| {
+        // Only react to agent mode LLM changes
+        if !matches!(event, LLMPreferencesEvent::UpdatedActiveAgentModeLLM) {
+            return;
+        }
+
+        if !model_remote_update_guard.should_broadcast() {
+            return;
+        }
+
+        if let Some(network) = session_sharer_for_models.borrow().as_ref() {
+            let llm_prefs = LLMPreferences::as_ref(ctx);
+            let selected_model_id: String = llm_prefs
+                .get_active_base_model(ctx, Some(terminal_view_id))
+                .id
+                .clone()
+                .into();
+
+            // The send method will check if it actually changed and skip if not
+            network.update(ctx, |network, _| {
+                network.send_universal_developer_input_context_update(
+                    UniversalDeveloperInputContextUpdate {
+                        selected_model: Some(SelectedAgentModel::new(selected_model_id)),
+                        ..Default::default()
+                    },
+                )
+            });
+        }
+    });
+
+    // Send input mode updates during session sharing.
+    // When AgentView is enabled, we only send updates when in an active agent view.
+    // For ambient agent sessions, input mode is controlled locally, so we skip sending updates.
+    let session_sharer_for_input_mode = session_sharer.clone();
+    let ai_input_model = view.as_ref(ctx).ai_input_model().clone();
+    let agent_view_controller_for_input_mode = view.as_ref(ctx).agent_view_controller().clone();
+    let model_for_input_mode = model.clone();
+    let input_mode_remote_update_guard = sharer_remote_update_guard.clone();
+    ctx.subscribe_to_model(&ai_input_model, move |_, event, ctx| {
+        if !input_mode_remote_update_guard.should_broadcast() {
+            return;
+        }
+
+        // In ambient agent sessions, input mode is controlled locally.
+        if model_for_input_mode
+            .lock()
+            .is_shared_ambient_agent_session()
+        {
+            return;
+        }
+
+        // When AgentView is enabled, only send input mode updates when in an active agent view.
+        if FeatureFlag::AgentView.is_enabled()
+            && !agent_view_controller_for_input_mode.as_ref(ctx).is_active()
+        {
+            return;
+        }
+
+        let config = event.updated_config();
+        if let Some(network) = session_sharer_for_input_mode.borrow().as_ref() {
+            // The send method will check if it actually changed and skip if not
+            network.update(ctx, |network, _| {
+                network.send_universal_developer_input_context_update(
+                    UniversalDeveloperInputContextUpdate {
+                        input_mode: Some((*config).into()),
+                        ..Default::default()
+                    },
+                )
+            });
+        }
+    });
+
+    let agent_view_controller = view.as_ref(ctx).agent_view_controller().clone();
+    let active_session = view.as_ref(ctx).active_session().clone();
+    ActiveAgentViewsModel::handle(ctx).update(ctx, |model, ctx| {
+        model.register_agent_view_controller(
+            &agent_view_controller,
+            &active_session,
+            terminal_view_id,
+            ctx,
+        );
+    });
+
+    let ai_context_model = view.as_ref(ctx).ai_context_model().clone();
+
+    // Send selected conversation updates during session sharing.
+    if FeatureFlag::AgentView.is_enabled() {
+        // When agent view is enabled, we listen to the agent view controller
+        // as the authoritative source for which conversation is selected.
+        let session_sharer_for_conversation = session_sharer.clone();
+        let ai_context_model_for_conversation = ai_context_model.clone();
+        let conversation_remote_update_guard = sharer_remote_update_guard.clone();
+        ctx.subscribe_to_model(
+            &agent_view_controller,
+            move |agent_view_controller, event, ctx| match event {
+                AgentViewControllerEvent::EnteredAgentView { .. } => {
+                    if conversation_remote_update_guard.should_broadcast() {
+                        TerminalManager::<TerminalView>::send_selected_conversation_update_for_sharer(
+                            &session_sharer_for_conversation,
+                            &agent_view_controller,
+                            &ai_context_model_for_conversation,
+                            ctx,
+                        );
+                    }
+                }
+                AgentViewControllerEvent::ExitedAgentView {
+                    origin,
+                    final_exchange_count,
+                    ..
+                } => {
+                    if conversation_remote_update_guard.should_broadcast() {
+                        TerminalManager::<TerminalView>::send_selected_conversation_update_for_sharer(
+                            &session_sharer_for_conversation,
+                            &agent_view_controller,
+                            &ai_context_model_for_conversation,
+                            ctx,
+                        );
+                    }
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::AgentViewExited {
+                            origin: TelemetryAgentViewEntryOrigin::from(origin.clone()),
+                            was_empty: *final_exchange_count == 0,
+                        },
+                        ctx
+                    );
+                }
+                AgentViewControllerEvent::ExitConfirmed { .. } => {}
+            },
+        );
+    } else {
+        // When agent view is disabled, we fallback to the legacy behavior
+        // of listening for pending query state changes to know which conversation is selected.
+        let session_sharer_for_conversation = session_sharer.clone();
+        let agent_view_controller_for_conversation = agent_view_controller.clone();
+        let conversation_remote_update_guard = sharer_remote_update_guard.clone();
+        ctx.subscribe_to_model(&ai_context_model, move |ai_context_model, event, ctx| {
+            if !matches!(event, BlocklistAIContextEvent::PendingQueryStateUpdated) {
+                return;
+            }
+
+            if !conversation_remote_update_guard.should_broadcast() {
+                return;
+            }
+
+            TerminalManager::<TerminalView>::send_selected_conversation_update_for_sharer(
+                &session_sharer_for_conversation,
+                &agent_view_controller_for_conversation,
+                &ai_context_model,
+                ctx,
+            );
+        });
+    }
+    // Also send after a request is submitted so viewers stay pinned to the intended conversation
+    let session_sharer_for_sent_request = session_sharer.clone();
+    let agent_view_controller_for_sent_request = agent_view_controller.clone();
+    let ai_context_model_for_sent_request = ai_context_model.clone();
+    let ai_controller_for_sent_request = view.as_ref(ctx).ai_controller().clone();
+    ctx.subscribe_to_model(&ai_controller_for_sent_request, move |_, event, ctx| {
+        if let BlocklistAIControllerEvent::SentRequest { .. } = event {
+            TerminalManager::<TerminalView>::send_selected_conversation_update_for_sharer(
+                &session_sharer_for_sent_request,
+                &agent_view_controller_for_sent_request,
+                &ai_context_model_for_sent_request,
+                ctx,
+            );
+        }
+    });
+    // Finally, when the server assigns a token, resend with the concrete token,
+    // & when the user toggles auto-approve, fan out an update.
+    let session_sharer_for_stream_init = session_sharer.clone();
+    let view_id_for_stream_init = view.id();
+    let weak_view_for_stream_init = view.downgrade();
+    let auto_approve_remote_update_guard = sharer_remote_update_guard.clone();
+    ctx.subscribe_to_model(
+        &BlocklistAIHistoryModel::handle(ctx),
+        move |_, event, ctx| {
+            match event {
+                BlocklistAIHistoryEvent::UpdatedStreamingExchange {
+                    terminal_view_id,
+                    conversation_id,
+                    ..
+                } => {
+                    if *terminal_view_id != view_id_for_stream_init {
+                        return;
+                    }
+
+                    let Some(view) = weak_view_for_stream_init.upgrade(ctx) else {
+                        return;
+                    };
+                    let ai_context_model = view.as_ref(ctx).ai_context_model().clone();
+                    let agent_view_controller = view.as_ref(ctx).agent_view_controller().clone();
+
+                    let history_model = BlocklistAIHistoryModel::handle(ctx);
+
+                    // if the conversation is not selected or does not have a token,
+                    // don't emit an update.
+                    if !ai_context_model
+                        .as_ref(ctx)
+                        .selected_conversation_id(ctx)
+                        .is_some_and(|sel| sel == *conversation_id)
+                    {
+                        return;
+                    }
+                    if history_model
+                        .as_ref(ctx)
+                        .conversation(conversation_id)
+                        .and_then(|c| c.server_conversation_token())
+                        .is_none()
+                    {
+                        return;
+                    }
+
+                    TerminalManager::<TerminalView>::send_selected_conversation_update_for_sharer(
+                        &session_sharer_for_stream_init,
+                        &agent_view_controller,
+                        &ai_context_model,
+                        ctx,
+                    );
+                }
+                BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { terminal_view_id } => {
+                    if *terminal_view_id != view_id_for_stream_init {
+                        return;
+                    }
+
+                    if !auto_approve_remote_update_guard.should_broadcast() {
+                        return;
+                    }
+
+                    let Some(view) = weak_view_for_stream_init.upgrade(ctx) else {
+                        return;
+                    };
+                    let ai_context_model = view.as_ref(ctx).ai_context_model().clone();
+
+                    if let Some(network) = session_sharer_for_stream_init.borrow().as_ref() {
+                        let auto_approve = ai_context_model
+                            .as_ref(ctx)
+                            .pending_query_autoexecute_override(ctx)
+                            .is_autoexecute_any_action();
+
+                        network.update(ctx, |network, _| {
+                            network.send_universal_developer_input_context_update(
+                                UniversalDeveloperInputContextUpdate {
+                                    auto_approve_agent_actions: Some(auto_approve),
+                                    ..Default::default()
+                                },
+                            );
+                        });
+                    }
+                }
+                // Upgrade a manual `User` share's sidecar `source_task_id`
+                // from `None` to `Some(_)` once the active conversation
+                // gets its `task_id`, so inherited child shares can
+                // discover the orchestrator task. Existing viewers stay
+                // on the old value (the protocol has no
+                // `UpdateSourceType` upstream message) until they
+                // reconnect.
+                BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+                    terminal_view_id,
+                    conversation_id,
+                } => {
+                    if *terminal_view_id != view_id_for_stream_init {
+                        return;
+                    }
+
+                    let Some(view) = weak_view_for_stream_init.upgrade(ctx) else {
+                        return;
+                    };
+
+                    let model = view.as_ref(ctx).model.clone();
+                    let needs_upgrade = {
+                        let model_lock = model.lock();
+                        model_lock.shared_session_source().is_some_and(|s| {
+                            matches!(s.source_type, SessionSourceType::User)
+                                && s.source_task_id.is_none()
+                        })
+                    };
+                    if !needs_upgrade {
+                        return;
+                    }
+
+                    let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(conversation_id)
+                        .and_then(|c| c.task_id());
+                    let Some(task_id) = task_id else {
+                        return;
+                    };
+
+                    model
+                        .lock()
+                        .set_shared_session_source_task_id(Some(task_id.to_string()));
+                }
+                _ => {}
+            }
+        },
+    );
+
+    // Always wire up the model but check the flag when a share is attempted.
+    TerminalManager::<TerminalView>::wire_up_session_sharer_with_view(
+        view,
+        prompt_type,
+        session_sharer.clone(),
+        model.clone(),
+        window_id,
+        sharer_remote_update_guard,
+        ctx,
+    );
+
+    TerminalManager::<TerminalView>::handle_network_status_events(
+        view,
+        session_sharer.clone(),
+        ctx,
+    );
+
+    session_sharer
 }
 
 impl TerminalManager<TerminalView> {
@@ -2852,10 +2845,6 @@ pub fn shutdown_all_pty_event_loops(ctx: &mut AppContext) {
 impl crate::terminal::TerminalManager for TerminalManager<TerminalView> {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
-    }
-
-    fn view(&self) -> ViewHandle<TerminalView> {
-        self.view.clone()
     }
 
     fn on_view_detached(

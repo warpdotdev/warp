@@ -34,7 +34,7 @@ pub struct TerminalManager {
 
     _event_loop: ModelHandle<EventLoop>,
 
-    view: ViewHandle<TerminalView>,
+    _view: ViewHandle<TerminalView>,
 }
 
 impl TerminalManager {
@@ -46,7 +46,10 @@ impl TerminalManager {
         window_id: WindowId,
         initial_input_config: Option<InputConfig>,
         ctx: &mut AppContext,
-    ) -> ModelHandle<Box<dyn crate::terminal::TerminalManager>> {
+    ) -> (
+        ModelHandle<Box<dyn crate::terminal::TerminalManager>>,
+        ViewHandle<TerminalView>,
+    ) {
         // Create all the necessary channels we need for communication.
         let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
         let (events_tx, events_rx) = async_channel::unbounded();
@@ -136,18 +139,23 @@ impl TerminalManager {
             ctx,
         );
 
+        // Clone the view before moving it into the manager so the caller can
+        // receive it alongside the boxed manager.
+        let terminal_view = view.clone();
+
         // Create the terminal manager itself.
         let terminal_manager = Self {
             model,
-            view,
+            _view: view,
             _pty_controller: pty_controller,
             _event_loop: event_loop,
         };
 
-        ctx.add_model(|_ctx| {
+        let manager_model = ctx.add_model(|_ctx| {
             let manager: Box<dyn crate::terminal::TerminalManager> = Box::new(terminal_manager);
             manager
-        })
+        });
+        (manager_model, terminal_view)
     }
 
     fn create_and_start_event_loop(
@@ -172,10 +180,6 @@ impl TerminalManager {
 impl super::super::TerminalManager for TerminalManager {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
-    }
-
-    fn view(&self) -> ViewHandle<TerminalView> {
-        self.view.clone()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

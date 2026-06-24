@@ -25762,7 +25762,6 @@ impl From<&Event> for Option<PtyIntent> {
 
 impl TerminalSurface for TerminalView {
     fn on_shell_determined(&mut self, ctx: &mut ViewContext<Self>) {
-        // The GUI surface owns the bootstrap timer; delegate to the existing method.
         TerminalView::on_shell_determined(self, ctx);
     }
 

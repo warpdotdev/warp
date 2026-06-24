@@ -201,7 +201,7 @@ impl TerminalManager {
         enable_orchestration_polling: bool,
         is_cloud_mode: bool,
         ctx: &mut AppContext,
-    ) -> Self {
+    ) -> (Self, ViewHandle<TerminalView>) {
         // Create all the necessary channels we need for communication.
         let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
         let (events_tx, events_rx) = async_channel::unbounded();
@@ -301,7 +301,8 @@ impl TerminalManager {
             );
         });
 
-        Self {
+        let terminal_view = view.clone();
+        let manager = Self {
             model,
             _model_events: model_events,
             view,
@@ -316,7 +317,8 @@ impl TerminalManager {
             outbound_handlers_registered: false,
             orchestration_viewer_model: Arc::new(FairMutex::new(None)),
             enable_orchestration_polling,
-        }
+        };
+        (manager, terminal_view)
     }
 
     /// Create a new terminal manager for viewing a shared session. See
@@ -336,8 +338,8 @@ impl TerminalManager {
         enable_orchestration_polling: bool,
         is_cloud_mode: bool,
         ctx: &mut AppContext,
-    ) -> Self {
-        let mut terminal_manager = Self::new_internal(
+    ) -> (Self, ViewHandle<TerminalView>) {
+        let (mut terminal_manager, terminal_view) = Self::new_internal(
             resources,
             initial_size,
             window_id,
@@ -352,7 +354,7 @@ impl TerminalManager {
             ctx,
         );
 
-        terminal_manager
+        (terminal_manager, terminal_view)
     }
 
     /// Create a new terminal manager for eventually viewing a cloud mode
@@ -364,7 +366,7 @@ impl TerminalManager {
         window_id: WindowId,
         enable_orchestration_polling: bool,
         ctx: &mut AppContext,
-    ) -> Self {
+    ) -> (Self, ViewHandle<TerminalView>) {
         Self::new_internal(
             resources,
             initial_size,
@@ -1776,10 +1778,6 @@ impl TerminalManager {
 impl crate::terminal::TerminalManager for TerminalManager {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
-    }
-
-    fn view(&self) -> ViewHandle<TerminalView> {
-        self.view.clone()
     }
 
     fn on_view_detached(&self, detach_type: DetachType, app: &mut AppContext) {

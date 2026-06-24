@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use async_channel::Receiver;
 use parking_lot::FairMutex;
-use warpui::{AppContext, Entity, ModelHandle, ViewHandle};
+use warpui::{AppContext, ModelHandle, ViewHandle};
 
 use crate::persistence::ModelEvent;
 use crate::terminal::line_editor_status::LineEditorStatus;
@@ -12,7 +12,7 @@ use crate::terminal::model::terminal_model::ExitReason;
 use crate::terminal::writeable_pty::command_history::update_command_history;
 use crate::terminal::writeable_pty::pty_controller::EventLoopSender;
 use crate::terminal::writeable_pty::{
-    PtyController, PtyControllerEvent, PtyIntent, TerminalSurface,
+    PtyController, PtyControllerEvent, PtyIntent, PtyIntentEvent, TerminalSurface,
 };
 use crate::terminal::{view, ModelEventDispatcher, TerminalModel, TerminalView};
 
@@ -31,7 +31,7 @@ pub fn wire_up_pty_controller_with_surface<T: EventLoopSender, S: TerminalSurfac
     model_event_sender: Option<SyncSender<ModelEvent>>,
     ctx: &mut AppContext,
 ) where
-    for<'a> Option<PtyIntent>: From<&'a <S as Entity>::Event>,
+    <S as warpui::Entity>::Event: PtyIntentEvent,
 {
     let controller_weak_handle = pty_controller.downgrade();
     let surface_weak_handle = surface.downgrade();
@@ -45,7 +45,7 @@ pub fn wire_up_pty_controller_with_surface<T: EventLoopSender, S: TerminalSurfac
             return;
         };
 
-        let Some(intent) = Option::<PtyIntent>::from(event) else {
+        let Some(intent) = event.pty_intent() else {
             return;
         };
 

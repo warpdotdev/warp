@@ -16,10 +16,10 @@ use crate::terminal::{ShellLaunchData, SizeUpdate};
 
 /// A normalized request from a terminal UI surface to the PTY controller.
 ///
-/// This is the intentionally narrow vocabulary that `TerminalManager` uses to
-/// drive the PTY without knowing the concrete UI implementation. It only
-/// contains actions meaningful to the PTY/session boundary: process control,
-/// byte writes, resizing, command execution, and native shell completions.
+/// This is the narrow vocabulary that `TerminalManager` uses to drive the PTY
+/// without knowing the concrete UI implementation. It only contains actions
+/// meaningful to the PTY/session boundary: process control, byte writes,
+/// resizing, command execution, and native shell completions.
 pub(crate) enum PtyIntent {
     CtrlD,
     ShutdownPty,
@@ -36,16 +36,38 @@ pub(crate) enum PtyIntent {
     },
 }
 
-/// A UI surface driven by `TerminalManager` for a terminal frontend.
+/// Event types that can be projected into an [`Option<PtyIntent>`].
 ///
-/// `TerminalView` is the only implementation in this PR. A future TUI root can
-/// implement the same contract without making `TerminalManager` depend on the
-/// GUI view type. Each surface defines how its own event type collapses into a
-/// PTY/session intent via `From<&Self::Event> for Option<PtyIntent>`.
+/// The blanket impl keeps the `From<&T> for Option<PtyIntent>` pattern as the
+/// single source of truth while exposing a direct method so generic call sites
+/// avoid repeating the higher-ranked `for<'a>` bound.
+pub(crate) trait PtyIntentEvent {
+    /// Projects this event into a PTY/session intent, or `None` if it is not a
+    /// PTY-driving event.
+    fn pty_intent(&self) -> Option<PtyIntent>;
+}
+
+impl<T> PtyIntentEvent for T
+where
+    for<'a> Option<PtyIntent>: From<&'a T>,
+{
+    fn pty_intent(&self) -> Option<PtyIntent> {
+        Option::<PtyIntent>::from(self)
+    }
+}
+
+/// A terminal frontend surface driven by `TerminalManager`.
+///
+/// Each surface defines how its own event type collapses into a PTY/session
+/// intent via `From<&Self::Event> for Option<PtyIntent>`.
 pub(crate) trait TerminalSurface: View + 'static
 where
-    for<'a> Option<PtyIntent>: From<&'a <Self as Entity>::Event>,
+    <Self as Entity>::Event: PtyIntentEvent,
 {
+    /// Whether the local manager should poll termios for a password prompt after a block starts.
+    #[cfg(unix)]
+    fn should_poll_for_password_prompt(&self, ctx: &AppContext) -> bool;
+
     /// Called once the shell starter has been determined and the PTY event loop
     /// has started, so the surface can react to shell launch metadata.
     fn on_shell_determined(&mut self, ctx: &mut ViewContext<Self>);
@@ -59,10 +81,6 @@ where
 
     /// Called when the PTY fails to spawn so the surface can surface the error.
     fn on_pty_spawn_failed(&mut self, error: anyhow::Error, ctx: &mut ViewContext<Self>);
-
-    /// Whether the local manager should poll termios for a password prompt after a block starts.
-    #[cfg(unix)]
-    fn should_poll_for_password_prompt(&self, ctx: &AppContext) -> bool;
 
     /// Called when termios indicates a likely password prompt is blocking the active block.
     #[cfg(unix)]
