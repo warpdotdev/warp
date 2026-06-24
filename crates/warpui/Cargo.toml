@@ -14,6 +14,7 @@ license = "MIT"
 enable-metal-frame-capture = []
 # Enables the font-kit rasterizer on Windows.
 fontkit-rasterizer = []
+hot-reload = ["warpui_core/hot-reload", "dep:subsecond", "dep:tungstenite", "dep:serde", "dep:serde_json"]
 traces = ["warpui_core/traces"]
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = ["warpui_core/integration_tests"]
@@ -140,6 +141,10 @@ rand.workspace = true
 async-io.workspace = true
 ctrlc.workspace = true
 font-kit.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+subsecond = { workspace = true, optional = true }
+tungstenite = { version = "0.24", optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 bimap = "0.6.2"

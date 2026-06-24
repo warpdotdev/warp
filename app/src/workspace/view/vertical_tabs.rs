@@ -1634,6 +1634,19 @@ fn render_new_tab_button(
     .finish()
 }
 
+/// Hot-reload probe: returns the background fill for the vertical tabs panel.
+///
+/// With `dx serve --hot-patch --features hot-reload`, edits to this function
+/// take effect live (no restart). Try changing the opacity or returning a
+/// different color to see the left panel update within ~400ms.
+///
+/// Example change: `internal_colors::fg_overlay_3(warp_theme)` gives a darker
+/// tint; `warp_theme.foreground().with_opacity(20)` is even more visible.
+fn vtabs_panel_bg(warp_theme: &WarpTheme) -> WarpThemeFill {
+    //internal_colors::fg_overlay_1(warp_theme)
+    warp_theme.ui_error_color().into()
+}
+
 fn render_vertical_tabs_panel(
     state: &VerticalTabsPanelState,
     workspace: &Workspace,
@@ -1678,9 +1691,16 @@ fn render_vertical_tabs_panel(
     };
     // Wrap the panel in a `Hoverable` so right-clicking the empty area of the
     // vertical tabs panel opens the tab configs dropdown.
+    // Use HotFn to redirect vtabs_panel_bg() through the subsecond jump table when
+    // hot-reload is active, so live edits to vtabs_panel_bg() take effect immediately.
+    #[cfg(feature = "hot-reload")]
+    let panel_bg = subsecond::HotFn::current(vtabs_panel_bg).call((theme,));
+    #[cfg(not(feature = "hot-reload"))]
+    let panel_bg = vtabs_panel_bg(theme);
+
     let inner = Hoverable::new(state.panel_right_click_mouse_state.clone(), |_| {
         Container::new(panel_with_popup)
-            .with_background(internal_colors::fg_overlay_1(theme))
+            .with_background(panel_bg)
             .finish()
     })
     .on_right_click(|ctx, _, position| {

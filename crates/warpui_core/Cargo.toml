@@ -14,6 +14,7 @@ integration_tests = ["dep:minimp4", "dep:openh264"]
 # When enabled, skip eager scene building from the window-invalidation callback
 # and rely on the normal platform redraw path instead; see core/app.rs.
 defer_scene_build = []
+hot-reload = ["dep:subsecond"]
 # If enabled, writes named telemetry events to the info log.  Should never be
 # enabled in release builds without a PII audit of telemetry data.
 log_named_telemetry_events = []
@@ -100,6 +101,7 @@ warpui_core = { path = ".", features = ["test-util"] }
 async-io.workspace = true
 ctrlc.workspace = true
 font-kit.workspace = true
+subsecond = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies]

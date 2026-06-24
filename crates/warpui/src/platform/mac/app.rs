@@ -269,6 +269,19 @@ pub unsafe extern "C-unwind" fn warp_app_will_finish_launching(this: &mut Object
         app.callbacks.initialize_app(init_fn);
     }
 
+    // Connect the subsecond hot-reload WebSocket client.  We do this after
+    // `initialize_app` so the app is fully set up before any patch could land.
+    // The wake closure posts `invalidate_all_views` to the main GCD queue so
+    // the NSRunLoop picks it up on its next pass.
+    #[cfg(all(feature = "hot-reload", not(target_family = "wasm")))]
+    crate::hot_reload::connect(move || {
+        dispatch::Queue::main().exec_async(|| {
+            callback_dispatcher().with_mutable_app_context(|ctx| {
+                ctx.invalidate_all_views();
+            });
+        });
+    });
+
     let app_delegate = ns_app
         .delegate()
         .expect("the warp app always has a delegate");

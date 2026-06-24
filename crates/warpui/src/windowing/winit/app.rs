@@ -177,6 +177,16 @@ impl App {
             .build()
             .expect("should be able to create event loop");
 
+        #[cfg(all(feature = "hot-reload", not(target_family = "wasm")))]
+        {
+            let proxy = event_loop.create_proxy();
+            crate::hot_reload::connect(move || {
+                let _ = proxy.send_event(CustomEvent::UpdateUIApp(Box::new(|ctx| {
+                    ctx.invalidate_all_views();
+                })));
+            });
+        }
+
         // Initialize the wgpu instance with the event loop's display handle.
         crate::rendering::wgpu::init_wgpu_instance(Box::new(event_loop.owned_display_handle()));
 

@@ -24,6 +24,8 @@ impl AssetProvider for Assets {
 }
 
 fn main() -> Result<()> {
+    // To develop with hot-reloading, install the Dioxus CLI and run:
+    //   dx serve --hot-patch --package warpui --example flex --features hot-reload
     let app_builder =
         platform::AppBuilder::new(platform::AppCallbacks::default(), Box::new(ASSETS), None);
     let _ = app_builder.run(move |ctx| {

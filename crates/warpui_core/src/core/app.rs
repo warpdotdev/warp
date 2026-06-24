@@ -4742,6 +4742,9 @@ impl AppContext {
         match window.views.get(&view_id) {
             Some(StoredView::Gui(view)) => {
                 Ok(autotracking::render_view(window_id, view_id, || {
+                    #[cfg(feature = "hot-reload")]
+                    return subsecond::call(|| view.render(self));
+                    #[cfg(not(feature = "hot-reload"))]
                     view.render(self)
                 }))
             }

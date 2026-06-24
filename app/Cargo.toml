@@ -30,6 +30,7 @@ test = false
 [[bin]]
 name = "integration"
 path = "src/bin/integration.rs"
+required-features = ["integration_tests"]
 test = false
 
 [[bin]]
@@ -242,6 +243,7 @@ warp_server_auth.workspace = true
 warp_server_client.workspace = true
 warp_util.workspace = true
 warpui = { workspace = true, features = ["schema_gen", "settings_value"] }
+subsecond = { workspace = true, optional = true }
 warpui_core.workspace = true
 voice_input = { workspace = true, optional = true }
 warpui_extras = { workspace = true, features = ["default", "user_preferences-toml"] }
@@ -461,6 +463,7 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
+hot-reload = ["warpui/hot-reload", "dep:subsecond"]
 ai_resume_button = []
 autoupdate = []
 figma_detection = []

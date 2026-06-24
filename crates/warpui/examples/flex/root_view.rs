@@ -35,7 +35,7 @@ impl RootView {
                         .with_height(50.)
                         .finish(),
                 )
-                .with_background_color(ColorU::new(255, 0, 0, 255))
+                .with_background_color(ColorU::new(255, 165, 0, 255))
                 .finish(),
             )
             .with_child(
