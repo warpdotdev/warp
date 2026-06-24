@@ -123,6 +123,8 @@ export WARP_PLIST_PATH="$WARP_APP_PATH/Contents/Info.plist"
 echo "Preparing bundled resources..."
 if [ "${GENERATE_SCHEMA:-false}" != "true" ]; then
   export SKIP_SETTINGS_SCHEMA=1
+else
+  export SETTINGS_SCHEMA_EXECUTABLE="$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
 fi
 NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" "$WARP_APP_PATH/Contents/Resources" "$WARP_CHANNEL"
 

@@ -249,6 +249,16 @@ if ($SKIP_BUILD_INSTALLER) {
 Write-Output "Built for $ARCH with executable at $BINARY_PATH"
 
 # Prepare bundled resources
+if ($env:SKIP_SETTINGS_SCHEMA -ne '1' -and -not $env:SETTINGS_SCHEMA_EXECUTABLE -and -not $env:SETTINGS_SCHEMA_SOURCE) {
+    if ($IS_TUI) {
+        Write-Error 'TUI bundles require SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE.'
+        exit 1
+    } elseif ($SKIP_BUILD_BINARY) {
+        Write-Error '-skip_build_binary requires SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE.'
+        exit 1
+    }
+    $env:SETTINGS_SCHEMA_EXECUTABLE = $BINARY_PATH
+}
 $BUNDLED_RESOURCES_DIR = "$CARGO_TARGET_OUTPUT_DIR\resources"
 Write-Output 'Preparing bundled resources...'
 & "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL" -CargoProfile "$CARGO_PROFILE"

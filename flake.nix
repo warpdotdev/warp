@@ -155,8 +155,6 @@
               "warp"
               "--bin"
               "warp-oss"
-              "--bin"
-              "generate_settings_schema"
             ];
             inherit buildFeatures;
 
@@ -175,7 +173,7 @@
               let
                 installDir = "$out/opt/warpdotdev/warp-terminal-experimental";
                 resourcesDir = "${installDir}/resources";
-                releaseChannel = "stable";
+                releaseChannel = "oss";
                 libraryPath = lib.makeLibraryPath linuxRuntimeLibraries;
                 executablePath = lib.makeBinPath (with pkgs; [ xdg-utils ]);
               in
@@ -187,15 +185,10 @@
                   ./script/prepare_bundled_resources \
                   ./script/copy_conditional_skills
 
-                SKIP_SETTINGS_SCHEMA=1 ./script/prepare_bundled_resources \
+                SETTINGS_SCHEMA_EXECUTABLE="${installDir}/warp-oss" ./script/prepare_bundled_resources \
                   "${resourcesDir}" \
                   "${releaseChannel}" \
                   release
-
-                "$out/bin/generate_settings_schema" \
-                  --channel "${releaseChannel}" \
-                  "${resourcesDir}/settings_schema.json"
-                rm -f "$out/bin/generate_settings_schema"
 
                 install -Dm644 \
                   "${resourcesDir}/THIRD_PARTY_LICENSES.txt" \

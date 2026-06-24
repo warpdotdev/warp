@@ -162,21 +162,40 @@ foreach ($entry in $AdditionalLicenses) {
 # Generate settings JSON schema unless explicitly skipped.
 if ($env:SKIP_SETTINGS_SCHEMA -ne '1') {
     $SchemaOutput = Join-Path $DestinationDir 'settings_schema.json'
-    Write-Output "Generating settings schema at $SchemaOutput"
 
-    $SchemaCmd = @('run')
-    if ($CargoProfile) {
-        $SchemaCmd += @('--profile', $CargoProfile)
+    if ($env:SETTINGS_SCHEMA_EXECUTABLE -and $env:SETTINGS_SCHEMA_SOURCE) {
+        Write-Error 'SETTINGS_SCHEMA_EXECUTABLE and SETTINGS_SCHEMA_SOURCE are mutually exclusive.'
+        exit 1
+    } elseif ($env:SETTINGS_SCHEMA_EXECUTABLE) {
+        if (-Not (Test-Path $env:SETTINGS_SCHEMA_EXECUTABLE -PathType Leaf)) {
+            Write-Error "Settings schema executable does not exist: $env:SETTINGS_SCHEMA_EXECUTABLE"
+            exit 1
+        }
+        Write-Output "Generating settings schema at $SchemaOutput"
+        $Process = Start-Process `
+            -FilePath $env:SETTINGS_SCHEMA_EXECUTABLE `
+            -ArgumentList @('dump-settings-schema', $SchemaOutput) `
+            -NoNewWindow `
+            -PassThru `
+            -Wait
+        if ($Process.ExitCode -ne 0) {
+            Write-Error "Failed to generate settings schema: executable exited with code $($Process.ExitCode)"
+            exit 1
+        }
+    } elseif ($env:SETTINGS_SCHEMA_SOURCE) {
+        if (-Not (Test-Path $env:SETTINGS_SCHEMA_SOURCE -PathType Leaf)) {
+            Write-Error "Settings schema source does not exist: $env:SETTINGS_SCHEMA_SOURCE"
+            exit 1
+        }
+        Write-Output "Copying settings schema to $SchemaOutput"
+        Copy-Item -Path $env:SETTINGS_SCHEMA_SOURCE -Destination $SchemaOutput -Force
+    } else {
+        Write-Error 'Set SETTINGS_SCHEMA_EXECUTABLE or SETTINGS_SCHEMA_SOURCE when preparing a settings schema.'
+        exit 1
     }
-    $SchemaCmd += @('--manifest-path', (Join-Path $RepoRoot 'Cargo.toml'), '--bin', 'generate_settings_schema', '--')
-    if ($Channel) {
-        $SchemaCmd += @('--channel', $Channel)
-    }
-    $SchemaCmd += $SchemaOutput
 
-    & cargo @SchemaCmd
-    if (-Not $?) {
-        Write-Error 'Failed to generate settings schema'
+    if (-Not (Test-Path $SchemaOutput -PathType Leaf) -or (Get-Item $SchemaOutput).Length -eq 0) {
+        Write-Error "Settings schema was not written to $SchemaOutput"
         exit 1
     }
 }

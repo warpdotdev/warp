@@ -28,6 +28,8 @@ mod onboarding;
 mod pane;
 mod privacy;
 mod same_line_prompt_block;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod schema_generation;
 mod scroll;
 mod select;
 mod shared_object_limit_banner;

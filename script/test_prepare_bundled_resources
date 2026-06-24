@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+set -e
+
+WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEMP_DIR"' EXIT
+
+FAKE_EXECUTABLE="$TEMP_DIR/warp"
+cat > "$FAKE_EXECUTABLE" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" != "dump-settings-schema" || -z "$2" ]]; then
+  exit 1
+fi
+printf '{"source":"executable"}' > "$2"
+EOF
+chmod +x "$FAKE_EXECUTABLE"
+
+EXECUTABLE_DESTINATION="$TEMP_DIR/from-executable"
+NO_LICENSES=1 \
+  SETTINGS_SCHEMA_EXECUTABLE="$FAKE_EXECUTABLE" \
+  "$WORKSPACE_ROOT/script/prepare_bundled_resources" "$EXECUTABLE_DESTINATION" dev
+grep -qx '{"source":"executable"}' "$EXECUTABLE_DESTINATION/settings_schema.json"
+
+SOURCE_SCHEMA="$TEMP_DIR/source-schema.json"
+printf '{"source":"file"}' > "$SOURCE_SCHEMA"
+SOURCE_DESTINATION="$TEMP_DIR/from-source"
+NO_LICENSES=1 \
+  SETTINGS_SCHEMA_SOURCE="$SOURCE_SCHEMA" \
+  "$WORKSPACE_ROOT/script/prepare_bundled_resources" "$SOURCE_DESTINATION" dev
+cmp "$SOURCE_SCHEMA" "$SOURCE_DESTINATION/settings_schema.json"
+
+if NO_LICENSES=1 "$WORKSPACE_ROOT/script/prepare_bundled_resources" "$TEMP_DIR/missing-input" dev; then
+  echo "Expected resource preparation without a schema input to fail." >&2
+  exit 1
+fi
+
+if NO_LICENSES=1 \
+  SETTINGS_SCHEMA_EXECUTABLE="$FAKE_EXECUTABLE" \
+  SETTINGS_SCHEMA_SOURCE="$SOURCE_SCHEMA" \
+  "$WORKSPACE_ROOT/script/prepare_bundled_resources" "$TEMP_DIR/conflicting-inputs" dev; then
+  echo "Expected conflicting schema inputs to fail." >&2
+  exit 1
+fi
