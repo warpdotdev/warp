@@ -62,7 +62,7 @@ The Warp team is shipping cross-window tab drag (hotkey→standard direction) co
 - **Multi-selection active:** All selected tabs transfer together. If no multi-selection, only the active tab transfers.
 - **Hotkey window closed at invocation:** Opened programmatically first.
 - **No standard window available:** A new standard window is created.
-- **Stale window ID:** Verified with `ctx.is_window_open(id)` at invocation time.
+- **Stale window ID:** Quake window existence and visibility verified via `quake_mode_window_is_open()` at invocation time.
 
 ## Success criteria
 
