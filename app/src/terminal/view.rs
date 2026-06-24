@@ -11319,7 +11319,11 @@ impl TerminalView {
                 && is_done_bootstrapping
             {
                 let shell_launch_data = self.shell_launch_data_if_local(ctx);
-                self.on_active_shell_launch_data_updated(shell_launch_data, ctx);
+                <Self as TerminalSurface>::on_active_shell_launch_data_updated(
+                    self,
+                    shell_launch_data,
+                    ctx,
+                );
             }
 
             // Check if the block is done bootstrapping and the directory is set.
@@ -15816,15 +15820,6 @@ impl TerminalView {
         }
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    pub(super) fn on_shell_determined(&self, ctx: &mut ViewContext<Self>) {
-        if !self.model.lock().shared_session_status().is_viewer() {
-            // Start a timer for the initial session bootstrapping, so that we can log and show a
-            // banner to the user if the bootstrapping takes too long
-            self.start_bootstrap_timer(BOOTSTRAP_FAILED_DURATION, ctx);
-        }
-    }
-
     pub fn is_login_shell_bootstrapped(&self) -> bool {
         self.is_login_shell_bootstrapped
     }
@@ -15846,24 +15841,6 @@ impl TerminalView {
     /// guided tutorial.
     pub fn clear_enter_agent_view_after_pending_commands(&mut self) {
         self.enter_agent_view_after_pending_commands = false;
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    pub(super) fn on_pty_spawn_failed(
-        &mut self,
-        pty_spawn_error: anyhow::Error,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.pty_spawn_failed = true;
-        // Emit before the banner so the terminal driver can cancel its
-        // bootstrap wait immediately, without waiting for the 60 s timeout.
-        let reason = format!("{pty_spawn_error:#}");
-        ctx.emit(Event::PtySpawnFailed { reason });
-        self.insert_shell_process_terminated_banner(
-            shell_terminated_banner::TerminationType::PtySpawnFailure { pty_spawn_error },
-            ctx,
-        );
-        ctx.notify();
     }
 
     /// Start a timer so that we can detect when a session does not bootstrap in a timely manner
@@ -25607,30 +25584,6 @@ impl TerminalView {
         }
     }
 
-    /// Parses the shell launch data and sets the necessary fields so a shell
-    /// indicator is rendered in the tab bar and pane header. Does nothing on
-    /// non-Windows platforms.
-    pub fn on_active_shell_launch_data_updated(
-        &mut self,
-        shell_launch_data: Option<ShellLaunchData>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if !cfg!(windows) {
-            return;
-        }
-
-        let shell_indicator_type = shell_launch_data
-            .as_ref()
-            .and_then(|data| ShellIndicatorType::try_from(data).ok());
-        self.shell_indicator_type = shell_indicator_type;
-        self.shell_detail = shell_launch_data.map(|launch_data| launch_data.shell_detail());
-
-        // Notify pane header to re-render with updated shell indicator.
-        self.pane_configuration.update(ctx, |config, ctx| {
-            config.notify_header_content_changed(ctx);
-        });
-    }
-
     pub fn shell_indicator_type(&self) -> Option<ShellIndicatorType> {
         self.shell_indicator_type
     }
@@ -25762,7 +25715,11 @@ impl From<&Event> for Option<PtyIntent> {
 
 impl TerminalSurface for TerminalView {
     fn on_shell_determined(&mut self, ctx: &mut ViewContext<Self>) {
-        TerminalView::on_shell_determined(self, ctx);
+        if !self.model.lock().shared_session_status().is_viewer() {
+            // Start a timer for the initial session bootstrapping, so that we can log and show a
+            // banner to the user if the bootstrapping takes too long
+            self.start_bootstrap_timer(BOOTSTRAP_FAILED_DURATION, ctx);
+        }
     }
 
     fn on_active_shell_launch_data_updated(
@@ -25770,11 +25727,35 @@ impl TerminalSurface for TerminalView {
         shell_launch_data: Option<ShellLaunchData>,
         ctx: &mut ViewContext<Self>,
     ) {
-        TerminalView::on_active_shell_launch_data_updated(self, shell_launch_data, ctx);
+        if !cfg!(windows) {
+            return;
+        }
+
+        let shell_indicator_type = shell_launch_data
+            .as_ref()
+            .and_then(|data| ShellIndicatorType::try_from(data).ok());
+        self.shell_indicator_type = shell_indicator_type;
+        self.shell_detail = shell_launch_data.map(|launch_data| launch_data.shell_detail());
+
+        // Notify pane header to re-render with updated shell indicator.
+        self.pane_configuration.update(ctx, |config, ctx| {
+            config.notify_header_content_changed(ctx);
+        });
     }
 
     fn on_pty_spawn_failed(&mut self, error: anyhow::Error, ctx: &mut ViewContext<Self>) {
-        TerminalView::on_pty_spawn_failed(self, error, ctx);
+        self.pty_spawn_failed = true;
+        // Emit before the banner so the terminal driver can cancel its
+        // bootstrap wait immediately, without waiting for the 60 s timeout.
+        let reason = format!("{error:#}");
+        ctx.emit(Event::PtySpawnFailed { reason });
+        self.insert_shell_process_terminated_banner(
+            shell_terminated_banner::TerminationType::PtySpawnFailure {
+                pty_spawn_error: error,
+            },
+            ctx,
+        );
+        ctx.notify();
     }
 
     #[cfg(unix)]
