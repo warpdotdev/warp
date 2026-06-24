@@ -101,6 +101,10 @@ pub enum CustomEvent {
     MomentumScroll {
         window_id: winit::window::WindowId,
     },
+    /// Smooth (animated) mouse-wheel scrolling animation frame.
+    SmoothScroll {
+        window_id: winit::window::WindowId,
+    },
 }
 
 #[derive(Debug)]

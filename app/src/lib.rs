@@ -1513,6 +1513,10 @@ pub(crate) fn initialize_app(
         apply_scroll_multiplier(event, ctx);
     });
 
+    // Initialize the windowing layer's smooth-scrolling flag from the persisted setting. Live
+    // toggles keep it in sync from the Settings UI (see FeaturesPageAction::ToggleSmoothScrolling).
+    warpui::set_smooth_scroll_enabled(*ScrollSettings::as_ref(ctx).smooth_scrolling);
+
     // Rewrite recognized Warp web URLs (sessions, Drive, settings, home) into local
     // intent URLs when possible so they open directly in the desktop app.
     ctx.set_before_open_url(|url_str, _ctx| {

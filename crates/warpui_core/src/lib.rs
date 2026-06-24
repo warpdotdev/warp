@@ -23,6 +23,7 @@ pub mod prelude;
 pub mod presenter;
 pub mod rendering;
 pub mod scene;
+pub mod smooth_scroll;
 pub mod telemetry;
 #[cfg(test)]
 mod test;
@@ -48,6 +49,7 @@ pub use presenter::{
     AfterLayoutContext, EventContext, LayoutContext, PaintContext, Presenter, SizeConstraint,
 };
 pub use scene::{ClipBounds, Scene};
+pub use smooth_scroll::{set_smooth_scroll_enabled, smooth_scroll_enabled};
 pub use zoom::ZoomFactor;
 
 pub use crate::core::*;
