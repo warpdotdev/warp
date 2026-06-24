@@ -20399,26 +20399,16 @@ impl Workspace {
                     || is_any_group_dragging,
                 hover_fixed_width,
             };
-            // Collapse the detached-placeholder slot to 0 width while it
-            // exists in this (source) window. After a put-back handoff the
-            // placeholder has been removed and the real tab re-inserted at a
-            // different index, so `source_placeholder_tab_index()` returns
-            // `None` and nothing is hidden — otherwise the stale
-            // `source_tab_index` would collapse an unrelated tab (e.g. the
-            // first tab shifting into that slot after a leftward put-back).
-            let transferred_tab_index = if drag_model.is_active()
-                && drag_model.source_window_id() == Some(self.window_id)
-            {
-                let has_dedicated_preview = drag_model.has_dedicated_preview_window();
-                let has_handoff = drag_model.handed_off_target().is_some();
-                if has_dedicated_preview || has_handoff {
-                    drag_model.source_placeholder_tab_index()
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            // The detached-placeholder slot in this (source) window is
+            // collapsed to zero width only while the dragged tab is actually
+            // away (floating in the preview, or ghosted / handed off to
+            // another window). While the cursor is back over this window's own
+            // tab bar the placeholder is reordered in place like an in-window
+            // drag and must stay full width, otherwise the drop zone vanishes
+            // and the slot oscillates ("fuzzy shake"). See
+            // `CrossWindowTabDrag::collapsed_source_placeholder_index`.
+            let transferred_tab_index =
+                drag_model.collapsed_source_placeholder_index(self.window_id);
             // Ghost state for cross-window drag hovering over this tab bar.
             let ghost = drag_model.ghost_state_for_window(self.window_id);
 
