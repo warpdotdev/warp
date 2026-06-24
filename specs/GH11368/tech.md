@@ -42,8 +42,8 @@ To resolve this, we must wire `CLIAgent::Antigravity` into the terminal's agent 
    - `supported_skill_providers()`: returns `&[]` (no skills integration yet).
    - `skill_command_prefix()`: Falls through to wildcard `_ => "/"`.
    - `supports_bash_mode()`: Falls through to `false`.
-   - `brand_color()`: returns `Some(ColorU::from_rgb(0x63, 0x66, 0xF1))` (Indigo brand color). Add an `ANTIGRAVITY_INDIGO` constant at module level.
-   - `brand_icon_color()`: Falls through to wildcard `_ => ColorU::white()`.
+   - `brand_color()`: returns `Some(ANTIGRAVITY_COLOR)`, matching Pi's white monochrome brand tile color. Add an `ANTIGRAVITY_COLOR` constant at module level.
+   - `brand_icon_color()`: returns `ColorU::new(0, 0, 0, 255)`, matching Pi's black logo color on light brand tiles.
    - `detect()`: Works automatically via `enum_iterator::Sequence` and prefix `"agy"`.
 3. Add `CLIAgent::Antigravity => CLIAgentType::Antigravity` to the telemetry conversion. Add an `Antigravity` variant to `CLIAgentType` in `app/src/server/telemetry/events.rs`.
 

@@ -18,7 +18,7 @@ Note: Richer notifications (OSC 777) and plugin installation are deferred until 
 ## Goals
 
 - Native command detection: typing or running `agy` triggers Agent Mode immediately.
-- Custom branding: render the dedicated Antigravity toolbar with custom colors (Indigo `#6366F1`) and a custom logo.
+- Custom branding: render the dedicated Antigravity toolbar with the same monochrome treatment as Pi: a white brand tile and a black custom logo.
 
 ## Non-Goals
 
