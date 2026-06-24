@@ -344,6 +344,31 @@ elif [[ "$ARTIFACT" == "tui" ]]; then
   BINARY_PATH="$OUT_DIR/$WARP_BIN"
 fi
 
+if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -z "${SETTINGS_SCHEMA_EXECUTABLE:-}" && -z "${SETTINGS_SCHEMA_SOURCE:-}" ]]; then
+  if [[ "$ARTIFACT" == "tui" ]]; then
+    echo "Error: TUI bundles require SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
+    exit 1
+  elif [[ "$BUILD" == "true" ]]; then
+    export SETTINGS_SCHEMA_EXECUTABLE="$EXECUTABLE_PATH"
+  else
+    echo "Error: --skip-build requires SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
+    exit 1
+  fi
+fi
+
+if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -n "${SETTINGS_SCHEMA_EXECUTABLE:-}" && -n "${SETTINGS_SCHEMA_SOURCE:-}" ]]; then
+  echo "Error: SETTINGS_SCHEMA_EXECUTABLE and SETTINGS_SCHEMA_SOURCE are mutually exclusive." >&2
+  exit 1
+fi
+
+if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -n "${SETTINGS_SCHEMA_EXECUTABLE:-}" ]]; then
+  GENERATED_SETTINGS_SCHEMA="$CARGO_TARGET_OUTPUT_DIR/settings_schema.json"
+  echo "Generating reusable settings schema at $GENERATED_SETTINGS_SCHEMA"
+  "$SETTINGS_SCHEMA_EXECUTABLE" dump-settings-schema "$GENERATED_SETTINGS_SCHEMA"
+  unset SETTINGS_SCHEMA_EXECUTABLE
+  export SETTINGS_SCHEMA_SOURCE="$GENERATED_SETTINGS_SCHEMA"
+fi
+
 # Prepare bundled resources for standalone builds.
 if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" || "$ARTIFACT" == "tui" ]]; then
   echo "Preparing standalone resources directory"
@@ -361,6 +386,7 @@ if [ "${GITHUB_ACTIONS}" == "true" ]; then
   echo "debug_executable_path=$DEBUG_EXECUTABLE_PATH" >> "$GITHUB_OUTPUT"
   echo "packages_dir=$OUT_DIR" >> "$GITHUB_OUTPUT"
   echo "bundled_resources_dir=${BUNDLED_RESOURCES_DIR:-}" >> "$GITHUB_OUTPUT"
+  echo "settings_schema_path=${SETTINGS_SCHEMA_SOURCE:-}" >> "$GITHUB_OUTPUT"
   echo "::echo::off"
 fi
 

@@ -48,10 +48,6 @@ path = "src/bin/preview.rs"
 required-features = ["preview_channel"]
 test = false
 
-[[bin]]
-name = "generate_settings_schema"
-path = "src/bin/generate_settings_schema.rs"
-test = false
 
 [dependencies]
 addr = "0.15.6"

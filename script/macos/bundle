@@ -662,6 +662,14 @@ if [[ "$ARTIFACT" == "app" ]]; then
 
   BUNDLED_RESOURCES_DIR="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Resources"
   echo "Preparing bundled resources..."
+  if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -z "${SETTINGS_SCHEMA_EXECUTABLE:-}" && -z "${SETTINGS_SCHEMA_SOURCE:-}" ]]; then
+    if [[ $BUILD_BINARY == true ]]; then
+      export SETTINGS_SCHEMA_EXECUTABLE="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/MacOS/$WARP_BIN"
+    else
+      echo "Error: --skip-build requires SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
+      exit 1
+    fi
+  fi
   "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
 
   "$WORKSPACE_ROOT_DIR/script/compile_icon" "$RELEASE_CHANNEL" "$BUNDLE_DIR/$WARP_APP_NAME.app"
@@ -762,6 +770,14 @@ elif [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
 
   echo "Preparing CLI resources directory"
   BUNDLED_RESOURCES_DIR="$OUT_DIR/resources"
+  if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -z "${SETTINGS_SCHEMA_EXECUTABLE:-}" && -z "${SETTINGS_SCHEMA_SOURCE:-}" ]]; then
+    if [[ $BUILD_BINARY == true ]]; then
+      export SETTINGS_SCHEMA_EXECUTABLE="$OUT_DIR/$WARP_BIN"
+    else
+      echo "Error: --skip-build requires SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
+      exit 1
+    fi
+  fi
   "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
 
 
@@ -792,6 +808,10 @@ elif [[ "$ARTIFACT" == "tui" ]]; then
   # Fonts are compiled into the binary, so they are intentionally absent here.
   echo "Preparing TUI resources directory"
   BUNDLED_RESOURCES_DIR="$OUT_DIR/resources"
+  if [[ "${SKIP_SETTINGS_SCHEMA:-}" != "1" && -z "${SETTINGS_SCHEMA_EXECUTABLE:-}" && -z "${SETTINGS_SCHEMA_SOURCE:-}" ]]; then
+    echo "Error: TUI bundles require SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE." >&2
+    exit 1
+  fi
   "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
 
   BINARY_PATH="$OUT_DIR/$WARP_BIN"
@@ -1029,6 +1049,9 @@ if [ "${GITHUB_ACTIONS}" == "true" ]; then
 
   if [[ -n "$BUNDLED_RESOURCES_DIR" ]]; then
     echo "bundled_resources_dir=$BUNDLED_RESOURCES_DIR" >> "$GITHUB_OUTPUT"
+  fi
+  if [[ -f "$BUNDLED_RESOURCES_DIR/settings_schema.json" ]]; then
+    echo "settings_schema_path=$BUNDLED_RESOURCES_DIR/settings_schema.json" >> "$GITHUB_OUTPUT"
   fi
   
   echo "::echo::off"
