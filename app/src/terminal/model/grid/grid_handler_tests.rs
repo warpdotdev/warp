@@ -1230,6 +1230,30 @@ fn test_possible_file_paths_across_wide_multiple_wrapped_lines() {
     }
 }
 
+/// Perf guard for issue #9193: hovering over separator-dense content must not
+/// produce a candidate list that grows quadratically with the line length. The
+/// candidate search is O(prefix_fragments * suffix_fragments), so it is capped
+/// at `MAX_LINK_PATH_FRAGMENTS` fragments per side regardless of how many
+/// fragments the surrounding text has.
+#[test]
+fn test_possible_file_paths_candidate_count_is_bounded() {
+    // 300 single-character, space-separated fragments on each side of the point.
+    let line = "a ".repeat(300);
+    let blockgrid = mock_blockgrid(&line);
+    let possible_paths = blockgrid
+        .grid_handler
+        .possible_file_paths_at_point(Point { row: 0, col: 300 });
+
+    // Candidates = at most (kept prefix fragments + 1 dummy) * kept suffix
+    // fragments. Without the cap this would be on the order of 150 * 150.
+    let max_candidates = (MAX_LINK_PATH_FRAGMENTS + 1) * MAX_LINK_PATH_FRAGMENTS;
+    assert!(
+        possible_paths.len() <= max_candidates,
+        "expected at most {max_candidates} candidates, got {}",
+        possible_paths.len()
+    );
+}
+
 #[test]
 fn test_fragment_boundary_at_point() {
     let assert_fragment_boundary =

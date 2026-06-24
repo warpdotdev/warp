@@ -57,17 +57,32 @@ use crate::util::extensions::TrimStringExt;
 /// Used to match equal brackets, when performing a bracket-pair selection.
 const BRACKET_PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
 
-/// Hard upper bound on how many characters the cross-soft-wrap file-link scan
-/// will walk. This is only a backstop: the scan normally stops much earlier
-/// because it extends into an adjacent soft-wrapped row only while the wrap
-/// boundary continues a single separator-free run (see
-/// [`GridHandler::soft_wrap_continues_path`]). A soft-wrapped path is one
-/// logical line split over several visual rows, so this must still be large
+/// Maximum number of characters the file-link scan walks across soft-wrapped
+/// rows when following a path that spans multiple visual lines. A soft-wrapped
+/// path is one logical line split over several rows, so this must be large
 /// enough to span a whole path; it is sized to filesystem `PATH_MAX` (typically
-/// 4096). With too small a budget, a long path that wraps in a wide terminal
-/// would only be detected up to the first wrap boundary (see issue #9193);
-/// the contiguity check keeps the common case from ever scanning that far.
+/// 4096). With too small a budget a long wrapped path is only detected up to the
+/// first wrap boundary (see issue #9193).
+///
+/// This budget alone does NOT bound the per-hover cost: the candidate search
+/// below is O(prefix_fragments * suffix_fragments), so a separator-dense region
+/// could still be quadratic in the scanned length. That cost is bounded
+/// independently by [`MAX_LINK_PATH_FRAGMENTS`].
 const LINK_NUM_CHARACTER_SCAN: usize = 4096;
+
+/// Upper bound on how many separator-delimited fragments are kept on each side
+/// of the hover point when assembling candidate file paths.
+///
+/// The candidate search is O(prefix_fragments * suffix_fragments), and every
+/// candidate is string-built here and then checked against the filesystem by the
+/// caller (`compute_valid_paths`). Without a cap, hovering over separator-dense
+/// wrapped text (e.g. a wide table or log line that happens to wrap) could
+/// generate O(scanned_chars^2) candidates and filesystem probes on every hover.
+/// A real path needs only a handful of fragments around the hover point, so we
+/// keep the fragments nearest the point and drop the rest, bounding the search
+/// to O(MAX_LINK_PATH_FRAGMENTS^2) regardless of the surrounding content while
+/// leaving realistic paths (including paths with a few spaces) unaffected.
+const MAX_LINK_PATH_FRAGMENTS: usize = 32;
 
 /// Max number of characters to scan for a URL.
 const URL_SCAN_CHARACTER_MAX_COUNT: usize = 1000;
@@ -1176,29 +1191,6 @@ impl GridHandler {
         FragmentBoundary(fragment_start..fragment_end)
     }
 
-    /// Whether the soft-wrap boundary between `upper_row` and the `lower_row` it
-    /// wraps into continues a single separator-free run — i.e. the last cell of
-    /// `upper_row` and the first cell of `lower_row` are both non-separators.
-    ///
-    /// File-link detection only needs to follow a path across a soft wrap while
-    /// the path itself continues across that wrap. Using this to bound the
-    /// cross-wrap scan keeps a hover over ordinary wrapped text (which breaks at
-    /// a separator almost immediately) from walking many rows, while still
-    /// letting a genuinely long path be followed to its end.
-    fn soft_wrap_continues_path(&self, upper_row: usize, lower_row: usize) -> bool {
-        let (upper, lower) = match (self.row(upper_row), self.row(lower_row)) {
-            (Some(upper), Some(lower)) => (upper, lower),
-            _ => return false,
-        };
-        let last_upper_col = self.columns().saturating_sub(1);
-        match (upper.get(last_upper_col), lower.get(0)) {
-            (Some(upper_cell), Some(lower_cell)) => {
-                !is_file_link_separator(upper_cell.c) && !is_file_link_separator(lower_cell.c)
-            }
-            _ => false,
-        }
-    }
-
     /// Return all possible file paths containing the grid point ordered from longest to shortest.
     pub fn possible_file_paths_at_point(&self, displayed_point: Point) -> Vec<PossiblePath> {
         let point = self.maybe_translate_point_from_displayed_to_original(displayed_point);
@@ -1211,7 +1203,6 @@ impl GridHandler {
         while first_prefix_row > 0
             && self.row_wraps(first_prefix_row - 1)
             && scanned_prefix_width < LINK_NUM_CHARACTER_SCAN
-            && self.soft_wrap_continues_path(first_prefix_row - 1, first_prefix_row)
         {
             first_prefix_row -= 1;
             scanned_prefix_width += self.columns();
@@ -1245,7 +1236,6 @@ impl GridHandler {
         while last_suffix_row + 1 < self.total_rows()
             && self.row_wraps(last_suffix_row)
             && scanned_suffix_width < LINK_NUM_CHARACTER_SCAN
-            && self.soft_wrap_continues_path(last_suffix_row, last_suffix_row + 1)
         {
             last_suffix_row += 1;
             scanned_suffix_width += self.columns();
@@ -1264,6 +1254,19 @@ impl GridHandler {
             let fragments = self.line_to_fragments(row, range, IncludeFirstWideChar::No);
             append_fragments_across_soft_wrap(&mut suffix_chunks, fragments);
         }
+
+        // Bound the number of fragment combinations the candidate search below
+        // considers. That search is O(prefix_chunks * suffix_chunks) and each
+        // combination is filesystem-checked by the caller, so a hover over
+        // separator-dense wrapped text would otherwise be quadratic in the
+        // scanned length. Only the fragments nearest the hover point can form a
+        // path through it, so drop the farthest ones on each side (prefix_chunks
+        // is ordered farthest-to-nearest, suffix_chunks nearest-to-farthest).
+        if prefix_chunks.len() > MAX_LINK_PATH_FRAGMENTS {
+            let excess = prefix_chunks.len() - MAX_LINK_PATH_FRAGMENTS;
+            prefix_chunks.drain(0..excess);
+        }
+        suffix_chunks.truncate(MAX_LINK_PATH_FRAGMENTS);
 
         // This addresses the case when the file path starts from the point -- in this case
         // the valid path is entirely constructed from suffix chunks. Note that this is only possible
