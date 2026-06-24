@@ -4,9 +4,10 @@ use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warp_server_client::auth::AgentIdentity;
 use warpui::elements::{
-    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, Padding, ParentElement, Radius, Text,
+    Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Empty, Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, Padding, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Stack, Text,
 };
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
@@ -24,6 +25,7 @@ use crate::editor::{
 };
 use crate::modal::{Modal, ModalViewState};
 use crate::util::truncation::truncate_from_end;
+use crate::view_components::dropdown::{DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT};
 use crate::view_components::{Dropdown as DropdownView, DropdownItem, FilterableDropdown};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -33,6 +35,7 @@ const API_KEY_DOCS_URL: &str =
 
 const LABEL_FONT_SIZE: f32 = 14.;
 const INPUT_WIDTH: f32 = 428.; // 460px - (2 * 16px) padding
+const AGENT_DROPDOWN_POSITION_ID: &str = "create_api_key_modal_agent_dropdown";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ApiKeyType {
@@ -704,6 +707,7 @@ impl View for CreateApiKeyModal {
                 .finish();
 
                 let mut col = Flex::column();
+                let mut render_agent_dropdown = false;
 
                 if self.has_team || self.has_named_agents {
                     let type_label =
@@ -776,18 +780,25 @@ impl View for CreateApiKeyModal {
                         );
                     } else {
                         // The agent list can grow long, so use a FilterableDropdown
-                        // (search input + substring filtering) instead of a plain
-                        // Dropdown. It renders its own expand/overlay menu, so it can
-                        // be placed directly in the column. FilterableDropdown adds
-                        // ~6px of vertical margin internally, so use a smaller bottom
-                        // margin here to keep the spacing consistent with sibling rows.
+                        // (search input + substring filtering). Its open menu must
+                        // paint above the fields below it (Name/Expiration), so the
+                        // dropdown is hoisted into the modal's outermost Stack as a
+                        // positioned overlay child anchored to this placeholder,
+                        // rather than rendered inline in the column (which would let
+                        // later siblings paint over the open menu).
+                        render_agent_dropdown = true;
                         col.add_child(
                             Container::new(
-                                ConstrainedBox::new(ChildView::new(&self.agent_dropdown).finish())
-                                    .with_width(INPUT_WIDTH)
-                                    .finish(),
+                                SavePosition::new(
+                                    ConstrainedBox::new(Empty::new().finish())
+                                        .with_width(INPUT_WIDTH)
+                                        .with_height(TOP_MENU_BAR_HEIGHT + (2. * DROPDOWN_PADDING))
+                                        .finish(),
+                                    AGENT_DROPDOWN_POSITION_ID,
+                                )
+                                .finish(),
                             )
-                            .with_margin_bottom(10.)
+                            .with_margin_bottom(16.)
                             .finish(),
                         );
                     }
@@ -829,7 +840,24 @@ impl View for CreateApiKeyModal {
                 );
 
                 col.add_child(buttons_row);
-                col.finish()
+                let mut stack = Stack::new()
+                    .with_constrain_absolute_children()
+                    .with_child(col.finish());
+                if render_agent_dropdown {
+                    stack.add_positioned_overlay_child(
+                        ConstrainedBox::new(ChildView::new(&self.agent_dropdown).finish())
+                            .with_width(INPUT_WIDTH)
+                            .finish(),
+                        OffsetPositioning::offset_from_save_position_element(
+                            AGENT_DROPDOWN_POSITION_ID,
+                            vec2f(0., 0.),
+                            PositionedElementOffsetBounds::WindowByPosition,
+                            PositionedElementAnchor::TopLeft,
+                            ChildAnchor::TopLeft,
+                        ),
+                    );
+                }
+                stack.finish()
             }
         }
     }
