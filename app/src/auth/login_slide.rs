@@ -961,17 +961,11 @@ impl LoginSlideView {
                 WARP_DRIVE_FEATURES,
                 "Enable Warp Drive",
             ),
-            LoginPurpose::WarpAgent => (
-                "Skip signing in for now?",
-                "Warp's AI features run on your Warp account. You can skip signing in for now, but you won't have access to any agentic features until you create an account. Creating an account is free.",
+            LoginPurpose::WarpAgent | LoginPurpose::ThirdParty => (
+                "Continue without signing in?",
+                "Without an account, you won't have access to Warp's AI features. Sign in anytime to unlock agents and other AI features.",
                 &[],
                 "Sign in",
-            ),
-            LoginPurpose::ThirdParty => (
-                "Skip creating an account?",
-                "An account is required to access Warp's agentic and collaborative features. You can create an account at any time.",
-                &[],
-                "Create an account",
             ),
         };
 
