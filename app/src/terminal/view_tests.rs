@@ -6271,15 +6271,8 @@ fn paste_raw_image_clipboard_in_cli_agent_sends_correct_bytes() {
                 writes.len()
             );
 
-            if cfg!(windows) {
-                if agent == CLIAgent::Claude {
-                    assert_eq!(writes[0], vec![C0::ESC, b'v']);
-                } else {
-                    let mut expected = Vec::new();
-                    expected.extend_from_slice(BRACKETED_PASTE_START);
-                    expected.extend_from_slice(BRACKETED_PASTE_END);
-                    assert_eq!(writes[0], expected);
-                }
+            if cfg!(windows) && agent == CLIAgent::Claude {
+                assert_eq!(writes[0], vec![C0::ESC, b'v']);
             } else {
                 assert_eq!(writes[0], vec![C0::SYN]);
             }
