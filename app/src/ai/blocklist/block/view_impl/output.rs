@@ -1098,9 +1098,14 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 }
 
                 if should_render_references_section {
+                    let exchange_id = props.model.exchange_id(app);
                     let memory_citations: Vec<AIAgentCitation> = props
                         .model
                         .conversation(app)
+                        .filter(|conv| {
+                            // Only show memory citations on the first exchange.
+                            conv.first_exchange().map(|e| Some(e.id)) == Some(exchange_id)
+                        })
                         .into_iter()
                         .flat_map(|conv| conv.fetched_memories())
                         .filter(|m| !m.memory_store_id.is_empty() && !m.memory_id.is_empty())
