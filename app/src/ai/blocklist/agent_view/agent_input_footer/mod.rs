@@ -127,10 +127,6 @@ const START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP: &str = "Log in to use /remote
 
 const CLOUD_MODE_V2_FOOTER_GAP: f32 = 4.;
 
-/// Diameter of the yellow notification dot shown on the context-window chip
-/// when the active conversation's prompt cache has expired.
-const PROMPT_CACHE_EXPIRY_DOT_SIZE: f32 = 6.;
-
 /// Voice input state for the CLI agent footer. Unlike the editor-based voice
 /// flow (which goes through Input → EditorView), this state is self-contained
 /// so that transcribed text can be written directly to the PTY.
@@ -2150,11 +2146,37 @@ impl AgentInputFooter {
                         .is_some();
                 has_conversation.then(|| {
                     let chip = ChildView::new(&self.context_window_button).finish();
-                    if self.prompt_cache_expired {
-                        render_prompt_cache_expiry_dot(chip, app)
-                    } else {
-                        chip
+                    if !self.prompt_cache_expired {
+                        return chip;
                     }
+
+                    let appearance = Appearance::as_ref(app);
+                    let dot = Container::new(
+                        ConstrainedBox::new(Empty::new().finish())
+                            .with_width(6.)
+                            .with_height(6.)
+                            .finish(),
+                    )
+                    .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
+                    .with_background(Fill::Solid(
+                        AnsiColorIdentifier::Yellow
+                            .to_ansi_color(&appearance.theme().terminal_colors().normal)
+                            .into(),
+                    ))
+                    .finish();
+
+                    let mut stack = Stack::new();
+                    stack.add_child(chip);
+                    stack.add_positioned_overlay_child(
+                        dot,
+                        OffsetPositioning::offset_from_parent(
+                            vec2f(3., -3.),
+                            ParentOffsetBounds::WindowByPosition,
+                            ParentAnchor::TopRight,
+                            ChildAnchor::TopRight,
+                        ),
+                    );
+                    stack.finish()
                 })
             }
             AgentToolbarItemKind::ShareSession => {
@@ -2362,42 +2384,6 @@ impl View for AgentInputFooter {
             container.finish()
         }
     }
-}
-
-/// Overlays a small yellow notification dot on the top-right corner of `element`
-/// to flag that the active conversation's prompt cache has expired.
-///
-/// Uses `add_positioned_overlay_child` so the dot renders in an overlay layer
-/// (`ClipBounds::None`), escaping the parent `Wrap`'s `BoundedByActiveLayerAnd`
-/// clip without needing a `SavePosition` + footer-level anchor.
-fn render_prompt_cache_expiry_dot(element: Box<dyn Element>, app: &AppContext) -> Box<dyn Element> {
-    let appearance = Appearance::as_ref(app);
-    let dot = Container::new(
-        ConstrainedBox::new(Empty::new().finish())
-            .with_width(PROMPT_CACHE_EXPIRY_DOT_SIZE)
-            .with_height(PROMPT_CACHE_EXPIRY_DOT_SIZE)
-            .finish(),
-    )
-    .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
-    .with_background(Fill::Solid(
-        AnsiColorIdentifier::Yellow
-            .to_ansi_color(&appearance.theme().terminal_colors().normal)
-            .into(),
-    ))
-    .finish();
-
-    let mut stack = Stack::new();
-    stack.add_child(element);
-    stack.add_positioned_overlay_child(
-        dot,
-        OffsetPositioning::offset_from_parent(
-            vec2f(3., -3.),
-            ParentOffsetBounds::WindowByPosition,
-            ParentAnchor::TopRight,
-            ChildAnchor::TopRight,
-        ),
-    );
-    stack.finish()
 }
 
 /// Render a message bubble calling out that the model has switched now that we're in FTU mode.
