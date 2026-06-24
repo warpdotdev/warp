@@ -81,6 +81,7 @@ titlecase = "1.0"
 tokio.workspace = true
 tracing.workspace = true
 trait-set = "0.3.0"
+unicode-general-category.workspace = true
 unicode-segmentation = { version = "1.11.0", optional = true }
 unicode-width = { workspace = true, optional = true }
 vec1.workspace = true
