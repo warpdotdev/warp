@@ -609,7 +609,18 @@ impl CustomRouterEditorView {
             .finish(),
         );
 
-        // Type
+        // Type + description
+        let type_description = match self.router_type {
+            RouterEditorType::Complexity => {
+                "Routes each request to a model based on task complexity. Warp classifies the task as easy, medium, or hard and picks the corresponding model, falling back to the default when a bucket is unset."
+            }
+            RouterEditorType::Prompt => {
+                "Routes each request based on the prompt's content. You write natural-language rules describing when a model should be used; the first matching rule wins, otherwise the default model is used."
+            }
+        };
+        let desc_color = appearance
+            .theme()
+            .sub_text_color(appearance.theme().surface_1());
         col.add_child(
             Container::new(
                 Flex::column()
@@ -618,6 +629,15 @@ impl CustomRouterEditorView {
                         ConstrainedBox::new(ChildView::new(&self.type_dropdown).finish())
                             .with_width(EDITOR_CONTENT_WIDTH)
                             .finish(),
+                    )
+                    .with_child(
+                        Container::new(
+                            Text::new(type_description, appearance.ui_font_family(), 11.)
+                                .with_color(desc_color.into())
+                                .finish(),
+                        )
+                        .with_margin_top(6.)
+                        .finish(),
                     )
                     .finish(),
             )
