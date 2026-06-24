@@ -20,57 +20,43 @@ use warpui_core::{
 };
 
 use super::OnboardingSlide;
-use crate::model::{
-    AiAccessChoice, NoAiConfirmationSource, OnboardingAuthState, OnboardingStateModel,
-};
+use crate::model::{AiAccessChoice, OnboardingAuthState, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 
 #[derive(Debug, Clone)]
 pub enum AiAccessSlideAction {
     SelectSubscription,
-    SelectByok,
+    SelectSetUpLater,
     ChoosePlanClicked,
-    AddApiKeyClicked,
-    AddCustomEndpointClicked,
     CopyUpgradeUrlClicked,
     PasteAuthTokenFromClipboardClicked,
     BackClicked,
     NextClicked,
-    NoAiClicked,
 }
 
-/// Emitted to the parent onboarding view so the (app-crate) settings modals can be
-/// hosted at the root level — the onboarding crate can't reference them directly.
+/// Emitted to the parent onboarding view so the (app-crate) upgrade fallback
+/// actions can be handled at the root level — the onboarding crate can't
+/// reference them directly.
 #[derive(Debug, Clone)]
 pub enum AiAccessSlideEvent {
-    AddApiKeyRequested,
-    AddCustomEndpointRequested,
     CopyUpgradeUrlRequested,
     PasteAuthTokenFromClipboardRequested,
 }
 
 /// The "Choose how to access AI" slide (Warp Agent path). Forks between a paid
-/// subscription and bring-your-own-key / custom endpoint, with an "I don't want AI"
-/// escape onto the terminal-only path.
+/// subscription and a "Set up later" option that lets the user explore Warp's
+/// built-in AI before committing to a plan.
 pub struct AiAccessSlide {
     onboarding_state: ModelHandle<OnboardingStateModel>,
     subscription_mouse_state: MouseStateHandle,
-    byok_mouse_state: MouseStateHandle,
+    set_up_later_mouse_state: MouseStateHandle,
     choose_plan_button: button::Button,
-    add_key_button: button::Button,
-    add_endpoint_button: button::Button,
     back_button: button::Button,
     next_button: button::Button,
-    no_ai_button: button::Button,
     scroll_state: ClippedScrollStateHandle,
     show_auth_prompt_bar: bool,
     copy_url_mouse_state: MouseStateHandle,
     paste_token_mouse_state: MouseStateHandle,
-    /// How many BYOK provider keys and custom endpoints the user has configured
-    /// (mirrors the app's `ApiKeyManager`). Drives the "N keys connected" status
-    /// line and gates "Next" on the bring-your-own path.
-    byok_key_count: usize,
-    byok_endpoint_count: usize,
 }
 
 impl AiAccessSlide {
@@ -78,19 +64,14 @@ impl AiAccessSlide {
         Self {
             onboarding_state,
             subscription_mouse_state: MouseStateHandle::default(),
-            byok_mouse_state: MouseStateHandle::default(),
+            set_up_later_mouse_state: MouseStateHandle::default(),
             choose_plan_button: button::Button::default(),
-            add_key_button: button::Button::default(),
-            add_endpoint_button: button::Button::default(),
             back_button: button::Button::default(),
             next_button: button::Button::default(),
-            no_ai_button: button::Button::default(),
             scroll_state: ClippedScrollStateHandle::new(),
             show_auth_prompt_bar: false,
             copy_url_mouse_state: MouseStateHandle::default(),
             paste_token_mouse_state: MouseStateHandle::default(),
-            byok_key_count: 0,
-            byok_endpoint_count: 0,
         }
     }
 
@@ -105,15 +86,15 @@ impl AiAccessSlide {
 
     /// Whether "Next" should be enabled. The subscription path advances via the
     /// checkout return (auto-advance once billing flips to `PayingUser`), so
-    /// "Next" is only live there if the user is already paying. The BYOK path
-    /// requires at least one key/endpoint to be configured first.
+    /// "Next" is only live there if the user is already paying. The "Set up
+    /// later" path is always skippable.
     fn can_advance(&self, app: &AppContext) -> bool {
         match self.choice(app) {
             AiAccessChoice::Subscription => matches!(
                 self.onboarding_state.as_ref(app).auth_state(),
                 OnboardingAuthState::PayingUser
             ),
-            AiAccessChoice::Byok => self.byok_key_count > 0 || self.byok_endpoint_count > 0,
+            AiAccessChoice::SetUpLater => true,
         }
     }
 
@@ -151,7 +132,7 @@ impl AiAccessSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Save with a recurring plan, or use your own key or endpoint.",
+            "Save with a recurring plan, or explore Warp's AI before committing.",
             appearance.ui_font_family(),
             16.,
         )
@@ -176,7 +157,8 @@ impl AiAccessSlide {
         let subscription_card = self
             .render_subscription_card(appearance, matches!(choice, AiAccessChoice::Subscription));
 
-        let byok_card = self.render_byok_card(appearance, matches!(choice, AiAccessChoice::Byok));
+        let set_up_later_card =
+            self.render_set_up_later_card(appearance, matches!(choice, AiAccessChoice::SetUpLater));
 
         Container::new(
             Flex::column()
@@ -187,7 +169,7 @@ impl AiAccessSlide {
                         .with_margin_bottom(12.)
                         .finish(),
                 )
-                .with_child(byok_card)
+                .with_child(set_up_later_card)
                 .finish(),
         )
         .with_margin_top(38.)
@@ -336,7 +318,11 @@ impl AiAccessSlide {
         )
     }
 
-    fn render_byok_card(&self, appearance: &Appearance, is_selected: bool) -> Box<dyn Element> {
+    fn render_set_up_later_card(
+        &self,
+        appearance: &Appearance,
+        is_selected: bool,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let bg_solid = theme.background().into_solid();
         let label_color = if is_selected {
@@ -348,7 +334,7 @@ impl AiAccessSlide {
 
         let label = appearance
             .ui_builder()
-            .paragraph("Use my own key or endpoint")
+            .paragraph("Set up later")
             .with_style(UiComponentStyles {
                 font_size: Some(16.),
                 font_weight: Some(Weight::Semibold),
@@ -359,7 +345,8 @@ impl AiAccessSlide {
             .finish();
 
         let description = FormattedTextElement::from_str(
-            "Use your own API key or OpenAI-compatible endpoint with Warp for free.",
+            "Explore Warp's built-in AI features before committing to a plan, or bring your own \
+             inference.",
             appearance.ui_font_family(),
             14.,
         )
@@ -369,116 +356,19 @@ impl AiAccessSlide {
         .with_line_height_ratio(1.2)
         .finish();
 
-        let add_key_button = self.add_key_button.render(
-            appearance,
-            button::Params {
-                content: button::Content::Label("+ Add key".into()),
-                theme: &button::themes::Secondary,
-                options: button::Options {
-                    on_click: Some(Box::new(|ctx, _app, _pos| {
-                        ctx.dispatch_typed_action(AiAccessSlideAction::AddApiKeyClicked);
-                    })),
-                    ..button::Options::default(appearance)
-                },
-            },
-        );
-
-        let add_endpoint_button = self.add_endpoint_button.render(
-            appearance,
-            button::Params {
-                content: button::Content::Label("+ Add custom endpoint".into()),
-                theme: &button::themes::Secondary,
-                options: button::Options {
-                    on_click: Some(Box::new(|ctx, _app, _pos| {
-                        ctx.dispatch_typed_action(AiAccessSlideAction::AddCustomEndpointClicked);
-                    })),
-                    ..button::Options::default(appearance)
-                },
-            },
-        );
-
-        let buttons_row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(add_key_button)
-            .with_child(
-                Container::new(add_endpoint_button)
-                    .with_margin_left(8.)
-                    .finish(),
-            )
-            .finish();
-
-        let mut content = Flex::column()
+        let content = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(label)
             .with_child(Container::new(description).with_margin_top(12.).finish())
-            .with_child(Container::new(buttons_row).with_margin_top(16.).finish());
-
-        // Surface how many keys/endpoints are already configured, mirroring the
-        // app's `ApiKeyManager` so the state is visible without reopening a modal.
-        if let Some(status) = self.render_byok_status(appearance) {
-            content = content.with_child(Container::new(status).with_margin_top(16.).finish());
-        }
+            .finish();
 
         Self::render_card_chrome(
             appearance,
             is_selected,
-            self.byok_mouse_state.clone(),
-            AiAccessSlideAction::SelectByok,
-            content.finish(),
-        )
-    }
-
-    /// "N keys connected" / "1 key and 1 endpoint connected" summary for the
-    /// BYOK card, or `None` when nothing is configured yet.
-    fn byok_status_text(&self) -> Option<String> {
-        fn count_label(count: usize, noun: &str) -> String {
-            format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
-        }
-        match (self.byok_key_count, self.byok_endpoint_count) {
-            (0, 0) => None,
-            (keys, 0) => Some(format!("{} connected", count_label(keys, "key"))),
-            (0, endpoints) => Some(format!("{} connected", count_label(endpoints, "endpoint"))),
-            (keys, endpoints) => Some(format!(
-                "{} and {} connected",
-                count_label(keys, "key"),
-                count_label(endpoints, "endpoint"),
-            )),
-        }
-    }
-
-    fn render_byok_status(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
-        const ICON_SIZE: f32 = 14.;
-
-        let text = self.byok_status_text()?;
-        let green = appearance.theme().ansi_fg_green();
-
-        let icon = ConstrainedBox::new(Box::new(
-            Icon::CheckSkinny.to_warpui_icon(Fill::Solid(green)),
-        ))
-        .with_width(ICON_SIZE)
-        .with_height(ICON_SIZE)
-        .finish();
-
-        let label = appearance
-            .ui_builder()
-            .span(text)
-            .with_style(UiComponentStyles {
-                font_color: Some(green),
-                font_size: Some(14.),
-                ..Default::default()
-            })
-            .build()
-            .finish();
-
-        Some(
-            Flex::row()
-                .with_main_axis_size(MainAxisSize::Min)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(icon)
-                .with_child(Container::new(label).with_margin_left(8.).finish())
-                .finish(),
+            self.set_up_later_mouse_state.clone(),
+            AiAccessSlideAction::SelectSetUpLater,
+            content,
         )
     }
 
@@ -497,22 +387,6 @@ impl AiAccessSlide {
             },
         );
 
-        let no_ai_keystroke = Keystroke::parse("cmdorctrl-enter").unwrap_or_default();
-        let no_ai_button = self.no_ai_button.render(
-            appearance,
-            button::Params {
-                content: button::Content::Label("I don't want AI".into()),
-                theme: &button::themes::Naked,
-                options: button::Options {
-                    keystroke: Some(no_ai_keystroke),
-                    on_click: Some(Box::new(|ctx, _app, _pos| {
-                        ctx.dispatch_typed_action(AiAccessSlideAction::NoAiClicked);
-                    })),
-                    ..button::Options::default(appearance)
-                },
-            },
-        );
-
         let can_advance = self.can_advance(app);
         let enter = Keystroke::parse("enter").unwrap_or_default();
         let next_button = self.next_button.render(
@@ -522,13 +396,12 @@ impl AiAccessSlide {
                 theme: &button::themes::Primary,
                 options: button::Options {
                     disabled: !can_advance,
-                    // Explain why the user can't continue yet: Warp Agent needs a
-                    // paid plan or a configured key/endpoint.
+                    // The user can only be blocked here if they picked a
+                    // subscription but haven't finished checkout yet.
                     tooltip: (!can_advance).then(|| button::Tooltip {
                         params: tooltip::Params {
-                            label:
-                                "Warp Agent requires a subscription or inference supplied by you"
-                                    .into(),
+                            label: "Choose a plan to continue, or select \"Set up later\" to skip"
+                                .into(),
                             options: tooltip::Options {
                                 keyboard_shortcut: None,
                             },
@@ -544,20 +417,13 @@ impl AiAccessSlide {
             },
         );
 
-        let right_buttons = Flex::row()
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(no_ai_button)
-            .with_child(Container::new(next_button).with_margin_left(8.).finish())
-            .finish();
-
         let (step_index, step_count) = self.onboarding_state.as_ref(app).progress();
         bottom_nav::onboarding_bottom_nav(
             appearance,
             step_index,
             step_count,
             Some(back_button),
-            Some(right_buttons),
+            Some(next_button),
         )
     }
 
@@ -733,20 +599,6 @@ impl AiAccessSlide {
             model.next(ctx);
         });
     }
-
-    pub(crate) fn set_byok_status(
-        &mut self,
-        key_count: usize,
-        endpoint_count: usize,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if self.byok_key_count == key_count && self.byok_endpoint_count == endpoint_count {
-            return;
-        }
-        self.byok_key_count = key_count;
-        self.byok_endpoint_count = endpoint_count;
-        ctx.notify();
-    }
 }
 
 impl OnboardingSlide for AiAccessSlide {
@@ -755,19 +607,13 @@ impl OnboardingSlide for AiAccessSlide {
     }
 
     fn on_down(&mut self, ctx: &mut ViewContext<Self>) {
-        self.select_choice(AiAccessChoice::Byok, ctx);
+        self.select_choice(AiAccessChoice::SetUpLater, ctx);
     }
 
     fn on_enter(&mut self, ctx: &mut ViewContext<Self>) {
         if self.can_advance(ctx) {
             self.next(ctx);
         }
-    }
-
-    fn on_cmd_or_ctrl_enter(&mut self, ctx: &mut ViewContext<Self>) {
-        self.onboarding_state.update(ctx, |model, ctx| {
-            model.request_no_ai_confirmation(NoAiConfirmationSource::AiAccess, ctx);
-        });
     }
 }
 
@@ -779,8 +625,8 @@ impl TypedActionView for AiAccessSlide {
             AiAccessSlideAction::SelectSubscription => {
                 self.select_choice(AiAccessChoice::Subscription, ctx);
             }
-            AiAccessSlideAction::SelectByok => {
-                self.select_choice(AiAccessChoice::Byok, ctx);
+            AiAccessSlideAction::SelectSetUpLater => {
+                self.select_choice(AiAccessChoice::SetUpLater, ctx);
             }
             AiAccessSlideAction::ChoosePlanClicked => {
                 self.select_choice(AiAccessChoice::Subscription, ctx);
@@ -797,14 +643,6 @@ impl TypedActionView for AiAccessSlide {
                 });
                 ctx.notify();
             }
-            AiAccessSlideAction::AddApiKeyClicked => {
-                self.select_choice(AiAccessChoice::Byok, ctx);
-                ctx.emit(AiAccessSlideEvent::AddApiKeyRequested);
-            }
-            AiAccessSlideAction::AddCustomEndpointClicked => {
-                self.select_choice(AiAccessChoice::Byok, ctx);
-                ctx.emit(AiAccessSlideEvent::AddCustomEndpointRequested);
-            }
             AiAccessSlideAction::CopyUpgradeUrlClicked => {
                 ctx.emit(AiAccessSlideEvent::CopyUpgradeUrlRequested);
             }
@@ -820,11 +658,6 @@ impl TypedActionView for AiAccessSlide {
                 if self.can_advance(ctx) {
                     self.next(ctx);
                 }
-            }
-            AiAccessSlideAction::NoAiClicked => {
-                self.onboarding_state.update(ctx, |model, ctx| {
-                    model.request_no_ai_confirmation(NoAiConfirmationSource::AiAccess, ctx);
-                });
             }
         }
     }
