@@ -229,6 +229,7 @@ pub enum SettingsViewEvent {
     OpenAIFactCollection,
     OpenMCPServerCollection,
     OpenCustomRouterEditor(Option<CustomModelRouter>),
+    OpenCustomRouterFile(PathBuf),
     OpenExecutionProfileEditor(ClientProfileId),
     OpenLspLogs {
         log_path: PathBuf,
@@ -1925,6 +1926,9 @@ impl SettingsView {
             }
             AISettingsPageEvent::OpenCustomRouterEditor(router) => {
                 ctx.emit(SettingsViewEvent::OpenCustomRouterEditor(router.clone()));
+            }
+            AISettingsPageEvent::OpenCustomRouterFile(path) => {
+                ctx.emit(SettingsViewEvent::OpenCustomRouterFile(path.clone()));
             }
             AISettingsPageEvent::OpenExecutionProfileEditor(profile_id) => {
                 ctx.emit(SettingsViewEvent::OpenExecutionProfileEditor(*profile_id));

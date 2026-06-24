@@ -1,31 +1,37 @@
+use std::path::PathBuf;
 use warpui::elements::{
-    ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
-    ParentElement, Text,
+    ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment,
+    MainAxisSize, ParentElement, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext, ViewHandle};
 
 use crate::ai::custom_model_routers::{CustomModelRouter, CustomModelRouting};
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::appearance::Appearance;
 use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, DangerSecondaryTheme, SecondaryTheme,
 };
+const HEADER_BUTTON_HEIGHT: f32 = 28.;
 
 #[derive(Debug, Clone)]
 pub enum CustomRouterViewAction {
+    OpenFile,
     Edit,
     Delete,
 }
 
 pub enum CustomRouterViewEvent {
+    OpenFile(PathBuf),
     Edit,
     Delete,
 }
 
 pub struct CustomRouterView {
     router: CustomModelRouter,
+    open_file_button: ViewHandle<ActionButton>,
     edit_button: ViewHandle<ActionButton>,
     delete_button: ViewHandle<ActionButton>,
 }
@@ -33,11 +39,24 @@ pub struct CustomRouterView {
 impl CustomRouterView {
     pub fn new(router: CustomModelRouter, ctx: &mut ViewContext<Self>) -> Self {
         let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
+        let open_file_button = ctx.add_typed_action_view(|_ctx| {
+            ActionButton::new("Open file", SecondaryTheme)
+                .with_icon(Icon::File)
+                .with_size(ButtonSize::Small)
+                .with_height(HEADER_BUTTON_HEIGHT)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(CustomRouterViewAction::OpenFile);
+                })
+        });
+        open_file_button.update(ctx, |button, ctx| {
+            button.set_disabled(router.source_path.is_none(), ctx);
+        });
 
         let edit_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("Edit", SecondaryTheme)
                 .with_icon(Icon::Pencil)
                 .with_size(ButtonSize::Small)
+                .with_height(HEADER_BUTTON_HEIGHT)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CustomRouterViewAction::Edit);
                 })
@@ -50,6 +69,7 @@ impl CustomRouterView {
             ActionButton::new("Delete", DangerSecondaryTheme)
                 .with_icon(Icon::Trash)
                 .with_size(ButtonSize::Small)
+                .with_height(HEADER_BUTTON_HEIGHT)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CustomRouterViewAction::Delete);
                 })
@@ -71,6 +91,7 @@ impl CustomRouterView {
 
         Self {
             router,
+            open_file_button,
             edit_button,
             delete_button,
         }
@@ -133,11 +154,16 @@ impl View for CustomRouterView {
                 Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_child(
-                        Container::new(self.edit_button.as_ref(app).render(app))
+                        Container::new(ChildView::new(&self.open_file_button).finish())
                             .with_margin_right(8.)
                             .finish(),
                     )
-                    .with_child(self.delete_button.as_ref(app).render(app))
+                    .with_child(
+                        Container::new(ChildView::new(&self.edit_button).finish())
+                            .with_margin_right(8.)
+                            .finish(),
+                    )
+                    .with_child(ChildView::new(&self.delete_button).finish())
                     .finish(),
             )
             .finish();
@@ -172,6 +198,7 @@ impl View for CustomRouterView {
             appearance,
             sub_color,
             is_any_ai_enabled,
+            app,
         );
 
         Container::new(
@@ -199,6 +226,11 @@ impl warpui::TypedActionView for CustomRouterView {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
+            CustomRouterViewAction::OpenFile => {
+                if let Some(path) = self.router.source_path.clone() {
+                    ctx.emit(CustomRouterViewEvent::OpenFile(path));
+                }
+            }
             CustomRouterViewAction::Edit => ctx.emit(CustomRouterViewEvent::Edit),
             CustomRouterViewAction::Delete => ctx.emit(CustomRouterViewEvent::Delete),
         }
@@ -210,39 +242,58 @@ fn render_targets_row(
     appearance: &Appearance,
     sub_color: warp_core::ui::theme::Fill,
     _is_ai_enabled: bool,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let mut flex = Flex::column();
     match routing {
         CustomModelRouting::Complexity(c) => {
             flex.add_child(render_model_line(
-                "Default:", &c.default, appearance, sub_color,
+                "Default:",
+                model_display_name(&c.default, app),
+                appearance,
+                sub_color,
             ));
             if let Some(easy) = &c.easy {
                 flex.add_child(
-                    Container::new(render_model_line("Easy:", easy, appearance, sub_color))
-                        .with_margin_top(2.)
-                        .finish(),
+                    Container::new(render_model_line(
+                        "Easy:",
+                        model_display_name(easy, app),
+                        appearance,
+                        sub_color,
+                    ))
+                    .with_margin_top(2.)
+                    .finish(),
                 );
             }
             if let Some(medium) = &c.medium {
                 flex.add_child(
-                    Container::new(render_model_line("Medium:", medium, appearance, sub_color))
-                        .with_margin_top(2.)
-                        .finish(),
+                    Container::new(render_model_line(
+                        "Medium:",
+                        model_display_name(medium, app),
+                        appearance,
+                        sub_color,
+                    ))
+                    .with_margin_top(2.)
+                    .finish(),
                 );
             }
             if let Some(hard) = &c.hard {
                 flex.add_child(
-                    Container::new(render_model_line("Hard:", hard, appearance, sub_color))
-                        .with_margin_top(2.)
-                        .finish(),
+                    Container::new(render_model_line(
+                        "Hard:",
+                        model_display_name(hard, app),
+                        appearance,
+                        sub_color,
+                    ))
+                    .with_margin_top(2.)
+                    .finish(),
                 );
             }
         }
         CustomModelRouting::Prompt(p) => {
             flex.add_child(render_model_line(
                 "Default:",
-                &p.default_model,
+                model_display_name(&p.default_model, app),
                 appearance,
                 sub_color,
             ));
@@ -266,6 +317,16 @@ fn render_targets_row(
         }
     }
     flex.finish()
+}
+
+/// Resolves a concrete model id (e.g. `claude-4-5-haiku`) to its display
+/// name/alias (e.g. `claude 4.5 haiku`), falling back to the raw id when the
+/// model isn't known to the client.
+fn model_display_name(model_id: &str, app: &AppContext) -> String {
+    LLMPreferences::as_ref(app)
+        .get_llm_info(&LLMId::from(model_id))
+        .map(|info| info.display_name.clone())
+        .unwrap_or_else(|| model_id.to_string())
 }
 
 fn render_model_line(

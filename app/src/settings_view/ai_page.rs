@@ -3109,6 +3109,9 @@ impl AISettingsPageView {
                 let router_clone = router.clone();
                 let view = ctx.add_typed_action_view(|ctx| CustomRouterView::new(router, ctx));
                 ctx.subscribe_to_view(&view, move |me, _, event, ctx| match event {
+                    CustomRouterViewEvent::OpenFile(path) => {
+                        ctx.emit(AISettingsPageEvent::OpenCustomRouterFile(path.clone()));
+                    }
                     CustomRouterViewEvent::Edit => {
                         let r = router_clone.clone();
                         ctx.emit(AISettingsPageEvent::OpenCustomRouterEditor(Some(r)));
@@ -3258,6 +3261,7 @@ pub enum AISettingsPageEvent {
     OpenAIFactCollection,
     OpenMCPServerCollection,
     OpenCustomRouterEditor(Option<crate::ai::custom_model_routers::CustomModelRouter>),
+    OpenCustomRouterFile(PathBuf),
     OpenExecutionProfileEditor(ClientProfileId),
     SignupAnonymousUser,
     ShowModal,

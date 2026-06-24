@@ -6,11 +6,13 @@
 
 use itertools::Itertools;
 use warpui::elements::{
-    Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-    CrossAxisAlignment, Expanded, Flex, Hoverable, MainAxisSize, MouseStateHandle, ParentElement,
-    ScrollbarWidth, Text,
+    ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CrossAxisAlignment, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, ScrollbarWidth, Text,
 };
 use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -39,6 +41,19 @@ pub const HEADER_TEXT: &str = "Router Editor";
 const EDITOR_CONTENT_WIDTH: f32 = 340.;
 const MODEL_MENU_WIDTH: f32 = 340.;
 
+/// Empty placeholder shown in a model dropdown when no model has been chosen
+/// yet, so new routers start blank instead of defaulting to the first available
+/// model. The empty string prevents auto-selection of the first item while
+/// preserving the blank appearance.
+const MODEL_PLACEHOLDER: &str = "";
+
+/// Height of the description input and model dropdown within a prompt rule row.
+/// Both fields are forced to this exact height so they line up visually.
+const RULE_FIELD_HEIGHT: f32 = 34.;
+
+/// Size (width/height) of the reorder/remove icon buttons in a rule row.
+const RULE_ICON_BUTTON_SIZE: f32 = 14.;
+
 #[derive(Debug, Clone)]
 pub enum CustomRouterEditorEvent {
     Pane(PaneEvent),
@@ -58,6 +73,8 @@ pub enum CustomRouterEditorAction {
     SetPromptRuleModel { index: usize, model_id: String },
     AddPromptRule,
     RemovePromptRule(usize),
+    MovePromptRuleUp(usize),
+    MovePromptRuleDown(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +86,8 @@ pub enum RouterEditorType {
 struct PromptRuleRow {
     description_editor: ViewHandle<EditorView>,
     model_dropdown: ViewHandle<FilterableDropdown<CustomRouterEditorAction>>,
+    move_up_mouse_state: MouseStateHandle,
+    move_down_mouse_state: MouseStateHandle,
     remove_mouse_state: MouseStateHandle,
     current_model: String,
 }
@@ -232,7 +251,7 @@ impl CustomRouterEditorView {
             ctx,
         );
 
-        let prompt_rules = init_prules
+        let mut prompt_rules: Vec<PromptRuleRow> = init_prules
             .iter()
             .enumerate()
             .map(|(i, rule)| {
@@ -245,6 +264,12 @@ impl CustomRouterEditorView {
                 )
             })
             .collect();
+        // Prompt routing requires at least one rule, so always start with one
+        // (empty) rule row when none were loaded.
+        if prompt_rules.is_empty() {
+            let row = make_prompt_rule_row(0, "", "", &upgrade_footer_mouse_state, ctx);
+            prompt_rules.push(row);
+        }
 
         let save_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Save", PrimaryTheme)
@@ -432,6 +457,13 @@ impl CustomRouterEditorView {
                         })
                     })
                     .collect();
+                if rules.is_empty() {
+                    self.save_error = Some(
+                        "At least one rule with a description and model is required.".to_string(),
+                    );
+                    ctx.notify();
+                    return;
+                }
                 CustomModelRouting::Prompt(PromptRouting {
                     default_model: self.prompt_default_model.clone(),
                     rules,
@@ -494,9 +526,46 @@ impl CustomRouterEditorView {
     }
 
     fn remove_prompt_rule(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        // Prompt routing requires at least one rule; never remove the last row.
+        if self.prompt_rules.len() <= 1 {
+            return;
+        }
         if index < self.prompt_rules.len() {
             self.prompt_rules.remove(index);
         }
+        ctx.notify();
+    }
+
+    /// Swaps the rule at `index` with the one at `target`, preserving each
+    /// rule's description text and selected model.
+    ///
+    /// The rows are fully rebuilt (rather than swapped in place) because each
+    /// model dropdown captures its row index in its on-select action; rebuilding
+    /// keeps those captured indices in sync with the new ordering.
+    fn move_prompt_rule(&mut self, index: usize, target: usize, ctx: &mut ViewContext<Self>) {
+        let len = self.prompt_rules.len();
+        if index >= len || target >= len {
+            return;
+        }
+        // Snapshot each row's current content in order, then swap.
+        let mut data: Vec<(String, String)> = self
+            .prompt_rules
+            .iter()
+            .map(|row| {
+                (
+                    row.description_editor.as_ref(ctx).buffer_text(ctx),
+                    row.current_model.clone(),
+                )
+            })
+            .collect();
+        data.swap(index, target);
+
+        let ms = self.upgrade_footer_mouse_state.clone();
+        self.prompt_rules = data
+            .iter()
+            .enumerate()
+            .map(|(i, (desc, model))| make_prompt_rule_row(i, desc, model, &ms, ctx))
+            .collect();
         ctx.notify();
     }
 
@@ -581,10 +650,30 @@ impl CustomRouterEditorView {
                     .with_margin_top(12.)
                     .finish(),
             );
+            // Explain rule precedence: rules are matched top-to-bottom.
+            column.add_child(
+                Container::new(
+                    Text::new(
+                        "Rules are matched top to bottom \u{2014} rules higher in the list take precedence over those below.",
+                        appearance.ui_font_family(),
+                        11.,
+                    )
+                    .with_color(
+                        appearance
+                            .theme()
+                            .sub_text_color(appearance.theme().surface_1())
+                            .into(),
+                    )
+                    .finish(),
+                )
+                .with_margin_bottom(12.)
+                .finish(),
+            );
+            let rule_count = self.prompt_rules.len();
             for (i, row) in self.prompt_rules.iter().enumerate() {
                 column.add_child(
-                    Container::new(render_rule_row(i, row, appearance))
-                        .with_margin_bottom(8.)
+                    Container::new(render_rule_row(i, row, rule_count, appearance))
+                        .with_margin_bottom(16.)
                         .finish(),
                 );
             }
@@ -592,7 +681,7 @@ impl CustomRouterEditorView {
 
         column.add_child(
             Container::new(ChildView::new(&self.add_rule_button).finish())
-                .with_margin_top(4.)
+                .with_margin_top(8.)
                 .finish(),
         );
         column.finish()
@@ -611,7 +700,11 @@ impl CustomRouterEditorView {
             Container::new(
                 Flex::column()
                     .with_child(Self::section_label(name_label, appearance))
-                    .with_child(editor_row(&self.name_editor, appearance))
+                    .with_child(
+                        ConstrainedBox::new(editor_row(&self.name_editor, None, appearance))
+                            .with_width(EDITOR_CONTENT_WIDTH)
+                            .finish(),
+                    )
                     .finish(),
             )
             .with_margin_bottom(16.)
@@ -753,6 +846,11 @@ impl TypedActionView for CustomRouterEditorView {
             CustomRouterEditorAction::Delete => self.try_delete(ctx),
             CustomRouterEditorAction::SetRouterType(t) => {
                 self.router_type = *t;
+                // Prompt routing requires at least one rule; ensure a row exists
+                // when switching into prompt mode.
+                if *t == RouterEditorType::Prompt && self.prompt_rules.is_empty() {
+                    self.add_prompt_rule(ctx);
+                }
                 ctx.notify();
             }
             CustomRouterEditorAction::SetComplexityDefault(id) => {
@@ -777,6 +875,14 @@ impl TypedActionView for CustomRouterEditorView {
             }
             CustomRouterEditorAction::AddPromptRule => self.add_prompt_rule(ctx),
             CustomRouterEditorAction::RemovePromptRule(i) => self.remove_prompt_rule(*i, ctx),
+            CustomRouterEditorAction::MovePromptRuleUp(i) => {
+                if *i > 0 {
+                    self.move_prompt_rule(*i, *i - 1, ctx);
+                }
+            }
+            CustomRouterEditorAction::MovePromptRuleDown(i) => {
+                self.move_prompt_rule(*i, *i + 1, ctx);
+            }
         }
     }
 }
@@ -882,6 +988,10 @@ fn fill_filterable_dropdown<F>(
 ) where
     F: Fn(String) -> CustomRouterEditorAction + Clone,
 {
+    // Set the placeholder before populating items so the initial
+    // `set_filtered_items` keeps an empty selection blank rather than
+    // auto-selecting the first model.
+    dropdown.set_placeholder(MODEL_PLACEHOLDER, ctx);
     let items = available_model_menu_items(
         LLMPreferences::as_ref(ctx)
             .get_base_llm_choices_for_agent_mode(ctx)
@@ -924,6 +1034,10 @@ fn make_prompt_rule_row(
             ctx,
         );
         editor.set_placeholder_text("Describe when to use this model\u{2026}", ctx);
+        // Use the UI font (rather than the editor's default mono font) so the
+        // input matches the rest of the editor's text inputs.
+        let font_family = Appearance::as_ref(ctx).ui_font_family();
+        editor.set_font_family(font_family, ctx);
         if !desc_owned.is_empty() {
             editor.set_buffer_text(&desc_owned, ctx);
         }
@@ -939,24 +1053,47 @@ fn make_prompt_rule_row(
         upgrade_mouse_state,
         ctx,
     );
+    // Match the dropdown's bar height to the description input and drop its
+    // default vertical margin so the two fields align flush within the row.
+    model_dropdown.update(ctx, |dropdown, ctx| {
+        dropdown.set_vertical_margin(0., ctx);
+        dropdown.set_top_bar_height(RULE_FIELD_HEIGHT, ctx);
+    });
 
     PromptRuleRow {
         description_editor,
         model_dropdown,
+        move_up_mouse_state: Default::default(),
+        move_down_mouse_state: Default::default(),
         remove_mouse_state: Default::default(),
         current_model: model.to_string(),
     }
 }
 
-fn editor_row(editor: &ViewHandle<EditorView>, appearance: &Appearance) -> Box<dyn Element> {
-    Container::new(ChildView::new(editor).finish())
-        .with_background(appearance.theme().surface_2())
-        .with_border(Border::new(1.).with_border_fill(appearance.theme().outline()))
-        .with_corner_radius(warpui::elements::CornerRadius::with_all(
-            warpui::elements::Radius::Pixels(4.),
-        ))
-        .with_horizontal_padding(8.)
-        .with_vertical_padding(6.)
+/// Renders an `EditorView` as a text input styled like the AI settings API-key
+/// inputs. The returned element has no width constraint, so callers should wrap
+/// it (e.g. in a `ConstrainedBox` or `Expanded`) to size it. Pass `height` to
+/// force an exact box height (used so rule inputs match the model dropdown).
+fn editor_row(
+    editor: &ViewHandle<EditorView>,
+    height: Option<f32>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    appearance
+        .ui_builder()
+        .text_input(editor.clone())
+        .with_style(UiComponentStyles {
+            padding: Some(Coords {
+                top: 8.,
+                bottom: 8.,
+                left: 12.,
+                right: 12.,
+            }),
+            background: Some(appearance.theme().surface_2().into()),
+            height,
+            ..Default::default()
+        })
+        .build()
         .finish()
 }
 
@@ -986,88 +1123,174 @@ fn labeled_dropdown(
         .finish()
 }
 
-fn render_rule_row(index: usize, row: &PromptRuleRow, appearance: &Appearance) -> Box<dyn Element> {
+/// A label stacked above a field (input/dropdown), matching the spacing used by
+/// the AI settings API-key inputs.
+fn labeled_field(
+    label: impl Into<String>,
+    field: Box<dyn Element>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let sub = appearance
         .theme()
-        .sub_text_color(appearance.theme().surface_2());
-    let icon_color = sub;
-    let idx = index;
-    let remove_state = row.remove_mouse_state.clone();
-
-    let remove_btn = Hoverable::new(remove_state, move |_| {
-        ConstrainedBox::new(Icon::X.to_warpui_icon(icon_color).finish())
-            .with_width(14.)
-            .with_height(14.)
-            .finish()
-    })
-    .on_click(move |ctx, _app, _pos| {
-        ctx.dispatch_typed_action(CustomRouterEditorAction::RemovePromptRule(idx));
-    })
-    .finish();
-
-    let desc_label_str = "Description".to_string();
-    let model_label_str = "Model".to_string();
-
-    Flex::row()
-        .with_main_axis_size(MainAxisSize::Max)
-        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .sub_text_color(appearance.theme().surface_1());
+    Flex::column()
         .with_child(
-            Expanded::new(
-                1.,
-                Flex::column()
-                    .with_child(
-                        Container::new(
-                            Flex::column()
-                                .with_child(
-                                    Container::new(
-                                        Text::new(
-                                            desc_label_str.clone(),
-                                            appearance.ui_font_family(),
-                                            11.,
-                                        )
-                                        .with_color(sub.into())
-                                        .finish(),
-                                    )
-                                    .with_margin_bottom(2.)
-                                    .finish(),
-                                )
-                                .with_child(editor_row(&row.description_editor, appearance))
-                                .finish(),
-                        )
-                        .with_margin_bottom(4.)
-                        .finish(),
-                    )
-                    .with_child(
-                        Flex::column()
-                            .with_child(
-                                Container::new(
-                                    Text::new(
-                                        model_label_str.clone(),
-                                        appearance.ui_font_family(),
-                                        11.,
-                                    )
-                                    .with_color(sub.into())
-                                    .finish(),
-                                )
-                                .with_margin_bottom(2.)
-                                .finish(),
-                            )
-                            .with_child(
-                                ConstrainedBox::new(ChildView::new(&row.model_dropdown).finish())
-                                    .with_width(EDITOR_CONTENT_WIDTH)
-                                    .finish(),
-                            )
-                            .finish(),
-                    )
+            Container::new(
+                Text::new(label.into(), appearance.ui_font_family(), 11.)
+                    .with_color(sub.into())
                     .finish(),
             )
+            .with_margin_bottom(4.)
+            .finish(),
+        )
+        .with_child(field)
+        .finish()
+}
+
+/// A small icon button for the per-rule reorder/remove controls. When `enabled`
+/// is false it renders greyed out and is non-interactive; when enabled it shows
+/// a pointing-hand cursor and dispatches `action` on click.
+fn rule_icon_button(
+    icon: Icon,
+    enabled: bool,
+    mouse_state: MouseStateHandle,
+    action: CustomRouterEditorAction,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let color = if enabled {
+        appearance
+            .theme()
+            .sub_text_color(appearance.theme().surface_1())
+    } else {
+        appearance.theme().disabled_ui_text_color()
+    };
+    // Inline the builder closure (rather than binding it to a `let`) so the
+    // compiler infers the higher-ranked closure lifetime `Hoverable` requires.
+    let hoverable = Hoverable::new(mouse_state, move |_| {
+        ConstrainedBox::new(icon.to_warpui_icon(color).finish())
+            .with_width(RULE_ICON_BUTTON_SIZE)
+            .with_height(RULE_ICON_BUTTON_SIZE)
+            .finish()
+    });
+    if enabled {
+        hoverable
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _app, _pos| {
+                ctx.dispatch_typed_action(action.clone());
+            })
+            .finish()
+    } else {
+        hoverable.finish()
+    }
+}
+
+/// Renders the reorder (up/down) and remove controls for a rule, vertically
+/// centered against the input/dropdown fields (not the labels above them).
+fn render_rule_controls(
+    index: usize,
+    row: &PromptRuleRow,
+    rule_count: usize,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let buttons = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(rule_icon_button(
+            Icon::ChevronUp,
+            index > 0,
+            row.move_up_mouse_state.clone(),
+            CustomRouterEditorAction::MovePromptRuleUp(index),
+            appearance,
+        ))
+        .with_child(
+            Container::new(rule_icon_button(
+                Icon::ChevronDown,
+                index + 1 < rule_count,
+                row.move_down_mouse_state.clone(),
+                CustomRouterEditorAction::MovePromptRuleDown(index),
+                appearance,
+            ))
+            .with_margin_left(6.)
             .finish(),
         )
         .with_child(
-            Container::new(remove_btn)
-                .with_margin_left(8.)
-                .with_margin_top(20.)
-                .finish(),
+            Container::new(rule_icon_button(
+                Icon::X,
+                true,
+                row.remove_mouse_state.clone(),
+                CustomRouterEditorAction::RemovePromptRule(index),
+                appearance,
+            ))
+            .with_margin_left(6.)
+            .finish(),
+        )
+        .finish();
+
+    // Spacer matching the label height + gap so the controls line up with the
+    // fields below the labels rather than the labels themselves.
+    let label_spacer = Container::new(
+        Text::new(" ", appearance.ui_font_family(), 11.)
+            .with_color(
+                appearance
+                    .theme()
+                    .sub_text_color(appearance.theme().surface_1())
+                    .into(),
+            )
+            .finish(),
+    )
+    .with_margin_bottom(4.)
+    .finish();
+
+    Flex::column()
+        .with_child(label_spacer)
+        .with_child(
+            ConstrainedBox::new(
+                Flex::column()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_main_axis_alignment(MainAxisAlignment::Center)
+                    .with_child(buttons)
+                    .finish(),
+            )
+            .with_height(RULE_FIELD_HEIGHT)
+            .finish(),
         )
         .finish()
+}
+
+fn render_rule_row(
+    index: usize,
+    row: &PromptRuleRow,
+    rule_count: usize,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    const MODEL_WIDTH: f32 = 170.;
+
+    let description_field = labeled_field(
+        "Description",
+        editor_row(&row.description_editor, Some(RULE_FIELD_HEIGHT), appearance),
+        appearance,
+    );
+    let model_field = labeled_field(
+        "Model",
+        ConstrainedBox::new(ChildView::new(&row.model_dropdown).finish())
+            .with_width(MODEL_WIDTH)
+            .finish(),
+        appearance,
+    );
+
+    let mut rule_row = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_child(Expanded::new(1., description_field).finish())
+        .with_child(Container::new(model_field).with_margin_left(8.).finish());
+
+    // Reorder + remove controls are only meaningful when there are multiple
+    // rules (prompt routing always keeps at least one rule).
+    if rule_count > 1 {
+        rule_row.add_child(
+            Container::new(render_rule_controls(index, row, rule_count, appearance))
+                .with_margin_left(8.)
+                .finish(),
+        );
+    }
+    rule_row.finish()
 }
