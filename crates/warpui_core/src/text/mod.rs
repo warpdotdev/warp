@@ -3,7 +3,7 @@ use itertools::Itertools;
 use string_offset::{ByteOffset, CharCounter, CharOffset};
 
 use self::point::Point;
-use self::word_boundaries::{is_word_boundary, WordBoundaries, WordBoundariesPolicy};
+use self::word_boundaries::{WordBoundaries, WordBoundariesPolicy};
 use crate::event::ModifiersState;
 
 pub mod header;
@@ -191,16 +191,18 @@ pub trait TextBuffer {
     /// Returns the target [`Point`] for expanding a semantic (double-click) selection from
     /// `position` in the given `direction`, respecting the word-boundary `policy`.
     ///
-    /// The expansion snaps to the maximal contiguous run of the *same character class* as the
-    /// character under `position`:
-    /// - If that character is part of a word, the target is the end (forward) or start
-    ///   (backward) of that word — ordinary word selection.
-    /// - If that character is a word-boundary char (whitespace/punctuation), the target is the
-    ///   end (forward) or start (backward) of the contiguous run of boundary characters, so the
-    ///   selection stops at the boundary run and does NOT spill into the adjacent word.
+    /// This faithfully mirrors the terminal grid's semantic selection
+    /// (`GridHandler::semantic_search_left`/`_right`) so rich-text selection behaves identically
+    /// to the terminal block list:
+    /// - Forward: include the character under `position`, then extend through a following word
+    ///   only if the character immediately after the cursor is itself part of a word. A boundary
+    ///   character right after the cursor stops the selection, so a run like `", "` or `"..."`
+    ///   never pulls in the next word, and trailing whitespace is never included.
+    /// - Backward: the mirror image, extending left through a preceding word only when the
+    ///   character immediately before the cursor is part of a word.
     ///
-    /// This mirrors the terminal grid's semantic selection (`semantic_search_left`/`_right`),
-    /// keeping rich-text selection consistent with the terminal block list.
+    /// The forward result is the *exclusive* end offset; the backward result is the *inclusive*
+    /// start offset.
     fn semantic_expansion_target<T: BufferIndex>(
         &self,
         position: T,
@@ -209,48 +211,40 @@ pub trait TextBuffer {
     ) -> Result<Point> {
         let offset = position.to_char_offset(self)?;
 
-        // Whether the character under `position` is itself a word-boundary character.
-        let on_boundary = self
-            .chars_at(offset)?
-            .next()
-            .is_some_and(|c| is_word_boundary(c, policy));
-
-        if !on_boundary {
-            // Ordinary word selection: expand to the end/start of the current word.
-            let point = match direction {
-                SelectionDirection::Forward => self
-                    .word_ends_from_offset_exclusive(offset)?
-                    .with_policy(policy)
-                    .next(),
-                SelectionDirection::Backward => self
-                    .word_starts_backward_from_offset_exclusive(offset)?
-                    .with_policy(policy)
-                    .next(),
-            };
-            return point.ok_or_else(|| anyhow!("no word boundary found from offset {offset}"));
-        }
-
-        // The character is a boundary: expand only across the contiguous run of boundary
-        // characters, stopping at the next/previous word.
         let target = match direction {
             SelectionDirection::Forward => {
+                let mut chars = self.chars_at(offset)?;
                 let mut end = offset;
-                for c in self.chars_at(offset)? {
-                    if is_word_boundary(c, policy) {
+                // Include the character under the cursor (if any).
+                if chars.next().is_some() {
+                    end += 1;
+                    // Extend through the following word only if the very next character is part
+                    // of a word; a boundary char here stops us (no trailing whitespace, no
+                    // crossing into the next word past a separator run).
+                    if chars.next().is_some_and(|c| !policy.is_word_boundary(c)) {
                         end += 1;
-                    } else {
-                        break;
+                        for c in chars {
+                            if policy.is_word_boundary(c) {
+                                break;
+                            }
+                            end += 1;
+                        }
                     }
                 }
                 end
             }
             SelectionDirection::Backward => {
+                let mut chars = self.chars_rev_at(offset)?;
                 let mut start = offset;
-                for c in self.chars_rev_at(offset)? {
-                    if is_word_boundary(c, policy) {
+                // Extend left through a preceding word only if the character immediately before
+                // the cursor is part of a word.
+                if chars.next().is_some_and(|c| !policy.is_word_boundary(c)) {
+                    start -= 1;
+                    for c in chars {
+                        if policy.is_word_boundary(c) {
+                            break;
+                        }
                         start -= 1;
-                    } else {
-                        break;
                     }
                 }
                 start
