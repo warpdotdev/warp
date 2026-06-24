@@ -21,6 +21,10 @@ const NUM_CHANNELS: u16 = 1;
 // Voice input is typically sampled at 16000Hz (and required by Wispr)
 const TARGET_SAMPLE_RATE: f32 = 16000.0;
 const STREAM_TIMEOUT: Duration = Duration::from_secs(60 * 6);
+/// Maximum number of resampled audio samples to buffer (~10 min × 16 kHz = 9.6 M samples, ≈ 38 MB).
+/// When this limit is reached, recording is automatically stopped to prevent unbounded memory growth
+/// (APP-4779: `resampled` Vec grew to 8 GB in heap profiles due to no upper bound).
+const MAX_RESAMPLED_SAMPLES: usize = 10 * 60 * TARGET_SAMPLE_RATE as usize;
 
 pub struct VoiceInput {
     state: VoiceInputState,
@@ -366,26 +370,48 @@ impl VoiceInput {
         let resampler = resampler.clone();
         let resampled = resampled.clone();
         ctx.spawn(
-            async move {
-                if let Err(e) = Self::resample_audio_frame(resampler, resampled, input_buffer).await
-                {
+            Self::resample_audio_frame(resampler, resampled, input_buffer),
+            |me, result, ctx| match result {
+                Ok(true) => {
+                    // Buffer cap reached — auto-stop to release memory (APP-4779).
+                    log::warn!(
+                        "Voice input buffer cap reached ({MAX_RESAMPLED_SAMPLES} samples, \
+                         ~10 min); auto-stopping recording"
+                    );
+                    let _ = me.stop_listening(ctx);
+                }
+                Err(e) => {
                     log::error!("Failed to resample audio frame: {e}");
                 }
+                Ok(false) => {}
             },
-            |_, _, _| {},
         );
     }
 
-    // Processes a single audio frame, resampling it to 16000Hz and adding it to the resampled buffer.
+    /// Resamples a single audio frame to 16 kHz and appends it to `resampled`.
+    ///
+    /// Returns `Ok(true)` when the accumulated buffer has reached [`MAX_RESAMPLED_SAMPLES`],
+    /// signalling the caller to stop the recording session.  This prevents the `resampled`
+    /// buffer from growing without bound (APP-4779).
     async fn resample_audio_frame(
         resampler: Arc<Mutex<SincFixedIn<f32>>>,
         resampled: Arc<Mutex<Vec<f32>>>,
         input_buffer: Vec<f32>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<bool /* cap_reached */, anyhow::Error> {
         let mut resampler = resampler.lock();
         let mut resampled = resampled.lock();
-        resampled.extend(resampler.process(&[input_buffer], None)?[0].to_vec());
-        Ok(())
+
+        if resampled.len() >= MAX_RESAMPLED_SAMPLES {
+            // Already at the cap; discard this frame and signal the caller.
+            return Ok(true);
+        }
+
+        let new_samples = resampler.process(&[input_buffer], None)?;
+        let remaining = MAX_RESAMPLED_SAMPLES.saturating_sub(resampled.len());
+        // Avoid an intermediate Vec allocation by extending directly from the slice.
+        resampled.extend(new_samples[0].iter().take(remaining).copied());
+
+        Ok(resampled.len() >= MAX_RESAMPLED_SAMPLES)
     }
 
     // Converts the resampled audio to a WAV file and returns the base64 encoded WAV data.
