@@ -37,7 +37,7 @@ use warpui::{
 };
 
 use super::event_loop::EventLoop;
-use super::shell::{ShellStarter, ShellStarterSource, ShellStarterSourceOrWslName};
+use super::shell::{ShellStarter, ShellStarterSource};
 #[cfg(unix)]
 use super::terminal_attributes::TerminalAttributesPoller;
 use super::{mio_channel, recorder};
@@ -140,19 +140,11 @@ fn should_skip_sharer_op(is_ambient_session: bool, op: &CrdtOperation) -> bool {
 /// event loop join handle).
 pub struct TerminalManager<S> {
     event_loop_tx: Arc<Mutex<mio_channel::Sender<Message>>>,
-    event_loop_rx: Option<mio_channel::Receiver<Message>>,
-    channel_event_proxy: ChannelEventListener,
-    wsl_name_or_shell_starter: Option<ShellStarterSourceOrWslName>,
     /// This is an `Option` so that we can take ownership of the inner
     /// `JoinHandle` in `TerminalManager::drop`.
     event_loop_handle: Option<JoinHandle<()>>,
     model: Arc<FairMutex<TerminalModel>>,
     view: ViewHandle<S>,
-
-    /// Dispatcher for terminal model events. Read by the Unix password-prompt poller
-    /// wiring; retained on all platforms so the manager owns the dispatcher's lifetime.
-    #[cfg_attr(not(unix), allow(dead_code))]
-    model_events: ModelHandle<ModelEventDispatcher>,
 
     /// The manager is responsible for managing the lifetime
     /// of the terminal attributes poller. None if the event loop has not yet started.
@@ -340,13 +332,9 @@ impl<S> TerminalManager<S> {
         );
         let mut terminal_manager = Self {
             event_loop_tx: Arc::new(Mutex::new(event_loop_tx)),
-            event_loop_rx: Some(event_loop_rx),
-            channel_event_proxy,
-            wsl_name_or_shell_starter,
             model,
             event_loop_handle: None,
             view: surface.clone(),
-            model_events,
             #[cfg(unix)]
             terminal_attributes_poller: None,
             pty_controller,
@@ -362,7 +350,6 @@ impl<S> TerminalManager<S> {
         post_wire(&mut terminal_manager, &surface, ctx);
 
         let terminal_surface = surface.clone();
-        let wsl_name_or_shell_starter = terminal_manager.take_wsl_name_or_shell_starter();
 
         let terminal_manager_model = ctx.add_model(|ctx| {
             let terminal_manager: Box<dyn TerminalManagerTrait> = Box::new(terminal_manager);
@@ -389,6 +376,9 @@ impl<S> TerminalManager<S> {
                         startup_directory,
                         env_vars,
                         user_default_shell_unsupported_banner_model_handle,
+                        event_loop_rx,
+                        channel_event_proxy,
+                        model_events,
                         shell_starter_source,
                         ctx,
                     )
@@ -409,11 +399,6 @@ impl<S> TerminalManager<S> {
     /// Returns the remote server controller owned by this manager.
     fn remote_server_controller(&self) -> ModelHandle<RemoteServerController> {
         self.remote_server_controller.clone()
-    }
-
-    /// Takes the shell-starter source so shell determination can be spawned.
-    fn take_wsl_name_or_shell_starter(&mut self) -> Option<ShellStarterSourceOrWslName> {
-        self.wsl_name_or_shell_starter.take()
     }
 
     /// Sends a shutdown message to the PTY event loop and waits for it to
@@ -579,6 +564,9 @@ fn on_shell_determined<S: TerminalSurface>(
     startup_directory: Option<PathBuf>,
     env_vars: HashMap<OsString, OsString>,
     user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
+    event_loop_rx: mio_channel::Receiver<Message>,
+    channel_event_proxy: ChannelEventListener,
+    model_events: ModelHandle<ModelEventDispatcher>,
     shell_starter_source: Option<ShellStarterSource>,
     ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
 ) where
@@ -680,10 +668,6 @@ fn on_shell_determined<S: TerminalSurface>(
     // Enqueue the init shell script (for shells that need it), then create
     // the PTY and start its corresponding event loop.
     let model = manager.model();
-    let event_loop_rx = manager
-        .event_loop_rx
-        .take()
-        .expect("terminal event loop receiver was already taken");
     #[cfg(windows)]
     let event_loop_tx = manager.event_loop_tx.lock().clone();
     let pty = match manager
@@ -721,7 +705,7 @@ fn on_shell_determined<S: TerminalSurface>(
         pty,
         event_loop_rx,
         model.clone(),
-        manager.channel_event_proxy.clone(),
+        channel_event_proxy,
     );
 
     manager.event_loop_handle = Some(event_loop_handle);
@@ -743,7 +727,7 @@ fn on_shell_determined<S: TerminalSurface>(
         wire_up_terminal_attribute_poller_with_surface(
             &terminal_attributes_poller,
             &manager.view,
-            &manager.model_events,
+            &model_events,
             model.clone(),
             ctx,
         );
