@@ -637,6 +637,7 @@ dependencies = [
  "arborium-json",
  "arborium-kotlin",
  "arborium-lua",
+ "arborium-markdown",
  "arborium-nix",
  "arborium-objc",
  "arborium-php",
@@ -845,6 +846,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0132cce1b343560a26ae8a9af8da70bcec44432106c9670399ac9c59c61f2dee"
 dependencies = [
  "arborium-sysroot",
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "arborium-markdown"
+version = "2.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3705547b4e843b1caaf8b690be09a54094ee888faa260f6333189dc7b9b9b7f7"
+dependencies = [
+ "arborium-html",
+ "arborium-sysroot",
+ "arborium-toml",
+ "arborium-yaml",
  "cc",
  "tree-sitter-language",
 ]

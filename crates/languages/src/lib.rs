@@ -18,7 +18,7 @@ lazy_static! {
     static ref LANGUAGE_REGISTRY: LanguageRegistry = LanguageRegistry::new();
 }
 
-pub const SUPPORTED_LANGUAGES: [&str; 34] = [
+pub const SUPPORTED_LANGUAGES: [&str; 35] = [
     "rust",
     "golang",
     "yaml",
@@ -53,6 +53,7 @@ pub const SUPPORTED_LANGUAGES: [&str; 34] = [
     "vue",
     "dockerfile",
     "nix",
+    "markdown",
 ];
 
 /// Registry that holds all of the supported languages.
@@ -99,8 +100,8 @@ pub fn language_by_local_filename(path: &Path) -> Option<Arc<Language>> {
     )
 }
 
-/// Normalizes common markdown language aliases to their internal names.
-/// For example, "go" -> "golang", "bash" -> "shell", etc.
+/// Normalizes common language-name aliases to their canonical internal names.
+/// For example, "go" -> "golang", "bash" -> "shell", "md" -> "markdown".
 fn normalize_language_name(name: &str) -> &str {
     match name {
         "go" => "golang",
@@ -116,6 +117,7 @@ fn normalize_language_name(name: &str) -> &str {
         "terraform" | "tf" => "hcl",
         "kt" => "kotlin",
         "docker" | "containerfile" => "dockerfile",
+        "md" => "markdown",
         other => other,
     }
 }
@@ -193,6 +195,7 @@ fn language_by_filename_parts(
         "xml" => language_by_name("xml"),
         "vue" => language_by_name("vue"),
         "dockerfile" => language_by_name("dockerfile"),
+        "md" | "markdown" => language_by_name("markdown"),
         _ => None,
     }
 }
@@ -312,10 +315,19 @@ fn load_language(lang: &str) -> Option<Language> {
         })
         .collect();
 
-    // Use arborium's bundled highlight query instead of loading from custom .scm files
-    let highlight_query_str = get_arborium_highlight_query(lang)?;
-    let highlight_query = Query::new(&grammar, highlight_query_str)
-        .expect("arborium highlight query should be valid");
+    // Prefer a Warp-authored highlight query bundled alongside the grammar, falling back to
+    // arborium's. This lets a grammar opt into a custom query when arborium's upstream one uses
+    // capture names that Warp's color mapping doesn't recognize, which would otherwise render
+    // uncolored.
+    let highlights_query_path = [lang, "highlights.scm"].join("\\");
+    let highlight_query = match load_query(&highlights_query_path, &grammar) {
+        Some(query) => query,
+        None => {
+            let highlight_query_str = get_arborium_highlight_query(lang)?;
+            Query::new(&grammar, highlight_query_str)
+                .expect("arborium highlight query should be valid")
+        }
+    };
 
     let indents_query_path = [lang, "indents.scm"].join("\\");
     let indents_query = load_query(&indents_query_path, &grammar);
