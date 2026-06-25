@@ -2106,11 +2106,17 @@ impl AISettingsPageView {
     /// "no credits" error with an `auto` model. Also skips when the current
     /// default is already served by a BYO credential.
     fn should_offer_default_model_switch(ctx: &AppContext) -> bool {
-        let is_free_plan = UserWorkspaces::as_ref(ctx)
+        // Exclude only confirmed paid plans. Solo/individual users have no
+        // `current_workspace`, and billing may not have loaded yet (Unknown), so
+        // treat both as eligible and rely on the out-of-credits check below to
+        // filter anyone who can still run Warp-hosted models. (A strict
+        // `is_free_plan()` check here meant solo free users — the common case —
+        // never saw the prompt.)
+        let on_paid_plan = UserWorkspaces::as_ref(ctx)
             .current_workspace()
-            .is_some_and(|workspace| workspace.billing_metadata.is_free_plan());
+            .is_some_and(|workspace| workspace.billing_metadata.is_user_on_paid_plan());
         let out_of_monthly_credits = !AIRequestUsageModel::as_ref(ctx).has_requests_remaining();
-        is_free_plan && out_of_monthly_credits && !Self::active_base_model_is_byo_covered(ctx)
+        !on_paid_plan && out_of_monthly_credits && !Self::active_base_model_is_byo_covered(ctx)
     }
 
     /// Detects a provider key that was just added (absent -> present) by diffing
