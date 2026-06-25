@@ -14,6 +14,7 @@ pub mod spawner;
 #[cfg(unix)]
 pub mod terminal_attributes;
 pub mod terminal_manager;
+mod terminal_view_adaptor;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
@@ -28,9 +29,12 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use shell::ShellStarter;
 
-#[cfg(windows)]
-pub use self::terminal_manager::shutdown_all_pty_event_loops;
 pub use self::terminal_manager::{get_shell_starter, TerminalManager};
+#[cfg(windows)]
+pub use self::terminal_view_adaptor::shutdown_all_pty_event_loops;
+pub(crate) use self::terminal_view_adaptor::{
+    create_terminal_view_surface, terminal_view_restored_blocks, TerminalViewSurfaceConfig,
+};
 #[cfg(unix)]
 pub use self::unix::*;
 #[cfg(windows)]

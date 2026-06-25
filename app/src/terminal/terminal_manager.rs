@@ -5,7 +5,7 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use pathfinder_geometry::vector::Vector2F;
 use settings::Setting as _;
-use warpui::{AppContext, SingletonEntity, ViewHandle};
+use warpui::{AppContext, SingletonEntity};
 
 use super::event_listener::ChannelEventListener;
 use super::model::block::BlockSize;
@@ -13,7 +13,7 @@ use super::safe_mode_settings::get_secret_obfuscation_mode;
 use super::session_settings::SessionSettings;
 use super::settings::TerminalSettings;
 use super::view::{create_size_info_for_blocklist, WARP_PROMPT_HEIGHT_LINES};
-use super::{color, ShellLaunchState, SizeInfo, TerminalModel, TerminalView};
+use super::{color, ShellLaunchState, SizeInfo, TerminalModel};
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::appearance::Appearance;
@@ -24,9 +24,6 @@ use crate::PrivacySettings;
 pub trait TerminalManager: Any {
     /// Returns the backing terminal model.
     fn model(&self) -> Arc<FairMutex<TerminalModel>>;
-
-    /// Returns the terminal view being managed.
-    fn view(&self) -> ViewHandle<TerminalView>;
 
     /// Called when the terminal pane detaches from its pane group. This is a sensitive path -
     /// do not do anything with high latency here. Note that we cannot rely on events emitted

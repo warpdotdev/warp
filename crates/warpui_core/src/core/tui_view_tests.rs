@@ -5,7 +5,9 @@
 //! additively alongside the full GUI test suite under `--features tui`.
 
 use super::*;
-use crate::elements::tui::{TuiBuffer, TuiConstraint, TuiElement, TuiRect, TuiSize};
+use crate::elements::tui::{
+    TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiRect, TuiSize,
+};
 use crate::platform::WindowStyle;
 
 /// A GUI root view hosting TUI views: under the additive design, GUI and TUI
@@ -147,15 +149,11 @@ impl Entity for ActionView {
 pub struct TuiEmpty;
 
 impl TuiElement for TuiEmpty {
-    fn layout(&mut self, _constraint: TuiConstraint) -> TuiSize {
+    fn layout(&mut self, _constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
         TuiSize::ZERO
     }
 
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer) {}
-
-    fn desired_height(&self, _width: u16) -> u16 {
-        0
-    }
+    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {}
 }
 
 impl TuiView for ActionView {

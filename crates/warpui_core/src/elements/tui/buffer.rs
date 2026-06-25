@@ -13,7 +13,7 @@
 
 use ratatui::buffer::CellWidth;
 pub use ratatui::buffer::{Buffer as TuiBuffer, Cell};
-pub use ratatui::style::Style as TuiStyle;
+pub use ratatui::style::{Color, Modifier, Style as TuiStyle};
 
 /// Headless rendering of a [`TuiBuffer`] to one `String` per row.
 pub trait TuiBufferExt {

@@ -407,16 +407,12 @@ fn updated_conversation_metadata_refreshes_selected_conversation_pane_title() {
 }
 struct TestTerminalManager {
     model: Arc<FairMutex<TerminalModel>>,
-    view: ViewHandle<TerminalView>,
+    _view: ViewHandle<TerminalView>,
 }
 
 impl TerminalManager for TestTerminalManager {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
-    }
-
-    fn view(&self) -> ViewHandle<TerminalView> {
-        self.view.clone()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -1280,14 +1276,14 @@ fn escape_pops_nested_cloud_agent_view_with_long_running_command() {
             let parent_manager = ctx.add_model(|_| {
                 let manager: Box<dyn TerminalManager> = Box::new(TestTerminalManager {
                     model: parent_model,
-                    view: parent_view.clone(),
+                    _view: parent_view.clone(),
                 });
                 manager
             });
             let cloud_manager = ctx.add_model(|_| {
                 let manager: Box<dyn TerminalManager> = Box::new(TestTerminalManager {
                     model: cloud_model,
-                    view: cloud_view.clone(),
+                    _view: cloud_view.clone(),
                 });
                 manager
             });
@@ -1414,14 +1410,14 @@ fn root_cloud_mode_pane_sets_root_cloud_mode_context_key() {
             let root_manager = ctx.add_model(|_| {
                 let manager: Box<dyn TerminalManager> = Box::new(TestTerminalManager {
                     model: root_model,
-                    view: root_view.clone(),
+                    _view: root_view.clone(),
                 });
                 manager
             });
             let nested_manager = ctx.add_model(|_| {
                 let manager: Box<dyn TerminalManager> = Box::new(TestTerminalManager {
                     model: nested_model,
-                    view: nested_view.clone(),
+                    _view: nested_view.clone(),
                 });
                 manager
             });

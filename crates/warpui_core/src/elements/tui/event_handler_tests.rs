@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use super::TuiEventHandler;
 use crate::elements::tui::{
-    TuiChildView, TuiElement, TuiEventContext, TuiPresentationContext, TuiRect,
+    TuiChildView, TuiElement, TuiEventContext, TuiLayoutContext, TuiPresentationContext, TuiRect,
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
@@ -35,14 +35,24 @@ fn invokes_callback_on_matching_key_and_reports_handled() {
 
             let area = TuiRect::new(0, 0, 4, 1);
             let mut event_ctx = TuiEventContext::default();
+            let mut rendered_views = HashMap::new();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
 
-            let handled =
-                handler.dispatch_event(&key_event("enter"), area, &mut event_ctx, app_ctx);
+            let handled = handler.dispatch_event(
+                &key_event("enter"),
+                area,
+                &mut event_ctx,
+                &mut ctx,
+                app_ctx,
+            );
             assert!(handled);
             assert_eq!(hits.get(), 1);
 
             // A non-matching key is left unhandled for ancestors, runs no callback.
-            let handled = handler.dispatch_event(&key_event("esc"), area, &mut event_ctx, app_ctx);
+            let handled =
+                handler.dispatch_event(&key_event("esc"), area, &mut event_ctx, &mut ctx, app_ctx);
             assert!(!handled);
             assert_eq!(hits.get(), 1);
         });
@@ -66,10 +76,15 @@ fn child_consumes_the_event_before_the_wrapper() {
             });
 
             let mut event_ctx = TuiEventContext::default();
+            let mut rendered_views = HashMap::new();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
             let handled = outer.dispatch_event(
                 &key_event("enter"),
                 TuiRect::new(0, 0, 1, 1),
                 &mut event_ctx,
+                &mut ctx,
                 app_ctx,
             );
 
@@ -87,8 +102,10 @@ fn present_recurses_into_the_wrapped_child() {
     let mut parent_by_child = HashMap::new();
 
     {
-        let mut ctx = TuiPresentationContext::new(root, &mut parent_by_child);
-        let mut handler = TuiEventHandler::new(TuiChildView::from_rendered(embedded, Box::new(())));
+        let mut rendered_views = HashMap::new();
+        let mut ctx = TuiPresentationContext::new(root, &mut rendered_views, &mut parent_by_child);
+        let child_node = TuiChildView::from_rendered(embedded, Box::new(()), ctx.rendered_views);
+        let mut handler = TuiEventHandler::new(child_node);
         handler.present(&mut ctx);
     }
 

@@ -121,9 +121,14 @@ use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::focus_env::add_session_focus_env_vars;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
-use crate::terminal::local_tty;
+use crate::terminal::local_tty::{
+    create_terminal_view_surface, terminal_view_restored_blocks,
+    TerminalManager as LocalTtyTerminalManager, TerminalViewSurfaceConfig,
+};
 use crate::terminal::model::session::Session;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
+#[cfg(feature = "remote_tty")]
+use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
 use crate::terminal::session_settings::{NewSessionSource, SessionSettings};
 use crate::terminal::shared_session::render_util::ParticipantAvatarParams;
 use crate::terminal::shared_session::role_change_modal::{
@@ -2469,7 +2474,7 @@ impl PaneGroup {
                         .update(app, |terminal_manager, ctx| {
                             if let Some(manager) = terminal_manager
                                 .as_any()
-                                .downcast_ref::<local_tty::TerminalManager>()
+                                .downcast_ref::<LocalTtyTerminalManager<TerminalView>>()
                             {
                                 if honor_ps1 {
                                     manager.send_switch_to_ps1_bindkey(ctx);
@@ -5902,7 +5907,7 @@ impl PaneGroup {
 
         cfg_if::cfg_if! {
             if #[cfg(feature = "remote_tty")] {
-                let terminal_manager: ModelHandle<Box<dyn TerminalManager>> = crate::terminal::remote_tty::TerminalManager::create_model(
+                let terminal_init = RemoteTtyTerminalManager::create_model(
                     resources,
                     initial_size,
                     model_event_sender,
@@ -5910,26 +5915,65 @@ impl PaneGroup {
                     initial_input_config,
                     ctx,
                 );
+                let terminal_manager = terminal_init.manager;
+                let terminal_view = terminal_init.view;
             } else if #[cfg(feature = "local_tty")] {
-                let terminal_manager: ModelHandle<Box<dyn TerminalManager>> = crate::terminal::local_tty::TerminalManager::create_model(
+                let all_restored_blocks =
+                    terminal_view_restored_blocks(restored_blocks, &conversation_restoration);
+                let has_conversation_restoration = matches!(
+                    &conversation_restoration,
+                    Some(
+                        ConversationRestorationInNewPaneType::Startup { .. }
+                            | ConversationRestorationInNewPaneType::Historical { .. }
+                    )
+                );
+                let is_historical = matches!(
+                    &conversation_restoration,
+                    Some(ConversationRestorationInNewPaneType::Historical { .. })
+                );
+                let should_use_live_appearance = conversation_restoration
+                    .as_ref()
+                    .map(|restoration| restoration.should_use_live_appearance())
+                    .unwrap_or(false);
+                let has_restored_command_blocks = all_restored_blocks
+                    .as_ref()
+                    .is_some_and(|blocks| !blocks.is_empty());
+                let model_event_sender_for_surface = model_event_sender.clone();
+                let window_id = ctx.window_id();
+                let terminal_init = LocalTtyTerminalManager::<TerminalView>::create_model(
                     startup_directory,
                     env_vars,
                     is_shared_session,
-                    resources,
-                    restored_blocks,
-                    conversation_restoration,
+                    all_restored_blocks.as_ref(),
                     user_default_shell_unsupported_banner_model_handle,
                     initial_size,
                     model_event_sender,
-                    ctx.window_id(),
                     chosen_shell,
-                    initial_input_config,
                     ctx,
+                    |surface_init, ctx| {
+                        create_terminal_view_surface(
+                            TerminalViewSurfaceConfig {
+                                resources,
+                                model_event_sender: model_event_sender_for_surface,
+                                window_id,
+                                initial_input_config,
+                                conversation_restoration,
+                                has_conversation_restoration,
+                                is_historical,
+                                should_use_live_appearance,
+                                has_restored_command_blocks,
+                            },
+                            surface_init,
+                            ctx,
+                        )
+                    },
                 );
+                let terminal_manager = terminal_init.manager;
+                let terminal_view = terminal_init.surface;
             } else {
                 use crate::terminal::{ShellLaunchState, shell::{ShellName, ShellType}};
 
-                let terminal_manager: ModelHandle<Box<dyn TerminalManager>> = crate::terminal::MockTerminalManager::create_model(
+                let terminal_init = MockTerminalManager::create_model(
                     ShellLaunchState::ShellSpawned {
                         available_shell: chosen_shell,
                         display_name: ShellName::blank(),
@@ -5942,10 +5986,11 @@ impl PaneGroup {
                     ctx.window_id(),
                     ctx,
                 );
+                let terminal_manager = terminal_init.manager;
+                let terminal_view = terminal_init.view;
             }
         }
 
-        let terminal_view = terminal_manager.as_ref(ctx).view();
         (terminal_view, terminal_manager)
     }
 
@@ -5969,21 +6014,20 @@ impl PaneGroup {
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
         let window_id = ctx.window_id();
-        let terminal_manager = ctx.add_model(|ctx| {
-            let terminal_manager: Box<dyn TerminalManager> =
-                Box::new(shared_session::viewer::TerminalManager::new(
-                    session_id,
-                    resources,
-                    initial_size,
-                    window_id,
-                    enable_orchestration_polling,
-                    is_cloud_mode,
-                    ctx,
-                ));
-            terminal_manager
-        });
+        let terminal_init = shared_session::viewer::TerminalManager::new(
+            session_id,
+            resources,
+            initial_size,
+            window_id,
+            enable_orchestration_polling,
+            is_cloud_mode,
+            ctx,
+        );
+        let viewer_manager = terminal_init.manager;
+        let terminal_view = terminal_init.view;
+        let terminal_manager =
+            ctx.add_model(|_ctx| Box::new(viewer_manager) as Box<dyn TerminalManager>);
 
-        let terminal_view = terminal_manager.as_ref(ctx).view();
         (terminal_view, terminal_manager)
     }
 
@@ -5998,7 +6042,7 @@ impl PaneGroup {
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
         let restored_blocks = conversation.to_serialized_blocklist_items();
-        let terminal_manager = MockTerminalManager::create_model(
+        let terminal_init = MockTerminalManager::create_model(
             ShellLaunchState::ShellSpawned {
                 available_shell: None,
                 display_name: ShellName::blank(),
@@ -6015,6 +6059,8 @@ impl PaneGroup {
             ctx.window_id(),
             ctx,
         );
+        let terminal_manager = terminal_init.manager;
+        let terminal_view = terminal_init.view;
         // Set the conversation viewer status based on whether this is an ambient agent conversation
         let viewer_status = ambient_agent_task_id
             .map(ConversationTranscriptViewerStatus::ViewingAmbientConversation)
@@ -6027,7 +6073,6 @@ impl PaneGroup {
                 .set_conversation_transcript_viewer_status(Some(viewer_status.clone()));
         });
 
-        let terminal_view = terminal_manager.as_ref(ctx).view();
         // Insert the conversation ended tombstone (includes Open in Warp button on WASM)
         terminal_view.update(ctx, |view, ctx| {
             view.insert_conversation_ended_tombstone_with_resolved_cta(ctx);
@@ -6059,7 +6104,7 @@ impl PaneGroup {
         ViewHandle<TerminalView>,
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
-        let terminal_manager = MockTerminalManager::create_model(
+        let terminal_init = MockTerminalManager::create_model(
             ShellLaunchState::ShellSpawned {
                 available_shell: None,
                 display_name: ShellName::blank(),
@@ -6072,6 +6117,8 @@ impl PaneGroup {
             window_id,
             ctx,
         );
+        let terminal_manager = terminal_init.manager;
+        let terminal_view = terminal_init.view;
 
         // Set the conversation transcript viewer status to Loading
         terminal_manager.update(ctx, |terminal_manager, _ctx| {
@@ -6083,7 +6130,6 @@ impl PaneGroup {
                 ));
         });
 
-        let terminal_view = terminal_manager.as_ref(ctx).view();
         (terminal_view, terminal_manager)
     }
 

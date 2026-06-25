@@ -269,7 +269,7 @@ impl Input {
                         .is_some_and(|argument| argument.is_empty())
                     && self.suggestions_mode_model.as_ref(ctx).is_closed()
                 {
-                    self.open_completion_suggestions(CompletionsTrigger::Keybinding, ctx);
+                    self.open_completion_suggestions(CompletionsTrigger::SlashCommandAutoOpen, ctx);
                 }
             }
             SlashCommandEntryState::SkillCommand(detected_skill) => {

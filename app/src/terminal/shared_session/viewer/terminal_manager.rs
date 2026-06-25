@@ -110,6 +110,10 @@ pub struct TerminalManager {
     /// transitive `ancestor_run_id` filter.
     enable_orchestration_polling: bool,
 }
+pub struct TerminalManagerInit {
+    pub(crate) manager: TerminalManager,
+    pub(crate) view: ViewHandle<TerminalView>,
+}
 
 impl TerminalManager {
     fn send_selected_conversation_update_for_viewer_to_current_network(
@@ -201,7 +205,7 @@ impl TerminalManager {
         enable_orchestration_polling: bool,
         is_cloud_mode: bool,
         ctx: &mut AppContext,
-    ) -> Self {
+    ) -> TerminalManagerInit {
         // Create all the necessary channels we need for communication.
         let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
         let (events_tx, events_rx) = async_channel::unbounded();
@@ -301,7 +305,8 @@ impl TerminalManager {
             );
         });
 
-        Self {
+        let terminal_view = view.clone();
+        let manager = Self {
             model,
             _model_events: model_events,
             view,
@@ -316,6 +321,10 @@ impl TerminalManager {
             outbound_handlers_registered: false,
             orchestration_viewer_model: Arc::new(FairMutex::new(None)),
             enable_orchestration_polling,
+        };
+        TerminalManagerInit {
+            manager,
+            view: terminal_view,
         }
     }
 
@@ -328,6 +337,7 @@ impl TerminalManager {
     /// orchestration parent agent, so the snapshot/restore path can emit a
     /// `LeafContents::AmbientAgent` rather than falling through to an empty
     /// terminal pane.
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         session_id: SessionId,
         resources: TerminalViewResources,
@@ -336,8 +346,11 @@ impl TerminalManager {
         enable_orchestration_polling: bool,
         is_cloud_mode: bool,
         ctx: &mut AppContext,
-    ) -> Self {
-        let mut terminal_manager = Self::new_internal(
+    ) -> TerminalManagerInit {
+        let TerminalManagerInit {
+            manager: mut terminal_manager,
+            view: terminal_view,
+        } = Self::new_internal(
             resources,
             initial_size,
             window_id,
@@ -352,7 +365,10 @@ impl TerminalManager {
             ctx,
         );
 
-        terminal_manager
+        TerminalManagerInit {
+            manager: terminal_manager,
+            view: terminal_view,
+        }
     }
 
     /// Create a new terminal manager for eventually viewing a cloud mode
@@ -364,7 +380,7 @@ impl TerminalManager {
         window_id: WindowId,
         enable_orchestration_polling: bool,
         ctx: &mut AppContext,
-    ) -> Self {
+    ) -> TerminalManagerInit {
         Self::new_internal(
             resources,
             initial_size,
@@ -1784,10 +1800,6 @@ impl TerminalManager {
 impl crate::terminal::TerminalManager for TerminalManager {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
-    }
-
-    fn view(&self) -> ViewHandle<TerminalView> {
-        self.view.clone()
     }
 
     fn on_view_detached(&self, detach_type: DetachType, app: &mut AppContext) {

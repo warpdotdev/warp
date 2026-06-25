@@ -20,8 +20,8 @@
 use ratatui::style::Color;
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiPresentationContext, TuiRect,
-    TuiRectExt, TuiSize, TuiStyle,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
+    TuiPresentationContext, TuiRect, TuiRectExt, TuiSize, TuiStyle,
 };
 use crate::{AppContext, Event};
 
@@ -82,13 +82,13 @@ impl TuiContainer {
 }
 
 impl TuiElement for TuiContainer {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
+    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
         let total = self.inset().saturating_mul(2);
         let inner_max = TuiSize::new(
             constraint.max.width.saturating_sub(total),
             constraint.max.height.saturating_sub(total),
         );
-        let inner = self.child.layout(TuiConstraint::loose(inner_max));
+        let inner = self.child.layout(TuiConstraint::loose(inner_max), ctx);
         let size = TuiSize::new(
             inner.width.saturating_add(total),
             inner.height.saturating_add(total),
@@ -96,7 +96,7 @@ impl TuiElement for TuiContainer {
         constraint.clamp(size)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
         if area.is_empty() {
             return;
         }
@@ -109,31 +109,30 @@ impl TuiElement for TuiContainer {
             draw_border(area, buffer, self.painted_border_style());
         }
 
-        self.child.render(area.inset(self.inset()), buffer);
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        let total = self.inset().saturating_mul(2);
-        let inner_width = width.saturating_sub(total);
-        self.child.desired_height(inner_width).saturating_add(total)
+        self.child.render(area.inset(self.inset()), buffer, ctx);
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
         self.child.present(ctx);
     }
 
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+        self.child.cursor_position(area.inset(self.inset()), ctx)
+    }
+
     fn dispatch_event(
         &mut self,
         event: &Event,
         area: TuiRect,
-        ctx: &mut TuiEventContext,
+        event_ctx: &mut TuiEventContext,
+        ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> bool {
         if area.is_empty() {
             return false;
         }
         self.child
-            .dispatch_event(event, area.inset(self.inset()), ctx, app)
+            .dispatch_event(event, area.inset(self.inset()), event_ctx, ctx, app)
     }
 }
 
