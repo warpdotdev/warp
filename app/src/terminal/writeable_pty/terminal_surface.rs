@@ -64,9 +64,14 @@ pub(crate) trait TerminalSurface: View + 'static
 where
     <Self as Entity>::Event: PtyIntentEvent,
 {
-    /// Whether the local manager should poll termios for a password prompt after a block starts.
+    /// Whether the local manager should start polling termios for a password prompt
+    /// after the given block starts.
     #[cfg(unix)]
-    fn should_poll_for_password_prompt(&self, ctx: &AppContext) -> bool;
+    fn should_start_password_prompt_polling(&self, command: &str, ctx: &AppContext) -> bool;
+
+    /// Whether the local manager should stop password-prompt polling for this completed block.
+    #[cfg(unix)]
+    fn should_stop_password_prompt_polling(&self, completed: &BlockCompletedEvent) -> bool;
 
     /// Called once the shell starter has been determined and the PTY event loop
     /// has started, so the surface can react to shell launch metadata.

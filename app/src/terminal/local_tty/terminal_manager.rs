@@ -924,30 +924,38 @@ fn wire_up_terminal_attribute_poller_with_surface<S: TerminalSurface>(
 
         match event {
             TerminalModelEvent::AfterBlockStarted {
+                command,
                 is_for_in_band_command: false,
                 ..
             } => {
-                *block_index.borrow_mut() = Some(model.lock().block_list().active_block_index());
-
                 let should_poll = surface_weak_handle.upgrade(ctx).is_some_and(|surface| {
                     surface.read(ctx, |surface, ctx| {
-                        surface.should_poll_for_password_prompt(ctx)
+                        surface.should_start_password_prompt_polling(command, ctx)
                     })
                 });
                 if should_poll {
+                    *block_index.borrow_mut() =
+                        Some(model.lock().block_list().active_block_index());
                     poller.update(ctx, |poller, ctx| {
                         poller.start_polling(ctx);
                     });
+                } else {
+                    *block_index.borrow_mut() = None;
                 }
             }
             TerminalModelEvent::BlockCompleted(completed) => {
-                poller.update(ctx, |poller, _ctx| {
-                    poller.stop_polling();
-                });
                 if let Some(surface) = surface_weak_handle.upgrade(ctx) {
-                    surface.update(ctx, |surface, ctx| {
-                        surface.on_polled_block_completed(completed, ctx);
+                    let should_stop = surface.read(ctx, |surface, _ctx| {
+                        surface.should_stop_password_prompt_polling(completed)
                     });
+                    if should_stop {
+                        poller.update(ctx, |poller, _ctx| {
+                            poller.stop_polling();
+                        });
+                        surface.update(ctx, |surface, ctx| {
+                            surface.on_polled_block_completed(completed, ctx);
+                        });
+                    }
                 }
             }
             _ => {}

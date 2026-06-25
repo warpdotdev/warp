@@ -25587,6 +25587,46 @@ impl TerminalView {
     pub fn shell_indicator_type(&self) -> Option<ShellIndicatorType> {
         self.shell_indicator_type
     }
+    #[cfg(unix)]
+    fn shell_family_for_password_prompt_polling(&self, ctx: &AppContext) -> ShellFamily {
+        self.active_block_session_id()
+            .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
+            .map(|session| session.shell().shell_type().into())
+            .unwrap_or_else(|| {
+                SessionSettings::handle(ctx).read(ctx, |settings, _| {
+                    settings
+                        .new_session_shell_override
+                        .value()
+                        .clone()
+                        .unwrap_or_default()
+                        .shell_family()
+                })
+            })
+    }
+
+    #[cfg(unix)]
+    fn would_emit_block_started_for_password_prompt_polling(
+        &self,
+        command: &str,
+        ctx: &AppContext,
+    ) -> bool {
+        let expanded_command = self
+            .active_block_session_id()
+            .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
+            .and_then(|session| {
+                let (first_word, rest) = command_first_word_and_suffix(command)?;
+                let alias_value = session.alias_value(first_word)?;
+                Some(format!("{alias_value}{rest}"))
+            });
+        let warpify_command = expanded_command.as_deref().unwrap_or(command);
+        let shell_family = self.shell_family_for_password_prompt_polling(ctx);
+        let warpify_settings = WarpifySettings::as_ref(ctx);
+        let is_compatible_subshell_command = warpify_settings
+            .is_compatible_subshell_command(command, shell_family)
+            || warpify_settings.is_compatible_subshell_command(warpify_command, shell_family);
+
+        !is_compatible_subshell_command
+    }
 
     /// Shows the warpify footer for a detected subshell command.
     fn show_warpify_footer(&mut self, ctx: &mut ViewContext<Self>) {
@@ -25759,7 +25799,10 @@ impl TerminalSurface for TerminalView {
     }
 
     #[cfg(unix)]
-    fn should_poll_for_password_prompt(&self, ctx: &AppContext) -> bool {
+    fn should_start_password_prompt_polling(&self, command: &str, ctx: &AppContext) -> bool {
+        if !self.would_emit_block_started_for_password_prompt_polling(command, ctx) {
+            return false;
+        }
         let notification_settings = &SessionSettings::as_ref(ctx).notifications;
         let password_notification_setting_on =
             matches!(notification_settings.mode, NotificationsMode::Unset)
@@ -25768,6 +25811,13 @@ impl TerminalSurface for TerminalView {
         let pane_handling_ssh_upload =
             self.is_ssh_uploader() && FeatureFlag::SshDragAndDrop.is_enabled();
         password_notification_setting_on || pane_handling_ssh_upload
+    }
+    #[cfg(unix)]
+    fn should_stop_password_prompt_polling(&self, completed: &BlockCompletedEvent) -> bool {
+        matches!(
+            &completed.block_type,
+            BlockType::User(_) | BlockType::BootstrapVisible(_) | BlockType::Background(_)
+        )
     }
 
     #[cfg(unix)]
