@@ -2739,7 +2739,7 @@ impl BlockList {
     pub fn insert_restored_block(&mut self, block: &SerializedBlock) {
         let did_active_block_receive_precmd = self.active_block().has_received_precmd();
         let mut processor = Processor::new();
-        self.restore_block(block, BootstrapStage::PostBootstrapPrecmd, &mut processor);
+        self.restore_block(block, BootstrapStage::RestoreBlocks, &mut processor);
         // restore_block consumed the previous active block and made the restored
         // block the new active (finished) block. Create a fresh active block so
         // the terminal can continue accepting input.
@@ -2958,7 +2958,6 @@ impl BlockList {
             self.active_block_mut().start_background(None);
         } else {
             self.active_block_mut().start();
-            self.active_block_mut().disable_reset_grid_checks();
         }
 
         if let Some(serialized_ai_metadata) = block.ai_metadata.as_ref().and_then(|ai_metadata| {
