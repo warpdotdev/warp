@@ -21,9 +21,7 @@
 //!   [`add_child`](TuiParentElement::add_child) /
 //!   [`add_children`](TuiParentElement::add_children).
 
-use std::collections::HashMap;
-
-use crate::{AppContext, EntityId, Event};
+use crate::{AppContext, EntityId, EntityIdMap, Event};
 
 mod buffer;
 mod child_view;
@@ -54,7 +52,7 @@ pub use text::TuiText;
 /// [`TuiPresenter::invalidate`]: crate::presenter::tui::TuiPresenter::invalidate
 pub struct TuiLayoutContext<'a> {
     /// Pre-rendered elements keyed by view id, consumed during layout.
-    pub rendered_views: &'a mut HashMap<EntityId, Box<dyn TuiElement>>,
+    pub rendered_views: &'a mut EntityIdMap<Box<dyn TuiElement>>,
 }
 
 impl<'a> TuiLayoutContext<'a> {
@@ -171,16 +169,16 @@ impl TuiElement for () {
 /// are reported to the neutral view hierarchy via
 /// [`AppContext::report_view_embeddings`].
 pub struct TuiPresentationContext<'a> {
-    parent_by_child: &'a mut HashMap<EntityId, EntityId>,
-    pub(crate) rendered_views: &'a mut HashMap<EntityId, Box<dyn TuiElement>>,
+    parent_by_child: &'a mut EntityIdMap<EntityId>,
+    pub(crate) rendered_views: &'a mut EntityIdMap<Box<dyn TuiElement>>,
     view_stack: Vec<EntityId>,
 }
 
 impl<'a> TuiPresentationContext<'a> {
     pub(crate) fn new(
         root_view_id: EntityId,
-        rendered_views: &'a mut HashMap<EntityId, Box<dyn TuiElement>>,
-        parent_by_child: &'a mut HashMap<EntityId, EntityId>,
+        rendered_views: &'a mut EntityIdMap<Box<dyn TuiElement>>,
+        parent_by_child: &'a mut EntityIdMap<EntityId>,
     ) -> Self {
         Self {
             parent_by_child,

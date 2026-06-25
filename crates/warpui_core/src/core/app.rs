@@ -57,9 +57,9 @@ use crate::windowing::{self, WindowCallbacks, WindowManager};
 use crate::{
     assets, rendering, AccessibilityData, Action, AddSingletonModel, AddWindowOptions, AnyModel,
     AnyModelHandle, ApplicationBundleInfo, Clipboard, CursorInfo, Effect, Element, Entity,
-    EntityId, Event, GetSingletonModelHandle, ModelAsRef, ModelContext, ModelHandle,
-    NextNewWindowsHasThisWindowsBoundsUponClose, Presenter, ReadModel, ReadView, Scene,
-    SingletonEntity, SpawnedFuture, TaskId, TypedActionView, UpdateModel, UpdateView, View,
+    EntityId, EntityIdMap, EntityIdSet, Event, GetSingletonModelHandle, ModelAsRef, ModelContext,
+    ModelHandle, NextNewWindowsHasThisWindowsBoundsUponClose, Presenter, ReadModel, ReadView,
+    Scene, SingletonEntity, SpawnedFuture, TaskId, TypedActionView, UpdateModel, UpdateView, View,
     ViewAsRef, ViewContext, ViewHandle, WindowId, WindowInvalidation, ZoomFactor,
 };
 
@@ -573,7 +573,7 @@ pub struct AppContext {
     /////////////////////////
     // Fields from AppContext
     /////////////////////////
-    pub(super) models: HashMap<EntityId, Box<dyn AnyModel>>,
+    pub(super) models: EntityIdMap<Box<dyn AnyModel>>,
     /// A mapping from type ID -> handle to the single global model of that
     /// type.  The handle is a strong reference, ensuring the model will not be
     /// dropped during the lifetime of the application.
@@ -608,8 +608,8 @@ pub struct AppContext {
     keystroke_matcher: Matcher,
     next_task_id: usize,
     weak_self: rc::Weak<RefCell<Self>>,
-    pub(super) subscriptions: HashMap<EntityId, Vec<Subscription>>,
-    pub(super) observations: HashMap<EntityId, Vec<Observation>>,
+    pub(super) subscriptions: EntityIdMap<Vec<Subscription>>,
+    pub(super) observations: EntityIdMap<Vec<Observation>>,
     /// Tracks pending unsubscribes during event emission.
     /// When `emit_event` is processing callbacks, unsubscribes are deferred here to avoid
     /// O(N²) tombstone scanning. The unsubscribes are processed at the end of event emission.
@@ -687,7 +687,7 @@ pub struct AppContext {
     /// Visibility is `pub(super)` because the `view::handle` module needs to access
     /// this field for dynamic window lookup in `ViewHandle::window_id()`,
     /// `WeakViewHandle::upgrade()`, and `WeakViewHandle::window_id()`.
-    pub(super) view_to_window: HashMap<EntityId, WindowId>,
+    pub(super) view_to_window: EntityIdMap<WindowId>,
 
     /// Maps child view → parent view for views created via `add_typed_action_view_with_parent`.
     /// Unlike the presenter's layout-time parent map, this persists across renders and
@@ -696,12 +696,12 @@ pub struct AppContext {
     ///
     /// Populated by `add_typed_action_view_internal` when a parent_view_id is provided,
     /// and cleaned up in `remove_dropped_items` when views are dropped.
-    structural_child_to_parent: HashMap<EntityId, EntityId>,
+    structural_child_to_parent: EntityIdMap<EntityId>,
 
     /// Reverse of `structural_child_to_parent`: maps parent view → set of child views.
     /// Enables efficient traversal in `transfer_structural_children` without iterating
     /// all views in the source window.
-    structural_parent_to_children: HashMap<EntityId, HashSet<EntityId>>,
+    structural_parent_to_children: EntityIdMap<EntityIdSet>,
 
     /// Backend-neutral child-view → parent-view map, per window. This is the view
     /// hierarchy the shared core walks for [`Self::view_ancestors`], the responder
@@ -713,7 +713,7 @@ pub struct AppContext {
     /// child-view embeddings it discovers while laying out a frame
     /// ([`Self::report_view_embeddings`]). Entries are removed when views are
     /// dropped or transferred out of the window, and when the window closes.
-    view_parents: HashMap<WindowId, HashMap<EntityId, EntityId>>,
+    view_parents: HashMap<WindowId, EntityIdMap<EntityId>>,
 
     /// When set, all focus changes to this window are suppressed.
     /// Used during tab drag to prevent the new window from stealing focus.
@@ -1454,7 +1454,7 @@ impl AppContext {
     pub fn report_view_embeddings(
         &mut self,
         window_id: WindowId,
-        embeddings: HashMap<EntityId, EntityId>,
+        embeddings: EntityIdMap<EntityId>,
     ) {
         self.view_parents
             .entry(window_id)
@@ -2725,11 +2725,11 @@ impl AppContext {
         self.view_parents.remove(&window_id);
         autotracking::close_window(window_id);
 
-        let mut subscriptions = HashMap::new();
-        let mut observations = HashMap::new();
+        let mut subscriptions = EntityIdMap::default();
+        let mut observations = EntityIdMap::default();
         // Back up view_to_window mappings so they can be restored if the window is reopened
         // via reopen_closed_window(). This preserves the view-to-window associations.
-        let mut view_to_window_backup = HashMap::new();
+        let mut view_to_window_backup = EntityIdMap::default();
         for view_id in view_ids.into_iter().flatten() {
             if let Some(subs) = self.subscriptions.remove(&view_id) {
                 subscriptions.insert(view_id, subs);
@@ -3287,7 +3287,7 @@ impl AppContext {
         root_view_id: EntityId,
         window_id: WindowId,
     ) -> Vec<EntityId> {
-        let mut seen: HashSet<EntityId> = HashSet::new();
+        let mut seen = EntityIdSet::default();
         let mut order: Vec<EntityId> = Vec::new();
         let mut stack: Vec<EntityId> = vec![root_view_id];
 
@@ -3327,7 +3327,7 @@ impl AppContext {
         target_window_id: WindowId,
         transferred: &mut Vec<EntityId>,
     ) {
-        let mut transferred_set: HashSet<EntityId> = transferred.iter().copied().collect();
+        let mut transferred_set: EntityIdSet = transferred.iter().copied().collect();
         let mut to_process: Vec<EntityId> = transferred.clone();
 
         while let Some(parent_id) = to_process.pop() {
@@ -4483,7 +4483,7 @@ impl AppContext {
     }
 
     /// Snapshot of the window's child-view → parent-view map (for debug tooling).
-    fn view_parent_map(&self, window_id: WindowId) -> HashMap<EntityId, EntityId> {
+    fn view_parent_map(&self, window_id: WindowId) -> EntityIdMap<EntityId> {
         self.view_parents
             .get(&window_id)
             .cloned()
@@ -4629,9 +4629,9 @@ impl AddSingletonModel for AppContext {
 pub struct ClosedWindowData {
     pub window_id: WindowId,
     window: Window,
-    subscriptions: HashMap<EntityId, Vec<Subscription>>,
-    observations: HashMap<EntityId, Vec<Observation>>,
-    view_to_window: HashMap<EntityId, WindowId>,
+    subscriptions: EntityIdMap<Vec<Subscription>>,
+    observations: EntityIdMap<Vec<Observation>>,
+    view_to_window: EntityIdMap<WindowId>,
     // TODO(vorporeal): why is AppContext.window_bounds holding an option?
     bounds: Option<RectF>,
     fullscreen_state: FullscreenState,
@@ -4757,7 +4757,7 @@ impl AppContext {
     // allow is needed because the filter half of `filter_map` is only
     // exercised when the additive `tui` feature adds the non-GUI variant.
     #[allow(clippy::unnecessary_filter_map)]
-    pub fn render_views(&self, window_id: WindowId) -> Result<HashMap<EntityId, Box<dyn Element>>> {
+    pub fn render_views(&self, window_id: WindowId) -> Result<EntityIdMap<Box<dyn Element>>> {
         self.windows
             .get(&window_id)
             .map(|w| {
@@ -4768,7 +4768,7 @@ impl AppContext {
                         #[cfg(feature = "tui")]
                         StoredView::Tui(_) => None,
                     })
-                    .collect::<HashMap<_, _>>()
+                    .collect::<EntityIdMap<_>>()
             })
             .ok_or_else(|| anyhow!("window not found"))
     }
