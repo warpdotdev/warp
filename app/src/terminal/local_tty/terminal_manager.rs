@@ -162,7 +162,6 @@ pub struct TerminalManager<S> {
 
     /// The manager is responsible for managing the lifetime
     /// of the PTY controller.
-    #[allow(dead_code)]
     pty_controller: ModelHandle<PtyController>,
 
     /// The manager is responsible for managing the lifetime of the remote server controller.
@@ -177,12 +176,10 @@ pub struct TerminalManager<S> {
     /// receiver as needed. We prefer to not create active receivers eagerly
     /// to avoid unnecessary allocations of data coming from the PTY (high throughput).
     /// Note that we need to hold onto the inactive receiver so that the channel isn't closed prematurely.
-    #[allow(dead_code)]
     inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
 
     /// The sharer side of the session sharing protocol. [`Some`] only when a
     /// shared session connection is ongoing.
-    #[allow(dead_code)]
     session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>>,
 }
 
