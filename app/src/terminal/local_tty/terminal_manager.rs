@@ -230,18 +230,21 @@ impl<S> TerminalManager<S> {
         let (executor_command_tx, executor_command_rx) = async_channel::unbounded();
         let (event_loop_tx, event_loop_rx) = mio_channel::channel();
 
-        // Deactivate the PTY reads broadcast immediately; we only activate receivers as needed.
+        // Create the broadcast channel to receive data from the PTY, but deactivate it immediately.
+        // We only want to create active receivers as necessary.
         let (pty_reads_tx, pty_reads_rx) =
             async_broadcast::broadcast(PTY_READS_BROADCAST_CHANNEL_SIZE);
         let inactive_pty_reads_rx = pty_reads_rx.deactivate();
 
         let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
 
+        // Initialize the sessions model.
         let sessions = ctx.add_model(|ctx| Sessions::new(executor_command_tx.clone(), ctx));
+
         let model_events =
             ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
 
-        // ApiKeyManager subscribes to block completion events for AWS credential refresh.
+        // Have ApiKeyManager subscribe to block completion events for AWS credential refresh
         ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.register_model_event_dispatcher(&model_events, ctx);
         });
@@ -252,6 +255,7 @@ impl<S> TerminalManager<S> {
         });
         let wsl_name_or_shell_starter = ShellStarter::init(preferred_shell.clone());
 
+        // Create the terminal model with all restored blocks
         log::info!(
             "Creating terminal model with {} restored blocks",
             all_restored_blocks
@@ -308,6 +312,7 @@ impl<S> TerminalManager<S> {
             IsSharedSessionCreator::No => {}
         }
 
+        // Initialize the PtyController.
         let pty_controller = init_pty_controller_model(
             event_loop_tx.clone(),
             executor_command_rx,
@@ -316,6 +321,8 @@ impl<S> TerminalManager<S> {
             model.clone(),
             ctx,
         );
+
+        // Initialize the RemoteServerController.
         let remote_server_controller =
             init_remote_server_controller(&pty_controller, &model_events, ctx);
         let size_info = model.lock().block_list().size().to_owned();
@@ -356,6 +363,7 @@ impl<S> TerminalManager<S> {
             inactive_pty_reads_rx,
             session_sharer: Rc::new(RefCell::new(None)),
         };
+
         post_wire(&mut terminal_manager, &surface, ctx);
 
         let terminal_surface = surface.clone();
