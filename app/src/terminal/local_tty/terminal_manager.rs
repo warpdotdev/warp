@@ -196,16 +196,17 @@ impl<S> Drop for TerminalManager<S> {
 }
 
 impl<S> TerminalManager<S> {
-    /// Creates a local terminal manager and its surface in the manager-owned
-    /// construction order.
+    /// Creates a local terminal manager model and terminal surface.
     #[allow(clippy::too_many_arguments)]
-    fn build_with_surface<PostWire>(
-        chosen_shell: Option<AvailableShell>,
+    pub(crate) fn create_model<PostWire>(
         startup_directory: Option<PathBuf>,
-        all_restored_blocks: Option<&Vec<SerializedBlockListItem>>,
-        initial_size: Vector2F,
+        env_vars: HashMap<OsString, OsString>,
         is_shared_session_creator: IsSharedSessionCreator,
+        all_restored_blocks: Option<&Vec<SerializedBlockListItem>>,
+        user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
+        initial_size: Vector2F,
         model_event_sender: Option<SyncSender<ModelEvent>>,
+        chosen_shell: Option<AvailableShell>,
         ctx: &mut AppContext,
         create_surface: impl FnOnce(
             async_channel::Receiver<()>,
@@ -217,10 +218,11 @@ impl<S> TerminalManager<S> {
             InactiveReceiver<Arc<Vec<u8>>>,
             &mut AppContext,
         ) -> (ViewHandle<S>, PostWire),
-    ) -> (Self, ViewHandle<S>)
+    ) -> (ModelHandle<Box<dyn TerminalManagerTrait>>, ViewHandle<S>)
     where
         S: TerminalSurface,
         <S as Entity>::Event: PtyIntentEvent,
+        Self: TerminalManagerTrait,
         PostWire: FnOnce(&mut Self, &ViewHandle<S>, &mut AppContext),
     {
         let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
@@ -258,7 +260,7 @@ impl<S> TerminalManager<S> {
                 .unwrap_or(0)
         );
         let model = terminal_manager::create_terminal_model(
-            startup_directory,
+            startup_directory.clone(),
             all_restored_blocks,
             initial_size,
             channel_event_proxy.clone(),
@@ -335,7 +337,7 @@ impl<S> TerminalManager<S> {
             model_event_sender,
             ctx,
         );
-        let mut manager = Self {
+        let mut terminal_manager = Self {
             event_loop_tx: Arc::new(Mutex::new(event_loop_tx)),
             event_loop_rx: Some(event_loop_rx),
             channel_event_proxy,
@@ -354,48 +356,7 @@ impl<S> TerminalManager<S> {
             inactive_pty_reads_rx,
             session_sharer: Rc::new(RefCell::new(None)),
         };
-        post_wire(&mut manager, &surface, ctx);
-        (manager, surface)
-    }
-    /// Creates a local terminal manager model and terminal surface.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn create_model<PostWire>(
-        startup_directory: Option<PathBuf>,
-        env_vars: HashMap<OsString, OsString>,
-        is_shared_session_creator: IsSharedSessionCreator,
-        all_restored_blocks: Option<&Vec<SerializedBlockListItem>>,
-        user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
-        initial_size: Vector2F,
-        model_event_sender: Option<SyncSender<ModelEvent>>,
-        chosen_shell: Option<AvailableShell>,
-        ctx: &mut AppContext,
-        create_surface: impl FnOnce(
-            async_channel::Receiver<()>,
-            ModelHandle<ModelEventDispatcher>,
-            Arc<FairMutex<TerminalModel>>,
-            ModelHandle<Sessions>,
-            SizeInfo,
-            ColorList,
-            InactiveReceiver<Arc<Vec<u8>>>,
-            &mut AppContext,
-        ) -> (ViewHandle<S>, PostWire),
-    ) -> (ModelHandle<Box<dyn TerminalManagerTrait>>, ViewHandle<S>)
-    where
-        S: TerminalSurface,
-        <S as Entity>::Event: PtyIntentEvent,
-        Self: TerminalManagerTrait,
-        PostWire: FnOnce(&mut Self, &ViewHandle<S>, &mut AppContext),
-    {
-        let (mut terminal_manager, surface) = Self::build_with_surface(
-            chosen_shell,
-            startup_directory.clone(),
-            all_restored_blocks,
-            initial_size,
-            is_shared_session_creator,
-            model_event_sender,
-            ctx,
-            create_surface,
-        );
+        post_wire(&mut terminal_manager, &surface, ctx);
 
         let terminal_surface = surface.clone();
         let wsl_name_or_shell_starter = terminal_manager.take_wsl_name_or_shell_starter();

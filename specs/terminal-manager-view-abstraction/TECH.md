@@ -66,9 +66,9 @@ Every other `TerminalView` event maps to `None`.
 
 Constructors that create a `TerminalView` return the view separately alongside the boxed manager. This keeps the boxed manager view-agnostic while preserving existing pane code that needs the `TerminalView` handle.
 
-Current GUI constructors that return `(manager, terminal_view)`:
+Current constructors that return `(manager, surface)`:
 
-- `local_tty::TerminalManager<TerminalView>::create_model`
+- `local_tty::TerminalManager<S>::create_model`, called by the GUI path as `TerminalManager::<TerminalView>::create_model`
 - `remote_tty::TerminalManager::create_model`
 - `MockTerminalManager::create_model`
 - `shared_session::viewer::TerminalManager::new`
@@ -106,7 +106,7 @@ For the GUI caller, `TerminalManager::<TerminalView>::create_model(...)` now:
 1. Resolves GUI-specific restored blocks from explicit restored blocks and conversation restoration.
 2. Uses a surface setup callback that creates `CurrentPrompt`, `PromptType`, and `TerminalView` from the manager-created surface components, then returns `(view, post_wire)`.
 3. The returned `post_wire` closure appends the GUI restoration separator when needed, wires remote-server choice UI, and wires `TerminalView`-specific session sharing.
-4. Boxes the manager, schedules shell determination, and returns `(manager_model, terminal_view)`.
+4. The generic constructor boxes the manager, schedules shell determination, and returns `(manager_model, terminal_view)`.
 
 This keeps the end-to-end local terminal construction protocol in `TerminalManager<S>::create_model` while keeping GUI-specific work in the `TerminalView` surface setup callback. A future TUI surface can call the same function with a different surface setup callback.
 
@@ -175,8 +175,6 @@ Validation performed during implementation:
 
 - `./script/format`
 - `cargo check -p warp`
-- `cargo clippy -p warp --all-targets --tests -- -D warnings`
-- focused `cargo nextest run -p warp` filters covering terminal view behavior, pane creation, PTY event paths, and shared-session start/stop
 
 ## Parallelization
 
