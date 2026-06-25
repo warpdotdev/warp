@@ -8,11 +8,11 @@ fn test_data_dir_path() {
     // ChannelState, by default, is configured for Channel::Oss.
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            assert_eq!(data_dir(), home_dir.join(".zerp-oss"));
+            assert_eq!(data_dir(), home_dir.join(".zerp"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-            assert_eq!(data_dir(), home_dir.join(".local/share/warp-oss"));
+            assert_eq!(data_dir(), home_dir.join(".local/share/zerp-terminal"));
         } else if #[cfg(windows)] {
-            assert_eq!(data_dir(), home_dir.join("AppData\\Roaming\\zerp\\ZerpOss\\data"));
+            assert_eq!(data_dir(), home_dir.join("AppData\\Roaming\\zerp\\Zerp\\data"));
         } else {
             unimplemented!("Need to update tests for current platform!");
         }
@@ -25,11 +25,11 @@ fn test_config_local_dir_path() {
     // ChannelState, by default, is configured for Channel::Oss.
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            assert_eq!(config_local_dir(), home_dir.join(".zerp-oss"));
+            assert_eq!(config_local_dir(), home_dir.join(".zerp"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-            assert_eq!(config_local_dir(), home_dir.join(".config/warp-oss"));
+            assert_eq!(config_local_dir(), home_dir.join(".config/zerp-terminal"));
         } else if #[cfg(windows)] {
-            assert_eq!(config_local_dir(), home_dir.join("AppData\\Local\\zerp\\ZerpOss\\config"));
+            assert_eq!(config_local_dir(), home_dir.join("AppData\\Local\\zerp\\Zerp\\config"));
         } else {
             unimplemented!("Need to update tests for current platform!");
         }
@@ -40,8 +40,8 @@ fn test_config_local_dir_path() {
 fn test_warp_home_config_dir_path() {
     let home_dir = home_dir().expect("Should be able to compute home directory");
     let expected_dir_name = match ChannelState::data_profile() {
-        Some(data_profile) => format!(".zerp-oss-{data_profile}"),
-        None => ".zerp-oss".to_string(),
+        Some(data_profile) => format!(".zerp-{data_profile}"),
+        None => ".zerp".to_string(),
     };
 
     assert_eq!(
@@ -68,11 +68,11 @@ fn test_cache_dir_path() {
     // ChannelState, by default, is configured for Channel::Oss.
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            assert_eq!(cache_dir(), home_dir.join("Library/Application Support/dev.zerp.ZerpOss"));
+            assert_eq!(cache_dir(), home_dir.join("Library/Application Support/dev.zerp.Zerp"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-            assert_eq!(cache_dir(), home_dir.join(".cache/warp-oss"));
+            assert_eq!(cache_dir(), home_dir.join(".cache/zerp-terminal"));
         } else if #[cfg(windows)] {
-            assert_eq!(cache_dir(), home_dir.join("AppData\\Local\\zerp\\ZerpOss\\cache"));
+            assert_eq!(cache_dir(), home_dir.join("AppData\\Local\\zerp\\Zerp\\cache"));
         } else {
             unimplemented!("Need to update tests for current platform!");
         }
@@ -85,11 +85,11 @@ fn test_state_dir_path() {
     cfg_if::cfg_if! {
         // ChannelState, by default, is configured for Channel::Oss.
         if #[cfg(target_os = "macos")] {
-            assert_eq!(state_dir(), home_dir.join("Library/Application Support/dev.zerp.ZerpOss"));
+            assert_eq!(state_dir(), home_dir.join("Library/Application Support/dev.zerp.Zerp"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-            assert_eq!(state_dir(), home_dir.join(".local/state/warp-oss"));
+            assert_eq!(state_dir(), home_dir.join(".local/state/zerp-terminal"));
         } else if #[cfg(windows)] {
-            assert_eq!(state_dir(), home_dir.join("AppData\\Local\\zerp\\ZerpOss\\data"));
+            assert_eq!(state_dir(), home_dir.join("AppData\\Local\\zerp\\Zerp\\data"));
         } else {
             unimplemented!("Need to update tests for current platform!");
         }
@@ -132,15 +132,15 @@ fn test_project_path_for_warp_dev_app_id() {
 
 #[test]
 fn test_project_path_for_oss_app_id() {
-    let project_dirs = project_dirs_for_app_id(AppId::new("dev", "zerp", "ZerpOss"), None)
+    let project_dirs = project_dirs_for_app_id(AppId::new("dev", "zerp", "Zerp"), None)
         .expect("should be able to compute project dirs");
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            assert_eq!(project_dirs.project_path(), "dev.zerp.ZerpOss");
+            assert_eq!(project_dirs.project_path(), "dev.zerp.Zerp");
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-            assert_eq!(project_dirs.project_path(), "zerp-oss");
+            assert_eq!(project_dirs.project_path(), "zerp-terminal");
         } else if #[cfg(windows)] {
-            assert_eq!(project_dirs.project_path(), "zerp\\ZerpOss");
+            assert_eq!(project_dirs.project_path(), "zerp\\Zerp");
         } else {
             unimplemented!("Need to update tests for current platform!");
         }

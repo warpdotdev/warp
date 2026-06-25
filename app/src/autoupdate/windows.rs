@@ -317,7 +317,7 @@ fn app_name_prefix(channel: Channel) -> &'static str {
         Channel::Local => "ZerpLocal",
         Channel::Integration => "ZerpIntegration",
         Channel::Dev => "ZerpDev",
-        Channel::Oss => "ZerpOss",
+        Channel::Oss => "Zerp",
     }
 }
 

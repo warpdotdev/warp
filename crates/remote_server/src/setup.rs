@@ -339,18 +339,14 @@ pub fn parse_uname_output(
 /// - dev:         `~/.zerp-dev/remote-server`
 /// - local:       `~/.zerp-local/remote-server`
 /// - integration: `~/.zerp-dev/remote-server`
-/// - zerp-oss:    `~/.zerp-oss/remote-server`
+/// - oss:         `~/.zerp/remote-server`
 pub fn remote_server_dir() -> String {
     let warp_dir = match ChannelState::channel() {
         Channel::Stable => ".zerp",
         Channel::Preview => ".zerp-preview",
         Channel::Dev | Channel::Integration => ".zerp-dev",
         Channel::Local => ".zerp-local",
-        Channel::Oss => {
-            // TODO(alokedesai): need to figure out how remote server works with warp-oss
-            // For now, return what Dev returns.
-            ".zerp-dev"
-        }
+        Channel::Oss => ".zerp",
     };
     format!("~/{warp_dir}/remote-server")
 }

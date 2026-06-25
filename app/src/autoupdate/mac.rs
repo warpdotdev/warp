@@ -744,7 +744,7 @@ fn executable_name(channel: Channel) -> &'static str {
         Channel::Local => "zerp",
         Channel::Integration => "integration",
         Channel::Dev => "dev",
-        Channel::Oss => "zerp-oss",
+        Channel::Oss => "zerp",
     }
 }
 

@@ -28,10 +28,10 @@ COMMON_SKILLS_TARGET="${ZERP_COMMON_SKILLS_INSTALL_TARGET:-}"
 
 # If warp_channel_config is on PATH, build the Local channel binary; otherwise build the OSS channel.
 if command -v warp-channel-config &>/dev/null; then
-    ZERP_BIN_NAME="zerp"
+    ZERP_BIN_NAME="zerp-local"
     ZERP_CHANNEL="local"
 else
-    ZERP_BIN_NAME="zerp-oss"
+    ZERP_BIN_NAME="zerp"
     ZERP_CHANNEL="oss"
 fi
 

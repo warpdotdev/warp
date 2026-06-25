@@ -6,12 +6,12 @@ use anyhow::Result;
 use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 use warp_core::AppId;
 
-// Simple wrapper around warp::run() for Warp OSS builds.
+// Simple wrapper around warp::run() for Zerp builds.
 fn main() -> Result<()> {
     let mut state = ChannelState::new(
         Channel::Oss,
         ChannelConfig {
-            app_id: AppId::new("dev", "zerp", "ZerpOss"),
+            app_id: AppId::new("dev", "zerp", "Zerp"),
             logfile_name: "zerp.log".into(),
             server_config: WarpServerConfig::production(),
             oz_config: OzConfig::production(),
@@ -41,9 +41,9 @@ embed_plist::embed_info_plist_bytes!(r#"
     <key>CFBundleDisplayName</key>
     <string>Zerp</string>
     <key>CFBundleExecutable</key>
-    <string>zerp-oss</string>
+    <string>zerp</string>
     <key>CFBundleIdentifier</key>
-    <string>dev.zerp.ZerpOss</string>
+    <string>dev.zerp.Zerp</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

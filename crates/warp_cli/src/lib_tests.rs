@@ -82,7 +82,6 @@ fn zerp_cli_binary_names_enter_cli_mode_without_matching_app_binaries() {
     assert!(is_cli_binary_name("zerp-cli-oss"));
 
     assert!(!is_cli_binary_name("zerp"));
-    assert!(!is_cli_binary_name("zerp-oss"));
     assert!(!is_cli_binary_name("oz"));
 }
 

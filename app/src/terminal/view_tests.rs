@@ -5443,7 +5443,7 @@ fn inline_agent_view_persists_across_transfer_takeover_for_monitored_long_runnin
 }
 
 #[test]
-fn use_agent_footer_renders_for_transfer_handoff_even_when_user_command_footer_setting_disabled() {
+fn use_agent_footer_stays_hidden_for_transfer_handoff() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         FeatureFlag::AgentView.set_enabled(true);
@@ -5515,13 +5515,12 @@ fn use_agent_footer_renders_for_transfer_handoff_even_when_user_command_footer_s
 
             view.maybe_show_use_agent_footer_in_blocklist(ctx);
             let model = view.model.lock();
-            assert!(view.should_render_use_agent_footer(&model, ctx));
+            assert!(!view.should_render_use_agent_footer(&model, ctx));
             let active_block_index = model.block_list().active_block_index();
-            let rendered_footer_view_id = model
+            let rendered_footer = model
                 .block_list()
-                .last_non_hidden_rich_content_block_after_block(Some(active_block_index))
-                .map(|(_, item)| item.view_id);
-            assert_eq!(rendered_footer_view_id, Some(view.use_agent_footer.id()));
+                .last_non_hidden_rich_content_block_after_block(Some(active_block_index));
+            assert!(rendered_footer.is_none());
         });
     })
 }

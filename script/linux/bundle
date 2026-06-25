@@ -160,7 +160,7 @@ mkdir -p "$OUT_DIR"
 # ZERP_BIN is the name of the binary produced by cargo;
 # BINARY_NAME is the desired name of the binary in the final package.
 if [[ $RELEASE_CHANNEL = "local" ]]; then
-  ZERP_BIN="zerp"
+  ZERP_BIN="zerp-local"
   BINARY_NAME="zerp-terminal-local"
   APP_NAME="ZerpLocal"
   FEATURES="$FEATURES,agent_mode_debug"
@@ -185,9 +185,9 @@ elif [[ $RELEASE_CHANNEL = "stable" ]]; then
   BINARY_NAME="zerp-terminal"
   APP_NAME="Zerp"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-  ZERP_BIN="zerp-oss"
-  BINARY_NAME="zerp-terminal-oss"
-  APP_NAME="ZerpOss"
+  ZERP_BIN="zerp"
+  BINARY_NAME="zerp-terminal"
+  APP_NAME="Zerp"
   # The OSS channel does not ship Sentry, so drop the crash_reporting feature
   # (which would otherwise pull in the Sentry SDK as a dependency).
   FEATURES="release_bundle"

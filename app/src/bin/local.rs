@@ -36,7 +36,7 @@ embed_plist::embed_info_plist_bytes!(r#"
     <key>CFBundleDisplayName</key>
     <string>ZerpLocal</string>
     <key>CFBundleExecutable</key>
-    <string>zerp</string>
+    <string>zerp-local</string>
     <key>CFBundleIdentifier</key>
     <string>dev.zerp.Zerp-Local</string>
     <key>CFBundleInfoDictionaryVersion</key>

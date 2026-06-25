@@ -4156,7 +4156,7 @@ impl TerminalView {
 
         let terminal_view_id = ctx.view_id();
         let agent_input_footer = input.as_ref(ctx).agent_input_footer().clone();
-        let use_agent_button_bar = ctx.add_typed_action_view(|ctx| {
+        let use_agent_button_bar = ctx.add_view(|ctx| {
             UseAgentToolbar::new(
                 terminal_view_id,
                 model.clone(),
@@ -9667,14 +9667,6 @@ impl TerminalView {
             model.block_list_mut().set_active_block_banner(None);
         }
 
-        // Also clear the warpify footer so it doesn't linger after warpification
-        // starts, fails, or is cancelled.
-        if FeatureFlag::WarpifyFooter.is_enabled() {
-            self.use_agent_footer.update(ctx, |footer, ctx| {
-                footer.clear_warpify(ctx);
-            });
-        }
-
         match remember_command {
             RememberForWarpification::RememberSubshellCommand(command) => {
                 WarpifySettings::handle(ctx).update(ctx, |warpify, ctx| {
@@ -9700,10 +9692,6 @@ impl TerminalView {
         telemetry_event: TelemetryEvent,
         ctx: &mut ViewContext<Self>,
     ) {
-        if FeatureFlag::WarpifyFooter.is_enabled() {
-            return;
-        }
-
         let mut model = self.model.lock();
 
         // Shared session viewers can't initiate warpification currently.
@@ -11688,10 +11676,6 @@ impl TerminalView {
                     self.on_user_block_completed(&block_completed_event.block_id, ctx);
                 }
 
-                // Clear any stale warpify footer so it doesn't leak into the next command's footer rendering.
-                self.use_agent_footer.update(ctx, |footer, ctx| {
-                    footer.clear_warpify(ctx);
-                });
                 self.hide_use_agent_footer_in_blocklist(ctx);
                 if matches!(block_completed_event.block_type, BlockType::User(_)) {
                     // Close the rich input editor if it was open (side effects
@@ -11830,14 +11814,10 @@ impl TerminalView {
                             .add_subshell_banner_abort_handle(ctx.spawn_abortable(
                                 Timer::after(*SUBSHELL_BANNER_DELAY_DURATION),
                                 |view, _, ctx| {
-                                    if FeatureFlag::WarpifyFooter.is_enabled() {
-                                        view.show_warpify_footer(ctx);
-                                    } else {
-                                        view.handle_action(
-                                            &TerminalAction::ShowSubshellBanner(command),
-                                            ctx,
-                                        );
-                                    }
+                                    view.handle_action(
+                                        &TerminalAction::ShowSubshellBanner(command),
+                                        ctx,
+                                    );
                                 },
                                 |_, _| {},
                             ));
@@ -25385,27 +25365,6 @@ impl TerminalView {
         self.shell_indicator_type
     }
 
-    /// Shows the warpify footer for a detected subshell command.
-    fn show_warpify_footer(&mut self, ctx: &mut ViewContext<Self>) {
-        let model = self.model.lock();
-
-        // Shared session viewers can't initiate warpification currently.
-        // Don't show the warpify footer when an agent is monitoring the command either.
-        if model.shared_session_status().is_viewer()
-            || model.block_list().active_block().is_agent_monitoring()
-        {
-            return;
-        }
-        drop(model);
-
-        self.use_agent_footer.update(ctx, |footer, ctx| {
-            footer.show_warpify(ctx);
-        });
-        self.maybe_show_use_agent_footer_in_blocklist(ctx);
-
-        send_telemetry_from_ctx!(TelemetryEvent::WarpifyFooterShown { is_ssh: false }, ctx);
-    }
-
     fn show_initialization_block(&mut self) {
         self.model
             .lock()
@@ -27656,12 +27615,6 @@ impl View for TerminalView {
         if let Some(WithinBlockBanner::WarpifyBanner(_)) =
             model_lock.block_list().active_block().block_banner()
         {
-            context.set.insert("SubshellBanner");
-        }
-
-        // Also set the warpify context when the footer (flag-gated replacement
-        // for the in-block banner) is active, so the ctrl-i keybinding works.
-        if self.use_agent_footer.as_ref(app).is_warpify_active(app) {
             context.set.insert("SubshellBanner");
         }
 

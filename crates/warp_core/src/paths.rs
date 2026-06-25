@@ -36,8 +36,7 @@ fn base_warp_config_dir_name() -> String {
     match ChannelState::channel() {
         // Preview shares the same directory as Stable for backward
         // compatibility — existing users already have config in `.warp`.
-        Channel::Stable | Channel::Preview => ZERP_CONFIG_DIR.to_owned(),
-        Channel::Oss => format!("{ZERP_CONFIG_DIR}-oss"),
+        Channel::Stable | Channel::Preview | Channel::Oss => ZERP_CONFIG_DIR.to_owned(),
         Channel::Dev => format!("{ZERP_CONFIG_DIR}-dev"),
         Channel::Integration => format!("{ZERP_CONFIG_DIR}-integration"),
         Channel::Local => format!("{ZERP_CONFIG_DIR}-local"),
@@ -86,7 +85,7 @@ fn macos_config_dir_name() -> String {
     match ChannelState::channel() {
         Channel::Stable => ZERP_CONFIG_DIR.to_owned(),
         Channel::Preview => format!("{ZERP_CONFIG_DIR}-preview"),
-        Channel::Oss => format!("{ZERP_CONFIG_DIR}-oss"),
+        Channel::Oss => ZERP_CONFIG_DIR.to_owned(),
         Channel::Dev => format!("{ZERP_CONFIG_DIR}-dev"),
         Channel::Integration => format!("{ZERP_CONFIG_DIR}-integration"),
         Channel::Local => format!("{ZERP_CONFIG_DIR}-local"),
@@ -244,7 +243,6 @@ fn project_dirs_for_app_id(
                 "WarpOss" => "Zerp-Oss".to_owned(),
                 other if other.starts_with("Warp") => other.replace("Warp", "Warp-Terminal-"),
                 "Zerp" => "Zerp-Terminal".to_owned(),
-                "ZerpOss" => "Zerp-Oss".to_owned(),
                 other if other.starts_with("Zerp") => other.replace("Zerp", "Zerp-Terminal-"),
                 _ => app_id.application_name().to_owned(),
             };

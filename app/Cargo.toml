@@ -1,6 +1,6 @@
 [package]
 authors = ["Warp Team <dev@warp.dev>"]
-default-run = "zerp-oss"
+default-run = "zerp"
 description = "The cloud-backed terminal for individuals and teams"
 edition = "2021"
 autobins = false
@@ -18,12 +18,12 @@ path = "src/lib.rs"
 # flag overrides). Otherwise these binaries are exactly identical to our main binary.
 
 [[bin]]
-name = "zerp-oss"
+name = "zerp"
 path = "src/bin/oss.rs"
 test = false
 
 [[bin]]
-name = "zerp"
+name = "zerp-local"
 path = "src/bin/local.rs"
 test = false
 
@@ -927,13 +927,17 @@ codex_plugin = []
 git_credential_refresh = []
 prompt_cache_expiry_warning = []
 
-[package.metadata.bundle.bin.zerp-oss]
+[package.metadata.bundle.bin.zerp]
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"
-identifier = "dev.zerp.ZerpOss"
+identifier = "dev.zerp.Zerp"
 name = "Zerp"
 resources = ["assets/onboarding"]
-icon = ["channels/oss/icon/no-padding/512x512.png", "channels/oss/icon/no-padding/icon.ico"]
+icon = [
+    "channels/oss/icon/no-padding/icon.icns",
+    "channels/oss/icon/no-padding/512x512.png",
+    "channels/oss/icon/no-padding/icon.ico",
+]
 short_description = "The terminal for third-party agent CLIs."
 
 [package.metadata.bundle.bin.stable]
@@ -969,7 +973,7 @@ osx_frameworks = [
 resources = ["assets/onboarding"]
 short_description = "The cloud-backed terminal for individuals and teams, developer build."
 
-[package.metadata.bundle.bin.zerp]
+[package.metadata.bundle.bin.zerp-local]
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"
 identifier = "dev.zerp.Zerp-Local"

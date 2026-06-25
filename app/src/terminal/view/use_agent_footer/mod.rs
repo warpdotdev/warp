@@ -1,8 +1,7 @@
-//! Footer bar for "Use agent" functionality during long-running commands.
+//! Footer bar for CLI agent functionality during long-running commands.
 //!
-//! This module provides a footer that appears at the bottom of active long running blocks,
-//! offering users the option to bring in the agent. For CLI agent commands (e.g., Claude Code,
-//! Gemini CLI, Codex), it displays a specialized footer with additional functionality.
+//! For CLI agent commands (e.g., Claude Code, Gemini CLI, Codex), it displays a specialized
+//! footer with additional functionality.
 
 use base64::Engine;
 use warpui::clipboard::{ClipboardContent, ImageData};
@@ -16,40 +15,24 @@ use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
 };
 use crate::util::image::{infer_mime_type, MAX_IMAGE_SIZE_BYTES_FOR_CLI_AGENT, MIME_SNIFF_BYTES};
-mod warpify_footer;
 
 use std::path::Path;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use parking_lot::FairMutex;
-use pathfinder_color::ColorU;
 use warp_core::features::FeatureFlag;
-use warp_core::settings::Setting;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::color::contrast::{
-    high_enough_contrast, pick_best_foreground_color, MinimumAllowedContrast,
-};
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill as ThemeFill;
-use warp_core::{report_error, send_telemetry_from_ctx};
+use warp_core::send_telemetry_from_ctx;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
-use warpify_footer::{WarpifyFooterView, WarpifyFooterViewEvent};
-use warpui::elements::{
-    ChildView, Container, CrossAxisAlignment, Empty, Expanded, Flex, MainAxisSize, ParentElement,
-};
-use warpui::keymap::Keystroke;
+use warpui::elements::{ChildView, Container, Empty};
 use warpui::r#async::Timer;
 use warpui::{
-    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, View, ViewContext,
+    ViewHandle,
 };
 
-use super::{RichContentInsertionPosition, TerminalAction, TerminalView};
-use crate::ai::blocklist::agent_view::agent_view_bg_fill;
+use super::{RichContentInsertionPosition, TerminalView};
 use crate::ai::blocklist::block::cli_controller::CLISubagentEvent;
-use crate::cmd_or_ctrl_shift;
 use crate::code_review::diff_state::GitDeltaPreference;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::server::telemetry::{CLIAgentType, CLISubagentControlState, TelemetryEvent};
@@ -60,11 +43,6 @@ use crate::terminal::cli_agent_sessions::CLIAgentRichInputCloseReason;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 pub use crate::terminal::CLIAgent;
 use crate::terminal::TerminalModel;
-use crate::ui_components::blended_colors;
-use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{
-    ActionButton, ActionButtonTheme, ButtonSize, KeystrokeSource, TooltipAlignment,
-};
 
 /// Small delay inserted between separate PTY writes to CLI agents.
 /// (Used both for the mode-switch prefix split and for the `DelayedEnter`
@@ -141,9 +119,6 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
     }
 }
 
-static USE_AGENT_KEYSTROKE: LazyLock<Keystroke> =
-    LazyLock::new(|| Keystroke::parse(cmd_or_ctrl_shift("enter")).expect("valid keystroke"));
-
 impl TerminalView {
     pub(super) fn register_subscriptions_for_use_agent_footer(
         &mut self,
@@ -153,19 +128,6 @@ impl TerminalView {
         ctx.subscribe_to_model(&ai_settings, |me, _, event, ctx| match event {
             AISettingsChangedEvent::IsAnyAIEnabled { .. }
             | AISettingsChangedEvent::ShouldRenderCLIAgentToolbar { .. } => {
-                me.maybe_show_use_agent_footer_in_blocklist(ctx);
-            }
-            AISettingsChangedEvent::ShouldRenderUseAgentToolbarForUserCommands { .. } => {
-                // When the setting is re-enabled (e.g. from the AI settings page),
-                // reset the pane-scoped dismissal so the footer can reappear.
-                if *AISettings::as_ref(ctx)
-                    .should_render_use_agent_footer_for_user_commands
-                    .value()
-                {
-                    me.use_agent_footer.update(ctx, |footer, _| {
-                        footer.did_user_dismiss = false;
-                    });
-                }
                 me.maybe_show_use_agent_footer_in_blocklist(ctx);
             }
             AISettingsChangedEvent::CLIAgentToolbarEnabledCommands { .. } => {
@@ -267,18 +229,6 @@ impl TerminalView {
             UseAgentToolbarEvent::HideRichInput => {
                 self.close_cli_agent_rich_input_and_disable_auto_toggle(ctx);
             }
-            UseAgentToolbarEvent::Warpify => {
-                self.hide_use_agent_footer_in_blocklist(ctx);
-                self.handle_action(&TerminalAction::TriggerSubshellBootstrap, ctx);
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::WarpifyFooterAcceptedWarpify { is_ssh: false },
-                    ctx
-                );
-            }
-            UseAgentToolbarEvent::UseAgent => {
-                self.hide_use_agent_footer_in_blocklist(ctx);
-                self.handle_action(&TerminalAction::SetInputModeAgent, ctx);
-            }
         }
     }
 
@@ -295,52 +245,15 @@ impl TerminalView {
     ) -> bool {
         let ai_settings = AISettings::as_ref(app);
 
-        // If the warpify footer is active, a subshell was detected and we should show the footer.
-        if self.use_agent_footer.as_ref(app).is_warpify_active(app) {
-            return true;
-        }
-
-        let active_block = model.block_list().active_block();
         let cli_agent = CLIAgentSessionsModel::as_ref(app)
             .session(self.view_id)
             .map(|s| s.agent);
 
-        // Check the appropriate setting based on whether this is a CLI agent command
-        if cli_agent.is_some() {
-            // For CLI agent commands, only check the CLI agent footer setting.
-            // This is independent of the global AI toggle so that users who
-            // disable Warp AI still get the footer for third-party coding agents.
-            if !*ai_settings.should_render_cli_agent_footer {
-                return false;
-            }
-
-            // If a CLIAgent is active, we always want to show the agent footer.
-            return true;
-        }
-
-        // All other footer variants require the global AI setting to be on.
-        if !ai_settings.is_any_ai_enabled(app) {
+        if cli_agent.is_none() {
             return false;
         }
 
-        if !active_block.is_eligible_for_agent_handoff() {
-            // For regular commands (not agent handoff), check the "Use Agent" footer setting.
-            // Agent handoff blocks always show the footer regardless of this setting.
-            let is_user_command = active_block.requested_command_action_id().is_none();
-            if is_user_command
-                && (self.use_agent_footer.as_ref(app).did_user_dismiss()
-                    || !*ai_settings.should_render_use_agent_footer_for_user_commands)
-            {
-                return false;
-            }
-        }
-
-        // Don't show the use agent footer during LRCs in setup phase of ambient agent sessions.
-        let is_shared_ambient_session = model.is_shared_ambient_agent_session();
-
-        !self.is_input_box_visible(model, app)
-            && ((active_block.is_eligible_to_tag_in_agent() && !is_shared_ambient_session)
-                || active_block.is_eligible_for_agent_handoff())
+        *ai_settings.should_render_cli_agent_footer && !self.is_input_box_visible(model, app)
     }
 
     /// Returns the detected CLI agent for the active block's command, if any.
@@ -420,9 +333,6 @@ impl TerminalView {
             .set_is_agent_tagged_in(true);
 
         if !self.model.lock().is_alt_screen_active() {
-            self.use_agent_footer.update(ctx, |footer, ctx| {
-                footer.clear_warpify(ctx);
-            });
             self.hide_use_agent_footer_in_blocklist(ctx);
         }
 
@@ -1028,32 +938,11 @@ impl TerminalView {
     }
 }
 
-/// Footer rendered at the bottom of the active long running block or alt screen element.
-///
-/// For regular commands, displays a 'Use agent' keystroke button to enter agent mode.
-/// For CLI agent commands (e.g., Claude Code, Gemini CLI, Codex), displays a specialized
-/// footer with image attachment, voice input, file explorer, view changes, and share buttons.
+/// Footer rendered at the bottom of an active CLI agent block.
 pub struct UseAgentToolbar {
     terminal_view_id: EntityId,
     terminal_model: Arc<FairMutex<TerminalModel>>,
-
-    // Standard "Use agent" UI
-    button: ViewHandle<ActionButton>,
-    give_control_back_button: ViewHandle<ActionButton>,
-    dismiss_button: ViewHandle<ActionButton>,
-    dont_show_again_button: ViewHandle<ActionButton>,
-
-    // Shared agent input footer (renders CLI agent mode when a CLI session is active).
     agent_input_footer: ViewHandle<AgentInputFooter>,
-
-    // Warpify footer UI (shown when a subshell/SSH command is detected).
-    warpify_footer_view: ViewHandle<WarpifyFooterView>,
-
-    // `true` if the user has dismissed the footer.
-    //
-    // Footer dismissal is terminal pane-scoped, e.g. dismissal hides the footer for this
-    // specific terminal pane for the lifetime of the pane.
-    did_user_dismiss: bool,
 }
 
 impl UseAgentToolbar {
@@ -1064,67 +953,8 @@ impl UseAgentToolbar {
         agent_input_footer: ViewHandle<AgentInputFooter>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let button_size = ButtonSize::XSmall;
-
-        let button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new(
-                "Use agent",
-                AgentFooterButtonTheme::new(Some(terminal_model.clone())),
-            )
-            .with_icon(Icon::Oz)
-            .with_keybinding(KeystrokeSource::Fixed(USE_AGENT_KEYSTROKE.clone()), ctx)
-            .with_size(button_size)
-            .with_tooltip("Ask the Warp agent to assist")
-            .with_tooltip_alignment(TooltipAlignment::Left)
-            .on_click(|ctx| {
-                ctx.dispatch_typed_action(TerminalAction::SetInputModeAgent);
-            })
-        });
-        let give_control_back_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new(
-                "Give control back to agent",
-                AgentFooterButtonTheme::new(Some(terminal_model.clone())),
-            )
-            .with_icon(Icon::Oz)
-            .with_keybinding(KeystrokeSource::Fixed(USE_AGENT_KEYSTROKE.clone()), ctx)
-            .with_size(button_size)
-            .with_tooltip("Ask the Warp agent to resume")
-            .with_tooltip_alignment(TooltipAlignment::Left)
-            .on_click(|ctx| {
-                ctx.dispatch_typed_action(TerminalAction::SetInputModeAgent);
-            })
-        });
-        let dismiss_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new(
-                "Dismiss",
-                AgentFooterButtonTheme::new(Some(terminal_model.clone())),
-            )
-            .on_click(|ctx| {
-                ctx.dispatch_typed_action(UseAgentToolbarAction::Dismiss { permanently: false });
-            })
-            .with_size(button_size)
-        });
-        let dont_show_again_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new(
-                "Don't show again",
-                AgentFooterButtonTheme::new(Some(terminal_model.clone())),
-            )
-            .on_click(|ctx| {
-                ctx.dispatch_typed_action(UseAgentToolbarAction::Dismiss { permanently: true });
-            })
-            .with_size(button_size)
-        });
-
-        // Subscribe to agent input footer events to forward CLI-relevant ones.
         ctx.subscribe_to_view(&agent_input_footer, |me, _, event, ctx| {
             me.handle_agent_input_footer_event(event, ctx);
-        });
-
-        let warpify_footer_view =
-            ctx.add_typed_action_view(|ctx| WarpifyFooterView::new(terminal_model.clone(), ctx));
-
-        ctx.subscribe_to_view(&warpify_footer_view, |me, _, event, ctx| {
-            me.handle_warpify_footer_event(event, ctx);
         });
 
         ctx.subscribe_to_model(model_event_dispatcher, |me, _, event, ctx| {
@@ -1145,14 +975,8 @@ impl UseAgentToolbar {
 
         Self {
             terminal_view_id,
-            button,
-            give_control_back_button,
-            dismiss_button,
-            dont_show_again_button,
             agent_input_footer,
-            warpify_footer_view,
             terminal_model,
-            did_user_dismiss: false,
         }
     }
 
@@ -1197,67 +1021,15 @@ impl UseAgentToolbar {
         }
     }
 
-    fn handle_warpify_footer_event(
-        &mut self,
-        event: &WarpifyFooterViewEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match event {
-            WarpifyFooterViewEvent::Warpify => {
-                ctx.emit(UseAgentToolbarEvent::Warpify);
-            }
-            WarpifyFooterViewEvent::UseAgent => {
-                ctx.emit(UseAgentToolbarEvent::UseAgent);
-            }
-            WarpifyFooterViewEvent::Dismiss => {
-                ctx.emit(UseAgentToolbarEvent::Dismiss);
-            }
-        }
-    }
-
     pub(in crate::terminal) fn notify_and_notify_children(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.notify();
         self.agent_input_footer.update(ctx, |_, ctx| ctx.notify());
-        self.warpify_footer_view.update(ctx, |_, ctx| ctx.notify());
-        self.button.update(ctx, |_, ctx| ctx.notify());
-        self.give_control_back_button
-            .update(ctx, |_, ctx| ctx.notify());
-        self.dismiss_button.update(ctx, |_, ctx| ctx.notify());
-        self.dont_show_again_button
-            .update(ctx, |_, ctx| ctx.notify());
-    }
-
-    /// Returns whether the user has dismissed this footer.
-    pub fn did_user_dismiss(&self) -> bool {
-        self.did_user_dismiss
     }
 
     fn cli_agent(&self, app: &AppContext) -> Option<CLIAgent> {
         CLIAgentSessionsModel::as_ref(app)
             .session(self.terminal_view_id)
             .map(|session| session.agent)
-    }
-
-    /// Activates the warpify footer. When active, the footer shows the
-    /// warpify view instead of the CLI agent or regular "Use agent" views.
-    pub(in crate::terminal) fn show_warpify(&mut self, ctx: &mut ViewContext<Self>) {
-        self.warpify_footer_view.update(ctx, |view, ctx| {
-            view.show(ctx);
-        });
-        ctx.notify();
-    }
-
-    /// Deactivates the warpify footer so it reverts to its default behavior.
-    pub(in crate::terminal) fn clear_warpify(&mut self, ctx: &mut ViewContext<Self>) {
-        self.warpify_footer_view.update(ctx, |view, ctx| {
-            view.clear(ctx);
-        });
-        ctx.notify();
-    }
-
-    /// Returns whether the warpify footer is currently active.
-    pub(in crate::terminal) fn is_warpify_active(&self, app: &AppContext) -> bool {
-        self.warpify_footer_view.as_ref(app).is_active()
     }
 
     /// Returns whether there's a current CLI agent (like Claude Code).
@@ -1289,10 +1061,6 @@ pub enum UseAgentToolbarEvent {
     OpenRichInput,
     /// Hide the rich input editor (same as Escape).
     HideRichInput,
-    /// User chose to warpify the subshell.
-    Warpify,
-    /// User chose to use the agent.
-    UseAgent,
 }
 
 impl Entity for UseAgentToolbar {
@@ -1305,11 +1073,6 @@ impl View for UseAgentToolbar {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        // If the warpify footer is active, delegate rendering to the warpify footer view.
-        if self.warpify_footer_view.as_ref(app).is_active() {
-            return ChildView::new(&self.warpify_footer_view).finish();
-        }
-
         // Hide the toolbar entirely when CLI rich input is open,
         // since the Input view renders its own footer in that state.
         if CLIAgentSessionsModel::as_ref(app).is_input_open(self.terminal_view_id) {
@@ -1336,169 +1099,7 @@ impl View for UseAgentToolbar {
             return container.finish();
         }
 
-        let terminal_model = self.terminal_model.lock();
-
-        let active_block = terminal_model.block_list().active_block();
-        let show_give_control_back_button = active_block.is_eligible_for_agent_handoff();
-        let show_dismiss_actions = active_block.requested_command_action_id().is_none();
-
-        let mut button_row = Flex::row()
-            .with_spacing(4.)
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                ChildView::new(if show_give_control_back_button {
-                    &self.give_control_back_button
-                } else {
-                    &self.button
-                })
-                .finish(),
-            );
-
-        if show_dismiss_actions {
-            button_row = button_row
-                .with_child(Expanded::new(1., Empty::new().finish()).finish())
-                .with_child(ChildView::new(&self.dismiss_button).finish());
-
-            if !show_give_control_back_button {
-                button_row =
-                    button_row.with_child(ChildView::new(&self.dont_show_again_button).finish());
-            }
-        }
-
-        let mut container = Container::new(button_row.finish())
-            .with_horizontal_padding(*super::PADDING_LEFT)
-            .with_vertical_padding(4.);
-
-        if terminal_model.is_alt_screen_active() {
-            if let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
-                container = container.with_background(bg_color);
-            }
-        } else if terminal_model.block_list().agent_view_state().is_inline() {
-            container = container.with_background(agent_view_bg_fill(app));
-        }
-
-        container.finish()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum UseAgentToolbarAction {
-    Dismiss { permanently: bool },
-}
-
-impl TypedActionView for UseAgentToolbar {
-    type Action = UseAgentToolbarAction;
-
-    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
-        let UseAgentToolbarAction::Dismiss { permanently } = action;
-        self.did_user_dismiss = true;
-        ctx.emit(UseAgentToolbarEvent::Dismiss);
-
-        if *permanently {
-            AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                if let Err(e) = settings
-                    .should_render_use_agent_footer_for_user_commands
-                    .set_value(false, ctx)
-                {
-                    report_error!(anyhow!("{e:?}")
-                        .context("Failed to set `ShouldRenderUseAgentToolbarForUserCommands`"));
-                }
-            });
-        }
-
-        ctx.notify();
-    }
-}
-
-#[derive(Clone)]
-pub(super) struct AgentFooterButtonTheme {
-    /// When set, enables alt-screen contrast adjustment for text and border.
-    terminal_model: Option<Arc<FairMutex<TerminalModel>>>,
-}
-
-impl AgentFooterButtonTheme {
-    pub fn new(terminal_model: Option<Arc<FairMutex<TerminalModel>>>) -> Self {
-        Self { terminal_model }
-    }
-
-    /// Returns the inferred background colour of the alt screen, if active.
-    fn inferred_alt_screen_bg(&self) -> Option<ColorU> {
-        let terminal_model = self.terminal_model.as_ref()?;
-        let terminal_model = terminal_model.lock();
-        terminal_model
-            .is_alt_screen_active()
-            .then(|| terminal_model.alt_screen().inferred_bg_color())
-            .flatten()
-    }
-
-    /// Picks a colour that contrasts well against `bg`, choosing between two
-    /// neutral candidates.
-    fn contrast_adjusted_color(
-        bg: ColorU,
-        default: ColorU,
-        contrast: MinimumAllowedContrast,
-        appearance: &Appearance,
-    ) -> ColorU {
-        if high_enough_contrast(default, bg, contrast) {
-            default
-        } else {
-            pick_best_foreground_color(
-                bg,
-                blended_colors::neutral_2(appearance.theme()),
-                blended_colors::neutral_6(appearance.theme()),
-                contrast,
-            )
-        }
-    }
-}
-
-impl ActionButtonTheme for AgentFooterButtonTheme {
-    fn background(&self, hovered: bool, appearance: &Appearance) -> Option<ThemeFill> {
-        if hovered {
-            Some(internal_colors::fg_overlay_2(appearance.theme()))
-        } else {
-            None
-        }
-    }
-
-    fn border(&self, appearance: &Appearance) -> Option<ColorU> {
-        let color = appearance.theme().outline().into_solid();
-        if let Some(bg) = self.inferred_alt_screen_bg() {
-            return Some(Self::contrast_adjusted_color(
-                bg,
-                color,
-                MinimumAllowedContrast::NonText,
-                appearance,
-            ));
-        }
-        Some(color)
-    }
-
-    fn text_color(
-        &self,
-        _hovered: bool,
-        _background: Option<ThemeFill>,
-        appearance: &Appearance,
-    ) -> ColorU {
-        let color = appearance
-            .theme()
-            .sub_text_color(appearance.theme().surface_1())
-            .into_solid();
-
-        // If rendered in the alt screen, the footer is rendered with the inferred background color
-        // of the alt screen output grid (if there is one). In such cases, we have to ensure that
-        // the text within the footer is high-contrast enough to be legible, since the background
-        // color can essentially be anything.
-        if let Some(bg) = self.inferred_alt_screen_bg() {
-            return Self::contrast_adjusted_color(
-                bg,
-                color,
-                MinimumAllowedContrast::Text,
-                appearance,
-            );
-        }
-        color
+        Empty::new().finish()
     }
 }
 

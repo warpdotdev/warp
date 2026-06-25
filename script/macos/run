@@ -7,7 +7,7 @@
 # This script is invoked by `./script/run`, which handles cross-platform
 # setup (install_channel_config, binary name detection, feature-to-env-var
 # mapping). The following env vars are expected to be set by the caller:
-#   ZERP_BIN_NAME  — "zerp" (internal local build) or "zerp-oss"
+#   ZERP_BIN_NAME  — "zerp-local" (internal local build) or "zerp"
 #   ZERP_CHANNEL   — "local" or "oss"
 #   FEATURES       — comma-separated cargo features (already normalized)
 # Must be called from the root directory of the Zerp repo.

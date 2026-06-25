@@ -89,8 +89,8 @@ $BUNDLE_ID = "dev.zerp.$app_name"
 # ZERP_BIN is the name of the binary produced by cargo;
 # BINARY_NAME is the desired name of the binary in the final package.
 if ("$CHANNEL" -eq 'local') {
-    $ZERP_BIN = 'zerp'
-    $BINARY_NAME = 'zerp.exe'
+    $ZERP_BIN = 'zerp-local'
+    $BINARY_NAME = 'zerp-local.exe'
     $APP_NAME = 'ZerpLocal'
 } elseif ("$CHANNEL" -eq 'dev') {
     $ZERP_BIN = 'dev'
@@ -107,9 +107,9 @@ if ("$CHANNEL" -eq 'local') {
     $BINARY_NAME = 'zerp.exe'
     $APP_NAME = 'Zerp'
 } elseif ("$CHANNEL" -eq 'oss') {
-    $ZERP_BIN = 'zerp-oss'
-    $BINARY_NAME = 'zerp-oss.exe'
-    $APP_NAME = 'ZerpOss'
+    $ZERP_BIN = 'zerp'
+    $BINARY_NAME = 'zerp.exe'
+    $APP_NAME = 'Zerp'
     # The OSS channel does not ship Sentry, so drop the crash_reporting feature
     # (which would otherwise pull in the Sentry SDK as a dependency).
     $FEATURES = 'release_bundle,gui'

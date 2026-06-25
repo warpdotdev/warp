@@ -117,7 +117,7 @@ mkdir -p "$EXTRAS_DIR"
 # ZERP_BIN is the name of the binary produced by cargo.
 # N.B. The bundled outputs will always be warp.js and warp_bg.wasm.
 if [[ $RELEASE_CHANNEL = "local" ]]; then
-  ZERP_BIN="zerp"
+  ZERP_BIN="zerp-local"
   FEATURES="$FEATURES,remote_tty"
 elif [[ $RELEASE_CHANNEL = "dev" ]]; then
   ZERP_BIN="dev"
@@ -127,7 +127,7 @@ elif [[ $RELEASE_CHANNEL = "preview" ]]; then
 elif [[ $RELEASE_CHANNEL = "stable" ]]; then
   ZERP_BIN="stable"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-  ZERP_BIN="zerp-oss"
+  ZERP_BIN="zerp"
 fi
 
 if [ -n "${FEATURES_OVERRIDE+x}" ]; then

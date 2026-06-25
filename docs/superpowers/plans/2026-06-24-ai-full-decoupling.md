@@ -149,7 +149,7 @@ rtk cargo test -p onboarding model::tests
 rtk cargo test -p warp search::slash_command_menu::static_commands::commands
 rtk cargo test -p warp tab_configs::session_config
 rtk cargo test -p warp settings_view::tests
-rtk cargo check -p warp --bin zerp-oss
+rtk cargo check -p warp --bin zerp
 ```
 
 目标搜索：

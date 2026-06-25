@@ -18,7 +18,7 @@ pub enum Channel {
     /// The internal-only HEAD build.
     Local,
 
-    /// The open-source build of Warp.
+    /// The open-source Zerp build.
     Oss,
 
     /// The integration test build.
@@ -80,7 +80,7 @@ impl fmt::Display for Channel {
             Channel::Dev => "dev",
             Channel::Integration => "integration",
             Channel::Local => "local",
-            Channel::Oss => "zerp-oss",
+            Channel::Oss => "zerp",
         })
     }
 }

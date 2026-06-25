@@ -57,7 +57,7 @@ rtk git merge --no-ff upstream/master
 
 ```bash
 rtk cargo fmt --all --check
-rtk cargo check -p warp --bin zerp-oss
+rtk cargo check -p warp --bin zerp
 rtk cargo test -p warp_cli harness_
 rtk cargo test -p warp summary_title_override
 rtk rg -n "Ask Warp AI|AI command search|WarpAIDataSource|OpenWarpAI|TranslateUsingWarpAI|toggle_ai_assistant|toggle_natural_language_command_search" app/src crates/onboarding
@@ -77,7 +77,7 @@ rtk git ls-files -ci --exclude-standard
 ### 构建与运行
 
 - `rtk cargo run`：本地构建并运行。
-- `rtk cargo check -p warp --bin zerp-oss`：检查当前 OSS app binary。
+- `rtk cargo check -p warp --bin zerp`：检查当前 app binary。
 - `rtk cargo bundle --bin warp`：打包主 app。
 
 ### 本地 server

@@ -8,11 +8,11 @@ Name=Zerp
 GenericName=TerminalEmulator
 
 Exec=zerp-terminal-oss %U
-StartupWMClass=dev.zerp.ZerpOss
+StartupWMClass=dev.zerp.Zerp
 
 Keywords=shell;prompt;command;commandline;cmd;
 
-Icon=dev.zerp.ZerpOss
+Icon=dev.zerp.Zerp
 
 Categories=System;TerminalEmulator;
 

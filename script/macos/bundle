@@ -269,7 +269,7 @@ if [[ "$CARGO_PROFILE" == "dev" ]]; then
 fi
 
 if [[ $RELEASE_CHANNEL = "local" ]]; then
-    ZERP_BIN="zerp"
+    ZERP_BIN="zerp-local"
     BUNDLE_ID="dev.zerp.Zerp-Local"
     ZERP_APP_NAME="ZerpLocal"
     ZERP_SCHEME_NAME="zerplocal"
@@ -309,8 +309,8 @@ elif [[ $RELEASE_CHANNEL = "stable" ]]; then
     # Enable heap usage tracking & profiling using jemalloc through pprof.
     FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-    ZERP_BIN="zerp-oss"
-    BUNDLE_ID="dev.zerp.ZerpOss"
+    ZERP_BIN="zerp"
+    BUNDLE_ID="dev.zerp.Zerp"
     ZERP_APP_NAME="Zerp"
     ZERP_SCHEME_NAME="zerp"
     # The OSS channel does not ship Sentry, so drop the cocoa_sentry feature
