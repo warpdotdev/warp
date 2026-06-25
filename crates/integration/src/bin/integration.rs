@@ -297,6 +297,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_code_review_scroll_preserved_deleted_range);
     register_test!(test_code_review_scroll_preserved_header_range);
     register_test!(test_code_review_scroll_preserved_footer_range);
+    register_test!(test_git_graph_loads_commits);
+    register_test!(test_git_graph_create_branch);
+    register_test!(test_git_graph_op_error_banner);
     register_test!(test_alt_screen_context_menu_with_sgr_with_mouse_reporting);
     register_test!(test_alt_screen_context_menu_with_sgr_without_mouse_reporting);
     register_test!(test_alt_screen_context_menu_without_sgr_with_mouse_reporting);

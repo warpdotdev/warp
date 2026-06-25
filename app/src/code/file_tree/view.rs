@@ -23,11 +23,11 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     AcceptedByDropTarget, Align, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
-    CrossAxisAlignment, Dismiss, Draggable, DraggableState, Empty, Flex, FormattedTextElement,
-    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Percentage, Rect, SavePosition, ScrollStateHandle,
-    Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text, UniformList,
-    UniformListState,
+    CrossAxisAlignment, Dismiss, Draggable, DraggableState, Empty, Expanded, Flex,
+    FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Percentage, Rect,
+    SavePosition, ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable,
+    Stack, Text, UniformList, UniformListState,
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::keymap::FixedBinding;
@@ -41,6 +41,11 @@ use warpui::{
 use crate::appearance::Appearance;
 use crate::code::active_file::{ActiveFileEvent, ActiveFileModel};
 use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code_review::diff_state::GitFileStatus;
+#[cfg(feature = "local_fs")]
+use crate::code_review::git_repo_model::{
+    GitRepoModels, GitRepoStatusEvent, GitRepoStatusModel, RepoGitFileStatuses,
+};
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::editor::{EditorOptions, EditorView, TextOptions};
 use crate::menu::{Menu, MenuItem, MenuItemFields};
@@ -280,6 +285,16 @@ pub struct FileTreeView {
     /// [`LocalRepoMetadataModel`] for file watching.
     #[cfg(feature = "local_fs")]
     registered_lazy_loaded_paths: HashSet<StandardizedPath>,
+    /// Per-root subscriptions to the shared [`GitRepoStatusModel`], backing the
+    /// VSCode-style git decorations. Holding the handle keeps that repo's
+    /// watcher alive. Populated only while [`FeatureFlag::GitGraph`] is enabled.
+    #[cfg(feature = "local_fs")]
+    git_status_models: HashMap<StandardizedPath, ModelHandle<GitRepoStatusModel>>,
+    /// Render snapshot of each root's git decorations, refreshed whenever its
+    /// model emits `FileStatusesChanged`. Read during render, which has no
+    /// `ctx` to query the models directly.
+    #[cfg(feature = "local_fs")]
+    git_decorations: HashMap<StandardizedPath, RepoGitFileStatuses>,
     /// Directory the view wants to focus once its entry becomes available.
     ///
     /// Set when a descendant path is absorbed into an ancestor root but the
@@ -351,6 +366,7 @@ impl FileTreeView {
         if is_active {
             self.subscribe_to_repository_metadata(ctx);
             self.subscribe_to_active_file_model(ctx);
+            self.update_git_status_subscriptions(ctx);
             self.subscribe_to_code_settings(ctx);
             self.show_hidden_files = *CodeSettings::as_ref(ctx).show_hidden_files;
 
@@ -403,6 +419,82 @@ impl FileTreeView {
         ctx.subscribe_to_model(&model, |me, _, event, ctx| {
             me.handle_repository_metadata_event(event, ctx);
         });
+    }
+
+    /// Re-evaluate which displayed roots need a git-status subscription and
+    /// subscribe / unsubscribe accordingly. Cheap to call on every root or
+    /// activation change: it only acts on the delta. No-op (and tears down any
+    /// existing decorations) while [`FeatureFlag::GitGraph`] is disabled.
+    #[cfg(feature = "local_fs")]
+    fn update_git_status_subscriptions(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::GitGraph.is_enabled() {
+            if !self.git_status_models.is_empty() || !self.git_decorations.is_empty() {
+                self.git_status_models.clear();
+                self.git_decorations.clear();
+                ctx.notify();
+            }
+            return;
+        }
+
+        // Only local (non-remote) roots have local working-tree status.
+        let local_roots: Vec<StandardizedPath> = self
+            .displayed_directories
+            .iter()
+            .filter(|p| !self.root_directories.get(p).is_some_and(|r| r.is_remote()))
+            .cloned()
+            .collect();
+
+        // Drop subscriptions / decorations for roots no longer displayed.
+        self.git_status_models
+            .retain(|root, _| local_roots.contains(root));
+        self.git_decorations
+            .retain(|root, _| local_roots.contains(root));
+
+        for root in local_roots {
+            if self.git_status_models.contains_key(&root) {
+                continue;
+            }
+            let Some(repo_path) = root.to_local_path() else {
+                continue;
+            };
+            let repo = LocalOrRemotePath::Local(repo_path);
+            let result = GitRepoModels::handle(ctx)
+                .update(ctx, |model, ctx| model.subscribe(&repo, ctx));
+            match result {
+                Ok(handle) => {
+                    let root_for_event = root.clone();
+                    ctx.subscribe_to_model(&handle, move |me, handle, event, ctx| {
+                        if matches!(event, GitRepoStatusEvent::FileStatusesChanged) {
+                            me.refresh_git_decorations(&root_for_event, &handle, ctx);
+                        }
+                    });
+                    // Snapshot whatever status the shared model already has.
+                    self.refresh_git_decorations(&root, &handle, ctx);
+                    self.git_status_models.insert(root, handle);
+                }
+                Err(err) => {
+                    // The root isn't a watched git repo — no decorations for it.
+                    log::debug!(
+                        "FileTreeView: git status subscribe skipped for {}: {err}",
+                        root.as_str()
+                    );
+                }
+            }
+        }
+    }
+
+    /// Copy the latest decorations for `root` out of its model into the render
+    /// cache and repaint.
+    #[cfg(feature = "local_fs")]
+    fn refresh_git_decorations(
+        &mut self,
+        root: &StandardizedPath,
+        handle: &ModelHandle<GitRepoStatusModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let statuses = handle.as_ref(ctx).file_statuses(ctx).clone();
+        self.git_decorations.insert(root.clone(), statuses);
+        ctx.notify();
     }
 
     #[cfg(feature = "local_fs")]
@@ -724,6 +816,10 @@ impl FileTreeView {
             explicitly_collapsed: HashMap::new(),
             #[cfg(feature = "local_fs")]
             registered_lazy_loaded_paths: HashSet::new(),
+            #[cfg(feature = "local_fs")]
+            git_status_models: HashMap::new(),
+            #[cfg(feature = "local_fs")]
+            git_decorations: HashMap::new(),
             pending_focus_target: None,
             show_hidden_files: *CodeSettings::as_ref(ctx).show_hidden_files,
         };
@@ -1177,6 +1273,10 @@ impl FileTreeView {
                 }
             }
         }
+
+        #[cfg(feature = "local_fs")]
+        self.update_git_status_subscriptions(ctx);
+
         self.apply_pending_focus_target();
     }
 
@@ -1877,7 +1977,32 @@ impl FileTreeView {
             .finish(),
         );
 
-        let text_color = item_highlight_state.text_and_icon_color(appearance);
+        // Git decoration: a status color plus the badge glyph to show on the
+        // right. Files use a letter (M/U/A/D/R/C); directories use a dot.
+        let git_decoration = render_state.git_status.as_ref().map(|status| {
+            let theme = appearance.theme();
+            match status {
+                GitFileStatus::Modified => (theme.ui_yellow_color(), "M"),
+                GitFileStatus::Renamed { .. } => (theme.ui_yellow_color(), "R"),
+                GitFileStatus::Copied { .. } => (theme.ui_yellow_color(), "C"),
+                GitFileStatus::New => (theme.ui_green_color(), "A"),
+                GitFileStatus::Untracked => (theme.ui_green_color(), "U"),
+                GitFileStatus::Deleted => (theme.ui_error_color(), "D"),
+                GitFileStatus::Conflicted => (theme.ui_error_color(), "!"),
+            }
+        });
+
+        // Name color priority: git status color > dimmed gitignore gray (only
+        // when the row isn't highlighted, so selection stays legible) > normal.
+        let text_color = if let Some((color, _)) = git_decoration {
+            color
+        } else if render_state.is_ignored
+            && matches!(item_highlight_state, ItemHighlightState::None)
+        {
+            internal_colors::text_disabled(appearance.theme(), appearance.theme().background())
+        } else {
+            item_highlight_state.text_and_icon_color(appearance)
+        };
         let text_style = if render_state.is_ignored {
             Properties::default()
                 .style(Style::Italic)
@@ -1885,6 +2010,7 @@ impl FileTreeView {
         } else {
             Properties::default()
         };
+        let is_editing = editor_view.is_some();
         match editor_view {
             Some(editor_view) => {
                 header_row.add_child(
@@ -1900,8 +2026,11 @@ impl FileTreeView {
                 );
             }
             None => {
+                // `Expanded` (not `Shrinkable`) so the name fills the row and
+                // pushes the trailing git badge to the right edge, matching the
+                // git graph panel's right-aligned layout.
                 header_row.add_child(
-                    Shrinkable::new(
+                    Expanded::new(
                         1.,
                         Text::new_inline(
                             render_state.display_name,
@@ -1912,6 +2041,31 @@ impl FileTreeView {
                         .with_style(text_style)
                         .finish(),
                     )
+                    .finish(),
+                );
+            }
+        }
+
+        // Trailing git badge, pushed to the right edge by the flexible name
+        // above. Files get the status letter; directories get a dot.
+        if let Some((color, badge)) = git_decoration {
+            if !is_editing {
+                let glyph = if render_state.is_directory {
+                    "\u{25CF}" // ● filled circle
+                } else {
+                    badge
+                };
+                header_row.add_child(
+                    Container::new(
+                        Text::new_inline(
+                            glyph.to_string(),
+                            appearance.ui_font_family(),
+                            ITEM_FONT_SIZE,
+                        )
+                        .with_color(color)
+                        .finish(),
+                    )
+                    .with_margin_left(6.)
                     .finish(),
                 );
             }
@@ -1956,7 +2110,7 @@ impl FileTreeView {
         };
 
         let item_highlight_state = ItemHighlightState::Selected;
-        let render_state = item.to_render_state(None /* is_expanded */, appearance);
+        let render_state = item.to_render_state(None /* is_expanded */, appearance, None);
 
         let text_color = item_highlight_state.text_and_icon_color(appearance);
         let text = Text::new(
@@ -1982,6 +2136,34 @@ impl FileTreeView {
     }
 
     /// Renders a clickable tree item with mouse state handle
+    /// Look up the git working-tree status for an item: files report their own
+    /// status, directories report the rolled-up status of their descendants.
+    #[cfg(feature = "local_fs")]
+    fn git_status_for_item(
+        &self,
+        root: &StandardizedPath,
+        item: &FileTreeItem,
+    ) -> Option<GitFileStatus> {
+        let decorations = self.git_decorations.get(root)?;
+        match item {
+            FileTreeItem::File { metadata, .. } => {
+                decorations.file_status(metadata.path.as_ref()).cloned()
+            }
+            FileTreeItem::DirectoryHeader { directory, .. } => {
+                decorations.dir_status(directory.path.as_ref()).cloned()
+            }
+        }
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    fn git_status_for_item(
+        &self,
+        _root: &StandardizedPath,
+        _item: &FileTreeItem,
+    ) -> Option<GitFileStatus> {
+        None
+    }
+
     fn render_item(&self, id: &FileTreeIdentifier, appearance: &Appearance) -> Box<dyn Element> {
         let Some(root_dir) = self.root_directories.get(&id.root) else {
             return Empty::new().finish();
@@ -1992,7 +2174,8 @@ impl FileTreeView {
 
         let is_selected = self.selected_item.as_ref() == Some(id);
         let is_expanded = self.is_item_expanded(&id.root, item);
-        let render_state = item.to_render_state(is_expanded, appearance);
+        let git_status = self.git_status_for_item(&id.root, item);
+        let render_state = item.to_render_state(is_expanded, appearance, git_status);
 
         let item_display_name = render_state.display_name.clone();
         let item_position_id = format!("file_tree_item:{item_display_name}");

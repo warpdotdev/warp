@@ -20,9 +20,9 @@ use crate::code_review::diff_size_limits::DiffSize;
 use crate::util::git::{BranchEntry, Commit, FileChangeEntry, PrInfo};
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 mod local;
-#[cfg(feature = "local_fs")]
-pub(crate) use local::diff_metadata_against_head;
 pub use local::LocalDiffStateModel;
+#[cfg(feature = "local_fs")]
+pub(crate) use local::{diff_metadata_against_head, file_statuses_against_head};
 
 mod remote;
 pub use remote::RemoteDiffStateModel;
@@ -162,6 +162,71 @@ pub struct DiffHunk {
     pub lines: Vec<DiffLine>,
     pub unified_diff_start: usize,
     pub unified_diff_end: usize,
+}
+
+/// Converts a list of unified-diff [`DiffHunk`]s into the [`DiffDelta`] form that
+/// [`CodeEditorView::apply_diffs`] consumes (each delta = an old-line range to replace
+/// plus the inserted text). Shared by the code review view and the Git Graph commit
+/// diff pane so both render diffs through the same editor machinery.
+///
+/// [`DiffDelta`]: ai::diff_validation::DiffDelta
+pub(crate) fn convert_hunks_to_diff_deltas(
+    hunks: &[DiffHunk],
+) -> Vec<ai::diff_validation::DiffDelta> {
+    let mut diff_deltas = Vec::new();
+
+    for hunk in hunks {
+        let mut current_replacement_start: Option<usize> = None;
+        let mut current_insertion = String::new();
+        let mut has_removals = false;
+        let mut old_line = hunk.old_start_line;
+
+        for line in &hunk.lines {
+            match line.line_type {
+                DiffLineType::Add => {
+                    if current_replacement_start.is_none() {
+                        current_replacement_start = Some(old_line);
+                    }
+
+                    current_insertion.push_str(&line.text);
+                    current_insertion.push('\n');
+                }
+                DiffLineType::Delete => {
+                    if current_replacement_start.is_none() {
+                        current_replacement_start = Some(old_line);
+                    }
+                    has_removals = true;
+                    old_line += 1;
+                }
+                DiffLineType::Context => {
+                    if let Some(start) = current_replacement_start.take() {
+                        let end = if has_removals { old_line } else { start };
+
+                        diff_deltas.push(ai::diff_validation::DiffDelta {
+                            replacement_line_range: start..end,
+                            insertion: current_insertion.clone(),
+                        });
+                        current_insertion.clear();
+                        has_removals = false;
+                    }
+                    old_line += 1;
+                }
+                DiffLineType::HunkHeader => {
+                    continue;
+                }
+            }
+        }
+
+        if let Some(start) = current_replacement_start.take() {
+            let end = if has_removals { old_line } else { start };
+            diff_deltas.push(ai::diff_validation::DiffDelta {
+                replacement_line_range: start..end,
+                insertion: current_insertion,
+            });
+        }
+    }
+
+    diff_deltas
 }
 
 /// Represents the diff for a single file, as rendered by `git diff`.

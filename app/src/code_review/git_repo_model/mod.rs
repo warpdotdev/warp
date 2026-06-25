@@ -3,7 +3,7 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 #[cfg(feature = "local_fs")]
 mod local;
 #[cfg(feature = "local_fs")]
-pub use local::LocalGitRepoStatusModel;
+pub use local::{LocalGitRepoStatusModel, RepoGitFileStatuses};
 
 mod remote;
 pub use remote::RemoteGitRepoStatusModel;
@@ -29,6 +29,9 @@ pub struct GitStatusMetadata {
 pub enum GitRepoStatusEvent {
     /// Emitted whenever the metadata changes (branch name, diff stats, etc.).
     MetadataChanged,
+    /// Emitted when the per-file working-tree status map changes. The Project
+    /// Explorer listens for this to refresh its git decorations.
+    FileStatusesChanged,
 }
 
 // ── Unified GitRepoStatusModel (local or remote backend) ────────────────────
@@ -57,6 +60,9 @@ impl GitRepoStatusModel {
     fn forward_event(&mut self, event: &GitRepoStatusEvent, ctx: &mut ModelContext<Self>) {
         match event {
             GitRepoStatusEvent::MetadataChanged => ctx.emit(GitRepoStatusEvent::MetadataChanged),
+            GitRepoStatusEvent::FileStatusesChanged => {
+                ctx.emit(GitRepoStatusEvent::FileStatusesChanged)
+            }
         }
     }
 
@@ -66,6 +72,20 @@ impl GitRepoStatusModel {
             #[cfg(feature = "local_fs")]
             Self::Local(m) => m.as_ref(ctx).metadata(),
             Self::Remote(m) => m.as_ref(ctx).metadata(),
+        }
+    }
+
+    /// Per-file/-directory working-tree status for the Project Explorer's git
+    /// decorations. Empty unless [`FeatureFlag::GitGraph`] is enabled.
+    #[cfg(feature = "local_fs")]
+    pub fn file_statuses<'a>(&self, ctx: &'a AppContext) -> &'a RepoGitFileStatuses {
+        // Remote repos have no local working-tree status; hand back a shared
+        // empty set so callers can treat both backends uniformly.
+        static EMPTY: std::sync::LazyLock<RepoGitFileStatuses> =
+            std::sync::LazyLock::new(RepoGitFileStatuses::default);
+        match self {
+            Self::Local(m) => m.as_ref(ctx).file_statuses(),
+            Self::Remote(_) => &EMPTY,
         }
     }
 

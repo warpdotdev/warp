@@ -28,11 +28,23 @@ pub async fn run_git_command_with_env(
     let mut cmd = Command::new("git");
     cmd.arg("-c")
         .arg("diff.autoRefreshIndex=false")
+        // Emit paths as raw UTF-8 instead of git's default octal-escaped,
+        // double-quoted form (`"docs/\346\236\266..."`). Every caller parses
+        // this output programmatically, so the escaped form is never wanted —
+        // it would turn a non-ASCII path into a bogus literal.
+        .arg("-c")
+        .arg("core.quotePath=false")
         .args(args)
         .current_dir(repo_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("GIT_OPTIONAL_LOCKS", "0")
+        // Warp's git commands run headless — there is no visible terminal for
+        // the user to type credentials into. Without this, an auth-requiring
+        // remote operation (e.g. `fetch` on a private repo with no cached
+        // credentials) blocks forever waiting on a prompt the user never sees.
+        // `0` makes git fail fast with an error instead of hanging.
+        .env("GIT_TERMINAL_PROMPT", "0")
         .kill_on_drop(true);
     if let Some(path_env) = path_env {
         cmd.env("PATH", path_env);

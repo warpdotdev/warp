@@ -114,6 +114,8 @@ impl LocalGitHubRepoModel {
                     me.refresh_pr_info(ctx);
                 }
             }
+            // 文件级 git 状态只服务 Project Explorer 装饰，与 GitHub 信息无关。
+            GitRepoStatusEvent::FileStatusesChanged => {}
         });
 
         let mut model = Self {

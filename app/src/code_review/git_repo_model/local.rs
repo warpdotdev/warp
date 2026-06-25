@@ -1,17 +1,95 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_channel::Sender;
 use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
 use repo_metadata::{Repository, RepositoryUpdate};
+use warp_core::features::FeatureFlag;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext, ModelHandle};
 
 use super::{GitRepoStatusEvent, GitStatusMetadata};
-use crate::code_review::diff_state::diff_metadata_against_head;
+use crate::code_review::diff_state::{
+    diff_metadata_against_head, file_statuses_against_head, GitFileStatus,
+};
 use crate::context_chips::display_chip::GitBranchTrackingStatus;
 use crate::throttle::throttle;
 use crate::util::git::{detect_current_branch_display, detect_main_branch};
+
+/// Per-file working-tree status for a repository, plus the rolled-up status of
+/// every directory containing a changed file. Consumed by the Project Explorer
+/// to color files/folders VSCode-style. Keyed by absolute [`StandardizedPath`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RepoGitFileStatuses {
+    /// Status of each changed file.
+    files: HashMap<StandardizedPath, GitFileStatus>,
+    /// Highest-priority descendant status for each ancestor directory, bounded
+    /// at the repo root. A folder is colored if anything beneath it changed.
+    dirs: HashMap<StandardizedPath, GitFileStatus>,
+}
+
+impl RepoGitFileStatuses {
+    /// Build from `git status` output (repo-relative paths), resolving paths to
+    /// absolute and rolling each file's status up into its ancestor directories.
+    fn from_relative(repo_path: &Path, statuses: Vec<(String, GitFileStatus)>) -> Self {
+        let repo_root = StandardizedPath::try_from_local(repo_path).ok();
+        let mut files = HashMap::with_capacity(statuses.len());
+        let mut dirs: HashMap<StandardizedPath, GitFileStatus> = HashMap::new();
+
+        for (relative_path, status) in statuses {
+            let Ok(path) = StandardizedPath::try_from_local(&repo_path.join(&relative_path)) else {
+                continue;
+            };
+
+            // Roll the status up into every ancestor directory, stopping at the
+            // repo root so we never decorate directories outside the repo.
+            let mut ancestor = path.parent();
+            while let Some(dir) = ancestor {
+                if let Some(root) = &repo_root {
+                    if !dir.starts_with(root) {
+                        break;
+                    }
+                }
+                dirs.entry(dir.clone())
+                    .and_modify(|existing| {
+                        if status_priority(&status) > status_priority(existing) {
+                            *existing = status.clone();
+                        }
+                    })
+                    .or_insert_with(|| status.clone());
+                ancestor = dir.parent();
+            }
+
+            files.insert(path, status);
+        }
+
+        Self { files, dirs }
+    }
+
+    /// Status of a file at `path`, if it has uncommitted changes.
+    pub fn file_status(&self, path: &StandardizedPath) -> Option<&GitFileStatus> {
+        self.files.get(path)
+    }
+
+    /// Rolled-up status of a directory at `path`, if anything beneath it changed.
+    pub fn dir_status(&self, path: &StandardizedPath) -> Option<&GitFileStatus> {
+        self.dirs.get(path)
+    }
+}
+
+/// Roll-up precedence for directory coloring: a conflict outranks a deletion,
+/// which outranks an edit, which outranks an addition. A folder shows the
+/// highest-precedence status among its descendants.
+fn status_priority(status: &GitFileStatus) -> u8 {
+    match status {
+        GitFileStatus::Conflicted => 4,
+        GitFileStatus::Deleted => 3,
+        GitFileStatus::Modified | GitFileStatus::Renamed { .. } | GitFileStatus::Copied { .. } => 2,
+        GitFileStatus::New | GitFileStatus::Untracked => 1,
+    }
+}
 
 /// Per-repository model that owns the filesystem watcher and exposes git status
 /// metadata. Consumers hold a `ModelHandle<GitRepoStatusModel>` and subscribe
@@ -25,6 +103,9 @@ pub struct LocalGitRepoStatusModel {
     subscriber_id: Option<SubscriberId>,
     metadata: Option<GitStatusMetadata>,
     computing_metadata_abort_handle: Option<SpawnedFutureHandle>,
+    /// Per-file/-directory working-tree status for the Project Explorer's git
+    /// decorations. Only populated while [`FeatureFlag::GitGraph`] is enabled.
+    file_statuses: RepoGitFileStatuses,
 }
 
 impl Entity for LocalGitRepoStatusModel {
@@ -45,6 +126,7 @@ impl LocalGitRepoStatusModel {
             subscriber_id: None,
             metadata: None,
             computing_metadata_abort_handle: None,
+            file_statuses: RepoGitFileStatuses::default(),
         };
 
         // Kick off initial metadata computation.
@@ -107,6 +189,12 @@ impl LocalGitRepoStatusModel {
         self.metadata.as_ref()
     }
 
+    /// Per-file/-directory working-tree status, for the Project Explorer's git
+    /// decorations. Empty unless [`FeatureFlag::GitGraph`] is enabled.
+    pub fn file_statuses(&self) -> &RepoGitFileStatuses {
+        &self.file_statuses
+    }
+
     /// The path to the repository root.
     pub fn repo_path(&self) -> &Path {
         &self.repo_path
@@ -132,16 +220,24 @@ impl LocalGitRepoStatusModel {
 
     fn handle_metadata_result(
         &mut self,
-        result: anyhow::Result<GitStatusMetadata>,
+        result: anyhow::Result<(GitStatusMetadata, RepoGitFileStatuses)>,
         ctx: &mut ModelContext<Self>,
     ) {
         match result {
-            Ok(metadata) => {
+            Ok((metadata, file_statuses)) => {
                 self.metadata = Some(metadata);
+                if self.file_statuses != file_statuses {
+                    self.file_statuses = file_statuses;
+                    ctx.emit(GitRepoStatusEvent::FileStatusesChanged);
+                }
             }
             Err(e) => {
                 log::warn!("GitRepoStatusModel: metadata load failed: {e}");
                 self.metadata = None;
+                if self.file_statuses != RepoGitFileStatuses::default() {
+                    self.file_statuses = RepoGitFileStatuses::default();
+                    ctx.emit(GitRepoStatusEvent::FileStatusesChanged);
+                }
             }
         }
         ctx.emit(GitRepoStatusEvent::MetadataChanged);
@@ -232,12 +328,16 @@ impl LocalGitRepoStatusModel {
         )
     }
 
-    /// Compute metadata for a repo — branch names and diff stats against HEAD.
+    /// Compute metadata for a repo — branch names and diff stats against HEAD —
+    /// plus, when the Project Explorer needs it, the per-file working-tree
+    /// status map for git decorations.
     ///
     /// This reuses logic extracted from `DiffStateModel::load_metadata_for_repo`
     /// but only computes the HEAD (uncommitted) stats since that's all the git
     /// chip needs.
-    async fn load_metadata(repo_path: PathBuf) -> anyhow::Result<GitStatusMetadata> {
+    async fn load_metadata(
+        repo_path: PathBuf,
+    ) -> anyhow::Result<(GitStatusMetadata, RepoGitFileStatuses)> {
         // Detect main branch.
         let main_branch_name = detect_main_branch(&repo_path).await?;
         // Detect current branch (using the display variant so detached HEAD
@@ -248,12 +348,24 @@ impl LocalGitRepoStatusModel {
         let branch_tracking_status =
             Self::branch_tracking_status(&repo_path, &current_branch_name).await;
 
-        Ok(GitStatusMetadata {
-            current_branch_name,
-            main_branch_name,
-            stats_against_head: stats_against_head.aggregate_stats,
-            branch_tracking_status,
-        })
+        // Per-file status is only needed by the Project Explorer's git
+        // decorations, so skip the extra `git status` unless GitGraph is on.
+        let file_statuses = if FeatureFlag::GitGraph.is_enabled() {
+            let relative = file_statuses_against_head(&repo_path).await?;
+            RepoGitFileStatuses::from_relative(&repo_path, relative)
+        } else {
+            RepoGitFileStatuses::default()
+        };
+
+        Ok((
+            GitStatusMetadata {
+                current_branch_name,
+                main_branch_name,
+                stats_against_head: stats_against_head.aggregate_stats,
+                branch_tracking_status,
+            },
+            file_statuses,
+        ))
     }
 }
 
@@ -269,6 +381,7 @@ impl LocalGitRepoStatusModel {
             subscriber_id: None,
             metadata,
             computing_metadata_abort_handle: None,
+            file_statuses: RepoGitFileStatuses::default(),
         }
     }
 

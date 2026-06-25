@@ -26,6 +26,9 @@ pub enum RepoDetectionSource {
     CodeReviewInitialization,
     /// Repo was cloned or discovered during cloud agent environment preparation.
     CloudEnvironmentPrep,
+    /// Repo was selected in the Git Graph panel, which watches it for
+    /// auto-refresh.
+    GitGraphPanel,
 }
 
 pub enum DetectedRepositoriesEvent {

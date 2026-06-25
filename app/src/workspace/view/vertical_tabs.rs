@@ -4031,9 +4031,10 @@ impl PaneGroup {
             IPaneType::AIFact => TypedPane::AIFact,
             IPaneType::AIDocument => TypedPane::AIDocument,
             IPaneType::ExecutionProfileEditor => TypedPane::ExecutionProfileEditor,
-            IPaneType::GetStarted | IPaneType::NetworkLog | IPaneType::DeferredPlaceholder => {
-                TypedPane::Other
-            }
+            IPaneType::CommitDiff
+            | IPaneType::GetStarted
+            | IPaneType::NetworkLog
+            | IPaneType::DeferredPlaceholder => TypedPane::Other,
             #[cfg(test)]
             IPaneType::Dummy => TypedPane::Other,
         }

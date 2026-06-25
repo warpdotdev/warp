@@ -499,6 +499,10 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CustomInferenceEndpoints,
         #[cfg(feature = "supergrok")]
         FeatureFlag::SuperGrok,
+        #[cfg(feature = "git_graph")]
+        FeatureFlag::GitGraph,
+        #[cfg(feature = "git_graph")]
+        FeatureFlag::GitGraphWrite,
         #[cfg(feature = "gemini_enterprise")]
         FeatureFlag::GeminiEnterprise,
         #[cfg(feature = "prompt_cache_expiry_warning")]

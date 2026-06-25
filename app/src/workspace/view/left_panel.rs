@@ -52,14 +52,18 @@ use crate::util::openable_file_type::{
 use crate::workspace::view::conversation_list::view::{
     ConversationListView, Event as ConversationListViewEvent,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::workspace::view::git_graph::GitGraphEvent;
+use crate::workspace::view::git_graph::GitGraphView;
 use crate::workspace::view::global_search::view::{
     Event as GlobalSearchViewEvent, GlobalSearchEntryFocus, GlobalSearchView,
 };
 use crate::workspace::view::{
-    LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,
-    LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME, LEFT_PANEL_WARP_DRIVE_BINDING_NAME,
-    OPEN_GLOBAL_SEARCH_BINDING_NAME, TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME,
-    TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
+    LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GIT_GRAPH_BINDING_NAME,
+    LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME, LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME,
+    LEFT_PANEL_WARP_DRIVE_BINDING_NAME, OPEN_GLOBAL_SEARCH_BINDING_NAME,
+    TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME, TOGGLE_PROJECT_EXPLORER_BINDING_NAME,
+    TOGGLE_WARP_DRIVE_BINDING_NAME,
 };
 use crate::workspace::WorkspaceAction;
 use crate::TelemetryEvent;
@@ -78,6 +82,7 @@ pub enum LeftPanelAction {
     GlobalSearch { entry_focus: GlobalSearchEntryFocus },
     WarpDrive,
     ConversationListView,
+    GitGraph,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -97,6 +102,15 @@ pub enum LeftPanelEvent {
         conversation_title: String,
         terminal_view_id: Option<warpui::EntityId>,
     },
+    /// The Git Graph requests opening a commit's changes to a file in a read-only diff pane in the main area.
+    #[cfg(not(target_family = "wasm"))]
+    OpenCommitFileDiff {
+        repo_relative_path: String,
+        short_hash: String,
+        base_content: String,
+        hunks: Vec<crate::code_review::diff_state::DiffHunk>,
+        preview: crate::code::commit_diff_view::DiffPreview,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +119,7 @@ pub enum ToolPanelView {
     GlobalSearch { entry_focus: GlobalSearchEntryFocus },
     WarpDrive,
     ConversationListView,
+    GitGraph,
 }
 
 /// Encapsulates the active view state to enforce that all mutations go through
@@ -172,6 +187,7 @@ pub struct LeftPanelView {
     close_button_mouse_state: MouseStateHandle,
     warp_drive_view: ViewHandle<DrivePanel>,
     conversation_list_view: ViewHandle<ConversationListView>,
+    git_graph_view: ViewHandle<GitGraphView>,
     active_view: active_view_state::ActiveViewState,
     toolbelt_buttons: Vec<ToolbeltButtonConfig>,
     active_pane_group: Option<WeakViewHandle<PaneGroup>>,
@@ -198,6 +214,12 @@ fn toolbelt_tooltip_keybinding(binding_names: &[&'static str], app: &AppContext)
 }
 
 impl LeftPanelView {
+    /// The Git Graph view handle. Exposed for integration tests.
+    #[cfg(feature = "integration_tests")]
+    pub(crate) fn git_graph_view(&self) -> ViewHandle<GitGraphView> {
+        self.git_graph_view.clone()
+    }
+
     pub fn new(
         working_directories_model: ModelHandle<WorkingDirectoriesModel>,
         views: Vec<ToolPanelView>,
@@ -216,6 +238,27 @@ impl LeftPanelView {
         };
         let warp_drive_view = ctx.add_typed_action_view(DrivePanel::new);
         let conversation_list_view = ctx.add_typed_action_view(ConversationListView::new);
+        let git_graph_view = ctx.add_typed_action_view(GitGraphView::new);
+
+        // Clicking a changed file in the Git Graph detail area is forwarded upward so the workspace opens a read-only diff pane in the main area.
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(&git_graph_view, |_me, _, event, ctx| match event {
+            GitGraphEvent::OpenCommitFileDiff {
+                repo_relative_path,
+                short_hash,
+                base_content,
+                hunks,
+                preview,
+            } => {
+                ctx.emit(LeftPanelEvent::OpenCommitFileDiff {
+                    repo_relative_path: repo_relative_path.clone(),
+                    short_hash: short_hash.clone(),
+                    base_content: base_content.clone(),
+                    hunks: hunks.clone(),
+                    preview: preview.clone(),
+                });
+            }
+        });
 
         ctx.subscribe_to_view(&warp_drive_view, |_me, _, event, ctx| {
             ctx.emit(LeftPanelEvent::WarpDrive(event.clone()));
@@ -323,6 +366,43 @@ impl LeftPanelView {
                 });
                 ctx.notify();
             }
+
+            // The Git Graph tracks the *focused* pane's directory, not the most
+            // recently added one: within one tab, clicking between split panes
+            // (or CDing the focused pane) moves the graph to that pane's repo.
+            // We anchor on `focused_dir` (the pane's repo root, or its working
+            // directory when it isn't inside a repo) rather than `focused_repo`,
+            // so focusing a non-repo dir still scans it for nested repos and
+            // surfaces them — a dir with no git anywhere then shows the "not a
+            // repository" placeholder. `focused_dir` is `None` only when the
+            // focused pane has no directory at all (e.g. no terminal); that
+            // leaves the current graph in place rather than blanking it.
+            if let WorkingDirectoriesEvent::FocusedRepoChanged {
+                pane_group_id,
+                focused_dir,
+                ..
+            } = event
+            {
+                let Some(active_pane_group) = &me.active_pane_group else {
+                    return;
+                };
+                let Some(active_pane_group) = active_pane_group.upgrade(ctx) else {
+                    return;
+                };
+                if active_pane_group.id() != *pane_group_id {
+                    return;
+                }
+                let Some(git_graph_dir) = focused_dir
+                    .as_ref()
+                    .and_then(|dir| dir.to_local_path().map(|p| p.to_path_buf()))
+                else {
+                    return;
+                };
+                let git_graph_view = me.git_graph_view.clone();
+                git_graph_view.update(ctx, |view, ctx| {
+                    view.set_working_directory(Some(git_graph_dir), ctx);
+                });
+            }
         });
 
         let mut view = Self {
@@ -331,6 +411,7 @@ impl LeftPanelView {
             close_button_mouse_state: Default::default(),
             warp_drive_view,
             conversation_list_view,
+            git_graph_view,
             active_view: active_view_state::new(active_view),
             toolbelt_buttons,
             active_pane_group: None,
@@ -458,6 +539,19 @@ impl LeftPanelView {
                     active_icon: Some(Icon::Conversation),
                     tooltip_text: "Agent conversations".to_string(),
                     action: LeftPanelAction::ConversationListView,
+                    render_with_active_state: false,
+                    tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
+                    tooltip_keybinding_names,
+                }
+            }
+            ToolPanelView::GitGraph => {
+                let tooltip_keybinding_names = vec![LEFT_PANEL_GIT_GRAPH_BINDING_NAME];
+
+                ToolbeltButtonConfig {
+                    icon: Icon::GitBranch,
+                    active_icon: None,
+                    tooltip_text: "Git Graph".to_string(),
+                    action: LeftPanelAction::GitGraph,
                     render_with_active_state: false,
                     tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
                     tooltip_keybinding_names,
@@ -642,6 +736,16 @@ impl LeftPanelView {
             view.set_root_directories(all_directories, view_ctx);
         });
 
+        // Seed the Git Graph with this pane group's most recent local working
+        // directory when switching to it, so it doesn't keep showing the
+        // previous group's state. Within the group, the `FocusedRepoChanged`
+        // handler then tracks whichever split pane is focused.
+        let git_graph_dir = local_paths.first().cloned();
+        let git_graph_view = self.git_graph_view.clone();
+        git_graph_view.update(ctx, |view, ctx| {
+            view.set_working_directory(git_graph_dir, ctx);
+        });
+
         let local_directories = deduplicate_by_directory_name(local_paths);
         let active_file_model = pane_group.as_ref(ctx).active_file_model().clone();
 
@@ -723,6 +827,7 @@ impl LeftPanelView {
                     view.on_left_panel_focused(ctx);
                 });
             }
+            ToolPanelView::GitGraph => ctx.focus(&self.git_graph_view),
         }
     }
 
@@ -889,6 +994,7 @@ impl LeftPanelView {
                 LeftPanelAction::ConversationListView => {
                     self.active_view.get() == ToolPanelView::ConversationListView
                 }
+                LeftPanelAction::GitGraph => self.active_view.get() == ToolPanelView::GitGraph,
             };
         }
     }
@@ -1030,6 +1136,9 @@ impl LeftPanelView {
                 active_view_state::set(self, ToolPanelView::ConversationListView, ctx);
                 send_telemetry_from_ctx!(TelemetryEvent::ConversationListViewOpened, ctx);
             }
+            LeftPanelAction::GitGraph => {
+                active_view_state::set(self, ToolPanelView::GitGraph, ctx);
+            }
         }
     }
 
@@ -1129,6 +1238,7 @@ impl View for LeftPanelView {
                 }
                 ToolPanelView::WarpDrive => ctx.focus(&self.warp_drive_view),
                 ToolPanelView::ConversationListView => ctx.focus(&self.conversation_list_view),
+                ToolPanelView::GitGraph => ctx.focus(&self.git_graph_view),
             }
         }
     }
@@ -1201,6 +1311,14 @@ impl View for LeftPanelView {
             ToolPanelView::ConversationListView => {
                 Shrinkable::new(1.0, ChildView::new(&self.conversation_list_view).finish()).finish()
             }
+            ToolPanelView::GitGraph => Shrinkable::new(
+                1.0,
+                Container::new(ChildView::new(&self.git_graph_view).finish())
+                    .with_padding_left(2.)
+                    .with_padding_right(2.)
+                    .finish(),
+            )
+            .finish(),
         };
 
         let panel_content = Container::new({

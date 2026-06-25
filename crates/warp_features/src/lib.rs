@@ -881,6 +881,18 @@ pub enum FeatureFlag {
     /// connect a Grok subscription instead of pasting an API key.
     SuperGrok,
 
+    /// Gates availability of the read-only Git Graph (commit DAG) tab per channel.
+    /// Within channels where it is enabled, the user setting `GitSettings.show_git_graph`
+    /// controls whether the panel is actually shown.
+    GitGraph,
+
+    /// Gates the write operations (right-click context-menu actions: checkout,
+    /// branch/tag create/delete, merge, rebase, reset, cherry-pick, revert,
+    /// push/pull, archive, …) layered on top of the read-only [`GitGraph`] panel.
+    /// Kept separate so the read-only base can ship independently of the
+    /// mutating layer.
+    GitGraphWrite,
+
     /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
@@ -954,6 +966,8 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::RemoteCodebaseIndexing,
+    FeatureFlag::GitGraph,
+    FeatureFlag::GitGraphWrite,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
@@ -1076,6 +1090,9 @@ impl FeatureFlag {
             ),
             GitOperationsInCodeReview => Some(
                 "Enables commit, push, and create-PR actions directly from the code review panel.",
+            ),
+            GitGraphWrite => Some(
+                "Enables write operations (checkout, branch/tag management, merge, rebase, reset, cherry-pick, revert, push/pull, archive) from the Git Graph right-click menus.",
             ),
             GroupedTabs => Some("Enables organizing tabs into named, collapsible groups."),
             AsyncFind => Some(

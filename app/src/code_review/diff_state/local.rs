@@ -1756,29 +1756,8 @@ impl LocalDiffStateModel {
         Ok(count)
     }
 
-    async fn file_statuses_against_head(repo_path: &Path) -> Result<Vec<(String, GitFileStatus)>> {
-        // First, get the list of changed files with their status
-        log::debug!(
-            "[GIT OPERATION] local.rs file_statuses_against_head git --no-optional-locks status --untracked-files=all --branch --porcelain=2 -z"
-        );
-        let status_output = run_git_command(
-            repo_path,
-            &[
-                "--no-optional-locks", // Avoid taking locks that might interfere with other git operations
-                "status",
-                "--untracked-files=all", // Get all untracked files
-                "--branch",              // Get branch information
-                "--porcelain=2",         // Use porcelain=2 to match git desktop implementation
-                "-z",                    // Split output by null characters
-            ],
-        )
-        .await?;
-
-        Self::parse_git_status(&status_output)
-    }
-
     async fn diff_state_against_head(repo_path: &Path) -> Result<GitDiffWithBaseContent> {
-        let changed_files = Self::file_statuses_against_head(repo_path).await?;
+        let changed_files = file_statuses_against_head(repo_path).await?;
 
         // Get binary file information using git diff --numstat
         let binary_files = Self::get_binary_files(repo_path).await?;
@@ -2891,6 +2870,32 @@ pub(crate) async fn diff_metadata_against_head(
         },
         files,
     })
+}
+
+/// Per-file working-tree status against HEAD (including untracked files), as
+/// repo-relative paths. Reuses the same `git status --porcelain=2 -z` parse as
+/// the diff-state model so the file tree's git decorations and the code-review
+/// diff agree on what each file's status is.
+pub(crate) async fn file_statuses_against_head(
+    repo_path: &Path,
+) -> Result<Vec<(String, GitFileStatus)>> {
+    log::debug!(
+        "[GIT OPERATION] local.rs file_statuses_against_head git --no-optional-locks status --untracked-files=all --branch --porcelain=2 -z"
+    );
+    let status_output = run_git_command(
+        repo_path,
+        &[
+            "--no-optional-locks", // Avoid taking locks that might interfere with other git operations
+            "status",
+            "--untracked-files=all", // Get all untracked files
+            "--branch",              // Get branch information
+            "--porcelain=2",         // Use porcelain=2 to match git desktop implementation
+            "-z",                    // Split output by null characters
+        ],
+    )
+    .await?;
+
+    LocalDiffStateModel::parse_git_status(&status_output)
 }
 
 impl warpui::Entity for LocalDiffStateModel {

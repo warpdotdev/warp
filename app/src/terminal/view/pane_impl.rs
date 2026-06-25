@@ -107,10 +107,17 @@ impl TerminalView {
     }
 
     pub fn refresh_pane_header(&mut self, ctx: &mut ViewContext<Self>) {
-        let is_active_session = self.is_active_session(ctx);
+        // Show the top-left active-pane indicator only when this terminal is both the active
+        // session and the currently focused pane. When focus moves to a non-terminal pane in
+        // the split (e.g. a read-only diff pane), active_session still points at this terminal
+        // (which is intended, so a new terminal can inherit its cwd, etc. — it must not be
+        // cleared); looking only at is_active_session would light the indicator on both the
+        // terminal and the focused pane. In pure-terminal scenarios the focused terminal is
+        // always the active_session, so behavior is unchanged.
+        let show_active_pane_indicator = self.is_active_session(ctx) && self.is_pane_focused(ctx);
         self.pane_configuration
             .update(ctx, move |pane_config, ctx| {
-                pane_config.set_show_active_pane_indicator(is_active_session, ctx);
+                pane_config.set_show_active_pane_indicator(show_active_pane_indicator, ctx);
                 pane_config.refresh_pane_header_overflow_menu_items(ctx);
             });
     }

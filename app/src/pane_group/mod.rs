@@ -79,6 +79,7 @@ use crate::channel::{Channel, ChannelState};
 use crate::cloud_object::Space;
 use crate::code::active_file::ActiveFileModel;
 use crate::code::buffer_location::LocalOrRemotePath;
+use crate::code::commit_diff_view::CommitDiffView;
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
 use crate::code::view::{CodeView, CodeViewAction};
@@ -179,6 +180,7 @@ pub use pane::ai_document_pane::AIDocumentPane;
 pub use pane::ai_fact_pane::AIFactPane;
 pub use pane::code_diff_pane::CodeDiffPane;
 pub use pane::code_pane::CodePane;
+pub use pane::commit_diff_pane::CommitDiffPane;
 pub use pane::env_var_collection_pane::EnvVarCollectionPane;
 pub use pane::environment_management_pane::EnvironmentManagementPane;
 pub use pane::execution_profile_editor_pane::ExecutionProfileEditorPane;
@@ -2233,6 +2235,22 @@ impl PaneGroup {
 
     pub fn ai_document_panes(&self) -> impl Iterator<Item = PaneId> + '_ {
         self.panes_of::<AIDocumentPane>().map(|pane| pane.id())
+    }
+
+    /// The first visible commit diff pane in the current pane group (id + inner view), used
+    /// to reuse it when reopening a commit file diff: update its content in place and focus
+    /// it, rather than opening a new pane.
+    ///
+    /// Must filter out panes that have been closed via × but not yet actually removed (hidden
+    /// for close): otherwise, reopening after closing would update that closed pane and the
+    /// diff wouldn't show.
+    pub fn first_commit_diff_pane(
+        &self,
+        app: &AppContext,
+    ) -> Option<(PaneId, ViewHandle<CommitDiffView>)> {
+        self.panes_of::<CommitDiffPane>()
+            .find(|pane| !self.is_pane_hidden_for_close(pane.id()))
+            .map(|pane| (pane.id(), pane.diff_view(app)))
     }
 
     fn visible_ai_document_panes(&self, ctx: &AppContext) -> Vec<(PaneId, AIDocumentId)> {
