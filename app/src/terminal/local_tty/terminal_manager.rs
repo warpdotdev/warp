@@ -154,9 +154,6 @@ pub struct TerminalManager<S> {
     #[cfg_attr(not(unix), allow(dead_code))]
     model_events: ModelHandle<ModelEventDispatcher>,
 
-    #[allow(dead_code)]
-    sessions: ModelHandle<Sessions>,
-
     /// The manager is responsible for managing the lifetime
     /// of the terminal attributes poller. None if the event loop has not yet started.
     #[cfg(unix)]
@@ -353,7 +350,6 @@ impl<S> TerminalManager<S> {
             event_loop_handle: None,
             view: surface.clone(),
             model_events,
-            sessions,
             #[cfg(unix)]
             terminal_attributes_poller: None,
             pty_controller,
@@ -364,6 +360,8 @@ impl<S> TerminalManager<S> {
             session_sharer: Rc::new(RefCell::new(None)),
         };
 
+        // Run surface-specific wiring after the manager exists, because this
+        // step may need manager-owned controllers and retained handles.
         post_wire(&mut terminal_manager, &surface, ctx);
 
         let terminal_surface = surface.clone();
