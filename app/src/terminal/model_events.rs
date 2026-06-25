@@ -77,7 +77,7 @@ impl ModelEventDispatcher {
                     pending_session_info.is_ssh_wrapper_session,
                     IsSSHWrapperSession::Yes { .. }
                 );
-                if FeatureFlag::SshRemoteServer.is_enabled() && is_ssh_wrapper_session {
+                if false && FeatureFlag::SshRemoteServer.is_enabled() && is_ssh_wrapper_session {
                     ModelEvent::SshInitShell {
                         pending_session_info,
                     }
@@ -295,7 +295,7 @@ impl ModelEventDispatcher {
         // `SessionsEvent::SessionBootstrapped`, which causes subscribers to
         // immediately queue `RunCommand` requests (e.g. `load_external_commands`).
         // The daemon must have the executor ready before those requests arrive.
-        if FeatureFlag::SshRemoteServer.is_enabled() && is_ssh_wrapper_session {
+        if false && FeatureFlag::SshRemoteServer.is_enabled() && is_ssh_wrapper_session {
             RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
                 mgr.notify_session_bootstrapped(
                     session_id,
@@ -319,10 +319,11 @@ impl ModelEventDispatcher {
     /// Emits an event so `TerminalView` can render the remote server block.
     pub fn request_remote_server_block(
         &mut self,
-        session_id: SessionId,
-        ctx: &mut ModelContext<Self>,
+        _session_id: SessionId,
+        _ctx: &mut ModelContext<Self>,
     ) {
-        ctx.emit(ModelEvent::RemoteServerBlockRequested { session_id });
+        // Zerp keeps SSH as a plain terminal connection and does not install
+        // or start Warp remote-server components on the host.
     }
 }
 

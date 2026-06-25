@@ -133,97 +133,11 @@ pub struct FileMCPWatcher {
 }
 
 impl FileMCPWatcher {
-    pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        let (file_mcp_tx, file_mcp_rx) = async_channel::unbounded::<FileMCPDetectionMessage>();
-
-        ctx.spawn_stream_local(
-            file_mcp_rx,
-            |me, message, ctx| {
-                me.handle_file_mcp_detection_message(message, ctx);
-            },
-            |_, _| {},
-        );
-
-        // Subscribe to changes to detected repositories.
-        ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), {
-            let file_mcp_tx = file_mcp_tx.clone();
-            move |me, _, event, ctx| {
-                let DetectedRepositoriesEvent::DetectedGitRepo { repository, source } = event;
-                // Register MCP servers for repos the user actively navigated to, and for
-                // repos cloned during cloud agent environment preparation.
-                if matches!(
-                    source,
-                    RepoDetectionSource::TerminalNavigation
-                        | RepoDetectionSource::CloudEnvironmentPrep
-                ) {
-                    let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();
-                    if matches!(source, RepoDetectionSource::CloudEnvironmentPrep) {
-                        // Track how many MCP config files remain to be parsed for the cloud environment repo.
-                        let count =
-                            providers_in_scope(repo_path.clone(), repo_path.clone()).count();
-                        me.cloud_env_pending.insert(repo_path.clone(), count);
-                    }
-                    me.register_repo_for_file_mcp_watching(repo_path, ctx, file_mcp_tx.clone());
-                }
-            }
-        });
-
-        // Subscribe to changes to top-level files in the home directory.
-        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _, event, ctx| {
-            me.handle_home_directory_watcher_event(event, ctx);
-        });
-        ctx.subscribe_to_model(
-            &WarpManagedPathsWatcher::handle(ctx),
-            |me, _, event, ctx| {
-                me.handle_warp_managed_paths_event(event, ctx);
-            },
-        );
-
-        let mut home_provider_watchers = HashMap::new();
-        if let Some(mcp_config_path) = warp_managed_mcp_config_path() {
-            Self::spawn_config_parse(
-                mcp_config_path.config_path,
-                mcp_config_path.root_path,
-                MCPProvider::Warp,
-                ctx,
-            );
-        }
-
-        if let Some(home_dir) = dirs::home_dir() {
-            for provider in MCPProvider::iter() {
-                if provider == MCPProvider::Warp {
-                    continue;
-                }
-                match home_subdir_to_watch(provider) {
-                    None => {
-                        // Initial scan of config files for providers whose config lives directly in
-                        // home (i.e. ~/.claude.json). HomeDirectoryWatcher handles incremental updates.
-                        let Some(config_path) = home_config_file_path(provider) else {
-                            continue;
-                        };
-                        Self::spawn_config_parse(config_path, home_dir.clone(), provider, ctx);
-                    }
-                    Some(subdir) => {
-                        // For providers whose home config lives in a subdir (e.g. ~/.codex for Codex)
-                        // start watching the subdir for file-based MCP servers, if it exists.
-                        let subdir_path = home_dir.join(&subdir);
-                        // Note: this will fail if the subdir doesn't exist yet.
-                        // We register upon creation of the subdir via HomeDirectoryWatcher.
-                        Self::watch_home_provider_dir(
-                            &subdir_path,
-                            home_dir.clone(),
-                            file_mcp_tx.clone(),
-                            &mut home_provider_watchers,
-                            ctx,
-                        );
-                    }
-                }
-            }
-        }
-
+    pub fn new(_ctx: &mut ModelContext<Self>) -> Self {
+        let (file_mcp_tx, _file_mcp_rx) = async_channel::unbounded::<FileMCPDetectionMessage>();
         Self {
             file_mcp_tx,
-            home_provider_watchers,
+            home_provider_watchers: HashMap::new(),
             project_repo_watchers: HashSet::new(),
             cloud_env_pending: HashMap::new(),
         }

@@ -169,7 +169,7 @@ while (( "$#" )); do
       OPEN_AFTER_BUNDLE=true
       shift
       ;;
-    # Specify the release channel (local, dev, preview, stable, oss)
+    # Specify the release channel (local, dev, preview, stable, zerp)
     -c|--channel)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
         RELEASE_CHANNEL=$2
@@ -291,7 +291,7 @@ elif [[ $RELEASE_CHANNEL = "stable" ]]; then
     ZERP_SCHEME_NAME="zerp"
     # Enable heap usage tracking & profiling using jemalloc through pprof.
     FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
-elif [[ $RELEASE_CHANNEL = "oss" ]]; then
+elif [[ $RELEASE_CHANNEL = "zerp" || $RELEASE_CHANNEL = "oss" ]]; then
     ZERP_BIN="zerp"
     BUNDLE_ID="dev.zerp.Zerp"
     ZERP_APP_NAME="Zerp"
@@ -442,10 +442,8 @@ if [[ "$ARTIFACT" == "app" ]]; then
 
   # Determine CLI wrapper script path based on release channel.  Each channel's
   # value here must match `Channel::cli_command_name` in the Rust source.
-  if [[ $RELEASE_CHANNEL = "stable" ]]; then
+  if [[ $RELEASE_CHANNEL = "stable" || $RELEASE_CHANNEL = "zerp" || $RELEASE_CHANNEL = "oss" ]]; then
     CLI_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/zerp-cli"
-  elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-    CLI_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/zerp-cli-oss"
   else
     CLI_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/zerp-cli-$RELEASE_CHANNEL"
   fi
@@ -467,10 +465,8 @@ EOF
 
   if [[ ",$FEATURES," =~ ",warp_control_cli," ]]; then
     # Each value must match `Channel::warpctrl_command_name` in the Rust source.
-    if [[ $RELEASE_CHANNEL = "stable" ]]; then
+    if [[ $RELEASE_CHANNEL = "stable" || $RELEASE_CHANNEL = "zerp" || $RELEASE_CHANNEL = "oss" ]]; then
       WARPCTRL_COMMAND_NAME="zerpctrl"
-    elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-      WARPCTRL_COMMAND_NAME="zerpctrl-oss"
     else
       WARPCTRL_COMMAND_NAME="zerpctrl-$RELEASE_CHANNEL"
     fi

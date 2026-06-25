@@ -1,8 +1,8 @@
 {
-  "documentation": "Zerp ships only the oss macOS arm64 release channel.",
+  "documentation": "Zerp ships only the zerp macOS arm64 release channel.",
   "channels": [
     {
-      "channel": "oss",
+      "channel": "zerp",
       "type": "continuous",
       "is_prerelease": false,
       "is_autopush": true,

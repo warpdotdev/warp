@@ -94,9 +94,12 @@ impl Input {
             add_input_suggestions_overlays(self, &mut stack, appearance, menu_positioning, app);
         }
 
-        let mut input_container = Container::new(stack.finish()).with_border(
-            Border::top(1.0).with_border_fill(internal_colors::fg_overlay_2(appearance.theme())),
-        );
+        let mut input_container = Container::new(stack.finish())
+            .with_background(appearance.theme().surface_1())
+            .with_border(
+                Border::top(1.0)
+                    .with_border_fill(internal_colors::fg_overlay_2(appearance.theme())),
+            );
 
         // When an alt screen CLI agent (e.g. OpenCode) is running, match
         // the rich input background to the alt screen so it blends in.

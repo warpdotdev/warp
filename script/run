@@ -5,7 +5,7 @@
 # Zerp intentionally supports only the macOS arm64 app bundle target.
 #
 # This script owns all cross-platform setup (running install_channel_config,
-# detecting internal vs OSS builds, and mapping legacy `--features` entries
+# detecting internal vs Zerp builds, and mapping legacy `--features` entries
 # to environment variables), so platform-specific scripts can assume those
 # values are already provided via environment variables.
 
@@ -24,13 +24,13 @@ COMMON_SKILLS_TARGET="${ZERP_COMMON_SKILLS_INSTALL_TARGET:-}"
 ./script/install_channel_config || echo "Skipping internal channel config installation (no repo access)."
 
 
-# If warp_channel_config is on PATH, build the Local channel binary; otherwise build the OSS channel.
+# If warp_channel_config is on PATH, build the Local channel binary; otherwise build the Zerp channel.
 if command -v warp-channel-config &>/dev/null; then
     ZERP_BIN_NAME="zerp-local"
     ZERP_CHANNEL="local"
 else
     ZERP_BIN_NAME="zerp"
-    ZERP_CHANNEL="oss"
+    ZERP_CHANNEL="zerp"
 fi
 
 # Shared argument parsing. macOS-specific flags (--dont-open,

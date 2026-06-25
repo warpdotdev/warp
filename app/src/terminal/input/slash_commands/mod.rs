@@ -217,6 +217,13 @@ impl Input {
         event: &UpdatedSlashCommandModel,
         ctx: &mut ViewContext<Self>,
     ) {
+        if self.is_cli_agent_session_active(ctx) {
+            if self.suggestions_mode_model.as_ref(ctx).is_slash_commands() {
+                self.close_slash_commands_menu(ctx);
+            }
+            return;
+        }
+
         // Refresh decorations if the slash command detection state changed, since
         // detected commands affect syntax highlighting.
         let new_state = self.slash_command_model.as_ref(ctx).state();
@@ -392,7 +399,7 @@ impl Input {
         // Handle the slash command action based on its kind
         match command.name {
             add_mcp if command.name == commands::ADD_MCP.name => {
-                ctx.dispatch_typed_action(&TerminalAction::OpenAddMCPPane);
+                return false;
             }
             add_prompt if command.name == commands::ADD_PROMPT.name => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenAddPromptPane);
@@ -727,7 +734,7 @@ impl Input {
                 });
             }
             open_mcp_servers if command.name == commands::OPEN_MCP_SERVERS.name => {
-                ctx.dispatch_typed_action(&TerminalAction::OpenViewMCPPane);
+                return false;
             }
             open_settings_file if command.name == commands::OPEN_SETTINGS_FILE.name => {
                 if !FeatureFlag::SettingsFile.is_enabled() || !cfg!(feature = "local_fs") {
@@ -1215,6 +1222,10 @@ impl Input {
         &mut self,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
+        if self.is_cli_agent_session_active(ctx) {
+            return false;
+        }
+
         // If slash command menu is open, accept the selected item with cmd_or_ctrl_enter=true.
         if matches!(
             self.suggestions_mode_model.as_ref(ctx).mode(),
@@ -1316,6 +1327,10 @@ impl Input {
         &mut self,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
+        if self.is_cli_agent_session_active(ctx) {
+            return false;
+        }
+
         if matches!(
             self.suggestions_mode_model.as_ref(ctx).mode(),
             InputSuggestionsMode::SlashCommands

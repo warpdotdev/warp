@@ -9,8 +9,6 @@ use strum_macros::EnumIter;
 use warp_util::path::ShellFamily;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use crate::terminal::ssh::util::{parse_interactive_ssh_command, SshWarpifyCommand};
-
 // Cannot directly use Vec<Regex> here b/c Regex doesn't impl Eq, Serialize, and Deserialize.
 maybe_define_setting!(AddedSubshellCommands, group: WarpifySettings, {
     type: Vec<String>,
@@ -44,12 +42,12 @@ maybe_define_setting!(SshHostsDenylist, group: WarpifySettings, {
 
 maybe_define_setting!(EnableSshWarpification, group: WarpifySettings, {
     type: bool,
-    default: true,
+    default: false,
     supported_platforms: SupportedPlatforms::ALL,
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
     toml_path: "warpify.ssh.enable_ssh_warpification",
-    description: "Whether to enable Warp features in SSH sessions.",
+    description: "Deprecated: Zerp keeps SSH as a plain terminal connection.",
 });
 
 // NOTE: This setting has been unified into `enable_ssh_warpification` and is no
@@ -470,6 +468,7 @@ impl SingletonEntity for WarpifySettings {}
 /// This is the other impl block for this model. This one contains the actual subshell-specific
 /// logic.
 impl WarpifySettings {
+    #[allow(dead_code)]
     fn is_built_in_subshell_match(command: &str) -> bool {
         for command_regex in SUBSHELL_COMMAND_REGEXES.iter() {
             if command_regex.is_match(command) {
@@ -490,29 +489,7 @@ impl WarpifySettings {
     /// manually by the user.
     pub fn is_compatible_subshell_command(&self, command: &str, shell_family: ShellFamily) -> bool {
         let command = command.trim();
-        if Self::is_built_in_subshell_match(command) {
-            return true;
-        }
-
-        if SshWarpifyCommand::matches(command).is_some_and(|command| command.is_ssh_like_command())
-        {
-            return true;
-        }
-
-        for command_regex in self.parsed_added_subshell_commands.iter().flatten() {
-            if command_regex.is_match(command) {
-                return true;
-            }
-        }
-
-        // While in-band generators are our best option for warpifying ssh sessions from powershell, hard-code
-        // the warpify subshell banner to show up.
-        if matches!(shell_family, ShellFamily::PowerShell)
-            && parse_interactive_ssh_command(command).is_some()
-        {
-            return true;
-        }
-
+        let _ = (command, shell_family);
         false
     }
 
@@ -527,7 +504,7 @@ impl WarpifySettings {
 
     /// Returns whether the one-time tmux SSH deprecation notice should be shown to the user.
     pub fn should_show_tmux_deprecation_notice(&self) -> bool {
-        *self.ssh_tmux_deprecation_notice_pending.value()
+        false
     }
 
     /// Marks the one-time tmux SSH deprecation notice as shown so it is not shown again.

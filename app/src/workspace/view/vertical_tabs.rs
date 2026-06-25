@@ -3309,7 +3309,7 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(ICON_WITH_STATUS_GAP)
         .with_child(icon)
-        .with_child(Shrinkable::new(1., text_content).finish());
+        .with_child(Expanded::new(1., text_content).finish());
     if let Some(status) = cli_agent_status.as_ref() {
         content.add_child(render_vertical_tab_status_pill(status, appearance));
     }
@@ -4590,7 +4590,7 @@ fn render_summary_tab_item(
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(ICON_WITH_STATUS_GAP)
         .with_child(icon);
-    content.add_child(Shrinkable::new(1., text_col.finish()).finish());
+    content.add_child(Expanded::new(1., text_col.finish()).finish());
     if let Some(status) = summary_status {
         content.add_child(render_vertical_tab_status_pill(status, appearance));
     }

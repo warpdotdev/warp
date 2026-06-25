@@ -14,7 +14,8 @@
 - 普通 terminal/session/workspace 能力。
 - 第三方 CLI agent 识别与展示，例如 `codex`、`claude`/Claude Code、`gemini`、`opencode`。
 - 第三方 CLI agent 的 tab/icon/status 展示。运行中状态必须独立于 tab 名称保存和渲染，用户重命名 tab 后仍要显示运行状态。
-- MCP servers 和第三方 CLI agent 相关设置页。
+- 第三方 CLI agent 的最小设置页，例如 Rich Input、自动展开、状态展示等本地终端体验。
+- 普通 `ssh` 连接能力。不要注入 Warpify/remote-server，也不要在远端下载 `.warp` 组件。
 
 清理范围：
 
@@ -23,12 +24,17 @@
 - cloud agent、Oz/cloud 编排平台、agent management、run/task/schedule/handoff/computer use 等 Warp 内建 AI 工具入口。
 - bundled Oz platform skill、Oz launch/changelog/onboarding、cloud handoff 和 computer-use 用户入口。
 - 账号体系、Warp Drive、登录/同步/团队协作等依赖 Warp 云端账号能力的用户入口。
+- Privacy 设置页、隐私策略外链入口、遥测/崩溃上报/云端会话存储开关入口。
+- MCP servers、MCP gallery、file-based MCP auto-spawn、MCP Server 设置页和 `/add-mcp`、`/open-mcp-servers` 等入口。
+- Warpify SSH、remote-server、远端开发面板、远端 `.warp` 下载/安装/启动流程。
+- Rich Input 中与第三方 CLI 冲突的 Warp 内置 `/` 和 `@` 菜单触发。Codex/Claude 等 CLI agent 会话中这些字符必须原样进入 CLI agent。
 
 兼容边界：
 
 - 服务端 schema 或历史数据中的 `AIAgentHarness::Oz` 可以作为只读兼容值保留，但不能重新映射成本地可选 harness。
 - 对缺失、旧版或未知 harness，使用 `Unknown`/普通 terminal fallback，不回退到 Warp/Oz。
-- 上游文档或代码若新增 Warp-native/Oz/cloud agent 入口，合并时必须按本目标改写或删除。
+- 上游文档或代码若新增 Warp-native/Oz/cloud agent/MCP/Warpify/remote-server/Privacy/Warp Drive 入口，合并时必须按本目标改写或删除。
+- 上游内部 channel 名如果仍叫 `oss`，只能作为兼容枚举或历史配置保留；用户可见名称、安装包、workflow 和 CLI wrapper 应使用 `zerp`。
 
 ## 从官方上游 master 合并最新内容
 
@@ -51,6 +57,7 @@ rtk git merge --no-ff upstream/master
 - 上游新增 Warp AI/Oz/cloud agent/computer use/handoff 入口时，保留上游非 AI 基础改动，但不要恢复这些入口。
 - 上游改动第三方 CLI agent 支持时，优先保留并适配到本分支的第三方 CLI-only 目标。
 - `Harness::Oz`、`oz-platform`、`OpenWarpAI`、`WarpAIDataSource`、`OpenOzLaunchModal` 等符号不要重新引入为可运行入口。
+- `MCPServers`、`AgentMCPServers`、`OpenMCPSettingsPage`、`Warpify`、`RemoteServerManager`、`Privacy`、`Warp Drive` 等符号若因上游合并出现，只能保留为不可见/不可运行兼容路径，不能重新成为 UI 或运行入口。
 - tab title/name 与 agent 运行态必须分离；冲突中不要把运行状态拼回 tab name。
 
 合并后至少执行：

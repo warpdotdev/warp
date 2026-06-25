@@ -47,7 +47,7 @@ jobs:
           GIT_RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
           ./script/macos/bundle \
-            --channel oss \
+            --channel zerp \
             --arch aarch64 \
             --dmg-name-suffix arm64 \
             --selfsign \

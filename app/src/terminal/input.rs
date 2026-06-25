@@ -4546,7 +4546,17 @@ impl Input {
         ctx.notify();
     }
 
+    fn is_cli_agent_session_active(&self, app: &AppContext) -> bool {
+        CLIAgentSessionsModel::as_ref(app)
+            .session(self.terminal_view_id)
+            .is_some_and(|session| !matches!(session.agent, CLIAgent::Unknown))
+    }
+
     fn open_slash_commands_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.is_cli_agent_session_active(ctx) {
+            return;
+        }
+
         // Don't open menu if there's a long-running command — unless the CLI agent
         // rich input is open (the CLI agent itself is the long-running command).
         let is_cli_agent_input =
@@ -4580,6 +4590,10 @@ impl Input {
             self.close_slash_commands_menu(ctx);
         } else {
             self.system_insert("/", ctx);
+            if self.is_cli_agent_session_active(ctx) {
+                return;
+            }
+
             let is_in_agent_view = FeatureFlag::AgentView.is_enabled()
                 && self.agent_view_controller.as_ref(ctx).is_fullscreen();
             send_telemetry_from_ctx!(
@@ -6520,6 +6534,10 @@ impl Input {
                 self.select_image(ctx);
             }
             UniversalDeveloperInputButtonBarEvent::SetAIContextMenuOpen(open) => {
+                if *open && self.is_cli_agent_session_active(ctx) {
+                    return;
+                }
+
                 self.focus_input_box(ctx);
                 self.set_ai_context_menu_open(*open, ctx);
             }
@@ -10754,6 +10772,10 @@ impl Input {
                 }
             }
             EditorEvent::SetAIContextMenuOpen(open) => {
+                if *open && self.is_cli_agent_session_active(ctx) {
+                    return;
+                }
+
                 self.set_ai_context_menu_open(*open, ctx);
             }
             EditorEvent::SelectAIContextMenuCategory { .. } => {
@@ -11646,6 +11668,10 @@ impl Input {
         shell_family: ShellFamily,
         app: &AppContext,
     ) -> bool {
+        if self.is_cli_agent_session_active(app) {
+            return false;
+        }
+
         if cursor_position == 0 {
             return false;
         }

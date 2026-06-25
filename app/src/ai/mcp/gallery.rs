@@ -91,27 +91,15 @@ impl TryFrom<GalleryMCPServer> for TemplatableMCPServer {
     }
 }
 
+#[derive(Default)]
 pub struct MCPGalleryManager {
     gallery_items: HashMap<Uuid, GalleryMCPServer>,
     templatable_mcp_servers: HashMap<Uuid, TemplatableMCPServer>,
 }
 
 impl MCPGalleryManager {
-    pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        let gallery_manager = Self {
-            gallery_items: Default::default(),
-            templatable_mcp_servers: Default::default(),
-        };
-
-        // Subscribe to UpdateManager events to receive MCP gallery updates
-        let update_manager = UpdateManager::handle(ctx);
-        ctx.subscribe_to_model(&update_manager, |me, _, event, ctx| {
-            if let UpdateManagerEvent::MCPGalleryUpdated { templates } = event {
-                me.update_gallery_items(templates.clone(), ctx);
-            }
-        });
-
-        gallery_manager
+    pub fn new(_ctx: &mut ModelContext<Self>) -> Self {
+        Self::default()
     }
 
     pub fn get_gallery(&self) -> Vec<GalleryMCPServer> {

@@ -75,7 +75,7 @@ impl AppExecutionMode {
 
     /// Whether the app can automatically start MCP servers from the previous session.
     pub fn can_autostart_mcp_servers(&self) -> bool {
-        self.is_app()
+        false
     }
 
     /// Whether the app can show interactive onboarding UIs (e.g. the onboarding

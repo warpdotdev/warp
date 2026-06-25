@@ -8,7 +8,7 @@
 # setup (install_channel_config, binary name detection, feature-to-env-var
 # mapping). The following env vars are expected to be set by the caller:
 #   ZERP_BIN_NAME  — "zerp-local" (internal local build) or "zerp"
-#   ZERP_CHANNEL   — "local" or "oss"
+#   ZERP_CHANNEL   — "local" or "zerp"
 #   FEATURES       — comma-separated cargo features (already normalized)
 # Must be called from the root directory of the Zerp repo.
 
@@ -138,7 +138,7 @@ if [[ ",$FEATURES," =~ ",warp_control_cli," ]]; then
   if [ "$ZERP_CHANNEL" = "local" ]; then
     WARPCTRL_COMMAND_NAME="zerpctrl-local"
   else
-    WARPCTRL_COMMAND_NAME="zerpctrl-oss"
+    WARPCTRL_COMMAND_NAME="zerpctrl"
   fi
   WARPCTRL_SCRIPT_PATH="$ZERP_APP_PATH/Contents/Resources/bin/$WARPCTRL_COMMAND_NAME"
   echo "Creating zerpctrl wrapper script at $WARPCTRL_SCRIPT_PATH..."
@@ -157,10 +157,10 @@ if [ "$DONT_OPEN" = false ] ; then
         PATH="" /usr/bin/open "$ZERP_APP_PATH"
         if [ "$ZERP_CHANNEL" = "local" ]; then
             LOG_FILE=~/Library/Logs/zerp_local.log
-        elif [ "$ZERP_CHANNEL" = "oss" ]; then
+        elif [ "$ZERP_CHANNEL" = "zerp" ]; then
             LOG_FILE=~/Library/Logs/zerp.log
         else
-            echo "Warning: unrecognized ZERP_CHANNEL '$ZERP_CHANNEL', defaulting to OSS log path" >&2
+            echo "Warning: unrecognized ZERP_CHANNEL '$ZERP_CHANNEL', defaulting to Zerp log path" >&2
             LOG_FILE=~/Library/Logs/zerp.log
         fi
         tail -F "$LOG_FILE"

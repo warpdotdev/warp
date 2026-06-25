@@ -538,7 +538,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 flags::WARP_DRIVE_CONTEXT_FLAG,
             )
             .with_group(bindings::BindingGroup::WarpAi)
-            .with_enabled(|| FeatureFlag::AIRules.is_enabled()),
+            .with_enabled(|| false),
             ToggleSettingActionPair::new(
                 "Auto-spawn servers from third-party agents",
                 builder(SettingsAction::AI(AISettingsPageAction::ToggleFileBasedMcp)),
@@ -546,11 +546,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 flags::FILE_BASED_MCP_FLAG,
             )
             .with_group(bindings::BindingGroup::WarpAi)
-            .with_enabled(|| {
-                FeatureFlag::McpServer.is_enabled()
-                    && FeatureFlag::FileBasedMcp.is_enabled()
-                    && ContextFlag::ShowMCPServers.is_enabled()
-            }),
+            .with_enabled(|| false),
         ],
         app,
     );
@@ -2400,7 +2396,7 @@ impl AISettingsPageView {
     fn build_page(subpage: Option<AISubpage>, _ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let mut widgets: Vec<Box<dyn SettingsWidget<View = AISettingsPageView>>> = Vec::new();
 
-        // The Zerp OSS build keeps third-party CLI agent support and removes
+        // The Zerp build keeps third-party CLI agent support and removes
         // Warp's built-in AI settings. Legacy subpage routes fall back here so
         // deep links do not expose removed settings.
         match subpage {
@@ -6190,7 +6186,7 @@ struct MCPServersWidget {
 
 impl MCPServersWidget {
     fn should_show_mcp() -> bool {
-        FeatureFlag::McpServer.is_enabled() && ContextFlag::ShowMCPServers.is_enabled()
+        false
     }
 }
 
@@ -6454,7 +6450,7 @@ impl SettingsWidget for AIFactWidget {
     }
 
     fn should_render(&self, _app: &AppContext) -> bool {
-        FeatureFlag::AIRules.is_enabled()
+        false
     }
 
     fn render(

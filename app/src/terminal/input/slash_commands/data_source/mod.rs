@@ -328,6 +328,10 @@ impl SlashCommandDataSource {
         command: &StaticCommand,
         context: &ActiveCommandsContext,
     ) -> bool {
+        if command.name == commands::ADD_MCP.name || command.name == commands::OPEN_MCP_SERVERS.name
+        {
+            return false;
+        }
         if !command.is_active(context.session_context) {
             return false;
         }

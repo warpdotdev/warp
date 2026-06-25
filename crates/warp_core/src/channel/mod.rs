@@ -55,7 +55,7 @@ impl Channel {
             Channel::Preview => "zerp-cli-preview",
             Channel::Local => "zerp-cli-local",
             Channel::Integration => "zerp-cli-integration",
-            Channel::Oss => "zerp-cli-oss",
+            Channel::Oss => "zerp-cli",
         }
     }
 
@@ -67,7 +67,7 @@ impl Channel {
             Channel::Preview => "zerpctrl-preview",
             Channel::Local => "zerpctrl-local",
             Channel::Integration => "zerpctrl-integration",
-            Channel::Oss => "zerpctrl-oss",
+            Channel::Oss => "zerpctrl",
         }
     }
 }
@@ -99,6 +99,6 @@ mod tests {
             Channel::Integration.cli_command_name(),
             "zerp-cli-integration"
         );
-        assert_eq!(Channel::Oss.cli_command_name(), "zerp-cli-oss");
+        assert_eq!(Channel::Oss.cli_command_name(), "zerp-cli");
     }
 }
