@@ -337,6 +337,7 @@ impl TerminalManager {
     /// orchestration parent agent, so the snapshot/restore path can emit a
     /// `LeafContents::AmbientAgent` rather than falling through to an empty
     /// terminal pane.
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         session_id: SessionId,
         resources: TerminalViewResources,

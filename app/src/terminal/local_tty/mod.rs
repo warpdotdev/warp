@@ -31,10 +31,10 @@ use shell::ShellStarter;
 
 #[cfg(windows)]
 pub use self::terminal_manager::shutdown_all_pty_event_loops;
+pub use self::terminal_manager::{get_shell_starter, TerminalManager};
 pub(crate) use self::terminal_view_adaptor::{
     create_terminal_view_surface, terminal_view_restored_blocks, TerminalViewSurfaceConfig,
 };
-pub use self::terminal_manager::{get_shell_starter, TerminalManager};
 #[cfg(unix)]
 pub use self::unix::*;
 #[cfg(windows)]

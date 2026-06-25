@@ -32,6 +32,7 @@ use crate::context_chips::prompt::Prompt;
 use crate::context_chips::ContextChipKind;
 use crate::features::FeatureFlag;
 use crate::persistence::ModelEvent;
+use crate::send_telemetry_on_executor;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{DebugSettings, PrivacySettings, SshSettings};
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
@@ -59,7 +60,6 @@ use crate::terminal::{
     terminal_manager, ShellLaunchData, ShellLaunchState, SizeInfo,
     TerminalManager as TerminalManagerTrait, TerminalModel, PTY_READS_BROADCAST_CHANNEL_SIZE,
 };
-use crate::send_telemetry_on_executor;
 
 type PtyController = writeable_pty::PtyController<mio_channel::Sender<Message>>;
 type RemoteServerController =
@@ -117,6 +117,11 @@ pub(crate) struct TerminalSurfaceInit {
     pub(super) colors: ColorList,
     pub(super) inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
 }
+/// A newly constructed terminal surface and its manager post-wiring callback.
+pub(crate) struct TerminalSurfaceResult<S, PostWire> {
+    pub(super) surface: ViewHandle<S>,
+    pub(super) post_wire: PostWire,
+}
 
 /// One-shot resources consumed when the shell is determined and the PTY starts.
 struct ShellStartupResources {
@@ -150,7 +155,10 @@ impl<S> TerminalManager<S> {
         model_event_sender: Option<SyncSender<ModelEvent>>,
         chosen_shell: Option<AvailableShell>,
         ctx: &mut AppContext,
-        create_surface: impl FnOnce(TerminalSurfaceInit, &mut AppContext) -> (ViewHandle<S>, PostWire),
+        create_surface: impl FnOnce(
+            TerminalSurfaceInit,
+            &mut AppContext,
+        ) -> TerminalSurfaceResult<S, PostWire>,
     ) -> TerminalManagerInit<S>
     where
         S: TerminalSurface,
@@ -259,14 +267,14 @@ impl<S> TerminalManager<S> {
         let remote_server_controller =
             init_remote_server_controller(&pty_controller, &model_events, ctx);
         let size_info = model.lock().block_list().size().to_owned();
-        let (surface, post_wire) = create_surface(
+        let TerminalSurfaceResult { surface, post_wire } = create_surface(
             TerminalSurfaceInit {
                 wakeups_rx,
                 model_events: model_events.clone(),
                 model: model.clone(),
                 sessions: sessions.clone(),
                 size_info,
-                colors: colors.clone(),
+                colors,
                 inactive_pty_reads_rx: inactive_pty_reads_rx.clone(),
             },
             ctx,

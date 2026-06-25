@@ -23,7 +23,7 @@ use warp_core::execution_mode::AppExecutionMode;
 use warp_core::send_telemetry_from_ctx;
 use warpui::{AppContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
 
-use super::terminal_manager::{TerminalManager, TerminalSurfaceInit};
+use super::terminal_manager::{TerminalManager, TerminalSurfaceInit, TerminalSurfaceResult};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
@@ -45,9 +45,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::terminal::session_settings::{
-    SessionSettings, SessionSettingsChangedEvent,
-};
+use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::terminal::shared_session::presence_manager::PresenceManager;
@@ -131,10 +129,10 @@ pub(crate) fn create_terminal_view_surface(
     config: TerminalViewSurfaceConfig,
     surface_init: TerminalSurfaceInit,
     ctx: &mut AppContext,
-) -> (
-    ViewHandle<TerminalView>,
+) -> TerminalSurfaceResult<
+    TerminalView,
     impl FnOnce(&mut TerminalManager<TerminalView>, &ViewHandle<TerminalView>, &mut AppContext),
-) {
+> {
     let TerminalSurfaceInit {
         wakeups_rx,
         model_events,
@@ -178,11 +176,11 @@ pub(crate) fn create_terminal_view_surface(
         )
     });
 
-    (
-        view,
-        move |terminal_manager: &mut TerminalManager<TerminalView>,
-              view: &ViewHandle<TerminalView>,
-              ctx: &mut AppContext| {
+    TerminalSurfaceResult {
+        surface: view,
+        post_wire: move |terminal_manager: &mut TerminalManager<TerminalView>,
+                         view: &ViewHandle<TerminalView>,
+                         ctx: &mut AppContext| {
             // Append the session restoration separator to the block list if there are any
             // restored blocks (command blocks or AI conversations) to show.
             let should_show_restoration_separator = (has_conversation_restoration
@@ -233,7 +231,7 @@ pub(crate) fn create_terminal_view_surface(
                 ctx,
             );
         },
-    )
+    }
 }
 
 /// Wires up `TerminalView`-specific session sharing: the local sharer (`Network`),
@@ -2009,4 +2007,3 @@ impl TerminalManagerTrait for TerminalManager<TerminalView> {
         self
     }
 }
-
