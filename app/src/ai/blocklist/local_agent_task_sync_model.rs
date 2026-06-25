@@ -388,6 +388,7 @@ fn map_conversation_status(
             task_update_for_conversation_error(
                 renderable_error,
                 conversation.status_error_message(),
+                conversation.status_is_user_error(),
             )
         }
         ConversationStatus::Cancelled => (
@@ -407,25 +408,33 @@ fn map_conversation_status(
 /// surface as `TransientError`, so an `Error` status is always terminal here — the
 /// `will_attempt_resume` rendering hint is deliberately ignored.
 ///
-/// When no structured exchange error is available, `status_error_message` is used
-/// as the error message instead of the generic "Agent encountered an error" text,
-/// so the real failure reason is visible in admin tooling. The task state remains
-/// `Error` regardless, because the string alone cannot reliably distinguish
-/// user-facing failures from platform errors.
+/// When no structured exchange error is available, falls back to
+/// `status_error_message` and `status_is_user_error` so that cloud-agent
+/// polling failures are reported with the real error text and the correct
+/// task state (`Failed` for user-facing failures, `Error` for platform errors).
 fn task_update_for_conversation_error(
     error: Option<&RenderableAIError>,
     status_error_message: Option<&str>,
+    status_is_user_error: bool,
 ) -> (AgentTaskState, Option<TaskStatusUpdate>) {
     match error {
         Some(error) => classify_renderable_error(error),
-        None => (
-            AgentTaskState::Error,
-            Some(TaskStatusUpdate::message(
-                status_error_message
-                    .unwrap_or("Agent encountered an error")
-                    .to_string(),
-            )),
-        ),
+        None => {
+            let message = status_error_message
+                .unwrap_or("Agent encountered an error")
+                .to_string();
+            if status_is_user_error {
+                (
+                    AgentTaskState::Failed,
+                    Some(TaskStatusUpdate::message(message)),
+                )
+            } else {
+                (
+                    AgentTaskState::Error,
+                    Some(TaskStatusUpdate::message(message)),
+                )
+            }
+        }
     }
 }
 

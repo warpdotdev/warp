@@ -2010,6 +2010,7 @@ fn launch_remote_child(
                     conversation_id,
                     ConversationStatus::Error,
                     Some(error_message),
+                    false,
                     ctx,
                 );
             });

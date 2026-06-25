@@ -329,6 +329,7 @@ fn failed_event_keeps_locked_queue_row_under_cloud_mode_setup_v2() {
             view.handle_ambient_agent_event(
                 &AmbientAgentViewModelEvent::Failed {
                     error_message: "failed setup".to_owned(),
+                    is_user_error: false,
                 },
                 ctx,
             );
@@ -359,6 +360,7 @@ fn failed_event_removes_locked_queue_row_without_cloud_mode_setup_v2() {
             view.handle_ambient_agent_event(
                 &AmbientAgentViewModelEvent::Failed {
                     error_message: "failed setup".to_owned(),
+                    is_user_error: false,
                 },
                 ctx,
             );

@@ -1408,14 +1408,21 @@ impl AmbientAgentViewModel {
                             }
                         }
                         AmbientAgentTaskState::Succeeded => {}
-                        AmbientAgentTaskState::Failed
-                        | AmbientAgentTaskState::Error
-                        | AmbientAgentTaskState::Blocked
-                        | AmbientAgentTaskState::Unknown => {
+                        AmbientAgentTaskState::Failed => {
+                            // Server-side FAILED: a user-facing failure (quota, config, etc.).
                             let error = status_message
                                 .map(|msg| msg.message)
                                 .unwrap_or_else(|| "Cloud agent failed".to_string());
-                            self.handle_spawn_error(error, ctx);
+                            self.handle_spawn_error(error, true, ctx);
+                        }
+                        AmbientAgentTaskState::Error
+                        | AmbientAgentTaskState::Blocked
+                        | AmbientAgentTaskState::Unknown => {
+                            // Server-side ERROR/BLOCKED/UNKNOWN: platform or infrastructure failure.
+                            let error = status_message
+                                .map(|msg| msg.message)
+                                .unwrap_or_else(|| "Cloud agent failed".to_string());
+                            self.handle_spawn_error(error, false, ctx);
                         }
                     }
                 }
@@ -1490,7 +1497,7 @@ impl AmbientAgentViewModel {
             }
         }
         if let Some(capacity_error) = err.downcast_ref::<CloudAgentCapacityError>() {
-            self.handle_spawn_error(capacity_error.error.clone(), ctx);
+            self.handle_spawn_error(capacity_error.error.clone(), true, ctx);
             ctx.emit(AmbientAgentViewModelEvent::ShowCloudAgentCapacityModal);
             return;
         }
@@ -1502,13 +1509,14 @@ impl AmbientAgentViewModel {
                     let error_message = user_display_message
                         .clone()
                         .unwrap_or_else(|| OUT_OF_CREDITS_TASK_FAILURE_MESSAGE.to_string());
-                    self.handle_spawn_error(error_message, ctx);
+                    self.handle_spawn_error(error_message, true, ctx);
                     ctx.emit(AmbientAgentViewModelEvent::ShowAICreditModal);
                     return;
                 }
                 AIApiError::ServerOverloaded => {
                     self.handle_spawn_error(
                         SERVER_OVERLOADED_TASK_FAILURE_MESSAGE.to_string(),
+                        false,
                         ctx,
                     );
                     return;
@@ -1516,7 +1524,7 @@ impl AmbientAgentViewModel {
                 _ => {}
             }
         }
-        self.handle_spawn_error(error_message, ctx);
+        self.handle_spawn_error(error_message, false, ctx);
     }
 
     /// Starts the periodic timer that updates the progress UI while waiting for a session.
@@ -1551,7 +1559,12 @@ impl AmbientAgentViewModel {
     }
 
     /// Handles a spawn error by transitioning to the Failed state.
-    fn handle_spawn_error(&mut self, error_message: String, ctx: &mut ModelContext<Self>) {
+    fn handle_spawn_error(
+        &mut self,
+        error_message: String,
+        is_user_error: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         self.stop_progress_timer();
 
         let now = Instant::now();
@@ -1577,7 +1590,10 @@ impl AmbientAgentViewModel {
             error_message: error_message.clone(),
         };
         self.pending_followup_prompt = None;
-        ctx.emit(AmbientAgentViewModelEvent::Failed { error_message });
+        ctx.emit(AmbientAgentViewModelEvent::Failed {
+            error_message,
+            is_user_error,
+        });
     }
 
     /// Handles the need for GitHub authentication by transitioning to the NeedsGithubAuth state.
@@ -1798,6 +1814,9 @@ pub enum AmbientAgentViewModelEvent {
     /// The ambient agent failed.
     Failed {
         error_message: String,
+        /// True when the failure is user-facing (e.g. quota exhausted, task
+        /// state was `Failed`) rather than a platform/infrastructure error.
+        is_user_error: bool,
     },
     /// Request to show the cloud agent concurrency/capacity modal.
     ShowCloudAgentCapacityModal,

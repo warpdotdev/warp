@@ -301,22 +301,37 @@ fn map_conversation_status_error_without_exchange_error_is_generic() {
     );
 }
 
-/// When the conversation has an `Error` status with no exchange error but a
-/// `status_error_message` (e.g. from the cloud-agent polling path detecting a quota
-/// failure before the streaming response arrives), the status message is surfaced
-/// instead of the generic "Agent encountered an error" text. The task state remains
-/// `Error` because the raw string cannot reliably distinguish user failures from
-/// platform errors.
+/// When the conversation has an `Error` status with no exchange error, a
+/// `status_error_message`, and `status_is_user_error = false` (platform failure),
+/// the real message is surfaced but the state stays `Error`.
 #[test]
 fn map_conversation_status_error_uses_status_error_message_when_no_exchange_error() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.set_status_for_test(ConversationStatus::Error);
+    conversation.set_status_error_message_for_test(Some("An internal error occurred.".into()));
+    // is_user_error defaults to false
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::Error,
+        None,
+        Some("An internal error occurred"),
+    );
+}
+
+/// When `status_is_user_error` is true (e.g. quota exhausted detected via task
+/// polling), the fallback produces `Failed` so the run is not classified as a
+/// warp fault in admin tooling.
+#[test]
+fn map_conversation_status_error_with_user_error_flag_reports_failed() {
     let mut conversation = AIConversation::new(false, false);
     conversation.set_status_for_test(ConversationStatus::Error);
     conversation.set_status_error_message_for_test(Some(
         "Out of credits. Upgrade your Warp plan to continue running cloud agents.".into(),
     ));
+    conversation.set_status_is_user_error_for_test(true);
     assert_update(
         map_conversation_status(&conversation),
-        AgentTaskState::Error,
+        AgentTaskState::Failed,
         None,
         Some("Out of credits"),
     );
