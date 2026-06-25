@@ -17,6 +17,9 @@ const MARKDOWN_EXTENSIONS: &[&str] = &["md", "markdown"];
 /// Names of files that are typically Markdown or plain text.
 const MARKDOWN_FILE_NAMES: &[&str] = &["README", "CHANGELOG", "LICENSE"];
 
+/// File extension for Jupyter notebook files.
+const JUPYTER_NOTEBOOK_EXTENSION: &str = "ipynb";
+
 /// Checks if a buffer appears to contain binary content.
 /// Returns true if the buffer appears to be binary, false if it appears to be text.
 pub fn is_buffer_binary(buffer: &[u8]) -> bool {
@@ -139,6 +142,13 @@ pub fn is_markdown_file(path: impl AsRef<Path>) -> bool {
                 .any(|markdown_name| file_name.eq_ignore_ascii_case(markdown_name))
         }),
     }
+}
+
+/// Guess whether or not `path` is a Jupyter notebook file based on its `.ipynb` extension.
+pub fn is_jupyter_notebook_file(path: impl AsRef<Path>) -> bool {
+    path.as_ref()
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(JUPYTER_NOTEBOOK_EXTENSION))
 }
 
 /// Determines if a file is likely to be a text file based on its filename.

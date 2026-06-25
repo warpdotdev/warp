@@ -50,6 +50,7 @@ http_server = { path = "crates/http_server" }
 input_classifier = { path = "crates/input_classifier" }
 integration = { path = "crates/integration" }
 ipc = { path = "crates/ipc" }
+ipynb_parser = { path = "crates/ipynb_parser" }
 jsonrpc = { path = "crates/jsonrpc" }
 languages = { path = "crates/languages" }
 local_control = { path = "crates/local_control" }

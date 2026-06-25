@@ -1186,6 +1186,7 @@ dependencies = [
  "anyhow",
  "async-compat",
  "async-fs",
+ "base64 0.22.1",
  "bytes",
  "cfg-if",
  "futures",
@@ -7029,6 +7030,16 @@ name = "ipnet"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
+
+[[package]]
+name = "ipynb_parser"
+version = "0.1.0"
+dependencies = [
+ "markdown_parser",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+]
 
 [[package]]
 name = "iri-string"
@@ -15464,6 +15475,7 @@ dependencies = [
  "html5ever",
  "imara-diff",
  "instant",
+ "ipynb_parser",
  "itertools 0.14.0",
  "lazy_static",
  "line-ending",
