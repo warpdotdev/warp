@@ -5,10 +5,12 @@
 //! `~/.warp/custom_model_routers/` via [`WarpConfig::save_custom_model_router`].
 
 use itertools::Itertools;
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warpui::elements::{
     ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, Empty, Expanded, Fill as UiFill, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Text,
+    CornerRadius, CrossAxisAlignment, Empty, Expanded, Fill as UiFill, Flex, FormattedTextElement,
+    HighlightedHyperlink, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    ParentElement, Radius, ScrollbarWidth, Text,
 };
 use warpui::platform::Cursor;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
@@ -31,6 +33,7 @@ use crate::editor::{EditorView, SingleLineEditorOptions, TextOptions};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
+use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 #[cfg(feature = "local_fs")]
 use crate::user_config::WarpConfig;
@@ -180,8 +183,8 @@ impl CustomRouterEditorView {
             .display_name()
             .as_deref()
             .and_then(|name| name.split_whitespace().next())
-            .map(|first_name| format!("{first_name}'s new model"))
-            .unwrap_or_else(|| "My new model".to_string());
+            .map(|first_name| format!("{first_name}'s custom router"))
+            .unwrap_or_else(|| "My custom router".to_string());
         let name_editor = ctx.add_view(move |ctx| {
             let font_size = Appearance::as_ref(ctx).ui_font_size();
             let mut editor = EditorView::single_line(
@@ -221,7 +224,7 @@ impl CustomRouterEditorView {
                         label: Some(LabelConfig {
                             label: match router_type {
                                 RouterEditorType::Complexity => "Complexity".into(),
-                                RouterEditorType::Prompt => "Prompt".into(),
+                                RouterEditorType::Prompt => "Rules".into(),
                             },
                             width_override: Some(70.0),
                             color: if is_selected {
@@ -682,39 +685,28 @@ impl CustomRouterEditorView {
                     .with_margin_top(12.)
                     .finish(),
             );
-            // Clarify that prompt-to-rule matching is performed by an LLM.
+            let rules_copy = FormattedText::new([
+                FormattedTextLine::Line(vec![FormattedTextFragment::plain_text(
+                    "Rules are custom prompts that describe when to use a specific model. Warp intelligently matches your tasks against these rules.",
+                )]),
+                FormattedTextLine::Line(vec![FormattedTextFragment::plain_text(
+                    "Rules are matched top to bottom — rules higher in the list take precedence over those below.",
+                )]),
+            ]);
             column.add_child(
                 Container::new(
-                    Text::new(
-                        "Warp uses an LLM to classify each prompt against your rules and route to the matching model.",
-                        appearance.ui_font_family(),
+                    FormattedTextElement::new(
+                        rules_copy,
                         11.,
-                    )
-                    .with_color(
-                        appearance
-                            .theme()
-                            .sub_text_color(appearance.theme().surface_1())
-                            .into(),
-                    )
-                    .finish(),
-                )
-                .with_margin_bottom(8.)
-                .finish(),
-            );
-            // Explain rule precedence: rules are matched top-to-bottom.
-            column.add_child(
-                Container::new(
-                    Text::new(
-                        "Rules are matched top to bottom \u{2014} rules higher in the list take precedence over those below.",
                         appearance.ui_font_family(),
-                        11.,
+                        appearance.ui_font_family(),
+                        blended_colors::text_sub(
+                            appearance.theme(),
+                            appearance.theme().surface_1(),
+                        ),
+                        HighlightedHyperlink::default(),
                     )
-                    .with_color(
-                        appearance
-                            .theme()
-                            .sub_text_color(appearance.theme().surface_1())
-                            .into(),
-                    )
+                    .with_line_height_ratio(1.5)
                     .finish(),
                 )
                 .with_margin_bottom(12.)
@@ -740,7 +732,7 @@ impl CustomRouterEditorView {
         col.add_child(
             Container::new(
                 Flex::column()
-                    .with_child(Self::section_label("Name", appearance))
+                    .with_child(Self::section_label("Router name", appearance))
                     .with_child(
                         ConstrainedBox::new(editor_row(&self.name_editor, None, appearance))
                             .with_width(EDITOR_CONTENT_WIDTH)
@@ -752,45 +744,46 @@ impl CustomRouterEditorView {
             .finish(),
         );
 
-        // Type + description
-        let type_description = match self.router_type {
-            RouterEditorType::Complexity => {
-                "Routes your prompts to a model based on task complexity. Warp classifies the task as easy, medium or hard and uses the corresponding model. If classification fails, the default model is used."
-            }
-            RouterEditorType::Prompt => {
-                "Routes your proutes to the right model using your custom rules. Describe your routing logic in natural language, and Warp will intelligently match each prompt to the first applicable rule. If no rule applies, the default model is used."
-            }
-        };
-        let desc_color = appearance
-            .theme()
-            .sub_text_color(appearance.theme().surface_1());
+        // Router type: a short, bold-prefixed explanation of each mode shown
+        // above the segmented control.
+        let routing_type_copy = FormattedText::new([
+            FormattedTextLine::Line(vec![
+                FormattedTextFragment::bold("Complexity-based"),
+                FormattedTextFragment::plain_text(
+                    " routing chooses a model based on Warp's classification of the task's difficulty.",
+                ),
+            ]),
+            FormattedTextLine::Line(vec![
+                FormattedTextFragment::bold("Rule-based"),
+                FormattedTextFragment::plain_text(
+                    " routing chooses a model based on custom prompts.",
+                ),
+            ]),
+        ]);
         col.add_child(
             Container::new(
                 Flex::column()
-                    .with_child(Self::section_label("Routing type", appearance))
+                    .with_child(Self::section_label("Router type", appearance))
                     .with_child(
                         Container::new(
-                            Text::new(
-                                "Choose how you want your custom model router to work.",
-                                appearance.ui_font_family(),
+                            FormattedTextElement::new(
+                                routing_type_copy,
                                 11.,
+                                appearance.ui_font_family(),
+                                appearance.ui_font_family(),
+                                blended_colors::text_sub(
+                                    appearance.theme(),
+                                    appearance.theme().surface_1(),
+                                ),
+                                HighlightedHyperlink::default(),
                             )
-                            .with_color(desc_color.into())
+                            .with_line_height_ratio(1.5)
                             .finish(),
                         )
                         .with_margin_bottom(8.)
                         .finish(),
                     )
                     .with_child(ChildView::new(&self.type_control).finish())
-                    .with_child(
-                        Container::new(
-                            Text::new(type_description, appearance.ui_font_family(), 11.)
-                                .with_color(desc_color.into())
-                                .finish(),
-                        )
-                        .with_margin_top(8.)
-                        .finish(),
-                    )
                     .finish(),
             )
             .with_margin_bottom(16.)
