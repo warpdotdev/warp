@@ -7065,7 +7065,7 @@ impl SettingsWidget for OtherAIWidget {
         // TODO: OpenConversationLayoutPreference should not depend on local_fs, but it lives under the external editor settings
         // which does require local_fs. It was a mistake to put it there, but now we keep it there for backward compatibility.
         #[cfg(feature = "local_fs")]
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+        {
             use crate::util::file::external_editor::settings::OpenConversationLayoutPreference;
 
             column.add_child(render_dropdown_item(

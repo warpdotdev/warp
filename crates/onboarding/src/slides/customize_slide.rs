@@ -1,5 +1,4 @@
 use ui_components::{button, Component as _, Options as _};
-use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::{
@@ -20,7 +19,6 @@ use super::toggle_card::{render_toggle_card, ChipSpec, ToggleCardSpec};
 use super::OnboardingSlide;
 use crate::model::{OnboardingStateEvent, OnboardingStateModel, UICustomizationSettings};
 use crate::slides::{bottom_nav, layout, slide_content};
-use crate::visuals::{intention_terminal_visual, intention_visual};
 use crate::OnboardingIntention;
 
 /// Which setting card is currently selected (expanded).
@@ -485,7 +483,7 @@ impl CustomizeUISlide {
     ];
 
     /// Returns the image path for the current visual state.
-    /// When `OpenWarpNewSettingsModes` is enabled, assets depend on the tab layout setting.
+    /// Assets depend on the tab layout setting.
     fn visual_image_path(
         selected_setting: Option<SettingCard>,
         hovered_chip: Option<ToolsPanelSubSetting>,
@@ -581,45 +579,16 @@ impl CustomizeUISlide {
 
     fn render_visual(
         &self,
-        appearance: &Appearance,
         intention: OnboardingIntention,
         ui: &UICustomizationSettings,
     ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            let path =
-                Self::visual_image_path(self.selected_setting, self.hovered_chip, intention, ui);
-            let fg_layout = match self.selected_setting {
-                None => layout::FOREGROUND_LAYOUT_DEFAULT,
-                Some(SettingCard::CodeReview) => layout::FOREGROUND_LAYOUT_CODE_REVIEW,
-                _ => layout::FOREGROUND_LAYOUT_WIDE,
-            };
-            layout::onboarding_right_panel_with_bg(path, fg_layout)
-        } else {
-            let panel_background = internal_colors::neutral_2(theme);
-            let neutral = internal_colors::neutral_4(theme);
-
-            let visual = if matches!(intention, OnboardingIntention::Terminal) {
-                let neutral_highlight = internal_colors::neutral_6(theme);
-                let accent = internal_colors::accent(theme);
-                intention_terminal_visual(
-                    panel_background,
-                    neutral,
-                    neutral_highlight,
-                    accent.into_solid(),
-                )
-            } else {
-                let blue = theme.ansi_fg_blue();
-                let green = theme.ansi_fg_green();
-                let yellow = theme.ansi_fg_yellow();
-                intention_visual(panel_background, neutral, blue, green, yellow)
-            };
-
-            Container::new(visual)
-                .with_background_color(internal_colors::neutral_1(theme))
-                .finish()
-        }
+        let path = Self::visual_image_path(self.selected_setting, self.hovered_chip, intention, ui);
+        let fg_layout = match self.selected_setting {
+            None => layout::FOREGROUND_LAYOUT_DEFAULT,
+            Some(SettingCard::CodeReview) => layout::FOREGROUND_LAYOUT_CODE_REVIEW,
+            _ => layout::FOREGROUND_LAYOUT_WIDE,
+        };
+        layout::onboarding_right_panel_with_bg(path, fg_layout)
     }
 }
 
@@ -639,7 +608,7 @@ impl View for CustomizeUISlide {
 
         layout::static_left(
             || self.render_content(appearance, intention, &ui, app),
-            || self.render_visual(appearance, intention, &ui),
+            || self.render_visual(intention, &ui),
         )
     }
 }

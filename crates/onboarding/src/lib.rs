@@ -51,7 +51,6 @@ cfg_if::cfg_if! {
 }
 
 pub mod components;
-mod visuals;
 
 /// The default mode for new sessions, chosen during onboarding.
 /// Mapped to `DefaultSessionMode` at the application boundary.

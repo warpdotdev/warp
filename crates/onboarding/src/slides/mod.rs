@@ -23,6 +23,6 @@ pub use customize_slide::CustomizeUISlide;
 pub use intention_slide::IntentionSlide;
 pub use intro_slide::{IntroSlide, IntroSlideEvent};
 pub use onboarding_slide::OnboardingSlide;
-pub use project_slide::{ProjectOnboardingSettings, ProjectSlide};
+pub use project_slide::ProjectOnboardingSettings;
 pub use theme_picker_slide::{ThemePickerSlide, ThemePickerSlideEvent};
 pub use third_party_slide::ThirdPartySlide;

@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use ai::LLMId;
 use instant::Instant;
-use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warpui_core::assets::asset_cache::AssetSource;
 use warpui_core::image_cache::ImageType;
@@ -16,8 +15,8 @@ use crate::model::{
 };
 use crate::slides::{
     AgentSlide, AiAccessSlide, AiAccessSlideEvent, AiSetupSlide, CustomizeUISlide, IntentionSlide,
-    IntroSlide, IntroSlideEvent, OnboardingModelInfo, OnboardingSlide, ProjectSlide,
-    ThemePickerSlide, ThemePickerSlideEvent, ThirdPartySlide,
+    IntroSlide, IntroSlideEvent, OnboardingModelInfo, OnboardingSlide, ThemePickerSlide,
+    ThemePickerSlideEvent, ThirdPartySlide,
 };
 use crate::telemetry::OnboardingEvent;
 use crate::AI_FEATURES;
@@ -84,7 +83,6 @@ pub struct AgentOnboardingView {
     agent_slide: ViewHandle<AgentSlide>,
     ai_access_slide: ViewHandle<AiAccessSlide>,
     third_party_slide: ViewHandle<ThirdPartySlide>,
-    project_slide: ViewHandle<ProjectSlide>,
     skippable: bool,
     close_button: button::Button,
     no_ai_confirm_button: button::Button,
@@ -143,7 +141,6 @@ impl AgentOnboardingView {
         models: Vec<OnboardingModelInfo>,
         default_model_id: LLMId,
         workspace_enforces_autonomy: bool,
-        agent_modality_enabled: bool,
         auth_state: OnboardingAuthState,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -152,7 +149,6 @@ impl AgentOnboardingView {
                 models,
                 default_model_id,
                 workspace_enforces_autonomy,
-                agent_modality_enabled,
                 auth_state,
             )
         });
@@ -248,11 +244,6 @@ impl AgentOnboardingView {
             ctx.add_typed_action_view(move |ctx| ThirdPartySlide::new(onboarding_state, ctx))
         };
 
-        let project_slide = {
-            let onboarding_state = onboarding_state.clone();
-            ctx.add_typed_action_view(move |_| ProjectSlide::new(onboarding_state))
-        };
-
         // When the app regains focus (e.g. user returning from the upgrade page in the
         // browser), notify the parent to refresh models and workspace/billing metadata.
         // Debounced to avoid excessive API calls from rapid alt-tabbing.
@@ -282,7 +273,6 @@ impl AgentOnboardingView {
             agent_slide,
             ai_access_slide,
             third_party_slide,
-            project_slide,
             skippable,
             close_button: button::Button::default(),
             no_ai_confirm_button: button::Button::default(),
@@ -353,9 +343,7 @@ impl AgentOnboardingView {
         ctx.focus_self();
 
         // Preload customize-slide images so they're ready when the user reaches that slide.
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            Self::preload_onboarding_images(ctx);
-        }
+        Self::preload_onboarding_images(ctx);
 
         send_telemetry_from_ctx!(OnboardingEvent::OnboardingStarted, ctx);
         send_telemetry_from_ctx!(
@@ -632,7 +620,6 @@ impl View for AgentOnboardingView {
             OnboardingStep::Agent => ChildView::new(&self.agent_slide).finish(),
             OnboardingStep::AiAccess => ChildView::new(&self.ai_access_slide).finish(),
             OnboardingStep::ThirdParty => ChildView::new(&self.third_party_slide).finish(),
-            OnboardingStep::Project => ChildView::new(&self.project_slide).finish(),
         };
 
         stack.add_child(slide);
@@ -764,9 +751,6 @@ impl TypedActionView for AgentOnboardingView {
                 dispatch_onboarding_action_to_slide(slide, *action, ctx)
             }),
             OnboardingStep::ThirdParty => self.third_party_slide.update(ctx, |slide, ctx| {
-                dispatch_onboarding_action_to_slide(slide, *action, ctx)
-            }),
-            OnboardingStep::Project => self.project_slide.update(ctx, |slide, ctx| {
                 dispatch_onboarding_action_to_slide(slide, *action, ctx)
             }),
         }

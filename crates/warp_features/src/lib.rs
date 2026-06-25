@@ -739,10 +739,6 @@ pub enum FeatureFlag {
     /// adopt the configured color when their working directory matches.
     DirectoryTabColors,
 
-    /// Enables the new settings to control visibility of Warp Drive, Code Review Panel,
-    /// and Project Explorer & Global Search features.
-    OpenWarpNewSettingsModes,
-
     /// Enables vertical tab layout as an alternative to the horizontal tab bar.
     VerticalTabs,
 

@@ -419,12 +419,6 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_free_ai_removal_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
-        // Gated on the OpenWarpNewSettingsModes rollout flag (the server experiment
-        // that previously gated this was removed in C1).
-        if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            return false;
-        }
-
         if *AISettings::as_ref(ctx).did_check_to_trigger_free_ai_removal_modal {
             return false;
         }

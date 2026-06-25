@@ -1,7 +1,6 @@
 use ai::LLMId;
 use pathfinder_color::ColorU;
 use ui_components::{button, Component as _, Options as _};
-use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
@@ -27,7 +26,6 @@ use super::two_line_button::{render_two_line_button, TwoLineButtonSpec};
 use super::OnboardingSlide;
 use crate::model::{NoAiConfirmationSource, OnboardingStateEvent, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
-use crate::visuals::agent_visual;
 
 /// Information about a model displayed on the onboarding slide.
 #[derive(Clone, Debug)]
@@ -861,33 +859,18 @@ impl AgentSlide {
         )
     }
 
-    fn render_visual(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
-        let theme = appearance.theme();
-
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            let use_vertical = self
-                .onboarding_state
-                .as_ref(app)
-                .ui_customization()
-                .use_vertical_tabs;
-            let path = if use_vertical {
-                "async/png/onboarding/agent_intention/customize_vertical_tabs.png"
-            } else {
-                "async/png/onboarding/agent_intention/customize_horizontal_tabs.png"
-            };
-            layout::onboarding_right_panel_with_bg(path, layout::FOREGROUND_LAYOUT_WIDE)
+    fn render_visual(&self, app: &AppContext) -> Box<dyn Element> {
+        let use_vertical = self
+            .onboarding_state
+            .as_ref(app)
+            .ui_customization()
+            .use_vertical_tabs;
+        let path = if use_vertical {
+            "async/png/onboarding/agent_intention/customize_vertical_tabs.png"
         } else {
-            let panel_background = internal_colors::neutral_2(theme);
-            let neutral = internal_colors::neutral_4(theme);
-
-            let blue = theme.ansi_fg_blue();
-            let green = theme.ansi_fg_green();
-            let yellow = theme.ansi_fg_yellow();
-
-            Container::new(agent_visual(panel_background, neutral, blue, green, yellow))
-                .with_background_color(internal_colors::neutral_1(theme))
-                .finish()
-        }
+            "async/png/onboarding/agent_intention/customize_horizontal_tabs.png"
+        };
+        layout::onboarding_right_panel_with_bg(path, layout::FOREGROUND_LAYOUT_WIDE)
     }
 }
 
@@ -910,7 +893,7 @@ impl View for AgentSlide {
         // base two-column layout.
         layout::static_left(
             || self.render_content(appearance, settings, workspace_enforces_autonomy, app),
-            || self.render_visual(appearance, app),
+            || self.render_visual(app),
         )
     }
 }

@@ -667,7 +667,6 @@ default = [
     "codex_notifications",
     "codex_plugin",
     "trim_trailing_blank_lines",
-    "open_warp_new_settings_modes",
     "skip_firebase_anonymous_user",
     "settings_file",
     "directory_tab_colors",
@@ -983,7 +982,6 @@ queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
 inline_menu_headers = []
 directory_tab_colors = []
-open_warp_new_settings_modes = []
 hoa_code_review = []
 vertical_tabs = []
 vertical_tabs_summary_mode = []

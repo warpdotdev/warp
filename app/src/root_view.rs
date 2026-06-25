@@ -1675,12 +1675,10 @@ impl RootView {
                 if #[cfg(target_family = "wasm")] {
                     AuthOnboardingState::WebImport(AuthOnboardingTarget::Workspace(workspace_args.into()))
                 } else {
-                    // When OpenWarpNewSettingsModes is enabled, show onboarding before login for
-                    // users who haven't completed it yet (tracked via a local UserPreferences key).
-                    let has_completed_local_onboarding = FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-                        && has_completed_local_onboarding(ctx);
-                    let should_show_pre_login_onboarding = FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-                        && FeatureFlag::AgentOnboarding.is_enabled()
+                    // Show onboarding before login for users who haven't completed it
+                    // yet (tracked via a local UserPreferences key).
+                    let has_completed_local_onboarding = has_completed_local_onboarding(ctx);
+                    let should_show_pre_login_onboarding = FeatureFlag::AgentOnboarding.is_enabled()
                         && !has_completed_local_onboarding;
                     if FeatureFlag::ForceLogin.is_enabled() {
                         // ForceLogin is true for Preview
@@ -1937,7 +1935,6 @@ impl RootView {
                 models,
                 default_model_id,
                 workspace_enforces_autonomy,
-                FeatureFlag::AgentView.is_enabled(),
                 auth_state,
                 ctx,
             )
@@ -2151,10 +2148,7 @@ impl RootView {
                 // settings need an account (AI or Warp Drive enabled).
                 let ai_enabled = selected_settings.is_ai_enabled();
                 let warp_drive_enabled = selected_settings.is_warp_drive_enabled();
-                // With old onboarding, we ask user to log in before onboarding, so don't do it after onboarding completes.
-                let requires_login = !is_logged_in
-                    && (ai_enabled || warp_drive_enabled)
-                    && FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
+                let requires_login = !is_logged_in && (ai_enabled || warp_drive_enabled);
 
                 if requires_login {
                     let tutorial = OnboardingTutorial::from(selected_settings.clone());
@@ -3359,9 +3353,7 @@ impl RootView {
             return;
         };
 
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-            && FeatureFlag::TabConfigs.is_enabled()
-        {
+        if FeatureFlag::TabConfigs.is_enabled() {
             let intention = tutorial.intention();
             if matches!(intention, OnboardingIntention::AgentDrivenDevelopment) {
                 workspace.update(ctx, |view, ctx| {

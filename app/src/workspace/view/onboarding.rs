@@ -157,11 +157,9 @@ impl Workspace {
             return;
         }
 
-        // With new onboarding, skip the guided tour when AI is not enabled
+        // Skip the guided tour when AI is not enabled
         // (e.g. terminal-intent users or users who disabled AI).
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-            && !*AISettings::as_ref(ctx).is_any_ai_enabled
-        {
+        if !*AISettings::as_ref(ctx).is_any_ai_enabled {
             return;
         }
 

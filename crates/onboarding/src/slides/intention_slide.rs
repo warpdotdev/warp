@@ -1,5 +1,4 @@
 use ui_components::{button, Component as _, Options as _};
-use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
@@ -23,7 +22,6 @@ use warpui_core::{
 use super::OnboardingSlide;
 use crate::model::{NoAiConfirmationSource, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
-use crate::visuals::{intention_terminal_visual, intention_visual};
 use crate::{OnboardingIntention, AI_FEATURES};
 
 #[derive(Debug, Clone)]
@@ -399,12 +397,7 @@ impl IntentionSlide {
             },
         );
 
-        let new_settings_modes = FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
-        let next_text = if !new_settings_modes && selected_index == 1 {
-            "Get Warping"
-        } else {
-            "Next"
-        };
+        let next_text = "Next";
         let enter = Keystroke::parse("enter").unwrap_or_default();
         let next_button = self.next_button.render(
             appearance,
@@ -422,15 +415,7 @@ impl IntentionSlide {
         );
 
         let is_terminal = selected_index == 1;
-        let (step_index, step_count) = if new_settings_modes {
-            if is_terminal {
-                (0, 4)
-            } else {
-                (0, 5)
-            }
-        } else {
-            (1, 4)
-        };
+        let (step_index, step_count) = if is_terminal { (0, 4) } else { (0, 5) };
         bottom_nav::onboarding_bottom_nav(
             appearance,
             step_index,
@@ -446,40 +431,13 @@ impl IntentionSlide {
         "async/png/onboarding/welcome_terminal.png",
     ];
 
-    fn render_visual(&self, appearance: &Appearance, selected_index: usize) -> Box<dyn Element> {
-        let theme = appearance.theme();
-
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            let path = if selected_index == 1 {
-                Self::VISUAL_IMAGE_PATHS[1]
-            } else {
-                Self::VISUAL_IMAGE_PATHS[0]
-            };
-            layout::onboarding_right_panel_with_bg(path, layout::FOREGROUND_LAYOUT_DEFAULT)
+    fn render_visual(&self, selected_index: usize) -> Box<dyn Element> {
+        let path = if selected_index == 1 {
+            Self::VISUAL_IMAGE_PATHS[1]
         } else {
-            let panel_background = internal_colors::neutral_2(theme);
-            let neutral = internal_colors::neutral_4(theme);
-            let neutral_highlight = internal_colors::neutral_6(theme);
-            let accent = internal_colors::accent(theme);
-
-            let visual = if selected_index == 1 {
-                intention_terminal_visual(
-                    panel_background,
-                    neutral,
-                    neutral_highlight,
-                    accent.into_solid(),
-                )
-            } else {
-                let blue = theme.ansi_fg_blue();
-                let green = theme.ansi_fg_green();
-                let yellow = theme.ansi_fg_yellow();
-                intention_visual(panel_background, neutral, blue, green, yellow)
-            };
-
-            Container::new(visual)
-                .with_background_color(internal_colors::neutral_1(theme))
-                .finish()
-        }
+            Self::VISUAL_IMAGE_PATHS[0]
+        };
+        layout::onboarding_right_panel_with_bg(path, layout::FOREGROUND_LAYOUT_DEFAULT)
     }
 }
 
@@ -505,7 +463,7 @@ impl View for IntentionSlide {
         // Background is rendered by the parent onboarding view (including background images).
         layout::static_left(
             || self.render_content(appearance, selected_index),
-            || self.render_visual(appearance, selected_index),
+            || self.render_visual(selected_index),
         )
     }
 }
@@ -522,24 +480,13 @@ impl IntentionSlide {
 
     fn next(&mut self, ctx: &mut ViewContext<Self>) {
         self.onboarding_state.update(ctx, |model, ctx| {
-            if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-                match model.intention() {
-                    // "Just use the terminal" confirms leaving AI behind before advancing.
-                    OnboardingIntention::Terminal => {
-                        model.request_no_ai_confirmation(NoAiConfirmationSource::Intention, ctx);
-                    }
-                    // Agent intention routes to the next step (the AI-setup fork).
-                    OnboardingIntention::AgentDrivenDevelopment => model.next(ctx),
+            match model.intention() {
+                // "Just use the terminal" confirms leaving AI behind before advancing.
+                OnboardingIntention::Terminal => {
+                    model.request_no_ai_confirmation(NoAiConfirmationSource::Intention, ctx);
                 }
-            } else {
-                match model.intention() {
-                    OnboardingIntention::Terminal => {
-                        model.complete(ctx);
-                    }
-                    OnboardingIntention::AgentDrivenDevelopment => {
-                        model.next(ctx);
-                    }
-                }
+                // Agent intention routes to the next step (the AI-setup fork).
+                OnboardingIntention::AgentDrivenDevelopment => model.next(ctx),
             }
         });
     }

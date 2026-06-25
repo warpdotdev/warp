@@ -48,8 +48,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 context.clone() & id!(flags::ENABLE_WARP_DRIVE) & !id!("IsAnonymousUser"),
             ),
             None,
-        )
-        .with_enabled(|| FeatureFlag::OpenWarpNewSettingsModes.is_enabled())],
+        )],
         app,
     );
 }
@@ -117,7 +116,7 @@ impl SettingsPageMeta for WarpDriveSettingsPageView {
     }
 
     fn should_render(&self, _ctx: &AppContext) -> bool {
-        FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+        true
     }
 
     fn update_filter(&mut self, query: &str, ctx: &mut ViewContext<Self>) -> MatchData {
