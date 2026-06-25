@@ -837,8 +837,9 @@ impl MessageProvider<AgentMessageArgs<'_>> for ForkSlashCommandMessageProducer {
         };
 
         // `/fork`, `/fork-and-compact`, and `/continue-locally` open in a new pane with Enter and
-        // a new tab with Cmd/Ctrl+Enter. Other fork-like commands open in the current pane with
-        // Enter and a new pane with Cmd/Ctrl+Enter.
+        // a new tab with Cmd/Ctrl+Enter. `/fork-from` instead opens in the current pane with Enter
+        // and a new pane with Cmd/Ctrl+Enter, matching how its query-picker resolves the fork in
+        // `Input::handle_user_query_menu_event`.
         let primary_to_new_pane = command_name == commands::FORK.name
             || command_name == commands::FORK_AND_COMPACT.name
             || is_continue_locally;
