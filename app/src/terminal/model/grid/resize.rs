@@ -281,19 +281,49 @@ impl InitialCursorState {
     fn into_content_offset(self, grid: &GridHandler) -> CursorContentOffset {
         match self {
             Self::AtPoint(point) => {
-                let content_offset = grid
-                    .flat_storage
-                    .content_offset_at_point(point)
-                    .expect("should have a content offset for point");
-                CursorContentOffset::AtPoint(content_offset)
+                CursorContentOffset::AtPoint(content_offset_for_point(grid, point))
             }
             Self::AtCellAfterPoint(point) => {
-                let content_offset = grid
-                    .flat_storage
-                    .content_offset_at_point(point)
-                    .expect("should have a content offset for point");
-                CursorContentOffset::AtCellAfterPoint(content_offset)
+                CursorContentOffset::AtCellAfterPoint(content_offset_for_point(grid, point))
             }
+        }
+    }
+}
+
+/// Resolves the flat-storage content offset for a cursor `point`, clamping the
+/// column back toward the start of the row if the exact cell has no content
+/// offset.
+///
+/// The cursor `point` is derived from the live grid, whose per-column
+/// accounting can diverge from flat storage's grapheme-run accounting for rows
+/// that contain wide (full-width / CJK) characters: a wide char occupies two
+/// columns but is a single grapheme, and a trailing wide-char spacer can push
+/// `point.col` past the number of content cells flat storage tracks. In that
+/// case `content_offset_at_point` returns `Err`, and unwrapping it used to
+/// abort the whole app whenever a terminal containing wide characters was
+/// resized. Instead, snap the cursor to the nearest preceding cell that does
+/// have a content offset, mirroring the defensive clamping in
+/// [`InitialCursorState::new`]. Column 0 of a non-empty row always resolves, so
+/// the search terminates.
+fn content_offset_for_point(grid: &GridHandler, point: Point) -> ByteOffset {
+    match grid.flat_storage.content_offset_at_point(point) {
+        Ok(content_offset) => content_offset,
+        Err(err) => {
+            log::warn!(
+                "no content offset for cursor point {point:?} during resize ({err}); \
+                 clamping to the nearest preceding content cell"
+            );
+            let mut col = point.col;
+            while let Some(prev) = col.checked_sub(1) {
+                col = prev;
+                if let Ok(content_offset) = grid
+                    .flat_storage
+                    .content_offset_at_point(Point { col, ..point })
+                {
+                    return content_offset;
+                }
+            }
+            ByteOffset::zero()
         }
     }
 }
