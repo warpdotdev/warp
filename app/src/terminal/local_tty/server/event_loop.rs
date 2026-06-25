@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::os::unix::prelude::*;
 use std::process::Child;
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 
+use anyhow::Result;
 use itertools::Itertools;
 use mio::Interest;
 use parking_lot::Mutex;
@@ -16,6 +19,8 @@ use crate::terminal::platform;
 
 const RECV_SOCKET_TOKEN: mio::Token = mio::Token(0);
 const SIGNALS_TOKEN: mio::Token = mio::Token(1);
+const CHILD_TERMINATION_GRACE_PERIOD: Duration = Duration::from_millis(500);
+const CHILD_TERMINATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// A helper structure for holding onto child processes and ensuring that
 /// all children are killed when the structure is dropped.
@@ -54,23 +59,105 @@ impl Children {
         }
         terminated_children
     }
+
+    /// Sends a signal to all processes in one hosted PTY process group.
+    ///
+    /// The group may already have exited before cleanup observes it, which is
+    /// equivalent to successful termination.
+    fn signal_process_group(pgid: u32, signal: nix::sys::signal::Signal) -> Result<()> {
+        let process_group = nix::unistd::Pid::from_raw(pgid as i32);
+        match nix::sys::signal::killpg(process_group, signal) {
+            Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Returns whether any process still exists in one hosted PTY process group.
+    fn process_group_exists(pgid: u32) -> bool {
+        let process_group = nix::unistd::Pid::from_raw(pgid as i32);
+        match nix::sys::signal::killpg(process_group, None) {
+            Ok(()) | Err(nix::errno::Errno::EPERM) => true,
+            Err(nix::errno::Errno::ESRCH) => false,
+            Err(err) => {
+                log::warn!("Failed to inspect PTY process group {pgid}: {err:#}");
+                true
+            }
+        }
+    }
+
+    /// Terminates one hosted PTY process group within a bounded period.
+    ///
+    /// PTY shell processes are process-group leaders, so their process IDs are
+    /// also their process-group IDs. The direct child may exit from `SIGHUP`
+    /// while descendants remain in that group, so this keeps checking group
+    /// liveness throughout a grace period and sends `SIGKILL` to survivors.
+    fn terminate_child(&mut self, pid: u32) -> Result<()> {
+        if !self.0.contains_key(&pid) {
+            log::info!(
+                "Did not find child shell process with pid {pid}; assuming it has already terminated."
+            );
+            return Ok(());
+        }
+        let pgid = pid;
+        Self::signal_process_group(pgid, nix::sys::signal::SIGHUP)?;
+        let deadline = Instant::now() + CHILD_TERMINATION_GRACE_PERIOD;
+        while Instant::now() < deadline {
+            if let Some(child) = self.0.get_mut(&pid) {
+                let _ = child.try_wait()?;
+            }
+            if !Self::process_group_exists(pgid) {
+                if let Some(mut child) = self.remove(&pid) {
+                    child.wait()?;
+                }
+                return Ok(());
+            }
+            thread::sleep(CHILD_TERMINATION_POLL_INTERVAL);
+        }
+        if Self::process_group_exists(pgid) {
+            Self::signal_process_group(pgid, nix::sys::signal::SIGKILL)?;
+        }
+        if let Some(mut child) = self.remove(&pid) {
+            child.wait()?;
+        }
+        Ok(())
+    }
+
+    /// Terminates all hosted PTY process groups during server shutdown.
+    fn terminate_all(&mut self) {
+        let pgids = self.0.keys().cloned().collect_vec();
+        for pgid in &pgids {
+            if let Err(err) = Self::signal_process_group(*pgid, nix::sys::signal::SIGHUP) {
+                log::warn!("Failed to send SIGHUP to PTY process group {pgid}: {err:#}");
+            }
+        }
+
+        let deadline = Instant::now() + CHILD_TERMINATION_GRACE_PERIOD;
+        while Instant::now() < deadline {
+            for child in self.0.values_mut() {
+                let _ = child.try_wait();
+            }
+            if pgids.iter().all(|pgid| !Self::process_group_exists(*pgid)) {
+                break;
+            }
+            thread::sleep(CHILD_TERMINATION_POLL_INTERVAL);
+        }
+        for pgid in pgids {
+            if Self::process_group_exists(pgid) {
+                if let Err(err) = Self::signal_process_group(pgid, nix::sys::signal::SIGKILL) {
+                    log::warn!("Failed to send SIGKILL to PTY process group {pgid}: {err:#}");
+                }
+            }
+        }
+        for child in self.0.values_mut() {
+            let _ = child.wait();
+        }
+        self.0.clear();
+    }
 }
 
 impl std::ops::Drop for Children {
     fn drop(&mut self) {
-        // Explicitly kill all children on drop.
-        for child in self.0.values_mut() {
-            // Send SIGHUP instead of SIGKILL (which is what `child.kill()`
-            // sends) so that the shell process can properly clean up
-            // foreground jobs.  SIGKILL cannot be ignored or caught, and kills
-            // the receiving process immediately.
-            let pid = nix::unistd::Pid::from_raw(child.id() as i32);
-            let _ = nix::sys::signal::kill(pid, nix::sys::signal::SIGHUP);
-            // Ensure we consume the child's exit code to avoid it becoming
-            // a zombie.
-            // See: https://doc.rust-lang.org/std/process/struct.Child.html#warning
-            let _ = child.wait();
-        }
+        self.terminate_all();
     }
 }
 
@@ -287,14 +374,9 @@ impl EventLoop {
                     }
                 }
                 api::Message::KillChildRequest { pid } => {
-                    let result = match self.children.remove(&pid) {
-                        Some(mut child) => child.kill().and_then(|_| child.wait()),
-                        None => {
-                            log::info!("Did not find child shell process with pid {pid}; assuming it has already terminated.");
-                            Ok(std::process::ExitStatus::default())
-                        }
-                    };
-                    let error_msg = result.err().map(|err| err.to_string());
+                    let error_msg = self.children.terminate_child(pid).err().map(|err| {
+                        format!("Failed to terminate child shell process {pid}: {err:#}")
+                    });
                     if let Err(err) = protocol::send_message(
                         RECV_SOCKET_FILENO,
                         api::Message::KillChildResponse { error_msg },
@@ -305,11 +387,25 @@ impl EventLoop {
                         return None;
                     };
                 }
+                api::Message::ShutdownRequest => {
+                    self.children.terminate_all();
+                    if let Err(err) = protocol::send_message(
+                        RECV_SOCKET_FILENO,
+                        api::Message::ShutdownResponse,
+                        Option::<RawFd>::None,
+                    ) {
+                        log::error!("Encountered unexpected error sending terminal server shutdown response: {err:#}.");
+                    }
+                    return None;
+                }
                 api::Message::SpawnShellResponse { .. } => {
                     log::error!("Terminal server received unexpected SpawnShellResponse message!");
                 }
                 api::Message::KillChildResponse { .. } => {
                     log::error!("Terminal server received unexpected KillChildResponse message!");
+                }
+                api::Message::ShutdownResponse => {
+                    log::error!("Terminal server received unexpected ShutdownResponse message!");
                 }
                 api::Message::WriteLogRequest { .. } => {
                     log::error!("Terminal server received unexpected WriteLogRequest message!");
@@ -323,3 +419,7 @@ impl EventLoop {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "event_loop_tests.rs"]
+mod tests;

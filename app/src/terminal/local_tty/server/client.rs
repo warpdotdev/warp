@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 use std::os::unix::prelude::*;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
+use nix::poll::{poll, PollFd, PollFlags};
 use parking_lot::Mutex;
 
 use super::{api, protocol};
@@ -105,6 +107,44 @@ impl TerminalServerClient {
             }
             None => {
                 bail!("Received error reading message back from terminal server");
+            }
+        }
+    }
+
+    /// Asks the server to clean up all hosted shells and shut itself down.
+    pub fn shutdown(&self, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        let Some(fd) = self
+            .socket_fd
+            .try_lock_for(deadline.saturating_duration_since(Instant::now()))
+        else {
+            bail!("Timed out waiting for terminal server protocol socket during shutdown");
+        };
+
+        protocol::send_message(
+            fd.as_fd(),
+            api::Message::ShutdownRequest,
+            Option::<RawFd>::None,
+        )?;
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!("Timed out waiting for terminal server to shut down");
+        }
+        let timeout_ms: i32 = remaining.as_millis().max(1).try_into().unwrap_or(i32::MAX);
+        let mut poll_fds = [PollFd::new(fd.as_raw_fd(), PollFlags::POLLIN)];
+        let poll_result = poll(&mut poll_fds, timeout_ms)?;
+        if poll_result == 0 {
+            bail!("Timed out waiting for terminal server to shut down");
+        }
+
+        match protocol::receive_message(fd.as_fd())? {
+            Some(api::Message::ShutdownResponse) => Ok(()),
+            Some(_) => {
+                bail!("Got response message other than ShutdownResponse after sending a ShutdownRequest message!");
+            }
+            None => {
+                bail!("Received error reading shutdown response from terminal server");
             }
         }
     }

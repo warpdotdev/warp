@@ -238,7 +238,6 @@ fn receive_message_header(socket_fd: &impl AsRawFd) -> Result<ReceiveMessageHead
     if msg.bytes == 0 {
         // The other side of the connection has been closed, so we should
         // quit.
-        log::info!("Received empty message; assuming the connection has been closed.");
         return Ok(ReceiveMessageHeaderResult::SocketClosed);
     }
 
