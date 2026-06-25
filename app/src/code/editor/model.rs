@@ -47,7 +47,7 @@ use warp_editor::editor::TextDecoration;
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::multiline::{AnyMultilineString, MultilineString, LF};
 use warp_editor::render::model::{
-    AutoScrollMode, BlockItem, Decoration, LineCount, LineDecoration, RenderEvent,
+    AutoScrollMode, BlockItem, ColumnUnit, Decoration, LineCount, LineDecoration, RenderEvent,
     RenderLineLocation, RenderState, RichTextStyles, StyleUpdateAction,
     UpdateDecorationAfterLayout, WidthSetting,
 };
@@ -2435,7 +2435,7 @@ impl CodeEditorModel {
             if let Some(existing) = self.selection().as_ref(ctx).goal_xs.as_ref() {
                 existing
                     .iter()
-                    .map(|px| px.as_f32().round() as u32)
+                    .map(|col| col.as_pixels().as_f32().round() as u32)
                     .collect()
             } else {
                 current_selections
@@ -2476,10 +2476,11 @@ impl CodeEditorModel {
         if let Ok(new_selections) = Vec1::try_from_vec(new_selections_vec) {
             self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
 
-            // Update goal_xs to the desired columns (stored as pixels for consistency with SelectionModel)
+            // Update goal_xs to the desired columns (stored as ColumnUnit::Pixels for
+            // consistency with the GUI SelectionModel pixel path)
             let goal_pixels: Vec<_> = goal_cols
                 .into_iter()
-                .map(|c| (c as usize).into_pixels())
+                .map(|c| ColumnUnit::Pixels((c as usize).into_pixels()))
                 .collect();
             self.selection().update(ctx, |selection, _| {
                 selection.goal_xs = Vec1::try_from_vec(goal_pixels).ok();

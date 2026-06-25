@@ -8,6 +8,11 @@
 //! prints the authenticated user's ID, and exits. No terminal UI is rendered
 //! yet.
 
+// This module is pre-built infrastructure not yet wired into the warp-tui binary.
+// Suppress dead_code and unused_imports until it is integrated.
+#[allow(dead_code, unused_imports)]
+pub mod input;
+
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity};
 
