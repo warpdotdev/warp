@@ -49,6 +49,7 @@ use warpui::{
 };
 
 use self::telemetry::SettingsTelemetryEvent;
+use crate::ai::custom_model_routers::CustomModelRouter;
 use crate::ai::execution_profiles::profiles::ClientProfileId;
 use crate::appearance::Appearance;
 use crate::editor::{
@@ -82,6 +83,7 @@ mod billing_and_usage_page;
 mod billing_and_usage_page_v2;
 mod code_page;
 pub(crate) mod custom_inference_modal;
+mod custom_router_view;
 mod delete_environment_confirmation_dialog;
 mod directory_color_add_picker;
 pub(crate) mod environments_page;
@@ -212,7 +214,7 @@ pub(super) fn render_model_chips(
     chips.finish()
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq)]
 pub enum SettingsViewEvent {
     Pane(PaneEvent),
     StartResize,
@@ -226,6 +228,8 @@ pub enum SettingsViewEvent {
     },
     OpenAIFactCollection,
     OpenMCPServerCollection,
+    OpenCustomRouterEditor(Option<CustomModelRouter>),
+    OpenCustomRouterFile(PathBuf),
     OpenExecutionProfileEditor(ClientProfileId),
     OpenLspLogs {
         log_path: PathBuf,
@@ -1919,6 +1923,14 @@ impl SettingsView {
             }
             AISettingsPageEvent::OpenMCPServerCollection => {
                 ctx.emit(SettingsViewEvent::OpenMCPServerCollection)
+            }
+            #[cfg(feature = "local_fs")]
+            AISettingsPageEvent::OpenCustomRouterEditor(router) => {
+                ctx.emit(SettingsViewEvent::OpenCustomRouterEditor(router.clone()));
+            }
+            #[cfg(feature = "local_fs")]
+            AISettingsPageEvent::OpenCustomRouterFile(path) => {
+                ctx.emit(SettingsViewEvent::OpenCustomRouterFile(path.clone()));
             }
             AISettingsPageEvent::OpenExecutionProfileEditor(profile_id) => {
                 ctx.emit(SettingsViewEvent::OpenExecutionProfileEditor(*profile_id));

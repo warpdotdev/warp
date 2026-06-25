@@ -26,7 +26,7 @@ use crate::editor::{
 use crate::modal::{Modal, ModalViewState};
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::dropdown::{DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT};
-use crate::view_components::{Dropdown as DropdownView, DropdownItem};
+use crate::view_components::{Dropdown as DropdownView, DropdownItem, FilterableDropdown};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const OZ_AGENTS_URL: &str = "https://oz.warp.dev/agents?new=true";
@@ -63,7 +63,7 @@ impl ApiKeyType {
 pub struct CreateApiKeyModal {
     name_editor: ViewHandle<EditorView>,
     expiration_dropdown: ViewHandle<DropdownView<CreateApiKeyModalAction>>,
-    agent_dropdown: ViewHandle<DropdownView<CreateApiKeyModalAction>>,
+    agent_dropdown: ViewHandle<FilterableDropdown<CreateApiKeyModalAction>>,
     api_key_type_control: ViewHandle<SegmentedControl<ApiKeyType>>,
     expiration: ExpirationOption,
     cancel_button_mouse_state: MouseStateHandle,
@@ -170,9 +170,11 @@ impl CreateApiKeyModal {
             ctx.add_typed_action_view(DropdownView::<CreateApiKeyModalAction>::new);
 
         let agent_dropdown =
-            ctx.add_typed_action_view(DropdownView::<CreateApiKeyModalAction>::new);
+            ctx.add_typed_action_view(FilterableDropdown::<CreateApiKeyModalAction>::new);
         agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_top_bar_max_width(INPUT_WIDTH);
+            // Match the open menu width to the rendered top-bar (input) width so
+            // the dropdown doesn't overhang the search field.
             dropdown.set_match_menu_width_to_top_bar(true, ctx);
         });
 
@@ -319,6 +321,16 @@ impl CreateApiKeyModal {
         self.agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_items(items, ctx);
         });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_agents_for_test(
+        &mut self,
+        agents: Vec<AgentIdentity>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.agents = agents;
+        self.populate_agent_dropdown(ctx);
     }
 
     fn create(&mut self, ctx: &mut ViewContext<Self>) {
@@ -767,6 +779,13 @@ impl View for CreateApiKeyModal {
                             .finish(),
                         );
                     } else {
+                        // The agent list can grow long, so use a FilterableDropdown
+                        // (search input + substring filtering). Its open menu must
+                        // paint above the fields below it (Name/Expiration), so the
+                        // dropdown is hoisted into the modal's outermost Stack as a
+                        // positioned overlay child anchored to this placeholder,
+                        // rather than rendered inline in the column (which would let
+                        // later siblings paint over the open menu).
                         render_agent_dropdown = true;
                         col.add_child(
                             Container::new(
@@ -943,3 +962,7 @@ fn api_key_type_control_styles(app: &AppContext) -> UiComponentStyles {
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+#[path = "create_api_key_modal_tests.rs"]
+mod tests;

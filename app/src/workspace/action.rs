@@ -18,6 +18,8 @@ use super::tab_settings::{
 };
 use super::view::{OnboardingTutorial, WorkspaceBanner};
 use crate::ai::agent::api::ServerConversationToken;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent::conversation::AIAgentHarness;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -208,12 +210,20 @@ pub enum WorkspaceAction {
     ClearTabMultiSelection,
     /// Creates a new tab group from the current tab multi-selection.
     NewTabGroupFromSelectedTabs,
+    /// Context-aware "create group" entry point for the keybinding: groups
+    /// the multi-selection when 2+ tabs are selected, otherwise groups the
+    /// active tab.
+    NewTabGroupFromActiveOrSelectedTabs,
     /// Moves every selected tab into `group_id`.
     MoveSelectedTabsToGroup {
         group_id: TabGroupId,
     },
     /// Removes every selected tab from its group (requires a single shared group).
     RemoveSelectedTabsFromGroup,
+    /// Context-aware "remove from group" entry point for the keybinding:
+    /// removes the multi-selection from its shared group when 2+ tabs are
+    /// selected, otherwise removes the active tab.
+    RemoveActiveOrSelectedTabsFromGroup,
     ToggleTabGroupRightClickMenu {
         group_id: TabGroupId,
         anchor: TabContextMenuAnchor,
@@ -230,12 +240,20 @@ pub enum WorkspaceAction {
     PinTab(usize),
     /// Unpins the tab at the given index.
     UnpinTab(usize),
+    /// Pins the active tab.
+    PinActiveTab,
+    /// Unpins the active tab.
+    UnpinActiveTab,
     /// Pins the entire tab group: sets the group as pinned
     /// and moves the group block to the end of the pinned region.
     PinTabGroup(TabGroupId),
     /// Unpins the entire tab group: clears the pinned flag on the group
     /// and moves the group block to the start of the unpinned region.
     UnpinTabGroup(TabGroupId),
+    /// Pins the active tab's group.
+    PinActiveTabGroup,
+    /// Unpins the active tab's group.
+    UnpinActiveTabGroup,
     AddDefaultTab,
     AddTerminalTab {
         hide_homepage: bool,
@@ -585,6 +603,12 @@ pub enum WorkspaceAction {
     ContinueConversationLocally {
         conversation_id: AIConversationId,
     },
+    /// Continue a completed third-party cloud harness run in a local split pane.
+    #[cfg(not(target_family = "wasm"))]
+    ContinueThirdPartyConversationLocally {
+        task_id: AmbientAgentTaskId,
+        harness: AIAgentHarness,
+    },
     /// Insert the /fork slash command into the active terminal's input.
     InsertForkSlashCommand,
     /// Open a local-to-cloud handoff pane next to the active conversation
@@ -868,6 +892,8 @@ impl WorkspaceAction {
         match self {
             #[cfg(not(target_family = "wasm"))]
             ContinueConversationLocally { .. } => true,
+            #[cfg(not(target_family = "wasm"))]
+            ContinueThirdPartyConversationLocally { .. } => true,
             ActivateTab(_)
             | ActivateTabByNumber(_)
             | ActivatePrevTab
@@ -902,8 +928,10 @@ impl WorkspaceAction {
             | MoveTabToGroup { .. }
             | RemoveTabFromGroup(_)
             | NewTabGroupFromSelectedTabs
+            | NewTabGroupFromActiveOrSelectedTabs
             | MoveSelectedTabsToGroup { .. }
             | RemoveSelectedTabsFromGroup
+            | RemoveActiveOrSelectedTabsFromGroup
             | UngroupTabs(_)
             | NewTabInGroup(_)
             | MoveTabGroupUp(_)
@@ -913,8 +941,12 @@ impl WorkspaceAction {
             | CloseTabsBelowGroup(_)
             | PinTab(_)
             | UnpinTab(_)
+            | PinActiveTab
+            | UnpinActiveTab
             | PinTabGroup(_)
             | UnpinTabGroup(_)
+            | PinActiveTabGroup
+            | UnpinActiveTabGroup
             | ToggleTabColor { .. }
             | AddDefaultTab
             | AddTerminalTab { .. }

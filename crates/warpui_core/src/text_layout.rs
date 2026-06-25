@@ -793,6 +793,61 @@ impl TextFrame {
         }
     }
 
+    /// Like [`Self::mock`], but lays out a single line of `text` with real glyph and caret
+    /// positions: each glyph is `advance` pixels wide and starts at `x = index * advance`.
+    /// This makes geometry helpers (e.g. `x_for_index`) and caret hit-testing usable in tests,
+    /// which the zero-position [`Self::mock`] cannot support. Only supports a single line.
+    ///
+    /// We can't mark this as cfg(test) because warp crate tests need it too.
+    pub fn mock_with_positions(text: &str, advance: f32) -> Self {
+        assert!(
+            !text.contains('\n'),
+            "mock_with_positions only supports a single line"
+        );
+        let char_count = text.chars().count();
+        let glyphs: Vec<_> = text
+            .chars()
+            .enumerate()
+            .map(|(index, _)| Glyph {
+                id: Default::default(),
+                position_along_baseline: vec2f(index as f32 * advance, 0.0),
+                index,
+                width: advance,
+            })
+            .collect();
+        let caret_positions = (0..char_count)
+            .map(|index| CaretPosition {
+                position_in_line: index as f32 * advance,
+                start_offset: index,
+                last_offset: index,
+            })
+            .collect();
+        let width = char_count as f32 * advance;
+        let line = Line {
+            width,
+            trailing_whitespace_width: 0.0,
+            runs: vec![Run {
+                font_id: FontId(0),
+                glyphs,
+                styles: TextStyle::new(),
+                width,
+            }],
+            font_size: DEFAULT_FONT_SIZE,
+            line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
+            baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+            ascent: DEFAULT_FONT_SIZE * DEFAULT_TOP_BOTTOM_RATIO,
+            descent: DEFAULT_FONT_SIZE * (1. - DEFAULT_TOP_BOTTOM_RATIO),
+            clip_config: None,
+            caret_positions,
+            chars_with_missing_glyphs: vec![],
+        };
+        TextFrame {
+            lines: vec1![line],
+            max_width: width,
+            alignment: Default::default(),
+        }
+    }
+
     pub fn lines(&self) -> &Vec<Line> {
         self.lines.as_ref()
     }

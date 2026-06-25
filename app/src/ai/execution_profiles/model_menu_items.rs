@@ -9,6 +9,7 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Style};
 use warpui::{Action, AppContext, Element, SingletonEntity as _};
 
+use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::llms::{
     is_using_api_key_for_provider, should_show_bedrock_icon_for_model, DisableReason, LLMId,
     LLMInfo, LLMPreferences,
@@ -87,8 +88,11 @@ fn make_item_fields<A: Action + Clone>(
         .is_some();
     let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
     let is_using_api_key = is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app);
+    let is_custom_router = is_custom_router_id(llm.id.as_str());
     let leading_icon = if is_using_bedrock {
         Icon::Aws
+    } else if is_custom_router {
+        Icon::Dataflow
     } else {
         llm.provider.icon().unwrap_or(Icon::Oz)
     };

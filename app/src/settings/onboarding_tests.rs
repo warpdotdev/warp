@@ -2,6 +2,7 @@ use ai::LLMId;
 use chrono::{DateTime, Utc};
 use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings, ProjectOnboardingSettings};
 use onboarding::SelectedSettings;
+use warp_core::features::FeatureFlag;
 use warpui::{App, SingletonEntity};
 
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -16,7 +17,7 @@ use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::sync_queue::SyncQueue;
-use crate::settings::{apply_onboarding_settings, PrivacySettings};
+use crate::settings::{apply_onboarding_settings, AISettings, PrivacySettings};
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -127,7 +128,7 @@ fn apply_onboarding_settings_preserves_existing_cloud_profile_on_existing_user_l
         };
 
         app.update(|ctx| {
-            apply_onboarding_settings(&onboarding_settings, ctx);
+            apply_onboarding_settings(&onboarding_settings, true, ctx);
         });
 
         // Post-condition: the cloud profile retains its stored values.
@@ -166,5 +167,61 @@ fn apply_onboarding_settings_preserves_existing_cloud_profile_on_existing_user_l
                 "mcp_permissions should not be overwritten by onboarding for existing users"
             );
         });
+    })
+}
+
+/// Warp's AI features run on a Warp account. For third-party agent intent
+/// (`disable_oz = true`), AI is therefore off when the user skips creating an
+/// account and on once they have one.
+#[test]
+fn apply_onboarding_settings_gates_third_party_ai_on_account() {
+    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+        app.add_singleton_model(PrivacySettings::mock);
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+
+        let onboarding_settings = SelectedSettings::AgentDrivenDevelopment {
+            agent_settings: AgentDevelopmentSettings {
+                selected_model_id: LLMId::from("auto"),
+                autonomy: None,
+                cli_agent_toolbar_enabled: true,
+                session_default: onboarding::SessionDefault::Agent,
+                disable_oz: true,
+                show_agent_notifications: true,
+            },
+            project_settings: ProjectOnboardingSettings::default(),
+            ui_customization: None,
+        };
+
+        // Skipping login (no account) leaves AI off, even for agent intent.
+        app.update(|ctx| {
+            apply_onboarding_settings(&onboarding_settings, false, ctx);
+        });
+        let ai_disabled = app.read(|ctx| !*AISettings::as_ref(ctx).is_any_ai_enabled);
+        assert!(
+            ai_disabled,
+            "skipping login must disable AI even for agent intent"
+        );
+
+        // Creating an account turns AI on, including for third-party agents.
+        app.update(|ctx| {
+            apply_onboarding_settings(&onboarding_settings, true, ctx);
+        });
+        let ai_enabled = app.read(|ctx| *AISettings::as_ref(ctx).is_any_ai_enabled);
+        assert!(
+            ai_enabled,
+            "creating an account must enable AI for third-party agent intent"
+        );
     })
 }

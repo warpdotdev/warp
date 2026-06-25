@@ -1,6 +1,6 @@
-use warpui::App;
+use warpui_core::App;
 
-use super::{NetworkLogItem, NetworkLogModel, NETWORK_LOGGING_MAX_ITEMS};
+use super::{NETWORK_LOGGING_MAX_ITEMS, NetworkLogItem, NetworkLogModel};
 
 #[test]
 fn empty_snapshot_is_empty_string() {
@@ -42,7 +42,7 @@ fn push_beyond_capacity_drops_oldest() {
         });
         model.read(&app, |model, _| {
             assert_eq!(model.len(), NETWORK_LOGGING_MAX_ITEMS);
-            // Oldest is still present when we're exactly at capacity.
+            // The oldest item is still present when we are exactly at capacity.
             assert!(model.snapshot_text().starts_with("item-0\n"));
         });
 

@@ -1,151 +1,16 @@
-//! Integer cell-grid geometry shared across the TUI rendering layers.
+//! Integer cell-grid geometry for the TUI rendering layers.
 //!
-//! All dimensions are in terminal cells (`u16`). The geometry deliberately
-//! mirrors a small slice of the GUI geometry vocabulary but stays integral,
-//! since a terminal grid has no sub-cell positions.
+//! Sizes and rectangles are ratatui's own `Size`/`Rect` (re-exported as
+//! [`TuiSize`]/[`TuiRect`]) so the element tree measures and paints in the same
+//! coordinate types the ratatui `Buffer` uses, with no conversions.
+//!
+//! [`TuiConstraint`] is a local min/max measure box. It is deliberately *not*
+//! ratatui's `Constraint`, which is the input to ratatui's layout *solver*
+//! (Length/Min/Max/Fill/…), not a bound an element clamps its natural size
+//! against. [`TuiRectExt`] adds the few slicing helpers the hand-rolled
+//! column/container layout needs that ratatui's `Rect` does not provide.
 
-use crate::geometry::vector::Vector2F;
-
-/// A width/height pair in terminal cells.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct TuiSize {
-    pub width: u16,
-    pub height: u16,
-}
-
-impl TuiSize {
-    pub const ZERO: Self = Self {
-        width: 0,
-        height: 0,
-    };
-
-    pub const fn new(width: u16, height: u16) -> Self {
-        Self { width, height }
-    }
-
-    /// The number of cells covered by a region of this size.
-    pub fn area(self) -> usize {
-        usize::from(self.width) * usize::from(self.height)
-    }
-}
-
-/// An axis-aligned rectangle of terminal cells. The covered columns are
-/// `x .. x + width` and rows `y .. y + height` (half-open).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct TuiRect {
-    pub x: u16,
-    pub y: u16,
-    pub width: u16,
-    pub height: u16,
-}
-
-impl TuiRect {
-    pub const fn new(x: u16, y: u16, width: u16, height: u16) -> Self {
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    /// Builds a rect at the origin with the given size.
-    pub const fn from_size(size: TuiSize) -> Self {
-        Self::new(0, 0, size.width, size.height)
-    }
-
-    pub const fn size(self) -> TuiSize {
-        TuiSize::new(self.width, self.height)
-    }
-
-    /// The first column past the right edge (saturating).
-    pub fn right(self) -> u16 {
-        self.x.saturating_add(self.width)
-    }
-
-    /// The first row past the bottom edge (saturating).
-    pub fn bottom(self) -> u16 {
-        self.y.saturating_add(self.height)
-    }
-
-    pub fn is_empty(self) -> bool {
-        self.width == 0 || self.height == 0
-    }
-
-    /// Shrinks the rect by `inset` cells on every side, saturating at zero. A
-    /// rect too small to inset collapses to zero width/height (never wraps).
-    ///
-    /// ```
-    /// # use warpui_core::elements::tui::TuiRect;
-    /// assert_eq!(
-    ///     TuiRect::new(2, 2, 10, 6).inset(1),
-    ///     TuiRect::new(3, 3, 8, 4),
-    /// );
-    /// assert_eq!(TuiRect::new(0, 0, 1, 1).inset(2), TuiRect::new(2, 2, 0, 0));
-    /// ```
-    pub fn inset(self, inset: u16) -> Self {
-        let shrink = inset.saturating_mul(2);
-        Self {
-            x: self.x.saturating_add(inset),
-            y: self.y.saturating_add(inset),
-            width: self.width.saturating_sub(shrink),
-            height: self.height.saturating_sub(shrink),
-        }
-    }
-
-    /// Splits off the top `height` rows, returning `(top, remainder)`. `height`
-    /// is clamped to this rect's height, so the two halves always tile the
-    /// original rect exactly.
-    ///
-    /// ```
-    /// # use warpui_core::elements::tui::TuiRect;
-    /// let (top, rest) = TuiRect::new(0, 0, 8, 5).split_top(2);
-    /// assert_eq!(top, TuiRect::new(0, 0, 8, 2));
-    /// assert_eq!(rest, TuiRect::new(0, 2, 8, 3));
-    /// ```
-    pub fn split_top(self, height: u16) -> (Self, Self) {
-        let top_height = height.min(self.height);
-        let top = Self::new(self.x, self.y, self.width, top_height);
-        let remainder = Self::new(
-            self.x,
-            self.y.saturating_add(top_height),
-            self.width,
-            self.height - top_height,
-        );
-        (top, remainder)
-    }
-
-    /// Splits off the left `width` columns, returning `(left, remainder)`.
-    /// `width` is clamped to this rect's width, so the two halves always tile
-    /// the original rect exactly.
-    ///
-    /// ```
-    /// # use warpui_core::elements::tui::TuiRect;
-    /// let (left, rest) = TuiRect::new(0, 0, 8, 5).split_left(3);
-    /// assert_eq!(left, TuiRect::new(0, 0, 3, 5));
-    /// assert_eq!(rest, TuiRect::new(3, 0, 5, 5));
-    /// ```
-    pub fn split_left(self, width: u16) -> (Self, Self) {
-        let left_width = width.min(self.width);
-        let left = Self::new(self.x, self.y, left_width, self.height);
-        let remainder = Self::new(
-            self.x.saturating_add(left_width),
-            self.y,
-            self.width - left_width,
-            self.height,
-        );
-        (left, remainder)
-    }
-
-    /// Whether a (sub-cell) point falls inside this rect, used for mouse
-    /// hit-testing against crossterm's pixel-free cell coordinates.
-    pub fn contains_position(self, position: Vector2F) -> bool {
-        position.x() >= f32::from(self.x)
-            && position.x() < f32::from(self.right())
-            && position.y() >= f32::from(self.y)
-            && position.y() < f32::from(self.bottom())
-    }
-}
+pub use ratatui::layout::{Rect as TuiRect, Size as TuiSize};
 
 /// A layout constraint: an element handed a `TuiConstraint` must return a
 /// [`TuiSize`] with `min.width <= width <= max.width` and
@@ -203,6 +68,61 @@ impl TuiConstraint {
     /// Clamps a height into `[min.height, max.height]`.
     pub fn constrain_height(self, height: u16) -> u16 {
         height.clamp(self.min.height, self.max.height)
+    }
+}
+
+/// Slicing helpers for [`TuiRect`] used by the hand-rolled stacking layout.
+///
+/// ratatui's `Rect` already provides `is_empty`/`right`/`bottom`/`area`; this
+/// trait adds the symmetric inset and the top/left splits the column and
+/// container rely on. Each split clamps to the rect's extent, so the two halves
+/// always tile the original rect exactly.
+pub trait TuiRectExt: Sized {
+    /// Shrinks the rect by `inset` cells on every side, saturating at zero. A
+    /// rect too small to inset advances its origin but collapses to zero
+    /// width/height (it never wraps).
+    fn inset(self, inset: u16) -> Self;
+
+    /// Splits off the top `height` rows, returning `(top, remainder)`.
+    fn split_top(self, height: u16) -> (Self, Self);
+
+    /// Splits off the left `width` columns, returning `(left, remainder)`.
+    fn split_left(self, width: u16) -> (Self, Self);
+}
+
+impl TuiRectExt for TuiRect {
+    fn inset(self, inset: u16) -> Self {
+        let shrink = inset.saturating_mul(2);
+        Self {
+            x: self.x.saturating_add(inset),
+            y: self.y.saturating_add(inset),
+            width: self.width.saturating_sub(shrink),
+            height: self.height.saturating_sub(shrink),
+        }
+    }
+
+    fn split_top(self, height: u16) -> (Self, Self) {
+        let top_height = height.min(self.height);
+        let top = Self::new(self.x, self.y, self.width, top_height);
+        let remainder = Self::new(
+            self.x,
+            self.y.saturating_add(top_height),
+            self.width,
+            self.height - top_height,
+        );
+        (top, remainder)
+    }
+
+    fn split_left(self, width: u16) -> (Self, Self) {
+        let left_width = width.min(self.width);
+        let left = Self::new(self.x, self.y, left_width, self.height);
+        let remainder = Self::new(
+            self.x.saturating_add(left_width),
+            self.y,
+            self.width - left_width,
+            self.height,
+        );
+        (left, remainder)
     }
 }
 

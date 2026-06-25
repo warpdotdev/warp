@@ -1,7 +1,14 @@
-//! Tools for loading a [`ChannelConfig`] from the external config generator binary.
+//! Loads a per-channel [`ChannelConfig`] for Warp's channel binaries.
 //!
-//! For non-bundled builds, the generator is invoked at runtime. For bundled builds, the config
-//! is embedded at compile time via the build script.
+//! For non-bundled builds the internal `warp-channel-config` generator is
+//! invoked at runtime; for `release_bundle` builds the config is embedded at
+//! compile time via the consuming crate's build script. Shared by the GUI app
+//! binaries and the `warp_tui` binaries so the loading logic lives in one place.
+//!
+//! The `release_bundle` cfg inside [`load_config!`] is evaluated in the
+//! *consuming* crate, so each binary crate opts into embedding by defining its
+//! own `release_bundle` feature (and generating `<channel>_config.json` into its
+//! `OUT_DIR` from a build script).
 use warp_core::channel::ChannelConfig;
 
 /// The name of the config generator binary, expected to be on PATH.
@@ -22,12 +29,18 @@ macro_rules! path_concat {
     };
 }
 
+/// Loads the [`ChannelConfig`] for the given channel name.
+///
+/// In `release_bundle` builds the config is embedded at compile time (the
+/// consuming crate's build script must generate `<channel>_config.json` into
+/// `OUT_DIR`); otherwise the `warp-channel-config` generator is invoked at
+/// runtime.
 #[macro_export]
 macro_rules! load_config {
     ($channel:expr) => {{
         #[cfg(feature = "release_bundle")]
         {
-            channel_config::load_config_from_embedded(include_str!($crate::path_concat!(
+            $crate::load_config_from_embedded(include_str!($crate::path_concat!(
                 env!("OUT_DIR"),
                 concat!($channel, "_config.json")
             )))
@@ -35,15 +48,13 @@ macro_rules! load_config {
 
         #[cfg(not(feature = "release_bundle"))]
         {
-            channel_config::load_config_from_generator($channel)
+            $crate::load_config_from_generator($channel)
         }
     }};
 }
-pub use load_config;
 
-/// Invokes the config generator binary at runtime and deserializes its JSON output into a
-/// [`ChannelConfig`].
-#[cfg_attr(feature = "release_bundle", expect(dead_code))]
+/// Invokes the config generator binary at runtime and deserializes its JSON
+/// output into a [`ChannelConfig`].
 pub fn load_config_from_generator(channel: &str) -> ChannelConfig {
     let target_family = if cfg!(target_family = "wasm") {
         "wasm"
@@ -86,15 +97,16 @@ pub fn load_config_from_generator(channel: &str) -> ChannelConfig {
 
     serde_json::from_slice(&output.stdout).unwrap_or_else(|err| {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        panic!("Failed to parse config generator output for channel '{channel}': {err}\nOutput:\n{stdout}")
+        panic!(
+            "Failed to parse config generator output for channel '{channel}': {err}\nOutput:\n{stdout}"
+        )
     })
 }
 
 /// Deserializes a [`ChannelConfig`] from a JSON string embedded at compile time.
 ///
-/// This is used to load the channel configuration in release bundles, where configuration
+/// Used to load channel configuration in release bundles, where configuration
 /// is embedded at compile time instead of being generated at runtime.
-#[cfg_attr(not(feature = "release_bundle"), expect(dead_code))]
 pub fn load_config_from_embedded(json: &str) -> ChannelConfig {
     serde_json::from_str(json)
         .unwrap_or_else(|err| panic!("Failed to parse embedded channel config: {err}"))

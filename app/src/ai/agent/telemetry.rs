@@ -8,7 +8,6 @@ use super::{
 };
 use crate::ai::llms::LLMId;
 use crate::server::telemetry::AgentModeCitation as CitationForTelemetry;
-use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
 use crate::CloudModel;
 
 pub trait ForTelemetry {
@@ -41,20 +40,6 @@ impl ForTelemetry for AIAgentCitation {
 impl EntrypointType {
     pub fn entrypoint(&self) -> String {
         match self {
-            Self::Onboarding { chip_type } => {
-                format!(
-                    "ONBOARDING.{}",
-                    match chip_type {
-                        OnboardingChipType::FixAnIssue => "FIX_AN_ISSUE",
-                        OnboardingChipType::PullCloudLogs => "PULL_CLOUD_LOGS",
-                        OnboardingChipType::StartAFeature => "START_A_FEATURE",
-                        OnboardingChipType::PythonSnakeGame => "PYTHON_SNAKE_GAME",
-                        OnboardingChipType::ExploreGitHistory => "EXPLORE_GIT_HISTORY",
-                        OnboardingChipType::MatrixThemePicker => "MATRIX_THEME_PICKER",
-                        OnboardingChipType::Other => "OTHER",
-                    }
-                )
-            }
             Self::PromptSuggestion {
                 is_static,
                 is_coding,

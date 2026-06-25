@@ -179,6 +179,7 @@ pub use pane::ai_document_pane::AIDocumentPane;
 pub use pane::ai_fact_pane::AIFactPane;
 pub use pane::code_diff_pane::CodeDiffPane;
 pub use pane::code_pane::CodePane;
+pub use pane::custom_router_editor_pane::CustomRouterEditorPane;
 pub use pane::env_var_collection_pane::EnvVarCollectionPane;
 pub use pane::environment_management_pane::EnvironmentManagementPane;
 pub use pane::execution_profile_editor_pane::ExecutionProfileEditorPane;
@@ -197,6 +198,10 @@ pub use working_directories::{WorkingDirectoriesEvent, WorkingDirectoriesModel};
 
 use self::pane::{DetachType, PaneViewEvent};
 pub use crate::code_review::CodeReviewPanelArg;
+
+/// Binding name for the action that toggles maximizing the active pane. Shared so
+/// the pane header menu item can surface the same shortcut the binding resolves to.
+pub const TOGGLE_MAXIMIZE_PANE_BINDING_NAME: &str = "pane_group:toggle_maximize_pane";
 
 lazy_static! {
     // The value to use as the initial window bounds if we are unable to
@@ -465,7 +470,7 @@ pub fn init(app: &mut AppContext) {
         .with_custom_action(CustomAction::SplitPaneRight)
         .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
         EditableBinding::new(
-            "pane_group:toggle_maximize_pane",
+            TOGGLE_MAXIMIZE_PANE_BINDING_NAME,
             "Toggle Maximize Active Pane",
             PaneGroupAction::ToggleMaximizePane,
         )
@@ -1921,11 +1926,9 @@ impl PaneGroup {
             LeafContents::CodeReview(_) => {
                 Err(anyhow::anyhow!("Code review panes are no longer supported"))
             }
-            LeafContents::ExecutionProfileEditor => {
-                // We don't yet support restoring execution profile editor panes.
-                Err(anyhow::anyhow!(
-                    "Can't restore execution profile editor panes"
-                ))
+            LeafContents::ExecutionProfileEditor | LeafContents::CustomRouterEditor => {
+                // Editor panes are not restored from persistence.
+                Err(anyhow::anyhow!("Can't restore editor panes"))
             }
             LeafContents::NetworkLog => {
                 // Network log panes are intentionally not restored. Two

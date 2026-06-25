@@ -81,9 +81,12 @@ impl SelectedSettings {
     pub fn is_ai_enabled(&self) -> bool {
         use warp_core::features::FeatureFlag;
         match self {
-            SelectedSettings::AgentDrivenDevelopment { agent_settings, .. } => {
-                !agent_settings.disable_oz
-            }
+            // Agent-driven development always means "I want AI" (including the
+            // bring-your-own-agents `disable_oz` path). This reflects intent and
+            // is used to decide that an account/login is required; whether AI is
+            // actually enabled is applied later based on whether the user has an
+            // account (see `apply_onboarding_settings`).
+            SelectedSettings::AgentDrivenDevelopment { .. } => true,
             SelectedSettings::Terminal { .. } => {
                 // With old onboarding (no OpenWarpNewSettingsModes), Terminal
                 // intent still leaves AI enabled; with new onboarding,
@@ -146,14 +149,14 @@ impl std::fmt::Display for AiSetupChoice {
 pub enum AiAccessChoice {
     #[default]
     Subscription,
-    Byok,
+    SetUpLater,
 }
 
 impl std::fmt::Display for AiAccessChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AiAccessChoice::Subscription => write!(f, "subscription"),
-            AiAccessChoice::Byok => write!(f, "byok"),
+            AiAccessChoice::SetUpLater => write!(f, "set_up_later"),
         }
     }
 }
@@ -164,12 +167,6 @@ impl std::fmt::Display for AiAccessChoice {
 pub(crate) enum NoAiConfirmationSource {
     /// Triggered from the intention slide via "Just use the terminal" + Next.
     Intention,
-    /// Triggered from the AI-setup slide via "I don't want AI".
-    AiSetup,
-    /// Triggered from the "Customize your Warp Agent" slide via "I don't want AI".
-    Agent,
-    /// Triggered from the "Choose how to access AI" slide via "I don't want AI".
-    AiAccess,
 }
 
 #[derive(Clone, Debug)]
@@ -388,9 +385,9 @@ impl OnboardingStateModel {
         self.set_step(OnboardingStep::Customize, ctx);
     }
 
-    /// "Give me AI features": abort the opt-out. From the intention slide this is
-    /// an explicit request for AI, so route onto the AI path; from the AI-setup
-    /// slide the user is already on the AI path, so just close the modal.
+    /// "Give me AI features": abort the opt-out. The only trigger is the
+    /// intention slide's "Just use the terminal", which is an explicit request
+    /// for AI, so route onto the AI path.
     pub(crate) fn cancel_no_ai(&mut self, ctx: &mut ModelContext<Self>) {
         send_telemetry_from_ctx!(OnboardingEvent::NoAiConfirmationCancelled, ctx);
         match self.no_ai_confirmation.take() {
@@ -398,10 +395,7 @@ impl OnboardingStateModel {
                 self.set_intention(OnboardingIntention::AgentDrivenDevelopment, ctx);
                 self.set_step(OnboardingStep::AiSetup, ctx);
             }
-            Some(NoAiConfirmationSource::AiSetup)
-            | Some(NoAiConfirmationSource::Agent)
-            | Some(NoAiConfirmationSource::AiAccess)
-            | None => {
+            None => {
                 ctx.emit(OnboardingStateEvent::NoAiConfirmationChanged);
                 ctx.notify();
             }

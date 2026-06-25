@@ -232,6 +232,7 @@ vte.workspace = true
 walkdir.workspace = true
 warp-workflows.workspace = true
 warp_assets.workspace = true
+warp_channel_config.workspace = true
 warp_completer.workspace = true
 warp_core.workspace = true
 warp_editor.workspace = true
@@ -461,6 +462,7 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
+tui = []
 ai_resume_button = []
 autoupdate = []
 figma_detection = []
@@ -664,6 +666,7 @@ default = [
     "hoa_onboarding_flow",
     "hoa_remote_control",
     "codex_notifications",
+    "codex_plugin",
     "trim_trailing_blank_lines",
     "open_warp_new_settings_modes",
     "skip_firebase_anonymous_user",
@@ -934,6 +937,7 @@ web_search_ui = []
 web_fetch_ui = []
 fork_from_command = []
 context_window_usage_v2 = []
+context_window_usage_breakdown = []
 global_search = []
 file_and_diff_set_comments = []
 revert_to_checkpoints = []

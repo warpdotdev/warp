@@ -1194,15 +1194,16 @@ impl<'a> TabComponent<'a> {
                         .set_border_width(0.),
                 )
                 .with_style(UiComponentStyles {
-                    margin: Some(Coords::default().top(
-                        if FeatureFlag::NewTabStyling.is_enabled() {
-                            // With the larger tabs in the new ui, we need to give the editor some extra top margin
-                            // to make it appear centered
-                            8.
-                        } else {
-                            3.
-                        },
-                    )),
+                    margin: Some(Coords::default().top(if self.grouped_member {
+                        // Reduce the top margin for grouped tabs to make it appear centered.
+                        2.
+                    } else if FeatureFlag::NewTabStyling.is_enabled() {
+                        // With the larger tabs in the new ui, we need to give the editor some extra top margin
+                        // to make it appear centered
+                        8.
+                    } else {
+                        3.
+                    })),
                     ..Default::default()
                 })
                 .build()
