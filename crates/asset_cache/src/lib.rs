@@ -19,7 +19,6 @@ impl AsyncAssetType for UrlAssetWithoutPersistence {}
 pub struct DataUriAsset;
 impl AsyncAssetType for DataUriAsset {}
 
-
 pub const MAX_DATA_URI_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 
 /// Namespace marker for URL-based async asset sources with persistence.
