@@ -2084,11 +2084,7 @@ pub fn init(app: &mut AppContext) {
 pub enum CompletionsTrigger {
     Keybinding,
     AsYouType,
-    /// Completions opened automatically by a slash command (e.g. `/open-file` with an empty
-    /// argument), rather than by an explicit user keybinding. These generate results like
-    /// [`CompletionsTrigger::Keybinding`] (including the file-path fallback) but must not
-    /// auto-insert a lone result, otherwise the user can never clear the argument when only a
-    /// single completion is available.
+    /// Completions opened automatically by a slash command.
     SlashCommandAutoOpen,
 }
 

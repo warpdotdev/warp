@@ -3507,12 +3507,6 @@ fn test_open_slash_command_triggers_completions_on_space() {
 
 #[test]
 fn test_open_slash_command_does_not_autofill_single_file_completion() {
-    // Regression test for #12990: when `/open-file` auto-opens completions because its argument
-    // is empty and the current directory contains exactly one file, that lone file must NOT be
-    // inserted automatically. Otherwise the user can never backspace the argument back to empty,
-    // because clearing it re-triggers the auto-open which immediately re-inserts the only file.
-    // The fix distinguishes the system-initiated open (`SlashCommandAutoOpen`, which shows the
-    // menu) from an explicit user keybinding (`Keybinding`, which still inserts a lone result).
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
@@ -3530,8 +3524,6 @@ fn test_open_slash_command_does_not_autofill_single_file_completion() {
             });
         });
 
-        // A `/open-file`-driven auto-open with a single file suggestion must leave the empty
-        // argument untouched.
         input.update(&mut app, |input, ctx| {
             input.handle_completion_suggestions_results(
                 build_suggestion_results(
@@ -3548,8 +3540,6 @@ fn test_open_slash_command_does_not_autofill_single_file_completion() {
             assert_eq!(input.buffer_text(ctx), "/open-file ");
         });
 
-        // By contrast, an explicit user keybinding with a single prefix suggestion still inserts
-        // it, preserving normal tab-completion behavior.
         input.update(&mut app, |input, ctx| {
             input.handle_completion_suggestions_results(
                 build_suggestion_results(
