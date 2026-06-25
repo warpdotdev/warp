@@ -1924,9 +1924,11 @@ impl SettingsView {
             AISettingsPageEvent::OpenMCPServerCollection => {
                 ctx.emit(SettingsViewEvent::OpenMCPServerCollection)
             }
+            #[cfg(feature = "local_fs")]
             AISettingsPageEvent::OpenCustomRouterEditor(router) => {
                 ctx.emit(SettingsViewEvent::OpenCustomRouterEditor(router.clone()));
             }
+            #[cfg(feature = "local_fs")]
             AISettingsPageEvent::OpenCustomRouterFile(path) => {
                 ctx.emit(SettingsViewEvent::OpenCustomRouterFile(path.clone()));
             }

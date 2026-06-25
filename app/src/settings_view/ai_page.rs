@@ -3260,7 +3260,9 @@ pub enum AISettingsPageEvent {
     FocusModal,
     OpenAIFactCollection,
     OpenMCPServerCollection,
+    #[cfg(feature = "local_fs")]
     OpenCustomRouterEditor(Option<crate::ai::custom_model_routers::CustomModelRouter>),
+    #[cfg(feature = "local_fs")]
     OpenCustomRouterFile(PathBuf),
     OpenExecutionProfileEditor(ClientProfileId),
     SignupAnonymousUser,
@@ -9083,15 +9085,13 @@ impl SettingsWidget for CustomModelRoutersWidget {
         FeatureFlag::CustomModelRouters.is_enabled()
     }
 
+    #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
     fn render(
         &self,
         view: &Self::View,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        use super::custom_router_view::render_router_error_card;
-        use crate::user_config::WarpConfig;
-
         let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
         let header_color = styles::header_font_color(is_any_ai_enabled, app);
 
@@ -9117,12 +9117,12 @@ impl SettingsWidget for CustomModelRoutersWidget {
                 }
                 #[cfg(not(feature = "local_fs"))]
                 {
-                    warpui::elements::Empty::finish()
+                    warpui::elements::Empty::new().finish()
                 }
             })
             .finish();
 
-        let mut column = Flex::column()
+        let column = Flex::column()
             .with_child(render_separator(appearance))
             .with_child(
                 Container::new(header_row)
@@ -9135,12 +9135,16 @@ impl SettingsWidget for CustomModelRoutersWidget {
                 app,
             ));
 
-        // Error cards (files that failed to parse) — shown first
+        // Error cards and router summary cards (local_fs only)
         #[cfg(feature = "local_fs")]
-        {
+        let column = {
+            use super::custom_router_view::render_router_error_card;
+            use crate::user_config::WarpConfig;
+            let mut c = column;
+            // Error cards (files that failed to parse) — shown first
             let errors = WarpConfig::as_ref(app).custom_model_router_errors();
             for error in errors.iter() {
-                column.add_child(
+                c.add_child(
                     Container::new(render_router_error_card(
                         &error.file_name,
                         &error.error_message,
@@ -9150,17 +9154,16 @@ impl SettingsWidget for CustomModelRoutersWidget {
                     .finish(),
                 );
             }
-        }
-
-        // Router summary cards
-        #[cfg(feature = "local_fs")]
-        for view_handle in &view.router_views {
-            column.add_child(
-                Container::new(warpui::elements::ChildView::new(view_handle).finish())
-                    .with_margin_top(8.)
-                    .finish(),
-            );
-        }
+            // Router summary cards
+            for view_handle in &view.router_views {
+                c.add_child(
+                    Container::new(warpui::elements::ChildView::new(view_handle).finish())
+                        .with_margin_top(8.)
+                        .finish(),
+                );
+            }
+            c
+        };
 
         column.finish()
     }

@@ -29,6 +29,7 @@ use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::ui_components::icons::Icon;
+#[cfg(feature = "local_fs")]
 use crate::user_config::WarpConfig;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, PrimaryTheme, SecondaryTheme,
@@ -479,17 +480,16 @@ impl CustomRouterEditorView {
             return;
         }
 
-        let yaml = match router.to_yaml_string() {
-            Ok(y) => y,
-            Err(e) => {
-                self.save_error = Some(format!("Serialization: {e}"));
-                ctx.notify();
-                return;
-            }
-        };
-
         #[cfg(feature = "local_fs")]
         {
+            let yaml = match router.to_yaml_string() {
+                Ok(y) => y,
+                Err(e) => {
+                    self.save_error = Some(format!("Serialization: {e}"));
+                    ctx.notify();
+                    return;
+                }
+            };
             let ep = self.existing.as_ref().and_then(|r| r.source_path.clone());
             if let Err(e) = WarpConfig::save_custom_model_router(&name, &yaml, ep.as_deref()) {
                 self.save_error = Some(format!("Write error: {e}"));
