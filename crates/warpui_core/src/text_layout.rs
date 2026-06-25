@@ -1189,10 +1189,13 @@ impl Line {
         self.last_index() + 1
     }
 
+    /// Paints a run's background fill and border box. This must run BEFORE the run's
+    /// glyphs and underline are drawn so that text decorations (notably the hyperlink
+    /// underline, which is a filled rect in the same layer as the background) render on
+    /// top of the background instead of being covered by it.
     #[allow(clippy::too_many_arguments)]
-    fn paint_run_decorations(
+    fn paint_run_background(
         &self,
-        glyph_color: ColorU,
         run: &Run,
         origin: Vector2F,
         visible_bounds: RectF,
@@ -1272,7 +1275,16 @@ impl Line {
                 }
             }
         }
+    }
 
+    fn paint_run_decorations(
+        &self,
+        glyph_color: ColorU,
+        run: &Run,
+        origin: Vector2F,
+        visible_bounds: RectF,
+        scene: &mut Scene,
+    ) {
         if let Some((error_underline_color, first_glyph)) =
             run.styles.error_underline_color.zip(run.glyphs.first())
         {
@@ -1491,6 +1503,19 @@ impl Line {
                 glyph_color = foreground_color;
             }
 
+            // Paint the run's background/border BEFORE its glyphs and underline. The
+            // hyperlink underline is a filled rect in the same layer as the background,
+            // so drawing the background afterward (as was previously done) painted over
+            // and hid the underline on backgrounded runs (e.g. an inline-code link).
+            self.paint_run_background(
+                run,
+                line_origin,
+                bounds,
+                font_cache,
+                scene,
+                baseline_position_fn,
+            );
+
             let glyph_iter = if is_start_clipping {
                 itertools::Either::Left(run.glyphs.iter().rev())
             } else {
@@ -1577,15 +1602,7 @@ impl Line {
                 }
             }
 
-            self.paint_run_decorations(
-                glyph_color,
-                run,
-                line_origin,
-                bounds,
-                font_cache,
-                scene,
-                baseline_position_fn,
-            );
+            self.paint_run_decorations(glyph_color, run, line_origin, bounds, scene);
 
             if should_stop_after_run {
                 break;

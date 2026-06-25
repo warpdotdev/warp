@@ -370,6 +370,86 @@ fn test_paint_start_ellipsis_does_not_overlap_leftmost_glyph() {
     });
 }
 
+/// Regression test for the "inline-code link underline" bug: a run that has BOTH a
+/// background and an underline must paint its background BEFORE its underline. The
+/// underline is a filled rect in the same layer as the background, so if the
+/// background is drawn afterward it covers (hides) the underline — which is exactly
+/// what happened for a detected link rendered as inline code (gray code background)
+/// on a soft-wrapping line. We assert the draw order: background rect precedes the
+/// underline rect.
+#[test]
+fn test_run_background_painted_before_underline() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let bg_color = ColorU::from_u32(0x37393CFF);
+            let underline_color = ColorU::from_u32(0x7AA6DAFF);
+            let glyph_width = 12.0;
+            let glyph_count = 5usize;
+
+            let glyphs = (0..glyph_count)
+                .map(|i| Glyph {
+                    id: 0,
+                    position_along_baseline: vec2f(glyph_width * i as f32, 0.),
+                    index: i,
+                    width: glyph_width,
+                })
+                .collect();
+            let run = Run {
+                font_id: FontId(0),
+                glyphs,
+                styles: TextStyle::default()
+                    .with_background_color(bg_color)
+                    .with_underline_color(underline_color),
+                width: glyph_width * glyph_count as f32,
+            };
+            let line = Line {
+                width: run.width,
+                trailing_whitespace_width: 0.,
+                runs: vec![run],
+                font_size: 12.,
+                line_height_ratio: 1.,
+                baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+                clip_config: None,
+                ascent: 10.,
+                descent: 2.,
+                caret_positions: Vec::new(),
+                chars_with_missing_glyphs: Vec::new(),
+            };
+
+            let mut scene = Scene::new(1., rendering::Config::default());
+            line.paint(
+                RectF::new(Vector2F::zero(), Vector2F::new(1000., 50.)),
+                &PaintStyleOverride::default(),
+                ColorU::black(),
+                ctx.font_cache(),
+                &mut scene,
+            );
+
+            // Find, in draw order within the layer, the background rect and the
+            // first underline rect (identified by their solid fill colors).
+            let layer = scene.layers().next().expect("at least one layer");
+            let bg_index = layer
+                .rects
+                .iter()
+                .position(|rect| matches!(rect.background, Fill::Solid(color) if color == bg_color))
+                .expect("background rect should be painted");
+            let underline_index = layer
+                .rects
+                .iter()
+                .position(
+                    |rect| matches!(rect.background, Fill::Solid(color) if color == underline_color),
+                )
+                .expect("underline rect should be painted");
+
+            assert!(
+                bg_index < underline_index,
+                "background rect (index {bg_index}) must be painted before the underline rect \
+                 (index {underline_index}) so the underline renders on top of the background",
+            );
+        });
+    });
+}
+
 /// When start-clipping without an ellipsis (fade style), the offset fix must
 /// not change the existing layout — visible glyphs should remain right-aligned
 /// in the paint bounds with no extra horizontal shift.
