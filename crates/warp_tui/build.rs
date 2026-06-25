@@ -18,20 +18,17 @@ use std::{env, fs};
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
-    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_FAMILY");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS must be set");
-    let target_family =
-        env::var("CARGO_CFG_TARGET_FAMILY").expect("CARGO_CFG_TARGET_FAMILY must be set");
 
-    generate_channel_config_if_needed(&target_family, &target_os);
+    generate_channel_config_if_needed(&target_os);
 }
 
 /// If the `release_bundle` feature is enabled and `warp-channel-config` is
 /// available on PATH, invoke the config generator and write each channel's JSON
 /// to `OUT_DIR` so it can be embedded via `include_str!` in the binary entry
 /// points.
-fn generate_channel_config_if_needed(target_family: &str, target_os: &str) {
+fn generate_channel_config_if_needed(target_os: &str) {
     if env::var("CARGO_FEATURE_RELEASE_BUNDLE").is_err() {
         // For non-bundled builds, config is loaded at runtime — nothing to embed.
         return;
@@ -59,11 +56,6 @@ fn generate_channel_config_if_needed(target_family: &str, target_os: &str) {
     println!("cargo:rerun-if-env-changed=WS_SERVER_URL");
 
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR must be set");
-    let family_arg = if target_family == "wasm" {
-        "wasm"
-    } else {
-        "native"
-    };
 
     // Generate config for every internal channel the TUI ships; each binary's
     // `include_str!` picks up its own file.
@@ -72,7 +64,7 @@ fn generate_channel_config_if_needed(target_family: &str, target_os: &str) {
             .arg("--channel")
             .arg(channel)
             .arg("--target-family")
-            .arg(family_arg)
+            .arg("native")
             .arg("--target-os")
             .arg(target_os)
             .output()
