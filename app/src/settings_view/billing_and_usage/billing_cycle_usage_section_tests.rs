@@ -53,6 +53,10 @@ fn add_section_view(
     app: &mut App,
     workspace: Workspace,
 ) -> ViewHandle<BillingCycleUsageSectionView> {
+    // `AIRequestUsageModel::new_for_test` reads cached banner state from the
+    // private user preferences during construction, so the preferences
+    // singletons must be registered before it is added below.
+    app.update(crate::settings::init_and_register_user_preferences);
     app.add_singleton_model(|_| Appearance::mock());
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
