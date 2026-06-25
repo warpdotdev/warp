@@ -1344,26 +1344,6 @@ pub(super) fn show_before_indicator(
         })
 }
 
-/// Wraps `element` in a 1px border that is always laid out (reserving the
-/// space) and only changes color: the theme accent when this row is the active
-/// drop target, transparent otherwise. Reserving the space avoids the reflow a
-/// conditionally-added border causes, which flickered at the over/before-tab
-/// boundary.
-fn with_reserved_drag_border(
-    element: Box<dyn Element>,
-    is_drag_target: bool,
-    theme: &WarpTheme,
-) -> Box<dyn Element> {
-    let border_color = if is_drag_target {
-        ThemeFill::Solid(theme.accent().into())
-    } else {
-        ThemeFill::Solid(ColorU::transparent_black())
-    };
-    Container::new(element)
-        .with_border(Border::all(1.).with_border_fill(border_color))
-        .finish()
-}
-
 /// Insertion indicator line shown between rows during a pane drag. `group`
 /// insets it to the group's member indentation so an in-group drop reads
 /// differently from an ungrouped drop between tabs/groups. Indicator only: drop
@@ -2393,7 +2373,12 @@ fn render_tab_group_internal(
                         .with_border_fill(internal_colors::fg_overlay_1(theme)),
                 );
             }
-            with_reserved_drag_border(container.finish(), is_drag_target, theme)
+            if is_drag_target {
+                container = container.with_foreground_border(
+                    Border::all(1.).with_border_fill(ThemeFill::Solid(theme.accent().into())),
+                );
+            }
+            container.finish()
         } else {
             // Inside a tab group the surrounding container already paints
             // hover/active state for the whole group, so suppress the
@@ -2424,7 +2409,12 @@ fn render_tab_group_internal(
             if needs_action_button_band {
                 container = container.with_margin_top(action_button_band);
             }
-            with_reserved_drag_border(container.finish(), is_drag_target, theme)
+            if is_drag_target {
+                container = container.with_foreground_border(
+                    Border::all(1.).with_border_fill(ThemeFill::Solid(theme.accent().into())),
+                );
+            }
+            container.finish()
         };
 
         // Show the action buttons when the group OR the buttons themselves
