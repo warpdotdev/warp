@@ -30,7 +30,11 @@ const INPUT_WIDTH: f32 = 480.;
 
 const MODEL_ROW_SPACING: f32 = 16.;
 const REMOVE_MODEL_BUTTON_COL_WIDTH: f32 = 32.;
-const MODEL_INPUT_WIDTH: f32 = (INPUT_WIDTH - MODEL_ROW_SPACING) / 2.;
+const FORM_SCROLLBAR_RESERVED_WIDTH: f32 = 12.;
+const MODEL_ROW_AVAILABLE_WIDTH: f32 =
+    INPUT_WIDTH + REMOVE_MODEL_BUTTON_COL_WIDTH - FORM_SCROLLBAR_RESERVED_WIDTH;
+const MODEL_INPUT_WIDTH: f32 =
+    (MODEL_ROW_AVAILABLE_WIDTH - MODEL_ROW_SPACING * 2. - REMOVE_MODEL_BUTTON_COL_WIDTH) / 2.;
 const FORM_SCROLL_MAX_HEIGHT: f32 = 410.;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -902,9 +906,6 @@ impl View for CustomEndpointModal {
             theme.active_ui_text_color().into(),
             Fill::None,
         )
-        .with_overlayed_scrollbar()
-        .with_padding_start(0.)
-        .with_padding_end(0.)
         .finish();
 
         ConstrainedBox::new(scrollable_content)
