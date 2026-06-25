@@ -357,6 +357,85 @@ impl<S> TerminalManager<S> {
         post_wire(&mut manager, &surface, ctx);
         (manager, surface)
     }
+    /// Creates a local terminal manager model and terminal surface.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn create_model<PostWire>(
+        startup_directory: Option<PathBuf>,
+        env_vars: HashMap<OsString, OsString>,
+        is_shared_session_creator: IsSharedSessionCreator,
+        all_restored_blocks: Option<&Vec<SerializedBlockListItem>>,
+        user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
+        initial_size: Vector2F,
+        model_event_sender: Option<SyncSender<ModelEvent>>,
+        chosen_shell: Option<AvailableShell>,
+        ctx: &mut AppContext,
+        create_surface: impl FnOnce(
+            async_channel::Receiver<()>,
+            ModelHandle<ModelEventDispatcher>,
+            Arc<FairMutex<TerminalModel>>,
+            ModelHandle<Sessions>,
+            SizeInfo,
+            ColorList,
+            InactiveReceiver<Arc<Vec<u8>>>,
+            &mut AppContext,
+        ) -> (ViewHandle<S>, PostWire),
+    ) -> (ModelHandle<Box<dyn TerminalManagerTrait>>, ViewHandle<S>)
+    where
+        S: TerminalSurface,
+        <S as Entity>::Event: PtyIntentEvent,
+        Self: TerminalManagerTrait,
+        PostWire: FnOnce(&mut Self, &ViewHandle<S>, &mut AppContext),
+    {
+        let (mut terminal_manager, surface) = Self::build_with_surface(
+            chosen_shell,
+            startup_directory.clone(),
+            all_restored_blocks,
+            initial_size,
+            is_shared_session_creator,
+            model_event_sender,
+            ctx,
+            create_surface,
+        );
+
+        let terminal_surface = surface.clone();
+        let wsl_name_or_shell_starter = terminal_manager.take_wsl_name_or_shell_starter();
+
+        let terminal_manager_model = ctx.add_model(|ctx| {
+            let terminal_manager: Box<dyn TerminalManagerTrait> = Box::new(terminal_manager);
+
+            ctx.spawn(
+                async move {
+                    match wsl_name_or_shell_starter {
+                        Some(starter_source) => starter_source.to_shell_starter_source().await,
+                        None => None,
+                    }
+                },
+                move |terminal_manager: &mut Box<dyn TerminalManagerTrait>,
+                      shell_starter_source,
+                      ctx| {
+                    let Some(terminal_manager) =
+                        TerminalManagerTrait::as_any_mut(terminal_manager.as_mut())
+                            .downcast_mut::<Self>()
+                    else {
+                        return;
+                    };
+
+                    on_shell_determined(
+                        terminal_manager,
+                        startup_directory,
+                        env_vars,
+                        user_default_shell_unsupported_banner_model_handle,
+                        shell_starter_source,
+                        ctx,
+                    )
+                },
+            );
+
+            terminal_manager
+        });
+
+        (terminal_manager_model, terminal_surface)
+    }
 
     /// Returns the terminal model owned by this manager.
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
@@ -394,221 +473,139 @@ impl<S> TerminalManager<S> {
     }
 }
 
-impl TerminalManager<TerminalView> {
-    /// Creates a local terminal manager model and its `TerminalView`.
-    ///
-    /// Resolves `TerminalView`-specific inputs (conversation
-    /// restoration, prompt/presence/LLM/input-mode broadcast wiring, shared-session
-    /// sharer setup, agent-view registration, remote-server choice wiring), creates
-    /// the `TerminalView`, boxes the manager, and returns `(manager, view)`.
-    ///
-    /// Surface-agnostic session construction is delegated to
-    /// [`TerminalManager::build_with_surface`].
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_model(
-        startup_directory: Option<PathBuf>,
-        env_vars: HashMap<OsString, OsString>,
-        is_shared_session_creator: IsSharedSessionCreator,
-        resources: TerminalViewResources,
-        restored_blocks: Option<&Vec<SerializedBlockListItem>>,
-        conversation_restoration: Option<ConversationRestorationInNewPaneType>,
-        user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
-        initial_size: Vector2F,
-        model_event_sender: Option<SyncSender<ModelEvent>>,
-        window_id: WindowId,
-        chosen_shell: Option<AvailableShell>,
-        initial_input_config: Option<InputConfig>,
-        ctx: &mut AppContext,
-    ) -> (
-        ModelHandle<Box<dyn TerminalManagerTrait>>,
-        ViewHandle<TerminalView>,
-    ) {
-        // TerminalView-specific restored-block resolution: merge explicit restored
-        // blocks with conversation restoration.
-        let all_restored_blocks = restored_blocks
-            .filter(|blocks| !blocks.is_empty())
-            .cloned()
-            .or_else(|| match &conversation_restoration {
-                Some(ConversationRestorationInNewPaneType::Historical { conversation, .. })
-                | Some(ConversationRestorationInNewPaneType::Forked { conversation, .. }) => {
-                    Some(conversation.to_serialized_blocklist_items())
+/// Resolves the block list used by the GUI `TerminalView` surface.
+pub(crate) fn terminal_view_restored_blocks(
+    restored_blocks: Option<&Vec<SerializedBlockListItem>>,
+    conversation_restoration: &Option<ConversationRestorationInNewPaneType>,
+) -> Option<Vec<SerializedBlockListItem>> {
+    restored_blocks
+        .filter(|blocks| !blocks.is_empty())
+        .cloned()
+        .or_else(|| match conversation_restoration {
+            Some(ConversationRestorationInNewPaneType::Historical { conversation, .. })
+            | Some(ConversationRestorationInNewPaneType::Forked { conversation, .. }) => {
+                Some(conversation.to_serialized_blocklist_items())
+            }
+            Some(ConversationRestorationInNewPaneType::Startup { conversations, .. }) => {
+                let mut items: Vec<_> = conversations
+                    .iter()
+                    .flat_map(|c| c.to_serialized_blocklist_items())
+                    .collect();
+                // Because there are multiple conversations that may have interleaved timestamps, we need to sort by start_ts
+                items.sort_by_key(|item| item.start_ts());
+                if items.is_empty() {
+                    None
+                } else {
+                    Some(items)
                 }
-                Some(ConversationRestorationInNewPaneType::Startup { conversations, .. }) => {
-                    let mut items: Vec<_> = conversations
-                        .iter()
-                        .flat_map(|c| c.to_serialized_blocklist_items())
-                        .collect();
-                    // Because there are multiple conversations that may have interleaved timestamps, we need to sort by start_ts
-                    items.sort_by_key(|item| item.start_ts());
-                    if items.is_empty() {
-                        None
-                    } else {
-                        Some(items)
-                    }
-                }
-                _ => None,
-            });
-        let has_conversation_restoration = matches!(
-            &conversation_restoration,
-            Some(
-                ConversationRestorationInNewPaneType::Startup { .. }
-                    | ConversationRestorationInNewPaneType::Historical { .. }
-            )
-        );
-        let is_historical = matches!(
-            &conversation_restoration,
-            Some(ConversationRestorationInNewPaneType::Historical { .. })
-        );
-        let should_use_live_appearance = conversation_restoration
-            .as_ref()
-            .map(|restoration| restoration.should_use_live_appearance())
-            .unwrap_or(false);
-        let has_restored_command_blocks = all_restored_blocks
-            .as_ref()
-            .is_some_and(|blocks| !blocks.is_empty());
+            }
+            _ => None,
+        })
+}
 
-        let model_event_sender_for_surface = model_event_sender.clone();
-        let conversation_restoration_for_surface = conversation_restoration;
-        let (mut terminal_manager, view) = TerminalManager::build_with_surface(
-            chosen_shell,
-            startup_directory.clone(),
-            all_restored_blocks.as_ref(),
-            initial_size,
-            is_shared_session_creator,
-            model_event_sender.clone(),
+/// Creates the GUI terminal surface and its manager-owned post-wiring closure.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn create_terminal_view_surface(
+    resources: TerminalViewResources,
+    model_event_sender: Option<SyncSender<ModelEvent>>,
+    window_id: WindowId,
+    initial_input_config: Option<InputConfig>,
+    conversation_restoration: Option<ConversationRestorationInNewPaneType>,
+    has_conversation_restoration: bool,
+    is_historical: bool,
+    should_use_live_appearance: bool,
+    has_restored_command_blocks: bool,
+    wakeups_rx: async_channel::Receiver<()>,
+    model_events: ModelHandle<ModelEventDispatcher>,
+    model: Arc<FairMutex<TerminalModel>>,
+    sessions: ModelHandle<Sessions>,
+    size_info: SizeInfo,
+    colors: ColorList,
+    inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
+    ctx: &mut AppContext,
+) -> (
+    ViewHandle<TerminalView>,
+    impl FnOnce(&mut TerminalManager<TerminalView>, &ViewHandle<TerminalView>, &mut AppContext),
+) {
+    let current_prompt = ctx.add_model(|ctx| {
+        CurrentPrompt::new_with_model_events(sessions.clone(), Some(&model_events), ctx)
+    });
+    let prompt_type = ctx.add_model(|ctx| PromptType::new_dynamic(current_prompt.clone(), ctx));
+    let view = ctx.add_typed_action_view(window_id, |ctx| {
+        TerminalView::new(
+            resources,
+            wakeups_rx,
+            model_events,
+            model,
+            sessions,
+            size_info,
+            colors,
+            model_event_sender,
+            prompt_type.clone(),
+            initial_input_config,
+            conversation_restoration,
+            Some(inactive_pty_reads_rx),
+            false,
             ctx,
-            |wakeups_rx,
-             model_events,
-             cloned_model,
-             sessions,
-             size_info,
-             colors,
-             inactive_pty_reads_rx,
-             ctx| {
-                let current_prompt = ctx.add_model(|ctx| {
-                    CurrentPrompt::new_with_model_events(sessions.clone(), Some(&model_events), ctx)
-                });
-                let prompt_type =
-                    ctx.add_model(|ctx| PromptType::new_dynamic(current_prompt.clone(), ctx));
-                let view = ctx.add_typed_action_view(window_id, |ctx| {
-                    TerminalView::new(
-                        resources,
-                        wakeups_rx,
-                        model_events,
-                        cloned_model,
-                        sessions,
-                        size_info,
-                        colors,
-                        model_event_sender_for_surface.clone(),
-                        prompt_type.clone(),
-                        initial_input_config,
-                        conversation_restoration_for_surface,
-                        Some(inactive_pty_reads_rx),
+        )
+    });
+
+    (
+        view,
+        move |terminal_manager: &mut TerminalManager<TerminalView>,
+              view: &ViewHandle<TerminalView>,
+              ctx: &mut AppContext| {
+            // Append the session restoration separator to the block list if there are any
+            // restored blocks (command blocks or AI conversations) to show.
+            let should_show_restoration_separator = (has_conversation_restoration
+                || has_restored_command_blocks)
+                && !should_use_live_appearance;
+
+            if should_show_restoration_separator {
+                terminal_manager
+                    .model()
+                    .lock()
+                    .block_list_mut()
+                    .append_session_restoration_separator_to_block_list(is_historical);
+            }
+
+            // In unit tests, we know we aren't going to bootstrap a shell
+            // so if we're waiting on starting a shared session until bootstrapped,
+            // just attempt to start it now.
+            #[cfg(test)]
+            if matches!(
+                terminal_manager.model().lock().shared_session_status(),
+                SharedSessionStatus::SharePendingPreBootstrap { .. }
+            ) {
+                view.update(ctx, |view, ctx| {
+                    view.attempt_to_share_session(
+                        SharedSessionScrollbackType::All,
+                        None,
+                        SharedSessionSource::user(None),
                         false,
                         ctx,
                     )
                 });
+            }
 
-                (
-                    view,
-                    move |terminal_manager: &mut TerminalManager<TerminalView>,
-                          view: &ViewHandle<TerminalView>,
-                          ctx: &mut AppContext| {
-                        // Append the session restoration separator to the block list if there are any
-                        // restored blocks (command blocks or AI conversations) to show.
-                        let should_show_restoration_separator = (has_conversation_restoration
-                            || has_restored_command_blocks)
-                            && !should_use_live_appearance;
-
-                        if should_show_restoration_separator {
-                            terminal_manager
-                                .model()
-                                .lock()
-                                .block_list_mut()
-                                .append_session_restoration_separator_to_block_list(is_historical);
-                        }
-
-                        // In unit tests, we know we aren't going to bootstrap a shell
-                        // so if we're waiting on starting a shared session until bootstrapped,
-                        // just attempt to start it now.
-                        #[cfg(test)]
-                        if matches!(
-                            terminal_manager.model().lock().shared_session_status(),
-                            SharedSessionStatus::SharePendingPreBootstrap { .. }
-                        ) {
-                            view.update(ctx, |view, ctx| {
-                                view.attempt_to_share_session(
-                                    SharedSessionScrollbackType::All,
-                                    None,
-                                    SharedSessionSource::user(None),
-                                    false,
-                                    ctx,
-                                )
-                            });
-                        }
-
-                        wire_up_remote_server_controller_with_view(
-                            &terminal_manager.remote_server_controller(),
-                            view,
-                            ctx,
-                        );
-
-                        // Wire up TerminalView-specific session sharing (sharer setup, prompt/presence/LLM/
-                        // input-mode/conversation broadcasts, agent-view registration, network status).
-                        terminal_manager.session_sharer = wire_up_terminal_view_session_sharing(
-                            view,
-                            current_prompt,
-                            prompt_type,
-                            terminal_manager.model(),
-                            window_id,
-                            ctx,
-                        );
-                    },
-                )
-            },
-        );
-
-        // Clone the view before moving it into the manager so the caller can
-        // receive it alongside the boxed manager.
-        let terminal_view = view.clone();
-        let wsl_name_or_shell_starter = terminal_manager.take_wsl_name_or_shell_starter();
-
-        let terminal_manager_model = ctx.add_model(|ctx| {
-            let terminal_manager: Box<dyn TerminalManagerTrait> = Box::new(terminal_manager);
-
-            ctx.spawn(
-                async move {
-                    match wsl_name_or_shell_starter {
-                        Some(starter_source) => starter_source.to_shell_starter_source().await,
-                        None => None,
-                    }
-                },
-                move |terminal_manager: &mut Box<dyn TerminalManagerTrait>,
-                      shell_starter_source,
-                      ctx| {
-                    let Some(terminal_manager) =
-                        TerminalManagerTrait::as_any_mut(terminal_manager.as_mut())
-                            .downcast_mut::<TerminalManager<TerminalView>>()
-                    else {
-                        return;
-                    };
-
-                    on_shell_determined(
-                        terminal_manager,
-                        startup_directory,
-                        env_vars,
-                        user_default_shell_unsupported_banner_model_handle,
-                        shell_starter_source,
-                        ctx,
-                    )
-                },
+            wire_up_remote_server_controller_with_view(
+                &terminal_manager.remote_server_controller(),
+                view,
+                ctx,
             );
 
-            terminal_manager
-        });
-
-        (terminal_manager_model, terminal_view)
-    }
+            // Wire up TerminalView-specific session sharing (sharer setup, prompt/presence/LLM/
+            // input-mode/conversation broadcasts, agent-view registration, network status).
+            terminal_manager.session_sharer = wire_up_terminal_view_session_sharing(
+                view,
+                current_prompt,
+                prompt_type,
+                terminal_manager.model(),
+                window_id,
+                ctx,
+            );
+        },
+    )
 }
 
 /// Callback invoked upon determining the shell to be spawned when starting the event loop.

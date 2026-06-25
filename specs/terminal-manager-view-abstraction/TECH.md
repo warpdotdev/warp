@@ -14,7 +14,7 @@ The current design splits the terminal manager responsibilities into three layer
 
 1. `TerminalSurface` and `PtyIntent` define the narrow frontend-to-PTY boundary.
 2. `TerminalManager<S>` owns local terminal model/session/controller/event-loop state for any terminal surface.
-3. `TerminalManager<TerminalView>::create_model` adapts the generic manager path to the current GUI pane system and returns the boxed model handle expected by pane code.
+3. `TerminalManager<S>::create_model` is the generic model-producing construction path. The current GUI pane system calls it with `S = TerminalView` and a GUI surface setup callback.
 
 ## Proposed changes
 
@@ -85,7 +85,7 @@ pub struct TerminalManager<S> {
 }
 ```
 
-`TerminalManager<TerminalView>::create_model(...)` is the canonical local GUI construction API. It owns the local terminal session construction order, creates the manager-owned channels/models/controllers internally, calls one surface setup callback that returns `(surface, post_wire)`, wires the surface to the `PtyController` through `wire_up_pty_controller_with_surface`, runs `post_wire`, boxes the manager as a WarpUI model, schedules shell determination, and returns `(manager_model, surface)`.
+`TerminalManager<S>::create_model(...)` is the canonical local terminal construction API. It owns the local terminal session construction order, creates the manager-owned channels/models/controllers internally, calls one surface setup callback that returns `(surface, post_wire)`, wires the surface to the `PtyController` through `wire_up_pty_controller_with_surface`, runs `post_wire`, boxes the manager as a WarpUI model, schedules shell determination, and returns `(manager_model, surface)`.
 
 The surface factory callback receives only the components a surface needs:
 
@@ -101,14 +101,14 @@ The manager stores the remaining startup and lifetime components itself, includi
 
 The surface setup callback can return a deferred `post_wire` closure for surface-specific wiring. The constructor runs that closure after the PTY controller is wired and the manager has been assembled. This keeps ordering-sensitive post-wiring inside the manager-owned construction flow without requiring the generic manager core to import `TerminalView`.
 
-`TerminalManager<TerminalView>::create_model(...)` now:
+For the GUI caller, `TerminalManager::<TerminalView>::create_model(...)` now:
 
 1. Resolves GUI-specific restored blocks from explicit restored blocks and conversation restoration.
 2. Uses a surface setup callback that creates `CurrentPrompt`, `PromptType`, and `TerminalView` from the manager-created surface components, then returns `(view, post_wire)`.
 3. The returned `post_wire` closure appends the GUI restoration separator when needed, wires remote-server choice UI, and wires `TerminalView`-specific session sharing.
 4. Boxes the manager, schedules shell determination, and returns `(manager_model, terminal_view)`.
 
-This keeps the end-to-end local terminal construction protocol in `TerminalManager<TerminalView>::create_model` while keeping the reusable manager core surface-generic.
+This keeps the end-to-end local terminal construction protocol in `TerminalManager<S>::create_model` while keeping GUI-specific work in the `TerminalView` surface setup callback. A future TUI surface can call the same function with a different surface setup callback.
 
 ### Generic PTY wiring
 

@@ -121,7 +121,10 @@ use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::focus_env::add_session_focus_env_vars;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
-use crate::terminal::local_tty::TerminalManager as LocalTtyTerminalManager;
+use crate::terminal::local_tty::{
+    create_terminal_view_surface, terminal_view_restored_blocks,
+    TerminalManager as LocalTtyTerminalManager,
+};
 use crate::terminal::model::session::Session;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 #[cfg(feature = "remote_tty")]
@@ -5913,20 +5916,66 @@ impl PaneGroup {
                     ctx,
                 );
             } else if #[cfg(feature = "local_tty")] {
-                let (terminal_manager, terminal_view) = LocalTtyTerminalManager::create_model(
+                let all_restored_blocks =
+                    terminal_view_restored_blocks(restored_blocks, &conversation_restoration);
+                let has_conversation_restoration = matches!(
+                    &conversation_restoration,
+                    Some(
+                        ConversationRestorationInNewPaneType::Startup { .. }
+                            | ConversationRestorationInNewPaneType::Historical { .. }
+                    )
+                );
+                let is_historical = matches!(
+                    &conversation_restoration,
+                    Some(ConversationRestorationInNewPaneType::Historical { .. })
+                );
+                let should_use_live_appearance = conversation_restoration
+                    .as_ref()
+                    .map(|restoration| restoration.should_use_live_appearance())
+                    .unwrap_or(false);
+                let has_restored_command_blocks = all_restored_blocks
+                    .as_ref()
+                    .is_some_and(|blocks| !blocks.is_empty());
+                let model_event_sender_for_surface = model_event_sender.clone();
+                let window_id = ctx.window_id();
+                let (terminal_manager, terminal_view) = LocalTtyTerminalManager::<TerminalView>::create_model(
                     startup_directory,
                     env_vars,
                     is_shared_session,
-                    resources,
-                    restored_blocks,
-                    conversation_restoration,
+                    all_restored_blocks.as_ref(),
                     user_default_shell_unsupported_banner_model_handle,
                     initial_size,
                     model_event_sender,
-                    ctx.window_id(),
                     chosen_shell,
-                    initial_input_config,
                     ctx,
+                    |wakeups_rx,
+                     model_events,
+                     model,
+                     sessions,
+                     size_info,
+                     colors,
+                     inactive_pty_reads_rx,
+                     ctx| {
+                        create_terminal_view_surface(
+                            resources,
+                            model_event_sender_for_surface,
+                            window_id,
+                            initial_input_config,
+                            conversation_restoration,
+                            has_conversation_restoration,
+                            is_historical,
+                            should_use_live_appearance,
+                            has_restored_command_blocks,
+                            wakeups_rx,
+                            model_events,
+                            model,
+                            sessions,
+                            size_info,
+                            colors,
+                            inactive_pty_reads_rx,
+                            ctx,
+                        )
+                    },
                 );
             } else {
                 use crate::terminal::{ShellLaunchState, shell::{ShellName, ShellType}};

@@ -45,7 +45,9 @@ use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::local_tty::docker_sandbox::DOCKER_SANDBOX_HOME_DIR;
 #[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
-use crate::terminal::local_tty::TerminalManager as LocalTtyTerminalManager;
+use crate::terminal::local_tty::{
+    create_terminal_view_surface, TerminalManager as LocalTtyTerminalManager,
+};
 #[cfg(feature = "remote_tty")]
 use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
 #[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
@@ -96,20 +98,46 @@ fn create_docker_sandbox_view(
                 DEFAULT_DOCKER_SANDBOX_BASE_IMAGE.map(str::to_owned),
             ));
 
-            let (terminal_manager, terminal_view) = LocalTtyTerminalManager::create_model(
+            let model_event_sender_for_surface = model_event_sender.clone();
+            let window_id = ctx.window_id();
+            let (terminal_manager, terminal_view) = LocalTtyTerminalManager::<TerminalView>::create_model(
                 None,
                 HashMap::new(),
                 IsSharedSessionCreator::No,
-                resources,
                 None, /* restored_blocks */
-                None, /* conversation_restoration */
                 user_default_shell_unsupported_banner_model_handle,
                 initial_size,
                 model_event_sender,
-                ctx.window_id(),
                 chosen_shell,
-                None, /* initial_input_config */
                 ctx,
+                |wakeups_rx,
+                 model_events,
+                 model,
+                 sessions,
+                 size_info,
+                 colors,
+                 inactive_pty_reads_rx,
+                 ctx| {
+                    create_terminal_view_surface(
+                        resources,
+                        model_event_sender_for_surface,
+                        window_id,
+                        None, /* initial_input_config */
+                        None, /* conversation_restoration */
+                        false, /* has_conversation_restoration */
+                        false, /* is_historical */
+                        false, /* should_use_live_appearance */
+                        false, /* has_restored_command_blocks */
+                        wakeups_rx,
+                        model_events,
+                        model,
+                        sessions,
+                        size_info,
+                        colors,
+                        inactive_pty_reads_rx,
+                        ctx,
+                    )
+                },
             );
         } else {
             log::info!("USING MOCK TERMINAL MANAGER!!!!!");
