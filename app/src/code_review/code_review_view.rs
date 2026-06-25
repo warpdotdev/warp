@@ -685,6 +685,9 @@ pub struct CodeReviewView {
     /// Pre-constructed fallback used when a dir path is absent from `dir_mouse_states`.
     /// Created during construction so no `MouseStateHandle` is ever allocated during render.
     sidebar_dir_fallback_mouse_state: MouseStateHandle,
+    /// Pre-constructed fallback for file rows whose path is absent from `file_states`.
+    /// Mirrors `sidebar_dir_fallback_mouse_state` — never allocated during render.
+    sidebar_file_fallback_mouse_state: MouseStateHandle,
 }
 
 impl CodeReviewView {
@@ -1379,6 +1382,7 @@ impl CodeReviewView {
             dir_mouse_states: HashMap::new(),
             cached_sidebar_tree: Vec::new(),
             sidebar_dir_fallback_mouse_state: MouseStateHandle::default(),
+            sidebar_file_fallback_mouse_state: MouseStateHandle::default(),
         };
         view.set_active_repo_comment_model(comment_batch_model, ctx);
         if has_repo {
@@ -2586,8 +2590,8 @@ impl CodeReviewView {
         );
 
         // Rebuild the sidebar file-tree state (expanded dirs + mouse handles) whenever
-        // a new diff is loaded.  New directories default to expanded; previously expanded
-        // paths stay expanded even if the tree changes slightly between loads.
+        // a new diff is loaded.  All directories default to expanded on each reload;
+        // any previously collapsed directory will also be re-expanded.
         if let Some(repo) = self.active_repo.as_ref() {
             if let CodeReviewViewState::Loaded(state) = &repo.state {
                 let tree = file_tree::build_code_review_tree(&state.file_states);

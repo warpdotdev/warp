@@ -352,11 +352,14 @@ impl CodeReviewView {
         state: &LoadedState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
+        // file_states always contains entries for every file in the loaded diff.
+        // The fallback uses a handle created once during construction (never during render),
+        // satisfying the WarpUI constraint that MouseStateHandles are not allocated per frame.
         let mouse_state = state
             .file_states
             .get(file_path)
             .map(|fs| fs.sidebar_mouse_state.clone())
-            .unwrap_or_default();
+            .unwrap_or_else(|| self.sidebar_file_fallback_mouse_state.clone());
 
         let file_name = name.to_string();
 
