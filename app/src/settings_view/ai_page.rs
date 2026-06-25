@@ -9117,7 +9117,7 @@ impl SettingsWidget for CustomModelRoutersWidget {
                 }
                 #[cfg(not(feature = "local_fs"))]
                 {
-                    warpui::elements::Empty.finish()
+                    warpui::elements::Empty::finish()
                 }
             })
             .finish();
