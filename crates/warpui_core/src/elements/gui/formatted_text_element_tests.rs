@@ -404,6 +404,13 @@ fn single_left_click_at(x: f32) -> Event {
     }
 }
 
+fn left_mouse_up_at(x: f32) -> Event {
+    Event::LeftMouseUp {
+        position: vec2f(x, 5.0),
+        modifiers: Default::default(),
+    }
+}
+
 /// A single click on a hyperlink must be reported as handled by `dispatch_event` so an enclosing
 /// `SelectableArea` does not also treat the press as the start of a text selection. When it
 /// didn't (the regression), the selection path fired its selection handler on the same press and
@@ -454,6 +461,37 @@ fn single_click_on_link_is_handled_so_selection_is_not_started() {
                 *clicks.borrow(),
                 1,
                 "clicking off the link should not fire the link handler"
+            );
+
+            // The matching mouse-up over the link must also be reported as handled so the
+            // enclosing SelectableArea does not run its mouse-up selection handler (which would
+            // dismiss the link tooltip the press opened). The release must not re-fire the click.
+            let up_on_link = element.dispatch_event(
+                &DispatchedEvent::from(left_mouse_up_at(TEST_GLYPH_ADVANCE / 2.0)),
+                &mut event_ctx,
+                ctx,
+            );
+            assert!(
+                up_on_link,
+                "a mouse-up over a link should be reported as handled"
+            );
+            assert_eq!(
+                *clicks.borrow(),
+                1,
+                "the mouse-up must not re-fire the link click handler"
+            );
+
+            // A mouse-up that misses every clickable range stays unhandled so selection finalizes.
+            let up_off_link = element.dispatch_event(
+                &DispatchedEvent::from(left_mouse_up_at(
+                    6.0 * TEST_GLYPH_ADVANCE + TEST_GLYPH_ADVANCE / 2.0,
+                )),
+                &mut event_ctx,
+                ctx,
+            );
+            assert!(
+                !up_off_link,
+                "a mouse-up off any link should not be reported as handled"
             );
         });
     });
