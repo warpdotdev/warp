@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
-use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use anyhow::Result;
 use cfg_if::cfg_if;
 use itertools::Itertools;
@@ -25,11 +24,10 @@ use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Border, ChildAnchor, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
 };
-use warpui::keymap::{EditableBinding, FixedBinding, Keystroke};
+use warpui::keymap::{EditableBinding, FixedBinding};
 use warpui::platform::{WindowBounds, WindowStyle};
 use warpui::presenter::ChildView;
 use warpui::rendering::OnGPUDeviceSelected;
-use warpui::ui_components::components::UiComponentStyles;
 use warpui::windowing::WindowManager;
 use warpui::{
     id, AddWindowOptions, AppContext, DisplayId, Element, Entity, EntityId, FocusContext,
@@ -52,7 +50,6 @@ use crate::auth::auth_view_modal::{AuthRedirectPayload, AuthView, AuthViewVarian
 use crate::auth::login_slide::{LoginSlideEvent, LoginSlideSource, LoginSlideView};
 use crate::auth::needs_sso_link_view::NeedsSsoLinkView;
 use crate::auth::paste_auth_token_modal::{PasteAuthTokenModalEvent, PasteAuthTokenModalView};
-use crate::auth::provider_keys_modal::{ProviderKeysModalEvent, ProviderKeysModalView};
 #[cfg(target_family = "wasm")]
 use crate::auth::web_handoff::{WebHandoffEvent, WebHandoffView};
 use crate::auth::{AuthStateProvider, LoginFailureReason};
@@ -68,7 +65,6 @@ use crate::features::FeatureFlag;
 use crate::interval_timer::IntervalTimer;
 use crate::launch_configs::launch_config;
 use crate::linear::LinearIssueWork;
-use crate::modal::{Modal, ModalEvent};
 use crate::notebooks::manager::NotebookSource;
 use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::persistence::ModelEvent;
@@ -81,7 +77,6 @@ use crate::settings::cloud_preferences_syncer::{
     CloudPreferencesSyncer, CloudPreferencesSyncerEvent,
 };
 use crate::settings::{apply_onboarding_settings, AISettings, QuakeModeSettings, ThemeSettings};
-use crate::settings_view::custom_inference_modal::{CustomEndpointModal, CustomEndpointModalEvent};
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::settings_view::{flags, OpenTeamsSettingsModalArgs, SettingsSection};
 use crate::terminal::available_shells::AvailableShell;
@@ -1626,10 +1621,6 @@ pub struct RootView {
     /// settings to apply after a new user login / initial cloud load completes
     pending_post_auth_onboarding_settings: Option<SelectedSettings>,
     paste_auth_token_modal: Option<ViewHandle<PasteAuthTokenModalView>>,
-    /// BYOK "Add API key" modal.
-    add_api_key_modal: Option<ViewHandle<ProviderKeysModalView>>,
-    /// BYOK "Add custom endpoint" modal — reuses the settings `CustomEndpointModal`.
-    add_custom_endpoint_modal: Option<ViewHandle<Modal<CustomEndpointModal>>>,
 }
 
 impl RootView {
@@ -1730,8 +1721,6 @@ impl RootView {
             pending_tutorial: None,
             pending_post_auth_onboarding_settings: None,
             paste_auth_token_modal: None,
-            add_api_key_modal: None,
-            add_custom_endpoint_modal: None,
         };
 
         match &root_view.auth_onboarding_state {
@@ -2007,30 +1996,6 @@ impl RootView {
             },
         );
 
-        // Gate the AI-access slide's "Next" on having a BYOK key/endpoint and
-        // surface how many are configured: seed from the current `ApiKeyManager`
-        // state and keep it in sync as the user adds keys/endpoints via the
-        // onboarding BYOK modals.
-        let keys = ApiKeyManager::as_ref(ctx).keys();
-        let (key_count, endpoint_count) = (keys.provider_key_count(), keys.custom_endpoints.len());
-        onboarding_view.update(ctx, |view, ctx| {
-            view.set_byok_status(key_count, endpoint_count, ctx);
-        });
-        let onboarding_view_for_keys = onboarding_view.clone();
-        ctx.subscribe_to_model(
-            &ApiKeyManager::handle(ctx),
-            move |_, api_key_manager, event, ctx| {
-                if matches!(event, ApiKeyManagerEvent::KeysUpdated) {
-                    let keys = api_key_manager.as_ref(ctx).keys();
-                    let (key_count, endpoint_count) =
-                        (keys.provider_key_count(), keys.custom_endpoints.len());
-                    onboarding_view_for_keys.update(ctx, |view, ctx| {
-                        view.set_byok_status(key_count, endpoint_count, ctx);
-                    });
-                }
-            },
-        );
-
         ctx.subscribe_to_view(&onboarding_view, |me, _view, event, ctx| {
             me.handle_agent_onboarding_event(event, ctx);
         });
@@ -2282,144 +2247,6 @@ impl RootView {
                 });
                 ctx.focus(&modal);
                 self.paste_auth_token_modal = Some(modal);
-                ctx.notify();
-            }
-            AgentOnboardingEvent::AddApiKeyRequested => {
-                // Pre-fill the modal with any keys the user already saved so they
-                // persist across reopens and can be edited or cleared in place.
-                let existing = ApiKeyManager::as_ref(ctx).keys();
-                let (openai, anthropic, google) = (
-                    existing.openai.clone(),
-                    existing.anthropic.clone(),
-                    existing.google.clone(),
-                );
-                let modal = ctx.add_typed_action_view(move |ctx| {
-                    ProviderKeysModalView::new(openai, anthropic, google, ctx)
-                });
-                ctx.subscribe_to_view(&modal, |me, _, event, ctx| match event {
-                    ProviderKeysModalEvent::Cancelled => {
-                        me.add_api_key_modal = None;
-                        me.focus(ctx);
-                        ctx.notify();
-                    }
-                    ProviderKeysModalEvent::Save {
-                        openai,
-                        anthropic,
-                        google,
-                    } => {
-                        let (openai, anthropic, google) =
-                            (openai.clone(), anthropic.clone(), google.clone());
-                        // Replace rather than merge so an emptied field clears the
-                        // stored key, keeping the saved state and the modal in sync.
-                        ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                            manager.set_openai_key(openai, ctx);
-                            manager.set_anthropic_key(anthropic, ctx);
-                            manager.set_google_key(google, ctx);
-                        });
-                        me.add_api_key_modal = None;
-                        me.focus(ctx);
-                        ctx.notify();
-                    }
-                });
-                ctx.focus(&modal);
-                self.add_api_key_modal = Some(modal);
-                ctx.notify();
-            }
-            AgentOnboardingEvent::AddCustomEndpointRequested => {
-                // Pre-fill with the existing endpoint (if any) so its content
-                // persists across reopens and edits in place instead of silently
-                // adding a duplicate. Onboarding exposes a single endpoint; the
-                // settings page manages multiples later.
-                let existing = ApiKeyManager::as_ref(ctx)
-                    .keys()
-                    .custom_endpoints
-                    .first()
-                    .cloned();
-                let is_editing = existing.is_some();
-                let editing_index = is_editing.then_some(0);
-                let title = if is_editing {
-                    "Edit custom endpoint"
-                } else {
-                    "Add custom endpoint"
-                }
-                .to_string();
-                let body = ctx.add_typed_action_view(move |ctx| {
-                    CustomEndpointModal::new(existing.as_ref(), editing_index, ctx)
-                });
-                ctx.subscribe_to_view(&body, |me, _, event, ctx| match event {
-                    CustomEndpointModalEvent::Close => {
-                        me.add_custom_endpoint_modal = None;
-                        me.focus(ctx);
-                        ctx.notify();
-                    }
-                    CustomEndpointModalEvent::AddEndpoint {
-                        name,
-                        url,
-                        api_key,
-                        models,
-                    } => {
-                        let (name, url, api_key, models) =
-                            (name.clone(), url.clone(), api_key.clone(), models.clone());
-                        ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                            manager.add_custom_endpoint(name, url, api_key, models, ctx);
-                        });
-                        me.add_custom_endpoint_modal = None;
-                        me.focus(ctx);
-                        ctx.notify();
-                    }
-                    CustomEndpointModalEvent::SaveEndpoint {
-                        index,
-                        name,
-                        url,
-                        api_key,
-                        models,
-                    } => {
-                        let (index, name, url, api_key, models) = (
-                            *index,
-                            name.clone(),
-                            url.clone(),
-                            api_key.clone(),
-                            models.clone(),
-                        );
-                        ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                            manager.save_custom_endpoint(index, name, url, api_key, models, ctx);
-                        });
-                        me.add_custom_endpoint_modal = None;
-                        me.focus(ctx);
-                        ctx.notify();
-                    }
-                    CustomEndpointModalEvent::RemoveEndpoint { index } => {
-                        let index = *index;
-                        ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                            manager.remove_custom_endpoint(index, ctx);
-                        });
-                        me.add_custom_endpoint_modal = None;
-                        me.focus(ctx);
-                        ctx.notify();
-                    }
-                });
-
-                let body_for_modal = body.clone();
-                let modal = ctx.add_typed_action_view(move |ctx| {
-                    Modal::new(Some(title), body_for_modal, ctx)
-                        .with_modal_style(UiComponentStyles {
-                            width: Some(560.),
-                            height: Some(600.),
-                            ..Default::default()
-                        })
-                        .with_background_opacity(100)
-                        .with_dismiss_on_click()
-                        .with_dismiss_keystroke(Keystroke::parse("escape").unwrap_or_default())
-                });
-                ctx.subscribe_to_view(&modal, |me, _, event, ctx| match event {
-                    ModalEvent::Close => {
-                        me.add_custom_endpoint_modal = None;
-                        me.focus(ctx);
-                        ctx.notify();
-                    }
-                });
-                body.update(ctx, |body, ctx| body.on_open(ctx));
-                self.add_custom_endpoint_modal = Some(modal);
                 ctx.notify();
             }
             AgentOnboardingEvent::PrivacySettingsFromTerminalThemeSlideRequested => {
@@ -3422,10 +3249,7 @@ impl View for RootView {
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
         if focus_ctx.is_self_focused() {
             self.focus(ctx);
-        } else if self.paste_auth_token_modal.is_some()
-            || self.add_api_key_modal.is_some()
-            || self.add_custom_endpoint_modal.is_some()
-        {
+        } else if self.paste_auth_token_modal.is_some() {
             // Modal is open — focus belongs to the editor inside it.
         } else if matches!(
             self.auth_onboarding_state,
@@ -3471,14 +3295,6 @@ impl View for RootView {
         stack.add_child(child);
 
         if let Some(modal) = &self.paste_auth_token_modal {
-            stack.add_child(ChildView::new(modal).finish());
-        }
-
-        if let Some(modal) = &self.add_api_key_modal {
-            stack.add_child(ChildView::new(modal).finish());
-        }
-
-        if let Some(modal) = &self.add_custom_endpoint_modal {
             stack.add_child(ChildView::new(modal).finish());
         }
 

@@ -66,8 +66,6 @@ pub enum AgentOnboardingEvent {
     UpgradeRequested,
     UpgradeCopyUrlRequested,
     UpgradePasteTokenFromClipboardRequested,
-    AddApiKeyRequested,
-    AddCustomEndpointRequested,
     /// Emitted when the app regains focus (e.g. user returns from the browser).
     /// The parent should refresh any stale data: available models, workspace/billing metadata, etc.
     AppBecameActive,
@@ -228,12 +226,6 @@ impl AgentOnboardingView {
         };
 
         ctx.subscribe_to_view(&ai_access_slide, |_me, _view, event, ctx| match event {
-            AiAccessSlideEvent::AddApiKeyRequested => {
-                ctx.emit(AgentOnboardingEvent::AddApiKeyRequested);
-            }
-            AiAccessSlideEvent::AddCustomEndpointRequested => {
-                ctx.emit(AgentOnboardingEvent::AddCustomEndpointRequested);
-            }
             AiAccessSlideEvent::CopyUpgradeUrlRequested => {
                 ctx.emit(AgentOnboardingEvent::UpgradeCopyUrlRequested);
             }
@@ -319,20 +311,6 @@ impl AgentOnboardingView {
             state.set_auth_state(auth_state, ctx);
         });
         ctx.notify();
-    }
-
-    /// Updates how many BYOK provider keys and custom endpoints the user has
-    /// configured. This drives the AI-access slide's "connected" status line and
-    /// gates "Next" on the bring-your-own path.
-    pub fn set_byok_status(
-        &mut self,
-        key_count: usize,
-        endpoint_count: usize,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.ai_access_slide.update(ctx, |slide, ctx| {
-            slide.set_byok_status(key_count, endpoint_count, ctx);
-        });
     }
 
     /// The current `use_vertical_tabs` value on the onboarding UI customization.
