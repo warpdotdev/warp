@@ -2007,3 +2007,22 @@ impl TerminalManagerTrait for TerminalManager<TerminalView> {
         self
     }
 }
+
+/// Send a Shutdown event to each PTY's event loop and waits for the
+/// event loop to terminate.
+/// This is needed on Windows to ensure all OpenConsole processes are
+/// cleaned up before the main thread exits.
+#[cfg(windows)]
+pub fn shutdown_all_pty_event_loops(ctx: &mut AppContext) {
+    let terminal_managers: Vec<ModelHandle<Box<dyn TerminalManagerTrait>>> = ctx.models_of_type();
+    terminal_managers.into_iter().for_each(|terminal_manager| {
+        terminal_manager.update(ctx, |terminal_manager, _ctx| {
+            if let Some(manager) = terminal_manager
+                .as_any_mut()
+                .downcast_mut::<TerminalManager<TerminalView>>()
+            {
+                manager.shutdown_event_loop();
+            }
+        })
+    })
+}

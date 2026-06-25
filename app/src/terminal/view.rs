@@ -395,8 +395,8 @@ use crate::terminal::cli_agent_sessions::{
 use crate::terminal::color::List;
 use crate::terminal::command_corrections_denylist::COMMAND_CORRECTIONS_PREFERRED_DENYLIST;
 use crate::terminal::event::{
-    AfterBlockCompletedEvent, BlockCompletedEvent, BlockLatencyData, BlockType,
-    RemoteServerSetupState, TerminalMode, UserBlockCompleted,
+    AfterBlockCompletedEvent, BlockLatencyData, BlockType, RemoteServerSetupState, TerminalMode,
+    UserBlockCompleted,
 };
 use crate::terminal::find::{BlockGridMatch, BlockListMatch, TerminalFindModel};
 use crate::terminal::general_settings::GeneralSettings;
@@ -25754,6 +25754,7 @@ impl PtyIntentEvent for Event {
 }
 
 impl TerminalSurface for TerminalView {
+    #[cfg(feature = "local_tty")]
     fn on_shell_determined(&mut self, ctx: &mut ViewContext<Self>) {
         if !self.model.lock().shared_session_status().is_viewer() {
             // Start a timer for the initial session bootstrapping, so that we can log and show a
@@ -25783,6 +25784,7 @@ impl TerminalSurface for TerminalView {
         });
     }
 
+    #[cfg(feature = "local_tty")]
     fn on_pty_spawn_failed(&mut self, error: anyhow::Error, ctx: &mut ViewContext<Self>) {
         self.pty_spawn_failed = true;
         // Emit before the banner so the terminal driver can cancel its
@@ -25813,7 +25815,7 @@ impl TerminalSurface for TerminalView {
         password_notification_setting_on || pane_handling_ssh_upload
     }
     #[cfg(unix)]
-    fn should_stop_password_prompt_polling(&self, completed: &BlockCompletedEvent) -> bool {
+    fn should_stop_password_prompt_polling(&self, completed: &AfterBlockCompletedEvent) -> bool {
         matches!(
             &completed.block_type,
             BlockType::User(_) | BlockType::BootstrapVisible(_) | BlockType::Background(_)
@@ -25849,7 +25851,7 @@ impl TerminalSurface for TerminalView {
     #[cfg(unix)]
     fn on_polled_block_completed(
         &mut self,
-        completed: &BlockCompletedEvent,
+        completed: &AfterBlockCompletedEvent,
         ctx: &mut ViewContext<Self>,
     ) {
         if !self.is_ssh_uploader() {

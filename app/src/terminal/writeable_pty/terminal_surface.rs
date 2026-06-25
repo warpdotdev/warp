@@ -7,7 +7,7 @@ use warpui::{Entity, View, ViewContext};
 
 use crate::ai::agent::AIAgentPtyWriteMode;
 #[cfg(unix)]
-use crate::terminal::event::BlockCompletedEvent;
+use crate::terminal::event::AfterBlockCompletedEvent;
 use crate::terminal::model::completions::ShellCompletion;
 #[cfg(unix)]
 use crate::terminal::model::terminal_model::BlockIndex;
@@ -57,10 +57,11 @@ where
 
     /// Whether the local manager should stop password-prompt polling for this completed block.
     #[cfg(unix)]
-    fn should_stop_password_prompt_polling(&self, completed: &BlockCompletedEvent) -> bool;
+    fn should_stop_password_prompt_polling(&self, completed: &AfterBlockCompletedEvent) -> bool;
 
     /// Called once the shell starter has been determined and the PTY event loop
     /// has started, so the surface can react to shell launch metadata.
+    #[cfg(feature = "local_tty")]
     fn on_shell_determined(&mut self, ctx: &mut ViewContext<Self>);
 
     /// Called when the active shell launch data is updated (e.g. shell indicator metadata).
@@ -71,6 +72,7 @@ where
     );
 
     /// Called when the PTY fails to spawn so the surface can surface the error.
+    #[cfg(feature = "local_tty")]
     fn on_pty_spawn_failed(&mut self, error: anyhow::Error, ctx: &mut ViewContext<Self>);
 
     /// Called when termios indicates a likely password prompt is blocking the active block.
@@ -85,7 +87,7 @@ where
     #[cfg(unix)]
     fn on_polled_block_completed(
         &mut self,
-        completed: &BlockCompletedEvent,
+        completed: &AfterBlockCompletedEvent,
         ctx: &mut ViewContext<Self>,
     );
 }

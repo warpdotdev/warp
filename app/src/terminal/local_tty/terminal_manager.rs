@@ -45,7 +45,9 @@ use crate::terminal::model::session::Sessions;
 #[cfg(unix)]
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model::terminal_model::ExitReason;
-use crate::terminal::model_events::{ModelEvent as TerminalModelEvent, ModelEventDispatcher};
+#[cfg(unix)]
+use crate::terminal::model_events::ModelEvent as TerminalModelEvent;
+use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::session_settings::{SessionSettings, ToolbarChipSelection};
 use crate::terminal::shared_session::sharer::network::Network;
 use crate::terminal::shared_session::{IsSharedSessionCreator, SharedSessionStatus};
@@ -127,6 +129,7 @@ pub(crate) struct TerminalSurfaceResult<S, PostWire> {
 struct ShellStartupResources {
     event_loop_rx: mio_channel::Receiver<Message>,
     channel_event_proxy: ChannelEventListener,
+    #[cfg(unix)]
     model_events: ModelHandle<ModelEventDispatcher>,
 }
 
@@ -310,6 +313,7 @@ impl<S> TerminalManager<S> {
         let shell_startup_resources = ShellStartupResources {
             event_loop_rx,
             channel_event_proxy,
+            #[cfg(unix)]
             model_events,
         };
 
@@ -366,7 +370,7 @@ impl<S> TerminalManager<S> {
 
     /// Sends a shutdown message to the PTY event loop and waits for it to
     /// process that event.
-    fn shutdown_event_loop(&mut self) {
+    pub(super) fn shutdown_event_loop(&mut self) {
         let shutdown_res = self.event_loop_tx.lock().send(Message::Shutdown);
         // Happens normally if the event loop has already been terminated (so the channel is now gone).
         if let Err(e) = shutdown_res {
@@ -496,6 +500,7 @@ fn on_shell_determined<S: TerminalSurface>(
     let ShellStartupResources {
         event_loop_rx,
         channel_event_proxy,
+        #[cfg(unix)]
         model_events,
     } = shell_startup_resources;
     let model = manager.model();
@@ -755,7 +760,7 @@ fn wire_up_terminal_attribute_poller_with_surface<S: TerminalSurface>(
                     *block_index.borrow_mut() = None;
                 }
             }
-            TerminalModelEvent::BlockCompleted(completed) => {
+            TerminalModelEvent::AfterBlockCompleted(completed) => {
                 if let Some(surface) = surface_weak_handle.upgrade(ctx) {
                     let should_stop = surface.read(ctx, |surface, _ctx| {
                         surface.should_stop_password_prompt_polling(completed)
@@ -859,26 +864,6 @@ fn get_shell_starter_internal(
             ShellStarter::Direct(starter)
         }
     }
-}
-
-/// Send a Shutdown event to each PTY's event loop and waits for the
-/// event loop to terminate.
-/// This is needed on Windows to ensure all OpenConsole processes are
-/// cleaned up before the main thread exits.
-#[cfg(windows)]
-pub fn shutdown_all_pty_event_loops(ctx: &mut AppContext) {
-    let terminal_managers: Vec<ModelHandle<Box<dyn crate::terminal::TerminalManager>>> =
-        ctx.models_of_type();
-    terminal_managers.into_iter().for_each(|terminal_manager| {
-        terminal_manager.update(ctx, |terminal_manager, _ctx| {
-            if let Some(manager) = terminal_manager
-                .as_any_mut()
-                .downcast_mut::<TerminalManager<TerminalView>>()
-            {
-                manager.shutdown_event_loop();
-            }
-        })
-    })
 }
 
 impl EventLoopSender for mio_channel::Sender<Message> {
