@@ -57,17 +57,22 @@ pub fn descendant_conversation_ids_in_spawn_order(
 }
 
 /// Returns true when any loaded descendant of `parent_id` is actively running.
+///
+/// Unlike [`aggregated_orchestrator_status`], this excludes `parent_id` and
+/// ignores display-specific status precedence.
 pub fn has_in_progress_descendant_conversation(
     history: &BlocklistAIHistoryModel,
     parent_id: AIConversationId,
 ) -> bool {
-    history
-        .child_conversation_ids_of(&parent_id)
-        .iter()
-        .any(|child_id| {
-            history.conversation(child_id).is_some_and(|conversation| {
-                conversation.status().is_in_progress() || conversation.status().is_transient_error()
-            }) || has_in_progress_descendant_conversation(history, *child_id)
+    descendant_conversation_ids_in_spawn_order(history, parent_id)
+        .into_iter()
+        .any(|descendant_id| {
+            history
+                .conversation(&descendant_id)
+                .is_some_and(|conversation| {
+                    conversation.status().is_in_progress()
+                        || conversation.status().is_transient_error()
+                })
         })
 }
 

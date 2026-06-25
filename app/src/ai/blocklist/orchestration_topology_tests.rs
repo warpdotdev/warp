@@ -459,18 +459,27 @@ fn has_in_progress_descendant_conversation_matches_running_children_only() {
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let (terminal_view_id, orchestrator_id, child_a, child_b) =
             build_orchestrator_with_two_children(&mut app, &history_model);
+        let grandchild = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "grandchild".to_string(),
+                child_a,
+                None,
+                ctx,
+            )
+        });
 
         history_model.update(&mut app, |history_model, ctx| {
             history_model.update_conversation_status(
                 terminal_view_id,
                 orchestrator_id,
-                ConversationStatus::Success,
+                ConversationStatus::InProgress,
                 ctx,
             );
             history_model.update_conversation_status(
                 terminal_view_id,
                 child_a,
-                ConversationStatus::Success,
+                ConversationStatus::WaitingForEvents,
                 ctx,
             );
             history_model.update_conversation_status(
@@ -479,6 +488,12 @@ fn has_in_progress_descendant_conversation_matches_running_children_only() {
                 ConversationStatus::Blocked {
                     blocked_action: "approve_command".to_string(),
                 },
+                ctx,
+            );
+            history_model.update_conversation_status(
+                terminal_view_id,
+                grandchild,
+                ConversationStatus::Success,
                 ctx,
             );
         });
@@ -493,7 +508,7 @@ fn has_in_progress_descendant_conversation_matches_running_children_only() {
         history_model.update(&mut app, |history_model, ctx| {
             history_model.update_conversation_status(
                 terminal_view_id,
-                child_b,
+                grandchild,
                 ConversationStatus::TransientError,
                 ctx,
             );
