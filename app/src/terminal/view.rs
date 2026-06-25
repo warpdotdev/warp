@@ -8701,10 +8701,18 @@ impl TerminalView {
     /// Returns `true` if focus is inside any AI block (e.g. the user is arrowing
     /// through a code diff's hunks).
     fn is_any_ai_block_focused(&self, ctx: &mut ViewContext<Self>) -> bool {
+        let window_id = ctx.window_id();
+        let Some(focused_id) = ctx.focused_view_id(window_id) else {
+            return false;
+        };
+        let ancestors: HashSet<_> = ctx
+            .view_ancestors(window_id, focused_id)
+            .into_iter()
+            .collect();
         self.rich_content_views.iter().any(|rich_content| {
             rich_content
                 .ai_block_metadata()
-                .is_some_and(|metadata| metadata.ai_block_handle.is_self_or_child_focused(ctx))
+                .is_some_and(|metadata| ancestors.contains(&metadata.ai_block_handle.id()))
         })
     }
 
