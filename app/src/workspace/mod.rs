@@ -48,7 +48,6 @@ use crate::ai::blocklist::NEW_AGENT_PANE_LABEL;
 use crate::channel::{Channel, ChannelState};
 use crate::features::FeatureFlag;
 use crate::palette::PaletteMode;
-use crate::pane_group::TabBarHoverIndex;
 use crate::server::telemetry::{AgentModeEntrypoint, PaletteSource};
 use crate::settings_view::{self, flags, SettingsSection};
 use crate::tab::{uses_vertical_tabs, NewSessionMenuItem};
@@ -1683,7 +1682,6 @@ pub struct TabBarDropTargetData {
 #[derive(PartialEq, Copy, Clone, Debug)]
 pub struct VerticalTabsPaneDropTargetData {
     pub tab_bar_location: TabBarLocation,
-    pub tab_hover_index: TabBarHoverIndex,
 }
 
 #[derive(PartialEq, Copy, Clone, Debug, Serialize, Deserialize)]

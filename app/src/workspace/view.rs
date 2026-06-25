@@ -119,8 +119,8 @@ use warpui::{
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
     htab_group_position_id, pane_summary_kind, render_detail_sidecar, render_settings_popup,
-    render_summary_pane_kind_icons, vtab_group_position_id, SummaryPaneKind, SummaryPaneKindIcons,
-    VerticalTabsPanelState, VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
+    render_summary_pane_kind_icons, show_before_indicator, vtab_group_position_id, SummaryPaneKind,
+    SummaryPaneKindIcons, VerticalTabsPanelState, VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use super::action::AutoCloudHandoffTrigger;
@@ -16347,7 +16347,10 @@ impl Workspace {
             pane_group::Event::DroppedOnTabBar { origin, pane_id } => {
                 if let Some(hovered_tab_index) = self.hovered_tab_index {
                     match hovered_tab_index {
-                        TabBarHoverIndex::BeforeTab(workspace_tab_index) => {
+                        TabBarHoverIndex::BeforeTab {
+                            index: workspace_tab_index,
+                            group,
+                        } => {
                             // If an editor tab is dropped into a new position in the workspace tab group,
                             // create a new pane and insert it into the group.
                             let pane = if let ActionOrigin::EditorTab(editor_tab_index) = origin {
@@ -16366,11 +16369,19 @@ impl Workspace {
                             };
 
                             if let Some(pane) = pane {
-                                // TODO(johnturcoo) inherit the tab group on pane drop.
+                                // `index`/`group` are already resolved by
+                                // `refine_hovered_tab_index` (group inheritance +
+                                // pinned clamping for vertical tabs), so use them
+                                // as-is. Grouping off => never inherit a group.
+                                let inherited_group = if FeatureFlag::GroupedTabs.is_enabled() {
+                                    group
+                                } else {
+                                    None
+                                };
                                 self.add_tab_from_existing_pane(
                                     pane,
                                     workspace_tab_index,
-                                    None,
+                                    inherited_group,
                                     ctx,
                                 );
 
@@ -16579,8 +16590,12 @@ impl Workspace {
                     });
                 }
             }
-            pane_group::Event::UpdateHoveredTabIndex { tab_hover_index } => {
-                self.hovered_tab_index = Some(*tab_hover_index);
+            pane_group::Event::UpdateHoveredTabIndex {
+                tab_hover_index,
+                drag_position,
+            } => {
+                self.hovered_tab_index =
+                    Some(self.refine_hovered_tab_index(*tab_hover_index, *drag_position, ctx));
                 ctx.notify();
             }
             pane_group::Event::ClearHoveredTabIndex => self.hovered_tab_index = None,
@@ -19570,7 +19585,7 @@ impl Workspace {
             .as_ref()
             .is_some_and(|hovered_index| match hovered_index {
                 TabBarHoverIndex::OverTab(idx) => *idx == tab_index,
-                TabBarHoverIndex::BeforeTab(_) => false,
+                TabBarHoverIndex::BeforeTab { .. } => false,
             });
 
         TabComponent::new(
@@ -20702,14 +20717,9 @@ impl Workspace {
                     TabBarSlot::Single { index } => {
                         let i = *index;
                         let is_transferred = transferred_tab_index == Some(i);
-                        if !is_transferred
-                            && self
-                                .hovered_tab_index
-                                .as_ref()
-                                .is_some_and(|hovered_index| match hovered_index {
-                                    TabBarHoverIndex::BeforeTab(idx) => i == *idx,
-                                    TabBarHoverIndex::OverTab(_) => false,
-                                })
+                        // Single tabs are ungrouped, so their before-indicator
+                        // only matches an ungrouped insertion.
+                        if !is_transferred && show_before_indicator(self.hovered_tab_index, i, None)
                         {
                             tab_bar.add_child(self.render_tab_hover_indicator(appearance));
                         }
@@ -20736,14 +20746,7 @@ impl Workspace {
                 .is_some_and(|g| g.insertion_index == self.tabs.len())
             {
                 tab_bar.add_child(self.render_ghost_tab_slot(appearance, ctx));
-            } else if self
-                .hovered_tab_index
-                .as_ref()
-                .is_some_and(|hovered_index| match hovered_index {
-                    TabBarHoverIndex::BeforeTab(idx) => self.tabs.len() == *idx,
-                    TabBarHoverIndex::OverTab(_) => false,
-                })
-            {
+            } else if show_before_indicator(self.hovered_tab_index, self.tabs.len(), None) {
                 tab_bar.add_child(self.render_tab_hover_indicator(appearance));
             }
 
@@ -28334,6 +28337,85 @@ impl Workspace {
         }
 
         current_index
+    }
+
+    /// Resolves the tab group a `BeforeTab` insertion lands in, using the drag
+    /// cursor, for the vertical tabs panel. The header computes the bare
+    /// before/over/after from the hovered row's geometry; this fills in the
+    /// group from the workspace's own tab-group geometry (which the header can't
+    /// see) and clamps ungrouped insertions out of the pinned region. `OverTab`,
+    /// and any drag over the horizontal bar, are returned unchanged.
+    fn refine_hovered_tab_index(
+        &self,
+        hovered: TabBarHoverIndex,
+        drag_position: RectF,
+        ctx: &mut ViewContext<Self>,
+    ) -> TabBarHoverIndex {
+        let TabBarHoverIndex::BeforeTab { index, .. } = hovered else {
+            return hovered;
+        };
+        // Group-aware resolution + pinned clamping are scoped to the vertical
+        // tabs panel; the horizontal bar keeps its existing behavior.
+        if !uses_vertical_tabs(ctx) {
+            return hovered;
+        }
+        let group = if FeatureFlag::GroupedTabs.is_enabled() {
+            self.insertion_group(index, drag_position.center().y(), ctx)
+        } else {
+            None
+        };
+        // An ungrouped insertion can't land in the pinned region, so clamp it to
+        // the first unpinned slot so the indicator stays in sync with where the
+        // pane lands. A drop into a group inherits that group's pinned status.
+        let index = if FeatureFlag::PinnedTabs.is_enabled() && group.is_none() {
+            self.clamp_to_unpinned_region(&self.tabs, index)
+        } else {
+            index
+        };
+        TabBarHoverIndex::BeforeTab { index, group }
+    }
+
+    /// Returns the expanded tab group a `BeforeTab` insertion at `index` should
+    /// join in the vertical tabs panel, based on the drag cursor's Y against the
+    /// group's saved container rect. Collapsed groups are excluded (you can't
+    /// drop into one). "Before the group" is only the leading half of the
+    /// header; the in-group zone runs to the group's trailing edge so the last
+    /// slot is easy to hit.
+    fn insertion_group(
+        &self,
+        index: usize,
+        cursor_y: f32,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<TabGroupId> {
+        for (group_id, group) in &self.tab_groups {
+            if group.collapsed {
+                continue;
+            }
+            let Some((first, last)) = group_member_index_range(&self.tabs, *group_id) else {
+                continue;
+            };
+            // The insertion index must fall within this group's slots to join.
+            if index < first || index > last + 1 {
+                continue;
+            }
+            let Some(group_rect) = ctx.element_position_by_id(vtab_group_position_id(*group_id))
+            else {
+                continue;
+            };
+            let group_start = group_rect.min_y();
+            let group_end = group_rect.max_y();
+            // "Before the group" is the leading half of the header (before the
+            // first member's top edge); everything past that, to the group's
+            // bottom edge, joins the group.
+            let in_group_start = ctx
+                .element_position_by_id(tab_position_id(first))
+                .map(|first_rect| (group_start + first_rect.min_y()) / 2.)
+                .unwrap_or(group_start);
+            if cursor_y >= in_group_start && cursor_y <= group_end {
+                return Some(*group_id);
+            }
+        }
+        None
     }
 
     /// Returns the group the dragged tab is over along the active axis so it can

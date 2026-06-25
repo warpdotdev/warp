@@ -28,7 +28,9 @@ use crate::pane_group::pane::{
     ActionOrigin, PaneConfiguration, PaneConfigurationEvent, PaneStack, PaneStackEvent,
     ToolbeltButton,
 };
-use crate::pane_group::{BackingView, Direction, PaneDragDropLocation, PaneId, TabBarHoverIndex};
+use crate::pane_group::{
+    BackingView, Direction, PaneDragDropLocation, PaneId, TabBarAxis, TabBarHoverIndex,
+};
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{SharingDialogSource, TelemetryEvent};
 use crate::settings::CodeSettings;
@@ -67,6 +69,9 @@ pub enum Event<A: ActionPayload, B: ActionPayload> {
         origin: ActionOrigin,
         tab_hover_index: TabBarHoverIndex,
         hidden_pane_preview_direction: Direction,
+        /// Drag cursor rect, forwarded to the workspace so it can resolve which
+        /// tab group a `BeforeTab` insertion lands in.
+        drag_position: RectF,
     },
     /// The pane header was dragged over some part of the terminal that is not the pane group
     /// or tab bar
@@ -100,10 +105,10 @@ pub enum PaneHeaderAction<A: ActionPayload, B: ActionPayload> {
         origin: ActionOrigin,
         drag_location: PaneDragDropLocation,
         drag_position: RectF,
-        /// Precomputed by drop targets that already know the exact hover state,
-        /// such as vertical tabs. When absent, the hover index is derived from
-        /// the drag geometry and tab bar location.
-        precomputed_tab_hover_index: Option<TabBarHoverIndex>,
+        /// Axis for a tab-bar drag, so the header derives the hover index from
+        /// cursor geometry along the right axis. `None` for non-tab-bar drag
+        /// locations.
+        tab_bar_axis: Option<TabBarAxis>,
     },
     PaneHeaderDropped {
         origin: ActionOrigin,
@@ -334,18 +339,71 @@ impl<P: BackingView> PaneHeader<P> {
                     let tab_quarter_x = (tab_center_x + tab_rect.lower_left().x()) / 2.;
                     let tab_three_quarters_x = (tab_center_x + tab_rect.lower_right().x()) / 2.;
                     if drag_position.center().x() < tab_quarter_x {
-                        TabBarHoverIndex::BeforeTab(*idx)
+                        TabBarHoverIndex::BeforeTab {
+                            index: *idx,
+                            group: None,
+                        }
                     } else if drag_position.center().x() < tab_three_quarters_x {
                         TabBarHoverIndex::OverTab(*idx)
                     } else {
-                        TabBarHoverIndex::BeforeTab(*idx + 1)
+                        TabBarHoverIndex::BeforeTab {
+                            index: *idx + 1,
+                            group: None,
+                        }
                     }
                 } else {
                     // If for some reason we can't retrieve the tab position, just default to the index
                     TabBarHoverIndex::OverTab(*idx)
                 }
             }
-            TabBarLocation::AfterTabIndex(tab_count) => TabBarHoverIndex::BeforeTab(*tab_count),
+            TabBarLocation::AfterTabIndex(tab_count) => TabBarHoverIndex::BeforeTab {
+                index: *tab_count,
+                group: None,
+            },
+        }
+    }
+
+    /// Vertical-tabs variant of [`Self::calculate_tab_focus_hover_index`]:
+    /// splits the hovered tab row into quarters along the Y axis (top quarter
+    /// inserts before, middle half merges onto the tab, bottom quarter inserts
+    /// after).
+    fn calculate_vertical_tab_focus_hover_index(
+        drag_position: &RectF,
+        tab_bar_location: &TabBarLocation,
+        ctx: &ViewContext<Self>,
+    ) -> TabBarHoverIndex {
+        match tab_bar_location {
+            TabBarLocation::TabIndex(idx) => {
+                if let Some(tab_rect) = ctx.element_position_by_id(tab_position_id(*idx)) {
+                    let tab_center_y = tab_rect.center().y();
+                    let tab_quarter_y = (tab_center_y + tab_rect.min_y()) / 2.;
+                    let tab_three_quarters_y = (tab_center_y + tab_rect.max_y()) / 2.;
+                    let drag_y = drag_position.center().y();
+                    if drag_y < tab_quarter_y {
+                        TabBarHoverIndex::BeforeTab {
+                            index: *idx,
+                            group: None,
+                        }
+                    } else if drag_y < tab_three_quarters_y {
+                        TabBarHoverIndex::OverTab(*idx)
+                    } else {
+                        TabBarHoverIndex::BeforeTab {
+                            index: *idx + 1,
+                            group: None,
+                        }
+                    }
+                } else {
+                    // Default to index if we can not find the tab position.
+                    TabBarHoverIndex::BeforeTab {
+                        index: *idx,
+                        group: None,
+                    }
+                }
+            }
+            TabBarLocation::AfterTabIndex(tab_count) => TabBarHoverIndex::BeforeTab {
+                index: *tab_count,
+                group: None,
+            },
         }
     }
 }
@@ -890,26 +948,33 @@ impl<P: BackingView> TypedActionView for PaneHeader<P> {
                 origin,
                 drag_location,
                 drag_position,
-                precomputed_tab_hover_index,
+                tab_bar_axis,
             } => match drag_location {
                 PaneDragDropLocation::TabBar(tab_bar_location) => {
                     if matches!(origin, ActionOrigin::Pane) {
                         self.is_visible_in_pane_group = false;
                     }
+                    let axis = tab_bar_axis.unwrap_or(TabBarAxis::Horizontal);
+                    let tab_hover_index = match axis {
+                        TabBarAxis::Horizontal => Self::calculate_tab_focus_hover_index(
+                            drag_position,
+                            tab_bar_location,
+                            ctx,
+                        ),
+                        TabBarAxis::Vertical => Self::calculate_vertical_tab_focus_hover_index(
+                            drag_position,
+                            tab_bar_location,
+                            ctx,
+                        ),
+                    };
                     ctx.emit(Event::DraggedOverTabBar {
                         origin: *origin,
-                        tab_hover_index: precomputed_tab_hover_index.unwrap_or_else(|| {
-                            Self::calculate_tab_focus_hover_index(
-                                drag_position,
-                                tab_bar_location,
-                                ctx,
-                            )
-                        }),
-                        hidden_pane_preview_direction: if precomputed_tab_hover_index.is_some() {
-                            Direction::Up
-                        } else {
-                            Direction::Left
+                        tab_hover_index,
+                        hidden_pane_preview_direction: match axis {
+                            TabBarAxis::Vertical => Direction::Up,
+                            TabBarAxis::Horizontal => Direction::Left,
                         },
+                        drag_position: *drag_position,
                     });
                 }
                 PaneDragDropLocation::PaneGroup(target_id) => {
@@ -1036,7 +1101,7 @@ pub fn render_pane_header_draggable<P: BackingView>(
                     origin: ActionOrigin::Pane,
                     drag_location: PaneDragDropLocation::PaneGroup(pane_drop_data.id),
                     drag_position,
-                    precomputed_tab_hover_index: None,
+                    tab_bar_axis: None,
                 });
             } else if let Some(data) =
                 data.and_then(|data| data.as_any().downcast_ref::<TabBarDropTargetData>())
@@ -1048,7 +1113,7 @@ pub fn render_pane_header_draggable<P: BackingView>(
                     origin: ActionOrigin::Pane,
                     drag_location: PaneDragDropLocation::TabBar(data.tab_bar_location),
                     drag_position,
-                    precomputed_tab_hover_index: None,
+                    tab_bar_axis: Some(TabBarAxis::Horizontal),
                 })
             } else if let Some(data) = data.and_then(|data| {
                 data.as_any()
@@ -1061,7 +1126,7 @@ pub fn render_pane_header_draggable<P: BackingView>(
                     origin: ActionOrigin::Pane,
                     drag_location: PaneDragDropLocation::TabBar(data.tab_bar_location),
                     drag_position,
-                    precomputed_tab_hover_index: Some(data.tab_hover_index),
+                    tab_bar_axis: Some(TabBarAxis::Vertical),
                 })
             } else {
                 ctx.dispatch_typed_action(PaneHeaderAction::<
@@ -1071,7 +1136,7 @@ pub fn render_pane_header_draggable<P: BackingView>(
                     origin: ActionOrigin::Pane,
                     drag_location: PaneDragDropLocation::Other,
                     drag_position,
-                    precomputed_tab_hover_index: None,
+                    tab_bar_axis: None,
                 })
             }
         })
