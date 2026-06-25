@@ -2801,6 +2801,79 @@ fn test_tab_completion_with_spaces() {
     });
 }
 
+/// Regression test for issue #12990: a completion auto-opened for a slash
+/// command's empty argument (e.g. `/open-file`) must surface the suggestions
+/// menu without force-inserting the only matching result. The `Keybinding`
+/// trigger does insert a lone result, but the `SlashCommandArgument` trigger
+/// must not — otherwise clearing the argument back to empty immediately
+/// re-inserts the only file in the directory, making it impossible to delete.
+#[test]
+fn test_slash_command_argument_does_not_autofill_single_result() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        // The `/open-file ` prefix (with a trailing space) is 11 bytes, so the
+        // argument completion replacement span is anchored at the end.
+        let open_file_prefix = "/open-file ";
+        let replacement_span = (open_file_prefix.len(), open_file_prefix.len());
+
+        // Auto-opened slash-command argument completions with a single result
+        // should NOT modify the buffer; they only open the menu.
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert(open_file_prefix, ctx);
+            input.handle_completion_suggestions_results(
+                build_suggestion_results(
+                    vec![file_suggestion("test.md")],
+                    replacement_span,
+                    MatchStrategy::CaseInsensitive,
+                ),
+                CompletionsTrigger::SlashCommandArgument,
+                editor_model_snapshot(input, ctx),
+                ctx,
+            );
+        });
+        input.read(&app, |input, ctx| {
+            // The lone result was not inserted — the empty argument is preserved.
+            assert_eq!(input.buffer_text(ctx), open_file_prefix);
+            // ...and the suggestions menu is open so the user can still pick it.
+            assert!(matches!(
+                input.suggestions_mode_model.as_ref(ctx).mode(),
+                InputSuggestionsMode::CompletionSuggestions { .. }
+            ));
+        });
+
+        // Contrast: the `Keybinding` trigger (an explicit user request) DOES
+        // insert a lone result. This guards the distinction between the two
+        // triggers so the fix can't regress by routing both the same way.
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert(open_file_prefix, ctx);
+            input.handle_completion_suggestions_results(
+                build_suggestion_results(
+                    vec![file_suggestion("test.md")],
+                    replacement_span,
+                    MatchStrategy::CaseInsensitive,
+                ),
+                CompletionsTrigger::Keybinding,
+                editor_model_snapshot(input, ctx),
+                ctx,
+            );
+        });
+        input.read(&app, |input, ctx| {
+            assert_ne!(input.buffer_text(ctx), open_file_prefix);
+            assert!(input.buffer_text(ctx).contains("test.md"));
+        });
+    });
+}
+
 #[test]
 fn test_tab_completion() {
     App::test((), |mut app| async move {

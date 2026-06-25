@@ -2084,6 +2084,13 @@ pub fn init(app: &mut AppContext) {
 pub enum CompletionsTrigger {
     Keybinding,
     AsYouType,
+    /// Completions opened automatically for a slash command's argument (e.g.
+    /// the `/open-file` path argument). Unlike `Keybinding`, this must NOT
+    /// force-insert a lone result or auto-fill a common prefix — it only
+    /// surfaces the suggestions menu. Otherwise, clearing the argument back to
+    /// empty would immediately re-insert the only matching entry, making it
+    /// impossible to delete it (see issue #12990).
+    SlashCommandArgument,
 }
 
 /// Represents whether the input editor should render the subshell flag.
@@ -11864,7 +11871,9 @@ impl Input {
             && !buffer_text.contains('\n');
 
         let fallback_strategy = match completions_trigger {
-            CompletionsTrigger::Keybinding if !use_native_shell_completions => {
+            CompletionsTrigger::Keybinding | CompletionsTrigger::SlashCommandArgument
+                if !use_native_shell_completions =>
+            {
                 CompletionsFallbackStrategy::FilePaths
             }
             _ => CompletionsFallbackStrategy::None,

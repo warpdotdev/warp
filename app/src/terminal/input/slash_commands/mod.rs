@@ -269,7 +269,10 @@ impl Input {
                         .is_some_and(|argument| argument.is_empty())
                     && self.suggestions_mode_model.as_ref(ctx).is_closed()
                 {
-                    self.open_completion_suggestions(CompletionsTrigger::Keybinding, ctx);
+                    // Surface the file suggestions menu without force-inserting a
+                    // lone result, so that clearing the argument back to empty
+                    // doesn't immediately re-insert the only matching file (#12990).
+                    self.open_completion_suggestions(CompletionsTrigger::SlashCommandArgument, ctx);
                 }
             }
             SlashCommandEntryState::SkillCommand(detected_skill) => {
