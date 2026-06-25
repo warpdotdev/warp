@@ -4,12 +4,14 @@ use ::ai::api_keys::CustomEndpoint;
 use url::Url;
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
-    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Expanded, Flex, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+    Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Empty, Expanded, Fill, Flex, MainAxisSize, MouseStateHandle,
+    ParentElement, Radius, ScrollbarWidth, Text,
 };
 use warpui::fonts::FamilyId;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::units::Pixels;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -29,6 +31,7 @@ const INPUT_WIDTH: f32 = 480.;
 const MODEL_ROW_SPACING: f32 = 16.;
 const REMOVE_MODEL_BUTTON_COL_WIDTH: f32 = 32.;
 const MODEL_INPUT_WIDTH: f32 = (INPUT_WIDTH - MODEL_ROW_SPACING) / 2.;
+const FORM_SCROLL_MAX_HEIGHT: f32 = 410.;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CustomEndpointModalEvent {
@@ -75,6 +78,7 @@ pub struct CustomEndpointModal {
     cancel_button_mouse_state: MouseStateHandle,
     save_button_mouse_state: MouseStateHandle,
     add_model_button_mouse_state: MouseStateHandle,
+    form_scroll_state: ClippedScrollStateHandle,
     remove_endpoint_button: ViewHandle<ActionButton>,
     editing_index: Option<usize>,
     url_has_error: bool,
@@ -219,6 +223,7 @@ impl CustomEndpointModal {
             cancel_button_mouse_state: Default::default(),
             save_button_mouse_state: Default::default(),
             add_model_button_mouse_state: Default::default(),
+            form_scroll_state: Default::default(),
             remove_endpoint_button,
             editing_index,
             url_has_error,
@@ -287,6 +292,7 @@ impl CustomEndpointModal {
         editing_index: Option<usize>,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.form_scroll_state.scroll_to(Pixels::zero());
         self.editing_index = editing_index;
         self.endpoint_name_editor.update(ctx, |editor, ctx| {
             editor.set_buffer_text(endpoint.map(|e| e.name.as_str()).unwrap_or(""), ctx);
@@ -339,11 +345,13 @@ impl CustomEndpointModal {
     }
 
     pub fn on_open(&mut self, ctx: &mut ViewContext<Self>) {
+        self.form_scroll_state.scroll_to(Pixels::zero());
         ctx.focus(&self.endpoint_name_editor);
         ctx.notify();
     }
 
     pub fn on_close(&mut self, ctx: &mut ViewContext<Self>) {
+        self.form_scroll_state.scroll_to(Pixels::zero());
         self.endpoint_name_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
         });
@@ -886,7 +894,22 @@ impl View for CustomEndpointModal {
 
         column.add_child(buttons_row.finish());
 
-        column.finish()
+        let scrollable_content = ClippedScrollable::vertical(
+            self.form_scroll_state.clone(),
+            column.finish(),
+            ScrollbarWidth::Auto,
+            theme.nonactive_ui_text_color().into(),
+            theme.active_ui_text_color().into(),
+            Fill::None,
+        )
+        .with_overlayed_scrollbar()
+        .with_padding_start(0.)
+        .with_padding_end(0.)
+        .finish();
+
+        ConstrainedBox::new(scrollable_content)
+            .with_max_height(FORM_SCROLL_MAX_HEIGHT)
+            .finish()
     }
 }
 
