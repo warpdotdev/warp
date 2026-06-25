@@ -303,8 +303,10 @@ fn map_conversation_status_error_without_exchange_error_is_generic() {
 
 /// When the conversation has an `Error` status with no exchange error but a
 /// `status_error_message` (e.g. from the cloud-agent polling path detecting a quota
-/// failure before the streaming response arrives), the status message is used
-/// directly instead of the generic "Agent encountered an error" warp-fault label.
+/// failure before the streaming response arrives), the status message is surfaced
+/// instead of the generic "Agent encountered an error" text. The task state remains
+/// `Error` because the raw string cannot reliably distinguish user failures from
+/// platform errors.
 #[test]
 fn map_conversation_status_error_uses_status_error_message_when_no_exchange_error() {
     let mut conversation = AIConversation::new(false, false);
@@ -314,7 +316,7 @@ fn map_conversation_status_error_uses_status_error_message_when_no_exchange_erro
     ));
     assert_update(
         map_conversation_status(&conversation),
-        AgentTaskState::Failed,
+        AgentTaskState::Error,
         None,
         Some("Out of credits"),
     );
