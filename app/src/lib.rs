@@ -1246,6 +1246,24 @@ pub(crate) fn initialize_app(
         None
     };
 
+    // A key supplied to an App launch but dropped here means Warp will start logged out
+    // (non-dogfood channel or feature disabled). Surface this loudly so it isn't silent.
+    if api_key.is_none()
+        && matches!(
+            launch_mode,
+            LaunchMode::App {
+                api_key: Some(_),
+                ..
+            }
+        )
+    {
+        let channel = ChannelState::channel();
+        let warning = format!(
+            "WARNING: --api-key/WARP_API_KEY was provided but IGNORED on the '{channel}' channel — Warp is starting LOGGED OUT. API-key auth requires a dogfood build; relaunch with `cargo run --bin warp`."
+        );
+        eprintln!("{warning}");
+    }
+
     let auth_state = Arc::new(AuthState::initialize(ctx, api_key));
     timer.mark_interval_end("AUTH_MANAGER_SET_USER");
 
