@@ -120,6 +120,20 @@ impl SlashCommandTrigger {
             }
         )
     }
+
+    /// Destination for fork-style slash commands (`/fork`, `/fork-and-compact`,
+    /// `/continue-locally`): Enter opens a new split pane, Cmd/Ctrl+Enter opens a new tab.
+    /// Sharing this keeps all fork commands' pane/tab behavior identical. The forked
+    /// conversation always honors this explicit destination, independent of the
+    /// `open_conversation_layout_preference` setting (that setting is only a fallback when
+    /// restoring/navigating to an existing conversation, not when forking).
+    fn fork_destination(&self) -> ForkedConversationDestination {
+        if self.is_cmd_or_ctrl_enter() {
+            ForkedConversationDestination::NewTab
+        } else {
+            ForkedConversationDestination::SplitPane
+        }
+    }
 }
 
 #[cfg(feature = "local_fs")]
@@ -984,11 +998,7 @@ impl Input {
                     return true;
                 };
 
-                let destination = if trigger.is_cmd_or_ctrl_enter() {
-                    ForkedConversationDestination::NewTab
-                } else {
-                    ForkedConversationDestination::SplitPane
-                };
+                let destination = trigger.fork_destination();
 
                 // Move any pending attachments out of the source input so they travel with the
                 // initial prompt into the forked pane and no longer linger on the original input.
@@ -1033,11 +1043,7 @@ impl Input {
                     return true;
                 }
 
-                let destination = if trigger.is_cmd_or_ctrl_enter() {
-                    ForkedConversationDestination::NewTab
-                } else {
-                    ForkedConversationDestination::SplitPane
-                };
+                let destination = trigger.fork_destination();
 
                 send_telemetry_from_ctx!(
                     AgentManagementTelemetryEvent::SlashCommandContinueLocally,
@@ -1075,11 +1081,8 @@ impl Input {
                     return true;
                 };
 
-                let destination = if trigger.is_cmd_or_ctrl_enter() {
-                    ForkedConversationDestination::SplitPane
-                } else {
-                    ForkedConversationDestination::CurrentPane
-                };
+                // Use the same Enter/Cmd-Enter pane behavior as `/fork`.
+                let destination = trigger.fork_destination();
 
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,

@@ -836,10 +836,12 @@ impl MessageProvider<AgentMessageArgs<'_>> for ForkSlashCommandMessageProducer {
             }
         };
 
-        // `/fork` and `/continue-locally` open in a new pane with Enter and a new tab with
-        // Cmd/Ctrl+Enter. Other fork-like commands open in the current pane with Enter and a new
-        // pane with Cmd/Ctrl+Enter.
-        let primary_to_new_pane = command_name == commands::FORK.name || is_continue_locally;
+        // `/fork`, `/fork-and-compact`, and `/continue-locally` open in a new pane with Enter and
+        // a new tab with Cmd/Ctrl+Enter. Other fork-like commands open in the current pane with
+        // Enter and a new pane with Cmd/Ctrl+Enter.
+        let primary_to_new_pane = command_name == commands::FORK.name
+            || command_name == commands::FORK_AND_COMPACT.name
+            || is_continue_locally;
         let (primary_label, secondary_label) = if primary_to_new_pane {
             (" new pane", " new tab")
         } else {
