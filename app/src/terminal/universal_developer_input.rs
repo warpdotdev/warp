@@ -236,7 +236,6 @@ fn calculate_profile_model_selector_threshold(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputToggleMode {
     Terminal,
-    AgentMode,
     AutoDetection,
 }
 
@@ -264,7 +263,7 @@ impl From<&BlocklistAIInputModel> for InputToggleMode {
         if input_model.is_input_type_locked() {
             match input_model.input_type() {
                 InputType::Shell => InputToggleMode::Terminal,
-                InputType::AI => InputToggleMode::AgentMode,
+                InputType::AI => InputToggleMode::Terminal,
             }
         } else {
             InputToggleMode::AutoDetection
@@ -437,7 +436,7 @@ impl UniversalDeveloperInputButtonBar {
         let ai_settings = AISettings::as_ref(ctx);
         let is_autodetection_enabled = ai_settings.is_ai_autodetection_enabled(ctx);
 
-        let mut options = vec![InputToggleMode::Terminal, InputToggleMode::AgentMode];
+        let mut options = vec![InputToggleMode::Terminal];
 
         let mut default_option = input_model.as_ref(ctx).into();
         if is_autodetection_enabled {
@@ -480,11 +479,6 @@ impl UniversalDeveloperInputButtonBar {
                         InputType::Shell,
                     ));
                 }
-                InputToggleMode::AgentMode => {
-                    ctx.emit(UniversalDeveloperInputButtonBarEvent::InputTypeSelected(
-                        InputType::AI,
-                    ));
-                }
                 InputToggleMode::AutoDetection => {
                     ctx.emit(UniversalDeveloperInputButtonBarEvent::EnableAutoDetection);
                 }
@@ -507,18 +501,11 @@ impl UniversalDeveloperInputButtonBar {
                 me.segmented_control.update(ctx, |segmented_control, ctx| {
                     if is_autodection_enabled {
                         segmented_control.update_options(
-                            vec![
-                                InputToggleMode::Terminal,
-                                InputToggleMode::AgentMode,
-                                InputToggleMode::AutoDetection,
-                            ],
+                            vec![InputToggleMode::Terminal, InputToggleMode::AutoDetection],
                             ctx,
                         );
                     } else {
-                        segmented_control.update_options(
-                            vec![InputToggleMode::Terminal, InputToggleMode::AgentMode],
-                            ctx,
-                        );
+                        segmented_control.update_options(vec![InputToggleMode::Terminal], ctx);
                     }
                 });
             }
@@ -992,25 +979,9 @@ fn build_renderable_option_config(
                 background: bg_color.into(),
             }
         }
-        InputToggleMode::AgentMode => {
-            let accent_color = theme.terminal_colors().normal.yellow.into();
-            let (fg_color, bg_color) = compute_colors(InputType::AI, accent_color);
-
-            RenderableOptionConfig {
-                icon_path: Icon::AgentMode.into(),
-                icon_color: fg_color,
-                label: None,
-                tooltip: Some(tooltip_config(
-                    "Agent Mode",
-                    Some(agent_mode_tooltip_subtext(terminal_keybindings)),
-                    app,
-                )),
-                background: bg_color.into(),
-            }
-        }
         InputToggleMode::AutoDetection => {
-            // Should not actually render anything, when using the new two-option
-            // UDI control.
+            // Auto-detection remains a hidden state so old input configs can normalize back to
+            // terminal mode without exposing Warp-native AI prompt mode in the prompt.
             return None;
         }
     };
@@ -1039,17 +1010,7 @@ fn build_renderable_option_config(
     Some(config)
 }
 
-const AGENT_MODE_TOOLTIP_PREFIX: &str = "* + space";
 const TERMINAL_MODE_TOOLTIP_PREFIX: &str = "! + space";
-
-fn agent_mode_tooltip_subtext(terminal_keybindings: &TerminalKeybindings) -> String {
-    let keybinding = terminal_keybindings.set_input_mode_agent_keybinding();
-    let Some(keybinding) = keybinding else {
-        return AGENT_MODE_TOOLTIP_PREFIX.into();
-    };
-
-    format!("{keybinding} or {AGENT_MODE_TOOLTIP_PREFIX}")
-}
 
 fn terminal_mode_tooltip_subtext(terminal_keybindings: &TerminalKeybindings) -> String {
     let keybinding = terminal_keybindings.set_input_mode_terminal_keybinding();

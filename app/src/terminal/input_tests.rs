@@ -6466,7 +6466,7 @@ fn test_input_type_button_explicit_lock() {
         assert_eq!(initial_config.input_type, InputType::Shell);
         assert!(!initial_config.is_locked);
 
-        // Explicitly click AgentMode button - should lock to AI mode
+        // A stale AgentMode event from the UDI switcher should be ignored.
         input.update(&mut app, |input, ctx| {
             input.handle_universal_developer_input_button_bar_event(
                 &UniversalDeveloperInputButtonBarEvent::InputTypeSelected(InputType::AI),
@@ -6474,26 +6474,23 @@ fn test_input_type_button_explicit_lock() {
             );
         });
 
-        // Verify we're now locked in AI mode
+        // Verify the input remains in its initial shell auto-detection state.
         let after_click_config = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
                 ai_input.input_config()
             })
         });
-        assert_eq!(after_click_config.input_type, InputType::AI);
+        assert_eq!(after_click_config.input_type, InputType::Shell);
         assert!(
-            after_click_config.is_locked,
-            "Input should be locked when user explicitly clicks AgentMode button"
+            !after_click_config.is_locked,
+            "UDI AgentMode events should not lock the input to AI mode"
         );
         let after_click_source = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
                 ai_input.last_ai_autodetection_source()
             })
         });
-        assert_eq!(
-            after_click_source,
-            Some(InputTypeAutoDetectionSource::ManualToggle)
-        );
+        assert_eq!(after_click_source, None);
 
         // Explicitly click Terminal button - should lock to Shell mode
         input.update(&mut app, |input, ctx| {
@@ -6602,7 +6599,7 @@ fn test_auto_detection_toggle() {
             "Input should remain unlocked after toggling auto-detection again"
         );
 
-        // Switch to AI mode manually and test toggle behavior
+        // A stale AgentMode event from the UDI switcher should be ignored.
         input.update(&mut app, |input, ctx| {
             input.handle_universal_developer_input_button_bar_event(
                 &UniversalDeveloperInputButtonBarEvent::InputTypeSelected(InputType::AI),
@@ -6610,19 +6607,19 @@ fn test_auto_detection_toggle() {
             );
         });
 
-        // Verify we're locked in AI mode
-        let locked_ai_config = input.read(&app, |input, _| {
+        // Verify we're still unlocked in Shell mode.
+        let ignored_ai_config = input.read(&app, |input, _| {
             app.read_model(input.ai_input_model(), |ai_input, _| {
                 ai_input.input_config()
             })
         });
-        assert_eq!(locked_ai_config.input_type, InputType::AI);
+        assert_eq!(ignored_ai_config.input_type, InputType::Shell);
         assert!(
-            locked_ai_config.is_locked,
-            "Input should be locked when manually set to AI"
+            !ignored_ai_config.is_locked,
+            "UDI AgentMode events should not lock the input to AI mode"
         );
 
-        // Toggle auto-detection from locked AI mode
+        // Toggle auto-detection again from the unchanged shell state.
         input.update(&mut app, |input, ctx| {
             input.handle_universal_developer_input_button_bar_event(
                 &UniversalDeveloperInputButtonBarEvent::EnableAutoDetection,
@@ -7553,7 +7550,7 @@ fn test_input_config_transitions() {
         .await;
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
 
-        // Test sequence: Shell(locked) -> VoiceInput -> AutoDetection -> AgentMode(locked)
+        // Test sequence: Shell(locked) -> VoiceInput -> AutoDetection -> stale AgentMode event.
 
         // Start in locked Shell mode
         input.update(&mut app, |input, ctx| {
@@ -7604,7 +7601,7 @@ fn test_input_config_transitions() {
         assert_eq!(config_after_auto.input_type, InputType::Shell);
         assert!(!config_after_auto.is_locked);
 
-        // Explicitly click AgentMode button (should lock in AI mode)
+        // A stale AgentMode event from the UDI switcher should be ignored.
         input.update(&mut app, |input, ctx| {
             input.handle_universal_developer_input_button_bar_event(
                 &UniversalDeveloperInputButtonBarEvent::InputTypeSelected(InputType::AI),
@@ -7617,8 +7614,8 @@ fn test_input_config_transitions() {
                 ai_input.input_config()
             })
         });
-        assert_eq!(final_config.input_type, InputType::AI);
-        assert!(final_config.is_locked);
+        assert_eq!(final_config.input_type, InputType::Shell);
+        assert!(!final_config.is_locked);
     });
 }
 

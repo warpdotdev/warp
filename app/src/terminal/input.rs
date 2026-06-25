@@ -6467,6 +6467,10 @@ impl Input {
                     return;
                 }
 
+                if *input_type == InputType::AI {
+                    return;
+                }
+
                 self.focus_input_box(ctx);
 
                 let is_input_buffer_empty = self.editor.as_ref(ctx).buffer_text(ctx).is_empty();

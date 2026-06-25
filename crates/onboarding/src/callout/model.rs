@@ -67,7 +67,7 @@ pub(super) enum AgentModalityCalloutState {
     Off,
     /// Step 1: terminal input with natural language support.
     TerminalMode,
-    /// Step 2: "Agent Mode" (Agent intention only).
+    /// Step 2: legacy agent prompt step (Agent intention only).
     AgentMode,
     /// Terminal state
     Complete(FinalState),
@@ -440,16 +440,20 @@ impl OnboardingCalloutModel {
         );
         match &self.state {
             OnboardingCalloutState::UniversalInput(_) => {
-                log::info!("Transitioning to UniversalInput::MeetInput");
+                log::info!("Skipping UniversalInput onboarding");
                 self.set_state(
-                    OnboardingCalloutState::UniversalInput(UniversalInputCalloutState::MeetInput),
+                    OnboardingCalloutState::UniversalInput(UniversalInputCalloutState::Complete(
+                        FinalState::Finish,
+                    )),
                     ctx,
                 );
             }
             OnboardingCalloutState::AgentModality(_) => {
-                log::info!("Transitioning to AgentModality::NaturalLanguageSupport");
+                log::info!("Skipping AgentModality onboarding");
                 self.set_state(
-                    OnboardingCalloutState::AgentModality(AgentModalityCalloutState::TerminalMode),
+                    OnboardingCalloutState::AgentModality(AgentModalityCalloutState::Complete(
+                        FinalState::Finish,
+                    )),
                     ctx,
                 );
             }

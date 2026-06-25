@@ -4417,20 +4417,19 @@ fn render_summary_tab_item(
     let mut title_region = Flex::column()
         .with_main_axis_size(MainAxisSize::Min)
         .with_cross_axis_alignment(CrossAxisAlignment::Start);
-    if let Some(title_override) = render_title_override(
+    let title_override = render_title_override(
         &props,
         12.,
         main_text_color,
         ClipConfig::end(),
         appearance,
         app,
-    ) {
-        title_region.add_child(render_summary_line_with_status(
-            title_override,
-            summary_status_for_title_override(summary),
-            false,
-            appearance,
-        ));
+    );
+    let title_override_status = title_override
+        .as_ref()
+        .and_then(|_| summary_status_for_title_override(summary));
+    if let Some(title_override) = title_override {
+        title_region.add_child(title_override);
     } else if summary.primary_labels.is_empty() {
         title_region.add_child(render_text_line(
             &props.title,
@@ -4577,13 +4576,16 @@ fn render_summary_tab_item(
         );
     }
 
-    let content = Flex::row()
+    let mut content = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
         .with_spacing(ICON_WITH_STATUS_GAP)
-        .with_child(icon)
-        .with_child(Shrinkable::new(1., text_col.finish()).finish())
-        .finish();
+        .with_child(icon);
+    if let Some(status) = title_override_status {
+        content.add_child(render_summary_standalone_status(status, appearance));
+    }
+    content.add_child(Shrinkable::new(1., text_col.finish()).finish());
+    let content = content.finish();
 
     render_pane_row_element(props, Padding::uniform(8.), true, content, theme)
 }
@@ -4595,6 +4597,19 @@ fn summary_status_for_title_override(
         .primary_labels
         .iter()
         .find_map(|label| label.status.as_ref())
+}
+
+fn render_summary_standalone_status(
+    status: &ConversationStatus,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    Container::new(render_status_element(
+        status,
+        VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE,
+        appearance,
+    ))
+    .with_margin_top(1.)
+    .finish()
 }
 
 fn render_summary_primary_label_line(
