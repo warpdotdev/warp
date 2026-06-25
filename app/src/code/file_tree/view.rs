@@ -29,7 +29,7 @@ use warpui::elements::{
     Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text, UniformList,
     UniformListState,
 };
-use warpui::fonts::{Properties, Style, Weight};
+use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
 use warpui::platform::Cursor;
 use warpui::text_layout::TextAlignment;
@@ -64,6 +64,7 @@ use crate::util::openable_file_type::{
 mod editing;
 mod render;
 
+use crate::code::file_tree::row_renderer::{self, TreeRowConfig};
 use crate::settings::{CodeSettings, CodeSettingsChangedEvent};
 
 const REMOTE_TEXT: &str = "The Project Explorer requires access to your local workspace, which isn’t supported in remote sessions.";
@@ -171,10 +172,7 @@ pub fn init(app: &mut AppContext) {
     ]);
 }
 
-// Constants matching the Drive panel styling
-const ITEM_FONT_SIZE: f32 = 14.;
-const FOLDER_INDENT: f32 = 16.; // Indentation per folder level
-const ITEM_PADDING: f32 = 4.;
+// Row layout constants live in row_renderer and are accessed as row_renderer::ITEM_FONT_SIZE etc.
 
 /// Represents a single item in the flattened file tree list.
 /// This is used to store the necessary information for rendering each item
@@ -682,7 +680,7 @@ impl FileTreeView {
                     soft_wrap: false,
                     single_line: true,
                     text: TextOptions {
-                        font_size_override: Some(ITEM_FONT_SIZE),
+                        font_size_override: Some(row_renderer::ITEM_FONT_SIZE),
                         font_family_override: Some(appearance.ui_font_family()),
                         ..Default::default()
                     },
@@ -1808,118 +1806,108 @@ impl FileTreeView {
         (selected_item_index, removed_item)
     }
 
-    /// Renders a file item with proper indentation and optional hover/selected styling
+    /// Renders a file item with proper indentation and optional hover/selected styling.
+    ///
+    /// When `editor_view` is `None` (the common case) this delegates the row layout
+    /// to [`row_renderer::render_tree_row`] so that the code review file-tree sidebar
+    /// can reuse the same visual primitives.  When an editor view is active (rename /
+    /// create-file) the row is built inline so the editor can replace the text label.
     fn render_item_with_hover(
         render_state: RenderState,
         appearance: &Appearance,
         item_highlight_state: ItemHighlightState,
         editor_view: Option<&ViewHandle<EditorView>>,
     ) -> Box<dyn Element> {
-        // Create the folder header row
-        let mut header_row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center);
+        // Build the inner row – either via the shared renderer (common case) or
+        // inline with an editor view in place of the text label (rare rename/create path).
+        let inner_row = if let Some(editor_view) = editor_view {
+            let mut header_row = Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-        // Add an indentation spacer based on the depth of the item in the file tree.
-        if render_state.depth > 0 {
-            header_row.add_child(
-                Container::new(
-                    ConstrainedBox::new(Empty::new().finish())
-                        .with_width(render_state.depth as f32 * FOLDER_INDENT)
-                        .finish(),
-                )
-                .finish(),
-            );
-        }
-
-        // Add expand/collapse button if the item is expandable.
-        let expand_icon = render_state.is_expanded.map(|expanded| {
-            if expanded {
-                Icon::ChevronDown
-            } else {
-                Icon::ChevronRight
-            }
-        });
-
-        let expand_icon = match expand_icon {
-            Some(icon) => {
-                let chevron_icon_color = item_highlight_state.text_and_icon_color(appearance);
-                icon.to_warpui_icon(chevron_icon_color.into()).finish()
-            }
-            None => Empty::new().finish(),
-        };
-
-        header_row.add_child(
-            Container::new(
-                ConstrainedBox::new(expand_icon)
-                    .with_width(FOLDER_INDENT)
-                    .with_height(FOLDER_INDENT)
-                    .finish(),
-            )
-            .with_margin_right(4.)
-            .finish(),
-        );
-
-        // Add the icon for the item.
-        let icon_color = item_highlight_state.text_and_icon_color(appearance);
-        let icon = match render_state.icon {
-            ImageOrIcon::Icon(icon) => icon.to_warpui_icon(icon_color.into()).finish(),
-            ImageOrIcon::Image(image) => image,
-        };
-        header_row.add_child(
-            Container::new(
-                ConstrainedBox::new(icon)
-                    .with_width(FOLDER_INDENT)
-                    .with_height(FOLDER_INDENT)
-                    .finish(),
-            )
-            .with_margin_right(8.)
-            .finish(),
-        );
-
-        let text_color = item_highlight_state.text_and_icon_color(appearance);
-        let text_style = if render_state.is_ignored {
-            Properties::default()
-                .style(Style::Italic)
-                .weight(Weight::Light)
-        } else {
-            Properties::default()
-        };
-        match editor_view {
-            Some(editor_view) => {
+            if render_state.depth > 0 {
                 header_row.add_child(
-                    Shrinkable::new(
-                        1.,
-                        Dismiss::new(Clipped::new(ChildView::new(editor_view).finish()).finish())
-                            .on_dismiss(|ctx, _app| {
-                                ctx.dispatch_typed_action(FileTreeAction::DismissEditor);
-                            })
+                    Container::new(
+                        ConstrainedBox::new(Empty::new().finish())
+                            .with_width(render_state.depth as f32 * row_renderer::FOLDER_INDENT)
                             .finish(),
                     )
                     .finish(),
                 );
             }
-            None => {
-                header_row.add_child(
-                    Shrinkable::new(
-                        1.,
-                        Text::new_inline(
-                            render_state.display_name,
-                            appearance.ui_font_family(),
-                            ITEM_FONT_SIZE,
-                        )
-                        .with_color(text_color)
-                        .with_style(text_style)
-                        .finish(),
-                    )
-                    .finish(),
-                );
-            }
-        }
 
-        let mut container = Container::new(header_row.finish())
-            .with_padding_top(ITEM_PADDING)
-            .with_padding_bottom(ITEM_PADDING)
+            let expand_icon = render_state.is_expanded.map(|expanded| {
+                if expanded {
+                    Icon::ChevronDown
+                } else {
+                    Icon::ChevronRight
+                }
+            });
+            let expand_icon = match expand_icon {
+                Some(icon) => {
+                    let color = item_highlight_state.text_and_icon_color(appearance);
+                    icon.to_warpui_icon(color.into()).finish()
+                }
+                None => Empty::new().finish(),
+            };
+            header_row.add_child(
+                Container::new(
+                    ConstrainedBox::new(expand_icon)
+                        .with_width(row_renderer::FOLDER_INDENT)
+                        .with_height(row_renderer::FOLDER_INDENT)
+                        .finish(),
+                )
+                .with_margin_right(4.)
+                .finish(),
+            );
+
+            let icon_color = item_highlight_state.text_and_icon_color(appearance);
+            let icon = match render_state.icon {
+                ImageOrIcon::Icon(icon) => icon.to_warpui_icon(icon_color.into()).finish(),
+                ImageOrIcon::Image(image) => image,
+            };
+            header_row.add_child(
+                Container::new(
+                    ConstrainedBox::new(icon)
+                        .with_width(row_renderer::FOLDER_INDENT)
+                        .with_height(row_renderer::FOLDER_INDENT)
+                        .finish(),
+                )
+                .with_margin_right(8.)
+                .finish(),
+            );
+
+            header_row.add_child(
+                Shrinkable::new(
+                    1.,
+                    Dismiss::new(Clipped::new(ChildView::new(editor_view).finish()).finish())
+                        .on_dismiss(|ctx, _app| {
+                            ctx.dispatch_typed_action(FileTreeAction::DismissEditor);
+                        })
+                        .finish(),
+                )
+                .finish(),
+            );
+
+            header_row.finish()
+        } else {
+            // Common case: delegate to shared row renderer.
+            row_renderer::render_tree_row(
+                TreeRowConfig {
+                    depth: render_state.depth,
+                    name: render_state.display_name,
+                    icon: render_state.icon,
+                    is_expanded: render_state.is_expanded,
+                    is_ignored: render_state.is_ignored,
+                    item_highlight_state,
+                },
+                appearance,
+            )
+        };
+
+        let mut container = Container::new(inner_row)
+            .with_padding_top(row_renderer::ITEM_PADDING)
+            .with_padding_bottom(row_renderer::ITEM_PADDING)
             .with_padding_left(8.)
             .with_padding_right(8.);
 
@@ -1962,14 +1950,14 @@ impl FileTreeView {
         let text = Text::new(
             render_state.display_name,
             appearance.ui_font_family(),
-            ITEM_FONT_SIZE,
+            row_renderer::ITEM_FONT_SIZE,
         )
         .with_color(text_color)
         .finish();
 
         let mut container = Container::new(text)
-            .with_padding_top(ITEM_PADDING)
-            .with_padding_bottom(ITEM_PADDING)
+            .with_padding_top(row_renderer::ITEM_PADDING)
+            .with_padding_bottom(row_renderer::ITEM_PADDING)
             .with_padding_left(8.)
             .with_padding_right(8.)
             .with_background(appearance.theme().background());
@@ -2817,8 +2805,8 @@ impl FileTreeView {
             .finish();
         let loading_icon = Container::new(
             ConstrainedBox::new(loading_icon)
-                .with_height(FOLDER_INDENT)
-                .with_width(FOLDER_INDENT)
+                .with_height(row_renderer::FOLDER_INDENT)
+                .with_width(row_renderer::FOLDER_INDENT)
                 .finish(),
         )
         .with_margin_right(8.)
@@ -2840,8 +2828,8 @@ impl FileTreeView {
         header_row.add_child(
             Container::new(
                 ConstrainedBox::new(folder_icon)
-                    .with_width(FOLDER_INDENT)
-                    .with_height(FOLDER_INDENT)
+                    .with_width(row_renderer::FOLDER_INDENT)
+                    .with_height(row_renderer::FOLDER_INDENT)
                     .finish(),
             )
             .with_margin_right(8.)

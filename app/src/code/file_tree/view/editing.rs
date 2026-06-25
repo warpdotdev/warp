@@ -14,6 +14,7 @@ use warpui::elements::MouseStateHandle;
 use warpui::ViewContext;
 
 use super::{FileTreeIdentifier, FileTreeItem, FileTreeView};
+use crate::code::file_tree::ordering::compare_file_tree_entries;
 use crate::code::file_tree::view::{PendingEdit, PendingEditKind};
 use crate::code::file_tree::FileTreeEvent;
 use crate::send_telemetry_from_ctx;
@@ -45,31 +46,12 @@ pub(super) fn sort_entries_for_file_tree(
     let is_dir_1 = matches!(entry_1, FileTreeEntryState::Directory(_));
     let is_dir_2 = matches!(entry_2, FileTreeEntryState::Directory(_));
 
-    // Order directories before any files.
-    match (is_dir_1, is_dir_2) {
-        (true, false) => return Ordering::Less,
-        (false, true) => return Ordering::Greater,
-        // Both are same type, continue with alphabetical sort.
-        _ => {}
-    }
-
-    // Same antisymmetry requirement for missing file names.
-    let (name_1, name_2) = match (entry_1.path().file_name(), entry_2.path().file_name()) {
-        (None, None) => return Ordering::Equal,
-        (None, Some(_)) => return Ordering::Less,
-        (Some(_), None) => return Ordering::Greater,
-        (Some(n1), Some(n2)) => (n1, n2),
-    };
-
-    let starts_with_dot_1 = name_1.starts_with('.');
-    let starts_with_dot_2 = name_2.starts_with('.');
-
-    // Items starting with "." come first.
-    match (starts_with_dot_1, starts_with_dot_2) {
-        (true, false) => Ordering::Less,
-        (false, true) => Ordering::Greater,
-        _ => alphanumeric_sort::compare_str(name_1, name_2),
-    }
+    compare_file_tree_entries(
+        is_dir_1,
+        entry_1.path().file_name(),
+        is_dir_2,
+        entry_2.path().file_name(),
+    )
 }
 
 impl FileTreeView {

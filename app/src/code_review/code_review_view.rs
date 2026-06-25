@@ -36,17 +36,16 @@ use warpui::elements::new_scrollable::{
 use warpui::elements::{
     resizable_state_handle, Align, Border, ChildAnchor, ChildView, Clipped,
     ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DispatchEventResult, DragBarSide, Element, Empty, EventHandler, Flex, Hoverable, List,
-    ListState, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    DispatchEventResult, Element, Empty, EventHandler, Flex, Hoverable, List, ListState,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Percentage, PositionedElementAnchor,
-    PositionedElementOffsetBounds, Radius, Rect, Resizable, ResizableStateHandle, SavePosition,
-    ScrollOffset, ScrollStateHandle, ScrollbarWidth, Shrinkable, Stack, Text,
-    DEFAULT_UI_LINE_HEIGHT_RATIO,
+    PositionedElementOffsetBounds, Radius, Rect, ResizableStateHandle, SavePosition, ScrollOffset,
+    ScrollStateHandle, ScrollbarWidth, Shrinkable, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::Keystroke;
 use warpui::platform::Cursor;
-use warpui::text_layout::{default_compute_baseline_position, ClipConfig};
+use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
@@ -350,6 +349,8 @@ pub enum CodeReviewAction {
     OpenCreatePrDialog,
     ViewPr(String),
     PublishBranch,
+    /// Toggle the expand/collapse state of a directory in the sidebar file tree.
+    ToggleDirExpanded(String),
 }
 
 pub struct FileState {
@@ -672,6 +673,21 @@ pub struct CodeReviewView {
     git_repo_status: Option<ModelHandle<GitRepoStatusModel>>,
     /// Per-repo GitHub-info model for the current repository, if any.
     github_repo_model: Option<ModelHandle<GitHubRepoModel>>,
+    /// Paths of directory nodes currently expanded in the code review file-tree sidebar.
+    /// All directories default to expanded when a new diff is loaded.
+    expanded_dirs: HashSet<String>,
+    /// Per-directory [`MouseStateHandle`] for hover tracking in the sidebar tree.
+    /// Rebuilt whenever the loaded diff changes; existing handles are preserved.
+    dir_mouse_states: HashMap<String, MouseStateHandle>,
+    /// Cached file tree built from the loaded diff; avoids per-frame allocations.
+    /// Rebuilt in the diff-load handler alongside `expanded_dirs` and `dir_mouse_states`.
+    cached_sidebar_tree: Vec<file_tree::CodeReviewTreeNode>,
+    /// Pre-constructed fallback used when a dir path is absent from `dir_mouse_states`.
+    /// Created during construction so no `MouseStateHandle` is ever allocated during render.
+    sidebar_dir_fallback_mouse_state: MouseStateHandle,
+    /// Pre-constructed fallback for file rows whose path is absent from `file_states`.
+    /// Mirrors `sidebar_dir_fallback_mouse_state` — never allocated during render.
+    sidebar_file_fallback_mouse_state: MouseStateHandle,
 }
 
 impl CodeReviewView {
@@ -1362,6 +1378,11 @@ impl CodeReviewView {
             git_dialog: None,
             git_repo_status: None,
             github_repo_model: None,
+            expanded_dirs: HashSet::new(),
+            dir_mouse_states: HashMap::new(),
+            cached_sidebar_tree: Vec::new(),
+            sidebar_dir_fallback_mouse_state: MouseStateHandle::default(),
+            sidebar_file_fallback_mouse_state: MouseStateHandle::default(),
         };
         view.set_active_repo_comment_model(comment_batch_model, ctx);
         if has_repo {
@@ -2567,6 +2588,18 @@ impl CodeReviewView {
             },
             ctx
         );
+
+        // Rebuild the sidebar file-tree state (expanded dirs + mouse handles) whenever
+        // a new diff is loaded.  All directories default to expanded on each reload;
+        // any previously collapsed directory will also be re-expanded.
+        if let Some(repo) = self.active_repo.as_ref() {
+            if let CodeReviewViewState::Loaded(state) = &repo.state {
+                let tree = file_tree::build_code_review_tree(&state.file_states);
+                file_tree::collect_expanded_dirs(&tree, &mut self.expanded_dirs);
+                file_tree::rebuild_dir_mouse_states(&tree, &mut self.dir_mouse_states);
+                self.cached_sidebar_tree = tree;
+            }
+        }
 
         if self.all_editors_loaded() {
             let diff_mode = self.diff_state_model.as_ref(ctx).diff_mode(ctx);
@@ -4486,8 +4519,14 @@ impl CodeReviewView {
 
         // When the flag is off, sidebar goes on the left (legacy).
         if !sidebar_on_right && self.file_sidebar_expanded && !state.file_states.is_empty() {
-            sidebar_and_diffs_row
-                .add_child(Container::new(self.render_file_sidebar(state, appearance)).finish());
+            sidebar_and_diffs_row.add_child(
+                Container::new(self.render_file_tree_sidebar(
+                    &self.cached_sidebar_tree,
+                    state,
+                    appearance,
+                ))
+                .finish(),
+            );
 
             let vertical_separator = ConstrainedBox::new(
                 Rect::new()
@@ -4543,229 +4582,21 @@ impl CodeReviewView {
             .finish();
 
             sidebar_and_diffs_row.add_child(vertical_separator);
-            sidebar_and_diffs_row
-                .add_child(Container::new(self.render_file_sidebar(state, appearance)).finish());
+            sidebar_and_diffs_row.add_child(
+                Container::new(self.render_file_tree_sidebar(
+                    &self.cached_sidebar_tree,
+                    state,
+                    appearance,
+                ))
+                .finish(),
+            );
         }
 
         Shrinkable::new(1., sidebar_and_diffs_row.finish()).finish()
     }
 
-    fn render_file_sidebar(
-        &self,
-        state: &LoadedState,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let mut column = Flex::column()
-            .with_main_axis_alignment(MainAxisAlignment::Start)
-            .with_cross_axis_alignment(CrossAxisAlignment::Start);
-
-        for (file_index, file_state) in state.file_states.values().enumerate() {
-            let file_row = self.render_file_sidebar_row(file_state, appearance);
-            column.add_child(
-                Hoverable::new(file_state.sidebar_mouse_state.clone(), |mouse_state| {
-                    let mut container = Container::new(Shrinkable::new(1., file_row).finish())
-                        .with_vertical_padding(5.)
-                        .with_horizontal_padding(8.)
-                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
-
-                    if mouse_state.is_hovered() {
-                        container = container.with_background(warp_core::ui::theme::Fill::Solid(
-                            internal_colors::neutral_3(appearance.theme()),
-                        ))
-                    }
-                    container.finish()
-                })
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeReviewAction::FileSelected(file_index));
-                })
-                .with_cursor(Cursor::PointingHand)
-                .finish(),
-            );
-        }
-
-        let scrollable_content = NewScrollable::vertical(
-            SingleAxisConfig::Clipped {
-                handle: self.ui_state_handles.sidebar_scroll_state.clone(),
-                child: column.finish(),
-            },
-            appearance.theme().nonactive_ui_detail().into(),
-            appearance.theme().active_ui_detail().into(),
-            warpui::elements::Fill::None,
-        )
-        .with_vertical_scrollbar(ScrollableAppearance::new(ScrollbarWidth::Auto, false))
-        .finish();
-
-        // We need an Align to ensure the Resizable takes up the full height of the sidebar.
-        // This way, the click target for resizing doesn't shrink with a short or empty file list.
-        let sidebar_on_right = FeatureFlag::GitOperationsInCodeReview.is_enabled();
-        let sidebar_content = if sidebar_on_right {
-            Container::new(scrollable_content)
-                .with_padding_left(8.)
-                .finish()
-        } else {
-            Container::new(scrollable_content)
-                .with_padding_right(8.)
-                .finish()
-        };
-        let mut resizable = Resizable::new(
-            self.ui_state_handles.sidebar_resizable_state.clone(),
-            sidebar_content,
-        );
-        if sidebar_on_right {
-            resizable = resizable.with_dragbar_side(DragBarSide::Left);
-        }
-        resizable
-            .on_resize(move |ctx, _| {
-                ctx.notify();
-            })
-            .with_bounds_callback(Box::new(Self::file_sidebar_bounds_callback))
-            .finish()
-    }
-
     fn file_sidebar_bounds_callback(_window_bounds: Vector2F) -> (f32, f32) {
         (FILE_SIDEBAR_MIN_WIDTH, FILE_SIDEBAR_MAX_WIDTH)
-    }
-
-    fn render_file_sidebar_row(
-        &self,
-        file_state: &FileState,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let repo_relative_path = Path::new(&file_state.file_diff.file_path);
-        let file_name = repo_relative_path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .unwrap_or_default();
-        let dir_path = repo_relative_path
-            .parent()
-            .and_then(|parent| parent.to_str())
-            .unwrap_or_default();
-        let additions = file_state.file_diff.additions();
-        let deletions = file_state.file_diff.deletions();
-
-        // Create the main row for the file entry
-        let mut file_row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween);
-
-        let mut file_and_directory = Flex::row();
-
-        const SMALLER_TEXT_RATIO: f32 = 0.9;
-
-        // File name (prominent)
-        file_and_directory.add_child(
-            Container::new(
-                ConstrainedBox::new(
-                    Text::new(
-                        file_name.to_string(),
-                        appearance.ui_font_family(),
-                        appearance.ui_font_size(),
-                    )
-                    .with_color(
-                        appearance
-                            .theme()
-                            .main_text_color(appearance.theme().surface_2())
-                            .into(),
-                    )
-                    .soft_wrap(false)
-                    .finish(),
-                )
-                .with_max_width(190.)
-                .finish(),
-            )
-            .with_margin_right(4.)
-            .finish(),
-        );
-
-        // Directory path (muted and smaller)
-        if !dir_path.is_empty() {
-            file_and_directory.add_child(
-                Shrinkable::new(
-                    1.,
-                    Text::new(
-                        dir_path.to_string(),
-                        appearance.ui_font_family(),
-                        appearance.ui_font_size() * SMALLER_TEXT_RATIO, // Slightly smaller
-                    )
-                    .with_color(
-                        appearance
-                            .theme()
-                            .sub_text_color(appearance.theme().surface_2())
-                            .into(),
-                    )
-                    .with_clip(ClipConfig::end())
-                    .soft_wrap(false)
-                    .with_line_height_ratio(DEFAULT_UI_LINE_HEIGHT_RATIO / SMALLER_TEXT_RATIO)
-                    .with_compute_baseline_position_fn(Box::new(|args| {
-                        // Calculate baseline position as if we were using the larger font size.
-                        // This ensures both text elements have the same baseline.
-                        let larger_font_size = args.font_size / SMALLER_TEXT_RATIO;
-                        default_compute_baseline_position(
-                            larger_font_size,
-                            DEFAULT_UI_LINE_HEIGHT_RATIO,
-                            args.ascent * (larger_font_size / args.font_size),
-                            args.descent * (larger_font_size / args.font_size),
-                        )
-                    }))
-                    .finish(),
-                )
-                .finish(),
-            );
-        }
-
-        file_row.add_child(
-            Shrinkable::new(1., Clipped::new(file_and_directory.finish()).finish()).finish(),
-        );
-
-        // Right side: additions/deletions
-        let mut changes_text = Text::new(
-            "",
-            appearance.ui_font_family(),
-            appearance.ui_font_size() * SMALLER_TEXT_RATIO,
-        )
-        .with_line_height_ratio(DEFAULT_UI_LINE_HEIGHT_RATIO / SMALLER_TEXT_RATIO)
-        .with_compute_baseline_position_fn(Box::new(|args| {
-            // Calculate baseline position as if we were using the larger font size.
-            // This ensures all text elements have the same baseline.
-            let larger_font_size = args.font_size / SMALLER_TEXT_RATIO;
-            default_compute_baseline_position(
-                larger_font_size,
-                DEFAULT_UI_LINE_HEIGHT_RATIO,
-                args.ascent * (larger_font_size / args.font_size),
-                args.descent * (larger_font_size / args.font_size),
-            )
-        }));
-        if additions > 0 {
-            changes_text.add_text_with_highlights(
-                format!("+{additions}"),
-                add_color(appearance),
-                Properties::default(),
-            );
-        }
-        if deletions > 0 {
-            if !changes_text.text().is_empty() {
-                changes_text.add_text_with_highlights(
-                    " ",
-                    remove_color(appearance),
-                    Properties::default(),
-                );
-            }
-            changes_text.add_text_with_highlights(
-                format!("-{deletions}"),
-                remove_color(appearance),
-                Properties::default(),
-            );
-        }
-
-        if !changes_text.text().is_empty() {
-            file_row.add_child(
-                Container::new(changes_text.finish())
-                    .with_margin_left(8.)
-                    .finish(),
-            );
-        }
-
-        file_row.finish()
     }
 
     fn file_index_position(&self, file_index: usize) -> String {
@@ -7478,6 +7309,14 @@ impl TypedActionView for CodeReviewView {
                 );
                 self.open_git_dialog(GitDialogKind::Commit, ctx);
             }
+            CodeReviewAction::ToggleDirExpanded(path) => {
+                if self.expanded_dirs.contains(path) {
+                    self.expanded_dirs.remove(path);
+                } else {
+                    self.expanded_dirs.insert(path.clone());
+                }
+                ctx.notify();
+            }
             CodeReviewAction::PublishBranch => {
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::GitButtonTriggered {
@@ -7681,6 +7520,8 @@ impl ShowCommentEditorProvider for ShowCommentEditor {
 #[path = "scroll_preservation.rs"]
 mod scroll_preservation;
 use scroll_preservation::RelocatableScrollContext;
+
+mod file_tree;
 
 #[cfg(feature = "integration_tests")]
 #[path = "code_review_view_integration.rs"]
