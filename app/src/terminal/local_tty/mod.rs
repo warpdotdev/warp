@@ -14,6 +14,7 @@ pub mod spawner;
 #[cfg(unix)]
 pub mod terminal_attributes;
 pub mod terminal_manager;
+mod terminal_view_adaptor;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
@@ -30,7 +31,7 @@ use shell::ShellStarter;
 
 #[cfg(windows)]
 pub use self::terminal_manager::shutdown_all_pty_event_loops;
-pub(crate) use self::terminal_manager::{
+pub(crate) use self::terminal_view_adaptor::{
     create_terminal_view_surface, terminal_view_restored_blocks, TerminalViewSurfaceConfig,
 };
 pub use self::terminal_manager::{get_shell_starter, TerminalManager};
