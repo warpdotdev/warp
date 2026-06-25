@@ -31,6 +31,7 @@ use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::AIExecutionProfileAppExt;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::persistence::model::PendingConversationHandoff;
 use crate::server::server_api::AIApiError;
 use crate::settings::AISettings;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
@@ -95,6 +96,8 @@ pub struct RequestParams {
     pub input: Vec<AIAgentInput>,
     pub conversation_token: Option<ServerConversationToken>,
     pub forked_from_conversation_token: Option<ServerConversationToken>,
+    /// Causes this request to prepend the server-side handoff marker.
+    pub pending_conversation_handoff: Option<PendingConversationHandoff>,
     pub ambient_agent_task_id: Option<AmbientAgentTaskId>,
     pub tasks: Vec<warp_multi_agent_api::Task>,
     pub existing_suggestions: Option<Suggestions>,
@@ -153,6 +156,8 @@ pub struct ConversationData {
     pub tasks: Vec<warp_multi_agent_api::Task>,
     pub server_conversation_token: Option<ServerConversationToken>,
     pub forked_from_conversation_token: Option<ServerConversationToken>,
+    /// Handoff state retained until an eligible request sends the server marker.
+    pub pending_conversation_handoff: Option<PendingConversationHandoff>,
     pub ambient_agent_task_id: Option<AmbientAgentTaskId>,
     pub existing_suggestions: Option<Suggestions>,
 }
@@ -164,6 +169,7 @@ impl RequestParams {
             input: vec![],
             conversation_token: None,
             forked_from_conversation_token: None,
+            pending_conversation_handoff: None,
             ambient_agent_task_id: None,
             tasks: vec![],
             existing_suggestions: None,
@@ -360,6 +366,10 @@ impl RequestParams {
             input: request_input.all_inputs().cloned().collect(),
             conversation_token: conversation.server_conversation_token,
             forked_from_conversation_token: conversation.forked_from_conversation_token,
+            pending_conversation_handoff: request_input
+                .can_carry_conversation_handoff_marker()
+                .then_some(conversation.pending_conversation_handoff)
+                .flatten(),
             ambient_agent_task_id: conversation.ambient_agent_task_id,
             tasks: conversation.tasks,
             existing_suggestions: conversation.existing_suggestions,

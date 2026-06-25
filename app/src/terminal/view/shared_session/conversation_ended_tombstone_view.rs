@@ -30,6 +30,8 @@ use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::blended_colors;
 use crate::util::time_format::human_readable_precise_duration;
 use crate::view_components::action_button::{ActionButton, PrimaryTheme};
+#[cfg(not(target_family = "wasm"))]
+use crate::workspace::ForkedConversationDestination;
 use crate::workspace::WorkspaceAction;
 
 /// Metadata collected for display in the tombstone.
@@ -650,6 +652,9 @@ impl TypedActionView for ConversationEndedTombstoneView {
                 );
                 ctx.dispatch_typed_action(&WorkspaceAction::ContinueConversationLocally {
                     conversation_id: *conversation_id,
+                    initial_prompt: None,
+                    initial_attachments: vec![],
+                    destination: ForkedConversationDestination::SplitPane,
                 });
             }
             #[cfg(target_family = "wasm")]

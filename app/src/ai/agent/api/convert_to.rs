@@ -446,6 +446,11 @@ fn convert_input_to_user_input(
                 },
             ),
         ),
+        AIAgentInput::ConversationHandoff => Ok(
+            api::request::input::user_inputs::user_input::Input::ConversationHandoff(
+                api::request::input::user_inputs::ConversationHandoff {},
+            ),
+        ),
         AIAgentInput::ResumeConversation { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::InitProjectRules { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::CodeReview { .. } => Err(ConvertToAPITypeError::Ignore),

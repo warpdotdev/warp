@@ -7,7 +7,7 @@ use warp_multi_agent_api as api;
 
 use super::convert_to::convert_input;
 use super::{ConvertToAPITypeError, RequestParams, ResponseStream};
-use crate::ai::agent::redaction;
+use crate::ai::agent::{redaction, AIAgentInput};
 use crate::server::server_api::ServerApi;
 use crate::terminal::model::session::SessionType;
 
@@ -51,6 +51,11 @@ pub async fn generate_multi_agent_output(
 
     if params.should_redact_secrets {
         redaction::redact_inputs(&mut params.input);
+    }
+    // Place the handoff marker first so the server unwinds inherited CLI subagent task state
+    // before processing the user's next input.
+    if params.pending_conversation_handoff.is_some() {
+        params.input.insert(0, AIAgentInput::ConversationHandoff);
     }
 
     let api_keys = api_keys_with_warp_credit_fallback_setting(

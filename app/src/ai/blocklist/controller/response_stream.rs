@@ -198,6 +198,12 @@ impl ResponseStream {
         &self.id
     }
 
+    pub(super) fn pending_conversation_handoff(
+        &self,
+    ) -> Option<crate::persistence::model::PendingConversationHandoff> {
+        self.params.pending_conversation_handoff
+    }
+
     /// Returns true if we should attempt to resume the conversation after the stream finishes.
     pub fn should_resume_conversation_after_stream_finished(&self) -> bool {
         self.should_resume_conversation_after_stream_finished

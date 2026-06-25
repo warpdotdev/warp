@@ -1,20 +1,53 @@
 use std::collections::HashMap;
 
+use chrono::Local;
 use uuid::Uuid;
 use warpui::{App, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
-    PassiveSuggestionTrigger, UserQueryMode,
+    api, AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext,
+    AIAgentInput, CancellationReason, ImageContext, PassiveSuggestionTrigger, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, PendingAttachment, PendingFile};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, PendingAttachment, PendingFile, RequestInput, SessionContext,
+};
+use crate::ai::llms::LLMId;
+use crate::persistence::model::PendingConversationHandoff;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
     Uuid::new_v4().to_string().parse().unwrap()
+}
+
+fn request_input_for_test(input: AIAgentInput) -> RequestInput {
+    let model = LLMId::from("test-model");
+    RequestInput {
+        conversation_id: crate::ai::agent::conversation::AIConversationId::new(),
+        input_messages: HashMap::from([(TaskId::new("test-task".to_owned()), vec![input])]),
+        working_directory: None,
+        model_id: model.clone(),
+        coding_model_id: model.clone(),
+        cli_agent_model_id: model.clone(),
+        computer_use_model_id: model,
+        shared_session_response_initiator: None,
+        request_start_ts: Local::now(),
+        supported_tools_override: None,
+    }
+}
+
+fn normal_user_query_input() -> AIAgentInput {
+    AIAgentInput::UserQuery {
+        query: "continue".to_owned(),
+        context: vec![].into(),
+        static_query_type: None,
+        referenced_attachments: HashMap::new(),
+        user_query_mode: UserQueryMode::Normal,
+        running_command: None,
+        intended_agent: None,
+    }
 }
 
 fn image_attachment(file_name: &str) -> PendingAttachment {
@@ -32,6 +65,86 @@ fn file_attachment(file_name: &str) -> PendingAttachment {
         file_path: file_name.into(),
         mime_type: "text/plain".to_owned(),
     })
+}
+
+#[test]
+fn request_params_only_snapshots_pending_handoff_for_user_inputs() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        app.update(|ctx| {
+            let user_query_request = request_input_for_test(normal_user_query_input());
+            let other_user_input_request = request_input_for_test(AIAgentInput::CreateNewProject {
+                query: "create project".to_owned(),
+                context: vec![].into(),
+            });
+            let action_result_request = request_input_for_test(AIAgentInput::ActionResult {
+                result: AIAgentActionResult {
+                    id: "action-id".to_owned().into(),
+                    task_id: TaskId::new("test-task".to_owned()),
+                    result: AIAgentActionResultType::InitProject,
+                },
+                context: vec![].into(),
+            });
+            let top_level_request = request_input_for_test(AIAgentInput::SummarizeConversation {
+                prompt: None,
+                context: vec![].into(),
+            });
+            let conversation = api::ConversationData {
+                id: user_query_request.conversation_id,
+                tasks: vec![],
+                server_conversation_token: None,
+                forked_from_conversation_token: None,
+                pending_conversation_handoff: Some(PendingConversationHandoff::CloudToLocal),
+                ambient_agent_task_id: None,
+                existing_suggestions: None,
+            };
+
+            let user_query_params = api::RequestParams::new(
+                None,
+                SessionContext::new_for_test(),
+                &user_query_request,
+                conversation.clone(),
+                None,
+                ctx,
+            );
+            assert_eq!(
+                user_query_params.pending_conversation_handoff,
+                Some(PendingConversationHandoff::CloudToLocal),
+            );
+            let other_user_input_params = api::RequestParams::new(
+                None,
+                SessionContext::new_for_test(),
+                &other_user_input_request,
+                conversation.clone(),
+                None,
+                ctx,
+            );
+            assert_eq!(
+                other_user_input_params.pending_conversation_handoff,
+                Some(PendingConversationHandoff::CloudToLocal),
+            );
+
+            let action_result_params = api::RequestParams::new(
+                None,
+                SessionContext::new_for_test(),
+                &action_result_request,
+                conversation.clone(),
+                None,
+                ctx,
+            );
+            assert_eq!(action_result_params.pending_conversation_handoff, None);
+            let top_level_params = api::RequestParams::new(
+                None,
+                SessionContext::new_for_test(),
+                &top_level_request,
+                conversation,
+                None,
+                ctx,
+            );
+            assert_eq!(top_level_params.pending_conversation_handoff, None);
+        });
+    });
 }
 
 #[test]
