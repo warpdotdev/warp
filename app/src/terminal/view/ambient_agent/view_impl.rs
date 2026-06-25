@@ -63,7 +63,6 @@ impl TerminalView {
         &self,
         status: ConversationStatus,
         error_message: Option<String>,
-        is_user_error: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(conversation_id) = self.active_ambient_agent_conversation_id(ctx) else {
@@ -76,7 +75,6 @@ impl TerminalView {
                 conversation_id,
                 status,
                 error_message,
-                is_user_error,
                 ctx,
             );
         });
@@ -201,7 +199,6 @@ impl TerminalView {
                 self.update_active_ambient_agent_conversation_status(
                     ConversationStatus::InProgress,
                     None,
-                    false,
                     ctx,
                 );
                 let pending_prompt = ambient_agent_view_model
@@ -258,15 +255,11 @@ impl TerminalView {
                 ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
                 ctx.notify();
             }
-            AmbientAgentViewModelEvent::Failed {
-                error_message,
-                is_user_error,
-            } => {
+            AmbientAgentViewModelEvent::Failed { error_message } => {
                 self.pending_cloud_followup_task_id = None;
                 self.update_active_ambient_agent_conversation_status(
                     ConversationStatus::Error,
                     Some(error_message.clone()),
-                    *is_user_error,
                     ctx,
                 );
 
@@ -313,7 +306,6 @@ impl TerminalView {
                                 .to_string(),
                         },
                         None,
-                        false,
                         ctx,
                     );
                 }
@@ -326,7 +318,6 @@ impl TerminalView {
                 self.update_active_ambient_agent_conversation_status(
                     ConversationStatus::Cancelled,
                     None,
-                    false,
                     ctx,
                 );
                 // Refresh the details panel to show cancelled status

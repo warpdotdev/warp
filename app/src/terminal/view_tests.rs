@@ -1965,7 +1965,6 @@ fn cloud_mode_failed_keeps_queued_query_above_tombstone_and_hides_input() {
             view.handle_ambient_agent_event(
                 &AmbientAgentViewModelEvent::Failed {
                     error_message: "setup failed".to_string(),
-                    is_user_error: false,
                 },
                 ctx,
             );
@@ -2015,7 +2014,6 @@ fn cloud_mode_failed_keeps_queued_query_above_tombstone_and_hides_input() {
             view.handle_ambient_agent_event(
                 &AmbientAgentViewModelEvent::Failed {
                     error_message: "setup failed again".to_string(),
-                    is_user_error: false,
                 },
                 ctx,
             );

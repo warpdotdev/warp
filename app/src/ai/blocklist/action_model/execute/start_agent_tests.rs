@@ -256,7 +256,6 @@ fn execute_resolves_error_when_request_linkage_happens_after_child_already_faile
                 child_conversation_id,
                 ConversationStatus::Error,
                 Some("'codex' CLI not found on your machine.".to_string()),
-                false,
                 ctx,
             );
         });
@@ -437,7 +436,6 @@ fn execute_returns_detailed_error_when_child_startup_fails_before_initialization
                 child_conversation_id,
                 ConversationStatus::Error,
                 Some("Failed to resolve child agent skills: review-comments".to_string()),
-                false,
                 ctx,
             );
         });
@@ -808,7 +806,6 @@ fn parallel_pendings_each_resolve_independently_via_recorded_child_id() {
                 child_b,
                 ConversationStatus::Error,
                 Some("Agent B init failed".to_string()),
-                false,
                 ctx,
             );
         });
@@ -946,7 +943,6 @@ fn errored_child_launch_emits_cleanup_event() {
                 state.child_conversation_id,
                 ConversationStatus::Error,
                 Some("Child agent failed to spawn".to_string()),
-                false,
                 ctx,
             );
         });

@@ -1220,7 +1220,6 @@ impl BlocklistAIHistoryModel {
             conversation_id,
             status,
             None,
-            false,
             ctx,
         );
     }
@@ -1231,14 +1230,12 @@ impl BlocklistAIHistoryModel {
         conversation_id: AIConversationId,
         status: ConversationStatus,
         error_message: Option<String>,
-        is_user_error: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             conversation.update_status_with_error_message(
                 status,
                 error_message,
-                is_user_error,
                 terminal_view_id,
                 ctx,
             );

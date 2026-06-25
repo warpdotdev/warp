@@ -272,7 +272,6 @@ pub(crate) fn create_error_child_agent_conversation(
             conversation_id,
             ConversationStatus::Error,
             Some(error_message),
-            false,
             ctx,
         );
     });

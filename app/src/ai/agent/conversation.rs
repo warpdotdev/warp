@@ -214,11 +214,6 @@ pub struct AIConversation {
     status: ConversationStatus,
     /// Optional detail for the current error status.
     status_error_message: Option<String>,
-    /// When set alongside `status_error_message`, indicates the error originated
-    /// from a user-facing failure (e.g. quota exhausted) rather than a platform
-    /// or infrastructure error. Used by `LocalAgentTaskSyncModel` to report
-    /// `AgentTaskState::Failed` instead of `AgentTaskState::Error`.
-    status_is_user_error: bool,
 
     /// Tracks whether the code review has been opened at least once for this conversation.
     has_opened_code_review: bool,
@@ -356,7 +351,6 @@ impl AIConversation {
             todo_lists: vec![],
             status: ConversationStatus::InProgress,
             status_error_message: None,
-            status_is_user_error: false,
             has_opened_code_review: false,
             conversation_usage_metadata: ConversationUsageMetadata::default(),
             server_conversation_token: None,
@@ -592,7 +586,6 @@ impl AIConversation {
             task_store,
             status,
             status_error_message: None,
-            status_is_user_error: false,
             todo_lists,
             // TODO(alokedesai): Support session restoration for code review comments.
             code_review: None,
@@ -899,12 +892,6 @@ impl AIConversation {
         self.status_error_message = msg;
     }
 
-    /// Test-only setter for the is-user-error flag.
-    #[cfg(test)]
-    pub(crate) fn set_status_is_user_error_for_test(&mut self, is_user_error: bool) {
-        self.status_is_user_error = is_user_error;
-    }
-
     /// Test-only helper: appends an exchange to the root task so status-derivation
     /// logic (e.g. `map_conversation_status`) can be exercised end-to-end.
     #[cfg(test)]
@@ -917,39 +904,30 @@ impl AIConversation {
         self.status_error_message.as_deref()
     }
 
-    /// Returns true when the current error originated from a user-facing
-    /// failure (e.g. quota exhausted) rather than a platform error.
-    pub fn status_is_user_error(&self) -> bool {
-        self.status_is_user_error
-    }
-
     pub fn update_status(
         &mut self,
         status: ConversationStatus,
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        self.update_status_with_error_message(status, None, false, terminal_view_id, ctx);
+        self.update_status_with_error_message(status, None, terminal_view_id, ctx);
     }
 
     pub fn update_status_with_error_message(
         &mut self,
         status: ConversationStatus,
         error_message: Option<String>,
-        is_user_error: bool,
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        let is_error_status = matches!(
+        self.status_error_message = if matches!(
             &status,
             ConversationStatus::Error | ConversationStatus::TransientError
-        );
-        self.status_error_message = if is_error_status {
+        ) {
             error_message.filter(|message| !message.trim().is_empty())
         } else {
             None
         };
-        self.status_is_user_error = is_error_status && is_user_error;
         let prev_status = self.status.clone();
         let new_status = status.clone();
         self.status = status;
@@ -2319,7 +2297,6 @@ impl AIConversation {
         self.update_status_with_error_message(
             status,
             Some(error.to_string()),
-            false,
             terminal_view_id,
             ctx,
         );
