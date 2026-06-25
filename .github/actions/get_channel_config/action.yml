@@ -26,12 +26,6 @@ outputs:
   release_body_text:
     description: The body text for the GitHub release.
     value: ${{ steps.get-config.outputs.release_body_text }}
-  sentry_project:
-    description: The Sentry project under which a new release should be created.
-    value: ${{ steps.get-config.outputs.sentry_project }}
-  sentry_environment:
-    description: The environment to set for this channel's Sentry release.
-    value: ${{ steps.get-config.outputs.sentry_environment }}
   changelog_slack_channel:
     description: The Slack channel where the release's changelog should be posted.
     value: ${{ steps.get-config.outputs.changelog_slack_channel }}

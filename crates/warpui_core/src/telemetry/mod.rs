@@ -16,38 +16,28 @@ lazy_static! {
 #[macro_export]
 macro_rules! record_telemetry_from_ctx {
     ($user_id: expr, $anonymous_id: expr, $name:expr, $payload: expr, $contains_ugc: expr, $ctx: expr) => {{
-        let timestamp = $crate::time::get_current_time();
-        $ctx.background_executor()
-            .spawn(async move {
-                $crate::telemetry::record_event(
-                    $user_id,
-                    $anonymous_id,
-                    $name,
-                    $payload,
-                    $contains_ugc,
-                    timestamp,
-                )
-            })
-            .detach();
+        let _ = (
+            $user_id,
+            $anonymous_id,
+            $name,
+            $payload,
+            $contains_ugc,
+            &$ctx,
+        );
     }};
 }
 
 #[macro_export]
 macro_rules! record_telemetry_on_executor {
     ($user_id: expr, $anonymous_id: expr, $name:expr, $payload: expr, $contains_ugc: expr, $executor: expr) => {{
-        let timestamp = $crate::time::get_current_time();
-        let _ = $executor
-            .spawn(async move {
-                $crate::telemetry::record_event(
-                    $user_id,
-                    $anonymous_id,
-                    $name,
-                    $payload,
-                    $contains_ugc,
-                    timestamp,
-                )
-            })
-            .detach();
+        let _ = (
+            $user_id,
+            $anonymous_id,
+            $name,
+            $payload,
+            $contains_ugc,
+            &$executor,
+        );
     }};
 }
 
@@ -80,8 +70,7 @@ pub fn record_event(
     contains_ugc: bool,
     timestamp: DateTime<Utc>,
 ) {
-    let mut telemetry = TELEMETRY.lock();
-    telemetry.record_event(
+    let _ = (
         user_id,
         anonymous_id,
         name,
@@ -92,8 +81,7 @@ pub fn record_event(
 }
 
 pub fn record_identify_user_event(user_id: String, anonymous_id: String, timestamp: DateTime<Utc>) {
-    let mut telemetry = TELEMETRY.lock();
-    telemetry.record_identify_user_event(user_id, anonymous_id, timestamp);
+    let _ = (user_id, anonymous_id, timestamp);
 }
 
 /// Adds a 'App Active' event to the global event queue.  This should only be called in an async
@@ -103,10 +91,10 @@ pub fn record_app_active_event(
     anonymous_id: String,
     timestamp: DateTime<Utc>,
 ) {
-    let mut telemetry = TELEMETRY.lock();
-    telemetry.record_app_active(user_id, anonymous_id, timestamp);
+    let _ = (user_id, anonymous_id, timestamp);
 }
 
 pub fn flush_events() -> Vec<Event> {
-    TELEMETRY.lock().events.drain(..).collect()
+    TELEMETRY.lock().events.clear();
+    Vec::new()
 }

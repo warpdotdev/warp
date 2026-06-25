@@ -138,10 +138,8 @@ ensure_git_lfs() {
     echo
     echo "warning: git-lfs is not installed. Install it before continuing:"
     case "${OS_TYPE}" in
-      Darwin)               echo "  brew install git-lfs" ;;
-      Linux)                echo "  sudo apt-get install -y git-lfs   # or your distro's package manager" ;;
-      MINGW64_NT*|MSYS_NT*)  echo "  choco install git-lfs            # or: winget install GitHub.GitLFS" ;;
-      *)                    echo "  See https://git-lfs.com for install instructions." ;;
+      Darwin) echo "  brew install git-lfs" ;;
+      *)      echo "  Zerp bootstrap only supports macOS arm64." ;;
     esac
     echo "After installing, re-run ./script/bootstrap."
     return 1
@@ -152,25 +150,11 @@ ensure_git_lfs() {
 
 ensure_git_lfs
 
-if [[ "$OS_TYPE" = "Darwin" ]]; then
-  print_bootstrap_preview "macOS"
-  ./script/macos/bootstrap "${PLATFORM_ARGS[@]}"
-  maybe_install_common_skills
-elif [[ "$OS_TYPE" = "Linux" ]]; then
-  print_bootstrap_preview "Linux"
-  ./script/linux/bootstrap "${PLATFORM_ARGS[@]}"
-  maybe_install_common_skills
-elif [[ "$OS_TYPE" =~ ^(MINGW64_NT|MSYS_NT) ]]; then
-  if [[ "${INSTALL_COMMON_SKILLS}" -eq 1 ]]; then
-    if [[ -n "${COMMON_SKILLS_TARGET}" ]]; then
-      ./script/windows/bootstrap.ps1 "${PLATFORM_ARGS[@]}" -InstallCommonSkills -CommonSkillsTarget "${COMMON_SKILLS_TARGET}"
-    else
-      ./script/windows/bootstrap.ps1 "${PLATFORM_ARGS[@]}" -InstallCommonSkills
-    fi
-  else
-    ./script/windows/bootstrap.ps1 "${PLATFORM_ARGS[@]}"
-  fi
-else
-  echo "No bootstrap script defined for the current platform!"
+if [[ "$OS_TYPE" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
+  echo "Zerp bootstrap only supports macOS arm64." >&2
   exit 1
 fi
+
+print_bootstrap_preview "macOS arm64"
+./script/macos/bootstrap "${PLATFORM_ARGS[@]}"
+maybe_install_common_skills

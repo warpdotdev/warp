@@ -3,13 +3,9 @@ use std::path::{Path, PathBuf};
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
 use enum_iterator::Sequence;
-use lsp::supported_servers::LSPServerType;
-#[cfg(not(target_family = "wasm"))]
-use repo_metadata::repositories::DetectedRepositories;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{Entity, ModelContext, SingletonEntity as _};
 
-use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::settings::CodeSettings;
 use crate::terminal::view::init_project::lsp_server_selector::LSPServerInfo;
 use crate::terminal::view::init_project::{
@@ -155,9 +151,7 @@ impl InitProjectModel {
 
         // Start async computations for subsequent steps
         self.compute_codebase_context_step(&pwd_path, ctx);
-        if self.path_env_var.is_some() {
-            self.compute_language_servers_step(&pwd_path, ctx);
-        }
+        self.set_step(InitStepKind::LanguageServers, None);
         self.compute_project_scoped_rules_step(&pwd_path, ctx);
 
         // Cloud environments are outside this fork's supported third-party CLI-only scope.
@@ -389,102 +383,6 @@ impl InitProjectModel {
                 )),
             );
         }
-    }
-
-    fn compute_language_servers_step(&mut self, pwd_path: &Path, ctx: &mut ModelContext<Self>) {
-        // Start as Pending
-        self.set_step(
-            InitStepKind::LanguageServers,
-            Some(InitStep::new_pending(InitStepKind::LanguageServers)),
-        );
-
-        let pwd_path = pwd_path.to_path_buf();
-        #[cfg(not(target_family = "wasm"))]
-        let repo_root = DetectedRepositories::as_ref(ctx)
-            .get_root_for_path(&LocalOrRemotePath::Local(pwd_path.clone()))
-            .and_then(|r| r.to_local_path().map(std::path::Path::to_path_buf))
-            .unwrap_or_else(|| pwd_path.clone());
-        #[cfg(target_family = "wasm")]
-        let repo_root = pwd_path.clone();
-        let repo_root_for_callback = repo_root.clone();
-        let executor = lsp::CommandBuilder::new(self.path_env_var.clone());
-        let http_client =
-            crate::server::server_api::ServerApiProvider::as_ref(ctx).get_http_client();
-
-        ctx.spawn(
-            async move {
-                let mut relevant_servers = Vec::new();
-                for server_type in LSPServerType::all() {
-                    let candidate = server_type.candidate(http_client.clone());
-                    let should_suggest = candidate
-                        .should_suggest_for_repo(&repo_root, &executor)
-                        .await;
-
-                    if should_suggest {
-                        let is_installed = candidate.is_installed(&executor).await;
-
-                        relevant_servers.push(LSPServerInfo {
-                            server_type,
-                            is_installed,
-                        });
-                    }
-                }
-                relevant_servers
-            },
-            move |me, relevant_servers, ctx| {
-                let repo_root = repo_root_for_callback;
-
-                if relevant_servers.is_empty() {
-                    // No relevant servers, mark step as None (skip it)
-                    me.set_step(InitStepKind::LanguageServers, None);
-                    me.maybe_emit_next_step(ctx);
-                    return;
-                }
-
-                // Check if already enabled and filter
-                let enabled_server_types: Vec<LSPServerType> = {
-                    let enabled_lsp_servers =
-                        PersistedWorkspace::as_ref(ctx).enabled_lsp_servers(&pwd_path);
-
-                    enabled_lsp_servers
-                        .map(|servers| servers.collect())
-                        .unwrap_or_default()
-                };
-
-                let filtered_servers: Vec<LSPServerInfo> = relevant_servers
-                    .into_iter()
-                    .filter(|info| !enabled_server_types.contains(&info.server_type))
-                    .collect();
-
-                if filtered_servers.is_empty() {
-                    // All relevant servers already enabled, auto-complete
-                    me.set_step(
-                        InitStepKind::LanguageServers,
-                        Some(InitStep::new_completed(
-                            InitStepKind::LanguageServers,
-                            InitActionResult::LanguageServers(LanguageServersResult::Accepted {
-                                enabled_servers: enabled_server_types,
-                                servers_to_install: Vec::new(),
-                            }),
-                        )),
-                    );
-                } else {
-                    // Ready for user interaction
-                    me.set_step(
-                        InitStepKind::LanguageServers,
-                        Some(InitStep::new_ready(
-                            InitStepKind::LanguageServers,
-                            InitStepData::LanguageServers {
-                                servers: filtered_servers,
-                                repo_path: repo_root,
-                            },
-                        )),
-                    );
-                }
-
-                me.maybe_emit_next_step(ctx);
-            },
-        );
     }
 
     fn compute_project_scoped_rules_step(&mut self, pwd_path: &Path, ctx: &mut ModelContext<Self>) {

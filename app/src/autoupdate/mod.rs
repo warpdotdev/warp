@@ -1,11 +1,7 @@
 mod changelog;
 mod channel_versions;
-#[cfg(target_os = "linux")]
-pub mod linux;
 #[cfg(target_os = "macos")]
 mod mac;
-#[cfg(windows)]
-mod windows;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -24,7 +20,7 @@ use warpui::windowing::{self, WindowManager};
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, ViewContext};
 
 pub use self::changelog::get_current_changelog;
-use self::channel_versions::fetch_channel_versions;
+use self::channel_versions::{fetch_channel_versions, fetch_github_latest_release_version};
 use crate::channel::Channel;
 use crate::features::FeatureFlag;
 use crate::server::server_api::ServerApi;
@@ -689,7 +685,6 @@ pub enum DownloadReady {
     /// The update was downloaded successfully.
     Yes,
     /// There were insufficient permissions to download the update.
-    #[cfg_attr(windows, allow(dead_code))]
     NeedsAuthorization,
     /// A newer version could not be downloaded.
     No,
@@ -697,17 +692,10 @@ pub enum DownloadReady {
 
 /// Whether or not we're ready to relaunch the app after the user requests that
 /// we apply an update.
-///
-/// This exists for Linux, when the app is installed via a package manager.
-/// Instead of immediately applying the update, we open a new tab and populate
-/// the input field with the command the user needs to run to install the
-/// update via their package manager.  After the update completes, we send
-/// ourselves a signal (via a DCS hook) that the update has completed and we're
-/// ready to relaunch.
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub enum ReadyForRelaunch {
     Yes,
-    #[cfg_attr(any(target_os = "macos", windows), allow(dead_code))]
+    #[allow(dead_code)]
     No,
 }
 
@@ -774,13 +762,18 @@ async fn fetch_version(
     update_id: &str,
     server_api: Arc<ServerApi>,
 ) -> Result<VersionInfo> {
+    if matches!(channel, Channel::Oss) {
+        return fetch_github_latest_release_version(server_api.http_client()).await;
+    }
+
     let versions = fetch_channel_versions(update_id, server_api.clone(), false, is_daily).await?;
 
     let channel_version = match channel {
+        Channel::Oss => unreachable!("OSS autoupdate is handled by GitHub releases"),
         Channel::Stable => versions.stable,
         Channel::Preview => versions.preview,
         Channel::Dev => versions.dev,
-        Channel::Integration | Channel::Local | Channel::Oss => {
+        Channel::Integration | Channel::Local => {
             // These channels don't ship release artifacts, so there's no
             // version to fetch. This branch is normally unreachable because
             // `AutoupdateState::register` gates the poll loop on the
@@ -788,9 +781,7 @@ async fn fetch_version(
             // can end up with `Autoupdate` enabled while running on one of
             // these channels. Return an error rather than panicking so the
             // poll loop just logs and bails.
-            anyhow::bail!(
-                "Local, integration, and open-source channel binaries don't support autoupdate"
-            );
+            anyhow::bail!("Local and integration channel binaries don't support autoupdate");
         }
     };
     let version_info = channel_version.version_info();
@@ -814,12 +805,8 @@ async fn download_update(
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
             mac::download_update_and_cleanup(&version_info, &update_id, last_successful_update_id.as_deref(), server_api.http_client()).await
-        } else if #[cfg(target_os = "linux")] {
-            linux::download_update_and_cleanup(&version_info, &update_id, server_api.http_client()).await
-        } else if #[cfg(windows)] {
-            windows::download_update_and_cleanup(&version_info, &update_id, server_api.http_client()).await
         } else {
-            Err(anyhow::anyhow!("Not implemented"))
+            Err(anyhow::anyhow!("Zerp autoupdate only supports macOS arm64."))
         }
     }
 }
@@ -829,29 +816,16 @@ async fn download_update(
 /// action is needed to apply the update, and the app shouldn't relaunch automatically.
 ///
 /// The timing of how updates are applied is very platform-specific:
-/// * On macOS, updates are applied asynchronously, _immediately_ before relaunching. This always
-///   returns [`ReadyForRelaunch::Yes`].
-/// * On Windows, updates are applied by a separate installer process, which is spawned
-///   [just before the app terminates](spawn_child_if_necessary).
-/// * On Linux, if using a package manager, we ask the user to install the update via their package
-///   manager, and do not relaunch until that's complete. This returns [`ReadyForRelaunch::No`].
+/// On macOS, updates are applied asynchronously, _immediately_ before relaunching.
 pub fn apply_update(
     _initiating_workspace: &mut Workspace,
     _ctx: &mut ViewContext<Workspace>,
 ) -> Result<ReadyForRelaunch> {
     cfg_if::cfg_if! {
-        if #[cfg(any(target_os = "macos", windows))] {
-            // macOS applies the update during the download step. Windows does it during
-            // `spawn_child_if_necessary`. In either case, simply continue relaunching the app.
+        if #[cfg(target_os = "macos")] {
             Ok(ReadyForRelaunch::Yes)
-        } else if #[cfg(target_os = "linux")] {
-            let AutoupdateStage::UpdateReady { update_id, .. } = &AutoupdateState::handle(_ctx).as_ref(_ctx).stage else {
-                anyhow::bail!("Trying to apply an update without AutoupdateState being UpdateReady!");
-            };
-            let update_id = update_id.clone();
-            linux::apply_update(_initiating_workspace, &update_id, _ctx)
         } else {
-            anyhow::bail!("Not implemented")
+            anyhow::bail!("Zerp autoupdate only supports macOS arm64.")
         }
     }
 }
@@ -1021,12 +995,8 @@ pub fn spawn_child_if_necessary(app: &mut AppContext) {
         cfg_if::cfg_if! {
             if #[cfg(target_os = "macos")] {
                 let relaunch_status = mac::relaunch();
-            } else if #[cfg(target_os = "linux")] {
-                let relaunch_status = linux::relaunch();
-            } else if #[cfg(windows)] {
-                let relaunch_status = windows::relaunch();
             } else {
-                let relaunch_status: Result<()> = Err(anyhow!("No autoupdate support on this platform!"));
+                let relaunch_status: Result<()> = Err(anyhow!("Zerp autoupdate only supports macOS arm64."));
             }
         }
         match relaunch_status {
@@ -1064,23 +1034,15 @@ fn manually_download_version(channel: &Channel, version: &VersionInfo, ctx: &mut
 }
 
 pub(crate) fn check_and_report_update_errors(_ctx: &mut AppContext) {
-    #[cfg(windows)]
-    windows::check_and_report_update_errors(_ctx);
+    let _ = _ctx;
 }
 
 pub fn remove_old_executable() -> Result<()> {
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
             mac::remove_old_executable()
-        } else if #[cfg(any(target_os = "linux", windows))] {
-            // Nothing to do on Linux or Windows; we don't leave anything behind to clean up after
-            // a relaunch.
-            Ok(())
-        } else if #[cfg(target_family = "wasm")] {
-            // Nothing to do on web. There's no executables stored somewhere.
-            Ok(())
         } else {
-            Err(anyhow::anyhow!("Not implemented"))
+            Err(anyhow::anyhow!("Zerp autoupdate only supports macOS arm64."))
         }
     }
 }
@@ -1152,8 +1114,9 @@ fn release_assets_directory_url(channel: Channel, version: &str) -> String {
             format!("{releases_base_url}/preview/{version}")
         }
         Channel::Dev => format!("{releases_base_url}/dev/{version}"),
-        Channel::Local | Channel::Integration | Channel::Oss => {
-            unreachable!("local/integration/oss autoupdate not supported");
+        Channel::Oss => format!("{releases_base_url}/{version}"),
+        Channel::Local | Channel::Integration => {
+            unreachable!("local/integration autoupdate not supported")
         }
     }
 }

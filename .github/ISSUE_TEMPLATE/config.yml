@@ -5,7 +5,7 @@ contact_links:
     about: Search Warp's open bugs and enhancements.
   - name: Warp Documentation
     url: https://docs.warp.dev/support-and-billing/known-issues?q=
-    about: Documentation for features, known issues, troubleshooting, keyboard shortcuts, telemetry table, and more!
+    about: Documentation for features, known issues, troubleshooting, keyboard shortcuts, and more!
   - name: Warp Changelog
     url: https://docs.warp.dev/changelog
     about: See our changelog to learn about new features, improvements, bug fixes, and Oz updates.

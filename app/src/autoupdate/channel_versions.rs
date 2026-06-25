@@ -3,11 +3,36 @@ use std::fs::read_to_string;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use channel_versions::ChannelVersions;
+use channel_versions::{ChannelVersions, VersionInfo};
+use serde::Deserialize;
 
 use crate::channel::{Channel, ChannelState};
 use crate::report_error;
 use crate::server::server_api::{ServerApi, FETCH_CHANNEL_VERSIONS_TIMEOUT};
+
+const ZERP_GITHUB_LATEST_RELEASE_URL: &str =
+    "https://api.github.com/repos/bestdonger/warp/releases/latest";
+
+#[derive(Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+}
+
+pub async fn fetch_github_latest_release_version(
+    client: &http_client::Client,
+) -> Result<VersionInfo> {
+    log::info!("Fetching Zerp latest release from GitHub");
+    let res = client
+        .get(ZERP_GITHUB_LATEST_RELEASE_URL)
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "Zerp")
+        .timeout(FETCH_CHANNEL_VERSIONS_TIMEOUT)
+        .send()
+        .await?
+        .error_for_status()?;
+    let release: GitHubRelease = res.json().await?;
+    Ok(VersionInfo::new(release.tag_name))
+}
 
 // Fetches channel versions asynchronously from the Warp server. If the Warp server request fails,
 // then fetches from GCP JSON storage as a fallback.

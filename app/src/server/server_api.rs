@@ -913,57 +913,43 @@ impl ServerApi {
         }
     }
 
-    /// Synchronously sends a [`TelemetryEvent`] to the Rudderstack API. Prefer not to call this
-    /// directly, use the macros defined in crate::server::telemetry::macros. If telemetry is
-    /// disabled, this is a no-op.
+    /// Zerp does not send telemetry.
     pub async fn send_telemetry_event(
         &self,
         event: impl TelemetryEvent,
         settings_snapshot: PrivacySettingsSnapshot,
     ) -> Result<()> {
-        let user_id = self.user_id();
-        let anonymous_id = self.anonymous_id();
-        self.telemetry_api
-            .send_telemetry_event(user_id, anonymous_id, event, settings_snapshot)
-            .await
+        let _ = (event, settings_snapshot);
+        Ok(())
     }
 
-    /// Drains all queued [`TelemetryEvent`]s into Rudderstack requests containing the corresponding
-    /// batch of events. Events are queued using the [`send_telemetry_from_ctx`] or
-    /// [`send_telemetry_from_app_ctx`] macros. If telemetry is disabled for the user, this flushes
-    /// the UI framework event queue and does nothing with them (no request is made).
-    ///
-    /// Returns the number of events that were flushed.
+    /// Zerp does not send telemetry.
     pub async fn flush_telemetry_events(
         &self,
         settings_snapshot: PrivacySettingsSnapshot,
     ) -> Result<usize> {
-        self.telemetry_api.flush_events(settings_snapshot).await
+        let _ = settings_snapshot;
+        Ok(0)
     }
 
-    /// Sends a batched Rudder request containing events written to the file at `path`. This is a
-    /// no-op if telemetry is disabled.
+    /// Zerp does not send telemetry.
     pub async fn flush_persisted_events_to_rudder(
         &self,
         path: &Path,
         settings_snapshot: PrivacySettingsSnapshot,
     ) -> Result<()> {
-        self.telemetry_api
-            .flush_persisted_events_to_rudder(path, settings_snapshot)
-            .await
+        let _ = (path, settings_snapshot);
+        Ok(())
     }
 
-    /// Writes all queued [`TelemetryEvent`]s to a file, limiting the number of written
-    /// events to `max_events`. Events are queued using the [`send_telemetry_from_ctx`] or
-    /// [`send_telemetry_from_app_ctx`] macros. If telemetry is disabled, no events are written to
-    /// disk.
+    /// Zerp does not send telemetry.
     pub fn persist_telemetry_events(
         &self,
         max_event_count: usize,
         settings_snapshot: PrivacySettingsSnapshot,
     ) -> Result<()> {
-        self.telemetry_api
-            .flush_and_persist_events(max_event_count, settings_snapshot)
+        let _ = (max_event_count, settings_snapshot);
+        Ok(())
     }
 
     /// Hits the /ai/generate_input_suggestions endpoint to get the predicted next action, based on past context.

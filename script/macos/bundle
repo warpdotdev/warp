@@ -47,19 +47,12 @@ WORKSPACE_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # This is used to set the minimum deployment target for mac
 # https://cmake.org/cmake/help/latest/envvar/MACOSX_DEPLOYMENT_TARGET.html
-# If unset, it uses the system one, but we want to build for older versions
-# of mac os by default.
-#
-# This should be kept in sync with the definition of this variable in
-# `.cargo/config.toml`.
-export MACOSX_DEPLOYMENT_TARGET="10.14"
+# Apple Silicon Macs require macOS 11+; Zerp does not ship Intel-era compatibility builds.
+export MACOSX_DEPLOYMENT_TARGET="11.0"
 
 # Constants used later in the script.
-INTEL_ARCH="x86_64"
-INTEL_TARGET="$INTEL_ARCH-apple-darwin"
 ARM_ARCH="aarch64"
 ARM_TARGET="$ARM_ARCH-apple-darwin"
-DEFAULT_ARCH="$(rustc --print cfg | grep target_arch)"
 
 # Function to clean up temporary DMG files
 cleanup_dmg_files() {
@@ -93,13 +86,12 @@ function relpath() {
 }
 
 # Defaults for command-line flags.
-UNIVERSAL_BINARY=true
 BUILD_BINARY=true
-TARGET_ARCH=""
+TARGET_ARCH="$ARM_ARCH"
 DMG_NAME_SUFFIX=""
 # By default we build dev bundles.
 RELEASE_CHANNEL="dev"
-FEATURES="release_bundle,cocoa_sentry,extern_plist"
+FEATURES="release_bundle,extern_plist"
 REGISTER_SERVICES=true
 DEBUG=false
 ARTIFACT="app"
@@ -145,22 +137,15 @@ while (( "$#" )); do
       SELFSIGN=true
       shift
       ;;
-    # Build only for the default target architecture instead of universal binary
-    --nouniversal)
-      echo "Only building for default target $DEFAULT_TARGET, not a universal binary."
-      UNIVERSAL_BINARY=false
-      shift
-      ;;
-    # Build only for a specific architecture (implies --nouniversal)
+    # Build only for a specific architecture.
     --arch)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
-        if [ "$2" = "x86_64" -o "$2" = "aarch64" ]; then
+        if [ "$2" = "aarch64" ]; then
           echo "Building for specific architecture: $2"
           TARGET_ARCH=$2
-          UNIVERSAL_BINARY=false
           shift 2
         else
-          echo "Error: --arch must be either x86_64 or aarch64, got '$2'" >&2
+          echo "Error: Zerp only supports --arch aarch64, got '$2'" >&2
           exit 1
         fi
       else
@@ -274,8 +259,7 @@ if [[ $RELEASE_CHANNEL = "local" ]]; then
     ZERP_APP_NAME="ZerpLocal"
     ZERP_SCHEME_NAME="zerplocal"
     FEATURES="$FEATURES,agent_mode_debug"
-    # For local builds, use different versions of our bundled frameworks (e.g.:
-    # Sentry).  This needs to be exported so it can be referenced by
+    # For local builds, use different versions of bundled frameworks. This needs to be exported so it can be referenced by
     # app/build.rs later, while running `cargo bundle`.
     export FRAMEWORK_OVERRIDE="dev"
 elif [[ $RELEASE_CHANNEL = "dev" ]]; then
@@ -288,8 +272,7 @@ elif [[ $RELEASE_CHANNEL = "dev" ]]; then
     FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
     # Enable the Warp Control CLI wrapper for local scripting/automation.
     FEATURES="$FEATURES,warp_control_cli"
-    # For dev builds, use different versions of our bundled frameworks (e.g.:
-    # Sentry).  This needs to be exported so it can be referenced by
+    # For dev builds, use different versions of bundled frameworks. This needs to be exported so it can be referenced by
     # app/build.rs later, while running `cargo bundle`.
     export FRAMEWORK_OVERRIDE="dev"
     export HANDLE_MARKDOWN=1
@@ -313,44 +296,21 @@ elif [[ $RELEASE_CHANNEL = "oss" ]]; then
     BUNDLE_ID="dev.zerp.Zerp"
     ZERP_APP_NAME="Zerp"
     ZERP_SCHEME_NAME="zerp"
-    # The OSS channel does not ship Sentry, so drop the cocoa_sentry feature
-    # (which would otherwise pull in the Sentry framework dependency).
     FEATURES="release_bundle,extern_plist"
 fi
 
 OUT_DIR="target/$TARGET_PROFILE_DIR/bundle/osx"
 DOCK_TILE_PLUGIN_DIR="target/$TARGET_PROFILE_DIR/ZerpDockTilePlugin.docktileplugin"
 
-# Handle specific architecture targeting
-if [[ -n "$TARGET_ARCH" ]]; then
-    # Building for a specific architecture
-    if [[ "$TARGET_ARCH" == "$INTEL_ARCH" ]]; then
-        echo "Building specifically for $INTEL_TARGET"
-        DEFAULT_TARGET="$INTEL_TARGET"
-        BUNDLE_DIR="target/$INTEL_TARGET/$TARGET_PROFILE_DIR/bundle/osx"
-    elif [[ "$TARGET_ARCH" == "$ARM_ARCH" ]]; then
-        echo "Building specifically for $ARM_TARGET"
-        DEFAULT_TARGET="$ARM_TARGET"
-        BUNDLE_DIR="target/$ARM_TARGET/$TARGET_PROFILE_DIR/bundle/osx"
-    fi
-else
-    # Auto-detect default target based on current architecture
-    if [[ "$DEFAULT_ARCH" == *"$INTEL_ARCH"* ]]; then
-        echo "Default target is $INTEL_TARGET"
-        DEFAULT_TARGET="$INTEL_TARGET"
-        ADDITIONAL_TARGET="$ARM_TARGET"
-        BUNDLE_DIR="target/$INTEL_TARGET/$TARGET_PROFILE_DIR/bundle/osx"
-    elif [[ "$DEFAULT_ARCH" == *"$ARM_ARCH"* ]]; then
-        echo "Default target is $ARM_TARGET"
-        DEFAULT_TARGET="$ARM_TARGET"
-        ADDITIONAL_TARGET="$INTEL_TARGET"
-        BUNDLE_DIR="target/$ARM_TARGET/$TARGET_PROFILE_DIR/bundle/osx"
-    fi
+if [[ "$TARGET_ARCH" != "$ARM_ARCH" ]]; then
+    echo "Zerp only supports aarch64 macOS bundles." >&2
+    exit 1
 fi
+DEFAULT_TARGET="$ARM_TARGET"
+BUNDLE_DIR="target/$ARM_TARGET/$TARGET_PROFILE_DIR/bundle/osx"
 
 # Set artifact-specific configuration.
 if [[ "$ARTIFACT" == cli || "$ARTIFACT" == warpctrl ]]; then
-  UNIVERSAL_BINARY=false
   OPEN_AFTER_BUNDLE=false
   FEATURES="$FEATURES,standalone"
 elif [[ "$ARTIFACT" == app ]]; then
@@ -358,19 +318,11 @@ elif [[ "$ARTIFACT" == app ]]; then
   FEATURES="$FEATURES,gui,nld_classifier_v3,nld_heuristic_v2"
 fi
 
-# If we're building a universal bundle for the app artifact, make sure the additional target is available.
-if [[ $UNIVERSAL_BINARY = true ]]; then
-    rustup target add "$ADDITIONAL_TARGET"
-fi
-
 # If we only want to check that compilation will succeed, perform the checks
 # then exit.  We use this script to invoke `cargo check` to ensure that we are
 # using the same feature flags and profile that we would be using in production.
 if [[ "$CHECK_ONLY" == "true" ]]; then
   cargo check --profile "$CARGO_PROFILE" --bin "$ZERP_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
-  if [[ $UNIVERSAL_BINARY = true && "$ARTIFACT" != "cli" && "$ARTIFACT" != "warpctrl" ]]; then
-    cargo check --profile "$CARGO_PROFILE" --bin "$ZERP_BIN" --target "$ADDITIONAL_TARGET" --features "$FEATURES"
-  fi
   exit 0
 fi
 
@@ -402,7 +354,7 @@ if [[ "$ARTIFACT" == "app" ]]; then
   cargo bundle --profile "$CARGO_PROFILE" --bin "$ZERP_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
   popd > /dev/null
 
-  echo "Adding rpath to support mac frameworks (e.g. Sentry)"
+  echo "Adding framework rpath"
   install_name_tool -add_rpath "@executable_path/../Frameworks" "$BUNDLE_DIR/$ZERP_APP_NAME.app/Contents/MacOS/$ZERP_BIN"
 
   export ZERP_SCHEME_NAME
@@ -463,54 +415,11 @@ if [[ "$ARTIFACT" == "app" ]]; then
   # Add SMAuthorizedClients for macOS 13+ (Ventura) to support login item functionality
   plutil -insert SMAuthorizedClients -xml "<array><string>$BUNDLE_ID</string></array>" "$BUNDLE_DIR"/$ZERP_APP_NAME.app/Contents/Info.plist
 
-  if [[ $UNIVERSAL_BINARY = true ]]; then
-      if [[ $BUILD_BINARY = true ]]; then
-          echo "Building $ADDITIONAL_TARGET to include in universal binary"
-
-          pushd app > /dev/null
-          cargo build --profile "$CARGO_PROFILE" --bin "$ZERP_BIN" --target "$ADDITIONAL_TARGET" --features "$FEATURES"
-          popd > /dev/null
-      else
-          echo "Skipping build of $ADDITIONAL_TARGET due to --skip-build flag"
-      fi
-
-      tmp_bundle_dir=$(mktemp -d -t ci-XXXXXXXXXX)
-
-      echo "Adding rpath to both binaries for universal executable"
-      install_name_tool -add_rpath "@executable_path/../Frameworks" "target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$ZERP_BIN"
-      install_name_tool -add_rpath "@executable_path/../Frameworks"  "target/$ARM_TARGET/$TARGET_PROFILE_DIR/$ZERP_BIN"
-
-      echo "Building universal binary using lipo."
-      lipo -create -output "$tmp_bundle_dir/$ZERP_BIN" \
-          "target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$ZERP_BIN" \
-          "target/$ARM_TARGET/$TARGET_PROFILE_DIR/$ZERP_BIN"
-
-      # Compute the real absolute path to the dSYM file, factoring in symlinks.
-      # Starting in Rust 1.56, the generated dSYMs are symlinks to files within the target/dep directory. For example,
-      # a dSYM for dev may be symlinked to target/deps/dev-080cf7e291fb066d.dSYM. This means the actual debug symbols are
-      # would be located at dev.dSYM/Contents/Resources/DWARF/dev-080cf7e291fb066d.dSYM where dev.dSYM is symlink to
-      # deps/dev-080cf7e291fb066d.dSYM. To fix this, parse out the actual name of the directory that the dSYM is
-      # symlinked to, since this is also the name of file that contains the debug symbols within the dSYM.
-      INTEL_DSYM_NAME=$(basename "$(realpath target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$ZERP_BIN.dSYM)" .dSYM)
-      INTEL_DSYM_PATH="target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$ZERP_BIN.dSYM/Contents/Resources/DWARF/$INTEL_DSYM_NAME"
-      ARM_DSYM_NAME=$(basename "$(realpath target/$ARM_TARGET/$TARGET_PROFILE_DIR/$ZERP_BIN.dSYM)" .dSYM)
-      ARM_DSYM_PATH="target/$ARM_TARGET/$TARGET_PROFILE_DIR/$ZERP_BIN.dSYM/Contents/Resources/DWARF/$ARM_DSYM_NAME"
-      if [[ -e "$INTEL_DSYM_PATH" && -e "$ARM_DSYM_PATH" ]]; then
-        echo "Building universal binary .dSYM using lipo and storing in $OUT_DIR/$ZERP_BIN.dSYM"
-
-        # Use lipo to merge the .dSYM files into a single universal .dSYM file.
-        # It expects the base name for the file (with the .dSYM suffix removed).
-        lipo -create -output "$OUT_DIR/$ZERP_BIN.dSYM" "${INTEL_DSYM_PATH}" "${ARM_DSYM_PATH}"
-      fi
-
-      echo "Storing result in $BUNDLE_DIR, replacing $DEFAULT_TARGET binary with fat binary."
-      mv "$tmp_bundle_dir/$ZERP_BIN" "$BUNDLE_DIR/$ZERP_APP_NAME.app/Contents/MacOS"
-  elif [[ -n "$TARGET_ARCH" && -e "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$ZERP_BIN.dSYM" ]]; then
+  if [[ -e "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$ZERP_BIN.dSYM" ]]; then
     echo "Copying .dSYM into $OUT_DIR/$ZERP_BIN.dSYM"
     cp -HR "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$ZERP_BIN.dSYM" "$OUT_DIR/"
   fi
 
-  # Note that the dock tile plugin is pre-built for both arm64 and x86_64 so we don't need to run lipo on it.
   echo "Creating PlugIns directory and copying pre-built DockTilePlugin..."
   mkdir -p "$BUNDLE_DIR/$ZERP_APP_NAME.app/Contents/PlugIns"
   cp -R "$DOCK_TILE_PLUGIN_DIR" "$BUNDLE_DIR/$ZERP_APP_NAME.app/Contents/PlugIns/"

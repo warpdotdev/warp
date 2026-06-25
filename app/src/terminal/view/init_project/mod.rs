@@ -28,16 +28,12 @@ use crate::ai::blocklist::block::toggleable_items::ToggleableItemsView;
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
 use crate::ai::blocklist::inline_action::inline_action_header::HeaderConfig;
 use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
-use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::appearance::Appearance;
-use crate::code::lsp_telemetry::{LspEnablementSource, LspTelemetryEvent};
 use crate::server::telemetry::{
     AgentModeSetupCodebaseContextActionType, AgentModeSetupCreateEnvironmentActionType,
     AgentModeSetupProjectScopedRulesActionType,
 };
 use crate::ui_components::icons::Icon;
-use crate::view_components::DismissibleToast;
-use crate::workspace::ToastStack;
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 const ONBOARDING_TEXT: &str = "Great - let's begin setting up this project! Would you like to give me permission to index this codebase? It allows me to quickly understand context and provide more targeted solutions when working in this codebase. No code is stored on Warp servers.";
@@ -954,78 +950,6 @@ impl InitStepBlock {
             }
         }
     }
-
-    fn spawn_server_installation(
-        server_type: LSPServerType,
-        repo_root: PathBuf,
-        path_env_var: Option<String>,
-        model: ModelHandle<InitProjectModel>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let window_id = ctx.window_id();
-        let executor = lsp::CommandBuilder::new(path_env_var);
-        let http_client =
-            crate::server::server_api::ServerApiProvider::as_ref(ctx).get_http_client();
-
-        ctx.spawn(
-            async move {
-                let candidate = server_type.candidate(http_client);
-                let metadata = candidate.fetch_latest_server_metadata().await?;
-                candidate.install(metadata, &executor).await?;
-                Ok::<_, anyhow::Error>(())
-            },
-            move |_me, result, ctx| match result {
-                Ok(()) => {
-                    send_telemetry_from_ctx!(
-                        LspTelemetryEvent::ServerInstallCompleted {
-                            server_type: server_type.binary_name().to_string(),
-                            success: true,
-                        },
-                        ctx
-                    );
-
-                    PersistedWorkspace::handle(ctx).update(ctx, |workspace, _| {
-                        workspace.enable_lsp_server_for_path(&repo_root, server_type);
-                    });
-
-                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                        toast_stack.add_ephemeral_toast(
-                            DismissibleToast::success(format!(
-                                "{} installed and enabled successfully.",
-                                server_type.binary_name()
-                            )),
-                            window_id,
-                            ctx,
-                        );
-                    });
-
-                    model.update(ctx, |_, ctx| {
-                        ctx.emit(InitProjectModelEvent::LanguageServerInstalledAndEnabled);
-                    });
-                }
-                Err(e) => {
-                    send_telemetry_from_ctx!(
-                        LspTelemetryEvent::ServerInstallCompleted {
-                            server_type: server_type.binary_name().to_string(),
-                            success: false,
-                        },
-                        ctx
-                    );
-
-                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                        toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(format!(
-                                "Failed to install {}: {e}",
-                                server_type.binary_name()
-                            )),
-                            window_id,
-                            ctx,
-                        );
-                    });
-                }
-            },
-        );
-    }
 }
 
 impl Entity for InitStepBlock {
@@ -1087,86 +1011,18 @@ impl TypedActionView for InitStepBlock {
                 });
             }
             InitProjectBlockAction::SetupLanguageServers {
-                server_info,
-                repo_path,
+                server_info: _,
+                repo_path: _,
             } => {
-                let repo_root = repo_path.clone();
-                let mut enabled_servers = Vec::new();
-                let mut servers_to_install = Vec::new();
-
-                // Separate installed servers from those needing installation
-                for info in server_info {
-                    if info.is_installed {
-                        PersistedWorkspace::handle(ctx).update(ctx, |workspace, _| {
-                            workspace.enable_lsp_server_for_path(&repo_root, info.server_type);
-                        });
-                        enabled_servers.push(info.server_type);
-                    } else {
-                        servers_to_install.push(info.server_type);
-                    }
-                }
-
-                // Send telemetry for each enabled server
-                for server_type in enabled_servers.iter().chain(servers_to_install.iter()) {
-                    send_telemetry_from_ctx!(
-                        LspTelemetryEvent::ServerEnabled {
-                            server_type: server_type.binary_name().to_string(),
-                            source: LspEnablementSource::InitFlow,
-                            needed_install: !enabled_servers.contains(server_type),
-                        },
-                        ctx
-                    );
-                }
-
-                // Spawn installation tasks for uninstalled servers
-                let model = self.model.clone();
-                let path_env_var = self.model.as_ref(ctx).path_env_var().cloned();
-                for server_type in &servers_to_install {
-                    Self::spawn_server_installation(
-                        *server_type,
-                        repo_root.clone(),
-                        path_env_var.clone(),
-                        model.clone(),
-                        ctx,
-                    );
-                }
-
-                // Show toast for servers being installed in background
-                if !servers_to_install.is_empty() {
-                    let window_id = ctx.window_id();
-                    let server_names: Vec<_> =
-                        servers_to_install.iter().map(|s| s.binary_name()).collect();
-                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                        toast_stack.add_ephemeral_toast(
-                            DismissibleToast::default(format!(
-                                "Installing {} in background...",
-                                server_names.join(", ")
-                            )),
-                            window_id,
-                            ctx,
-                        );
-                    });
-                }
-
                 self.model.update(ctx, |model, ctx| {
                     model.mark_step_completed(
                         InitStepKind::LanguageServers,
-                        InitActionResult::LanguageServers(
-                            if enabled_servers.is_empty() && servers_to_install.is_empty() {
-                                LanguageServersResult::Skipped
-                            } else {
-                                LanguageServersResult::Accepted {
-                                    enabled_servers,
-                                    servers_to_install,
-                                }
-                            },
-                        ),
+                        InitActionResult::LanguageServers(LanguageServersResult::Skipped),
                         ctx,
                     );
                 });
             }
             InitProjectBlockAction::SkipLanguageServers => {
-                send_telemetry_from_ctx!(LspTelemetryEvent::ServerEnablementSkipped, ctx);
                 self.model.update(ctx, |model, ctx| {
                     model.mark_step_completed(
                         InitStepKind::LanguageServers,

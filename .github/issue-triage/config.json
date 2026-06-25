@@ -90,7 +90,7 @@
     },
     "area:editor-notebooks": {
       "color": "1d76db",
-      "description": "Editors, notebooks, markdown rendering, LSP, and code display."
+      "description": "Editors, notebooks, markdown rendering, and code display."
     },
     "area:launch-configs": {
       "color": "c2e0c6",

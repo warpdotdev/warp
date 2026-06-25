@@ -7,8 +7,8 @@ use url::{Origin, ParseError, Url};
 
 use super::Channel;
 use crate::channel::config::{
-    ChannelConfig, IapConfig, McpOAuthProviderConfig, OzConfig, RudderStackDestination,
-    WarpServerConfig,
+    AutoupdateConfig, ChannelConfig, IapConfig, McpOAuthProviderConfig, OzConfig,
+    RudderStackDestination, WarpServerConfig,
 };
 use crate::features::FeatureFlag;
 use crate::AppId;
@@ -47,7 +47,11 @@ impl ChannelState {
                 server_config: WarpServerConfig::production(),
                 oz_config: OzConfig::production(),
                 telemetry_config: None,
-                autoupdate_config: None,
+                autoupdate_config: Some(AutoupdateConfig {
+                    releases_base_url: "https://github.com/bestdonger/warp/releases/download"
+                        .into(),
+                    show_autoupdate_menu_items: true,
+                }),
                 crash_reporting_config: None,
                 mcp_static_config: None,
             },
@@ -193,7 +197,7 @@ impl ChannelState {
     /// `telemetry_config: None`, in which case UI that controls telemetry
     /// should be hidden since the toggle has no effect.
     pub fn is_telemetry_available() -> bool {
-        CHANNEL_STATE.lock().config.telemetry_config.is_some()
+        false
     }
 
     /// Returns whether this build has a crash reporting config and can therefore
@@ -201,7 +205,7 @@ impl ChannelState {
     /// `crash_reporting_config: None`, in which case UI that controls crash
     /// reporting should be hidden since the toggle has no effect.
     pub fn is_crash_reporting_available() -> bool {
-        CHANNEL_STATE.lock().config.crash_reporting_config.is_some()
+        false
     }
 
     pub fn releases_base_url() -> Cow<'static, str> {

@@ -9,7 +9,7 @@ use serde_json::Value;
 use strum::IntoEnumIterator;
 use warpui_core::{AppContext, Entity, SingletonEntity};
 
-use crate::channel::{Channel, ChannelState};
+use crate::channel::Channel;
 use crate::features::FeatureFlag;
 
 /// Core trait defining telemetry event behavior.
@@ -138,32 +138,12 @@ pub fn all_events() -> impl Iterator<Item = Box<dyn TelemetryEventDesc>> {
     inventory::iter::<&'static dyn AnyTelemetryEventRegistration>().flat_map(|meta| meta.events())
 }
 
-// Sends a telemetry `track` event to Rudderstack asynchronously. It adds events to the static
-// telemetry queue that is periodically flushed to the Rudderstack API.
-// This is the recommended way of recording telemetry events.
-// You should almost always use this, unless the recording is time-sensitive and cannot be lost.
-// To send a telemetry event synchronously, use [`send_telemetry_sync_from_ctx`].
+// Zerp is a local-only fork. Telemetry macros intentionally expand to no-ops so callers can stay
+// compilable while no event payloads are created, queued, or uploaded.
 #[macro_export]
 macro_rules! send_telemetry_from_ctx {
     ($event:expr, $ctx:expr) => {
-        #[allow(unused_imports)]
-        use warp_core::telemetry::TelemetryEvent as _;
-        let event = $event;
-        if event.enablement_state().is_enabled() {
-            let auth_state =
-                <$crate::telemetry::TelemetryContextModel as $crate::warpui_core::SingletonEntity>::handle($ctx)
-                    .as_ref($ctx);
-            let user_id = auth_state.user_id($ctx);
-            let anonymous_id = auth_state.anonymous_id($ctx);
-            $crate::warpui_core::record_telemetry_from_ctx!(
-                user_id,
-                anonymous_id,
-                event.name().into(),
-                event.payload(),
-                event.contains_ugc(),
-                $ctx
-            );
-        }
+        let _ = ($event, &$ctx);
     };
 }
 
@@ -175,24 +155,7 @@ macro_rules! send_telemetry_from_ctx {
 #[macro_export]
 macro_rules! send_telemetry_from_app_ctx {
     ($event:expr, $app_ctx:expr) => {
-        let event = $event;
-        if event.enablement_state().is_enabled() {
-            let auth_state =
-                <$crate::telemetry::TelemetryContextModel as $crate::warpui_core::SingletonEntity>::handle(
-                    $app_ctx,
-                )
-                .as_ref($app_ctx);
-            let user_id = auth_state.user_id($app_ctx.as_ref());
-            let anonymous_id = auth_state.anonymous_id($app_ctx.as_ref());
-            $crate::warpui_core::record_telemetry_on_executor!(
-                user_id,
-                anonymous_id,
-                event.name().into(),
-                event.payload(),
-                event.contains_ugc(),
-                $app_ctx.background_executor()
-            );
-        }
+        let _ = ($event, &$app_ctx);
     };
 }
 
@@ -210,14 +173,8 @@ pub enum EnablementState {
 
 impl EnablementState {
     pub fn is_enabled(&self) -> bool {
-        match self {
-            EnablementState::Always => true,
-            EnablementState::Flag(flag) => flag.is_enabled(),
-            EnablementState::ChannelSpecific { channels } => {
-                let app_channel = ChannelState::channel();
-                channels.contains(&app_channel)
-            }
-        }
+        let _ = self;
+        false
     }
 }
 

@@ -1,9 +1,7 @@
-// On Windows, we don't want to display a console window when the application is running in release
-// builds. See https://doc.rust-lang.org/reference/runtime.html#the-windows_subsystem-attribute.
-#![cfg_attr(feature = "release_bundle", windows_subsystem = "windows")]
-
 use anyhow::Result;
-use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
+use warp_core::channel::{
+    AutoupdateConfig, Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig,
+};
 use warp_core::AppId;
 
 // Simple wrapper around warp::run() for Zerp builds.
@@ -17,7 +15,10 @@ fn main() -> Result<()> {
             oz_config: OzConfig::production(),
             telemetry_config: None,
             crash_reporting_config: None,
-            autoupdate_config: None,
+            autoupdate_config: Some(AutoupdateConfig {
+                releases_base_url: "https://github.com/bestdonger/warp/releases/download".into(),
+                show_autoupdate_menu_items: true,
+            }),
             mcp_static_config: None,
         },
     );

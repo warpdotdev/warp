@@ -1,9 +1,7 @@
 # lsp
 
-This crate provides a stdio-only Language Server Protocol (LSP) client transport for Warp. It:
+This crate is a disabled compatibility layer.
 
-- Spawns and manages a language server process (child process)
-- Communicates over stdio using JSON-RPC with proper Content-Length framing
-
-
-See `examples/rust-lsp/main.rs` for an example implementation.
+Zerp does not start, install, detect, or communicate with language servers. The
+small remaining API exists only so older app code and local persistence rows can
+compile while LSP support is removed.

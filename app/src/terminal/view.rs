@@ -10699,41 +10699,6 @@ impl TerminalView {
                     InlineBannerItem::new(banner_id, InlineBannerType::ShellProcessTerminated),
                 );
         } else {
-            let (termination_reason, termination_details, exit_reason) = match &termination_type {
-                shell_terminated_banner::TerminationType::PtySpawnFailure { .. } => {
-                    (Some("PtySpawnFailure".to_string()), None, None)
-                }
-                shell_terminated_banner::TerminationType::Premature {
-                    shell_detail,
-                    reason,
-                } => (
-                    Some("Premature".to_string()),
-                    Some(shell_detail.into()),
-                    Some(reason),
-                ),
-                _ => (None, None, None),
-            };
-
-            if let Some(termination_reason) = termination_reason {
-                let (shell_path, shell_type) = self.get_shell_starter_local(ctx).unzip();
-                let antivirus_name = AntivirusInfo::as_ref(ctx).get();
-
-                let long_os_version = crate::system::long_os_version(ctx);
-
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::ShellTerminatedPrematurely {
-                        shell_type,
-                        shell_path,
-                        reason: termination_reason,
-                        reason_details: termination_details,
-                        antivirus_name: antivirus_name.map(ToOwned::to_owned),
-                        long_os_version,
-                        exit_reason: exit_reason.map(|exit_reason| format!("{exit_reason:?}")),
-                    },
-                    ctx
-                );
-            };
-
             let banner = ctx.add_typed_action_view(|ctx| {
                 shell_terminated_banner::ShellTerminatedBanner::new(termination_type, ctx)
             });
@@ -11462,8 +11427,6 @@ impl TerminalView {
                                                     );
                                             });
                                         }
-
-                                        me.start_lsp_server_in_active_pwd(ctx);
 
                                         me.update_repo_banner_state(repo_path.clone(), ctx);
                                     }
@@ -13991,8 +13954,6 @@ impl TerminalView {
                             ctx,
                         );
                     });
-                    #[cfg(feature = "local_fs")]
-                    me.start_lsp_server_in_active_pwd(ctx);
                     me.redetermine_terminal_focus(ctx);
                     ctx.emit(Event::OnboardingInitCompleted);
                 }
@@ -14050,10 +14011,7 @@ impl TerminalView {
                 InitProjectModelEvent::ViewCodebaseContextStatus => {
                     ctx.emit(Event::OpenSettings(SettingsSection::CodeIndexing));
                 }
-                InitProjectModelEvent::LanguageServerInstalledAndEnabled => {
-                    #[cfg(feature = "local_fs")]
-                    me.start_lsp_server_in_active_pwd(ctx);
-                }
+                InitProjectModelEvent::LanguageServerInstalledAndEnabled => {}
                 InitProjectModelEvent::CreateEnvironment => {
                     me.ai_controller.update(ctx, |controller, ctx| {
                         controller.send_ai_input_with_context(
@@ -25402,23 +25360,6 @@ impl TerminalView {
 
     /// Starts all enabled LSP servers for the current working directory.
     #[cfg(feature = "local_fs")]
-    fn start_lsp_server_in_active_pwd(&self, ctx: &mut ViewContext<Self>) {
-        use crate::ai::persisted_workspace::LspTask;
-
-        let Some(cwd) = self.canonical_session_pwd_if_local(ctx) else {
-            return;
-        };
-
-        PersistedWorkspace::handle(ctx).update(ctx, |workspace, ctx| {
-            workspace.execute_lsp_task(
-                LspTask::Spawn {
-                    file_path: cwd.into(),
-                },
-                ctx,
-            );
-        });
-    }
-
     pub(super) fn toggle_file_tree(
         &mut self,
         cli_agent: Option<crate::server::telemetry::CLIAgentType>,
@@ -25662,8 +25603,7 @@ impl TypedActionView for TerminalView {
             | ResumeConversation
             | ForkConversationFromLastKnownGoodState
             | ToggleAIDocumentPane
-            | ClearMarkedText
-            | StartLspServer => ActionAccessibilityContent::from_debug(),
+            | ClearMarkedText => ActionAccessibilityContent::from_debug(),
             #[cfg(feature = "local_fs")]
             OpenCodeInWarp { .. } => ActionAccessibilityContent::from_debug(),
             OpenInWarpBanner(action) => self.open_in_warp_banner_accessibility_content(*action),
@@ -26779,10 +26719,6 @@ impl TypedActionView for TerminalView {
                     }
                 });
                 ctx.notify();
-            }
-            StartLspServer => {
-                #[cfg(feature = "local_fs")]
-                self.start_lsp_server_in_active_pwd(ctx);
             }
             OpenConversationsPalette => {
                 ctx.emit(Event::OpenConversationHistory);

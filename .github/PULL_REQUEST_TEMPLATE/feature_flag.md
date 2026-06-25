@@ -7,7 +7,6 @@ This PR template helps ensure that as we launch new features we appropriately co
 ## Coding checklist
 
 - [ ] Test in dev for a week
-- [ ] Telemetry in code
 - [ ] A11y (if applicable, see [testing a11y guide](https://docs.google.com/document/d/1-H0bWss5Qw18ZpIYg-RUvN7_db1MVdWfOb5UF_GLxNc/edit?usp=sharing) for more info)
 - [ ] Add to Command Palette (if applicable)
 - [ ] Add toggle setting(s) to command palette (if applicable)
@@ -28,7 +27,6 @@ This PR template helps ensure that as we launch new features we appropriately co
 
 - [ ] Help content
 - [ ] Changelog entry (add entry below)
-- [ ] [Telemetry entry](https://docs.warp.dev/getting-started/privacy#exhaustive-telemetry-table) (if applicable)
 - [ ] Metrics dashboard in Metabase
 - [ ] Tweet (if appropriate)
 - [ ] Blog post (if appropriate)

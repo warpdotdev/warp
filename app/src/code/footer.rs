@@ -1742,8 +1742,6 @@ impl View for CodeFooterView {
                 );
             }
         } else {
-            footer_content.add_child(self.render_lsp_icon(appearance, app));
-
             let (status_message, should_show_enable_button) = self.compute_status_message(app);
 
             if let Some(status_message) = status_message {

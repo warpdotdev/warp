@@ -25,7 +25,7 @@
 /app/src/terminal/find/ @seemeroland
 /app/src/uri/ @seemeroland
 
-# Code editor / LSP / notebooks / codebase context
+# Code editor / notebooks / codebase context
 /app/src/code/ @kevinyang372
 /app/src/editor/ @kevinyang372
 /app/src/notebooks/ @kevinyang372 @bnavetta
@@ -34,7 +34,6 @@
 /crates/ai/src/project_context/ @kevinyang372
 /crates/editor/ @kevinyang372 @bnavetta
 /crates/languages/ @kevinyang372 @bnavetta
-/crates/lsp/ @kevinyang372 @moirahuang
 /crates/repo_metadata/ @kevinyang372
 
 # Settings and keybindings
@@ -153,8 +152,6 @@
 # Windows and Linux (and winit) platform
 /crates/warpui/src/windowing/winit/ @acarl005 @vorporeal @alokedesai
 /app/src/terminal/local_tty/windows/ @abhishekp106 @vorporeal @acarl005
-/app/src/autoupdate/windows.rs @acarl005
-/app/src/autoupdate/linux.rs @vorporeal
 /app/src/app_services/windows/ @acarl005
 /app/src/app_services/linux/ @vorporeal
 /app/src/terminal/writeable_pty/bootstrap_file/windows.rs @acarl005
@@ -237,9 +234,7 @@
 /command-signatures-v2/ @zachbai
 
 # OS-level bootstrap scripts
-/script/linux/bootstrap @acarl005
 /script/macos/bootstrap @acarl005
-/script/windows/bootstrap.ps1 @acarl005
 
 # Shell completions in the Warp CLI
 /crates/warp_cli/src/completions.rs @zachbai @szgupta @alokedesai

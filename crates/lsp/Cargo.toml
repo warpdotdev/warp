@@ -5,45 +5,21 @@ edition = "2021"
 authors = ["Warp Team <dev@warp.dev>"]
 publish.workspace = true
 license.workspace = true
-description = "Language Server Protocol implementation for Warp"
+description = "Disabled LSP compatibility layer for Zerp"
 
 [features]
 local_fs = []
 
-[build-dependencies]
-anyhow = { workspace = true }
-
 [dependencies]
 anyhow = { workspace = true }
-async-channel = { workspace = true }
-async-trait = { workspace = true }
-chrono = { workspace = true }
-env_logger = { workspace = true }
-futures = { workspace = true }
-globset = { workspace = true }
-itertools.workspace = true
-jsonrpc.workspace = true
-log = { workspace = true }
-lsp-types = "0.97.0"
-node_runtime = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
-strum = { workspace = true }
-strum_macros = { workspace = true }
-warp_core = { workspace = true }
-warp_util.workspace = true
-warpui_core.workspace = true
-instant.workspace = true
 http_client = { workspace = true }
-cfg-if.workspace = true
+instant.workspace = true
+itertools.workspace = true
+lsp-types = "0.97.0"
+serde = { workspace = true, features = ["derive"] }
+strum.workspace = true
+strum_macros = { workspace = true }
+warpui_core.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-async-fs = { workspace = true }
 url = "2"
-async-process = { workspace = true }
-command.workspace = true
-simple_logger.workspace = true
-nix = { workspace = true }
-repo_metadata.workspace = true
-sha2 = { workspace = true }
-tokio = { workspace = true, features = ["process"] }

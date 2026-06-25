@@ -17,6 +17,11 @@ set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
 cd "${REPO_ROOT}"
 
+if [[ "$(uname -m)" != "arm64" ]]; then
+  echo "Zerp only supports macOS arm64." >&2
+  exit 1
+fi
+
 : "${ZERP_BIN_NAME:?ZERP_BIN_NAME must be set (invoke via ./script/run)}"
 : "${ZERP_CHANNEL:?ZERP_CHANNEL must be set (invoke via ./script/run)}"
 : "${FEATURES:?FEATURES must be set (invoke via ./script/run)}"
@@ -108,13 +113,7 @@ cargo bundle --bin "$ZERP_BIN_NAME" --features "$FEATURES" $PARAMS
 echo "Successfully bundled..."
 popd > /dev/null
 
-if [[ ",$FEATURES," =~ ",cocoa_sentry," ]]; then
-  echo "Copying Sentry framework into app bundle..."
-  SENTRY_FRAMEWORK="app/frameworks/dev/Sentry-Dynamic-WithARM64e.xcframework/macos-arm64_arm64e_x86_64/Sentry.framework"
-  mkdir -p "$ZERP_APP_PATH/Contents/Frameworks"
-  cp -a "$SENTRY_FRAMEWORK" "$ZERP_APP_PATH/Contents/Frameworks/"
-fi
-echo "Adding rpath to support mac frameworks (e.g. Sentry)"
+echo "Adding framework rpath"
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$ZERP_APP_PATH/Contents/MacOS/$ZERP_BIN_NAME"
 
 export ZERP_SCHEME_NAME

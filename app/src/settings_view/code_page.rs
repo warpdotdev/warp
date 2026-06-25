@@ -372,7 +372,6 @@ impl CodeSettingsPageView {
                 Box::new(ProjectExplorerToggleWidget::default()),
                 Box::new(GlobalSearchToggleWidget::default()),
                 Box::new(ShowHiddenFilesToggleWidget::default()),
-                Box::new(FormatOnSaveToggleWidget::default()),
             ]);
             let categories = vec![
                 Category::new("Codebase Indexing", codebase_indexing_widgets),
@@ -457,7 +456,6 @@ impl CodeSettingsPageView {
                             Box::new(ProjectExplorerToggleWidget::default()),
                             Box::new(GlobalSearchToggleWidget::default()),
                             Box::new(ShowHiddenFilesToggleWidget::default()),
-                            Box::new(FormatOnSaveToggleWidget::default()),
                         ]);
                     }
                 }
@@ -508,7 +506,6 @@ impl CodeSettingsPageView {
                 Box::new(ProjectExplorerToggleWidget::default()),
                 Box::new(GlobalSearchToggleWidget::default()),
                 Box::new(ShowHiddenFilesToggleWidget::default()),
-                Box::new(FormatOnSaveToggleWidget::default()),
             ]);
             let categories = vec![
                 Category::new("Codebase Indexing", codebase_indexing_widgets),
@@ -629,7 +626,6 @@ pub enum CodeSettingsPageAction {
     ToggleProjectExplorer,
     ToggleGlobalSearch,
     ToggleShowHiddenFiles,
-    ToggleFormatOnSave,
     /// Install (if needed) and enable a suggested LSP server.
     InstallAndEnableLspServer {
         workspace_path: PathBuf,
@@ -836,12 +832,6 @@ impl TypedActionView for CodeSettingsPageView {
                 });
                 ctx.notify();
             }
-            CodeSettingsPageAction::ToggleFormatOnSave => {
-                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.format_on_save.toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
             CodeSettingsPageAction::ToggleAutoOpenCodeReviewPane => {
                 GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
@@ -1020,7 +1010,7 @@ impl SettingsWidget for CodePageWidget {
     type View = CodeSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "code coding codebase repository index indexing indices context path lsp language server"
+        "code coding codebase repository index indexing indices context path"
     }
 
     fn render(
@@ -2490,7 +2480,7 @@ impl SettingsWidget for CodebaseIndexingCategorizedWidget {
     type View = CodeSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "codebase index indexing repository code context embedding auto-index lsp language server"
+        "codebase index indexing repository code context embedding auto-index"
     }
 
     fn render(
@@ -2912,49 +2902,6 @@ impl SettingsWidget for ShowHiddenFilesToggleWidget {
                 .finish(),
             Some(
                 "Show dotfiles and hidden files (starting with .) in the project explorer.".into(),
-            ),
-        )
-    }
-}
-
-#[derive(Default)]
-struct FormatOnSaveToggleWidget {
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for FormatOnSaveToggleWidget {
-    type View = CodeSettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "format on save lsp language server formatting reformat editor"
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let code_settings = CodeSettings::as_ref(app);
-
-        render_body_item::<CodeSettingsPageAction>(
-            "Format on save (requires an active language server)".into(),
-            None,
-            LocalOnlyIconState::Hidden,
-            ToggleState::Enabled,
-            appearance,
-            appearance
-                .ui_builder()
-                .switch(self.switch_state.clone())
-                .check(*code_settings.format_on_save)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleFormatOnSave);
-                })
-                .finish(),
-            Some(
-                "Only applies when a language server is active for the file. Automatically formats the file with the language server on save; other LSP features (hover, go-to-definition, references, diagnostics) are unaffected."
-                    .into(),
             ),
         )
     }

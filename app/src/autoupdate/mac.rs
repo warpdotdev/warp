@@ -303,22 +303,22 @@ async fn is_directory_writable(directory: &Path) -> Result<bool> {
     Ok(needs_authorization)
 }
 
-/// Verifies that the staged bundle path has a valid macOS code signature, and that its
-/// team identifier matches Warp's team identifier.
+/// Verifies that the staged bundle path has a valid macOS code signature.
 async fn verify_code_signature(component: &str, path: &Path) -> Result<()> {
-    // Verify the signature of the staged update bundle with team identifier
-    let codesign_verify_output = Command::new("/usr/bin/codesign")
-        .arg("-v")
-        .arg(format!(
+    let mut codesign_verify = Command::new("/usr/bin/codesign");
+    codesign_verify.arg("-v");
+
+    if ChannelState::channel() != Channel::Oss {
+        codesign_verify.arg(format!(
             "-R=certificate leaf[subject.OU] = \"{}\"",
             warp_core::macos::APPLE_TEAM_ID
-        ))
-        .arg(path)
-        .output()
-        .await?;
+        ));
+    }
+
+    let codesign_verify_output = codesign_verify.arg(path).output().await?;
     ensure!(
         codesign_verify_output.status.success(),
-        "Failed to verify code signature for {component} with team identifier: {codesign_verify_output:?}"
+        "Failed to verify code signature for {component}: {codesign_verify_output:?}"
     );
 
     safe_info!(
@@ -713,17 +713,7 @@ fn versioned_app_name(channel: Channel, version: &str) -> String {
 }
 
 fn dmg_name(channel: Channel) -> String {
-    // If the user is on an Apple Silicon Mac, download an arm64-only bundle.
-    let is_arm64 = command::blocking::Command::new("uname")
-        .arg("-m")
-        .output()
-        .is_ok_and(|output| output.stdout.starts_with(b"arm64"));
-    if is_arm64 {
-        return format!("{}-arm64.dmg", app_name_prefix(channel));
-    }
-
-    // Otherwise, download a universal bundle.
-    format!("{}.dmg", app_name_prefix(channel))
+    format!("{}-arm64.dmg", app_name_prefix(channel))
 }
 
 fn app_name_prefix(channel: Channel) -> &'static str {

@@ -1,10 +1,8 @@
 #!/bin/bash
 #
-# Cross-platform entrypoint for running a local Zerp build.
+# macOS arm64 entrypoint for running a local Zerp build.
 #
-# On macOS this delegates to `./script/macos/run`, which builds and runs Zerp
-# as a real `.app` bundle (with code signing, plist updates, etc.). On Linux
-# and Windows it invokes `cargo run` directly for the appropriate binary.
+# Zerp intentionally supports only the macOS arm64 app bundle target.
 #
 # This script owns all cross-platform setup (running install_channel_config,
 # detecting internal vs OSS builds, and mapping legacy `--features` entries
@@ -127,8 +125,7 @@ fi
 # invocations keep working.
 for mapping in \
     "with_local_server:WITH_LOCAL_SERVER" \
-    "with_local_session_sharing_server:WITH_LOCAL_SESSION_SHARING_SERVER" \
-    "with_sandbox_telemetry:WITH_SANDBOX_TELEMETRY"; do
+    "with_local_session_sharing_server:WITH_LOCAL_SESSION_SHARING_SERVER"; do
     feature="${mapping%%:*}"
     env_var="${mapping##*:}"
     if [[ ",$FEATURES," =~ ,"$feature", ]]; then
@@ -143,20 +140,18 @@ export FEATURES
 export ZERP_BIN_NAME
 export ZERP_CHANNEL
 
-if [[ "$OS_TYPE" = "Darwin" ]]; then
-  if [[ ${#ZERP_ARGS[@]} -gt 0 ]]; then
-    exec ./script/macos/run "${MAC_ARGS[@]}" -- "${ZERP_ARGS[@]}"
-  else
-    exec ./script/macos/run "${MAC_ARGS[@]}"
-  fi
-elif [[ "$OS_TYPE" = "Linux" ]] || [[ "$OS_TYPE" =~ ^(MINGW64_NT|MSYS_NT) ]]; then
-  echo "Running cargo run --bin $ZERP_BIN_NAME --features \"$FEATURES\" ${CARGO_PARAMS[*]}"
-  if [[ ${#ZERP_ARGS[@]} -gt 0 ]]; then
-    cargo run --bin "$ZERP_BIN_NAME" --features "$FEATURES" "${CARGO_PARAMS[@]}" -- "${ZERP_ARGS[@]}"
-  else
-    cargo run --bin "$ZERP_BIN_NAME" --features "$FEATURES" "${CARGO_PARAMS[@]}"
-  fi
-else
-  echo "No run script defined for the current platform ($OS_TYPE)!" >&2
+if [[ "$OS_TYPE" != "Darwin" ]]; then
+  echo "Zerp only supports macOS arm64." >&2
   exit 1
+fi
+
+if [[ "$(uname -m)" != "arm64" ]]; then
+  echo "Zerp only supports macOS arm64." >&2
+  exit 1
+fi
+
+if [[ ${#ZERP_ARGS[@]} -gt 0 ]]; then
+  exec ./script/macos/run "${MAC_ARGS[@]}" -- "${ZERP_ARGS[@]}"
+else
+  exec ./script/macos/run "${MAC_ARGS[@]}"
 fi
