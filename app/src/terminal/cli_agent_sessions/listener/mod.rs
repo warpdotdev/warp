@@ -125,7 +125,7 @@ impl CodexSessionHandler {
 }
 
 impl CLIAgentSessionHandler for CodexSessionHandler {
-    /// Before Codex enabled support for hooks, we relied on OSC 9 to trigger notifications in Warp.
+    /// Before Codex enabled support for hooks, we relied on OSC 9 to trigger notifications in Zerp.
     /// Here, we try to parse an OSC 777 event if we can, and remember when we've seen one.
     /// This lets us ignore OSC 9 notifications if we are working with a client that is using
     /// the new plugin, but keeps them intact for legacy clients.

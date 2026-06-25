@@ -751,11 +751,11 @@ pub enum FeatureFlag {
     /// Requires HOANotifications to also be enabled.
     OpenCodeNotifications,
 
-    /// Enables the install/update chip for the Codex Warp notification plugin.
+    /// Enables the install/update chip for the Codex Zerp notification plugin.
     /// Requires HOANotifications to also be enabled.
     CodexNotifications,
 
-    /// Enables the Codex Warp plugin marketplace integration.
+    /// Enables the Codex Zerp plugin marketplace integration.
     /// When disabled, Codex uses native OSC9 notifications.
     CodexPlugin,
 

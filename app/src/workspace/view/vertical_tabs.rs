@@ -1034,10 +1034,12 @@ fn normalize_summary_text(text: &str) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
-/// Returns the CLI agent status used by vertical tabs. Tab status is a basic
-/// session signal, so it should not depend on rich plugin status support.
+/// Returns the CLI agent status used by vertical tabs. Command detection alone
+/// only tells us which agent is running; status is trustworthy after a rich
+/// plugin event reaches the session.
 fn cli_agent_tab_status(session: &CLIAgentSession) -> Option<ConversationStatus> {
-    (!matches!(session.agent, CLIAgent::Unknown)).then(|| session.status.to_conversation_status())
+    (!matches!(session.agent, CLIAgent::Unknown) && session.supports_rich_status())
+        .then(|| session.status.to_conversation_status())
 }
 
 fn cli_agent_status_for_terminal(

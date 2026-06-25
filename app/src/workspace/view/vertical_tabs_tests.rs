@@ -59,6 +59,12 @@ fn cli_session(agent: CLIAgent, status: CLIAgentSessionStatus) -> CLIAgentSessio
     }
 }
 
+fn rich_cli_session(agent: CLIAgent, status: CLIAgentSessionStatus) -> CLIAgentSession {
+    let mut session = cli_session(agent, status);
+    session.received_rich_notification = true;
+    session
+}
+
 fn code_summary_kind(title: &str) -> SummaryPaneKind {
     SummaryPaneKind::Code {
         title: title.to_string(),
@@ -1217,8 +1223,15 @@ fn vertical_tab_status_label_uses_cli_friendly_copy() {
 }
 
 #[test]
-fn cli_agent_tab_status_does_not_require_rich_plugin_status() {
+fn cli_agent_tab_status_requires_rich_plugin_status() {
     let session = cli_session(CLIAgent::Codex, CLIAgentSessionStatus::InProgress);
+
+    assert_eq!(cli_agent_tab_status(&session), None);
+}
+
+#[test]
+fn cli_agent_tab_status_shows_rich_plugin_status() {
+    let session = rich_cli_session(CLIAgent::Codex, CLIAgentSessionStatus::InProgress);
 
     assert_eq!(
         cli_agent_tab_status(&session),

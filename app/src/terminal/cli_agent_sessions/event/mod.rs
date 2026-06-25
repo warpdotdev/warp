@@ -7,7 +7,7 @@ use crate::terminal::CLIAgent;
 #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
 type EventParser = fn(&str) -> Option<CLIAgentEvent>;
 
-/// Sentinel title that identifies structured CLI agent events sent via OSC 777.
+/// Legacy-compatible sentinel title that identifies structured CLI agent events sent via OSC 777.
 /// The `"agent"` field in the JSON body distinguishes which agent sent it.
 pub const CLI_AGENT_NOTIFICATION_SENTINEL: &str = "warp://cli-agent";
 
@@ -25,7 +25,7 @@ pub enum CLIAgentEventType {
     Unknown(String),
 }
 
-/// How a CLI agent event reached Warp.
+/// How a CLI agent event reached Zerp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CLIAgentEventSource {
     /// Structured OSC 777 notification from a rich plugin.
@@ -67,7 +67,7 @@ pub struct CLIAgentEvent {
 #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
 const VERSIONED_PARSERS: &[EventParser] = &[v1::parse];
 
-/// The current CLI agent protocol version this build of Warp supports.
+/// The current CLI agent protocol version this build of Zerp supports.
 /// Exported as the `ZERP_CLI_AGENT_PROTOCOL_VERSION` env var on the PTY
 /// so plugins can negotiate a compatible payload format.
 #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
@@ -92,7 +92,7 @@ pub fn parse_event(title: Option<&str>, body: &str) -> Option<CLIAgentEvent> {
         None => {
             log::error!(
                 "Received CLI agent event with unsupported schema version \
-                 {version}. The CLI agent plugin or Warp may need to be updated."
+                 {version}. The CLI agent plugin or Zerp may need to be updated."
             );
             None
         }

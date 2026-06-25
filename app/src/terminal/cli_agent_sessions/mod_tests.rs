@@ -448,7 +448,7 @@ fn failure_tracking_is_independent_per_agent() {
 }
 
 #[test]
-fn session_start_sets_plugin_version() {
+fn session_start_sets_plugin_version_and_idle_status() {
     let mut session = CLIAgentSession {
         agent: CLIAgent::Claude,
         status: CLIAgentSessionStatus::InProgress,
@@ -477,8 +477,12 @@ fn session_start_sets_plugin_version() {
         },
     };
 
-    session.apply_event(&event);
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Idle)
+    );
     assert_eq!(session.plugin_version.as_deref(), Some("1.5.0"));
+    assert!(matches!(session.status, CLIAgentSessionStatus::Idle));
 }
 
 #[test]
@@ -510,6 +514,86 @@ fn session_start_without_plugin_version_leaves_none() {
 
     session.apply_event(&event);
     assert_eq!(session.plugin_version, None);
+    assert!(matches!(session.status, CLIAgentSessionStatus::Idle));
+}
+
+#[test]
+fn codex_plugin_events_drive_status_lifecycle() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Codex,
+        status: CLIAgentSessionStatus::Idle,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        received_rich_notification: false,
+    };
+
+    let mut event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Codex,
+        event: CLIAgentEventType::SessionStart,
+        session_id: Some("codex-session".to_owned()),
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload {
+            plugin_version: Some("0.4.0".to_owned()),
+            ..Default::default()
+        },
+    };
+
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Idle)
+    );
+
+    event.event = CLIAgentEventType::PromptSubmit;
+    event.payload = CLIAgentEventPayload {
+        query: Some("Explain this codebase".to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::InProgress)
+    );
+
+    event.event = CLIAgentEventType::PermissionRequest;
+    event.payload = CLIAgentEventPayload {
+        summary: Some("Wants to run Bash".to_owned()),
+        tool_name: Some("Bash".to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Blocked {
+            message: Some("Wants to run Bash".to_owned()),
+        })
+    );
+
+    event.event = CLIAgentEventType::ToolComplete;
+    event.payload = CLIAgentEventPayload {
+        tool_name: Some("Bash".to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::InProgress)
+    );
+
+    event.event = CLIAgentEventType::Stop;
+    event.payload = CLIAgentEventPayload {
+        response: Some("Done".to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(
+        session.apply_event(&event),
+        Some(CLIAgentSessionStatus::Success)
+    );
 }
 
 #[test]

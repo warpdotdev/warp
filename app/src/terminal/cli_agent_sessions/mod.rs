@@ -240,7 +240,8 @@ impl CLIAgentSession {
             }
             CLIAgentEventType::SessionStart => {
                 self.plugin_version = event.payload.plugin_version.clone();
-                return None;
+                self.clear_permission_scoped_state();
+                CLIAgentSessionStatus::Idle
             }
             CLIAgentEventType::Unknown(_) => return None,
         };
@@ -370,7 +371,7 @@ impl CLIAgentSessionsModel {
             .filter(|s| s.agent == agent)
         {
             // Upgrade existing session with plugin context.
-            session.status = CLIAgentSessionStatus::InProgress;
+            session.status = CLIAgentSessionStatus::Idle;
             session.listener = Some(listener);
             session.plugin_version = plugin_version;
             session.remote_host = remote_host;
@@ -386,7 +387,7 @@ impl CLIAgentSessionsModel {
             terminal_view_id,
             CLIAgentSession {
                 agent,
-                status: CLIAgentSessionStatus::InProgress,
+                status: CLIAgentSessionStatus::Idle,
                 session_context: CLIAgentSessionContext {
                     cwd,
                     project,

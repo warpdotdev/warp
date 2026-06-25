@@ -21,7 +21,7 @@ fn can_auto_install_is_false_without_codex_plugin() {
 fn install_instructions_are_native_without_codex_plugin() {
     let _guard = FeatureFlag::CodexPlugin.override_enabled(false);
     let instructions = CodexPluginManager::new(None, None, None).install_instructions();
-    assert_eq!(instructions.title, "Enable Warp Notifications for Codex");
+    assert_eq!(instructions.title, "Enable Zerp Notifications for Codex");
     assert_eq!(
         instructions.steps[1].command,
         "[tui]\nnotification_condition = \"always\""
@@ -64,11 +64,11 @@ fn install_instructions_has_marketplace_and_plugin_add_steps() {
     let instructions = CodexPluginManager::new(None, None, None).install_instructions();
     assert_eq!(
         instructions.steps[0].command,
-        "codex plugin marketplace add warpdotdev/codex-warp"
+        "codex plugin marketplace add bestdonger/codex-zerp"
     );
     assert_eq!(
         instructions.steps[1].command,
-        "codex plugin add warp@codex-warp"
+        "codex plugin add zerp@codex-zerp"
     );
     assert_eq!(instructions.steps.len(), 2);
     assert!(!instructions.title.is_empty());
@@ -80,11 +80,11 @@ fn update_instructions_has_marketplace_and_plugin_add_steps() {
     let instructions = CodexPluginManager::new(None, None, None).update_instructions();
     assert_eq!(
         instructions.steps[0].command,
-        "codex plugin marketplace upgrade codex-warp"
+        "codex plugin marketplace upgrade codex-zerp"
     );
     assert_eq!(
         instructions.steps[1].command,
-        "codex plugin add warp@codex-warp"
+        "codex plugin add zerp@codex-zerp"
     );
     assert_eq!(instructions.steps.len(), 2);
     assert!(!instructions.title.is_empty());
@@ -340,7 +340,7 @@ fn write_marketplace_config(dir: &Path, source_type: &str) {
     fs::write(
         dir.join("config.toml"),
         format!(
-            "[marketplaces.codex-warp]\nsource_type = \"{source_type}\"\nsource = \"/tmp/codex-warp\"\n"
+            "[marketplaces.codex-zerp]\nsource_type = \"{source_type}\"\nsource = \"/tmp/codex-zerp\"\n"
         ),
     )
     .unwrap();
@@ -373,7 +373,7 @@ fn write_cache_manifest_json(
     let manifest_dir = dir
         .join("plugins")
         .join("cache")
-        .join("codex-warp")
+        .join("codex-zerp")
         .join(plugin_name)
         .join(version_dir)
         .join(".codex-plugin");
