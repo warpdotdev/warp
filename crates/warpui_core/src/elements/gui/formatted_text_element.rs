@@ -2222,15 +2222,24 @@ impl Element for FormattedTextElement {
             Some(Event::LeftMouseDown {
                 position,
                 modifiers,
+                click_count,
                 ..
             }) => {
-                self.handle_mouse_down(*position, z_index, modifiers, ctx, app);
-                false
+                // Only a single click can land on a clickable range (e.g. a hyperlink). When it
+                // does, report the event as handled so an enclosing `SelectableArea` does not also
+                // treat the press as the start of a text selection. Otherwise the selection path
+                // dispatches its selection handler on the same press, which clears the link
+                // tooltip/click that `handle_mouse_down` just triggered — making clicks on
+                // markdown links appear to do nothing. Multi-clicks fall through so word/line
+                // selection still works when it begins on top of a link.
+                if *click_count == 1 {
+                    self.handle_mouse_down(*position, z_index, modifiers, ctx, app)
+                } else {
+                    false
+                }
             }
             _ => false,
         }
-
-        // false
     }
 
     fn origin(&self) -> Option<Point> {

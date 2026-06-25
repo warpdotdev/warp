@@ -15,11 +15,14 @@ use super::{
     HeadingFontSizeMultipliers, HighlightedHyperlink, HyperlinkSupport, LaidOutTextFrame,
     SecretRange,
 };
-use crate::elements::{Point, SelectableElement, ZIndex};
+use crate::elements::{Element, PartialClickableElement, Point, SelectableElement, ZIndex};
+use crate::event::DispatchedEvent;
 use crate::fonts::FamilyId;
+use crate::platform::WindowStyle;
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{BlockHeaderSize, SelectionDirection, SelectionType};
 use crate::text_layout::TextFrame;
+use crate::{App, AppContext, Entity, Event, Presenter, TypedActionView};
 
 #[test]
 fn test_default_heading_font_size_multipliers() {
@@ -318,4 +321,140 @@ fn expand_selection_stops_at_end_of_punctuation_run() {
         semantic_target_x(&element, 5, SelectionDirection::Forward),
         6.0 * TEST_GLYPH_ADVANCE,
     );
+}
+
+#[derive(Default)]
+struct LinkClickTestView;
+
+impl Entity for LinkClickTestView {
+    type Event = ();
+}
+
+impl crate::core::View for LinkClickTestView {
+    fn ui_name() -> &'static str {
+        "formatted_text_link_click_test_view"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        FormattedTextElement::from_str("", FamilyId(0), 13.0).finish()
+    }
+}
+
+impl TypedActionView for LinkClickTestView {
+    type Action = ();
+}
+
+/// Builds a positioned single-line element whose chars `0..link_len` are registered as one
+/// clickable range (mimicking a detected hyperlink). Each click that lands on that range
+/// increments the returned counter.
+fn element_with_clickable_link(
+    text: &str,
+    link_len: usize,
+) -> (FormattedTextElement, Rc<RefCell<usize>>) {
+    let clicks = Rc::new(RefCell::new(0usize));
+    let clicks_for_handler = clicks.clone();
+    let handlers = FrameMouseHandlers::default().with_clickable_char_range(
+        0..link_len,
+        move |_modifiers, _ctx, _app| {
+            *clicks_for_handler.borrow_mut() += 1;
+        },
+    );
+
+    let text_frame = Arc::new(TextFrame::mock_with_positions(text, TEST_GLYPH_ADVANCE));
+    let frame_bounds = RectF::new(
+        vec2f(0.0, 0.0),
+        vec2f(text_frame.max_width(), text_frame.height()),
+    );
+    let mouse_handlers = Rc::new(RefCell::new(handlers));
+    let formatted_text = FormattedText::new([FormattedTextLine::Line(vec![
+        FormattedTextFragment::plain_text(text),
+    ])]);
+
+    let mut element = FormattedTextElement::new(
+        formatted_text,
+        13.0,
+        FamilyId(0),
+        FamilyId(0),
+        ColorU::black(),
+        HighlightedHyperlink::default(),
+    );
+    element.origin = Some(Point::new(0.0, 0.0, ZIndex::new(0)));
+    element.size = Some(frame_bounds.size());
+    element.laid_out_text = vec![LaidOutTextFrame::Text {
+        text_frame,
+        frame_bounds,
+        bottom_padding: 0.0,
+        raw_text: text.to_string(),
+        mouse_handlers: mouse_handlers.clone(),
+    }];
+    element.text_frame_mouse_handlers = vec![mouse_handlers];
+    element.hyperlink_support = HyperlinkSupport {
+        highlighted_hyperlink: Arc::new(Mutex::new(None)),
+        hyperlink_font_color: ColorU::black(),
+    };
+    (element, clicks)
+}
+
+fn single_left_click_at(x: f32) -> Event {
+    Event::LeftMouseDown {
+        position: vec2f(x, 5.0),
+        modifiers: Default::default(),
+        click_count: 1,
+        is_first_mouse: false,
+    }
+}
+
+/// A single click on a hyperlink must be reported as handled by `dispatch_event` so an enclosing
+/// `SelectableArea` does not also treat the press as the start of a text selection. When it
+/// didn't (the regression), the selection path fired its selection handler on the same press and
+/// cleared the link tooltip/click that `handle_mouse_down` had just triggered, making clicks on
+/// markdown links in AI output appear to do nothing. A click that misses every clickable range
+/// must still report unhandled so normal text selection keeps working.
+#[test]
+fn single_click_on_link_is_handled_so_selection_is_not_started() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let (window_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| LinkClickTestView);
+        let mut presenter = Presenter::new(window_id);
+
+        app.update(move |ctx| {
+            // "linktext": chars 0..4 ("link") are clickable; the rest are not.
+            let (mut element, clicks) = element_with_clickable_link("linktext", 4);
+            let mut event_ctx = presenter.mock_event_context(ctx.font_cache());
+
+            // Click squarely on the first glyph of the link.
+            let handled_on_link = element.dispatch_event(
+                &DispatchedEvent::from(single_left_click_at(TEST_GLYPH_ADVANCE / 2.0)),
+                &mut event_ctx,
+                ctx,
+            );
+            assert!(
+                handled_on_link,
+                "a single click on a link should be reported as handled"
+            );
+            assert_eq!(
+                *clicks.borrow(),
+                1,
+                "the link click handler should fire once"
+            );
+
+            // Click on a non-link glyph (index 6) within the same element.
+            let handled_off_link = element.dispatch_event(
+                &DispatchedEvent::from(single_left_click_at(
+                    6.0 * TEST_GLYPH_ADVANCE + TEST_GLYPH_ADVANCE / 2.0,
+                )),
+                &mut event_ctx,
+                ctx,
+            );
+            assert!(
+                !handled_off_link,
+                "a click that misses every clickable range should not be reported as handled"
+            );
+            assert_eq!(
+                *clicks.borrow(),
+                1,
+                "clicking off the link should not fire the link handler"
+            );
+        });
+    });
 }
