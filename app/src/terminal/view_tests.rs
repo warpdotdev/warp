@@ -5527,30 +5527,6 @@ fn use_agent_footer_renders_for_transfer_handoff_even_when_user_command_footer_s
 }
 
 #[test]
-fn test_first_onboarding_block_exists() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let terminal = add_window_with_terminal(&mut app, None);
-
-        terminal.update(&mut app, |terminal_view, ctx| {
-            terminal_view.handle_action(
-                &TerminalAction::OnboardingFlow(OnboardingVersion::Legacy),
-                ctx,
-            );
-        });
-        terminal.update(&mut app, |terminal_view, ctx| {
-            assert!(terminal_view.block_onboarding_active);
-            // Here we assert that Agentic Suggestions block is the first one. As we modify the sequence, this test will have to be updated.
-            ctx.subscribe_to_model(&History::handle(ctx), move |me, _, event, _| match event {
-                HistoryEvent::Initialized(_) => {
-                    assert!(me.onboarding_agentic_suggestions_block.is_some());
-                }
-            });
-        });
-    })
-}
-
-#[test]
 fn exiting_agent_view_removes_empty_conversations() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

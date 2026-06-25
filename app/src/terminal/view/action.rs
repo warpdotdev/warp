@@ -61,7 +61,6 @@ pub enum AgentOnboardingVersion {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OnboardingVersion {
-    Legacy,
     Agent(AgentOnboardingVersion),
 }
 
@@ -336,7 +335,6 @@ pub enum TerminalAction {
         selected_range: Range<usize>,
     },
     ClearMarkedText,
-    SelectAgenticSuggestion(i32),
     HideTelemetryBannerPermanently,
     ShowInitializationBlock,
     GenerateCodebaseIndex,
@@ -673,7 +671,6 @@ impl fmt::Debug for TerminalAction {
                 selected_range,
             } => write!(f, "SetMarkedText {{{marked_text:?}, {selected_range:?}}}"),
             ClearMarkedText => write!(f, "ClearMarkedText"),
-            SelectAgenticSuggestion(index) => write!(f, "SelectAgenticSuggestion({index:?})"),
             HideTelemetryBannerPermanently => write!(f, "HideTelemetryBannerPermanently"),
             ShowInitializationBlock => write!(f, "ShowInitializationBlock"),
             GenerateCodebaseIndex => write!(f, "GenerateIndexForRepo"),
