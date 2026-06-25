@@ -14,7 +14,7 @@ The current design splits the terminal manager responsibilities into three layer
 
 1. `TerminalSurface` and `PtyIntent` define the narrow frontend-to-PTY boundary.
 2. `TerminalManager<S>` owns local terminal model/session/controller/event-loop state for any terminal surface.
-3. `TerminalManager<TerminalView>::create_model` adapts the generic manager path to the current GUI pane system.
+3. `TerminalManager<TerminalView>::create_model` adapts the generic manager path to the current GUI pane system and returns the boxed model handle expected by pane code.
 
 ## Proposed changes
 
@@ -85,34 +85,30 @@ pub struct TerminalManager<S> {
 }
 ```
 
-`TerminalManager<S>::new(...)` is the generic construction seam. It assembles a manager around a pre-constructed surface and shared local terminal session parts, and it wires the surface to the `PtyController` through `wire_up_pty_controller_with_surface`.
+`TerminalManager<TerminalView>::create_model(...)` is the canonical local GUI construction API. It owns the local terminal session construction order, creates the manager-owned channels/models/controllers internally, calls one surface setup callback that returns `(surface, post_wire)`, wires the surface to the `PtyController` through `wire_up_pty_controller_with_surface`, runs `post_wire`, boxes the manager as a WarpUI model, schedules shell determination, and returns `(manager_model, surface)`.
 
-`LocalTerminalSessionParts` is a private construction-output bundle for the shared model/session/controller/channel state needed to create any local terminal surface:
+The surface factory callback receives only the components a surface needs:
 
 - `TerminalModel`
 - `Sessions`
 - `ModelEventDispatcher`
-- `PtyController`
-- `RemoteServerController`
-- event-loop sender/receiver
 - wakeup receiver
 - inactive PTY reads receiver
-- `ChannelEventListener`
 - terminal colors
-- shell-starter source
+- current terminal size
 
-`build_local_terminal_session_parts(...)` creates those pieces in one pass, including terminal model initialization, throughput recording, shared-session creator status, and PTY/remote-server controller registration.
+The manager stores the remaining startup and lifetime components itself, including the event-loop sender/receiver, channel event proxy, `PtyController`, `RemoteServerController`, and shell-starter source. Shell determination later consumes that stored startup state from the manager after it has been registered as a WarpUI model.
 
-The GUI adapter `TerminalManager<TerminalView>::create_model(...)` now:
+The surface setup callback can return a deferred `post_wire` closure for surface-specific wiring. The constructor runs that closure after the PTY controller is wired and the manager has been assembled. This keeps ordering-sensitive post-wiring inside the manager-owned construction flow without requiring the generic manager core to import `TerminalView`.
+
+`TerminalManager<TerminalView>::create_model(...)` now:
 
 1. Resolves GUI-specific restored blocks from explicit restored blocks and conversation restoration.
-2. Calls `build_local_terminal_session_parts(...)`.
-3. Creates `TerminalView`.
-4. Appends the GUI restoration separator when needed.
-5. Wires remote-server choice UI.
-6. Wires `TerminalView`-specific session sharing.
-7. Calls `TerminalManager::new(...)` to assemble the manager.
-8. Boxes the manager and returns `(manager, terminal_view)`.
+2. Uses a surface setup callback that creates `CurrentPrompt`, `PromptType`, and `TerminalView` from the manager-created surface components, then returns `(view, post_wire)`.
+3. The returned `post_wire` closure appends the GUI restoration separator when needed, wires remote-server choice UI, and wires `TerminalView`-specific session sharing.
+4. Boxes the manager, schedules shell determination, and returns `(manager_model, terminal_view)`.
+
+This keeps the end-to-end local terminal construction protocol in `TerminalManager<TerminalView>::create_model` while keeping the reusable manager core surface-generic.
 
 ### Generic PTY wiring
 

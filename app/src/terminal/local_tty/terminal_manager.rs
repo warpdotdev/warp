@@ -140,6 +140,9 @@ fn should_skip_sharer_op(is_ambient_session: bool, op: &CrdtOperation) -> bool {
 /// event loop join handle).
 pub struct TerminalManager<S> {
     event_loop_tx: Arc<Mutex<mio_channel::Sender<Message>>>,
+    event_loop_rx: Option<mio_channel::Receiver<Message>>,
+    channel_event_proxy: ChannelEventListener,
+    wsl_name_or_shell_starter: Option<ShellStarterSourceOrWslName>,
     /// This is an `Option` so that we can take ownership of the inner
     /// `JoinHandle` in `TerminalManager::drop`.
     event_loop_handle: Option<JoinHandle<()>>,
@@ -150,6 +153,9 @@ pub struct TerminalManager<S> {
     /// wiring; retained on all platforms so the manager owns the dispatcher's lifetime.
     #[cfg_attr(not(unix), allow(dead_code))]
     model_events: ModelHandle<ModelEventDispatcher>,
+
+    #[allow(dead_code)]
+    sessions: ModelHandle<Sessions>,
 
     /// The manager is responsible for managing the lifetime
     /// of the terminal attributes poller. None if the event loop has not yet started.
@@ -163,7 +169,6 @@ pub struct TerminalManager<S> {
     pty_controller: ModelHandle<PtyController>,
 
     /// The manager is responsible for managing the lifetime of the remote server controller.
-    #[expect(dead_code)]
     remote_server_controller: ModelHandle<RemoteServerController>,
 
     /// The process ID of the PTY. Purely used for integration tests. None if the PTY has not yet
@@ -191,41 +196,155 @@ impl<S> Drop for TerminalManager<S> {
 }
 
 impl<S> TerminalManager<S> {
-    /// Assembles a `TerminalManager` around a pre-constructed surface. Wires the
-    /// PTY controller to the surface.
+    /// Creates a local terminal manager and its surface in the manager-owned
+    /// construction order.
     #[allow(clippy::too_many_arguments)]
-    fn new(
-        surface: ViewHandle<S>,
-        event_loop_tx: mio_channel::Sender<Message>,
-        inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
-        sessions: ModelHandle<Sessions>,
-        model_events: ModelHandle<ModelEventDispatcher>,
-        model: Arc<FairMutex<TerminalModel>>,
-        pty_controller: ModelHandle<PtyController>,
-        remote_server_controller: ModelHandle<RemoteServerController>,
-        session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>>,
+    fn build_with_surface<PostWire>(
+        chosen_shell: Option<AvailableShell>,
+        startup_directory: Option<PathBuf>,
+        all_restored_blocks: Option<&Vec<SerializedBlockListItem>>,
+        initial_size: Vector2F,
+        is_shared_session_creator: IsSharedSessionCreator,
         model_event_sender: Option<SyncSender<ModelEvent>>,
         ctx: &mut AppContext,
-    ) -> Self
+        create_surface: impl FnOnce(
+            async_channel::Receiver<()>,
+            ModelHandle<ModelEventDispatcher>,
+            Arc<FairMutex<TerminalModel>>,
+            ModelHandle<Sessions>,
+            SizeInfo,
+            ColorList,
+            InactiveReceiver<Arc<Vec<u8>>>,
+            &mut AppContext,
+        ) -> (ViewHandle<S>, PostWire),
+    ) -> (Self, ViewHandle<S>)
     where
         S: TerminalSurface,
         <S as Entity>::Event: PtyIntentEvent,
+        PostWire: FnOnce(&mut Self, &ViewHandle<S>, &mut AppContext),
     {
+        let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
+        let (events_tx, events_rx) = async_channel::unbounded();
+        let (executor_command_tx, executor_command_rx) = async_channel::unbounded();
+        let (event_loop_tx, event_loop_rx) = mio_channel::channel();
+
+        // Deactivate the PTY reads broadcast immediately; we only activate receivers as needed.
+        let (pty_reads_tx, pty_reads_rx) =
+            async_broadcast::broadcast(PTY_READS_BROADCAST_CHANNEL_SIZE);
+        let inactive_pty_reads_rx = pty_reads_rx.deactivate();
+
+        let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
+
+        let sessions = ctx.add_model(|ctx| Sessions::new(executor_command_tx.clone(), ctx));
+        let model_events =
+            ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
+
+        // ApiKeyManager subscribes to block completion events for AWS credential refresh.
+        ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.register_model_event_dispatcher(&model_events, ctx);
+        });
+
+        let preferred_shell = chosen_shell.unwrap_or_else(|| {
+            AvailableShells::handle(ctx)
+                .read(ctx, |shells, ctx| shells.get_user_preferred_shell(ctx))
+        });
+        let wsl_name_or_shell_starter = ShellStarter::init(preferred_shell.clone());
+
+        log::info!(
+            "Creating terminal model with {} restored blocks",
+            all_restored_blocks
+                .as_ref()
+                .map(|blocks| blocks.len())
+                .unwrap_or(0)
+        );
+        let model = terminal_manager::create_terminal_model(
+            startup_directory,
+            all_restored_blocks,
+            initial_size,
+            channel_event_proxy.clone(),
+            ShellLaunchState::DeterminingShell {
+                available_shell: Some(preferred_shell),
+                display_name: wsl_name_or_shell_starter
+                    .as_ref()
+                    .map(|wsl_name_or_shell_starter| wsl_name_or_shell_starter.name())
+                    .unwrap_or(ShellName::LessDescriptive("Shell".to_owned())),
+            },
+            ctx,
+        );
+        let colors = model.colors();
+        let model = Arc::new(FairMutex::new(model));
+
+        // This is purely for measuring throughput on WarpDev.
+        if FeatureFlag::RecordPtyThroughput.is_enabled() {
+            let auth_state = AuthStateProvider::as_ref(ctx).get();
+            recorder::record_pty_throughput(
+                inactive_pty_reads_rx.clone().activate(),
+                model.clone(),
+                auth_state.clone(),
+                ctx.background_executor().to_owned(),
+            );
+        }
+
+        // If this session should be a shared-session creator, configure its initial
+        // shared-session state before the surface is constructed, so that bootstrap
+        // events can observe the correct pending status and source type.
+        match is_shared_session_creator {
+            IsSharedSessionCreator::Yes { source }
+                if FeatureFlag::CreatingSharedSessions.is_enabled() =>
+            {
+                model.lock().set_shared_session_status(
+                    SharedSessionStatus::SharePendingPreBootstrap { source },
+                );
+                log::info!("Configured terminal to start sharing after bootstrap");
+            }
+            IsSharedSessionCreator::Yes { .. } => {
+                log::warn!(
+                    "Session sharing was requested, but CreatingSharedSessions is disabled; \
+                     skipping shared-session startup"
+                );
+            }
+            IsSharedSessionCreator::No => {}
+        }
+
+        let pty_controller = init_pty_controller_model(
+            event_loop_tx.clone(),
+            executor_command_rx,
+            model_events.clone(),
+            sessions.clone(),
+            model.clone(),
+            ctx,
+        );
+        let remote_server_controller =
+            init_remote_server_controller(&pty_controller, &model_events, ctx);
+        let size_info = model.lock().block_list().size().to_owned();
+        let (surface, post_wire) = create_surface(
+            wakeups_rx,
+            model_events.clone(),
+            model.clone(),
+            sessions.clone(),
+            size_info,
+            colors.clone(),
+            inactive_pty_reads_rx.clone(),
+            ctx,
+        );
         wire_up_pty_controller_with_surface(
             &pty_controller,
             &surface,
             model.clone(),
-            sessions,
+            sessions.clone(),
             model_event_sender,
             ctx,
         );
-
-        Self {
+        let mut manager = Self {
             event_loop_tx: Arc::new(Mutex::new(event_loop_tx)),
+            event_loop_rx: Some(event_loop_rx),
+            channel_event_proxy,
+            wsl_name_or_shell_starter,
             model,
             event_loop_handle: None,
-            view: surface,
+            view: surface.clone(),
             model_events,
+            sessions,
             #[cfg(unix)]
             terminal_attributes_poller: None,
             pty_controller,
@@ -233,13 +352,25 @@ impl<S> TerminalManager<S> {
             #[cfg(feature = "integration_tests")]
             pid: None,
             inactive_pty_reads_rx,
-            session_sharer,
-        }
+            session_sharer: Rc::new(RefCell::new(None)),
+        };
+        post_wire(&mut manager, &surface, ctx);
+        (manager, surface)
     }
 
     /// Returns the terminal model owned by this manager.
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
+    }
+
+    /// Returns the remote server controller owned by this manager.
+    fn remote_server_controller(&self) -> ModelHandle<RemoteServerController> {
+        self.remote_server_controller.clone()
+    }
+
+    /// Takes the shell-starter source so shell determination can be spawned.
+    fn take_wsl_name_or_shell_starter(&mut self) -> Option<ShellStarterSourceOrWslName> {
+        self.wsl_name_or_shell_starter.take()
     }
 
     /// Sends a shutdown message to the PTY event loop and waits for it to
@@ -263,158 +394,16 @@ impl<S> TerminalManager<S> {
     }
 }
 
-/// Construction-output bundle for a local terminal session: all the models,
-/// controllers, channels, and shell-starter data needed to assemble a
-/// `TerminalManager<S>` and create a terminal surface.
-struct LocalTerminalSessionParts {
-    event_loop_tx: mio_channel::Sender<Message>,
-    event_loop_rx: mio_channel::Receiver<Message>,
-    wakeups_rx: async_channel::Receiver<()>,
-    inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
-    channel_event_proxy: ChannelEventListener,
-    sessions: ModelHandle<Sessions>,
-    model_events: ModelHandle<ModelEventDispatcher>,
-    model: Arc<FairMutex<TerminalModel>>,
-    colors: ColorList,
-    pty_controller: ModelHandle<PtyController>,
-    remote_server_controller: ModelHandle<RemoteServerController>,
-    wsl_name_or_shell_starter: Option<ShellStarterSourceOrWslName>,
-}
-
-/// Creates all shared model/session/controller/channel pieces for a local terminal
-/// session in one pass: communication channels, `Sessions`, `ModelEventDispatcher`,
-/// `TerminalModel`, `PtyController`, `RemoteServerController`, colors, PTY-read
-/// receivers, and shell-starter source.
-///
-/// `all_restored_blocks` is the resolved block list used to initialize the
-/// `TerminalModel`.
-#[allow(clippy::too_many_arguments)]
-fn build_local_terminal_session_parts(
-    chosen_shell: Option<AvailableShell>,
-    startup_directory: Option<PathBuf>,
-    all_restored_blocks: Option<&Vec<SerializedBlockListItem>>,
-    initial_size: Vector2F,
-    is_shared_session_creator: IsSharedSessionCreator,
-    ctx: &mut AppContext,
-) -> LocalTerminalSessionParts {
-    let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
-    let (events_tx, events_rx) = async_channel::unbounded();
-    let (executor_command_tx, executor_command_rx) = async_channel::unbounded();
-    let (event_loop_tx, event_loop_rx) = mio_channel::channel();
-
-    // Deactivate the PTY reads broadcast immediately; we only activate receivers as needed.
-    let (pty_reads_tx, pty_reads_rx) = async_broadcast::broadcast(PTY_READS_BROADCAST_CHANNEL_SIZE);
-    let inactive_pty_reads_rx = pty_reads_rx.deactivate();
-
-    let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
-
-    let sessions = ctx.add_model(|ctx| Sessions::new(executor_command_tx.clone(), ctx));
-    let model_events =
-        ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
-
-    // ApiKeyManager subscribes to block completion events for AWS credential refresh.
-    ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-        manager.register_model_event_dispatcher(&model_events, ctx);
-    });
-
-    let preferred_shell = chosen_shell.unwrap_or_else(|| {
-        AvailableShells::handle(ctx).read(ctx, |shells, ctx| shells.get_user_preferred_shell(ctx))
-    });
-    let wsl_name_or_shell_starter = ShellStarter::init(preferred_shell.clone());
-
-    log::info!(
-        "Creating terminal model with {} restored blocks",
-        all_restored_blocks
-            .as_ref()
-            .map(|blocks| blocks.len())
-            .unwrap_or(0)
-    );
-    let model = terminal_manager::create_terminal_model(
-        startup_directory,
-        all_restored_blocks,
-        initial_size,
-        channel_event_proxy.clone(),
-        ShellLaunchState::DeterminingShell {
-            available_shell: Some(preferred_shell),
-            display_name: wsl_name_or_shell_starter
-                .as_ref()
-                .map(|wsl_name_or_shell_starter| wsl_name_or_shell_starter.name())
-                .unwrap_or(ShellName::LessDescriptive("Shell".to_owned())),
-        },
-        ctx,
-    );
-    let colors = model.colors();
-    let model = Arc::new(FairMutex::new(model));
-
-    // This is purely for measuring throughput on WarpDev.
-    if FeatureFlag::RecordPtyThroughput.is_enabled() {
-        let auth_state = AuthStateProvider::as_ref(ctx).get();
-        recorder::record_pty_throughput(
-            inactive_pty_reads_rx.clone().activate(),
-            model.clone(),
-            auth_state.clone(),
-            ctx.background_executor().to_owned(),
-        );
-    }
-
-    // If this session should be a shared-session creator, configure its initial
-    // shared-session state before the surface is constructed, so that bootstrap
-    // events can observe the correct pending status and source type.
-    match is_shared_session_creator {
-        IsSharedSessionCreator::Yes { source }
-            if FeatureFlag::CreatingSharedSessions.is_enabled() =>
-        {
-            model
-                .lock()
-                .set_shared_session_status(SharedSessionStatus::SharePendingPreBootstrap {
-                    source,
-                });
-            log::info!("Configured terminal to start sharing after bootstrap");
-        }
-        IsSharedSessionCreator::Yes { .. } => {
-            log::warn!(
-                "Session sharing was requested, but CreatingSharedSessions is disabled; \
-                 skipping shared-session startup"
-            );
-        }
-        IsSharedSessionCreator::No => {}
-    }
-
-    let pty_controller = init_pty_controller_model(
-        event_loop_tx.clone(),
-        executor_command_rx,
-        model_events.clone(),
-        sessions.clone(),
-        model.clone(),
-        ctx,
-    );
-    let remote_server_controller =
-        init_remote_server_controller(&pty_controller, &model_events, ctx);
-
-    LocalTerminalSessionParts {
-        event_loop_tx,
-        event_loop_rx,
-        wakeups_rx,
-        inactive_pty_reads_rx,
-        channel_event_proxy,
-        sessions,
-        model_events,
-        model,
-        colors,
-        pty_controller,
-        remote_server_controller,
-        wsl_name_or_shell_starter,
-    }
-}
-
 impl TerminalManager<TerminalView> {
-    /// GUI adapter that resolves `TerminalView`-specific inputs (conversation
+    /// Creates a local terminal manager model and its `TerminalView`.
+    ///
+    /// Resolves `TerminalView`-specific inputs (conversation
     /// restoration, prompt/presence/LLM/input-mode broadcast wiring, shared-session
     /// sharer setup, agent-view registration, remote-server choice wiring), creates
     /// the `TerminalView`, boxes the manager, and returns `(manager, view)`.
     ///
     /// Surface-agnostic session construction is delegated to
-    /// [`build_local_terminal_session_parts`].
+    /// [`TerminalManager::build_with_surface`].
     #[allow(clippy::too_many_arguments)]
     pub fn create_model(
         startup_directory: Option<PathBuf>,
@@ -459,43 +448,6 @@ impl TerminalManager<TerminalView> {
                 }
                 _ => None,
             });
-
-        // Build the surface-agnostic local terminal session parts: channels, sessions,
-        // model events, terminal model, PTY controller, remote-server controller,
-        // throughput recording, and shared-session creator status.
-        let parts = build_local_terminal_session_parts(
-            chosen_shell,
-            startup_directory.clone(),
-            all_restored_blocks.as_ref(),
-            initial_size,
-            is_shared_session_creator,
-            ctx,
-        );
-        // Destructure `parts` into fields consumed by the surface, the shell-starter
-        // spawn, and the generic manager constructor.
-        let LocalTerminalSessionParts {
-            event_loop_tx,
-            event_loop_rx,
-            wakeups_rx,
-            inactive_pty_reads_rx,
-            channel_event_proxy,
-            sessions,
-            model_events,
-            model,
-            colors,
-            pty_controller,
-            remote_server_controller,
-            wsl_name_or_shell_starter,
-        } = parts;
-
-        let current_prompt = ctx.add_model(|ctx| {
-            CurrentPrompt::new_with_model_events(sessions.clone(), Some(&model_events), ctx)
-        });
-        let prompt_type = ctx.add_model(|ctx| PromptType::new_dynamic(current_prompt.clone(), ctx));
-
-        let has_restored_command_blocks = all_restored_blocks
-            .as_ref()
-            .is_some_and(|blocks| !blocks.is_empty());
         let has_conversation_restoration = matches!(
             &conversation_restoration,
             Some(
@@ -507,100 +459,119 @@ impl TerminalManager<TerminalView> {
             &conversation_restoration,
             Some(ConversationRestorationInNewPaneType::Historical { .. })
         );
-        // Create the view.
-        let cloned_model = model.clone();
         let should_use_live_appearance = conversation_restoration
             .as_ref()
             .map(|restoration| restoration.should_use_live_appearance())
             .unwrap_or(false);
-        let view = ctx.add_typed_action_view(window_id, |ctx| {
-            let size_info = cloned_model.lock().block_list().size().to_owned();
-            TerminalView::new(
-                resources,
-                wakeups_rx,
-                model_events.clone(),
-                cloned_model,
-                sessions.clone(),
-                size_info,
-                colors,
-                model_event_sender.clone(),
-                prompt_type.clone(),
-                initial_input_config,
-                conversation_restoration,
-                Some(inactive_pty_reads_rx.clone()),
-                false,
-                ctx,
-            )
-        });
+        let has_restored_command_blocks = all_restored_blocks
+            .as_ref()
+            .is_some_and(|blocks| !blocks.is_empty());
 
-        // Append the session restoration separator to the block list if there are any
-        // restored blocks (command blocks or AI conversations) to show.
-        let should_show_restoration_separator = (has_conversation_restoration
-            || has_restored_command_blocks)
-            && !should_use_live_appearance;
+        let model_event_sender_for_surface = model_event_sender.clone();
+        let conversation_restoration_for_surface = conversation_restoration;
+        let (mut terminal_manager, view) = TerminalManager::build_with_surface(
+            chosen_shell,
+            startup_directory.clone(),
+            all_restored_blocks.as_ref(),
+            initial_size,
+            is_shared_session_creator,
+            model_event_sender.clone(),
+            ctx,
+            |wakeups_rx,
+             model_events,
+             cloned_model,
+             sessions,
+             size_info,
+             colors,
+             inactive_pty_reads_rx,
+             ctx| {
+                let current_prompt = ctx.add_model(|ctx| {
+                    CurrentPrompt::new_with_model_events(sessions.clone(), Some(&model_events), ctx)
+                });
+                let prompt_type =
+                    ctx.add_model(|ctx| PromptType::new_dynamic(current_prompt.clone(), ctx));
+                let view = ctx.add_typed_action_view(window_id, |ctx| {
+                    TerminalView::new(
+                        resources,
+                        wakeups_rx,
+                        model_events,
+                        cloned_model,
+                        sessions,
+                        size_info,
+                        colors,
+                        model_event_sender_for_surface.clone(),
+                        prompt_type.clone(),
+                        initial_input_config,
+                        conversation_restoration_for_surface,
+                        Some(inactive_pty_reads_rx),
+                        false,
+                        ctx,
+                    )
+                });
 
-        if should_show_restoration_separator {
-            model
-                .lock()
-                .block_list_mut()
-                .append_session_restoration_separator_to_block_list(is_historical);
-        }
+                (
+                    view,
+                    move |terminal_manager: &mut TerminalManager<TerminalView>,
+                          view: &ViewHandle<TerminalView>,
+                          ctx: &mut AppContext| {
+                        // Append the session restoration separator to the block list if there are any
+                        // restored blocks (command blocks or AI conversations) to show.
+                        let should_show_restoration_separator = (has_conversation_restoration
+                            || has_restored_command_blocks)
+                            && !should_use_live_appearance;
 
-        // In unit tests, we know we aren't going to bootstrap a shell
-        // so if we're waiting on starting a shared session until bootstrapped,
-        // just attempt to start it now.
-        #[cfg(test)]
-        if matches!(
-            model.lock().shared_session_status(),
-            SharedSessionStatus::SharePendingPreBootstrap { .. }
-        ) {
-            view.update(ctx, |view, ctx| {
-                view.attempt_to_share_session(
-                    SharedSessionScrollbackType::All,
-                    None,
-                    SharedSessionSource::user(None),
-                    false,
-                    ctx,
+                        if should_show_restoration_separator {
+                            terminal_manager
+                                .model()
+                                .lock()
+                                .block_list_mut()
+                                .append_session_restoration_separator_to_block_list(is_historical);
+                        }
+
+                        // In unit tests, we know we aren't going to bootstrap a shell
+                        // so if we're waiting on starting a shared session until bootstrapped,
+                        // just attempt to start it now.
+                        #[cfg(test)]
+                        if matches!(
+                            terminal_manager.model().lock().shared_session_status(),
+                            SharedSessionStatus::SharePendingPreBootstrap { .. }
+                        ) {
+                            view.update(ctx, |view, ctx| {
+                                view.attempt_to_share_session(
+                                    SharedSessionScrollbackType::All,
+                                    None,
+                                    SharedSessionSource::user(None),
+                                    false,
+                                    ctx,
+                                )
+                            });
+                        }
+
+                        wire_up_remote_server_controller_with_view(
+                            &terminal_manager.remote_server_controller(),
+                            view,
+                            ctx,
+                        );
+
+                        // Wire up TerminalView-specific session sharing (sharer setup, prompt/presence/LLM/
+                        // input-mode/conversation broadcasts, agent-view registration, network status).
+                        terminal_manager.session_sharer = wire_up_terminal_view_session_sharing(
+                            view,
+                            current_prompt,
+                            prompt_type,
+                            terminal_manager.model(),
+                            window_id,
+                            ctx,
+                        );
+                    },
                 )
-            });
-        }
-
-        wire_up_remote_server_controller_with_view(&remote_server_controller, &view, ctx);
-
-        // Wire up TerminalView-specific session sharing (sharer setup, prompt/presence/LLM/
-        // input-mode/conversation broadcasts, agent-view registration, network status).
-        let session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>> =
-            wire_up_terminal_view_session_sharing(
-                &view,
-                current_prompt,
-                prompt_type,
-                model.clone(),
-                window_id,
-                ctx,
-            );
-
-        #[cfg(windows)]
-        let event_loop_tx_clone = event_loop_tx.clone();
+            },
+        );
 
         // Clone the view before moving it into the manager so the caller can
         // receive it alongside the boxed manager.
         let terminal_view = view.clone();
-
-        // Assemble the manager via the generic construction path, which wires the
-        // PTY controller to the surface.
-        let terminal_manager = TerminalManager::new(
-            view,
-            event_loop_tx,
-            inactive_pty_reads_rx,
-            sessions,
-            model_events,
-            model,
-            pty_controller,
-            remote_server_controller,
-            session_sharer,
-            model_event_sender,
-            ctx,
-        );
+        let wsl_name_or_shell_starter = terminal_manager.take_wsl_name_or_shell_starter();
 
         let terminal_manager_model = ctx.add_model(|ctx| {
             let terminal_manager: Box<dyn TerminalManagerTrait> = Box::new(terminal_manager);
@@ -627,10 +598,6 @@ impl TerminalManager<TerminalView> {
                         startup_directory,
                         env_vars,
                         user_default_shell_unsupported_banner_model_handle,
-                        #[cfg(windows)]
-                        event_loop_tx_clone,
-                        event_loop_rx,
-                        channel_event_proxy,
                         shell_starter_source,
                         ctx,
                     )
@@ -651,9 +618,6 @@ fn on_shell_determined<S: TerminalSurface>(
     startup_directory: Option<PathBuf>,
     env_vars: HashMap<OsString, OsString>,
     user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
-    #[cfg(windows)] event_loop_tx: mio_channel::Sender<Message>,
-    event_loop_rx: mio_channel::Receiver<Message>,
-    channel_event_proxy: ChannelEventListener,
     shell_starter_source: Option<ShellStarterSource>,
     ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
 ) where
@@ -755,6 +719,12 @@ fn on_shell_determined<S: TerminalSurface>(
     // Enqueue the init shell script (for shells that need it), then create
     // the PTY and start its corresponding event loop.
     let model = manager.model();
+    let event_loop_rx = manager
+        .event_loop_rx
+        .take()
+        .expect("terminal event loop receiver was already taken");
+    #[cfg(windows)]
+    let event_loop_tx = manager.event_loop_tx.lock().clone();
     let pty = match manager
         .enqueue_init_script(&shell_starter, generated_session_id)
         .context("Failed to write shell init script to the pty")
@@ -790,7 +760,7 @@ fn on_shell_determined<S: TerminalSurface>(
         pty,
         event_loop_rx,
         model.clone(),
-        channel_event_proxy.clone(),
+        manager.channel_event_proxy.clone(),
     );
 
     manager.event_loop_handle = Some(event_loop_handle);
