@@ -7,11 +7,14 @@
 use itertools::Itertools;
 use warpui::elements::{
     ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-    CrossAxisAlignment, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, ParentElement, ScrollbarWidth, Text,
+    CornerRadius, CrossAxisAlignment, Empty, Expanded, Fill as UiFill, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Text,
 };
 use warpui::platform::Cursor;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::segmented_control::{
+    LabelConfig, RenderableOptionConfig, SegmentedControl, SegmentedControlEvent,
+};
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -35,7 +38,7 @@ use crate::view_components::action_button::{
     ActionButton, ButtonSize, PrimaryTheme, SecondaryTheme,
 };
 use crate::view_components::dropdown::DropdownAction;
-use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
+use crate::view_components::FilterableDropdown;
 
 pub const HEADER_TEXT: &str = "Router Editor";
 
@@ -55,6 +58,14 @@ const RULE_FIELD_HEIGHT: f32 = 34.;
 /// Size (width/height) of the reorder/remove icon buttons in a rule row.
 const RULE_ICON_BUTTON_SIZE: f32 = 14.;
 
+/// Horizontal gap between the reorder/remove icon buttons in a rule row.
+const RULE_ICON_GAP: f32 = 6.;
+
+/// Total width of the reorder/remove controls (three icon buttons separated by
+/// two gaps). This slot is reserved even for a single rule so the rule input
+/// and model dropdown keep a constant width regardless of rule count.
+const RULE_CONTROLS_WIDTH: f32 = RULE_ICON_BUTTON_SIZE * 3. + RULE_ICON_GAP * 2.;
+
 #[derive(Debug, Clone)]
 pub enum CustomRouterEditorEvent {
     Pane(PaneEvent),
@@ -64,7 +75,6 @@ pub enum CustomRouterEditorEvent {
 pub enum CustomRouterEditorAction {
     Close,
     Save,
-    SetRouterType(RouterEditorType),
     SetComplexityDefault(String),
     SetComplexityEasy(String),
     SetComplexityMedium(String),
@@ -100,7 +110,7 @@ pub struct CustomRouterEditorView {
 
     name_editor: ViewHandle<EditorView>,
     router_type: RouterEditorType,
-    type_dropdown: ViewHandle<Dropdown<CustomRouterEditorAction>>,
+    type_control: ViewHandle<SegmentedControl<RouterEditorType>>,
 
     complexity_default_dropdown: ViewHandle<FilterableDropdown<CustomRouterEditorAction>>,
     complexity_easy_dropdown: ViewHandle<FilterableDropdown<CustomRouterEditorAction>>,
@@ -197,28 +207,50 @@ impl CustomRouterEditorView {
             editor.set_font_family(font_family, ctx);
         });
 
-        // Type dropdown
+        // Routing type selector (segmented control)
         let init_type = router_type;
-        let type_dropdown = ctx.add_typed_action_view(move |ctx| {
-            let mut d = Dropdown::new(ctx);
-            d.set_items(
-                vec![
-                    DropdownItem::new(
-                        "Complexity",
-                        CustomRouterEditorAction::SetRouterType(RouterEditorType::Complexity),
-                    ),
-                    DropdownItem::new(
-                        "Prompt",
-                        CustomRouterEditorAction::SetRouterType(RouterEditorType::Prompt),
-                    ),
-                ],
-                ctx,
-            );
-            match init_type {
-                RouterEditorType::Complexity => d.set_selected_by_name("Complexity", ctx),
-                RouterEditorType::Prompt => d.set_selected_by_name("Prompt", ctx),
-            }
-            d
+        let type_control = ctx.add_typed_action_view(move |ctx| {
+            SegmentedControl::new(
+                vec![RouterEditorType::Complexity, RouterEditorType::Prompt],
+                |router_type, is_selected, app| {
+                    let appearance = Appearance::as_ref(app);
+                    let theme = appearance.theme();
+                    Some(RenderableOptionConfig {
+                        icon_path: "",
+                        icon_color: theme.main_text_color(theme.background()).into(),
+                        label: Some(LabelConfig {
+                            label: match router_type {
+                                RouterEditorType::Complexity => "Complexity".into(),
+                                RouterEditorType::Prompt => "Prompt".into(),
+                            },
+                            width_override: Some(70.0),
+                            color: if is_selected {
+                                theme.accent().into()
+                            } else {
+                                theme.main_text_color(theme.background()).into()
+                            },
+                        }),
+                        tooltip: None,
+                        background: if is_selected {
+                            UiFill::Solid(theme.surface_3().into())
+                        } else {
+                            UiFill::None
+                        },
+                    })
+                },
+                init_type,
+                type_control_styles(ctx),
+            )
+        });
+        ctx.subscribe_to_view(&type_control, |me, _, event, ctx| {
+            let SegmentedControlEvent::OptionSelected(t) = event;
+            me.set_router_type(*t, ctx);
+        });
+        ctx.subscribe_to_model(&Appearance::handle(ctx), |me, _, _, ctx| {
+            me.type_control.update(ctx, |control, ctx| {
+                control.set_styles(type_control_styles(ctx), ctx);
+            });
+            ctx.notify();
         });
 
         // Model dropdowns — searchable, with icons and display names.
@@ -268,11 +300,21 @@ impl CustomRouterEditorView {
                 )
             })
             .collect();
-        // Prompt routing requires at least one rule, so always start with one
-        // (empty) rule row when none were loaded.
+        // Prompt routing requires at least one rule, so seed empty rule rows
+        // when none were loaded. New routers start with two rows to hint that
+        // multiple rules are supported (saving still only requires one populated
+        // rule); editing a router without prompt rules seeds a single row.
         if prompt_rules.is_empty() {
-            let row = make_prompt_rule_row(0, "", "", &upgrade_footer_mouse_state, ctx);
-            prompt_rules.push(row);
+            let default_rule_rows: usize = if existing.is_none() { 2 } else { 1 };
+            for i in 0..default_rule_rows {
+                prompt_rules.push(make_prompt_rule_row(
+                    i,
+                    "",
+                    "",
+                    &upgrade_footer_mouse_state,
+                    ctx,
+                ));
+            }
         }
 
         let save_button = ctx.add_typed_action_view(|_| {
@@ -288,7 +330,6 @@ impl CustomRouterEditorView {
         let add_rule_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("+ Add rule", SecondaryTheme)
                 .with_size(ButtonSize::Small)
-                .with_full_width(true)
                 .on_click(|ctx| ctx.dispatch_typed_action(CustomRouterEditorAction::AddPromptRule))
         });
 
@@ -299,7 +340,7 @@ impl CustomRouterEditorView {
             scroll_state: Default::default(),
             name_editor,
             router_type,
-            type_dropdown,
+            type_control,
             complexity_default_dropdown,
             complexity_easy_dropdown,
             complexity_medium_dropdown,
@@ -510,6 +551,16 @@ impl CustomRouterEditorView {
         ctx.notify();
     }
 
+    fn set_router_type(&mut self, router_type: RouterEditorType, ctx: &mut ViewContext<Self>) {
+        self.router_type = router_type;
+        // Prompt routing requires at least one rule; ensure a row exists when
+        // switching into prompt mode.
+        if router_type == RouterEditorType::Prompt && self.prompt_rules.is_empty() {
+            self.add_prompt_rule(ctx);
+        }
+        ctx.notify();
+    }
+
     fn remove_prompt_rule(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         // Prompt routing requires at least one rule; never remove the last row.
         if self.prompt_rules.len() <= 1 {
@@ -631,6 +682,25 @@ impl CustomRouterEditorView {
                     .with_margin_top(12.)
                     .finish(),
             );
+            // Clarify that prompt-to-rule matching is performed by an LLM.
+            column.add_child(
+                Container::new(
+                    Text::new(
+                        "Warp uses an LLM to classify each prompt against your rules and route to the matching model.",
+                        appearance.ui_font_family(),
+                        11.,
+                    )
+                    .with_color(
+                        appearance
+                            .theme()
+                            .sub_text_color(appearance.theme().surface_1())
+                            .into(),
+                    )
+                    .finish(),
+                )
+                .with_margin_bottom(8.)
+                .finish(),
+            );
             // Explain rule precedence: rules are matched top-to-bottom.
             column.add_child(
                 Container::new(
@@ -660,18 +730,6 @@ impl CustomRouterEditorView {
             }
         }
 
-        // The add-rule button spans the full width of the rule rows above it.
-        column.add_child(
-            Container::new(
-                Flex::row()
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_child(
-                        Expanded::new(1., ChildView::new(&self.add_rule_button).finish()).finish(),
-                    )
-                    .finish(),
-            )
-            .finish(),
-        );
         column.finish()
     }
 
@@ -697,10 +755,10 @@ impl CustomRouterEditorView {
         // Type + description
         let type_description = match self.router_type {
             RouterEditorType::Complexity => {
-                "Routes each request to a model based on task complexity. Warp classifies the task as easy, medium, or hard and picks the corresponding model, falling back to the default when a bucket is unset."
+                "Routes your prompts to a model based on task complexity. Warp classifies the task as easy, medium or hard and uses the corresponding model. If classification fails, the default model is used."
             }
             RouterEditorType::Prompt => {
-                "Routes each request based on the prompt's content. You write natural-language rules describing when a model should be used; the first matching rule wins, otherwise the default model is used."
+                "Routes your proutes to the right model using your custom rules. Describe your routing logic in natural language, and Warp will intelligently match each prompt to the first applicable rule. If no rule applies, the default model is used."
             }
         };
         let desc_color = appearance
@@ -720,21 +778,17 @@ impl CustomRouterEditorView {
                             .with_color(desc_color.into())
                             .finish(),
                         )
-                        .with_margin_bottom(6.)
+                        .with_margin_bottom(8.)
                         .finish(),
                     )
-                    .with_child(
-                        ConstrainedBox::new(ChildView::new(&self.type_dropdown).finish())
-                            .with_width(EDITOR_CONTENT_WIDTH)
-                            .finish(),
-                    )
+                    .with_child(ChildView::new(&self.type_control).finish())
                     .with_child(
                         Container::new(
                             Text::new(type_description, appearance.ui_font_family(), 11.)
                                 .with_color(desc_color.into())
                                 .finish(),
                         )
-                        .with_margin_top(6.)
+                        .with_margin_top(8.)
                         .finish(),
                     )
                     .finish(),
@@ -748,30 +802,35 @@ impl CustomRouterEditorView {
             RouterEditorType::Complexity => {
                 col.add_child(
                     Container::new(self.render_complexity_section(appearance))
-                        .with_margin_bottom(16.)
+                        .with_margin_bottom(8.)
                         .finish(),
                 );
             }
             RouterEditorType::Prompt => {
                 col.add_child(
                     Container::new(self.render_prompt_section(appearance, app))
-                        .with_margin_bottom(16.)
+                        .with_margin_bottom(8.)
                         .finish(),
                 );
             }
         }
 
-        // Buttons: right-aligned, with Cancel to the left of Save.
-        let btn_row = Flex::row()
+        // Buttons row: "Add rule" (prompt routing only) sits left-aligned,
+        // while Cancel and Save stay right-aligned. A flexible spacer pushes
+        // the Cancel/Save group to the right edge in both routing modes.
+        let mut btn_row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::End)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Container::new(ChildView::new(&self.cancel_button).finish())
-                    .with_margin_right(8.)
-                    .finish(),
-            )
-            .with_child(ChildView::new(&self.save_button).finish());
+            .with_cross_axis_alignment(CrossAxisAlignment::Center);
+        if self.router_type == RouterEditorType::Prompt {
+            btn_row.add_child(ChildView::new(&self.add_rule_button).finish());
+        }
+        btn_row.add_child(Expanded::new(1., Empty::new().finish()).finish());
+        btn_row.add_child(
+            Container::new(ChildView::new(&self.cancel_button).finish())
+                .with_margin_right(8.)
+                .finish(),
+        );
+        btn_row.add_child(ChildView::new(&self.save_button).finish());
         col.add_child(btn_row.finish());
 
         // Error
@@ -834,15 +893,6 @@ impl TypedActionView for CustomRouterEditorView {
                 ctx.emit(CustomRouterEditorEvent::Pane(PaneEvent::Close));
             }
             CustomRouterEditorAction::Save => self.try_save(ctx),
-            CustomRouterEditorAction::SetRouterType(t) => {
-                self.router_type = *t;
-                // Prompt routing requires at least one rule; ensure a row exists
-                // when switching into prompt mode.
-                if *t == RouterEditorType::Prompt && self.prompt_rules.is_empty() {
-                    self.add_prompt_rule(ctx);
-                }
-                ctx.notify();
-            }
             CustomRouterEditorAction::SetComplexityDefault(id) => {
                 self.complexity_default = id.clone();
             }
@@ -927,6 +977,29 @@ impl BackingView for CustomRouterEditorView {
 // ------------------------------------------------------------------
 // Module-level helper functions
 // ------------------------------------------------------------------
+
+/// Styles for the routing-type [`SegmentedControl`], themed to match the
+/// editor's other inputs.
+fn type_control_styles(app: &AppContext) -> UiComponentStyles {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    UiComponentStyles {
+        font_family_id: Some(appearance.ui_font_family()),
+        font_size: Some(appearance.ui_font_size()),
+        border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.0))),
+        border_width: Some(1.0),
+        border_color: Some(UiFill::Solid(theme.surface_3().into())),
+        background: Some(UiFill::Solid(theme.background().into())),
+        height: Some(24.0),
+        padding: Some(Coords {
+            top: 2.,
+            bottom: 2.,
+            left: 2.,
+            right: 2.,
+        }),
+        ..Default::default()
+    }
+}
 
 /// Creates and populates a [`FilterableDropdown`] for model selection.
 ///
@@ -1199,7 +1272,7 @@ fn render_rule_controls(
                 CustomRouterEditorAction::MovePromptRuleDown(index),
                 appearance,
             ))
-            .with_margin_left(6.)
+            .with_margin_left(RULE_ICON_GAP)
             .finish(),
         )
         .with_child(
@@ -1210,7 +1283,7 @@ fn render_rule_controls(
                 CustomRouterEditorAction::RemovePromptRule(index),
                 appearance,
             ))
-            .with_margin_left(6.)
+            .with_margin_left(RULE_ICON_GAP)
             .finish(),
         )
         .finish();
@@ -1255,7 +1328,7 @@ fn render_rule_row(
     const MODEL_WIDTH: f32 = 170.;
 
     let description_field = labeled_field(
-        "Description",
+        "Rule",
         editor_row(&row.description_editor, Some(RULE_FIELD_HEIGHT), appearance),
         appearance,
     );
@@ -1273,14 +1346,24 @@ fn render_rule_row(
         .with_child(Expanded::new(1., description_field).finish())
         .with_child(Container::new(model_field).with_margin_left(8.).finish());
 
-    // Reorder + remove controls are only meaningful when there are multiple
-    // rules (prompt routing always keeps at least one rule).
-    if rule_count > 1 {
-        rule_row.add_child(
-            Container::new(render_rule_controls(index, row, rule_count, appearance))
-                .with_margin_left(8.)
+    // Always reserve a fixed-width slot for the reorder/remove controls so the
+    // rule input and model dropdown keep the same width regardless of rule
+    // count. The controls themselves are only meaningful with multiple rules
+    // (prompt routing always keeps at least one rule); otherwise the slot stays
+    // empty.
+    let controls: Box<dyn Element> = if rule_count > 1 {
+        render_rule_controls(index, row, rule_count, appearance)
+    } else {
+        Empty::new().finish()
+    };
+    rule_row.add_child(
+        Container::new(
+            ConstrainedBox::new(controls)
+                .with_width(RULE_CONTROLS_WIDTH)
                 .finish(),
-        );
-    }
+        )
+        .with_margin_left(8.)
+        .finish(),
+    );
     rule_row.finish()
 }

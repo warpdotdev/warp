@@ -9130,7 +9130,7 @@ impl SettingsWidget for CustomModelRoutersWidget {
                     .finish(),
             )
             .with_child(render_ai_setting_description(
-                "Create named model routers that automatically pick the right model based on task complexity or prompt content.",
+                "Create named model routers that automatically pick the right model based on your task.",
                 is_any_ai_enabled,
                 app,
             ));
@@ -9165,7 +9165,12 @@ impl SettingsWidget for CustomModelRoutersWidget {
             c
         };
 
-        column.finish()
+        // Add trailing space beneath this section (matching sibling sections
+        // like AWS Bedrock) so the following section's title isn't crowded
+        // against the router cards.
+        Container::new(column.finish())
+            .with_margin_bottom(HEADER_PADDING)
+            .finish()
     }
 }
 
