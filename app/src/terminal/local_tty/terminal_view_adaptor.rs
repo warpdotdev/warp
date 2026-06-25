@@ -1373,9 +1373,10 @@ impl TerminalManager<TerminalView> {
 
                 // Execute the agent prompt in the Oz-harness case
                 terminal_view.update(ctx, |view, ctx| {
-                    // Clear the sharer's input (as the prompt in the input is now being executed)
+                    // Restore the sharer's frozen visual state. The buffer is cleared by
+                    // system_clear_buffer when SentRequest fires from execute_agent_prompt_for_shared_session.
                     view.input().update(ctx, |input, ctx| {
-                        input.unfreeze_and_clear_agent_input(ctx);
+                        input.unfreeze_agent_input(false, ctx);
                     });
 
                     view.ai_controller().update(ctx, |ai_controller, ctx| {

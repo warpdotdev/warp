@@ -1205,8 +1205,13 @@ impl TerminalManager {
                     return;
                 };
                 view.update(ctx, |terminal_view, ctx| {
+                    // Restore frozen visual state. optimistically_show_empty=true creates
+                    // a display-only empty ephemeral for immediate UX feedback. Unlike a
+                    // regular ephemeral, this one discards its content on materialization
+                    // instead of restoring it to the regular buffer, so no spurious CRDT
+                    // delete ops are generated for concurrent edits by other viewers.
                     terminal_view.input().update(ctx, |input, ctx| {
-                        input.unfreeze_and_clear_agent_input(ctx);
+                        input.unfreeze_agent_input(true, ctx);
                     });
                 });
             }
@@ -1218,8 +1223,11 @@ impl TerminalManager {
                     let reason_string = agent_prompt_failure_reason_string(reason);
                     terminal_view.show_persistent_toast(reason_string, ToastFlavor::Error, ctx);
 
+                    // Restore frozen visual state without clearing the buffer — the prompt
+                    // failed so no CRDT delete ops were sent, and the user should be able
+                    // to retry with their original text.
                     terminal_view.input().update(ctx, |input, ctx| {
-                        input.unfreeze_and_clear_agent_input(ctx);
+                        input.unfreeze_agent_input(false, ctx);
                     });
                 });
             }
