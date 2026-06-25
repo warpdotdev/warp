@@ -1,6 +1,7 @@
 use warp_core::ui::color::contrast::MinimumAllowedContrast;
 use warp_core::ui::color::ContrastingColor;
 use warp_core::ui::theme::color::internal_colors;
+use warpui::color::ColorU;
 use warpui::elements::{
     Border, Clipped, ConstrainedBox, Container, DispatchEventResult, DropTarget, Element,
     EventHandler, Flex, Hoverable, ParentElement, SavePosition, Stack,
@@ -22,6 +23,14 @@ use crate::editor::{EnterAction, EnterSettings, TextColors};
 use crate::features::FeatureFlag;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::view::TerminalAction;
+use crate::themes::theme::Blend;
+
+fn cli_agent_input_background(appearance: &Appearance, alt_screen_bg: Option<ColorU>) -> ColorU {
+    let theme = appearance.theme();
+    alt_screen_bg
+        .map(|bg| bg.blend(&theme.surface_overlay_2().into_solid()))
+        .unwrap_or_else(|| theme.surface_2().into_solid())
+}
 
 impl Input {
     /// Renders the CLI rich input (editor + CLI agent footer).
@@ -94,23 +103,21 @@ impl Input {
             add_input_suggestions_overlays(self, &mut stack, appearance, menu_positioning, app);
         }
 
-        let mut input_container = Container::new(stack.finish())
-            .with_background(appearance.theme().surface_1())
+        let alt_screen_bg = {
+            let terminal_model = self.model.lock();
+            terminal_model
+                .is_alt_screen_active()
+                .then(|| terminal_model.alt_screen().inferred_bg_color())
+                .flatten()
+        };
+        let input_background = cli_agent_input_background(appearance, alt_screen_bg);
+
+        let input_container = Container::new(stack.finish())
+            .with_background(input_background)
             .with_border(
                 Border::top(1.0)
                     .with_border_fill(internal_colors::fg_overlay_2(appearance.theme())),
             );
-
-        // When an alt screen CLI agent (e.g. OpenCode) is running, match
-        // the rich input background to the alt screen so it blends in.
-        {
-            let terminal_model = self.model.lock();
-            if terminal_model.is_alt_screen_active() {
-                if let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
-                    input_container = input_container.with_background(bg_color);
-                }
-            }
-        }
 
         let drop_target = DropTarget::new(
             input_container.finish(),
@@ -166,17 +173,20 @@ impl Input {
         let rich_input_open =
             CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id);
 
-        let alt_screen_bg = if rich_input_open {
-            let terminal_model = self.model.lock();
-            terminal_model
-                .is_alt_screen_active()
-                .then(|| terminal_model.alt_screen().inferred_bg_color())
-                .flatten()
+        let input_background = if rich_input_open {
+            let alt_screen_bg = {
+                let terminal_model = self.model.lock();
+                terminal_model
+                    .is_alt_screen_active()
+                    .then(|| terminal_model.alt_screen().inferred_bg_color())
+                    .flatten()
+            };
+            Some(cli_agent_input_background(appearance, alt_screen_bg))
         } else {
             None
         };
 
-        let text_colors = match alt_screen_bg {
+        let text_colors = match input_background {
             Some(bg) => TextColors {
                 default_color: default_colors
                     .default_color
