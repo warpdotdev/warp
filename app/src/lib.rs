@@ -169,7 +169,7 @@ use terminal::keys_settings::KeysSettings;
 use terminal::local_shell::LocalShellState;
 pub use util::bindings::cmd_or_ctrl_shift;
 use voice::transcriber::VoiceTranscriber;
-use warp_cli::{CliCommand, GlobalOptions};
+use warp_cli::GlobalOptions;
 #[cfg(feature = "local_fs")]
 use watcher::HomeDirectoryWatcher;
 

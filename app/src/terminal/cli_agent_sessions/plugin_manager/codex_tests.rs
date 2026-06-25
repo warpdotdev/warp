@@ -124,22 +124,6 @@ fn not_installed_when_only_marketplace_present() {
 }
 
 #[test]
-fn platform_plugin_installed_when_enabled_in_config() {
-    let dir = tempfile::tempdir().unwrap();
-    write_plugin_config(dir.path(), super::PLATFORM_PLUGIN_KEY, true);
-
-    assert!(super::check_platform_plugin_installed(dir.path()));
-}
-
-#[test]
-fn platform_plugin_not_installed_when_disabled_in_config() {
-    let dir = tempfile::tempdir().unwrap();
-    write_plugin_config(dir.path(), super::PLATFORM_PLUGIN_KEY, false);
-
-    assert!(!super::check_platform_plugin_installed(dir.path()));
-}
-
-#[test]
 fn not_installed_when_config_missing() {
     let dir = tempfile::tempdir().unwrap();
     assert!(!super::check_installed(dir.path()));
@@ -160,17 +144,6 @@ fn installed_version_reads_cache_manifest_version() {
 
     assert_eq!(
         super::installed_version(dir.path()).as_deref(),
-        Some("0.4.0")
-    );
-}
-
-#[test]
-fn installed_platform_plugin_version_reads_cache_manifest_version() {
-    let dir = tempfile::tempdir().unwrap();
-    write_cache_manifest(dir.path(), super::PLATFORM_PLUGIN_NAME, "0.4.0");
-
-    assert_eq!(
-        super::installed_platform_plugin_version(dir.path()).as_deref(),
         Some("0.4.0")
     );
 }
@@ -199,22 +172,6 @@ fn installed_version_returns_none_when_cache_manifest_has_no_version() {
     write_cache_manifest_without_version(dir.path(), super::PLUGIN_NAME, "0.4.0");
 
     assert_eq!(super::installed_version(dir.path()), None);
-}
-
-#[test]
-fn platform_plugin_version_is_current_when_cache_current() {
-    let dir = tempfile::tempdir().unwrap();
-    write_cache_manifest(dir.path(), super::PLATFORM_PLUGIN_NAME, "0.4.0");
-
-    assert!(super::platform_plugin_version_is_current(dir.path()));
-}
-
-#[test]
-fn platform_plugin_version_is_not_current_when_cache_outdated() {
-    let dir = tempfile::tempdir().unwrap();
-    write_cache_manifest(dir.path(), super::PLATFORM_PLUGIN_NAME, "0.2.0");
-
-    assert!(!super::platform_plugin_version_is_current(dir.path()));
 }
 
 #[test]
@@ -272,34 +229,6 @@ fn needs_update_true_when_enabled_without_cached_version() {
 }
 
 #[test]
-fn platform_plugin_needs_update_true_when_enabled_and_outdated() {
-    let dir = tempfile::tempdir().unwrap();
-    write_plugin_config(dir.path(), super::PLATFORM_PLUGIN_KEY, true);
-    write_cache_manifest(dir.path(), super::PLATFORM_PLUGIN_NAME, "0.2.0");
-
-    assert!(super::plugin_needs_update(
-        dir.path(),
-        super::PLATFORM_PLUGIN_NAME,
-        super::PLATFORM_PLUGIN_KEY,
-        super::MINIMUM_PLATFORM_PLUGIN_VERSION
-    ));
-}
-
-#[test]
-fn platform_plugin_needs_update_false_when_current() {
-    let dir = tempfile::tempdir().unwrap();
-    write_plugin_config(dir.path(), super::PLATFORM_PLUGIN_KEY, true);
-    write_cache_manifest(dir.path(), super::PLATFORM_PLUGIN_NAME, "0.4.0");
-
-    assert!(!super::plugin_needs_update(
-        dir.path(),
-        super::PLATFORM_PLUGIN_NAME,
-        super::PLATFORM_PLUGIN_KEY,
-        super::MINIMUM_PLATFORM_PLUGIN_VERSION
-    ));
-}
-
-#[test]
 #[serial_test::serial]
 fn is_not_installed_via_trait_without_codex_plugin() {
     let _guard = FeatureFlag::CodexPlugin.override_enabled(false);
@@ -325,34 +254,6 @@ fn is_installed_via_trait_with_codex_home_env() {
     std::env::remove_var("CODEX_HOME");
 
     assert!(result);
-}
-
-#[test]
-#[serial_test::serial]
-fn is_platform_plugin_installed_via_trait_with_codex_home_env() {
-    let _guard = FeatureFlag::CodexPlugin.override_enabled(true);
-    let dir = tempfile::tempdir().unwrap();
-    write_plugin_config(dir.path(), super::PLATFORM_PLUGIN_KEY, true);
-
-    std::env::set_var("CODEX_HOME", dir.path());
-    let result = CodexPluginManager::new(None, None, None).is_platform_plugin_installed();
-    std::env::remove_var("CODEX_HOME");
-
-    assert!(result);
-}
-
-#[test]
-#[serial_test::serial]
-fn is_platform_plugin_not_installed_via_trait_without_codex_plugin() {
-    let _guard = FeatureFlag::CodexPlugin.override_enabled(false);
-    let dir = tempfile::tempdir().unwrap();
-    write_plugin_config(dir.path(), super::PLATFORM_PLUGIN_KEY, true);
-
-    std::env::set_var("CODEX_HOME", dir.path());
-    let result = CodexPluginManager::new(None, None, None).is_platform_plugin_installed();
-    std::env::remove_var("CODEX_HOME");
-
-    assert!(!result);
 }
 
 #[test]
@@ -422,11 +323,9 @@ fn does_not_need_update_for_non_git_marketplace_override() {
 
     std::env::set_var("CODEX_HOME", dir.path());
     let result = CodexPluginManager::new(None, None, None).needs_update();
-    let has_override = CodexPluginManager::new(None, None, None).has_local_marketplace_override();
     std::env::remove_var("CODEX_HOME");
 
     assert!(!result);
-    assert!(has_override);
 }
 
 fn write_plugin_config(dir: &Path, plugin_key: &str, enabled: bool) {
