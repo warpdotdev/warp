@@ -303,29 +303,50 @@ impl InitialCursorState {
 /// abort the whole app whenever a terminal containing wide characters was
 /// resized. Instead, snap the cursor to the nearest preceding cell that does
 /// have a content offset, mirroring the defensive clamping in
-/// [`InitialCursorState::new`]. Column 0 of a non-empty row always resolves, so
-/// the search terminates.
+/// [`InitialCursorState::new`].
+///
+/// We walk backward over columns in the cursor's row first (the wide-char case),
+/// and then, if even column 0 of that row is unresolvable, over earlier rows.
+/// We deliberately never fall back to `ByteOffset::zero()`: content offsets
+/// count every byte the grid has *ever* seen, so the earliest tracked offset is
+/// generally greater than zero (and grows as scrollback is truncated from the
+/// front). A zero offset would be *before* the first stored row, which the
+/// later `content_offset_to_point` conversion rejects, turning a missing cursor
+/// offset back into the very panic this function exists to prevent.
 fn content_offset_for_point(grid: &GridHandler, point: Point) -> ByteOffset {
-    match grid.flat_storage.content_offset_at_point(point) {
-        Ok(content_offset) => content_offset,
-        Err(err) => {
-            log::warn!(
-                "no content offset for cursor point {point:?} during resize ({err}); \
-                 clamping to the nearest preceding content cell"
-            );
-            let mut col = point.col;
-            while let Some(prev) = col.checked_sub(1) {
-                col = prev;
-                if let Ok(content_offset) = grid
-                    .flat_storage
-                    .content_offset_at_point(Point { col, ..point })
-                {
-                    return content_offset;
-                }
+    if let Ok(content_offset) = grid.flat_storage.content_offset_at_point(point) {
+        return content_offset;
+    }
+
+    log::warn!(
+        "no content offset for cursor point {point:?} during resize; \
+         clamping to the nearest preceding content cell"
+    );
+
+    for row in (0..=point.row).rev() {
+        // For the cursor's own row, start just before the failing column; for
+        // earlier rows, start past the last possible column so the whole row is
+        // probed. Column 0 of a non-empty row always resolves, so as long as any
+        // row at or before the cursor holds content, the search terminates with
+        // a valid offset.
+        let start_col = if row == point.row {
+            point.col
+        } else {
+            grid.columns()
+        };
+        for col in (0..start_col).rev() {
+            if let Ok(content_offset) =
+                grid.flat_storage.content_offset_at_point(Point { row, col })
+            {
+                return content_offset;
             }
-            ByteOffset::zero()
         }
     }
+
+    // Flat storage tracks no resolvable cell at or before the cursor (e.g. it is
+    // empty). There is nothing to anchor the cursor to, so fall back to the
+    // start of content.
+    ByteOffset::zero()
 }
 
 enum CursorContentOffset {
