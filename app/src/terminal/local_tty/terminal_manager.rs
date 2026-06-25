@@ -206,6 +206,12 @@ struct ShellStartupResources {
     model_events: ModelHandle<ModelEventDispatcher>,
 }
 
+/// Handles created for a local terminal manager and its surface.
+pub(crate) struct TerminalManagerInit<S> {
+    pub(crate) manager: ModelHandle<Box<dyn TerminalManagerTrait>>,
+    pub(crate) surface: ViewHandle<S>,
+}
+
 impl<S> Drop for TerminalManager<S> {
     fn drop(&mut self) {
         self.shutdown_event_loop();
@@ -226,7 +232,7 @@ impl<S> TerminalManager<S> {
         chosen_shell: Option<AvailableShell>,
         ctx: &mut AppContext,
         create_surface: impl FnOnce(TerminalSurfaceInit, &mut AppContext) -> (ViewHandle<S>, PostWire),
-    ) -> (ModelHandle<Box<dyn TerminalManagerTrait>>, ViewHandle<S>)
+    ) -> TerminalManagerInit<S>
     where
         S: TerminalSurface,
         <S as Entity>::Event: PtyIntentEvent,
@@ -415,7 +421,10 @@ impl<S> TerminalManager<S> {
             terminal_manager
         });
 
-        (terminal_manager_model, terminal_surface)
+        TerminalManagerInit {
+            manager: terminal_manager_model,
+            surface: terminal_surface,
+        }
     }
 
     /// Returns the terminal model owned by this manager.

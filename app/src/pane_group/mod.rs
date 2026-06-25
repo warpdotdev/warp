@@ -5907,7 +5907,7 @@ impl PaneGroup {
 
         cfg_if::cfg_if! {
             if #[cfg(feature = "remote_tty")] {
-                let (terminal_manager, terminal_view) = RemoteTtyTerminalManager::create_model(
+                let terminal_init = RemoteTtyTerminalManager::create_model(
                     resources,
                     initial_size,
                     model_event_sender,
@@ -5915,6 +5915,8 @@ impl PaneGroup {
                     initial_input_config,
                     ctx,
                 );
+                let terminal_manager = terminal_init.manager;
+                let terminal_view = terminal_init.view;
             } else if #[cfg(feature = "local_tty")] {
                 let all_restored_blocks =
                     terminal_view_restored_blocks(restored_blocks, &conversation_restoration);
@@ -5938,7 +5940,7 @@ impl PaneGroup {
                     .is_some_and(|blocks| !blocks.is_empty());
                 let model_event_sender_for_surface = model_event_sender.clone();
                 let window_id = ctx.window_id();
-                let (terminal_manager, terminal_view) = LocalTtyTerminalManager::<TerminalView>::create_model(
+                let terminal_init = LocalTtyTerminalManager::<TerminalView>::create_model(
                     startup_directory,
                     env_vars,
                     is_shared_session,
@@ -5966,10 +5968,12 @@ impl PaneGroup {
                         )
                     },
                 );
+                let terminal_manager = terminal_init.manager;
+                let terminal_view = terminal_init.surface;
             } else {
                 use crate::terminal::{ShellLaunchState, shell::{ShellName, ShellType}};
 
-                let (terminal_manager, terminal_view) = MockTerminalManager::create_model(
+                let terminal_init = MockTerminalManager::create_model(
                     ShellLaunchState::ShellSpawned {
                         available_shell: chosen_shell,
                         display_name: ShellName::blank(),
@@ -5982,6 +5986,8 @@ impl PaneGroup {
                     ctx.window_id(),
                     ctx,
                 );
+                let terminal_manager = terminal_init.manager;
+                let terminal_view = terminal_init.view;
             }
         }
 
@@ -6008,7 +6014,7 @@ impl PaneGroup {
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
         let window_id = ctx.window_id();
-        let (viewer_manager, terminal_view) = shared_session::viewer::TerminalManager::new(
+        let terminal_init = shared_session::viewer::TerminalManager::new(
             session_id,
             resources,
             initial_size,
@@ -6017,6 +6023,8 @@ impl PaneGroup {
             is_cloud_mode,
             ctx,
         );
+        let viewer_manager = terminal_init.manager;
+        let terminal_view = terminal_init.view;
         let terminal_manager =
             ctx.add_model(|_ctx| Box::new(viewer_manager) as Box<dyn TerminalManager>);
 
@@ -6034,7 +6042,7 @@ impl PaneGroup {
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
         let restored_blocks = conversation.to_serialized_blocklist_items();
-        let (terminal_manager, terminal_view) = MockTerminalManager::create_model(
+        let terminal_init = MockTerminalManager::create_model(
             ShellLaunchState::ShellSpawned {
                 available_shell: None,
                 display_name: ShellName::blank(),
@@ -6051,6 +6059,8 @@ impl PaneGroup {
             ctx.window_id(),
             ctx,
         );
+        let terminal_manager = terminal_init.manager;
+        let terminal_view = terminal_init.view;
         // Set the conversation viewer status based on whether this is an ambient agent conversation
         let viewer_status = ambient_agent_task_id
             .map(ConversationTranscriptViewerStatus::ViewingAmbientConversation)
@@ -6094,7 +6104,7 @@ impl PaneGroup {
         ViewHandle<TerminalView>,
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
-        let (terminal_manager, terminal_view) = MockTerminalManager::create_model(
+        let terminal_init = MockTerminalManager::create_model(
             ShellLaunchState::ShellSpawned {
                 available_shell: None,
                 display_name: ShellName::blank(),
@@ -6107,6 +6117,8 @@ impl PaneGroup {
             window_id,
             ctx,
         );
+        let terminal_manager = terminal_init.manager;
+        let terminal_view = terminal_init.view;
 
         // Set the conversation transcript viewer status to Loading
         terminal_manager.update(ctx, |terminal_manager, _ctx| {

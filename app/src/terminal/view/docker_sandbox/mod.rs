@@ -82,7 +82,7 @@ fn create_docker_sandbox_view(
 ) {
     cfg_if::cfg_if! {
         if #[cfg(feature = "remote_tty")] {
-            let (terminal_manager, terminal_view) = RemoteTtyTerminalManager::create_model(
+            let terminal_init = RemoteTtyTerminalManager::create_model(
                 resources,
                 initial_size,
                 model_event_sender,
@@ -90,6 +90,8 @@ fn create_docker_sandbox_view(
                 None, /* initial_input_config */
                 ctx,
             );
+            let terminal_manager = terminal_init.manager;
+            let terminal_view = terminal_init.view;
         } else if #[cfg(feature = "local_tty")] {
             let user_default_shell_unsupported_banner_model_handle =
                 ctx.add_model(|_| BannerState::default());
@@ -101,7 +103,7 @@ fn create_docker_sandbox_view(
 
             let model_event_sender_for_surface = model_event_sender.clone();
             let window_id = ctx.window_id();
-            let (terminal_manager, terminal_view) = LocalTtyTerminalManager::<TerminalView>::create_model(
+            let terminal_init = LocalTtyTerminalManager::<TerminalView>::create_model(
                 None,
                 HashMap::new(),
                 IsSharedSessionCreator::No,
@@ -129,12 +131,14 @@ fn create_docker_sandbox_view(
                     )
                 },
             );
+            let terminal_manager = terminal_init.manager;
+            let terminal_view = terminal_init.surface;
         } else {
             log::info!("USING MOCK TERMINAL MANAGER!!!!!");
             use crate::terminal::MockTerminalManager;
             use crate::terminal::shell::{ShellName, ShellType};
             use crate::terminal::ShellLaunchState;
-            let (terminal_manager, terminal_view) = MockTerminalManager::create_model(
+            let terminal_init = MockTerminalManager::create_model(
                 ShellLaunchState::ShellSpawned {
                     available_shell: None,
                     display_name: ShellName::blank(),
@@ -147,6 +151,8 @@ fn create_docker_sandbox_view(
                 ctx.window_id(),
                 ctx,
             );
+            let terminal_manager = terminal_init.manager;
+            let terminal_view = terminal_init.view;
         }
     }
 

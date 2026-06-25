@@ -39,6 +39,11 @@ pub struct TerminalManager {
 
     _view: ViewHandle<TerminalView>,
 }
+#[cfg_attr(not(feature = "remote_tty"), allow(dead_code))]
+pub struct TerminalManagerInit {
+    pub(crate) manager: ModelHandle<Box<dyn TerminalManagerTrait>>,
+    pub(crate) view: ViewHandle<TerminalView>,
+}
 
 impl TerminalManager {
     /// Creates a terminal manager model that feeds bytes to/from a remote PTY.
@@ -49,10 +54,7 @@ impl TerminalManager {
         window_id: WindowId,
         initial_input_config: Option<InputConfig>,
         ctx: &mut AppContext,
-    ) -> (
-        ModelHandle<Box<dyn TerminalManagerTrait>>,
-        ViewHandle<TerminalView>,
-    ) {
+    ) -> TerminalManagerInit {
         // Create all the necessary channels we need for communication.
         let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
         let (events_tx, events_rx) = async_channel::unbounded();
@@ -158,7 +160,10 @@ impl TerminalManager {
             let manager: Box<dyn TerminalManagerTrait> = Box::new(terminal_manager);
             manager
         });
-        (manager_model, terminal_view)
+        TerminalManagerInit {
+            manager: manager_model,
+            view: terminal_view,
+        }
     }
 
     fn create_and_start_event_loop(

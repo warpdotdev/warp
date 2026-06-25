@@ -110,6 +110,10 @@ pub struct TerminalManager {
     /// transitive `ancestor_run_id` filter.
     enable_orchestration_polling: bool,
 }
+pub struct TerminalManagerInit {
+    pub(crate) manager: TerminalManager,
+    pub(crate) view: ViewHandle<TerminalView>,
+}
 
 impl TerminalManager {
     fn send_selected_conversation_update_for_viewer_to_current_network(
@@ -201,7 +205,7 @@ impl TerminalManager {
         enable_orchestration_polling: bool,
         is_cloud_mode: bool,
         ctx: &mut AppContext,
-    ) -> (Self, ViewHandle<TerminalView>) {
+    ) -> TerminalManagerInit {
         // Create all the necessary channels we need for communication.
         let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
         let (events_tx, events_rx) = async_channel::unbounded();
@@ -318,7 +322,10 @@ impl TerminalManager {
             orchestration_viewer_model: Arc::new(FairMutex::new(None)),
             enable_orchestration_polling,
         };
-        (manager, terminal_view)
+        TerminalManagerInit {
+            manager,
+            view: terminal_view,
+        }
     }
 
     /// Create a new terminal manager for viewing a shared session. See
@@ -338,8 +345,11 @@ impl TerminalManager {
         enable_orchestration_polling: bool,
         is_cloud_mode: bool,
         ctx: &mut AppContext,
-    ) -> (Self, ViewHandle<TerminalView>) {
-        let (mut terminal_manager, terminal_view) = Self::new_internal(
+    ) -> TerminalManagerInit {
+        let TerminalManagerInit {
+            manager: mut terminal_manager,
+            view: terminal_view,
+        } = Self::new_internal(
             resources,
             initial_size,
             window_id,
@@ -354,7 +364,10 @@ impl TerminalManager {
             ctx,
         );
 
-        (terminal_manager, terminal_view)
+        TerminalManagerInit {
+            manager: terminal_manager,
+            view: terminal_view,
+        }
     }
 
     /// Create a new terminal manager for eventually viewing a cloud mode
@@ -366,7 +379,7 @@ impl TerminalManager {
         window_id: WindowId,
         enable_orchestration_polling: bool,
         ctx: &mut AppContext,
-    ) -> (Self, ViewHandle<TerminalView>) {
+    ) -> TerminalManagerInit {
         Self::new_internal(
             resources,
             initial_size,

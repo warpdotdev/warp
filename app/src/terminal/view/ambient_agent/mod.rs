@@ -64,13 +64,15 @@ pub fn create_cloud_mode_view(
     // In Cloud Mode, ambient agent prompts are composed in an uninitialized session-sharing
     // viewer pane. This lets us reuse the terminal input without a backing session, and
     // then join the ambient agent session once it's ready.
-    let (viewer_manager, terminal_view) = shared_session::viewer::TerminalManager::new_deferred(
+    let terminal_init = shared_session::viewer::TerminalManager::new_deferred(
         resources,
         view_bounds_size,
         window_id,
         enable_orchestration_polling,
         ctx,
     );
+    let viewer_manager = terminal_init.manager;
+    let terminal_view = terminal_init.view;
     let terminal_manager: ModelHandle<Box<dyn TerminalManager>> =
         ctx.add_model(|_ctx| Box::new(viewer_manager) as Box<dyn TerminalManager>);
 

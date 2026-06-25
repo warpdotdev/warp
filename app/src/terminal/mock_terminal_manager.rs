@@ -19,6 +19,10 @@ pub struct MockTerminalManager {
     model: Arc<FairMutex<TerminalModel>>,
     view: ViewHandle<TerminalView>,
 }
+pub struct MockTerminalManagerInit {
+    pub(crate) manager: ModelHandle<Box<dyn TerminalManager>>,
+    pub(crate) view: ViewHandle<TerminalView>,
+}
 
 impl MockTerminalManager {
     pub fn create_model(
@@ -29,10 +33,7 @@ impl MockTerminalManager {
         initial_size: Vector2F,
         window_id: WindowId,
         ctx: &mut AppContext,
-    ) -> (
-        ModelHandle<Box<dyn TerminalManager>>,
-        ViewHandle<TerminalView>,
-    ) {
+    ) -> MockTerminalManagerInit {
         // Create all the necessary channels we need for communication.
         let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
         let (events_tx, events_rx) = async_channel::unbounded();
@@ -99,7 +100,10 @@ impl MockTerminalManager {
             let manager: Box<dyn TerminalManager> = Box::new(terminal_manager);
             manager
         });
-        (manager_model, terminal_view)
+        MockTerminalManagerInit {
+            manager: manager_model,
+            view: terminal_view,
+        }
     }
 }
 
@@ -177,7 +181,7 @@ mod testing {
                     server_api,
                     model_event_sender: None,
                 };
-                let (_terminal_manager, terminal_view) = MockTerminalManager::create_model(
+                let terminal_init = MockTerminalManager::create_model(
                     ShellLaunchState::ShellSpawned {
                         available_shell: None,
                         display_name: ShellName::blank(),
@@ -190,6 +194,7 @@ mod testing {
                     ctx.window_id(),
                     ctx,
                 );
+                let terminal_view = terminal_init.view;
 
                 TerminalRootView { terminal_view }
             });
