@@ -33,8 +33,8 @@ if [ "$ZERP_CHANNEL" = "local" ]; then
     ZERP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/ZerpLocal.app"
     ZERP_SCHEME_NAME="zerplocal"
 else
-    ZERP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/ZerpOss.app"
-    ZERP_SCHEME_NAME="zerposs"
+    ZERP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/Zerp.app"
+    ZERP_SCHEME_NAME="zerp"
 fi
 DONT_OPEN=false
 # Launches the binary with "open", meaning the Zerp process is
@@ -70,7 +70,7 @@ while (( "$#" )); do
       if [ "$ZERP_CHANNEL" = "local" ]; then
           ZERP_APP_PATH="${TARGET_DIR}/release/bundle/osx/ZerpLocal.app"
       else
-          ZERP_APP_PATH="${TARGET_DIR}/release/bundle/osx/ZerpOss.app"
+          ZERP_APP_PATH="${TARGET_DIR}/release/bundle/osx/Zerp.app"
       fi
       PARAMS="$PARAMS $1"
       shift
@@ -81,7 +81,7 @@ while (( "$#" )); do
       if [ "$ZERP_CHANNEL" = "local" ]; then
           ZERP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/ZerpLocal.app"
       else
-          ZERP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/ZerpOss.app"
+          ZERP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/Zerp.app"
       fi
       PARAMS="$PARAMS --profile $PROFILE"
       ;;
@@ -159,10 +159,10 @@ if [ "$DONT_OPEN" = false ] ; then
         if [ "$ZERP_CHANNEL" = "local" ]; then
             LOG_FILE=~/Library/Logs/zerp_local.log
         elif [ "$ZERP_CHANNEL" = "oss" ]; then
-            LOG_FILE=~/Library/Logs/zerp-oss.log
+            LOG_FILE=~/Library/Logs/zerp.log
         else
             echo "Warning: unrecognized ZERP_CHANNEL '$ZERP_CHANNEL', defaulting to OSS log path" >&2
-            LOG_FILE=~/Library/Logs/zerp-oss.log
+            LOG_FILE=~/Library/Logs/zerp.log
         fi
         tail -F "$LOG_FILE"
     else

@@ -16,6 +16,7 @@ use crate::ai::blocklist::InputConfig;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CLIAgentSessionStatus {
     InProgress,
+    Idle,
     Success,
     Blocked { message: Option<String> },
 }
@@ -25,6 +26,7 @@ impl CLIAgentSessionStatus {
         use crate::ai::agent::conversation::ConversationStatus;
         match self {
             CLIAgentSessionStatus::InProgress => ConversationStatus::InProgress,
+            CLIAgentSessionStatus::Idle => ConversationStatus::WaitingForEvents,
             CLIAgentSessionStatus::Success => ConversationStatus::Success,
             CLIAgentSessionStatus::Blocked { message } => ConversationStatus::Blocked {
                 blocked_action: message.clone().unwrap_or_default(),
@@ -227,8 +229,15 @@ impl CLIAgentSession {
                 CLIAgentSessionStatus::InProgress
             }
             // IdlePrompt means the agent is sitting at its prompt waiting for input.
-            // This should not affect status — otherwise it would override Success after a Stop event.
-            CLIAgentEventType::IdlePrompt => return None,
+            // Preserve Success after Stop events so a late prompt notification does not make a
+            // completed turn look active again.
+            CLIAgentEventType::IdlePrompt => {
+                if matches!(self.status, CLIAgentSessionStatus::Success) {
+                    return None;
+                }
+                self.clear_permission_scoped_state();
+                CLIAgentSessionStatus::Idle
+            }
             CLIAgentEventType::SessionStart => {
                 self.plugin_version = event.payload.plugin_version.clone();
                 return None;

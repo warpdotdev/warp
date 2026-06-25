@@ -13277,7 +13277,9 @@ impl TerminalView {
                             ctx,
                         );
                     }
-                    CLIAgentSessionStatus::InProgress | CLIAgentSessionStatus::Success => {
+                    CLIAgentSessionStatus::InProgress
+                    | CLIAgentSessionStatus::Idle
+                    | CLIAgentSessionStatus::Success => {
                         // Auto-open rich input when the agent resumes or completes.
                         if !self.has_active_cli_agent_input_session(ctx) {
                             self.open_cli_agent_rich_input(CLIAgentInputEntrypoint::AutoShow, ctx);
@@ -13301,13 +13303,18 @@ impl TerminalView {
             .or(session_context.summary.as_deref().filter(|s| !s.is_empty()))
             .unwrap_or(agent.command_prefix())
             .to_owned();
-        let description = if let CLIAgentSessionStatus::Blocked { message } = status {
-            message.clone().unwrap_or_default()
-        } else {
-            session_context.response.clone().unwrap_or_default()
+        let description = match status {
+            CLIAgentSessionStatus::Blocked { message } => message.clone().unwrap_or_default(),
+            CLIAgentSessionStatus::Idle => "Waiting for your input".to_string(),
+            CLIAgentSessionStatus::InProgress | CLIAgentSessionStatus::Success => {
+                session_context.response.clone().unwrap_or_default()
+            }
         };
 
-        let trigger = if matches!(status, CLIAgentSessionStatus::Blocked { .. }) {
+        let trigger = if matches!(
+            status,
+            CLIAgentSessionStatus::Blocked { .. } | CLIAgentSessionStatus::Idle
+        ) {
             NotificationsTrigger::NeedsAttention
         } else {
             NotificationsTrigger::AgentTaskCompleted(true)

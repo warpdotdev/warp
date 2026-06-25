@@ -5,6 +5,7 @@ use super::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
     CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
+use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::blocklist::{InputConfig, InputType};
 use crate::terminal::CLIAgent;
 
@@ -104,6 +105,70 @@ fn parse_idle_prompt_notification() {
     assert_eq!(
         notif.payload.summary.as_deref(),
         Some("Claude is waiting for your input")
+    );
+}
+
+fn claude_session_with_status(status: CLIAgentSessionStatus) -> CLIAgentSession {
+    CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status,
+        session_context: CLIAgentSessionContext {
+            summary: Some("stale summary".to_string()),
+            tool_name: Some("Bash".to_string()),
+            tool_input_preview: Some("echo stale".to_string()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        remote_host: None,
+        plugin_version: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        received_rich_notification: false,
+    }
+}
+
+fn idle_prompt_event() -> CLIAgentEvent {
+    CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::IdlePrompt,
+        session_id: Some("abc".to_string()),
+        cwd: Some("/tmp".to_string()),
+        project: Some("tmp".to_string()),
+        payload: CLIAgentEventPayload::default(),
+    }
+}
+
+#[test]
+fn idle_prompt_sets_idle_for_active_session() {
+    let mut session = claude_session_with_status(CLIAgentSessionStatus::InProgress);
+
+    assert_eq!(
+        session.apply_event(&idle_prompt_event()),
+        Some(CLIAgentSessionStatus::Idle)
+    );
+    assert_eq!(session.status, CLIAgentSessionStatus::Idle);
+    assert_eq!(session.session_context.summary, None);
+    assert_eq!(session.session_context.tool_name, None);
+    assert_eq!(session.session_context.tool_input_preview, None);
+}
+
+#[test]
+fn idle_prompt_does_not_override_success() {
+    let mut session = claude_session_with_status(CLIAgentSessionStatus::Success);
+
+    assert_eq!(session.apply_event(&idle_prompt_event()), None);
+    assert_eq!(session.status, CLIAgentSessionStatus::Success);
+}
+
+#[test]
+fn idle_status_maps_to_waiting_for_events() {
+    assert_eq!(
+        CLIAgentSessionStatus::Idle.to_conversation_status(),
+        ConversationStatus::WaitingForEvents
     );
 }
 

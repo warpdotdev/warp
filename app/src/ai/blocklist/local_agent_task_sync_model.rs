@@ -504,6 +504,10 @@ fn map_cli_session_status(
 ) -> (AgentTaskState, Option<TaskStatusUpdate>) {
     match status {
         CLIAgentSessionStatus::InProgress => (AgentTaskState::InProgress, None),
+        CLIAgentSessionStatus::Idle => (
+            AgentTaskState::Blocked,
+            Some(TaskStatusUpdate::message("Waiting for your input")),
+        ),
         CLIAgentSessionStatus::Success => (AgentTaskState::Succeeded, None),
         CLIAgentSessionStatus::Blocked { message } => (
             AgentTaskState::Blocked,

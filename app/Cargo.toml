@@ -931,10 +931,10 @@ prompt_cache_expiry_warning = []
 category = "public.app-category.developer-tools"
 copyright = "© 2025, Denver Technologies, Inc"
 identifier = "dev.zerp.ZerpOss"
-name = "ZerpOss"
+name = "Zerp"
 resources = ["assets/onboarding"]
 icon = ["channels/oss/icon/no-padding/512x512.png", "channels/oss/icon/no-padding/icon.ico"]
-short_description = "The open-source, cloud-backed terminal for individuals and teams."
+short_description = "The terminal for third-party agent CLIs."
 
 [package.metadata.bundle.bin.stable]
 category = "public.app-category.developer-tools"

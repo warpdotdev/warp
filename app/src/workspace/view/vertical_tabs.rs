@@ -39,7 +39,6 @@ use super::{render_group_member_icon_collage, select_unique_pane_kinds};
 use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
 use crate::ai::agent_management::AgentNotificationsModel;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::ai::conversation_status_ui::render_status_element;
 use crate::appearance::Appearance;
 use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::cloud_object::CloudObjectLookup as _;
@@ -121,10 +120,6 @@ pub(super) const VERTICAL_TABS_DETAIL_SIDECAR_POSITION_ID: &str = "vertical_tabs
 /// Total size of the icon-with-status component rendered for each vertical-tabs row.
 /// Sub-components (circle, badge, cloud) are derived inside `render_icon_with_status`.
 const VERTICAL_TABS_ICON_SIZE: f32 = 24.;
-
-/// Icon size for the per-line conversation status pill in Summary mode. Pairs with
-/// `STATUS_ELEMENT_PADDING` (2px) for an overall ~14px element next to a 12pt title.
-const VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE: f32 = 10.;
 
 fn vtab_pane_row_position_id(pane_group_id: EntityId, pane_id: PaneId) -> String {
     format!("vertical_tabs:pane_row:{pane_group_id:?}:{pane_id}")
@@ -1039,11 +1034,9 @@ fn normalize_summary_text(text: &str) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
-/// Returns the conversation status for a terminal pane, used to render the per-line status
-/// pill prefix in Summary mode. Mirrors the status sources used by `render_detail_status_pill`
-/// in the detail sidecar — CLI agent sessions with rich status or selected third-party
-/// conversations. Returns `None` for plain terminals or conversations without status.
-fn summary_conversation_status_for_terminal(
+/// Returns the rich CLI agent status for a terminal pane. Command-detected sessions without
+/// structured plugin status intentionally return `None`.
+fn cli_agent_status_for_terminal(
     terminal_view: &TerminalView,
     app: &AppContext,
 ) -> Option<ConversationStatus> {
@@ -1055,13 +1048,38 @@ fn summary_conversation_status_for_terminal(
         return Some(session.status.to_conversation_status());
     }
 
-    let is_ambient = terminal_view.is_ambient_agent_session(app);
-    let has_conversation = terminal_view
-        .selected_conversation_display_title(app)
-        .is_some();
-    (has_conversation || is_ambient)
-        .then(|| terminal_view.selected_conversation_status_for_display(app))
-        .flatten()
+    None
+}
+
+fn vertical_tab_cli_agent_status(
+    typed: &TypedPane<'_>,
+    app: &AppContext,
+) -> Option<ConversationStatus> {
+    let TypedPane::Terminal(terminal_pane) = typed else {
+        return None;
+    };
+    let terminal_view = terminal_pane.terminal_view(app);
+    cli_agent_status_for_terminal(terminal_view.as_ref(app), app)
+}
+
+fn icon_variant_without_status(variant: IconWithStatusVariant) -> IconWithStatusVariant {
+    match variant {
+        IconWithStatusVariant::CLIAgent {
+            agent, is_ambient, ..
+        } => IconWithStatusVariant::CLIAgent {
+            agent,
+            status: None,
+            is_ambient,
+        },
+        IconWithStatusVariant::CustomAvatar {
+            avatar, is_ambient, ..
+        } => IconWithStatusVariant::CustomAvatar {
+            avatar,
+            status: None,
+            is_ambient,
+        },
+        variant => variant,
+    }
 }
 
 fn coalesce_summary_branch_entries(
@@ -3211,18 +3229,15 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
     let font_family = appearance.ui_font_family();
 
     let icon = render_pane_icon_with_status(
-        resolve_icon_with_status_variant(&props.typed, &props.title, appearance, app),
+        icon_variant_without_status(resolve_icon_with_status_variant(
+            &props.typed,
+            &props.title,
+            appearance,
+            app,
+        )),
         theme,
     );
-
-    // Top-align the icon when there are multiple lines of content so it sits next to
-    // the first line; center it for single-line rows (Settings, Notebook with no subtitle, etc.).
-    let icon_alignment =
-        if matches!(props.typed, TypedPane::Terminal(_)) || !effective_subtitle.is_empty() {
-            CrossAxisAlignment::Start
-        } else {
-            CrossAxisAlignment::Center
-        };
+    let cli_agent_status = vertical_tab_cli_agent_status(&props.typed, app);
 
     let text_content = if let TypedPane::Terminal(terminal_pane) = &props.typed {
         render_terminal_row_content(
@@ -3289,13 +3304,16 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
         content_col.finish()
     };
 
-    let content = Flex::row()
+    let mut content = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
-        .with_cross_axis_alignment(icon_alignment)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(ICON_WITH_STATUS_GAP)
         .with_child(icon)
-        .with_child(Shrinkable::new(1., text_content).finish())
-        .finish();
+        .with_child(Shrinkable::new(1., text_content).finish());
+    if let Some(status) = cli_agent_status.as_ref() {
+        content.add_child(render_vertical_tab_status_pill(status, appearance));
+    }
+    let content = content.finish();
 
     render_pane_row_element(props, Padding::uniform(8.), true, content, theme)
 }
@@ -3501,7 +3519,7 @@ fn build_vertical_tabs_summary_data(
                     terminal_title_fallback_font(&agent_text),
                     terminal_view.last_completed_command_text(),
                 );
-                let status = summary_conversation_status_for_terminal(terminal_view, app);
+                let status = cli_agent_status_for_terminal(terminal_view, app);
                 push_normalized_unique_summary_label(
                     &mut primary_labels,
                     &mut primary_seen,
@@ -4425,9 +4443,7 @@ fn render_summary_tab_item(
         appearance,
         app,
     );
-    let title_override_status = title_override
-        .as_ref()
-        .and_then(|_| summary_status_for_title_override(summary));
+    let summary_status = summary_status_for_title_override(summary);
     if let Some(title_override) = title_override {
         title_region.add_child(title_override);
     } else if summary.primary_labels.is_empty() {
@@ -4443,15 +4459,8 @@ fn render_summary_tab_item(
             .iter()
             .take(MAX_VISIBLE_PRIMARY_LABELS)
             .collect();
-        let reserve_prefix_slot = visible_labels.iter().any(|label| label.status.is_some());
-
         for (idx, label) in visible_labels.iter().enumerate() {
-            let line = render_summary_primary_label_line(
-                label,
-                reserve_prefix_slot,
-                main_text_color,
-                appearance,
-            );
+            let line = render_summary_primary_label_line(label, main_text_color, appearance);
             title_region.add_child(if idx == 0 {
                 line
             } else {
@@ -4578,13 +4587,13 @@ fn render_summary_tab_item(
 
     let mut content = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
-        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(ICON_WITH_STATUS_GAP)
         .with_child(icon);
-    if let Some(status) = title_override_status {
-        content.add_child(render_summary_standalone_status(status, appearance));
-    }
     content.add_child(Shrinkable::new(1., text_col.finish()).finish());
+    if let Some(status) = summary_status {
+        content.add_child(render_vertical_tab_status_pill(status, appearance));
+    }
     let content = content.finish();
 
     render_pane_row_element(props, Padding::uniform(8.), true, content, theme)
@@ -4599,66 +4608,59 @@ fn summary_status_for_title_override(
         .find_map(|label| label.status.as_ref())
 }
 
-fn render_summary_standalone_status(
+fn vertical_tab_status_label(status: &ConversationStatus) -> &'static str {
+    match status {
+        ConversationStatus::InProgress => "Working",
+        ConversationStatus::Success => "Done",
+        ConversationStatus::Error => "Error",
+        ConversationStatus::TransientError => "Retrying",
+        ConversationStatus::Cancelled => "Cancelled",
+        ConversationStatus::Blocked { .. } => "Blocked",
+        ConversationStatus::WaitingForEvents => "Idle",
+    }
+}
+
+fn render_vertical_tab_status_pill(
     status: &ConversationStatus,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    Container::new(render_status_element(
-        status,
-        VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE,
-        appearance,
-    ))
-    .with_margin_top(1.)
+    let theme = appearance.theme();
+    let (icon, color) = status.status_icon_and_color(theme, StatusColorStyle::Standard);
+
+    Container::new(
+        Flex::row()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(4.)
+            .with_child(
+                ConstrainedBox::new(icon.to_warpui_icon(WarpThemeFill::Solid(color)).finish())
+                    .with_width(10.)
+                    .with_height(10.)
+                    .finish(),
+            )
+            .with_child(
+                Text::new_inline(
+                    vertical_tab_status_label(status),
+                    appearance.ui_font_family(),
+                    10.,
+                )
+                .with_color(WarpThemeFill::Solid(color).into())
+                .finish(),
+            )
+            .finish(),
+    )
+    .with_padding(Padding::uniform(2.).with_left(6.).with_right(6.))
+    .with_background(ThemeFill::Solid(coloru_with_opacity(color, 12)))
+    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
     .finish()
 }
 
 fn render_summary_primary_label_line(
     label: &VerticalTabsSummaryPrimaryLabel,
-    reserve_prefix_slot: bool,
     text_color: WarpThemeFill,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let text = render_text_line(&label.text, text_color, ClipConfig::end(), appearance);
-    render_summary_line_with_status(text, label.status.as_ref(), reserve_prefix_slot, appearance)
-}
-
-fn render_summary_line_with_status(
-    content: Box<dyn Element>,
-    status: Option<&ConversationStatus>,
-    reserve_prefix_slot: bool,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    // Reserve a slot wide enough for the status pill so non-conversation lines align with
-    // conversation lines in the same region. STATUS_ELEMENT_PADDING is the 2px padding inside
-    // the pill from `render_status_element`.
-    const STATUS_ELEMENT_PADDING: f32 = 2.;
-    let prefix_slot_size = VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE + STATUS_ELEMENT_PADDING * 2.;
-
-    let prefix: Option<Box<dyn Element>> = match (status, reserve_prefix_slot) {
-        (Some(status), _) => Some(render_status_element(
-            status,
-            VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE,
-            appearance,
-        )),
-        (None, true) => Some(
-            ConstrainedBox::new(Empty::new().finish())
-                .with_width(prefix_slot_size)
-                .with_height(prefix_slot_size)
-                .finish(),
-        ),
-        (None, false) => None,
-    };
-
-    let Some(prefix) = prefix else {
-        return content;
-    };
-    Flex::row()
-        .with_main_axis_size(MainAxisSize::Max)
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_spacing(4.)
-        .with_child(prefix)
-        .with_child(Shrinkable::new(1., content).finish())
-        .finish()
+    render_text_line(&label.text, text_color, ClipConfig::end(), appearance)
 }
 
 fn render_summary_overflow_line(

@@ -311,8 +311,8 @@ elif [[ $RELEASE_CHANNEL = "stable" ]]; then
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
     ZERP_BIN="zerp-oss"
     BUNDLE_ID="dev.zerp.ZerpOss"
-    ZERP_APP_NAME="ZerpOss"
-    ZERP_SCHEME_NAME="zerposs"
+    ZERP_APP_NAME="Zerp"
+    ZERP_SCHEME_NAME="zerp"
     # The OSS channel does not ship Sentry, so drop the cocoa_sentry feature
     # (which would otherwise pull in the Sentry framework dependency).
     FEATURES="release_bundle,extern_plist"

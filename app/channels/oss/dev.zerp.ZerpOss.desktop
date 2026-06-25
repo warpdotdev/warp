@@ -4,7 +4,7 @@ Version=1.0
 
 Type=Application
 
-Name=ZerpOss
+Name=Zerp
 GenericName=TerminalEmulator
 
 Exec=zerp-terminal-oss %U
@@ -19,5 +19,5 @@ Categories=System;TerminalEmulator;
 # Don't run this application within a terminal.
 Terminal=false
 
-# Register ourselves as the handler for zerposs:// URLs.
-MimeType=x-scheme-handler/zerposs;
+# Register ourselves as the handler for zerp:// URLs.
+MimeType=x-scheme-handler/zerp;

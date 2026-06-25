@@ -318,6 +318,14 @@ fn cli_success_maps_correctly() {
 }
 
 #[test]
+fn cli_idle_maps_to_blocked_waiting_for_input() {
+    let (state, update) = map_cli_session_status(&CLIAgentSessionStatus::Idle);
+    assert_eq!(state, AgentTaskState::Blocked);
+    let update = update.expect("should have status update");
+    assert!(update.message.contains("Waiting for your input"));
+}
+
+#[test]
 fn cli_blocked_maps_correctly() {
     let (state, update) = map_cli_session_status(&CLIAgentSessionStatus::Blocked {
         message: Some("needs approval".into()),

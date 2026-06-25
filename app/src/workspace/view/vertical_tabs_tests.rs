@@ -15,11 +15,11 @@ use super::{
     sort_summary_primary_labels_status_first, summary_overflow_count,
     summary_search_text_fragments, summary_status_for_title_override, terminal_kind_badge_label,
     terminal_primary_line_data, terminal_pull_request_badge_label, terminal_search_text_fragments,
-    terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
-    vtab_diff_stats_text, AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons,
-    TerminalAgentText, TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
-    VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
-    VerticalTabsSummaryPrimaryLabel,
+    terminal_title_fallback_font, uses_outer_group_container, vertical_tab_status_label,
+    visible_pane_ids_for_detail_target, vtab_diff_stats_text, AgentTabTextPreference,
+    SummaryPaneKind, SummaryPaneKindIcons, TerminalAgentText, TerminalPrimaryLineData,
+    TerminalPrimaryLineFont, VerticalTabsDetailTarget, VerticalTabsDetailTargetKind,
+    VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData, VerticalTabsSummaryPrimaryLabel,
 };
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::context_chips::display_chip::GitLineChanges;
@@ -1172,4 +1172,26 @@ fn summary_title_override_has_no_status_without_agent_label() {
     };
 
     assert_eq!(summary_status_for_title_override(&summary), None);
+}
+
+#[test]
+fn vertical_tab_status_label_uses_cli_friendly_copy() {
+    assert_eq!(
+        vertical_tab_status_label(&ConversationStatus::InProgress),
+        "Working"
+    );
+    assert_eq!(
+        vertical_tab_status_label(&ConversationStatus::WaitingForEvents),
+        "Idle"
+    );
+    assert_eq!(
+        vertical_tab_status_label(&ConversationStatus::Success),
+        "Done"
+    );
+    assert_eq!(
+        vertical_tab_status_label(&ConversationStatus::Blocked {
+            blocked_action: "Needs approval".to_string()
+        }),
+        "Blocked"
+    );
 }
