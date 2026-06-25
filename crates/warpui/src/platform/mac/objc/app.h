@@ -33,7 +33,7 @@ void warp_app_active_window_changed(id app);
 void warp_app_notification_clicked(id app, double date, id data);
 void warp_app_open_urls(id app, id urls);
 void warp_app_os_appearance_changed(id app);
-BOOL warp_app_should_terminate_app(id app);
+BOOL warp_app_should_terminate_app(id app, BOOL systemInitiated);
 BOOL warp_app_should_close_window(id app, id window);
 BOOL warp_app_are_key_bindings_disabled_for_window(id app, id window);
 BOOL warp_app_has_binding_for_keystroke(id app, id event);

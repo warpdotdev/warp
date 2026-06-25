@@ -136,7 +136,7 @@ Then, **ensure your PR passes code review and includes relevant tests** per our 
 
 ## Using a Coding Agent
 
-You can use **any third-party CLI coding agent** to implement a contribution — for example, Claude Code, Codex, Gemini CLI, or others — or no agent at all. This repository ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`WARP.md`](WARP.md)) that any harness supporting these formats can pick up.
+You can use **any third-party CLI coding agent** to implement a contribution — for example, Claude Code, Codex, Gemini CLI, or others — or no agent at all. This repository ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`AGENTS.md`](AGENTS.md)) that any harness supporting these formats can pick up.
 
 While you can use coding agents for implementation, we expect contributors to **collaborate with us personally**. This means that you should not be using agents like OpenClaw to engage in conversation with our team. Our maintainers will always talk to you as a human, so please talk to us as a human as well.
 
@@ -161,7 +161,7 @@ If a review leaves your PR with **changes requested** and it then goes quiet, au
 
 ## Development Setup
 
-See [README.md](README.md) and [WARP.md](WARP.md) for the full engineering guide. Quick start:
+See [README.md](README.md) and [AGENTS.md](AGENTS.md) for the full engineering guide. Quick start:
 
 ```bash
 ./script/bootstrap   # platform-specific setup
@@ -176,7 +176,7 @@ Tests are required for most code changes:
 ### Manual Testing
 Manual testing is required for changes that can be manually tested, and almost all changes can be manually tested. For small, isolated, and visual changes, you should include **before and after screenshots**. For larger, broad, or interactive changes, you should also include a **narrated screen recording**.
 
-You can run the app locally using `./script/run` - see [WARP.md](WARP.md) for more details on how to get set up.
+You can run the app locally using `./script/run` - see [AGENTS.md](AGENTS.md) for more details on how to get set up.
 
 ### Automated Tests
 - **Bug fixes** should include a regression test that would have caught the bug.
@@ -189,7 +189,7 @@ Run unit tests with `cargo nextest run`.
 
 - `./script/format --check` and `cargo clippy --workspace --all-targets --all-features --tests -- -D warnings` must pass.
 - Prefer imports over path qualifiers, inline format args (`println!("{x}")`), and exhaustive `match` over `_` wildcards.
-- See [WARP.md](WARP.md) for the full style guide, including WarpUI patterns and terminal model locking rules.
+- See [AGENTS.md](AGENTS.md) for the full style guide, including WarpUI patterns and terminal model locking rules.
 
 ## Commit and Branch Conventions
 

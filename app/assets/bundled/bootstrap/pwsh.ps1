@@ -162,7 +162,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             Where-Object { -not $_.Name.StartsWith('Warp') } |
             Select-Object -ExpandProperty Name
         $functionNames = $functionNamesRaw -join [Environment]::NewLine
-        $builtinsRaw = Get-Command -CommandType Cmdlet | Select-Object -ExpandProperty Name
+        $builtinsRaw = Get-Command -CommandType Cmdlet -Module $corePsModules | Select-Object -ExpandProperty Name
         $builtins = $builtinsRaw -join [Environment]::NewLine
         $shellVersion = $PSVersionTable.PSVersion.ToString()
         # PowerShell wasn't cross-platform until version 6. Anything before that is definitely on Windows.

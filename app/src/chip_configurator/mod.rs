@@ -420,6 +420,15 @@ impl ChipConfigurator {
         self.current_dragging_state = None;
     }
 
+    /// Whether any zone currently holds chips (i.e. the configurator is open /
+    /// populated).
+    pub fn has_items(&self) -> bool {
+        !self.used_chips.is_empty()
+            || !self.left_chips.is_empty()
+            || !self.right_chips.is_empty()
+            || !self.unused_chips.is_empty()
+    }
+
     pub fn left_item_kinds(&self) -> Vec<AgentToolbarItemKind> {
         self.left_chips
             .iter()

@@ -1537,6 +1537,11 @@ impl AppearanceSettingsPageView {
                     editor.set_buffer_text(&format!("{line_height_ratio}"), ctx);
                 });
             }
+            AppearanceEvent::ThemeChanged => {
+                // Context-chip colors are theme-derived, so rebuild the Input
+                // preview chips when the theme changes to keep them in sync.
+                self.context_chips = Self::get_context_chip_renderers(ctx);
+            }
             _ => {}
         }
 

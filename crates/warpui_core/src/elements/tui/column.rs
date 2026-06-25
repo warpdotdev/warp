@@ -17,7 +17,8 @@
 //! available height are clipped.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiPresentationContext, TuiRect, TuiSize,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiPresentationContext, TuiRect,
+    TuiRectExt, TuiSize,
 };
 use crate::{AppContext, Event};
 

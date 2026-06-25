@@ -14,7 +14,7 @@ How did you test this change? What automated tests did you add? If you didn't ad
 
 Manual testing is required for changes that can be manually tested, and almost all changes can be manually tested. If your change can be manually tested, please include screenshots or a screen recording that show it working end to end.
 
-You can run the app locally using `./script/run` - see WARP.md for more details on how to get set up.
+You can run the app locally using `./script/run` - see AGENTS.md for more details on how to get set up.
 -->
 
 - [ ] I have manually tested my changes locally with `./script/run`

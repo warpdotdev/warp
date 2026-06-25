@@ -157,19 +157,23 @@ impl AIExecutionProfilesModel {
                 }
 
                 let default_profile_state = match launch_mode {
-                    LaunchMode::App { .. } | LaunchMode::Test { .. } => match default_profile_from_cloud {
-                        Some(p) => {
-                            let execution_profile_id = ClientProfileId::new();
-                            profile_id_to_sync_id.insert(execution_profile_id, p.id);
-                            DefaultProfileState::Synced {
-                                id: execution_profile_id,
+                    // The TUI front-end is an app-style client, so it shares the
+                    // GUI app's cloud-synced default execution profile.
+                    LaunchMode::App { .. } | LaunchMode::Test { .. } | LaunchMode::Tui => {
+                        match default_profile_from_cloud {
+                            Some(p) => {
+                                let execution_profile_id = ClientProfileId::new();
+                                profile_id_to_sync_id.insert(execution_profile_id, p.id);
+                                DefaultProfileState::Synced {
+                                    id: execution_profile_id,
+                                }
                             }
+                            None => DefaultProfileState::Unsynced {
+                                id: ClientProfileId::new(),
+                                profile: super::create_default_from_legacy_settings(ctx),
+                            },
                         }
-                        None => DefaultProfileState::Unsynced {
-                            id: ClientProfileId::new(),
-                            profile: super::create_default_from_legacy_settings(ctx),
-                        },
-                    },
+                    }
                     // When running as a CLI, we ignore the GUI default and use a more permissive default.
                     LaunchMode::CommandLine { is_sandboxed, .. } => {
                         DefaultProfileState::Cli {
