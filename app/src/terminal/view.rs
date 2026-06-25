@@ -488,7 +488,7 @@ use crate::terminal::warpify::render::render_subshell_separator;
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::warpify::SubshellSource;
 use crate::terminal::waterfall_gap_element::WaterfallGapElement;
-use crate::terminal::writeable_pty::{PtyIntent, TerminalSurface};
+use crate::terminal::writeable_pty::{PtyIntent, PtyIntentEvent, TerminalSurface};
 use crate::terminal::{
     block_list_element::BlockHoverAction,
     // find::{Event as FindEvent, Find, FindDirection},
@@ -25729,9 +25729,9 @@ impl Entity for TerminalView {
 /// Projects the GUI [`Event`] stream into the PTY/session intent vocabulary used
 /// by `TerminalManager`. Only the PTY-driving variants map to a [`PtyIntent`];
 /// every other event returns `None` and is handled by the GUI surface itself.
-impl From<&Event> for Option<PtyIntent> {
-    fn from(event: &Event) -> Self {
-        match event {
+impl PtyIntentEvent for Event {
+    fn pty_intent(&self) -> Option<PtyIntent> {
+        match self {
             Event::CtrlD => Some(PtyIntent::CtrlD),
             Event::ShutdownPty => Some(PtyIntent::ShutdownPty),
             Event::WriteBytesToPty { bytes } => Some(PtyIntent::WriteBytes(bytes.clone())),

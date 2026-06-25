@@ -37,29 +37,15 @@ pub(crate) enum PtyIntent {
 }
 
 /// Event types that can be projected into an [`Option<PtyIntent>`].
-///
-/// The blanket impl keeps the `From<&T> for Option<PtyIntent>` pattern as the
-/// single source of truth while exposing a direct method so generic call sites
-/// avoid repeating the higher-ranked `for<'a>` bound.
 pub(crate) trait PtyIntentEvent {
     /// Projects this event into a PTY/session intent, or `None` if it is not a
     /// PTY-driving event.
     fn pty_intent(&self) -> Option<PtyIntent>;
 }
 
-impl<T> PtyIntentEvent for T
-where
-    for<'a> Option<PtyIntent>: From<&'a T>,
-{
-    fn pty_intent(&self) -> Option<PtyIntent> {
-        Option::<PtyIntent>::from(self)
-    }
-}
-
 /// A terminal frontend surface driven by `TerminalManager`.
 ///
-/// Each surface defines how its own event type collapses into a PTY/session
-/// intent via `From<&Self::Event> for Option<PtyIntent>`.
+/// Each surface defines how its own event type collapses into a PTY/session intent.
 pub(crate) trait TerminalSurface: View + 'static
 where
     <Self as Entity>::Event: PtyIntentEvent,
