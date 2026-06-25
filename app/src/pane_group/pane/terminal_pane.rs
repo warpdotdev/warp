@@ -1030,15 +1030,18 @@ fn handle_terminal_view_event(
                                     is_local: *is_local,
                                 });
 
-                                let sender_clone = sender.clone();
-                                let _ = ctx.spawn(async move {
-                                // Sending over a sync sender can block the current thread, so we do this async.
-                                sender_clone.send(block_completed_event)
-                            }, move |_, res, _| {
-                                if let Err(err) = res {
+                                // Send synchronously so the SaveBlock event is guaranteed to be
+                                // queued before app shutdown cancels pending background tasks.
+                                // Using an async background task here caused a race condition
+                                // where the task could be cancelled by shutdown_background()
+                                // before it had a chance to run, causing blocks from alt-screen
+                                // apps (like claude) to not be saved on session restore.
+                                //
+                                // The SyncSender channel has 1024 capacity; in practice it is
+                                // never full during normal operation so blocking is negligible.
+                                if let Err(err) = sender.send(block_completed_event) {
                                     log::error!("Error sending block completed event for terminal id {terminal_pane_id:?} {err:?}");
                                 }
-                            });
                             }
                         }
                         ctx.emit(pane_group::Event::ActiveSessionChanged);
