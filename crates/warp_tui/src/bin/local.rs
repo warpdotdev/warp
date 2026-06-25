@@ -19,5 +19,5 @@ fn main() -> Result<()> {
             .with_additional_features(features::LOCAL_FLAGS),
     );
 
-    warp::run_tui()
+    warp_tui::run()
 }

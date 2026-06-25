@@ -175,11 +175,13 @@ impl OrchestrationViewerModel {
 
         match event {
             BlocklistAIHistoryEvent::SetActiveConversation {
-                terminal_view_id, ..
+                terminal_surface_id,
+                ..
             }
             | BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
-                terminal_view_id, ..
-            } if *terminal_view_id == self.terminal_view_id => {
+                terminal_surface_id,
+                ..
+            } if *terminal_surface_id == self.terminal_view_id => {
                 self.register_viewer_mode_consumer_if_possible(ctx);
             }
             _ => {}

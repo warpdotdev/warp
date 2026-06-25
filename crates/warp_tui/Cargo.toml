@@ -9,9 +9,9 @@ autobins = false
 default-run = "warp-tui-oss"
 
 # One binary per channel, mirroring the GUI app's `app/src/bin/*` layout. The
-# OSS bin is the `default-run` so bare `cargo run -p warp_tui` builds without the
-# internal `warp-channel-config` generator; `./script/run-tui` selects the local
-# bin when the generator is available.
+# OSS bin is the `default-run` so bare `cargo run -p warp_tui` builds without
+# the internal `warp-channel-config` generator; `./script/run-tui` selects the
+# local bin when the generator is available.
 [[bin]]
 name = "warp-tui-oss"
 path = "src/bin/oss.rs"
@@ -34,19 +34,25 @@ path = "src/bin/stable.rs"
 
 [dependencies]
 anyhow.workspace = true
+log.workspace = true
 num-traits.workspace = true
+parking_lot.workspace = true
+pathfinder_geometry.workspace = true
 string-offset.workspace = true
 vec1.workspace = true
 warp = { workspace = true, features = ["tui"] }
 warp_channel_config.workspace = true
 warp_core.workspace = true
 warp_editor.workspace = true
+warpui.workspace = true
 warpui_core = { workspace = true, features = ["tui"] }
 
 [dev-dependencies]
 # `test-util` exposes `Appearance::mock()`, used to register the `Appearance`
 # singleton that the editor-backed TUI input view depends on in tests/examples.
 warp_core = { workspace = true, features = ["test-util"] }
+# Process-level worker-dispatch regression test.
+command.workspace = true
 
 [[example]]
 name = "tui_input_demo"

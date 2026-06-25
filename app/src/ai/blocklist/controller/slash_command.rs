@@ -127,7 +127,7 @@ impl SlashCommandRequest {
             return;
         }
         let active_conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
-            .active_conversation_id(controller.terminal_view_id);
+            .active_conversation_id(controller.terminal_surface_id);
 
         // If no existing conversation, create a new one.
         // When AgentView is enabled, enter agent view which creates the conversation
@@ -136,7 +136,7 @@ impl SlashCommandRequest {
             if FeatureFlag::AgentView.is_enabled() {
                 controller.context_model.update(ctx, |context_model, ctx| {
                     context_model
-                        .try_enter_agent_view_for_new_conversation(
+                        .try_start_new_conversation(
                             AgentViewEntryOrigin::SlashCommand {
                                 trigger: SlashCommandTrigger::input(),
                             },
@@ -176,7 +176,7 @@ impl SlashCommandRequest {
             &controller.active_session,
             controller.get_current_response_initiator(),
             conversation_id,
-            controller.terminal_view_id,
+            controller.terminal_surface_id,
             ctx,
         );
         let model_id = request_input.model_id.clone();
@@ -188,7 +188,6 @@ impl SlashCommandRequest {
                 entrypoint,
                 is_auto_resume_after_error: false,
             }),
-            /*default_to_follow_up_on_success*/ true,
             /*can_attempt_resume_on_error*/ true,
             is_queued_prompt,
             ctx,

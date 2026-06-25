@@ -342,11 +342,11 @@ impl InlineModelSelectorView {
             &BlocklistAIHistoryModel::handle(ctx),
             move |me, _, event, ctx| {
                 if let BlocklistAIHistoryEvent::UpdatedConversationStatus {
-                    terminal_view_id: event_terminal_view_id,
+                    terminal_surface_id: event_terminal_surface_id,
                     ..
                 } = event
                 {
-                    if *event_terminal_view_id == terminal_view_id {
+                    if *event_terminal_surface_id == terminal_view_id {
                         me.menu_view.update(ctx, |_, ctx| ctx.notify());
                     }
                 }

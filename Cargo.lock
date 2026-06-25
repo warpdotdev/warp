@@ -15842,13 +15842,18 @@ name = "warp_tui"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "command",
+ "log",
  "num-traits",
+ "parking_lot",
+ "pathfinder_geometry",
  "string-offset",
  "vec1",
  "warp",
  "warp_channel_config",
  "warp_core",
  "warp_editor",
+ "warpui",
  "warpui_core",
 ]
 

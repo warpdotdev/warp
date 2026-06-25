@@ -12,5 +12,5 @@ fn main() -> Result<()> {
         warp_channel_config::load_config!("stable"),
     ));
 
-    warp::run_tui()
+    warp_tui::run()
 }
