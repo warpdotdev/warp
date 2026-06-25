@@ -1234,9 +1234,18 @@ impl AgentConversationsModel {
         }
     }
 
-    /// Returns true if we have tasks or local conversations in this view
-    pub fn has_items(&self) -> bool {
-        !self.tasks.is_empty() || !self.conversations.is_empty()
+    /// Returns true if we have any *visible* tasks or local conversations in this
+    /// view. Mirrors the child-agent exclusion applied in [`Self::get_entries`]
+    /// so a model containing only child (orchestrated) agents — which produce no
+    /// list entries — is treated as empty rather than as a non-empty list with
+    /// no filter matches.
+    pub fn has_items(&self, app: &AppContext) -> bool {
+        let history_model = BlocklistAIHistoryModel::as_ref(app);
+        self.tasks.values().any(|task| task.parent_run_id.is_none())
+            || self
+                .conversations
+                .keys()
+                .any(|conversation_id| !history_model.is_child_conversation(conversation_id))
     }
 
     /// Returns an iterator over all ambient agent tasks.
