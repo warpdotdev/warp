@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+
 use warpui::elements::{
     ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, MainAxisAlignment,
     MainAxisSize, ParentElement, Text,
@@ -388,8 +389,8 @@ pub fn render_router_error_card(
         .finish();
 
     // Truncate long error messages to keep the card readable.
-    let truncated = if error_message.len() > 200 {
-        format!("{}…", &error_message[..200])
+    let truncated = if error_message.chars().count() > 200 {
+        format!("{}…", error_message.chars().take(200).collect::<String>())
     } else {
         error_message.to_string()
     };

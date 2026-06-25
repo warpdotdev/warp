@@ -680,10 +680,12 @@ impl LLMPreferences {
         if let Some(terminal_view_id) = terminal_view_id {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override {
-                if let Some(llm_info) =
-                    Self::server_info_for_id_router_gated(&self.models_by_feature.agent_mode, llm_id)
-                        .or_else(|| self.custom_llm_info_for_id_if_enabled(llm_id, app))
-                        .or_else(|| self.custom_router_llm_info_for_id_if_enabled(llm_id))
+                if let Some(llm_info) = Self::server_info_for_id_router_gated(
+                    &self.models_by_feature.agent_mode,
+                    llm_id,
+                )
+                .or_else(|| self.custom_llm_info_for_id_if_enabled(llm_id, app))
+                .or_else(|| self.custom_router_llm_info_for_id_if_enabled(llm_id))
                 {
                     return llm_info;
                 }
@@ -765,8 +767,7 @@ impl LLMPreferences {
             // Gate cloud/team routers behind the same flag as local routers so
             // the entire custom-router feature is controlled by one flag.
             .filter(move |llm| {
-                routers_enabled
-                    || !custom_model_routers::is_cloud_custom_router_id(llm.id.as_str())
+                routers_enabled || !custom_model_routers::is_cloud_custom_router_id(llm.id.as_str())
             })
             .chain(self.custom_llm_choices(app))
             .chain(self.custom_router_choices())
@@ -783,8 +784,7 @@ impl LLMPreferences {
             .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
             // Gate cloud/team routers behind the same flag as local routers.
             .filter(move |llm| {
-                routers_enabled
-                    || !custom_model_routers::is_cloud_custom_router_id(llm.id.as_str())
+                routers_enabled || !custom_model_routers::is_cloud_custom_router_id(llm.id.as_str())
             })
             .chain(self.custom_llm_choices(app))
             .chain(self.custom_router_choices())
