@@ -1,29 +1,27 @@
 //! [`TuiText`]: a styled run of text that wraps (or truncates) to the width it
-//! is laid out at.
+//! is laid out at, built on ratatui's `Paragraph`.
 //!
 //! # Construction
 //! Build with [`TuiText::new`] and chain builders:
 //! - [`with_style`](TuiText::with_style) sets the [`TuiStyle`] applied to every
 //!   glyph.
 //! - [`truncate`](TuiText::truncate) switches from the default word-wrapping
-//!   policy to single-row-per-line truncation.
+//!   policy to single-row-per-hard-line truncation.
 //!
 //! # Layout policy
-//! The text is first split into *hard lines* on `'\n'`. Each hard line is then
-//! laid out against the available width in one of two modes:
+//! Wrapping and measurement defer to `Paragraph`, so layout, render, and
+//! `desired_height` always agree:
+//! - **Wrap** (default): word-wrapped with whitespace preserved
+//!   (`Wrap { trim: false }`); a word wider than the row is broken at grapheme
+//!   boundaries.
+//! - **Truncate**: each hard line becomes one row, clipped to the width.
 //!
-//! - **Wrap** (default): tokens (space-separated words) are packed greedily,
-//!   separated by a single space, starting a new row whenever the next token
-//!   would overflow. A token wider than the whole width is hard-broken at
-//!   grapheme boundaries. Runs of spaces collapse to a single separator.
-//! - **Truncate**: each hard line becomes exactly one row; glyphs past the
-//!   width are dropped by the buffer when painted.
-//!
-//! Column widths are measured with `unicode-width`, so a wide (CJK) glyph
-//! occupies two columns and is never split across rows.
+//! Height is `Paragraph::line_count` and the natural width is
+//! `Paragraph::line_width`; both are column-accurate for wide (CJK) glyphs, so a
+//! wide glyph occupies two columns and is never split across rows. An empty
+//! string occupies no rows.
 
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use super::{TuiBuffer, TuiConstraint, TuiElement, TuiRect, TuiSize, TuiStyle};
 
@@ -54,30 +52,25 @@ impl TuiText {
         self
     }
 
-    /// The rows this text occupies when laid out at `width` columns, under the
-    /// active wrap/truncate policy. This is the single source of truth shared by
-    /// [`layout`](TuiElement::layout), [`render`](TuiElement::render), and
-    /// [`desired_height`](TuiElement::desired_height).
-    fn rows(&self, width: u16) -> Vec<String> {
-        if self.text.is_empty() {
-            return Vec::new();
-        }
+    /// The ratatui `Paragraph` backing this element's measure and paint.
+    fn paragraph(&self) -> Paragraph<'_> {
+        let paragraph = Paragraph::new(self.text.as_str()).style(self.style);
         if self.wrap {
-            self.text
-                .split('\n')
-                .flat_map(|line| wrap_hard_line(line, width))
-                .collect()
+            paragraph.wrap(Wrap { trim: false })
         } else {
-            self.text.split('\n').map(str::to_owned).collect()
+            paragraph
         }
     }
 }
 
 impl TuiElement for TuiText {
     fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
-        let rows = self.rows(constraint.max.width);
-        let content_width = rows.iter().map(|row| text_width(row)).max().unwrap_or(0);
-        let height = u16::try_from(rows.len()).unwrap_or(u16::MAX);
+        if self.text.is_empty() {
+            return constraint.clamp(TuiSize::ZERO);
+        }
+        let paragraph = self.paragraph();
+        let height = u16::try_from(paragraph.line_count(constraint.max.width)).unwrap_or(u16::MAX);
+        let content_width = u16::try_from(paragraph.line_width()).unwrap_or(u16::MAX);
         TuiSize::new(
             constraint.constrain_width(content_width),
             constraint.constrain_height(height),
@@ -88,109 +81,15 @@ impl TuiElement for TuiText {
         if area.is_empty() {
             return;
         }
-        for (offset, row) in self.rows(area.width).iter().enumerate() {
-            let Ok(offset) = u16::try_from(offset) else {
-                break;
-            };
-            if offset >= area.height {
-                break;
-            }
-            buffer.set_str(area.x, area.y + offset, area.width, row, self.style);
-        }
+        Widget::render(self.paragraph(), area, buffer);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        u16::try_from(self.rows(width).len()).unwrap_or(u16::MAX)
-    }
-}
-
-/// Greedily wraps a single newline-free line to `width` columns. Returns one
-/// `String` per visual row (empty when `width` is zero).
-fn wrap_hard_line(line: &str, width: u16) -> Vec<String> {
-    if width == 0 {
-        return Vec::new();
-    }
-
-    let mut rows = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0;
-
-    for token in line.split(' ').filter(|token| !token.is_empty()) {
-        let token_width = text_width(token);
-
-        if !current.is_empty() && current_width + 1 + token_width <= width {
-            current.push(' ');
-            current.push_str(token);
-            current_width += 1 + token_width;
-            continue;
+        if self.text.is_empty() {
+            return 0;
         }
-
-        if !current.is_empty() {
-            rows.push(std::mem::take(&mut current));
-            current_width = 0;
-        }
-
-        if token_width <= width {
-            current = token.to_owned();
-            current_width = token_width;
-            continue;
-        }
-
-        // The token is wider than a full row: hard-break it at grapheme
-        // boundaries, carrying the final fragment into `current`.
-        let chunks = hard_break(token, width);
-        let last = chunks.len().saturating_sub(1);
-        for (index, chunk) in chunks.into_iter().enumerate() {
-            if index == last {
-                current_width = text_width(&chunk);
-                current = chunk;
-            } else {
-                rows.push(chunk);
-            }
-        }
+        u16::try_from(self.paragraph().line_count(width)).unwrap_or(u16::MAX)
     }
-
-    if !current.is_empty() {
-        rows.push(current);
-    }
-    if rows.is_empty() {
-        rows.push(String::new());
-    }
-    rows
-}
-
-/// Splits `token` into fragments each at most `width` columns wide, breaking
-/// only on grapheme boundaries (a single glyph wider than `width` is kept whole
-/// and clipped later by the buffer).
-fn hard_break(token: &str, width: u16) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0;
-
-    for grapheme in token.graphemes(true) {
-        let glyph_width = grapheme_width(grapheme);
-        if !current.is_empty() && current_width + glyph_width > width {
-            chunks.push(std::mem::take(&mut current));
-            current_width = 0;
-        }
-        current.push_str(grapheme);
-        current_width += glyph_width;
-    }
-
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    chunks
-}
-
-fn text_width(text: &str) -> u16 {
-    u16::try_from(UnicodeWidthStr::width(text)).unwrap_or(u16::MAX)
-}
-
-/// The column width of a single grapheme, floored at 1 to mirror the buffer's
-/// own measurement of zero-width clusters.
-fn grapheme_width(grapheme: &str) -> u16 {
-    u16::try_from(UnicodeWidthStr::width(grapheme).max(1)).unwrap_or(u16::MAX)
 }
 
 #[cfg(test)]

@@ -17,7 +17,8 @@ use super::{
 };
 use crate::elements::{Point, SelectableElement, ZIndex};
 use crate::fonts::FamilyId;
-use crate::text::BlockHeaderSize;
+use crate::text::word_boundaries::WordBoundariesPolicy;
+use crate::text::{BlockHeaderSize, SelectionDirection, SelectionType};
 use crate::text_layout::TextFrame;
 
 #[test]
@@ -219,4 +220,102 @@ fn smart_select_returns_none_when_point_is_outside_horizontal_bounds() {
     assert!(element
         .smart_select(point, select_first_character)
         .is_none());
+}
+
+const TEST_GLYPH_ADVANCE: f32 = 10.0;
+
+/// Builds a single-line, left-aligned [`FormattedTextElement`] at origin (0, 0) whose glyphs each
+/// advance by [`TEST_GLYPH_ADVANCE`], so `expand_selection` results can be checked by x position.
+fn positioned_text_element(text: &str) -> FormattedTextElement {
+    let text_frame = Arc::new(TextFrame::mock_with_positions(text, TEST_GLYPH_ADVANCE));
+    let frame_bounds = RectF::new(
+        vec2f(0.0, 0.0),
+        vec2f(text_frame.max_width(), text_frame.height()),
+    );
+    let mouse_handlers = Rc::new(RefCell::new(FrameMouseHandlers::default()));
+    let formatted_text = FormattedText::new([FormattedTextLine::Line(vec![
+        FormattedTextFragment::plain_text(text),
+    ])]);
+
+    let mut element = FormattedTextElement::new(
+        formatted_text,
+        13.0,
+        FamilyId(0),
+        FamilyId(0),
+        ColorU::black(),
+        HighlightedHyperlink::default(),
+    );
+    element.origin = Some(Point::new(0.0, 0.0, ZIndex::new(0)));
+    element.size = Some(frame_bounds.size());
+    element.laid_out_text = vec![LaidOutTextFrame::Text {
+        text_frame,
+        frame_bounds,
+        bottom_padding: 0.0,
+        raw_text: text.to_string(),
+        mouse_handlers: mouse_handlers.clone(),
+    }];
+    element.text_frame_mouse_handlers = vec![mouse_handlers];
+    element.hyperlink_support = HyperlinkSupport {
+        highlighted_hyperlink: Arc::new(Mutex::new(None)),
+        hyperlink_font_color: ColorU::black(),
+    };
+    element
+}
+
+/// Drives `expand_selection` for a semantic selection whose tail is over the glyph at
+/// `glyph_index`, returning the resulting x position. The element is laid out so x == glyph index
+/// times [`TEST_GLYPH_ADVANCE`], so the caller can assert which character boundary it snapped to.
+fn semantic_target_x(
+    element: &FormattedTextElement,
+    glyph_index: usize,
+    direction: SelectionDirection,
+) -> f32 {
+    // Aim near the middle of the target glyph so the point snaps to it.
+    let point = vec2f(glyph_index as f32 * TEST_GLYPH_ADVANCE + 2.0, 5.0);
+    element
+        .expand_selection(
+            point,
+            direction,
+            SelectionType::Semantic,
+            &WordBoundariesPolicy::Default,
+        )
+        .expect("expand_selection should return a point")
+        .x()
+}
+
+#[test]
+fn expand_selection_excludes_trailing_whitespace_after_punctuation() {
+    // "alpha, bravo": a0 l1 p2 h3 a4 ,5 <space>6 b7 r8 a9 v10 o11
+    let element = positioned_text_element("alpha, bravo");
+
+    // Forward drag with the tail on the comma ends just after the comma (x == 6 * advance),
+    // NOT including the following space (which would be x == 7 * advance). This is the
+    // reporter's case and matches the terminal block list.
+    assert_eq!(
+        semantic_target_x(&element, 5, SelectionDirection::Forward),
+        6.0 * TEST_GLYPH_ADVANCE,
+    );
+    // Forward drag with the tail on a word char selects the whole word "alpha" (end x == 5 * advance).
+    assert_eq!(
+        semantic_target_x(&element, 1, SelectionDirection::Forward),
+        5.0 * TEST_GLYPH_ADVANCE,
+    );
+    // Backward drag with the tail on a word char selects from the start of "bravo" (x == 7 * advance).
+    assert_eq!(
+        semantic_target_x(&element, 8, SelectionDirection::Backward),
+        7.0 * TEST_GLYPH_ADVANCE,
+    );
+}
+
+#[test]
+fn expand_selection_stops_at_end_of_punctuation_run() {
+    // "foo... bar": f0 o1 o2 .3 .4 .5 <space>6 b7 a8 r9
+    let element = positioned_text_element("foo... bar");
+
+    // Tail on the last dot ends at x == 6 * advance ("foo..."), excluding the trailing space
+    // (which would be x == 7 * advance) and never reaching "bar".
+    assert_eq!(
+        semantic_target_x(&element, 5, SelectionDirection::Forward),
+        6.0 * TEST_GLYPH_ADVANCE,
+    );
 }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::TuiChildView;
 use crate::elements::tui::{
-    TuiBuffer, TuiElement, TuiPresentationContext, TuiRect, TuiSize, TuiText,
+    TuiBuffer, TuiBufferExt, TuiElement, TuiPresentationContext, TuiRect, TuiText,
 };
 use crate::EntityId;
 
@@ -10,7 +10,7 @@ use crate::EntityId;
 fn embeds_and_renders_the_stub_at_the_given_area() {
     let view = TuiChildView::from_rendered(EntityId::from_usize(1), Box::new(TuiText::new("Z")));
 
-    let mut buffer = TuiBuffer::new(TuiSize::new(3, 1));
+    let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 3, 1));
     // Render offset one column in: the embedded glyph must land at x = 1.
     view.render(TuiRect::new(1, 0, 2, 1), &mut buffer);
     assert_eq!(buffer.to_lines(), vec![" Z "]);

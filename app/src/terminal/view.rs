@@ -13450,6 +13450,7 @@ impl TerminalView {
         // underlines to valid commands.
         let input = self.input().clone();
         let session_clone = session.clone();
+        let session_clone2 = session.clone();
         ctx.spawn(
             async move { session.load_external_commands().await },
             move |me, _, ctx| {
@@ -13465,6 +13466,10 @@ impl TerminalView {
 
         ctx.background_executor()
             .spawn(async move { session_clone.load_all_function_names().await })
+            .detach();
+
+        ctx.background_executor()
+            .spawn(async move { session_clone2.load_all_builtins().await })
             .detach();
 
         // If we were waiting for a successful warpification, it's come. Stop the timeout.

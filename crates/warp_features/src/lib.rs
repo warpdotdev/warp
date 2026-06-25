@@ -884,6 +884,11 @@ pub enum FeatureFlag {
     /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
+
+    /// Gates the custom model router feature, which allows users to define
+    /// their own model routers.
+    CustomModelRouters,
+
     /// Shows a warning in the agent view when the active conversation's
     /// provider-side prompt cache has expired.
     PromptCacheExpiryWarning,
@@ -952,6 +957,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
+    FeatureFlag::CustomModelRouters,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::PinnedTabs,
     FeatureFlag::ContextWindowUsageBreakdown,

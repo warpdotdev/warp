@@ -2356,18 +2356,13 @@ impl SelectableElement for FormattedTextElement {
                         ..
                     } => {
                         let frame_bounds = frame.get_frame_bounds();
-                        let inner_point = if matches!(direction, SelectionDirection::Backward) {
-                            raw_text.word_starts_backward_from_offset_exclusive(CharOffset::from(
-                                text_selection_bound.glyph_index,
-                            ))
-                        } else {
-                            raw_text.word_ends_from_offset_exclusive(CharOffset::from(
-                                text_selection_bound.glyph_index,
-                            ))
-                        }
-                        .ok()?
-                        .with_policy(word_boundaries_policy)
-                        .next()?;
+                        let inner_point = raw_text
+                            .semantic_expansion_target(
+                                CharOffset::from(text_selection_bound.glyph_index),
+                                direction,
+                                word_boundaries_policy,
+                            )
+                            .ok()?;
 
                         let offset = raw_text.to_offset(inner_point).ok()?.as_usize();
 

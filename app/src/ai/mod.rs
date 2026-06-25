@@ -28,6 +28,7 @@ pub(crate) mod conversation_navigation;
 pub(crate) mod conversation_rename;
 pub(crate) mod conversation_status_ui;
 pub(crate) mod conversation_utils;
+pub(crate) mod custom_model_routers;
 pub(crate) mod document;
 #[cfg(not(target_family = "wasm"))]
 pub mod geap_credentials;

@@ -8,7 +8,7 @@ license = "MIT"
 
 [features]
 traces = []
-tui = ["dep:crossterm", "dep:unicode-segmentation", "dep:unicode-width"]
+tui = ["dep:ratatui"]
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = ["dep:minimp4", "dep:openh264"]
 # When enabled, skip eager scene building from the window-invalidation callback
@@ -33,7 +33,6 @@ bounded-vec-deque.workspace = true
 bytes.workspace = true
 cfg-if.workspace = true
 chrono = "0.4"
-crossterm = { version = "0.29.0", optional = true }
 dashmap.workspace = true
 derivative.workspace = true
 derive_more.workspace = true
@@ -63,6 +62,9 @@ pathfinder_color.workspace = true
 pathfinder_geometry.workspace = true
 rand.workspace = true
 rangemap.workspace = true
+ratatui = { version = "0.30", optional = true, features = [
+    "unstable-rendered-line-info",
+] }
 raw-window-handle = "0.6.2"
 resvg.workspace = true
 rstar = "0.12.2"
@@ -81,8 +83,6 @@ titlecase = "1.0"
 tokio.workspace = true
 tracing.workspace = true
 trait-set = "0.3.0"
-unicode-segmentation = { version = "1.11.0", optional = true }
-unicode-width = { workspace = true, optional = true }
 vec1.workspace = true
 warp_util.workspace = true
 

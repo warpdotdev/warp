@@ -1,0 +1,16 @@
+[package]
+name = "warp_tui"
+edition = "2021"
+description = "Headless terminal-UI front-end for Warp"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "warp-tui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+warp = { workspace = true, features = ["tui"] }
+warp_core.workspace = true
