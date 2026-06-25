@@ -10,7 +10,6 @@ use warpui::elements::{
     CrossAxisAlignment, Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, ScrollbarWidth, Text,
 };
-use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
@@ -24,6 +23,7 @@ use crate::ai::custom_model_routers::{
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
 use crate::editor::{EditorView, SingleLineEditorOptions, TextOptions};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
@@ -31,7 +31,7 @@ use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::ui_components::icons::Icon;
 use crate::user_config::WarpConfig;
 use crate::view_components::action_button::{
-    ActionButton, ButtonSize, DangerSecondaryTheme, PrimaryTheme, SecondaryTheme,
+    ActionButton, ButtonSize, PrimaryTheme, SecondaryTheme,
 };
 use crate::view_components::dropdown::DropdownAction;
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
@@ -63,7 +63,6 @@ pub enum CustomRouterEditorEvent {
 pub enum CustomRouterEditorAction {
     Close,
     Save,
-    Delete,
     SetRouterType(RouterEditorType),
     SetComplexityDefault(String),
     SetComplexityEasy(String),
@@ -118,7 +117,6 @@ pub struct CustomRouterEditorView {
 
     save_button: ViewHandle<ActionButton>,
     cancel_button: ViewHandle<ActionButton>,
-    delete_button: ViewHandle<ActionButton>,
     add_rule_button: ViewHandle<ActionButton>,
 
     upgrade_footer_mouse_state: MouseStateHandle,
@@ -163,7 +161,16 @@ impl CustomRouterEditorView {
             .as_ref()
             .map(|r| r.info.display_name.clone())
             .unwrap_or_default();
-        let is_editing = existing.is_some();
+        // Personalize the placeholder with the user's first name (derived from
+        // their display name), falling back to a generic placeholder when no
+        // name is available.
+        let name_placeholder = AuthStateProvider::as_ref(ctx)
+            .get()
+            .display_name()
+            .as_deref()
+            .and_then(|name| name.split_whitespace().next())
+            .map(|first_name| format!("{first_name}'s new model"))
+            .unwrap_or_else(|| "My new model".to_string());
         let name_editor = ctx.add_view(move |ctx| {
             let font_size = Appearance::as_ref(ctx).ui_font_size();
             let mut editor = EditorView::single_line(
@@ -176,13 +183,9 @@ impl CustomRouterEditorView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("e.g. \"my-router\"", ctx);
+            editor.set_placeholder_text(&name_placeholder, ctx);
             if !initial_name.is_empty() {
                 editor.set_buffer_text(&initial_name, ctx);
-            }
-            if is_editing {
-                // Make read-only: Selectable = can navigate/copy but not edit
-                editor.set_interaction_state(crate::editor::InteractionState::Selectable, ctx);
             }
             editor
         });
@@ -281,15 +284,10 @@ impl CustomRouterEditorView {
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| ctx.dispatch_typed_action(CustomRouterEditorAction::Close))
         });
-        let delete_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Delete router", DangerSecondaryTheme)
-                .with_icon(Icon::Trash)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| ctx.dispatch_typed_action(CustomRouterEditorAction::Delete))
-        });
         let add_rule_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("+ Add rule", SecondaryTheme)
                 .with_size(ButtonSize::Small)
+                .with_full_width(true)
                 .on_click(|ctx| ctx.dispatch_typed_action(CustomRouterEditorAction::AddPromptRule))
         });
 
@@ -314,7 +312,6 @@ impl CustomRouterEditorView {
             prompt_rules,
             save_button,
             cancel_button,
-            delete_button,
             add_rule_button,
             upgrade_footer_mouse_state,
             save_error: None,
@@ -505,18 +502,6 @@ impl CustomRouterEditorView {
         ctx.emit(CustomRouterEditorEvent::Pane(PaneEvent::Close));
     }
 
-    fn try_delete(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(path) = self.existing.as_ref().and_then(|r| r.source_path.as_ref()) {
-            #[cfg(feature = "local_fs")]
-            if let Err(e) = WarpConfig::delete_custom_model_router(path) {
-                self.save_error = Some(format!("Delete error: {e}"));
-                ctx.notify();
-                return;
-            }
-        }
-        ctx.emit(CustomRouterEditorEvent::Pane(PaneEvent::Close));
-    }
-
     fn add_prompt_rule(&mut self, ctx: &mut ViewContext<Self>) {
         let index = self.prompt_rules.len();
         let ms = self.upgrade_footer_mouse_state.clone();
@@ -573,16 +558,12 @@ impl CustomRouterEditorView {
     // Rendering
     // ------------------------------------------------------------------
 
+    /// A section header label, styled to match the field headers in the
+    /// execution profile editor (sentence case, active text color).
     fn section_label(label: impl Into<String>, appearance: &Appearance) -> Box<dyn Element> {
         Container::new(
-            Text::new(label.into(), appearance.ui_font_family(), 11.)
-                .with_style(Properties::default().weight(Weight::Medium))
-                .with_color(
-                    appearance
-                        .theme()
-                        .sub_text_color(appearance.theme().surface_1())
-                        .into(),
-                )
+            Text::new(label.into(), appearance.ui_font_family(), 13.)
+                .with_color(appearance.theme().active_ui_text_color().into())
                 .finish(),
         )
         .with_margin_bottom(4.)
@@ -591,7 +572,7 @@ impl CustomRouterEditorView {
 
     fn render_complexity_section(&self, appearance: &Appearance) -> Box<dyn Element> {
         Flex::column()
-            .with_child(Self::section_label("MODELS", appearance))
+            .with_child(Self::section_label("Models", appearance))
             .with_child(labeled_dropdown(
                 "Default (required)",
                 &self.complexity_default_dropdown,
@@ -637,7 +618,7 @@ impl CustomRouterEditorView {
             .sub_text_color(appearance.theme().surface_1());
 
         let mut column = Flex::column()
-            .with_child(Self::section_label("DEFAULT MODEL", appearance))
+            .with_child(Self::section_label("Default model", appearance))
             .with_child(
                 ConstrainedBox::new(ChildView::new(&self.prompt_default_dropdown).finish())
                     .with_width(EDITOR_CONTENT_WIDTH)
@@ -646,7 +627,7 @@ impl CustomRouterEditorView {
 
         if !self.prompt_rules.is_empty() {
             column.add_child(
-                Container::new(Self::section_label("RULES".to_string(), appearance))
+                Container::new(Self::section_label("Rules".to_string(), appearance))
                     .with_margin_top(12.)
                     .finish(),
             );
@@ -679,10 +660,17 @@ impl CustomRouterEditorView {
             }
         }
 
+        // The add-rule button spans the full width of the rule rows above it.
         column.add_child(
-            Container::new(ChildView::new(&self.add_rule_button).finish())
-                .with_margin_top(8.)
-                .finish(),
+            Container::new(
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_child(
+                        Expanded::new(1., ChildView::new(&self.add_rule_button).finish()).finish(),
+                    )
+                    .finish(),
+            )
+            .finish(),
         );
         column.finish()
     }
@@ -691,15 +679,10 @@ impl CustomRouterEditorView {
         let mut col = Flex::column();
 
         // Name
-        let name_label = if self.existing.is_some() {
-            "NAME (read-only)"
-        } else {
-            "NAME"
-        };
         col.add_child(
             Container::new(
                 Flex::column()
-                    .with_child(Self::section_label(name_label, appearance))
+                    .with_child(Self::section_label("Name", appearance))
                     .with_child(
                         ConstrainedBox::new(editor_row(&self.name_editor, None, appearance))
                             .with_width(EDITOR_CONTENT_WIDTH)
@@ -726,7 +709,20 @@ impl CustomRouterEditorView {
         col.add_child(
             Container::new(
                 Flex::column()
-                    .with_child(Self::section_label("ROUTING TYPE", appearance))
+                    .with_child(Self::section_label("Routing type", appearance))
+                    .with_child(
+                        Container::new(
+                            Text::new(
+                                "Choose how you want your custom model router to work.",
+                                appearance.ui_font_family(),
+                                11.,
+                            )
+                            .with_color(desc_color.into())
+                            .finish(),
+                        )
+                        .with_margin_bottom(6.)
+                        .finish(),
+                    )
                     .with_child(
                         ConstrainedBox::new(ChildView::new(&self.type_dropdown).finish())
                             .with_width(EDITOR_CONTENT_WIDTH)
@@ -765,22 +761,17 @@ impl CustomRouterEditorView {
             }
         }
 
-        // Buttons
-        let mut btn_row = Flex::row()
+        // Buttons: right-aligned, with Cancel to the left of Save.
+        let btn_row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::End)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
-                Container::new(ChildView::new(&self.save_button).finish())
+                Container::new(ChildView::new(&self.cancel_button).finish())
                     .with_margin_right(8.)
                     .finish(),
             )
-            .with_child(ChildView::new(&self.cancel_button).finish());
-        if self.existing.is_some() {
-            btn_row.add_child(
-                Container::new(ChildView::new(&self.delete_button).finish())
-                    .with_margin_left(16.)
-                    .finish(),
-            );
-        }
+            .with_child(ChildView::new(&self.save_button).finish());
         col.add_child(btn_row.finish());
 
         // Error
@@ -843,7 +834,6 @@ impl TypedActionView for CustomRouterEditorView {
                 ctx.emit(CustomRouterEditorEvent::Pane(PaneEvent::Close));
             }
             CustomRouterEditorAction::Save => self.try_save(ctx),
-            CustomRouterEditorAction::Delete => self.try_delete(ctx),
             CustomRouterEditorAction::SetRouterType(t) => {
                 self.router_type = *t;
                 // Prompt routing requires at least one rule; ensure a row exists
