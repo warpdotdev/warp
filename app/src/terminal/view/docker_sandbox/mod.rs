@@ -47,6 +47,7 @@ use crate::terminal::local_tty::docker_sandbox::DOCKER_SANDBOX_HOME_DIR;
 #[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
 use crate::terminal::local_tty::{
     create_terminal_view_surface, TerminalManager as LocalTtyTerminalManager,
+    TerminalViewSurfaceConfig,
 };
 #[cfg(feature = "remote_tty")]
 use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
@@ -110,31 +111,20 @@ fn create_docker_sandbox_view(
                 model_event_sender,
                 chosen_shell,
                 ctx,
-                |wakeups_rx,
-                 model_events,
-                 model,
-                 sessions,
-                 size_info,
-                 colors,
-                 inactive_pty_reads_rx,
-                 ctx| {
+                |surface_init, ctx| {
                     create_terminal_view_surface(
-                        resources,
-                        model_event_sender_for_surface,
-                        window_id,
-                        None, /* initial_input_config */
-                        None, /* conversation_restoration */
-                        false, /* has_conversation_restoration */
-                        false, /* is_historical */
-                        false, /* should_use_live_appearance */
-                        false, /* has_restored_command_blocks */
-                        wakeups_rx,
-                        model_events,
-                        model,
-                        sessions,
-                        size_info,
-                        colors,
-                        inactive_pty_reads_rx,
+                        TerminalViewSurfaceConfig {
+                            resources,
+                            model_event_sender: model_event_sender_for_surface,
+                            window_id,
+                            initial_input_config: None,
+                            conversation_restoration: None,
+                            has_conversation_restoration: false,
+                            is_historical: false,
+                            should_use_live_appearance: false,
+                            has_restored_command_blocks: false,
+                        },
+                        surface_init,
                         ctx,
                     )
                 },

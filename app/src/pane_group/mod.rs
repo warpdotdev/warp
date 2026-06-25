@@ -123,7 +123,7 @@ use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedE
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty::{
     create_terminal_view_surface, terminal_view_restored_blocks,
-    TerminalManager as LocalTtyTerminalManager,
+    TerminalManager as LocalTtyTerminalManager, TerminalViewSurfaceConfig,
 };
 use crate::terminal::model::session::Session;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
@@ -5948,31 +5948,20 @@ impl PaneGroup {
                     model_event_sender,
                     chosen_shell,
                     ctx,
-                    |wakeups_rx,
-                     model_events,
-                     model,
-                     sessions,
-                     size_info,
-                     colors,
-                     inactive_pty_reads_rx,
-                     ctx| {
+                    |surface_init, ctx| {
                         create_terminal_view_surface(
-                            resources,
-                            model_event_sender_for_surface,
-                            window_id,
-                            initial_input_config,
-                            conversation_restoration,
-                            has_conversation_restoration,
-                            is_historical,
-                            should_use_live_appearance,
-                            has_restored_command_blocks,
-                            wakeups_rx,
-                            model_events,
-                            model,
-                            sessions,
-                            size_info,
-                            colors,
-                            inactive_pty_reads_rx,
+                            TerminalViewSurfaceConfig {
+                                resources,
+                                model_event_sender: model_event_sender_for_surface,
+                                window_id,
+                                initial_input_config,
+                                conversation_restoration,
+                                has_conversation_restoration,
+                                is_historical,
+                                should_use_live_appearance,
+                                has_restored_command_blocks,
+                            },
+                            surface_init,
                             ctx,
                         )
                     },

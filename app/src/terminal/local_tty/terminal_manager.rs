@@ -175,6 +175,37 @@ pub struct TerminalManager<S> {
     session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>>,
 }
 
+/// Shared inputs needed to construct a terminal surface for a local PTY.
+pub(crate) struct TerminalSurfaceInit {
+    wakeups_rx: async_channel::Receiver<()>,
+    model_events: ModelHandle<ModelEventDispatcher>,
+    model: Arc<FairMutex<TerminalModel>>,
+    sessions: ModelHandle<Sessions>,
+    size_info: SizeInfo,
+    colors: ColorList,
+    inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
+}
+
+/// Configuration for constructing the GUI terminal surface.
+pub(crate) struct TerminalViewSurfaceConfig {
+    pub(crate) resources: TerminalViewResources,
+    pub(crate) model_event_sender: Option<SyncSender<ModelEvent>>,
+    pub(crate) window_id: WindowId,
+    pub(crate) initial_input_config: Option<InputConfig>,
+    pub(crate) conversation_restoration: Option<ConversationRestorationInNewPaneType>,
+    pub(crate) has_conversation_restoration: bool,
+    pub(crate) is_historical: bool,
+    pub(crate) should_use_live_appearance: bool,
+    pub(crate) has_restored_command_blocks: bool,
+}
+
+/// One-shot resources consumed when the shell is determined and the PTY starts.
+struct ShellStartupResources {
+    event_loop_rx: mio_channel::Receiver<Message>,
+    channel_event_proxy: ChannelEventListener,
+    model_events: ModelHandle<ModelEventDispatcher>,
+}
+
 impl<S> Drop for TerminalManager<S> {
     fn drop(&mut self) {
         self.shutdown_event_loop();
@@ -194,16 +225,7 @@ impl<S> TerminalManager<S> {
         model_event_sender: Option<SyncSender<ModelEvent>>,
         chosen_shell: Option<AvailableShell>,
         ctx: &mut AppContext,
-        create_surface: impl FnOnce(
-            async_channel::Receiver<()>,
-            ModelHandle<ModelEventDispatcher>,
-            Arc<FairMutex<TerminalModel>>,
-            ModelHandle<Sessions>,
-            SizeInfo,
-            ColorList,
-            InactiveReceiver<Arc<Vec<u8>>>,
-            &mut AppContext,
-        ) -> (ViewHandle<S>, PostWire),
+        create_surface: impl FnOnce(TerminalSurfaceInit, &mut AppContext) -> (ViewHandle<S>, PostWire),
     ) -> (ModelHandle<Box<dyn TerminalManagerTrait>>, ViewHandle<S>)
     where
         S: TerminalSurface,
@@ -313,13 +335,15 @@ impl<S> TerminalManager<S> {
             init_remote_server_controller(&pty_controller, &model_events, ctx);
         let size_info = model.lock().block_list().size().to_owned();
         let (surface, post_wire) = create_surface(
-            wakeups_rx,
-            model_events.clone(),
-            model.clone(),
-            sessions.clone(),
-            size_info,
-            colors.clone(),
-            inactive_pty_reads_rx.clone(),
+            TerminalSurfaceInit {
+                wakeups_rx,
+                model_events: model_events.clone(),
+                model: model.clone(),
+                sessions: sessions.clone(),
+                size_info,
+                colors: colors.clone(),
+                inactive_pty_reads_rx: inactive_pty_reads_rx.clone(),
+            },
             ctx,
         );
         wire_up_pty_controller_with_surface(
@@ -350,6 +374,11 @@ impl<S> TerminalManager<S> {
         post_wire(&mut terminal_manager, &surface, ctx);
 
         let terminal_surface = surface.clone();
+        let shell_startup_resources = ShellStartupResources {
+            event_loop_rx,
+            channel_event_proxy,
+            model_events,
+        };
 
         let terminal_manager_model = ctx.add_model(|ctx| {
             let terminal_manager: Box<dyn TerminalManagerTrait> = Box::new(terminal_manager);
@@ -376,9 +405,7 @@ impl<S> TerminalManager<S> {
                         startup_directory,
                         env_vars,
                         user_default_shell_unsupported_banner_model_handle,
-                        event_loop_rx,
-                        channel_event_proxy,
-                        model_events,
+                        shell_startup_resources,
                         shell_starter_source,
                         ctx,
                     )
@@ -453,29 +480,34 @@ pub(crate) fn terminal_view_restored_blocks(
 }
 
 /// Creates the GUI terminal surface and its manager-owned post-wiring closure.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_terminal_view_surface(
-    resources: TerminalViewResources,
-    model_event_sender: Option<SyncSender<ModelEvent>>,
-    window_id: WindowId,
-    initial_input_config: Option<InputConfig>,
-    conversation_restoration: Option<ConversationRestorationInNewPaneType>,
-    has_conversation_restoration: bool,
-    is_historical: bool,
-    should_use_live_appearance: bool,
-    has_restored_command_blocks: bool,
-    wakeups_rx: async_channel::Receiver<()>,
-    model_events: ModelHandle<ModelEventDispatcher>,
-    model: Arc<FairMutex<TerminalModel>>,
-    sessions: ModelHandle<Sessions>,
-    size_info: SizeInfo,
-    colors: ColorList,
-    inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
+    config: TerminalViewSurfaceConfig,
+    surface_init: TerminalSurfaceInit,
     ctx: &mut AppContext,
 ) -> (
     ViewHandle<TerminalView>,
     impl FnOnce(&mut TerminalManager<TerminalView>, &ViewHandle<TerminalView>, &mut AppContext),
 ) {
+    let TerminalSurfaceInit {
+        wakeups_rx,
+        model_events,
+        model,
+        sessions,
+        size_info,
+        colors,
+        inactive_pty_reads_rx,
+    } = surface_init;
+    let TerminalViewSurfaceConfig {
+        resources,
+        model_event_sender,
+        window_id,
+        initial_input_config,
+        conversation_restoration,
+        has_conversation_restoration,
+        is_historical,
+        should_use_live_appearance,
+        has_restored_command_blocks,
+    } = config;
     let current_prompt = ctx.add_model(|ctx| {
         CurrentPrompt::new_with_model_events(sessions.clone(), Some(&model_events), ctx)
     });
@@ -564,9 +596,7 @@ fn on_shell_determined<S: TerminalSurface>(
     startup_directory: Option<PathBuf>,
     env_vars: HashMap<OsString, OsString>,
     user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
-    event_loop_rx: mio_channel::Receiver<Message>,
-    channel_event_proxy: ChannelEventListener,
-    model_events: ModelHandle<ModelEventDispatcher>,
+    shell_startup_resources: ShellStartupResources,
     shell_starter_source: Option<ShellStarterSource>,
     ctx: &mut ModelContext<Box<dyn TerminalManagerTrait>>,
 ) where
@@ -667,6 +697,11 @@ fn on_shell_determined<S: TerminalSurface>(
 
     // Enqueue the init shell script (for shells that need it), then create
     // the PTY and start its corresponding event loop.
+    let ShellStartupResources {
+        event_loop_rx,
+        channel_event_proxy,
+        model_events,
+    } = shell_startup_resources;
     let model = manager.model();
     #[cfg(windows)]
     let event_loop_tx = manager.event_loop_tx.lock().clone();
