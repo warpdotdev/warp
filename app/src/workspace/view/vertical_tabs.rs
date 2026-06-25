@@ -55,7 +55,7 @@ use crate::pane_group::{
 };
 use crate::safe_triangle::SafeTriangle;
 use crate::tab::{tab_position_id, SelectedTabColor, TabData};
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::cli_agent_sessions::{CLIAgentSession, CLIAgentSessionsModel};
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::TerminalViewState;
 use crate::terminal::{CLIAgent, TerminalView};
@@ -1034,21 +1034,19 @@ fn normalize_summary_text(text: &str) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
-/// Returns the rich CLI agent status for a terminal pane. Command-detected sessions without
-/// structured plugin status intentionally return `None`.
+/// Returns the CLI agent status used by vertical tabs. Tab status is a basic
+/// session signal, so it should not depend on rich plugin status support.
+fn cli_agent_tab_status(session: &CLIAgentSession) -> Option<ConversationStatus> {
+    (!matches!(session.agent, CLIAgent::Unknown)).then(|| session.status.to_conversation_status())
+}
+
 fn cli_agent_status_for_terminal(
     terminal_view: &TerminalView,
     app: &AppContext,
 ) -> Option<ConversationStatus> {
-    let cli_agent_session = CLIAgentSessionsModel::as_ref(app).session(terminal_view.id());
-    if let Some(session) = cli_agent_session
-        .filter(|s| s.supports_rich_status())
-        .filter(|s| !matches!(s.agent, CLIAgent::Unknown))
-    {
-        return Some(session.status.to_conversation_status());
-    }
-
-    None
+    CLIAgentSessionsModel::as_ref(app)
+        .session(terminal_view.id())
+        .and_then(cli_agent_tab_status)
 }
 
 fn vertical_tab_cli_agent_status(

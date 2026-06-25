@@ -6,8 +6,8 @@ use warpui::elements::PositionedElementOffsetBounds;
 use warpui::EntityId;
 
 use super::{
-    branch_label_display, coalesce_summary_branch_entries, code_detail_kind_label,
-    compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
+    branch_label_display, cli_agent_tab_status, coalesce_summary_branch_entries,
+    code_detail_kind_label, compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
     detail_target_for_hovered_row, non_terminal_search_text_fragments,
     pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
     push_normalized_unique_summary_label, search_fragments_contain_query,
@@ -26,6 +26,9 @@ use crate::context_chips::display_chip::GitLineChanges;
 use crate::pane_group::pane::IPaneType;
 use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
+};
 use crate::terminal::CLIAgent;
 use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
 
@@ -39,6 +42,23 @@ fn label(text: &str) -> VerticalTabsSummaryPrimaryLabel {
 fn pane_id() -> PaneId {
     TerminalPaneId::dummy_terminal_pane_id().into()
 }
+
+fn cli_session(agent: CLIAgent, status: CLIAgentSessionStatus) -> CLIAgentSession {
+    CLIAgentSession {
+        agent,
+        status,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        received_rich_notification: false,
+    }
+}
+
 fn code_summary_kind(title: &str) -> SummaryPaneKind {
     SummaryPaneKind::Code {
         title: title.to_string(),
@@ -1194,4 +1214,21 @@ fn vertical_tab_status_label_uses_cli_friendly_copy() {
         }),
         "Blocked"
     );
+}
+
+#[test]
+fn cli_agent_tab_status_does_not_require_rich_plugin_status() {
+    let session = cli_session(CLIAgent::Codex, CLIAgentSessionStatus::InProgress);
+
+    assert_eq!(
+        cli_agent_tab_status(&session),
+        Some(ConversationStatus::InProgress)
+    );
+}
+
+#[test]
+fn cli_agent_tab_status_hides_unknown_agents() {
+    let session = cli_session(CLIAgent::Unknown, CLIAgentSessionStatus::InProgress);
+
+    assert_eq!(cli_agent_tab_status(&session), None);
 }
