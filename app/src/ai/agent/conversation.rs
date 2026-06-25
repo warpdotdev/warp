@@ -376,6 +376,27 @@ pub(crate) fn artifact_from_fork_proto(
     }
 }
 
+/// Returns true if a conversation with the given parent linkage was spawned by a
+/// parent orchestrator agent.
+///
+/// This is the single source of truth for child-agent status, shared by the
+/// loaded [`AIConversation`] and the unloaded
+/// [`crate::ai::blocklist::history_model::AIConversationMetadata`] so both decide
+/// identically — a child is hidden from conversation navigation whether or not
+/// its full conversation has been loaded into memory.
+///
+/// A conversation is a child when it knows about a parent agent via *either*:
+/// - a local parent placeholder (`parent_conversation_id`, set in the GUI parent
+///   when it spawns a local child), or
+/// - the parent's server-side run identifier (`parent_agent_id`, i.e. the
+///   parent's run_id, stamped on remote/driver-hosted children).
+pub fn is_child_agent(
+    parent_conversation_id: Option<AIConversationId>,
+    parent_agent_id: Option<&str>,
+) -> bool {
+    parent_conversation_id.is_some() || parent_agent_id.is_some()
+}
+
 impl AIConversation {
     pub fn new(is_viewing_shared_session: bool, is_cli_agent_transcript: bool) -> Self {
         let root_task = Task::new_optimistic_root();
@@ -1154,7 +1175,7 @@ impl AIConversation {
 
     /// Returns true if this conversation was spawned by a parent orchestrator agent.
     pub fn is_child_agent_conversation(&self) -> bool {
-        self.parent_conversation_id.is_some() || self.parent_agent_id.is_some()
+        is_child_agent(self.parent_conversation_id, self.parent_agent_id.as_deref())
     }
 
     /// True iff this conversation knows about a parent agent — either via a
@@ -1162,7 +1183,7 @@ impl AIConversation {
     /// parent) or via the parent's server-side run identifier
     /// (`parent_agent_id`, stamped in driver-hosted processes).
     pub fn has_parent_agent(&self) -> bool {
-        self.parent_conversation_id.is_some() || self.parent_agent_id.is_some()
+        is_child_agent(self.parent_conversation_id, self.parent_agent_id.as_deref())
     }
 
     /// Returns true if this is a placeholder for a child agent executing on a
