@@ -33,6 +33,20 @@ pub enum ForkedConversationDestination {
 }
 
 impl ForkedConversationDestination {
+    /// Destination for fork-style commands (`/fork`, `/fork-from`, `/fork-and-compact`,
+    /// `/continue-locally`): Enter opens a new split pane, Cmd/Ctrl+Enter opens a new tab.
+    /// Routing every fork entry point through this single mapping keeps their Enter /
+    /// Cmd-Enter semantics identical. Forks honor this explicit destination regardless of the
+    /// `open_conversation_layout_preference` setting (that setting only affects restoring or
+    /// navigating to an existing conversation, not forking).
+    pub fn for_fork_trigger(cmd_or_ctrl_enter: bool) -> Self {
+        if cmd_or_ctrl_enter {
+            Self::NewTab
+        } else {
+            Self::SplitPane
+        }
+    }
+
     pub fn is_new_tab(&self) -> bool {
         matches!(self, Self::NewTab)
     }

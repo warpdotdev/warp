@@ -836,18 +836,11 @@ impl MessageProvider<AgentMessageArgs<'_>> for ForkSlashCommandMessageProducer {
             }
         };
 
-        // `/fork`, `/fork-and-compact`, and `/continue-locally` open in a new pane with Enter and
-        // a new tab with Cmd/Ctrl+Enter. `/fork-from` instead opens in the current pane with Enter
-        // and a new pane with Cmd/Ctrl+Enter, matching how its query-picker resolves the fork in
-        // `Input::handle_user_query_menu_event`.
-        let primary_to_new_pane = command_name == commands::FORK.name
-            || command_name == commands::FORK_AND_COMPACT.name
-            || is_continue_locally;
-        let (primary_label, secondary_label) = if primary_to_new_pane {
-            (" new pane", " new tab")
-        } else {
-            (" current pane", " new pane")
-        };
+        // All fork-style commands (`/fork`, `/fork-from`, `/fork-and-compact`, and
+        // `/continue-locally`) share the same destination semantics: Enter opens a new pane and
+        // Cmd/Ctrl+Enter opens a new tab (see `ForkedConversationDestination::for_fork_trigger`).
+        let primary_label = " new pane";
+        let secondary_label = " new tab";
 
         Some(Message::new(vec![
             MessageItem::keystroke(Keystroke {

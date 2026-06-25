@@ -123,16 +123,10 @@ impl SlashCommandTrigger {
 
     /// Destination for fork-style slash commands (`/fork`, `/fork-and-compact`,
     /// `/continue-locally`): Enter opens a new split pane, Cmd/Ctrl+Enter opens a new tab.
-    /// Sharing this keeps all fork commands' pane/tab behavior identical. The forked
-    /// conversation always honors this explicit destination, independent of the
-    /// `open_conversation_layout_preference` setting (that setting is only a fallback when
-    /// restoring/navigating to an existing conversation, not when forking).
+    /// Delegates to the shared `ForkedConversationDestination::for_fork_trigger` mapping so
+    /// every fork entry point (including `/fork-from`'s query-picker) stays identical.
     fn fork_destination(&self) -> ForkedConversationDestination {
-        if self.is_cmd_or_ctrl_enter() {
-            ForkedConversationDestination::NewTab
-        } else {
-            ForkedConversationDestination::SplitPane
-        }
+        ForkedConversationDestination::for_fork_trigger(self.is_cmd_or_ctrl_enter())
     }
 }
 
