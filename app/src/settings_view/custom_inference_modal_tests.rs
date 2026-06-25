@@ -132,11 +132,11 @@ fn modal_with_many_models_lays_out() {
 #[test]
 fn model_row_inputs_align_and_controls_fit_gutter() {
     assert_eq!(MODEL_INPUT_WIDTH * 2. + MODEL_ROW_SPACING, INPUT_WIDTH);
+    // SCROLL_CONTENT_RIGHT_MARGIN already includes MODAL_SCROLLBAR_WIDTH, so the
+    // right gutter (button spacing + remove-button column + content right margin)
+    // is 56 without adding the scrollbar width again.
     assert_eq!(
-        REMOVE_MODEL_BUTTON_SPACING
-            + REMOVE_MODEL_BUTTON_COL_WIDTH
-            + SCROLL_CONTENT_RIGHT_MARGIN
-            + MODAL_SCROLLBAR_WIDTH,
+        REMOVE_MODEL_BUTTON_SPACING + REMOVE_MODEL_BUTTON_COL_WIDTH + SCROLL_CONTENT_RIGHT_MARGIN,
         56.
     );
 }
