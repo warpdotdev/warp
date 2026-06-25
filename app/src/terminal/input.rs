@@ -290,8 +290,8 @@ use crate::terminal::input::rewind::{RewindMenuEvent, RewindMenuView};
 use crate::terminal::input::skills::{InlineSkillSelectorEvent, InlineSkillSelectorView};
 use crate::terminal::input::slash_command_model::{SlashCommandEntryState, SlashCommandModel};
 use crate::terminal::input::slash_commands::{
-    CloudModeV2SlashCommandView, InlineSlashCommandView, SlashCommandDataSource,
-    SlashCommandTrigger,
+    slash_command_is_submitted_as_prompt, CloudModeV2SlashCommandView, InlineSlashCommandView,
+    SlashCommandDataSource, SlashCommandTrigger,
 };
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
@@ -13899,6 +13899,13 @@ impl Input {
                     // handler show the error toast.
                     None => return false,
                 }
+            } else if !slash_command_is_submitted_as_prompt(&detected.command) {
+                // Action-emitting slash commands (e.g. /fork, /model, /rewind) execute
+                // immediately and must not be captured by prompt queuing — they emit an action
+                // rather than reiterating input into the conversation. Bypass the queue and let
+                // the slash-command executor handle them now. Only the prompt-submitting commands
+                // (/compact, /plan, /orchestrate) fall through to be queued.
+                return false;
             } else {
                 prompt
             }
@@ -14176,12 +14183,19 @@ impl Input {
             return true;
         }
 
-        // Fork slash commands should be run locally instead of being sent to the sharer
-        // (as the viewer running the slash command wants to fork on their local machine).
-        if prompt.starts_with(commands::FORK_AND_COMPACT.name)
-            || prompt.starts_with(commands::FORK.name)
+        // Slash commands that run as an immediate local action (e.g. /fork) should execute on
+        // the viewer's own machine instead of being forwarded to the sharer. Centralized with
+        // the prompt-queue gate via `slash_command_is_submitted_as_prompt`: only the
+        // prompt-submitting commands (/compact, /plan, /orchestrate) are forwarded as prompts;
+        // every other slash command runs locally.
+        if let SlashCommandEntryState::SlashCommand(detected) = self
+            .slash_command_model
+            .as_ref(ctx)
+            .detect_command(&prompt, ctx)
         {
-            return false;
+            if !slash_command_is_submitted_as_prompt(&detected.command) {
+                return false;
+            }
         }
 
         // Freeze the editor and put it in a loading state

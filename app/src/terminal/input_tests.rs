@@ -2140,6 +2140,80 @@ fn shell_submission_is_not_queued_when_v2_disabled() {
     });
 }
 
+/// `/fork` emits an action and does not reiterate input into the conversation, so it must bypass
+/// prompt queuing and run immediately even while an agent is in progress with queued-prompts mode
+/// on. Regression test for the bug where `/fork` was captured as a queued prompt instead of
+/// forking.
+#[test]
+fn slash_fork_bypasses_prompt_queue_while_in_progress() {
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let conversation_id = seed_in_progress_conversation(&mut app, &terminal);
+        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.toggle_queue_next_prompt(conversation_id, ctx);
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_agent(/* ensure_input_is_focused */ false, ctx);
+            input.replace_buffer_content("/fork", ctx);
+            input.close_input_suggestions(/* should_focus_input */ false, ctx);
+            input.input_enter(ctx);
+        });
+
+        // /fork emits an action and is never added to the queue.
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(
+                model.queue(conversation_id).is_empty(),
+                "/fork should bypass prompt queuing and run immediately"
+            );
+        });
+    });
+}
+
+/// Counterpart to the fork bypass: prompt-submitting commands like `/compact` reiterate their text
+/// into the conversation, so they are still queued while an agent is in progress. This keeps the
+/// bypass scoped to action-emitting commands only.
+#[test]
+fn slash_compact_still_queues_while_in_progress() {
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let conversation_id = seed_in_progress_conversation(&mut app, &terminal);
+        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.toggle_queue_next_prompt(conversation_id, ctx);
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_agent(/* ensure_input_is_focused */ false, ctx);
+            input.replace_buffer_content("/compact", ctx);
+            input.close_input_suggestions(/* should_focus_input */ false, ctx);
+            input.input_enter(ctx);
+        });
+
+        // /compact reiterates into the conversation as a prompt, so it is queued.
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(
+                queue.len(),
+                1,
+                "/compact should be queued while in progress"
+            );
+            assert_eq!(queue[0].text(), "/compact");
+        });
+    });
+}
+
 #[test]
 fn test_history_up_multiline() {
     App::test((), |mut app| async move {
