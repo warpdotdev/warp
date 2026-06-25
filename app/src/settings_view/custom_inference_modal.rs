@@ -35,7 +35,6 @@ const MODEL_ROW_AVAILABLE_WIDTH: f32 =
     INPUT_WIDTH + REMOVE_MODEL_BUTTON_COL_WIDTH - FORM_SCROLLBAR_RESERVED_WIDTH;
 const MODEL_INPUT_WIDTH: f32 =
     (MODEL_ROW_AVAILABLE_WIDTH - MODEL_ROW_SPACING * 2. - REMOVE_MODEL_BUTTON_COL_WIDTH) / 2.;
-const FORM_SCROLL_MAX_HEIGHT: f32 = 410.;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CustomEndpointModalEvent {
@@ -653,10 +652,10 @@ impl View for CustomEndpointModal {
             ..Default::default()
         };
 
-        let mut column = Flex::column();
+        let mut content_column = Flex::column();
 
         // Description
-        column.add_child(
+        content_column.add_child(
             Container::new(
                 Text::new(
                     "Provide your endpoint details below. You can add as many models from the endpoint as you'd like and can also provide aliases for the model picker in your input.",
@@ -672,12 +671,12 @@ impl View for CustomEndpointModal {
         );
 
         // Endpoint name
-        column.add_child(
+        content_column.add_child(
             Container::new(label("Endpoint name"))
                 .with_margin_bottom(4.)
                 .finish(),
         );
-        column.add_child(
+        content_column.add_child(
             Container::new(
                 appearance
                     .ui_builder()
@@ -691,7 +690,7 @@ impl View for CustomEndpointModal {
         );
 
         // Endpoint URL
-        column.add_child(
+        content_column.add_child(
             Container::new(label("Endpoint URL"))
                 .with_margin_bottom(4.)
                 .finish(),
@@ -701,7 +700,7 @@ impl View for CustomEndpointModal {
         } else {
             theme.outline()
         };
-        column.add_child(
+        content_column.add_child(
             Container::new(
                 appearance
                     .ui_builder()
@@ -717,12 +716,12 @@ impl View for CustomEndpointModal {
         );
 
         // API key
-        column.add_child(
+        content_column.add_child(
             Container::new(label("API key"))
                 .with_margin_bottom(4.)
                 .finish(),
         );
-        column.add_child(
+        content_column.add_child(
             Container::new(
                 appearance
                     .ui_builder()
@@ -759,7 +758,7 @@ impl View for CustomEndpointModal {
             );
         }
 
-        column.add_child(
+        content_column.add_child(
             Container::new(model_labels.finish())
                 .with_margin_bottom(4.)
                 .finish(),
@@ -814,11 +813,11 @@ impl View for CustomEndpointModal {
             }
             let row = row.finish();
 
-            column.add_child(Container::new(row).with_margin_bottom(12.).finish());
+            content_column.add_child(Container::new(row).with_margin_bottom(12.).finish());
         }
 
         // + Add model button
-        column.add_child(
+        content_column.add_child(
             Container::new(
                 appearance
                     .ui_builder()
@@ -841,6 +840,18 @@ impl View for CustomEndpointModal {
             .with_margin_bottom(24.)
             .finish(),
         );
+
+        let scrollable_content = ClippedScrollable::vertical(
+            self.form_scroll_state.clone(),
+            content_column.finish(),
+            ScrollbarWidth::Auto,
+            theme.nonactive_ui_text_color().into(),
+            theme.active_ui_text_color().into(),
+            Fill::None,
+        )
+        .finish();
+
+        let mut column = Flex::column().with_child(Expanded::new(1., scrollable_content).finish());
 
         // Bottom buttons row
         let mut buttons_row = Flex::row()
@@ -896,21 +907,13 @@ impl View for CustomEndpointModal {
             .finish(),
         );
 
-        column.add_child(buttons_row.finish());
+        column.add_child(
+            Container::new(buttons_row.finish())
+                .with_margin_top(16.)
+                .finish(),
+        );
 
-        let scrollable_content = ClippedScrollable::vertical(
-            self.form_scroll_state.clone(),
-            column.finish(),
-            ScrollbarWidth::Auto,
-            theme.nonactive_ui_text_color().into(),
-            theme.active_ui_text_color().into(),
-            Fill::None,
-        )
-        .finish();
-
-        ConstrainedBox::new(scrollable_content)
-            .with_max_height(FORM_SCROLL_MAX_HEIGHT)
-            .finish()
+        column.finish()
     }
 }
 
