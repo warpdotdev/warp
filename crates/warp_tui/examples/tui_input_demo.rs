@@ -31,7 +31,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use warp::editor::CodeEditorModel;
+use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp_tui::input::{TuiInputView, TuiInputViewEvent};
 use warpui_core::elements::tui::{
     Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiStyle, TuiText,
@@ -66,6 +66,16 @@ impl ShellView {
     fn new(quit: Rc<Cell<bool>>, ctx: &mut ViewContext<Self>) -> Self {
         let terminal_width = 80_u16;
         let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(terminal_width, ctx));
+
+        // Re-render the shell whenever the input's content changes. The child input
+        // view re-renders itself on edits, but the shell's "(N visual rows)" status
+        // line is computed here, so without this subscription it would go stale.
+        let status_model = input_model.clone();
+        ctx.subscribe_to_model(&status_model, |_, _, event, ctx| {
+            if matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
+                ctx.notify();
+            }
+        });
 
         // Create TuiInputView — subscribe to its Submitted event for submit handling.
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {

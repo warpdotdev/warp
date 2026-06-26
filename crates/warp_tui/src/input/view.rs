@@ -20,7 +20,6 @@
 use std::cmp;
 use std::ops::Range;
 
-use num_traits::SaturatingSub;
 use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
@@ -88,6 +87,10 @@ pub enum TuiInputAction {
     SelectUp,
     /// Extend selection down (`Shift+↓`).
     SelectDown,
+    /// Extend selection one word left (`Ctrl+Shift+←`, `Alt+Shift+←`).
+    SelectWordLeft,
+    /// Extend selection one word right (`Ctrl+Shift+→`, `Alt+Shift+→`).
+    SelectWordRight,
     /// Select all text (`Ctrl+Shift+A` / `Meta+A`).
     SelectAll,
     /// Delete word backward (`Ctrl+W`, `Alt+Backspace`, `Ctrl+Backspace`).
@@ -227,8 +230,16 @@ impl TuiView for TuiInputView {
             } else {
                 dim
             };
+            // An empty `TuiText` lays out to zero rows, which would collapse the
+            // row and clip the cursor (or following rows) off the column. Render
+            // a single space so every visual row keeps a height of exactly one.
+            let row_display = if row_text.is_empty() {
+                " ".to_string()
+            } else {
+                row_text.clone()
+            };
             column = column.with_child(Box::new(
-                TuiText::new(row_text.clone()).with_style(style).truncate(),
+                TuiText::new(row_display).with_style(style).truncate(),
             ));
         }
 
@@ -314,6 +325,24 @@ impl TypedActionView for TuiInputView {
             }
             TuiInputAction::SelectDown => {
                 self.model.update(ctx, |m, ctx| m.select_down(ctx));
+            }
+            TuiInputAction::SelectWordLeft => {
+                self.model.update(ctx, |m, ctx| {
+                    m.backward_word_with_unit(
+                        true,
+                        TextUnit::Word(WordBoundariesPolicy::Default),
+                        ctx,
+                    )
+                });
+            }
+            TuiInputAction::SelectWordRight => {
+                self.model.update(ctx, |m, ctx| {
+                    m.forward_word_with_unit(
+                        true,
+                        TextUnit::Word(WordBoundariesPolicy::Default),
+                        ctx,
+                    )
+                });
             }
             TuiInputAction::SelectAll => {
                 self.model.update(ctx, |m, ctx| m.select_all(ctx));
@@ -412,8 +441,10 @@ impl TuiInputView {
         let cursor_offset = self.cursor_offset(ctx);
         let inner = self.model.as_ref(ctx);
         let render = inner.render_state().as_ref(ctx);
-        let adjusted = cursor_offset.saturating_sub(&CharOffset::from(1));
-        let pt = render.offset_to_softwrap_point(adjusted);
+        // `offset_to_softwrap_point` is 0-based (see `char_cell_offset_to_softwrap_point`),
+        // while the cursor is a 1-based `CharOffset`, so convert by subtracting 1.
+        let cursor_char_index = CharOffset::from(cursor_offset.as_usize().saturating_sub(1));
+        let pt = render.offset_to_softwrap_point(cursor_char_index);
         let cursor_row = pt.row();
 
         if cursor_row < self.scroll_offset {
@@ -503,39 +534,29 @@ impl TuiInputView {
 
     fn range_to_visual_line_end(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
         let text = self.plain_text(ctx);
-        let cursor_text_offset = self.cursor_text_offset(ctx);
-        // Text-CharOffset is 1-indexed; convert to 0-based string char index.
-        let cursor_idx = cursor_text_offset.saturating_sub(1);
+        // `cursor_offset` is a 1-indexed gap position (gap 1 sits before the
+        // first character); the buffer's `text_in_range` / `Delete` use those
+        // same coordinates, so the kill range starts exactly at `cursor_gap`.
+        let cursor_gap = self.cursor_offset(ctx).as_usize();
+        // 0-based index of the character at the cursor, for the pure helpers.
+        let cursor_idx = cursor_gap.saturating_sub(1);
         let end_idx = visual_line_end_exclusive(&text, cursor_idx, self.terminal_width);
         if end_idx <= cursor_idx {
             return None;
         }
-        // Convert back: char at text[i] lives at text-CharOffset(i + 1).
-        Some(CharOffset::from(cursor_text_offset)..CharOffset::from(end_idx + 1))
+        // `text[i]` lives at gap `i + 1`, so the exclusive end gap is `end_idx + 1`.
+        Some(CharOffset::from(cursor_gap)..CharOffset::from(end_idx + 1))
     }
 
     fn range_from_visual_line_start(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
         let text = self.plain_text(ctx);
-        let cursor_text_offset = self.cursor_text_offset(ctx);
-        let cursor_idx = cursor_text_offset.saturating_sub(1);
+        let cursor_gap = self.cursor_offset(ctx).as_usize();
+        let cursor_idx = cursor_gap.saturating_sub(1);
         let start_idx = visual_line_start_idx(&text, cursor_idx, self.terminal_width);
         if start_idx >= cursor_idx {
             return None;
         }
-        Some(CharOffset::from(start_idx + 1)..CharOffset::from(cursor_text_offset))
-    }
-
-    /// The cursor position expressed in the *plain-text* coordinate space used by
-    /// [`Self::plain_text`] (i.e. `text_in_range(1..max)`).
-    ///
-    /// The cursor/anchor coordinate space counts the buffer's leading
-    /// block-marker sentinel, so a cursor sitting at the first visible character
-    /// reports `CharOffset(2)` even though that character is at index 0 in
-    /// `plain_text()` (text-CharOffset 1). Subtracting the one-offset sentinel
-    /// converts the cursor into the same 1-indexed text coordinate the kill
-    /// helpers operate in.
-    fn cursor_text_offset(&self, ctx: &AppContext) -> usize {
-        self.cursor_offset(ctx).as_usize().saturating_sub(1)
+        Some(CharOffset::from(start_idx + 1)..CharOffset::from(cursor_gap))
     }
 }
 
@@ -705,6 +726,13 @@ impl TuiElement for TuiInputElement {
                 (false, false, true, "up") => Some(TuiInputAction::SelectUp),
                 (false, false, true, "down") => Some(TuiInputAction::SelectDown),
                 (true, false, true, "a") => Some(TuiInputAction::SelectAll),
+                // Word-wise selection: Ctrl+Shift+Arrow (and Alt+Shift+Arrow).
+                (true, false, true, "left") | (false, true, true, "left") => {
+                    Some(TuiInputAction::SelectWordLeft)
+                }
+                (true, false, true, "right") | (false, true, true, "right") => {
+                    Some(TuiInputAction::SelectWordRight)
+                }
                 // ── Kill / yank ───────────────────────────────────────────────────
                 (true, false, false, "k") => Some(TuiInputAction::KillToLineEnd),
                 (true, false, false, "u") => Some(TuiInputAction::KillToLineStart),
@@ -828,3 +856,7 @@ pub fn char_cell_cursor_pos(
 
     (visual_row, 0)
 }
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod tests;

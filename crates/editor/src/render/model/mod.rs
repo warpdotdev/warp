@@ -5265,17 +5265,19 @@ pub(crate) fn char_cell_max_line(
     LineCount(total)
 }
 
-/// Converts a buffer [`CharOffset`] to a [`SoftWrapPoint`] in char-cell coordinates.
+/// Converts a 0-based character index to a [`SoftWrapPoint`] in char-cell coordinates.
 ///
-/// The `offset` here follows the same 1-indexed convention as the rest of the buffer:
-/// offset 1 is the first character. We adjust down by 1 to get a 0-based char index.
+/// This softwrap API is 0-based — index 0 is the first character — matching the
+/// convention the navigation callers already use for both layout modes: they pass
+/// `cursor_offset - 1` here and re-add 1 to [`char_cell_softwrap_point_to_offset`]
+/// results to convert back to the buffer's 1-based [`CharOffset`]. Keeping both modes
+/// on the same contract is what lets `navigate_line` stay layout-mode-agnostic.
 pub(crate) fn char_cell_offset_to_softwrap_point(
     offset: CharOffset,
     line_starts: &[usize],
     terminal_width: u16,
 ) -> SoftWrapPoint {
-    // Clamp to at least 1 (the buffer is 1-indexed).
-    let char_idx = offset.as_usize().saturating_sub(1);
+    let char_idx = offset.as_usize();
 
     // Find the logical line by binary-searching line_starts.
     let logical_line = line_starts
@@ -5299,7 +5301,9 @@ pub(crate) fn char_cell_offset_to_softwrap_point(
     SoftWrapPoint::new(preceding_rows + row_within_line, ColumnUnit::Chars(col))
 }
 
-/// Converts a [`SoftWrapPoint`] in char-cell coordinates back to a buffer [`CharOffset`].
+/// Converts a [`SoftWrapPoint`] in char-cell coordinates back to a 0-based character
+/// index — the inverse of [`char_cell_offset_to_softwrap_point`]. Callers re-add 1 to
+/// recover the buffer's 1-based [`CharOffset`].
 pub(crate) fn char_cell_softwrap_point_to_offset(
     point: SoftWrapPoint,
     line_starts: &[usize],
@@ -5339,17 +5343,22 @@ pub(crate) fn char_cell_softwrap_point_to_offset(
         if current_row.saturating_add(line_rows) > target_row {
             // The target visual row is within this logical line.
             let row_within_line = (target_row - current_row) as usize;
-            let char_idx_in_line = row_within_line * w.max(1) + target_col;
-            // For the last line, clamp using the actual remaining content.
-            // We reconstruct the true last-line length from total_chars if available;
-            // without it, leave unclamped (the buffer will clamp on access anyway).
-            return CharOffset::from(line_start + char_idx_in_line + 1);
+            let mut char_idx_in_line = row_within_line * w.max(1) + target_col;
+            // Clamp the goal column to this logical line's length so a column
+            // wider than the (possibly empty or shorter) target line does not
+            // spill into the following line — e.g. moving up/down onto a blank
+            // line must land at its start, not the next line's first character.
+            // The last line is unbounded, so the buffer clamps it on access.
+            if !is_last_line {
+                char_idx_in_line = char_idx_in_line.min(line_char_count);
+            }
+            return CharOffset::from(line_start + char_idx_in_line);
         }
 
         current_row = current_row.saturating_add(line_rows);
     }
 
-    // Past the end: return the offset just after the last character.
+    // Past the end: return the last line's 0-based start index.
     let last_start = line_starts.last().copied().unwrap_or(0);
-    CharOffset::from(last_start + 1)
+    CharOffset::from(last_start)
 }

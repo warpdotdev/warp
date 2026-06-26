@@ -1492,41 +1492,41 @@ mod char_cell {
     fn offset_to_softwrap_single_line_short() {
         let text = "hello";
         let (starts, _) = line_starts_for(text);
-        // Buffer is 1-indexed, so char 'h' = offset 1, 'e' = 2, ...
+        // The softwrap API is 0-based, so char 'h' = index 0, 'e' = 1, ...
         // 'h' should be at (row=0, col=0).
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(1), &starts, 80);
+        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(0), &starts, 80);
         assert_eq!(pt, SoftWrapPoint::new(0, ColumnUnit::Chars(0)));
-        // 'l' (3rd char, offset 3) at col 2.
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(3), &starts, 80);
+        // 'l' (3rd char, index 2) at col 2.
+        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(2), &starts, 80);
         assert_eq!(pt, SoftWrapPoint::new(0, ColumnUnit::Chars(2)));
     }
 
     #[test]
     fn offset_to_softwrap_wrapping_line() {
-        // width=4, "0123456789" — char at offset 5 (0-indexed 4) should be on row 1, col 0.
+        // width=4, "0123456789" — char index 4 should be on row 1, col 0.
         let text = "0123456789";
         let (starts, _) = line_starts_for(text);
-        // offset 5 → 0-based char 4 → row 4/4=1, col 0.
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(5), &starts, 4);
+        // index 4 → row 4/4=1, col 0.
+        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(4), &starts, 4);
         assert_eq!(pt, SoftWrapPoint::new(1, ColumnUnit::Chars(0)));
-        // offset 8 → 0-based char 7 → row 7/4=1, col 7%4=3.
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(8), &starts, 4);
+        // index 7 → row 7/4=1, col 7%4=3.
+        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(7), &starts, 4);
         assert_eq!(pt, SoftWrapPoint::new(1, ColumnUnit::Chars(3)));
-        // offset 10 → 0-based char 9 → row 9/4=2, col 9%4=1.
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(10), &starts, 4);
+        // index 9 → row 9/4=2, col 9%4=1.
+        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(9), &starts, 4);
         assert_eq!(pt, SoftWrapPoint::new(2, ColumnUnit::Chars(1)));
     }
 
     #[test]
     fn offset_to_softwrap_two_logical_lines() {
         // "abc\ndef", width=10
-        // 'a'=offset1→(row0,col0), 'd'=offset5→(row1,col0)
+        // 'a'=index0→(row0,col0), 'd'=index4→(row1,col0)
         let text = "abc\ndef";
         let (starts, _) = line_starts_for(text);
-        let pt_a = char_cell_offset_to_softwrap_point(CharOffset::from(1), &starts, 10);
+        let pt_a = char_cell_offset_to_softwrap_point(CharOffset::from(0), &starts, 10);
         assert_eq!(pt_a, SoftWrapPoint::new(0, ColumnUnit::Chars(0)));
-        // 'd' = 0-based char 4 (after 'abc\n'). Logical line 1, offset_in_line=0.
-        let pt_d = char_cell_offset_to_softwrap_point(CharOffset::from(5), &starts, 10);
+        // 'd' = index 4 (after 'abc\n'). Logical line 1, offset_in_line=0.
+        let pt_d = char_cell_offset_to_softwrap_point(CharOffset::from(4), &starts, 10);
         assert_eq!(pt_d, SoftWrapPoint::new(1, ColumnUnit::Chars(0)));
     }
 
@@ -1534,16 +1534,16 @@ mod char_cell {
     fn softwrap_roundtrip_single_line() {
         let text = "hello world";
         let (starts, _) = line_starts_for(text);
-        for i in 1..=(text.len() as u64 + 1) {
+        for i in 0..=(text.len() as u64) {
             let offset = CharOffset::from(i as usize);
             let pt = char_cell_offset_to_softwrap_point(offset, &starts, 80);
             // Verify the column is ColumnUnit::Chars
             assert!(
                 matches!(pt.column(), ColumnUnit::Chars(_)),
-                "offset {i}: expected Chars variant"
+                "index {i}: expected Chars variant"
             );
             let back = char_cell_softwrap_point_to_offset(pt, &starts, 80);
-            assert_eq!(back, offset, "round-trip failed at offset {i}");
+            assert_eq!(back, offset, "round-trip failed at index {i}");
         }
     }
 
@@ -1551,11 +1551,11 @@ mod char_cell {
     fn softwrap_roundtrip_wrapping() {
         let text = "abcdefghij"; // 10 chars
         let (starts, _) = line_starts_for(text);
-        for i in 1..=10 {
+        for i in 0..10 {
             let offset = CharOffset::from(i);
             let pt = char_cell_offset_to_softwrap_point(offset, &starts, 4);
             let back = char_cell_softwrap_point_to_offset(pt, &starts, 4);
-            assert_eq!(back, offset, "round-trip failed at offset {i} with width=4");
+            assert_eq!(back, offset, "round-trip failed at index {i} with width=4");
         }
     }
 
@@ -1563,7 +1563,7 @@ mod char_cell {
     fn softwrap_returns_chars_variant_not_pixels() {
         let text = "abc";
         let (starts, _) = line_starts_for(text);
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(1), &starts, 80);
+        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(0), &starts, 80);
         assert!(
             matches!(pt.column(), ColumnUnit::Chars(_)),
             "CharCell path must return ColumnUnit::Chars, got {:?}",
@@ -1575,8 +1575,8 @@ mod char_cell {
     fn softwrap_point_zero_offset_is_row0_col0() {
         let text = "abc";
         let (starts, _) = line_starts_for(text);
-        // Offset 1 = first char = 0-based index 0 → (0, 0).
-        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(1), &starts, 80);
+        // Index 0 = first char → (0, 0).
+        let pt = char_cell_offset_to_softwrap_point(CharOffset::from(0), &starts, 80);
         assert_eq!(pt.row(), 0);
         assert_eq!(pt.column(), ColumnUnit::Chars(0));
     }
