@@ -516,7 +516,9 @@ use crate::util::color::darken;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::{settings::EditorLayout, EditorSettings};
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{is_markdown_file, resolve_file_target, FileTarget};
+use crate::util::openable_file_type::{
+    renders_in_warp_notebook_viewer, resolve_file_target, FileTarget,
+};
 use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::{ActionButton, ButtonSize, KeystrokeSource};
@@ -16454,7 +16456,7 @@ impl TerminalView {
                                     .into_item(),
                             ];
 
-                            if is_markdown_file(&path) {
+                            if renders_in_warp_notebook_viewer(&path) {
                                 items.push(
                                     MenuItemFields::new("Open in Warp")
                                         .with_on_select_action(TerminalAction::OpenFileInWarp(path))

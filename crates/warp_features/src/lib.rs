@@ -501,6 +501,10 @@ pub enum FeatureFlag {
     /// Enables rendering markdown tables in notebooks.
     MarkdownTables,
 
+    /// Renders `.ipynb` (Jupyter) files as a formatted, read-only notebook in
+    /// Warp's notebook viewer instead of showing the raw JSON in the code editor.
+    JupyterNotebookRendering,
+
     /// Enables rendering markdown tables inline in AI block list responses.
     BlocklistMarkdownTableRendering,
     /// Enables rendering markdown images inline in AI block list responses.
@@ -960,6 +964,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::PinnedTabs,
     FeatureFlag::ContextWindowUsageBreakdown,
+    FeatureFlag::JupyterNotebookRendering,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
