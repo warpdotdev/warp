@@ -351,28 +351,28 @@ fn content_offset_for_point(grid: &GridHandler, point: Point) -> Option<ByteOffs
     None
 }
 
-/// Converts a cursor content offset back to a grid point, homing the cursor to
-/// the origin when it cannot be mapped.
+/// Resolves a cursor content offset back to the grid point that anchors it, or
+/// `None` when there is no anchor to map.
 ///
 /// [`content_offset_for_point`] yields `None` when flat storage holds no cell to
 /// anchor the cursor to. Even a concrete offset can fail to convert if it falls
 /// before the first stored row once scrollback has been truncated from the
-/// front. Neither case has a meaningful prior position, so we fall back to the
-/// origin instead of unwrapping and aborting the app mid-resize.
-fn resolved_point_or_origin(grid: &GridHandler, offset: Option<ByteOffset>) -> Point {
-    let origin = Point { row: 0, col: 0 };
-    let Some(offset) = offset else {
-        return origin;
-    };
+/// front. Neither case has a meaningful prior position, so we return `None` and
+/// let the caller home the cursor to the origin instead of unwrapping and
+/// aborting the app mid-resize. Returning `None` (rather than the origin point)
+/// keeps the no-anchor case distinguishable from a real anchor that happens to
+/// land on the origin, so callers don't apply cell-after semantics to it.
+fn resolve_content_offset(grid: &GridHandler, offset: Option<ByteOffset>) -> Option<Point> {
+    let offset = offset?;
     grid.flat_storage
         .content_offset_to_point(offset)
-        .unwrap_or_else(|err| {
+        .map_err(|err| {
             log::warn!(
                 "cursor content offset {offset:?} did not map to a point during \
                  resize ({err:?}); homing cursor to origin"
             );
-            origin
         })
+        .ok()
 }
 
 enum CursorContentOffset {
@@ -387,12 +387,19 @@ enum CursorContentOffset {
 
 impl CursorContentOffset {
     fn into_cursor_point(self, new_cols: usize, grid: &GridHandler) -> FinalCursorState {
+        let origin = Point { row: 0, col: 0 };
         match self {
-            Self::AtPoint(offset) => {
-                FinalCursorState::AtPoint(resolved_point_or_origin(grid, offset))
-            }
+            Self::AtPoint(offset) => FinalCursorState::AtPoint(
+                resolve_content_offset(grid, offset).unwrap_or(origin),
+            ),
             Self::AtCellAfterPoint(offset) => {
-                let mut point = resolved_point_or_origin(grid, offset);
+                // With no anchor there is nothing to advance past, so home the
+                // cursor to the origin rather than applying cell-after semantics
+                // (which would otherwise nudge the fabricated point to col 1 or
+                // flag `input_needs_wrap`).
+                let Some(mut point) = resolve_content_offset(grid, offset) else {
+                    return FinalCursorState::AtPoint(origin);
+                };
                 // All data is in flat storage at the moment, so we need to
                 // explicitly ask it about row wrapping.
                 let input_needs_wrap =
