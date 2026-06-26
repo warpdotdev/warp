@@ -310,6 +310,9 @@ pub struct CodeEditorModel {
     lazy_layout_initialized: bool,
     /// Whether syntax parsing should be bootstrapped from the latest full buffer content.
     pending_syntax_tree_bootstrap: bool,
+    /// Whether lines soft-wrap to the viewport width. When set, the editor re-lays out its
+    /// content on viewport resize so wrapping tracks the available width.
+    soft_wrap: bool,
 }
 
 impl CodeEditorModel {
@@ -317,6 +320,7 @@ impl CodeEditorModel {
         text_styles: RichTextStyles,
         session_platform: Option<SessionPlatform>,
         lazy_layout: bool,
+        soft_wrap: bool,
         buffer: Option<ModelHandle<Buffer>>, // Whether the editor is using an underlying shared buffer.
         ctx: &mut ModelContext<Self>,
     ) -> Self {
@@ -355,9 +359,14 @@ impl CodeEditorModel {
         let hidden_lines =
             ctx.add_model(|_| HiddenLinesModel::new(content.clone(), selection_model.clone()));
 
+        let width_setting = if soft_wrap {
+            WidthSetting::FitViewport
+        } else {
+            WidthSetting::InfiniteWidth
+        };
         let render_state = ctx.add_model(|ctx| {
             RenderState::new(text_styles, lazy_layout, Some(hidden_lines.clone()), ctx)
-                .with_width_setting(WidthSetting::InfiniteWidth)
+                .with_width_setting(width_setting)
         });
         ctx.subscribe_to_model(&render_state, |me, _, event, ctx| {
             me.handle_render_state_model_event(event, ctx);
@@ -396,6 +405,7 @@ impl CodeEditorModel {
             lazy_layout_enabled: lazy_layout,
             lazy_layout_initialized: false,
             pending_syntax_tree_bootstrap: false,
+            soft_wrap,
         }
     }
 
@@ -446,7 +456,13 @@ impl CodeEditorModel {
             RenderEvent::LayoutUpdated => {
                 ctx.emit(CodeEditorModelEvent::LayoutInvalidated);
             }
-            RenderEvent::NeedsResize => {}
+            RenderEvent::NeedsResize => {
+                // When soft-wrapping, a viewport width change must re-wrap the content.
+                // Non-wrapping editors lay out at infinite width and ignore resizes (current behavior).
+                if self.soft_wrap {
+                    self.rebuild_layout_and_refresh_diff(ctx);
+                }
+            }
         }
     }
 

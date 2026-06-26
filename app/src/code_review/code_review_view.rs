@@ -3028,6 +3028,7 @@ impl CodeReviewView {
                                     VerticalExpansionBehavior::InfiniteHeight,
                                 )
                                 .lazy_layout()
+                                .with_soft_wrap(true)
                                 .line_height_override(CODE_REVIEW_EDITOR_LINE_HEIGHT_RATIO)
                                 .with_show_comment_editor_provider(ShowCommentEditor {
                                     comment_list_save_position_id: self
