@@ -1259,7 +1259,7 @@ pub(crate) fn initialize_app(
     {
         let channel = ChannelState::channel();
         let warning = format!(
-            "WARNING: --api-key/WARP_API_KEY was provided but IGNORED on the '{channel}' channel — Warp is starting LOGGED OUT. API-key auth requires a dogfood build; relaunch with `cargo run --bin warp`."
+            "WARNING: --api-key/WARP_API_KEY was provided but IGNORED on the '{channel}' channel — Warp is starting LOGGED OUT. API-key auth is only available on internal (dogfood) builds."
         );
         eprintln!("{warning}");
     }
