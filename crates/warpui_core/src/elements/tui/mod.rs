@@ -96,8 +96,15 @@ impl<'a> TuiLayoutContext<'a> {
 pub trait TuiElement {
     /// Measures this element against `constraint`, returning the size it will
     /// occupy (which must lie within `constraint`). `ctx` carries the
-    /// presenter's pre-rendered view map for child-view lookup.
-    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize;
+    /// presenter's pre-rendered view map for child-view lookup; `app` provides
+    /// shared read access to the core, mirroring the GUI's `Element::layout`, so
+    /// an element can push viewport-dependent state into a model during layout.
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSize;
 
     /// Paints this element into `area` of `buffer`. `ctx` carries the
     /// presenter's pre-rendered view map so [`TuiChildView`] can look up and
@@ -143,7 +150,12 @@ pub trait TuiElement {
 /// as a placeholder child where the element's own rendering is irrelevant.
 #[cfg(test)]
 impl TuiElement for () {
-    fn layout(&mut self, _constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
+    fn layout(
+        &mut self,
+        _constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
         TuiSize::ZERO
     }
 

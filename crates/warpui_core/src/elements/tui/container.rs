@@ -82,13 +82,18 @@ impl TuiContainer {
 }
 
 impl TuiElement for TuiContainer {
-    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSize {
         let total = self.inset().saturating_mul(2);
         let inner_max = TuiSize::new(
             constraint.max.width.saturating_sub(total),
             constraint.max.height.saturating_sub(total),
         );
-        let inner = self.child.layout(TuiConstraint::loose(inner_max), ctx);
+        let inner = self.child.layout(TuiConstraint::loose(inner_max), ctx, app);
         let size = TuiSize::new(
             inner.width.saturating_add(total),
             inner.height.saturating_add(total),

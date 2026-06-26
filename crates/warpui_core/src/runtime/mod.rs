@@ -138,7 +138,8 @@ where
 
     fn draw_if_dirty(&mut self, app: &mut App) -> io::Result<()> {
         let size = self.terminal.size()?;
-        if self.last_size != Some(size) {
+        let size_changed = self.last_size != Some(size);
+        if size_changed {
             self.dirty.set(true);
         }
         if !self.dirty.replace(false) {
@@ -154,8 +155,11 @@ where
         let presenter = &mut self.presenter;
         let root_view = &self.root_view;
         let frame = app.update(|ctx| {
-            // Re-render only the views that changed this frame, then present
-            // the full tree (unchanged views reuse their cached elements).
+            // Re-render the views that changed this frame, then present the full
+            // tree (unchanged views reuse their cached elements). The presenter
+            // lays out against the current `area`, so a terminal resize is
+            // reflected without a dedicated hook: each element's `layout` pass
+            // sees the new size and refreshes any width-dependent state.
             let invalidation = ctx.take_all_invalidations_for_window(window_id);
             presenter.invalidate(&invalidation, ctx, window_id);
             presenter.present(ctx, root_view, area)

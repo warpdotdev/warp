@@ -44,7 +44,12 @@ impl Extend<Box<dyn TuiElement>> for TuiColumn {
 }
 
 impl TuiElement for TuiColumn {
-    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSize {
         let width = constraint.constrain_width(constraint.max.width);
         let mut total_height: u16 = 0;
         self.child_sizes.clear();
@@ -54,7 +59,7 @@ impl TuiElement for TuiColumn {
             // budget. The child's layout clamps to its actual content height.
             let remaining_height = constraint.max.height.saturating_sub(total_height);
             let child_constraint = TuiConstraint::loose(TuiSize::new(width, remaining_height));
-            let size = child.layout(child_constraint, ctx);
+            let size = child.layout(child_constraint, ctx, app);
             total_height = total_height.saturating_add(size.height);
             self.child_sizes.push(size);
         }

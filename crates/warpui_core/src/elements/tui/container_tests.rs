@@ -47,22 +47,30 @@ fn border_frames_the_child() {
 
 #[test]
 fn border_and_padding_compose() {
-    let mut container = TuiContainer::new(TuiText::new("X"))
-        .with_border()
-        .with_padding(1);
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let mut container = TuiContainer::new(TuiText::new("X"))
+                .with_border()
+                .with_padding(1);
 
-    // Child inset by 2 (border + padding) on each side: 1x1 child -> 5x5 total.
-    let mut rendered_views = HashMap::new();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
-    let size = container.layout(TuiConstraint::loose(TuiSize::new(20, 20)), &mut ctx);
-    assert_eq!(size, TuiSize::new(5, 5));
+            // Child inset by 2 (border + padding) on each side: 1x1 child -> 5x5 total.
+            let mut rendered_views = HashMap::new();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let size = container.layout(
+                TuiConstraint::loose(TuiSize::new(20, 20)),
+                &mut ctx,
+                app_ctx,
+            );
+            assert_eq!(size, TuiSize::new(5, 5));
 
-    assert_eq!(
-        render_to_lines(&container, TuiSize::new(5, 5)),
-        vec!["┌───┐", "│   │", "│ X │", "│   │", "└───┘"],
-    );
+            assert_eq!(
+                render_to_lines(&container, TuiSize::new(5, 5)),
+                vec!["┌───┐", "│   │", "│ X │", "│   │", "└───┘"],
+            );
+        });
+    });
 }
 
 #[test]

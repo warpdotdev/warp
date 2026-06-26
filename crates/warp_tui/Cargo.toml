@@ -34,9 +34,23 @@ path = "src/bin/stable.rs"
 
 [dependencies]
 anyhow.workspace = true
+num-traits.workspace = true
+string-offset.workspace = true
+vec1.workspace = true
 warp = { workspace = true, features = ["tui"] }
 warp_channel_config.workspace = true
 warp_core.workspace = true
+warp_editor.workspace = true
+warpui_core = { workspace = true, features = ["tui"] }
+
+[dev-dependencies]
+# `test-util` exposes `Appearance::mock()`, used to register the `Appearance`
+# singleton that the editor-backed TUI input view depends on in tests/examples.
+warp_core = { workspace = true, features = ["test-util"] }
+
+[[example]]
+name = "tui_input_demo"
+required-features = []
 
 [features]
 # Declared so the `warp_channel_config::load_config!` macro's

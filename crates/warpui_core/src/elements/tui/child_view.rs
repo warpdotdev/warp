@@ -63,12 +63,19 @@ impl TuiChildView {
 }
 
 impl TuiElement for TuiChildView {
-    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
-        ctx.use_view(self.view_id, |child, ctx| child.layout(constraint, ctx))
-            .unwrap_or_else(|| {
-                log::warn!("TuiChildView: no element found for {:?}", self.view_id);
-                TuiSize::ZERO
-            })
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSize {
+        ctx.use_view(self.view_id, |child, ctx| {
+            child.layout(constraint, ctx, app)
+        })
+        .unwrap_or_else(|| {
+            log::warn!("TuiChildView: no element found for {:?}", self.view_id);
+            TuiSize::ZERO
+        })
     }
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {

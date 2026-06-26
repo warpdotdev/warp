@@ -13,6 +13,10 @@ pub use view::*;
 pub use warpui::text::point::Point;
 use warpui::AppContext;
 
+// Re-exported for use by the `warp_tui` TUI front-end, which needs to
+// construct and subscribe to `CodeEditorModel` in char-cell mode.
+pub use crate::code::editor::model::{CodeEditorModel, CodeEditorModelEvent};
+
 pub fn init(app: &mut AppContext) {
     view::init(app);
 }

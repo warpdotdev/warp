@@ -20,7 +20,12 @@ struct TextElement {
 }
 
 impl TuiElement for TextElement {
-    fn layout(&mut self, constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
         let width = u16::try_from(self.text.chars().count()).unwrap_or(u16::MAX);
         constraint.clamp(TuiSize::new(width, 1))
     }
