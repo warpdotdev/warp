@@ -15,35 +15,26 @@ fn empty_conversation_shows_full_white_circle() {
     // 0% used == 100% remaining -> all-white circle.
     assert_eq!(
         icon_for_context_window_usage(0.0),
-        Icon::ConversationContext100
+        Icon::ContextRemaining100
     );
 }
 
 #[test]
 fn full_context_window_shows_all_grey_circle() {
     // 100% used == 0% remaining -> all-grey circle.
-    assert_eq!(
-        icon_for_context_window_usage(1.0),
-        Icon::ConversationContext0
-    );
+    assert_eq!(icon_for_context_window_usage(1.0), Icon::ContextRemaining0);
 }
 
 #[test]
 fn icon_brightness_tracks_remaining_not_used() {
     // Lightly-used conversation: lots of context remaining -> mostly white.
-    assert_eq!(
-        icon_for_context_window_usage(0.1),
-        Icon::ConversationContext90
-    );
+    assert_eq!(icon_for_context_window_usage(0.1), Icon::ContextRemaining90);
     // Half used -> half white.
-    assert_eq!(
-        icon_for_context_window_usage(0.5),
-        Icon::ConversationContext50
-    );
+    assert_eq!(icon_for_context_window_usage(0.5), Icon::ContextRemaining50);
     // Heavily used (the original report's 88%): little remaining -> mostly grey.
     assert_eq!(
         icon_for_context_window_usage(0.88),
-        Icon::ConversationContext10
+        Icon::ContextRemaining10
     );
 }
 
@@ -52,17 +43,17 @@ fn mapping_is_monotonic_more_usage_never_brightens_the_circle() {
     // As usage increases, the number of bright (remaining) marks must be
     // non-increasing — the circle only ever empties as context fills.
     let icon_rank = |usage: f32| match icon_for_context_window_usage(usage) {
-        Icon::ConversationContext0 => 0,
-        Icon::ConversationContext10 => 10,
-        Icon::ConversationContext20 => 20,
-        Icon::ConversationContext30 => 30,
-        Icon::ConversationContext40 => 40,
-        Icon::ConversationContext50 => 50,
-        Icon::ConversationContext60 => 60,
-        Icon::ConversationContext70 => 70,
-        Icon::ConversationContext80 => 80,
-        Icon::ConversationContext90 => 90,
-        Icon::ConversationContext100 => 100,
+        Icon::ContextRemaining0 => 0,
+        Icon::ContextRemaining10 => 10,
+        Icon::ContextRemaining20 => 20,
+        Icon::ContextRemaining30 => 30,
+        Icon::ContextRemaining40 => 40,
+        Icon::ContextRemaining50 => 50,
+        Icon::ContextRemaining60 => 60,
+        Icon::ContextRemaining70 => 70,
+        Icon::ContextRemaining80 => 80,
+        Icon::ContextRemaining90 => 90,
+        Icon::ContextRemaining100 => 100,
         other => panic!("unexpected icon: {other:?}"),
     };
 
