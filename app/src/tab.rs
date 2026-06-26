@@ -60,6 +60,24 @@ const TAB_INDICATOR_HEIGHT: f32 = 14.0;
 /// Label for the tab right-click menu's "Move to group" submenu parent.
 pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
 
+/// Decides which tab-group context-menu entries apply to a tab, based on whether
+/// it is currently in a group and whether any *other* groups exist.
+///
+/// Returns `(show_new_group, show_move_to_group, show_remove_from_group)`:
+/// - `New group with tab` only when the tab is **not** already in a group —
+///   offering it on an already-grouped tab is meaningless and was a bug
+///   (the sibling `Remove from group` is the correct action there).
+/// - `Move to group` when at least one group other than the tab's own exists.
+/// - `Remove from group` only when the tab **is** in a group.
+fn tab_group_menu_entry_flags(
+    group_id: Option<TabGroupId>,
+    tab_groups: &HashMap<TabGroupId, TabGroup>,
+) -> (bool, bool, bool) {
+    let in_group = group_id.is_some();
+    let has_other_groups = tab_groups.keys().any(|gid| Some(*gid) != group_id);
+    (!in_group, has_other_groups, in_group)
+}
+
 /// True when the user has opted into vertical tabs and the feature flag is on.
 /// Exposed so binding-description overrides in `workspace/mod.rs` and context-
 /// menu builders here can share a single predicate.
@@ -580,7 +598,7 @@ impl TabData {
     }
 
     /// Returns the tab-group entries for the top-level right-click menu:
-    /// `New group with tab` (always available when the FF is on),
+    /// `New group with tab` (only when the tab is not already in a group),
     /// `Move to group` (when at least one other group exists), and
     /// `Remove from group` (only when the tab is currently in a group).
     ///
@@ -595,14 +613,20 @@ impl TabData {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return vec![];
         }
-        let mut menu_items = vec![MenuItemFields::new("New group with tab")
-            .with_on_select_action(WorkspaceAction::NewTabGroupFromTab(index))
-            .into_item()];
-        let has_other_groups = tab_groups.keys().any(|gid| Some(*gid) != self.group_id);
-        if has_other_groups {
+        let (show_new_group, show_move_to_group, show_remove_from_group) =
+            tab_group_menu_entry_flags(self.group_id, tab_groups);
+        let mut menu_items = vec![];
+        if show_new_group {
+            menu_items.push(
+                MenuItemFields::new("New group with tab")
+                    .with_on_select_action(WorkspaceAction::NewTabGroupFromTab(index))
+                    .into_item(),
+            );
+        }
+        if show_move_to_group {
             menu_items.push(MenuItemFields::new_submenu(MOVE_TO_GROUP_LABEL).into_item());
         }
-        if self.group_id.is_some() {
+        if show_remove_from_group {
             menu_items.push(
                 MenuItemFields::new("Remove from group")
                     .with_on_select_action(WorkspaceAction::RemoveTabFromGroup(index))
@@ -2049,3 +2073,7 @@ impl UiComponent for TabComponent<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tab_tests.rs"]
+mod tests;
