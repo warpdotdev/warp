@@ -289,3 +289,37 @@ fn move_to_line_start_and_end_multiline() {
         });
     });
 }
+
+/// Wide (double-width) CJK characters advance the cursor by two display columns
+/// each, so the rendered cursor column reflects display width, not char count.
+#[test]
+fn cursor_accounts_for_wide_chars() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "你好");
+            let (cursor, height) = cursor_and_height(&view, ctx);
+            assert_eq!(
+                cursor,
+                Some((4, 0)),
+                "two double-width chars → cursor col 4"
+            );
+            assert_eq!(height, 1);
+            assert_eq!(text(&view, ctx), "你好");
+        });
+    });
+}
+
+/// A combining mark is zero-width: it shares its base character's cell, so
+/// "a\u{0301}b" occupies two display columns and the cursor ends at column 2.
+#[test]
+fn cursor_accounts_for_zero_width_chars() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "a\u{0301}b");
+            let (cursor, _height) = cursor_and_height(&view, ctx);
+            assert_eq!(cursor, Some((2, 0)), "a + combining + b → 2 display cols");
+        });
+    });
+}

@@ -23,6 +23,9 @@ use std::ops::Range;
 use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
+use warp_editor::render::model::{
+    char_cell_display_width, char_cell_line_gap_position, char_cell_line_row_starts,
+};
 use warp_editor::selection::TextUnit;
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiColumn, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
@@ -176,6 +179,12 @@ impl TuiView for TuiInputView {
         "TuiInputView"
     }
 
+    /// Keep the char-cell layout in sync with the live terminal width so
+    /// wrapping and cursor math stay correct after a resize.
+    fn on_resize(&mut self, size: TuiSize, ctx: &mut ViewContext<Self>) {
+        self.set_terminal_width(size.width, ctx);
+    }
+
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         // ── Gather state ───────────────────────────────────────────────────────
         let text = self.plain_text(ctx);
@@ -205,17 +214,30 @@ impl TuiView for TuiInputView {
             vec![(String::new(), 0)]
         };
 
-        // ── Selection spans per visible row ────────────────────────────────────
+        // ── Selection spans per visible row (display-column based) ──────────────
+        // Selection offsets are char indices; terminal highlighting works in
+        // display columns, so convert via each char's display width (wide chars
+        // span two columns).
         let mut selected_spans: Vec<(u16, u16, u16)> = Vec::new();
         if let Some((sel_start, sel_end)) = sel_char_range {
             if sel_start < sel_end {
                 for (vis_idx, (row_text, row_char_start)) in visible_rows_slice.iter().enumerate() {
-                    let row_len = row_text.chars().count();
+                    let row_chars: Vec<char> = row_text.chars().collect();
+                    let row_len = row_chars.len();
                     let row_char_end = row_char_start + row_len;
                     if sel_end > *row_char_start && sel_start < row_char_end {
-                        let span_start = sel_start.saturating_sub(*row_char_start);
-                        let span_end = (sel_end - row_char_start).min(row_len);
-                        selected_spans.push((vis_idx as u16, span_start as u16, span_end as u16));
+                        // Char sub-range of the selection within this row.
+                        let start_char = sel_start.saturating_sub(*row_char_start);
+                        let end_char = (sel_end - row_char_start).min(row_len);
+                        let disp_start: usize = row_chars[..start_char]
+                            .iter()
+                            .map(|&c| char_cell_display_width(c))
+                            .sum();
+                        let disp_end: usize = row_chars[..end_char]
+                            .iter()
+                            .map(|&c| char_cell_display_width(c))
+                            .sum();
+                        selected_spans.push((vis_idx as u16, disp_start as u16, disp_end as u16));
                     }
                 }
             }
@@ -564,53 +586,75 @@ impl TuiInputView {
 // Kill range pure-text helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Returns the 0-based exclusive end index of the visual line segment at `cursor_idx`.
-/// Does NOT include any trailing `\n`.
-fn visual_line_end_exclusive(text: &str, cursor_idx: usize, terminal_width: u16) -> usize {
-    let chars: Vec<char> = text.chars().collect();
-    let w = terminal_width as usize;
-
-    // Start of the logical line (after the previous '\n', or 0).
-    let logical_line_start = chars[..cursor_idx]
+/// The `(logical_line_start, logical_line_end)` char indices bounding the
+/// logical line that contains `cursor_idx` (end excludes the trailing `\n`).
+fn logical_line_bounds(chars: &[char], cursor_idx: usize) -> (usize, usize) {
+    let ci = cursor_idx.min(chars.len());
+    let start = chars[..ci]
         .iter()
         .rposition(|&c| c == '\n')
         .map(|p| p + 1)
         .unwrap_or(0);
-
-    // End of the logical line (exclusive, not including the '\n' itself).
-    let logical_line_end = chars[cursor_idx..]
+    let end = chars[ci..]
         .iter()
         .position(|&c| c == '\n')
-        .map(|p| cursor_idx + p)
+        .map(|p| ci + p)
         .unwrap_or(chars.len());
+    (start, end)
+}
 
-    if w == 0 {
-        return logical_line_end;
-    }
+/// For the logical line containing `cursor_idx`, returns
+/// `(logical_line_start, pos_in_line, row_starts, line_len)` using width-aware
+/// wrapping. `row_starts` are 0-based char indices within the line where each
+/// visual row begins; `line_len` is the line's char count (excluding the
+/// trailing `\n`). Shared by the two kill-range helpers below.
+fn visual_line_segments(
+    text: &str,
+    cursor_idx: usize,
+    terminal_width: u16,
+) -> (usize, usize, Vec<usize>, usize) {
+    let chars: Vec<char> = text.chars().collect();
+    let (logical_line_start, logical_line_end) = logical_line_bounds(&chars, cursor_idx);
+    let line_widths: Vec<u8> = chars[logical_line_start..logical_line_end]
+        .iter()
+        .map(|&c| char_cell_display_width(c) as u8)
+        .collect();
+    let row_starts = char_cell_line_row_starts(&line_widths, terminal_width);
+    let pos_in_line = cursor_idx
+        .min(chars.len())
+        .saturating_sub(logical_line_start);
+    (
+        logical_line_start,
+        pos_in_line,
+        row_starts,
+        line_widths.len(),
+    )
+}
 
-    let pos_in_line = cursor_idx - logical_line_start;
-    let visual_seg_start_in_line = (pos_in_line / w) * w;
-    (logical_line_start + visual_seg_start_in_line + w).min(logical_line_end)
+/// Returns the 0-based exclusive end index of the visual line segment at
+/// `cursor_idx`. Does NOT include any trailing `\n`. Width-aware: the segment
+/// boundaries follow the same display-width wrapping as the rendered rows.
+fn visual_line_end_exclusive(text: &str, cursor_idx: usize, terminal_width: u16) -> usize {
+    let (logical_line_start, pos_in_line, row_starts, line_len) =
+        visual_line_segments(text, cursor_idx, terminal_width);
+    let row = row_starts
+        .partition_point(|&s| s <= pos_in_line)
+        .saturating_sub(1);
+    // Exclusive end = start of the next visual row, or the logical line's end
+    // (excluding the '\n') for the final row.
+    let seg_end_in_line = row_starts.get(row + 1).copied().unwrap_or(line_len);
+    logical_line_start + seg_end_in_line
 }
 
 /// Returns the 0-based start index of the visual line segment at `cursor_idx`.
+/// Width-aware (see [`visual_line_end_exclusive`]).
 fn visual_line_start_idx(text: &str, cursor_idx: usize, terminal_width: u16) -> usize {
-    let chars: Vec<char> = text.chars().collect();
-    let w = terminal_width as usize;
-
-    let logical_line_start = chars[..cursor_idx]
-        .iter()
-        .rposition(|&c| c == '\n')
-        .map(|p| p + 1)
-        .unwrap_or(0);
-
-    if w == 0 {
-        return logical_line_start;
-    }
-
-    let pos_in_line = cursor_idx - logical_line_start;
-    let visual_seg_start_in_line = (pos_in_line / w) * w;
-    logical_line_start + visual_seg_start_in_line
+    let (logical_line_start, pos_in_line, row_starts, _line_len) =
+        visual_line_segments(text, cursor_idx, terminal_width);
+    let row = row_starts
+        .partition_point(|&s| s <= pos_in_line)
+        .saturating_sub(1);
+    logical_line_start + row_starts[row]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -762,27 +806,27 @@ impl TuiElement for TuiInputElement {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Splits `text` into visual rows, returning `(row_text, char_start_offset)` pairs.
+///
+/// Wrapping is display-width aware (wide CJK/emoji span two columns, combining
+/// marks zero), sharing the same wrapping rule as the editor's char-cell layout
+/// via [`char_cell_line_row_starts`].
 pub fn build_visual_rows_with_offsets(text: &str, terminal_width: u16) -> Vec<(String, usize)> {
-    let w = terminal_width as usize;
     let mut rows: Vec<(String, usize)> = Vec::new();
     let mut global_char_offset: usize = 0;
 
     for logical_line in text.split('\n') {
         let line_char_start = global_char_offset;
-        let line_len = logical_line.chars().count();
-
-        if logical_line.is_empty() {
-            rows.push((String::new(), line_char_start));
-        } else if w == 0 {
-            rows.push((logical_line.to_owned(), line_char_start));
-        } else {
-            let chars: Vec<char> = logical_line.chars().collect();
-            let mut start = 0;
-            while start < chars.len() {
-                let end = (start + w).min(chars.len());
-                rows.push((chars[start..end].iter().collect(), line_char_start + start));
-                start = end;
-            }
+        let chars: Vec<char> = logical_line.chars().collect();
+        let line_len = chars.len();
+        let widths: Vec<u8> = chars
+            .iter()
+            .map(|&c| char_cell_display_width(c) as u8)
+            .collect();
+        let row_starts = char_cell_line_row_starts(&widths, terminal_width);
+        for r in 0..row_starts.len() {
+            let start = row_starts[r];
+            let end = row_starts.get(r + 1).copied().unwrap_or(line_len);
+            rows.push((chars[start..end].iter().collect(), line_char_start + start));
         }
         global_char_offset += line_len + 1;
     }
@@ -793,64 +837,43 @@ pub fn build_visual_rows_with_offsets(text: &str, terminal_width: u16) -> Vec<(S
     rows
 }
 
-/// Splits `text` into visual rows of at most `terminal_width` chars each.
+/// Splits `text` into visual rows, display-width aware. Thin wrapper over
+/// [`build_visual_rows_with_offsets`] that drops the per-row char offsets.
 pub fn build_visual_rows(text: &str, terminal_width: u16) -> Vec<String> {
-    let w = terminal_width as usize;
-    let mut rows = Vec::new();
-
-    for logical_line in text.split('\n') {
-        if logical_line.is_empty() {
-            rows.push(String::new());
-        } else if w == 0 {
-            rows.push(logical_line.to_owned());
-        } else {
-            let chars: Vec<char> = logical_line.chars().collect();
-            let mut start = 0;
-            while start < chars.len() {
-                let end = (start + w).min(chars.len());
-                rows.push(chars[start..end].iter().collect());
-                start = end;
-            }
-        }
-    }
-
-    if rows.is_empty() {
-        rows.push(String::new());
-    }
-    rows
+    build_visual_rows_with_offsets(text, terminal_width)
+        .into_iter()
+        .map(|(row_text, _)| row_text)
+        .collect()
 }
 
-/// Returns `(visual_row, visual_col)` for `cursor_offset` in char-cell coordinates.
+/// Returns `(visual_row, visual_col)` for `cursor_offset` in char-cell
+/// coordinates, where `visual_col` is a display column (wide chars span two).
 pub fn char_cell_cursor_pos(
     text: &str,
     cursor_offset: CharOffset,
     terminal_width: u16,
 ) -> (u32, u32) {
     let cursor_char_idx = cursor_offset.as_usize().saturating_sub(1);
-    let w = terminal_width as usize;
     let mut visual_row: u32 = 0;
     let mut chars_so_far: usize = 0;
 
     for logical_line in text.split('\n') {
-        let line_len = logical_line.chars().count();
+        let chars: Vec<char> = logical_line.chars().collect();
+        let line_len = chars.len();
+        let widths: Vec<u8> = chars
+            .iter()
+            .map(|&c| char_cell_display_width(c) as u8)
+            .collect();
         let line_end_exclusive = chars_so_far + line_len;
 
         if cursor_char_idx <= line_end_exclusive {
-            let offset_in_line = cursor_char_idx.saturating_sub(chars_so_far);
-            let (row_in_line, col) = if w == 0 {
-                (0, offset_in_line as u32)
-            } else {
-                ((offset_in_line / w) as u32, (offset_in_line % w) as u32)
-            };
-            return (visual_row + row_in_line, col);
+            let char_in_line = cursor_char_idx.saturating_sub(chars_so_far);
+            let (row_in_line, col) =
+                char_cell_line_gap_position(&widths, terminal_width, char_in_line);
+            return (visual_row + row_in_line, col as u32);
         }
 
-        let line_rows = if w == 0 || line_len == 0 {
-            1
-        } else {
-            line_len.div_ceil(w).max(1)
-        };
-        visual_row += line_rows as u32;
+        visual_row += char_cell_line_row_starts(&widths, terminal_width).len() as u32;
         chars_so_far = line_end_exclusive + 1;
     }
 

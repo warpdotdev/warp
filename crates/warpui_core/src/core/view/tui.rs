@@ -9,7 +9,7 @@
 use std::any::Any;
 
 use super::{BlurContext, FocusContext, ViewContext};
-use crate::elements::tui::TuiElement;
+use crate::elements::tui::{TuiElement, TuiSize};
 use crate::{keymap, AppContext, Entity, EntityId, WindowId};
 
 /// An interactive, renderable TUI component. The TUI counterpart of
@@ -22,6 +22,14 @@ pub trait TuiView: Entity {
 
     /// Produces the [`TuiElement`] representation of this view.
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement>;
+
+    /// Handles the terminal being resized to `size` (in character cells).
+    ///
+    /// Called on the window's root view before each redraw whose size changed.
+    /// Views that own child views are responsible for forwarding the new size to
+    /// them (the runtime only notifies the root). Views whose layout depends on
+    /// the terminal width (e.g. char-cell editors) should update that width here.
+    fn on_resize(&mut self, _size: TuiSize, _ctx: &mut ViewContext<Self>) {}
 
     /// Handles the view or its descendent receiving focus.
     fn on_focus(&mut self, _focus_ctx: &FocusContext, _ctx: &mut ViewContext<Self>) {}
@@ -61,6 +69,13 @@ pub trait AnyTuiView {
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn ui_name(&self) -> &'static str;
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement>;
+    fn on_resize(
+        &mut self,
+        size: TuiSize,
+        app: &mut AppContext,
+        window_id: WindowId,
+        view_id: EntityId,
+    );
     fn on_focus(
         &mut self,
         focus_ctx: &FocusContext,
@@ -97,6 +112,17 @@ where
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
         TuiView::render(self, app)
+    }
+
+    fn on_resize(
+        &mut self,
+        size: TuiSize,
+        app: &mut AppContext,
+        window_id: WindowId,
+        view_id: EntityId,
+    ) {
+        let mut ctx = ViewContext::new(app, window_id, view_id);
+        TuiView::on_resize(self, size, &mut ctx);
     }
 
     fn on_focus(

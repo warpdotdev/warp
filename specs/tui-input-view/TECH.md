@@ -47,21 +47,25 @@ pub enum LayoutMode {
 pub struct CharCellState {
     pub terminal_width: u16,
     line_starts: RefCell<Vec<usize>>, // 0-based char index of each logical line start
-    total_chars: Cell<usize>,
+    char_widths: RefCell<Vec<u8>>,    // per-char display width (derived; NOT a text copy)
 }
 ```
+
+`char_widths` deliberately stores only each character's display width (0/1/2), **not** the buffer text. The render-state query methods are `&self` with no `AppContext` and `RenderState` does not hold the `Buffer`, so the per-char data layout needs must live here; storing widths (1 byte/char of derived metadata, like `line_starts`) instead of a `Vec<char>` avoids duplicating the text. The view builds row strings from the live buffer text directly, so it never needs this copy.
 
 Construction and APIs:
 - `RenderState::new_internal` gains a `layout_mode` parameter; existing pixel constructors pass `LayoutMode::Pixels`.
 - New `RenderState::new_tui(terminal_width, styles, ctx)` constructs a `CharCell` `RenderState`. Callers supply a stub `RichTextStyles` (the field is never read for char-cell layout).
 - `is_char_cell_mode() -> bool`.
-- `update_char_cell_text(&str)` rebuilds `line_starts` / `total_chars` from the current buffer text (O(n) char scan).
+- `update_char_cell_text(&str)` rebuilds `line_starts` and the per-char `char_widths` from the current buffer text (O(n) char scan).
 - `set_char_cell_terminal_width(u16)` updates the width.
+- Public per-line primitives are the single source of truth for the wrapping rule, shared by both the editor conversions and the `warp_tui` view, and all operate on a line's per-char display widths (`&[u8]`): `char_cell_display_width(char)` (terminal cell width via `unicode-width`, used to build the width slices), `char_cell_line_row_starts(widths, terminal_width)` (char indices where each visual row begins), and `char_cell_line_gap_position(widths, terminal_width, char_in_line)` (`(row, display_col)` of a cursor gap).
 
 Layout behaviour in `CharCell` mode:
 - `handle_layout_action`'s `BufferEdit` arm is a no-op — the async font-shaping channel and `LayoutCache` are bypassed entirely.
-- `offset_to_softwrap_point`, `softwrap_point_to_offset`, and `max_line` branch on `layout_mode` and delegate to free functions: `char_cell_offset_to_softwrap_point`, `char_cell_softwrap_point_to_offset`, `char_cell_max_line`. These operate on `line_starts` + `terminal_width` with a 0-based soft-wrap API (callers pass `cursor_offset - 1` and re-add 1, matching the existing convention so `navigate_line` stays layout-mode-agnostic).
-- `char_cell_softwrap_point_to_offset` treats the final (unbounded) logical line as spanning all remaining rows (`u32::MAX`) so a target row past the end resolves there rather than overflowing `usize → u32`.
+- `offset_to_softwrap_point`, `softwrap_point_to_offset`, and `max_line` branch on `layout_mode` and delegate to free functions (`char_cell_offset_to_softwrap_point`, `char_cell_softwrap_point_to_offset`, `char_cell_max_line`) built on the per-line primitives above. They use a 0-based soft-wrap API (callers pass `cursor_offset - 1` and re-add 1, matching the existing convention so `navigate_line` stays layout-mode-agnostic).
+- Wrapping is **display-width aware**: wide CJK/emoji occupy two columns and wrap to the next row when they don't fit; zero-width/combining marks share their base character's column. ASCII (all width-1) layout is identical to simple `idx / width` arithmetic, so existing behaviour is unchanged.
+- `char_cell_softwrap_point_to_offset` resolves the target row within its logical line and clamps the column to that line's end (the final line is bounded by the buffer length), so it never returns an offset past the end of the buffer even when the target column is beyond a shorter final line.
 
 **Blast radius**: `SoftWrapPoint` construction sites (mechanical), `RenderState::new_internal` (signature + call sites), `handle_layout_action` (CharCell arm), `offset_to_softwrap_point` / `softwrap_point_to_offset` / `max_line` (new branches). No changes to GUI rendering behaviour.
 
@@ -125,6 +129,8 @@ Keybinding table (Milestone 1):
 
 **Events**: `TuiInputView` emits `TuiInputViewEvent::Submitted(String)` on `Enter`. (No separate `Changed` event — parents that need content updates subscribe to the model's `CodeEditorModelEvent::ContentChanged`.)
 
+**Resize**: `TuiInputView` implements the `TuiView::on_resize` hook (added to `warpui_core`, see §3) to call `set_terminal_width`, which updates the model's char-cell width and rebuilds the layout, keeping wrapping and cursor math correct as the terminal resizes.
+
 ### 3. Module layout
 
 ```
@@ -138,6 +144,8 @@ crates/warp_tui/src/
 ```
 
 The editor-crate refactor is additive to existing files (`render/model/mod.rs`, `selection.rs`). The `new_tui` constructor lives on the existing `CodeEditorModel` in `app/src/code/editor/model.rs`. `app/src/tui/mod.rs` remains the auth-only headless entry point; the input view is not yet wired into the `warp-tui` runtime (next step).
+
+**Framework change (resize)**: `warpui_core` gains a `TuiView::on_resize(size, ctx)` hook (default no-op), its type-erased `AnyTuiView::on_resize`, and `AppContext::resize_tui_view` (mirroring the focus dispatch: remove from the registry, invoke, reinsert). `TuiRuntime::draw_if_dirty` calls it on the window's root view whenever the terminal size changes, before layout; the root view forwards the size to its children (the demo's `ShellView` forwards to its `TuiInputView`).
 
 ### 4. Dependency notes
 
@@ -163,7 +171,7 @@ TuiInputView : TuiView + TypedActionView
 │                                                           │     └── navigate_line() sticky-column (ColumnUnit)
 │                                                           ├── on_buffer_version_updated → update_char_cell_text
 │                                                           └── RenderState (CharCell)
-│                                                                 ├── line_starts: Vec<usize>
+│                                                                 ├── line_starts + char_widths (derived; no text copy)
 │                                                                 ├── offset_to_softwrap_point → ColumnUnit::Chars
 │                                                                 ├── max_line (drives visual_line_count)
 │                                                                 └── skips LayoutCache / font engine
@@ -173,13 +181,14 @@ TuiInputView : TuiView + TypedActionView
 
 ## Testing and Validation
 
-**Editor char-cell unit tests** (`crates/editor/src/render/model/mod_tests.rs`, module `char_cell` — 12 tests):
+**Editor char-cell unit tests** (`crates/editor/src/render/model/mod_tests.rs`, module `char_cell` — 18 tests):
 - `char_cell_max_line` for empty, short, wrapping, multi-logical-line, and empty-logical-line content.
 - `char_cell_offset_to_softwrap_point` for single/wrapping/multi-line content, returning `ColumnUnit::Chars`.
 - `offset → point → offset` round-trips across offsets and `terminal_width` values (single line and wrapping).
-- Explicit checks that the char-cell path returns `ColumnUnit::Chars` (not `Pixels`) and that offset 0 maps to row 0 / col 0.
+- Explicit checks that the char-cell path returns `ColumnUnit::Chars` (not `Pixels`) and that offset 0 maps to row 0 / col 0; that the final shorter line clamps without exceeding the buffer.
+- Unicode display width: wide CJK chars occupy two columns and wrap when they don't fit (with round-trips), zero-width/combining marks don't advance the column, and `char_cell_line_row_starts` breaks on wide-char boundaries.
 
-**`TuiInputView` tests** (`crates/warp_tui/src/input/view_tests.rs` — 12 tests): drive a real `CodeEditorModel` (char-cell) behind a real `TuiInputView` (registering `Appearance::mock()`), covering cursor placement on empty/multi-line buffers, empty-line handling, up/down navigation across blank lines, selection text, and `Ctrl+K` / `Ctrl+U` / `Ctrl+Y` kill-yank behaviour.
+**`TuiInputView` tests** (`crates/warp_tui/src/input/view_tests.rs` — 14 tests): drive a real `CodeEditorModel` (char-cell) behind a real `TuiInputView` (registering `Appearance::mock()`), covering cursor placement on empty/multi-line buffers, empty-line handling, up/down navigation across blank lines, selection text, `Ctrl+K` / `Ctrl+U` / `Ctrl+Y` kill-yank behaviour, and display-width cursor positioning for wide (CJK) and zero-width characters.
 
 **Examples (manual smoke)**:
 - `crates/warp_tui/examples/tui_input_demo.rs` — interactive editor-backed input demo. Run: `cargo run -p warp_tui --example tui_input_demo`.
@@ -187,7 +196,9 @@ TuiInputView : TuiView + TypedActionView
 
 ## Risks and Mitigations
 
-**Two char-cell implementations**: the view renders with its own pure helpers (`build_visual_rows_with_offsets`, `char_cell_cursor_pos`, kill-range helpers) while line-count/scroll use the `RenderState` char-cell path. They must agree on wrapping semantics; the round-trip and view tests guard the overlap. A future cleanup could collapse the view helpers onto the `RenderState` API.
+**Two char-cell layout call sites**: the view builds row strings/cursor with its own helpers (`build_visual_rows_with_offsets`, `char_cell_cursor_pos`, kill-range helpers) while line-count/scroll use the `RenderState` char-cell path — but both now delegate to the same shared per-line primitives (`char_cell_line_row_starts` / `char_cell_line_gap_position`), so they apply one wrapping rule. The round-trip and view tests guard the overlap; a future cleanup could route row-string building through the editor API too.
+
+**Unicode display width**: cell widths come from `unicode-width` (Unicode East Asian Width). Widths are summed per `char`, so multi-`char` grapheme clusters (e.g. ZWJ emoji sequences) can mismeasure; full grapheme-cluster segmentation is a future refinement.
 
 **Shift+Enter terminal support**: crossterm only delivers `Shift+Enter` distinctly in terminals supporting the Kitty keyboard protocol; elsewhere it arrives as bare `Enter`. The `Ctrl+J` fallback always inserts a newline.
 
@@ -199,7 +210,7 @@ TuiInputView : TuiView + TypedActionView
 
 Intentionally out of scope for M1; each should become its own task:
 
-- **Wire into the `warp-tui` runtime**: render `TuiInputView` in the `warp_tui` binary (today only auth runs in `app/src/tui/mod.rs`); register `Appearance` there.
+- **Wire into the `warp-tui` runtime**: render `TuiInputView` in the `warp_tui` binary (today only auth runs in `app/src/tui/mod.rs`); register `Appearance` there. (The `TuiView::on_resize` hook and its runtime wiring already exist; this remaining item is mounting the view in the binary.)
 - **Input mode (Agent / Shell)**: wire `BlocklistAIInputModel`; placeholder text and submit routing per mode.
 - **Slash command menu**: render an overlay on the `Composing` state.
 - **History (up-arrow)**: open a TUI history overlay; add an "is cursor on first visual row" trigger.

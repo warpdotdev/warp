@@ -392,9 +392,14 @@ pub struct CharCellState {
     /// The 0-indexed char offset of the start of each logical line (`\n`-split).
     /// Rebuilt synchronously via [`RenderState::update_char_cell_text`].
     pub(crate) line_starts: RefCell<Vec<usize>>,
-    /// Total char count of the last text passed to `update_char_cell_text`.
-    /// Used to compute the length of the last logical line.
-    pub(crate) total_chars: Cell<usize>,
+    /// The terminal display width (in cells) of each character of the buffer
+    /// text, indexed in parallel with char offsets. This is **derived layout
+    /// metadata, not a copy of the text**: char-cell wrapping only needs each
+    /// char's width, and the render-state query methods are `&self` with no
+    /// `AppContext`, so they can't read the `Buffer` model at query time. One
+    /// byte per char (0 for zero-width/combining marks, 2 for wide CJK/emoji, 1
+    /// otherwise). Rebuilt via [`RenderState::update_char_cell_text`].
+    pub(crate) char_widths: RefCell<Vec<u8>>,
 }
 
 impl CharCellState {
@@ -402,7 +407,7 @@ impl CharCellState {
         Self {
             terminal_width,
             line_starts: RefCell::new(Vec::new()),
-            total_chars: Cell::new(0),
+            char_widths: RefCell::new(Vec::new()),
         }
     }
 }
@@ -412,7 +417,7 @@ impl std::fmt::Debug for CharCellState {
         f.debug_struct("CharCellState")
             .field("terminal_width", &self.terminal_width)
             .field("line_starts_len", &self.line_starts.borrow().len())
-            .field("total_chars", &self.total_chars.get())
+            .field("total_chars", &self.char_widths.borrow().len())
             .finish()
     }
 }
@@ -1985,18 +1990,19 @@ impl RenderState {
             return;
         };
         let mut starts = cc.line_starts.borrow_mut();
+        let mut char_widths = cc.char_widths.borrow_mut();
         starts.clear();
+        char_widths.clear();
         // Logical line 0 starts at char index 0.
         starts.push(0_usize);
-        let mut char_idx: usize = 0;
         for ch in text.chars() {
-            char_idx += 1;
+            // Store only the derived display width, never the character itself.
+            char_widths.push(char_cell_display_width(ch) as u8);
             if ch == '\n' {
                 // The next logical line starts at the char index after this '\n'.
-                starts.push(char_idx);
+                starts.push(char_widths.len());
             }
         }
-        cc.total_chars.set(char_idx);
     }
 
     /// Update the terminal width used by char-cell layout. Only valid in `CharCell` mode.
@@ -2129,7 +2135,7 @@ impl RenderState {
         if let LayoutMode::CharCell(ref cc) = self.layout_mode {
             return char_cell_max_line(
                 &cc.line_starts.borrow(),
-                cc.total_chars.get(),
+                &cc.char_widths.borrow(),
                 cc.terminal_width,
             );
         }
@@ -3332,11 +3338,12 @@ impl RenderState {
     }
 
     pub fn offset_to_softwrap_point(&self, offset: CharOffset) -> SoftWrapPoint {
-        // CharCell path: compute visual row/col from character-count arithmetic.
+        // CharCell path: compute visual row/col from char-cell display-width arithmetic.
         if let LayoutMode::CharCell(ref cc) = self.layout_mode {
             return char_cell_offset_to_softwrap_point(
                 offset,
                 &cc.line_starts.borrow(),
+                &cc.char_widths.borrow(),
                 cc.terminal_width,
             );
         }
@@ -3358,6 +3365,7 @@ impl RenderState {
             return char_cell_softwrap_point_to_offset(
                 point,
                 &cc.line_starts.borrow(),
+                &cc.char_widths.borrow(),
                 cc.terminal_width,
             );
         }
@@ -5124,49 +5132,110 @@ impl LaidOutEmbeddedItem for BrokenBlockEmbedding {
 // Char-cell (TUI) layout helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// Given a char index within a logical line and a terminal width, returns the
-/// (visual_row_within_line, visual_col) pair.
-#[inline]
-fn char_cell_row_col_within_line(char_idx_in_line: usize, terminal_width: u16) -> (u32, u16) {
-    let w = terminal_width as usize;
-    if w == 0 {
-        return (0, 0);
-    }
-    let row = (char_idx_in_line / w) as u32;
-    let col = (char_idx_in_line % w) as u16;
-    (row, col)
+/// The terminal display width of a character, in cells: 0 for zero-width /
+/// combining marks, 2 for wide CJK/emoji, 1 otherwise. Control characters have
+/// no defined width and are treated as 0.
+pub fn char_cell_display_width(c: char) -> usize {
+    unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
 }
 
-/// Computes how many visual rows a single logical line of `char_count` chars
-/// occupies given `terminal_width`. Empty lines still occupy one row.
-#[inline]
-fn char_cell_rows_for_line(char_count: usize, terminal_width: u16) -> u32 {
+/// For one logical line, given the display width (in cells) of each of its
+/// characters, returns the 0-based char index at which each visual row begins.
+/// Always returns at least `[0]`.
+///
+/// Width-aware: a character is placed on the current row if it fits within
+/// `terminal_width` display columns; otherwise it starts a new row. Wide
+/// characters that don't fit in the remaining columns wrap (leaving a blank
+/// trailing cell); zero-width characters never force a wrap. With
+/// `terminal_width == 0`, wrapping is disabled (a single row).
+pub fn char_cell_line_row_starts(char_widths: &[u8], terminal_width: u16) -> Vec<usize> {
     let w = terminal_width as usize;
+    let mut starts = vec![0usize];
     if w == 0 {
-        return 1;
+        return starts;
     }
-    char_count.div_ceil(w).max(1) as u32
+    let mut col = 0usize;
+    for (i, &cw) in char_widths.iter().enumerate() {
+        let cw = cw as usize;
+        if col > 0 && col + cw > w {
+            starts.push(i);
+            col = 0;
+        }
+        col += cw;
+    }
+    starts
+}
+
+/// The `(row_within_line, display_col)` of the gap before char `char_in_line`
+/// (or the end of the line when `char_in_line == char_widths.len()`), using the
+/// same width-aware wrapping as [`char_cell_line_row_starts`]. A cursor at the
+/// end of a row that exactly fills the width wraps to the start of the next row.
+pub fn char_cell_line_gap_position(
+    char_widths: &[u8],
+    terminal_width: u16,
+    char_in_line: usize,
+) -> (u32, u16) {
+    let w = terminal_width as usize;
+    let n = char_in_line.min(char_widths.len());
+    let mut row: u32 = 0;
+    let mut col: usize = 0;
+    for &cw in char_widths.iter().take(n) {
+        let cw = cw as usize;
+        if w > 0 && col > 0 && col + cw > w {
+            row += 1;
+            col = 0;
+        }
+        col += cw;
+    }
+    if char_in_line < char_widths.len() {
+        // The cursor sits before char `char_in_line`; if that char would wrap,
+        // the cursor is at the start of the next row.
+        let cw = char_widths[char_in_line] as usize;
+        if w > 0 && col > 0 && col + cw > w {
+            row += 1;
+            col = 0;
+        }
+    } else if w > 0 && col == w {
+        // End-of-line cursor on a row that exactly fills the width wraps to the
+        // next row's start (matches plain monospace terminal behavior).
+        row += 1;
+        col = 0;
+    }
+    (row, col as u16)
+}
+
+/// The number of visual rows occupied by a single logical line (always >= 1).
+fn char_cell_line_rows(char_widths: &[u8], terminal_width: u16) -> u32 {
+    char_cell_line_row_starts(char_widths, terminal_width).len() as u32
+}
+
+/// The `\n`-free slice of per-char display widths for logical line `i`, given
+/// the line-start indices and the full per-char width buffer.
+fn char_cell_logical_line<'a>(line_starts: &[usize], char_widths: &'a [u8], i: usize) -> &'a [u8] {
+    let start = line_starts[i].min(char_widths.len());
+    // The next line starts just after this line's '\n'; exclude that newline.
+    let end = line_starts
+        .get(i + 1)
+        .map(|&next| next.saturating_sub(1))
+        .unwrap_or(char_widths.len())
+        .min(char_widths.len());
+    &char_widths[start..end.max(start)]
 }
 
 /// Returns the total number of visual rows across all logical lines.
 /// Used by [`RenderState::max_line`] in `CharCell` mode.
 pub(crate) fn char_cell_max_line(
     line_starts: &[usize],
-    total_chars: usize,
+    char_widths: &[u8],
     terminal_width: u16,
 ) -> LineCount {
     if line_starts.is_empty() {
         return LineCount(1);
     }
     let mut total: usize = 0;
-    for (i, &start) in line_starts.iter().enumerate() {
-        let end = if i + 1 < line_starts.len() {
-            line_starts[i + 1].saturating_sub(1) // -1 to exclude the '\n'
-        } else {
-            total_chars
-        };
-        let len = end.saturating_sub(start);
-        total += char_cell_rows_for_line(len, terminal_width) as usize;
+    for i in 0..line_starts.len() {
+        let line = char_cell_logical_line(line_starts, char_widths, i);
+        total += char_cell_line_rows(line, terminal_width) as usize;
     }
     LineCount(total)
 }
@@ -5181,6 +5250,7 @@ pub(crate) fn char_cell_max_line(
 pub(crate) fn char_cell_offset_to_softwrap_point(
     offset: CharOffset,
     line_starts: &[usize],
+    char_widths: &[u8],
     terminal_width: u16,
 ) -> SoftWrapPoint {
     let char_idx = offset.as_usize();
@@ -5190,29 +5260,32 @@ pub(crate) fn char_cell_offset_to_softwrap_point(
         .partition_point(|&s| s <= char_idx)
         .saturating_sub(1);
     let line_start_char = line_starts.get(logical_line).copied().unwrap_or(0);
-    let char_idx_in_line = char_idx.saturating_sub(line_start_char);
+    let char_in_line = char_idx.saturating_sub(line_start_char);
 
     // Count visual rows from all preceding logical lines.
     let mut preceding_rows: u32 = 0;
-    for (i, &start) in line_starts.iter().enumerate().take(logical_line) {
-        let end = line_starts
-            .get(i + 1)
-            .map(|&s| s.saturating_sub(1)) // exclude '\n'
-            .unwrap_or(char_idx); // shouldn't happen given we're iterating .take(logical_line)
-        let len = end.saturating_sub(start);
-        preceding_rows += char_cell_rows_for_line(len, terminal_width);
+    for i in 0..logical_line {
+        let line = char_cell_logical_line(line_starts, char_widths, i);
+        preceding_rows += char_cell_line_rows(line, terminal_width);
     }
 
-    let (row_within_line, col) = char_cell_row_col_within_line(char_idx_in_line, terminal_width);
+    let line = char_cell_logical_line(line_starts, char_widths, logical_line);
+    let (row_within_line, col) = char_cell_line_gap_position(line, terminal_width, char_in_line);
     SoftWrapPoint::new(preceding_rows + row_within_line, ColumnUnit::Chars(col))
 }
 
 /// Converts a [`SoftWrapPoint`] in char-cell coordinates back to a 0-based character
 /// index — the inverse of [`char_cell_offset_to_softwrap_point`]. Callers re-add 1 to
 /// recover the buffer's 1-based [`CharOffset`].
+///
+/// The result is always clamped to the end of the logical line it lands in (the
+/// final line is bounded by the buffer length), so it never returns an offset
+/// past the end of the buffer even when the target column is beyond a shorter
+/// final line.
 pub(crate) fn char_cell_softwrap_point_to_offset(
     point: SoftWrapPoint,
     line_starts: &[usize],
+    char_widths: &[u8],
     terminal_width: u16,
 ) -> CharOffset {
     let target_row = point.row();
@@ -5223,48 +5296,50 @@ pub(crate) fn char_cell_softwrap_point_to_offset(
         ColumnUnit::Chars(c) => c as usize,
         ColumnUnit::Pixels(_) => 0,
     };
-    let w = terminal_width as usize;
 
-    let mut current_row: u32 = 0;
-    for (i, &line_start) in line_starts.iter().enumerate() {
-        let next_line_start = line_starts.get(i + 1);
-        // Length of this logical line (excluding the trailing '\n').
-        // `None` means this is the last line, which has no upper bound.
-        let is_last_line = next_line_start.is_none();
-        let line_char_count = match next_line_start {
-            Some(&next) => next.saturating_sub(1).saturating_sub(line_start),
-            None => 0, // placeholder; handled by `is_last_line`
-        };
-
-        // For the last line (unbounded), we treat it as spanning all remaining rows
-        // so the target is always found here. This avoids usize→u32 overflow.
-        let line_rows: u32 = if is_last_line {
-            u32::MAX
-        } else if w == 0 {
-            1
-        } else {
-            char_cell_rows_for_line(line_char_count, terminal_width)
-        };
-
-        if current_row.saturating_add(line_rows) > target_row {
-            // The target visual row is within this logical line.
-            let row_within_line = (target_row - current_row) as usize;
-            let mut char_idx_in_line = row_within_line * w.max(1) + target_col;
-            // Clamp the goal column to this logical line's length so a column
-            // wider than the (possibly empty or shorter) target line does not
-            // spill into the following line — e.g. moving up/down onto a blank
-            // line must land at its start, not the next line's first character.
-            // The last line is unbounded, so the buffer clamps it on access.
-            if !is_last_line {
-                char_idx_in_line = char_idx_in_line.min(line_char_count);
-            }
-            return CharOffset::from(line_start + char_idx_in_line);
-        }
-
-        current_row = current_row.saturating_add(line_rows);
+    if line_starts.is_empty() {
+        return CharOffset::from(0);
     }
 
-    // Past the end: return the last line's 0-based start index.
-    let last_start = line_starts.last().copied().unwrap_or(0);
-    CharOffset::from(last_start)
+    let mut acc_rows: u32 = 0;
+    for i in 0..line_starts.len() {
+        let line_start = line_starts[i];
+        let line = char_cell_logical_line(line_starts, char_widths, i);
+        let row_starts = char_cell_line_row_starts(line, terminal_width);
+        let line_rows = row_starts.len() as u32;
+        let is_last = i + 1 == line_starts.len();
+
+        // The target row falls in this line, or this is the last line (which
+        // absorbs any overshoot so the result never exceeds the buffer).
+        if acc_rows + line_rows > target_row || is_last {
+            let row_within =
+                (target_row.saturating_sub(acc_rows) as usize).min(row_starts.len() - 1);
+            let row_start_char = row_starts[row_within];
+            let row_end_char = row_starts
+                .get(row_within + 1)
+                .copied()
+                .unwrap_or(line.len());
+
+            // Walk the row's per-char widths to find the gap at or just before
+            // `target_col`, clamped to the row's end (which never spills past
+            // the logical line, and for the final line, past the buffer).
+            let mut col = 0usize;
+            let mut idx = row_start_char;
+            while idx < row_end_char {
+                let cw = line[idx] as usize;
+                if col + cw > target_col {
+                    break;
+                }
+                col += cw;
+                idx += 1;
+            }
+            return CharOffset::from(line_start + idx);
+        }
+
+        acc_rows += line_rows;
+    }
+
+    // Unreachable given the `is_last` branch always returns; fall back to the
+    // start of the last logical line.
+    CharOffset::from(*line_starts.last().unwrap_or(&0))
 }

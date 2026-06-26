@@ -138,7 +138,8 @@ where
 
     fn draw_if_dirty(&mut self, app: &mut App) -> io::Result<()> {
         let size = self.terminal.size()?;
-        if self.last_size != Some(size) {
+        let size_changed = self.last_size != Some(size);
+        if size_changed {
             self.dirty.set(true);
         }
         if !self.dirty.replace(false) {
@@ -151,9 +152,17 @@ where
         // and returns a composited frame (buffer + cursor).
         let area = TuiRect::new(0, 0, size.width, size.height);
         let window_id = self.window_id;
+        let root_view_id = self.root_view.id();
         let presenter = &mut self.presenter;
         let root_view = &self.root_view;
         let frame = app.update(|ctx| {
+            // Notify the root view of a size change before layout so size-
+            // dependent state (e.g. a char-cell editor's terminal width) is
+            // refreshed; its re-render is then picked up by the invalidation
+            // pass below. The root forwards the size to any child views.
+            if size_changed {
+                ctx.resize_tui_view(window_id, root_view_id, size);
+            }
             // Re-render only the views that changed this frame, then present
             // the full tree (unchanged views reuse their cached elements).
             let invalidation = ctx.take_all_invalidations_for_window(window_id);

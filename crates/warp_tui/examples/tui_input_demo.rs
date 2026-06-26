@@ -1,4 +1,4 @@
-//! Interactive validation demo for `TuiInputView` + `TuiInputModel`.
+//! Interactive validation demo for `TuiInputView`.
 //!
 //! This is the Step 4 validation from `specs/tui-input-view/TECH.md`:
 //! a real terminal session that proves the full editor-backed input stack works.
@@ -35,7 +35,7 @@ use warp::appearance::Appearance;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp_tui::input::{TuiInputView, TuiInputViewEvent};
 use warpui_core::elements::tui::{
-    Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiStyle, TuiText,
+    Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::platform::WindowStyle;
 use warpui_core::runtime::TuiRuntime;
@@ -114,6 +114,13 @@ impl ShellView {
 impl TuiView for ShellView {
     fn ui_name() -> &'static str {
         "ShellView"
+    }
+
+    /// Forward terminal resizes to the child input view (the runtime only
+    /// notifies the root view; parents distribute the size to their children).
+    fn on_resize(&mut self, size: TuiSize, ctx: &mut ViewContext<Self>) {
+        self.input_view
+            .update(ctx, |input, ctx| input.set_terminal_width(size.width, ctx));
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
