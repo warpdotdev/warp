@@ -897,6 +897,59 @@ fn test_selection_bounds_all_grids_single_line_lprompt_command() {
     assert_eq!(all_grids, "lprompt%cmd1\nrprompt\noutput1\noutput2");
 }
 
+#[test]
+fn test_command_and_output_to_string_includes_ps1_prompt_command_rprompt_and_output() {
+    let block_index = BlockIndex::zero();
+    let mut prompt_and_command_grid = mock_blockgrid("lprompt%cmd1");
+    prompt_and_command_grid.finish();
+    let mut rprompt_grid = mock_blockgrid("rprompt");
+    rprompt_grid.finish();
+    let mut output_grid = mock_blockgrid("output1\r\noutput2\r\n");
+    output_grid.finish();
+
+    let mut block = create_test_block_with_grids(
+        block_index,
+        prompt_and_command_grid,
+        rprompt_grid,
+        output_grid,
+        true, /* honor_ps1 */
+    );
+    block.set_raw_prompt_end_point(Some(PromptEndPoint::PromptEnd {
+        point: Point::new(0, 7),
+        has_extra_trailing_newline: false,
+    }));
+
+    assert_eq!(
+        block.command_and_output_to_string(),
+        "lprompt%cmd1\nrprompt\noutput1\noutput2"
+    );
+}
+
+#[test]
+fn test_command_and_output_to_string_excludes_warp_prompt() {
+    let block_index = BlockIndex::zero();
+    let mut prompt_and_command_grid = mock_blockgrid("cmd1");
+    prompt_and_command_grid.finish();
+    let mut rprompt_grid = mock_blockgrid("rprompt");
+    rprompt_grid.finish();
+    let mut output_grid = mock_blockgrid("output1\r\noutput2\r\n");
+    output_grid.finish();
+
+    let mut block = create_test_block_with_grids(
+        block_index,
+        prompt_and_command_grid,
+        rprompt_grid,
+        output_grid,
+        false, /* honor_ps1 */
+    );
+    block.set_honor_ps1(false);
+
+    assert_eq!(
+        block.command_and_output_to_string(),
+        "cmd1\noutput1\noutput2"
+    );
+}
+
 /// Tests the single line lprompt, with trailing newline, and command case for text selection across grids.
 #[test]
 fn test_selection_bounds_all_grids_single_line_lprompt_trailing_newline_command() {
