@@ -126,6 +126,22 @@ fn serde_round_trip_empty() {
 fn serde_round_trip_with_provider_keys() {
     let keys = ApiKeys {
         openai: Some("sk-openai".into()),
+        openai_api_url: None,
+        anthropic: Some("sk-ant-abc".into()),
+        google: Some("AIzaSy123".into()),
+        open_router: Some("sk-or-xxx".into()),
+        custom_endpoints: vec![],
+    };
+    let json = serde_json::to_string(&keys).unwrap();
+    let deser: ApiKeys = serde_json::from_str(&json).unwrap();
+    assert_eq!(keys, deser);
+}
+
+#[test]
+fn serde_round_trip_with_openai_api_url() {
+    let keys = ApiKeys {
+        openai: Some("sk-openai".into()),
+        openai_api_url: Some("https://api.githubcopilot.com".into()),
         anthropic: Some("sk-ant-abc".into()),
         google: Some("AIzaSy123".into()),
         open_router: Some("sk-or-xxx".into()),
@@ -140,6 +156,7 @@ fn serde_round_trip_with_provider_keys() {
 fn serde_round_trip_with_custom_endpoints() {
     let keys = ApiKeys {
         openai: None,
+        openai_api_url: None,
         anthropic: None,
         google: None,
         open_router: None,
@@ -211,6 +228,7 @@ fn provider_key_count_zero_when_empty() {
 fn provider_key_count_counts_each_provider_key() {
     let keys = ApiKeys {
         openai: Some("sk-o".into()),
+        openai_api_url: None,
         anthropic: Some("sk-a".into()),
         google: Some("AIza".into()),
         open_router: Some("sk-or".into()),
@@ -223,6 +241,7 @@ fn provider_key_count_counts_each_provider_key() {
 fn provider_key_count_ignores_blank_keys_and_endpoints() {
     let keys = ApiKeys {
         openai: Some("sk-o".into()),
+        openai_api_url: None,
         anthropic: Some("   ".into()),
         google: None,
         open_router: None,
@@ -238,7 +257,7 @@ fn provider_key_count_ignores_blank_keys_and_endpoints() {
 #[test]
 fn custom_model_providers_none_when_empty() {
     let mgr = make_manager(ApiKeys::default());
-    assert!(mgr.custom_model_providers_for_request(true).is_none());
+    assert!(mgr.custom_model_providers_for_request(true, true, vec![]).is_none());
 }
 
 #[test]
@@ -247,7 +266,7 @@ fn custom_model_providers_none_when_byo_disabled() {
         custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
         ..Default::default()
     });
-    assert!(mgr.custom_model_providers_for_request(false).is_none());
+    assert!(mgr.custom_model_providers_for_request(false, true, vec![]).is_none());
 }
 
 #[test]
@@ -261,7 +280,7 @@ fn custom_model_providers_populates_single_endpoint() {
         )],
         ..Default::default()
     });
-    let result = mgr.custom_model_providers_for_request(true).unwrap();
+    let result = mgr.custom_model_providers_for_request(true, true, vec![]).unwrap();
     assert_eq!(result.providers.len(), 1);
     let p = &result.providers[0];
     assert_eq!(p.base_url, "https://custom.io/v1");
@@ -293,7 +312,7 @@ fn multiple_endpoints_all_serialize() {
         ],
         ..Default::default()
     });
-    let result = mgr.custom_model_providers_for_request(true).unwrap();
+    let result = mgr.custom_model_providers_for_request(true, true, vec![]).unwrap();
     assert_eq!(result.providers.len(), 2);
     assert_eq!(result.providers[0].base_url, "https://a.io");
     assert_eq!(result.providers[0].models[0].config_key, "uuid-a");
@@ -310,7 +329,7 @@ fn byok_disabled_returns_none_even_with_endpoints() {
         custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
         ..Default::default()
     });
-    assert!(mgr.custom_model_providers_for_request(false).is_none());
+    assert!(mgr.custom_model_providers_for_request(true, false, vec![]).is_none());
 }
 
 #[test]
@@ -322,7 +341,7 @@ fn empty_api_key_endpoints_are_skipped() {
         ],
         ..Default::default()
     });
-    let result = mgr.custom_model_providers_for_request(true).unwrap();
+    let result = mgr.custom_model_providers_for_request(true, true, vec![]).unwrap();
     assert_eq!(result.providers.len(), 1);
     assert_eq!(result.providers[0].base_url, "https://b.io");
 }
@@ -338,7 +357,38 @@ fn endpoints_with_only_empty_models_are_skipped() {
         )],
         ..Default::default()
     });
-    assert!(mgr.custom_model_providers_for_request(true).is_none());
+    assert!(mgr.custom_model_providers_for_request(true, true, vec![]).is_none());
+}
+
+#[test]
+fn custom_model_providers_includes_openai_override() {
+    let mgr = make_manager(ApiKeys {
+        openai: Some("sk-openai".to_string()),
+        openai_api_url: Some("https://api.githubcopilot.com".to_string()),
+        ..Default::default()
+    });
+    let result = mgr
+        .custom_model_providers_for_request(true, true, vec!["gpt-4o".to_string()])
+        .unwrap();
+    assert_eq!(result.providers.len(), 1);
+    let p = &result.providers[0];
+    assert_eq!(p.base_url, "https://api.githubcopilot.com");
+    assert_eq!(p.api_key, "sk-openai");
+    assert_eq!(p.models.len(), 1);
+    assert_eq!(p.models[0].slug, "gpt-4o");
+    assert_eq!(p.models[0].config_key, "gpt-4o");
+}
+
+#[test]
+fn custom_model_providers_excludes_openai_override_when_byo_disabled() {
+    let mgr = make_manager(ApiKeys {
+        openai: Some("sk-openai".to_string()),
+        openai_api_url: Some("https://api.githubcopilot.com".to_string()),
+        ..Default::default()
+    });
+    assert!(mgr
+        .custom_model_providers_for_request(true, false, vec!["gpt-4o".to_string()])
+        .is_none());
 }
 
 // ── display_label fallback ─────────────────────────────────────

@@ -35,6 +35,7 @@ pub struct ApiKeys {
     pub google: Option<String>,
     pub anthropic: Option<String>,
     pub openai: Option<String>,
+    pub openai_api_url: Option<String>,
     pub open_router: Option<String>,
     pub custom_endpoints: Vec<CustomEndpoint>,
 }
@@ -258,6 +259,12 @@ impl ApiKeyManager {
         self.write_keys_to_secure_storage(ctx);
     }
 
+    pub fn set_openai_api_url(&mut self, url: Option<String>, ctx: &mut ModelContext<Self>) {
+        self.keys.openai_api_url = url;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
     pub fn set_open_router_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
         self.keys.open_router = key;
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
@@ -392,35 +399,67 @@ impl ApiKeyManager {
     pub fn custom_model_providers_for_request(
         &self,
         include_custom_models: bool,
+        is_byo_enabled: bool,
+        openai_models: Vec<String>,
     ) -> Option<api::request::settings::CustomModelProviders> {
-        if !include_custom_models {
-            return None;
+        let mut providers = Vec::new();
+
+        if include_custom_models {
+            let custom_providers = self
+                .keys
+                .custom_endpoints
+                .iter()
+                .filter(|endpoint| !endpoint.url.trim().is_empty() && !endpoint.api_key.is_empty())
+                .map(
+                    |endpoint| api::request::settings::custom_model_providers::CustomModelProvider {
+                        base_url: endpoint.url.clone(),
+                        api_key: endpoint.api_key.clone(),
+                        models: endpoint
+                            .models
+                            .iter()
+                            .filter(|m| !m.name.trim().is_empty() && !m.config_key.is_empty())
+                            .map(
+                                |m| api::request::settings::custom_model_providers::CustomModel {
+                                    slug: m.name.clone(),
+                                    config_key: m.config_key.clone(),
+                                },
+                            )
+                            .collect(),
+                    },
+                )
+                .filter(|provider| !provider.models.is_empty());
+            providers.extend(custom_providers);
         }
 
-        let providers: Vec<_> = self
-            .keys
-            .custom_endpoints
-            .iter()
-            .filter(|endpoint| !endpoint.url.trim().is_empty() && !endpoint.api_key.is_empty())
-            .map(
-                |endpoint| api::request::settings::custom_model_providers::CustomModelProvider {
-                    base_url: endpoint.url.clone(),
-                    api_key: endpoint.api_key.clone(),
-                    models: endpoint
-                        .models
-                        .iter()
-                        .filter(|m| !m.name.trim().is_empty() && !m.config_key.is_empty())
-                        .map(
-                            |m| api::request::settings::custom_model_providers::CustomModel {
-                                slug: m.name.clone(),
-                                config_key: m.config_key.clone(),
-                            },
-                        )
-                        .collect(),
-                },
-            )
-            .filter(|provider| !provider.models.is_empty())
-            .collect();
+        if is_byo_enabled {
+            if let Some(ref custom_url) = self.keys.openai_api_url {
+                let trimmed_url = custom_url.trim();
+                if !trimmed_url.is_empty() {
+                    if let Some(ref api_key) = self.keys.openai {
+                        if !api_key.trim().is_empty() {
+                            let models: Vec<_> = openai_models
+                                .into_iter()
+                                .map(|model_id| {
+                                    api::request::settings::custom_model_providers::CustomModel {
+                                        slug: model_id.clone(),
+                                        config_key: model_id,
+                                    }
+                                })
+                                .collect();
+                            if !models.is_empty() {
+                                providers.push(
+                                    api::request::settings::custom_model_providers::CustomModelProvider {
+                                        base_url: trimmed_url.to_owned(),
+                                        api_key: api_key.clone(),
+                                        models,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         if providers.is_empty() {
             None
