@@ -183,7 +183,10 @@ impl super::WarpConfig {
         let path = if let Some(p) = existing_path {
             p.to_path_buf()
         } else {
-            dir.join(format!("{name}.yaml"))
+            let sanitized = name
+                .to_lowercase()
+                .replace(|c: char| !c.is_alphanumeric() && c != '-', "_");
+            dir.join(format!("{sanitized}.yaml"))
         };
         std::fs::write(&path, yaml)
             .map_err(|e| anyhow::anyhow!("could not write router file: {e}"))?;
