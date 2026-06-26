@@ -55,7 +55,7 @@ use crate::workspace::{
 use crate::BlocklistAIHistoryModel;
 
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
-const TAB_INDICATOR_HEIGHT: f32 = 14.0;
+pub(crate) const TAB_INDICATOR_HEIGHT: f32 = 14.0;
 
 /// Label for the tab right-click menu's "Move to group" submenu parent.
 pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
@@ -77,7 +77,7 @@ pub(crate) const TAB_PIN_INDICATOR_ICON_SIZE: f32 = 16.0;
 const TAB_INDICATOR_SYNCED_COLOR: u32 = 0x4A93FFFF;
 
 // Width threshold (in px) below which we render an icon-only tab
-const COMPACT_TAB_WIDTH_THRESHOLD: f32 = 42.0;
+pub(crate) const COMPACT_TAB_WIDTH_THRESHOLD: f32 = 42.0;
 // Horizontal inset for the tab close button
 const TAB_CLOSE_BUTTON_HORIZONTAL_INSET: f32 = 2.0;
 
