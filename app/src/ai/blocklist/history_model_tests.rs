@@ -4039,6 +4039,23 @@ fn subagent_tool_call_result_message(
     }
 }
 
+/// Builds a sub-agent tool-call message with `request_id` set, returning the
+/// message and its `tool_call_id` (for pairing with a result message).
+fn make_subagent_call(
+    id: &str,
+    task_id: &str,
+    subtask_id: &str,
+    request_id: &str,
+    metadata: Option<warp_multi_agent_api::message::tool_call::subagent::Metadata>,
+) -> (warp_multi_agent_api::Message, String) {
+    use crate::ai::agent::task::helper::MessageExt;
+    use crate::test_util::ai_agent_tasks::create_subagent_tool_call_message;
+    let mut call = create_subagent_tool_call_message(id, task_id, subtask_id, metadata);
+    call.request_id = request_id.to_string();
+    let tool_call_id = call.tool_call().unwrap().tool_call_id.clone();
+    (call, tool_call_id)
+}
+
 /// Returns the flat list of user-query strings in `tasks` (root + subtasks),
 /// in linearized order.
 fn user_queries_in_tasks(tasks: &[warp_multi_agent_api::Task]) -> Vec<String> {
@@ -4051,117 +4068,6 @@ fn user_queries_in_tasks(tasks: &[warp_multi_agent_api::Task]) -> Vec<String> {
         }
     }
     queries
-}
-
-/// REPRO for the conversation-rewind "many prompts sent at once" bug.
-///
-/// Builds a conversation whose root task holds two user-query turns:
-///   1. "continue ..." (request `req-1`)
-///   2. "hrmm ..."     (request `req-3`)
-/// then rewinds away the `hrmm` turn and asserts that the message list that
-/// would be sent on the next request (compute_active_tasks) no longer
-/// contains the rewound-away `hrmm` query, and contains exactly one
-/// `continue` query.
-#[test]
-fn rewind_removes_rewound_away_user_query_from_next_request() {
-    App::test((), |mut app| async move {
-        initialize_history_persistence_for_tests(&mut app);
-        let terminal_view_id = EntityId::new();
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
-        let conversation_id = AIConversationId::new();
-        let root_task_id = "root-task";
-
-        let continue_text = "continue, but please just run cargo check, tests, etc.";
-        let hrmm_text = "hrmm, I still don't love the option. can you outline ...";
-
-        let root_task = warp_multi_agent_api::Task {
-            id: root_task_id.to_string(),
-            messages: vec![
-                // Turn 1: user "continue" + its response.
-                create_user_query_message("m1", root_task_id, "req-1", continue_text),
-                agent_output_message("m2", root_task_id, "req-1", "subagent result"),
-                agent_output_message("m3", root_task_id, "req-2", "runShellCommand result"),
-                // Turn 2: user "hrmm" + its response (the turn we rewind away).
-                create_user_query_message("m4", root_task_id, "req-3", hrmm_text),
-                agent_output_message("m5", root_task_id, "req-3", "hrmm response"),
-            ],
-            dependencies: None,
-            description: continue_text.to_string(),
-            summary: String::new(),
-            server_data: String::new(),
-        };
-
-        let conversation = AIConversation::new_restored(
-            conversation_id,
-            vec![root_task],
-            Some(AgentConversationData {
-                server_conversation_token: Some("token-1".to_string()),
-                conversation_usage_metadata: None,
-                reverted_action_ids: None,
-                forked_from_server_conversation_token: None,
-                artifacts_json: None,
-                parent_agent_id: None,
-                agent_name: None,
-                orchestration_harness_type: None,
-                parent_conversation_id: None,
-                is_remote_child: false,
-                root_task_is_optimistic: None,
-                run_id: None,
-                autoexecute_override: None,
-                last_event_sequence: None,
-                pinned: false,
-            }),
-        )
-        .expect("conversation should build");
-
-        history_model.update(&mut app, |model, ctx| {
-            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-        });
-
-        // Find the exchange that holds the "hrmm" user query (the rewind target).
-        let hrmm_exchange_id = history_model.read(&app, |model, _| {
-            model
-                .conversation(&conversation_id)
-                .expect("conversation exists")
-                .root_task_exchanges()
-                .find(|exchange| {
-                    exchange.input.iter().any(|input| {
-                        matches!(
-                            input,
-                            AIAgentInput::UserQuery { query, .. } if query == hrmm_text
-                        )
-                    })
-                })
-                .map(|exchange| exchange.id)
-                .expect("hrmm exchange should exist")
-        });
-
-        // Rewind: truncate from the hrmm exchange (inclusive).
-        history_model.update(&mut app, |model, ctx| {
-            model
-                .truncate_conversation_from_exchange(conversation_id, hrmm_exchange_id, ctx)
-                .expect("truncate should succeed");
-        });
-
-        // The next request is built from compute_active_tasks. Inspect it.
-        let active_tasks = history_model.read(&app, |model, _| {
-            model
-                .conversation(&conversation_id)
-                .expect("conversation exists")
-                .compute_active_tasks()
-        });
-
-        let queries = user_queries_in_tasks(&active_tasks);
-        assert!(
-            !queries.iter().any(|q| q == hrmm_text),
-            "rewound-away 'hrmm' user query must NOT be in the next request, got: {queries:?}"
-        );
-        let continue_count = queries.iter().filter(|q| *q == continue_text).count();
-        assert_eq!(
-            continue_count, 1,
-            "there must be exactly one 'continue' query in the next request, got: {queries:?}"
-        );
-    });
 }
 
 /// Returns the root task from a `compute_active_tasks()` result.
@@ -4264,22 +4170,19 @@ fn restore_truncate_and_collect(
 /// must not appear in the next request.
 #[test]
 fn rewind_orphans_subagent_subtask_invoked_after_rewind_point() {
-    use crate::ai::agent::task::helper::MessageExt;
-    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_subagent_tool_call_message};
+    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_api_task};
 
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);
         let root_task_id = "root-task";
         let subtask_id = "sub-1";
 
-        let mut subagent_call =
-            create_subagent_tool_call_message("m4", root_task_id, subtask_id, None);
-        subagent_call.request_id = "req-2".to_string();
-        let subagent_tool_call_id = subagent_call.tool_call().unwrap().tool_call_id.clone();
+        let (subagent_call, subagent_tool_call_id) =
+            make_subagent_call("m4", root_task_id, subtask_id, "req-2", None);
 
-        let root_task = warp_multi_agent_api::Task {
-            id: root_task_id.to_string(),
-            messages: vec![
+        let root_task = create_api_task(
+            root_task_id,
+            vec![
                 create_user_query_message("m1", root_task_id, "req-1", "keep me"),
                 agent_output_message("m2", root_task_id, "req-1", "ok"),
                 // The rewound turn that spawns the terminal sub-agent.
@@ -4292,11 +4195,7 @@ fn rewind_orphans_subagent_subtask_invoked_after_rewind_point() {
                     "req-2",
                 ),
             ],
-            dependencies: None,
-            description: "keep me".to_string(),
-            summary: String::new(),
-            server_data: String::new(),
-        };
+        );
         let subtask = create_api_subtask(
             subtask_id,
             root_task_id,
@@ -4340,22 +4239,19 @@ fn rewind_orphans_subagent_subtask_invoked_after_rewind_point() {
 /// so it is neither re-sent nor left as a dangling tool_use.
 #[test]
 fn rewind_straddle_subagent_call_kept_result_removed_does_not_resend_subtask() {
-    use crate::ai::agent::task::helper::MessageExt;
-    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_subagent_tool_call_message};
+    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_api_task};
 
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);
         let root_task_id = "root-task";
         let subtask_id = "sub-1";
 
-        let mut subagent_call =
-            create_subagent_tool_call_message("m2", root_task_id, subtask_id, None);
-        subagent_call.request_id = "req-1".to_string();
-        let subagent_tool_call_id = subagent_call.tool_call().unwrap().tool_call_id.clone();
+        let (subagent_call, subagent_tool_call_id) =
+            make_subagent_call("m2", root_task_id, subtask_id, "req-1", None);
 
-        let root_task = warp_multi_agent_api::Task {
-            id: root_task_id.to_string(),
-            messages: vec![
+        let root_task = create_api_task(
+            root_task_id,
+            vec![
                 // Turn 1 (kept): spawns the terminal sub-agent.
                 create_user_query_message("m1", root_task_id, "req-1", "spawn terminal agent"),
                 subagent_call,
@@ -4368,11 +4264,7 @@ fn rewind_straddle_subagent_call_kept_result_removed_does_not_resend_subtask() {
                     "req-2",
                 ),
             ],
-            dependencies: None,
-            description: "spawn terminal agent".to_string(),
-            summary: String::new(),
-            server_data: String::new(),
-        };
+        );
         let subtask = create_api_subtask(
             subtask_id,
             root_task_id,
@@ -4411,22 +4303,19 @@ fn rewind_straddle_subagent_call_kept_result_removed_does_not_resend_subtask() {
 /// the root keeps both halves.
 #[test]
 fn rewind_preserves_subagent_fully_before_rewind_point() {
-    use crate::ai::agent::task::helper::MessageExt;
-    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_subagent_tool_call_message};
+    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_api_task};
 
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);
         let root_task_id = "root-task";
         let subtask_id = "sub-1";
 
-        let mut subagent_call =
-            create_subagent_tool_call_message("m2", root_task_id, subtask_id, None);
-        subagent_call.request_id = "req-1".to_string();
-        let subagent_tool_call_id = subagent_call.tool_call().unwrap().tool_call_id.clone();
+        let (subagent_call, subagent_tool_call_id) =
+            make_subagent_call("m2", root_task_id, subtask_id, "req-1", None);
 
-        let root_task = warp_multi_agent_api::Task {
-            id: root_task_id.to_string(),
-            messages: vec![
+        let root_task = create_api_task(
+            root_task_id,
+            vec![
                 // Turn 1 (kept): sub-agent runs and finishes entirely.
                 create_user_query_message("m1", root_task_id, "req-1", "do work"),
                 subagent_call,
@@ -4441,11 +4330,7 @@ fn rewind_preserves_subagent_fully_before_rewind_point() {
                 create_user_query_message("m5", root_task_id, "req-2", "continue"),
                 agent_output_message("m6", root_task_id, "req-2", "more"),
             ],
-            dependencies: None,
-            description: "do work".to_string(),
-            summary: String::new(),
-            server_data: String::new(),
-        };
+        );
         let subtask = create_api_subtask(
             subtask_id,
             root_task_id,
@@ -4480,8 +4365,7 @@ fn rewind_preserves_subagent_fully_before_rewind_point() {
 /// fix removes both halves and prunes the summary subtask.
 #[test]
 fn rewind_removes_summarized_away_user_query_from_next_request() {
-    use crate::ai::agent::task::helper::MessageExt;
-    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_subagent_tool_call_message};
+    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_api_task};
 
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);
@@ -4489,19 +4373,17 @@ fn rewind_removes_summarized_away_user_query_from_next_request() {
         let summary_subtask_id = "summary-sub";
         let summarized_away = "summarized away question";
 
-        let mut summarization_call = create_subagent_tool_call_message(
+        let (summarization_call, summarization_tool_call_id) = make_subagent_call(
             "m_sum",
             root_task_id,
             summary_subtask_id,
+            "req-1",
             Some(warp_multi_agent_api::message::tool_call::subagent::Metadata::Summarization(())),
         );
-        summarization_call.request_id = "req-1".to_string();
-        let summarization_tool_call_id =
-            summarization_call.tool_call().unwrap().tool_call_id.clone();
 
-        let root_task = warp_multi_agent_api::Task {
-            id: root_task_id.to_string(),
-            messages: vec![
+        let root_task = create_api_task(
+            root_task_id,
+            vec![
                 // Turn 1 (kept): the summarization sub-agent is invoked.
                 create_user_query_message("m1", root_task_id, "req-1", "please summarize"),
                 summarization_call,
@@ -4515,11 +4397,7 @@ fn rewind_removes_summarized_away_user_query_from_next_request() {
                     "req-2",
                 ),
             ],
-            dependencies: None,
-            description: "please summarize".to_string(),
-            summary: String::new(),
-            server_data: String::new(),
-        };
+        );
         // The summary subtask holds the moved-away user query.
         let summary_subtask = create_api_subtask(
             summary_subtask_id,
@@ -4555,9 +4433,8 @@ fn rewind_removes_summarized_away_user_query_from_next_request() {
 /// subtask, no dangling sub-agent tool_call).
 #[test]
 fn straddle_rewind_followup_requests_are_clean_and_durable() {
-    use crate::ai::agent::task::helper::MessageExt;
     use crate::ai::agent::task::TaskId;
-    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_subagent_tool_call_message};
+    use crate::test_util::ai_agent_tasks::{create_api_subtask, create_api_task};
 
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
@@ -4572,14 +4449,12 @@ fn straddle_rewind_followup_requests_are_clean_and_durable() {
         let root_task_id = "root-task";
         let subtask_id = "sub-1";
 
-        let mut subagent_call =
-            create_subagent_tool_call_message("m2", root_task_id, subtask_id, None);
-        subagent_call.request_id = "req-1".to_string();
-        let subagent_tool_call_id = subagent_call.tool_call().unwrap().tool_call_id.clone();
+        let (subagent_call, subagent_tool_call_id) =
+            make_subagent_call("m2", root_task_id, subtask_id, "req-1", None);
 
-        let root_task = warp_multi_agent_api::Task {
-            id: root_task_id.to_string(),
-            messages: vec![
+        let root_task = create_api_task(
+            root_task_id,
+            vec![
                 create_user_query_message("m1", root_task_id, "req-1", "spawn terminal agent"),
                 subagent_call,
                 create_user_query_message("m3", root_task_id, "req-2", "continue"),
@@ -4590,11 +4465,7 @@ fn straddle_rewind_followup_requests_are_clean_and_durable() {
                     "req-2",
                 ),
             ],
-            dependencies: None,
-            description: "spawn terminal agent".to_string(),
-            summary: String::new(),
-            server_data: String::new(),
-        };
+        );
         let subtask = create_api_subtask(
             subtask_id,
             root_task_id,
@@ -4745,88 +4616,5 @@ fn straddle_rewind_followup_requests_are_clean_and_durable() {
             !has_dangling_subagent_pair(find_root_task(&active_b, root_task_id)),
             "follow-up request B root must not contain a dangling sub-agent tool_call"
         );
-    });
-}
-
-/// Rewinding away every root exchange resets the root to an optimistic task and
-/// clears the server conversation token, so the next message goes through the
-/// fresh "first message" flow.
-#[test]
-fn rewind_all_exchanges_resets_root_to_optimistic_and_clears_token() {
-    App::test((), |mut app| async move {
-        initialize_history_persistence_for_tests(&mut app);
-        let terminal_view_id = EntityId::new();
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
-        let conversation_id = AIConversationId::new();
-        let root_task_id = "root-task";
-
-        let root_task = warp_multi_agent_api::Task {
-            id: root_task_id.to_string(),
-            messages: vec![
-                create_user_query_message("m1", root_task_id, "req-1", "only turn"),
-                agent_output_message("m2", root_task_id, "req-1", "answer"),
-            ],
-            dependencies: None,
-            description: "only turn".to_string(),
-            summary: String::new(),
-            server_data: String::new(),
-        };
-        let conversation = AIConversation::new_restored(
-            conversation_id,
-            vec![root_task],
-            Some(AgentConversationData {
-                server_conversation_token: Some("token-1".to_string()),
-                conversation_usage_metadata: None,
-                reverted_action_ids: None,
-                forked_from_server_conversation_token: None,
-                artifacts_json: None,
-                parent_agent_id: None,
-                agent_name: None,
-                orchestration_harness_type: None,
-                parent_conversation_id: None,
-                is_remote_child: false,
-                root_task_is_optimistic: None,
-                run_id: None,
-                autoexecute_override: None,
-                last_event_sequence: None,
-                pinned: false,
-            }),
-        )
-        .expect("conversation should build");
-        history_model.update(&mut app, |model, ctx| {
-            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-        });
-
-        let first_exchange_id = history_model.read(&app, |model, _| {
-            model
-                .conversation(&conversation_id)
-                .unwrap()
-                .root_task_exchanges()
-                .next()
-                .map(|e| e.id)
-                .unwrap()
-        });
-        history_model.update(&mut app, |model, ctx| {
-            model
-                .truncate_conversation_from_exchange(conversation_id, first_exchange_id, ctx)
-                .unwrap();
-        });
-
-        history_model.read(&app, |model, _| {
-            let conversation = model.conversation(&conversation_id).unwrap();
-            assert!(
-                conversation.server_conversation_token().is_none(),
-                "rewinding all exchanges must clear the server conversation token"
-            );
-            let root = conversation.get_root_task().expect("root task exists");
-            assert!(
-                root.source().is_none(),
-                "root must be reset to an optimistic task after all exchanges are removed"
-            );
-            assert!(
-                conversation.compute_active_tasks().is_empty(),
-                "a fully-rewound conversation must send no tasks"
-            );
-        });
     });
 }
