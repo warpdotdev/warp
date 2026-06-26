@@ -124,8 +124,6 @@ pub struct TuiInputView {
     kill_buffer: KillBuffer,
     /// First visible visual row (0-indexed).
     scroll_offset: u32,
-    /// Terminal width in columns. Kept in sync with the model's `CharCellState`.
-    terminal_width: u16,
     /// Maximum number of visible rows before the input scrolls.
     max_visible_rows: u32,
 }
@@ -135,15 +133,13 @@ impl Entity for TuiInputView {
 }
 
 impl TuiInputView {
-    /// Construct a new `TuiInputView` backed by `model` (must be in char-cell mode).
+    /// Construct a new `TuiInputView` backed by `model` (must be in char-cell
+    /// mode). The model carries the terminal width (set via
+    /// [`CodeEditorModel::new_tui`]); the view does not keep its own copy.
     ///
     /// Subscribes to [`CodeEditorModelEvent::ContentChanged`] to trigger re-renders
     /// whenever the buffer changes from outside `handle_action`.
-    pub fn new(
-        model: ModelHandle<CodeEditorModel>,
-        terminal_width: u16,
-        ctx: &mut ViewContext<Self>,
-    ) -> Self {
+    pub fn new(model: ModelHandle<CodeEditorModel>, ctx: &mut ViewContext<Self>) -> Self {
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
             if matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
                 ctx.notify();
@@ -153,7 +149,6 @@ impl TuiInputView {
             model,
             kill_buffer: KillBuffer::default(),
             scroll_offset: 0,
-            terminal_width,
             max_visible_rows: 6,
         }
     }
@@ -162,16 +157,6 @@ impl TuiInputView {
     pub fn model(&self) -> &ModelHandle<CodeEditorModel> {
         &self.model
     }
-
-    /// Update the terminal width, resizing the char-cell layout on the model.
-    pub fn set_terminal_width(&mut self, width: u16, ctx: &mut ViewContext<Self>) {
-        if self.terminal_width == width {
-            return;
-        }
-        self.terminal_width = width;
-        self.model
-            .update(ctx, |m, ctx| m.set_tui_terminal_width(width, ctx));
-    }
 }
 
 impl TuiView for TuiInputView {
@@ -179,97 +164,30 @@ impl TuiView for TuiInputView {
         "TuiInputView"
     }
 
-    /// Keep the char-cell layout in sync with the live terminal width so
-    /// wrapping and cursor math stay correct after a resize.
-    fn on_resize(&mut self, size: TuiSize, ctx: &mut ViewContext<Self>) {
-        self.set_terminal_width(size.width, ctx);
-    }
-
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        // ── Gather state ───────────────────────────────────────────────────────
+        // Gather width-independent state. Width-dependent layout (row wrapping,
+        // cursor placement, selection spans) is deferred to
+        // `TuiInputElement::layout`, the first point that knows the terminal
+        // width (from the layout constraint).
         let text = self.plain_text(ctx);
-        let terminal_width = self.terminal_width;
-        let scroll_offset = self.scroll_offset;
-        let visible_rows = cmp::min(self.visual_line_count(ctx), self.max_visible_rows);
-
         let cursor_offset = self.cursor_offset(ctx);
-        let (cursor_visual_row, cursor_col) =
-            char_cell_cursor_pos(&text, cursor_offset, terminal_width);
-        let cursor_row_in_view = cursor_visual_row.saturating_sub(scroll_offset);
-
         let sel_char_range = self.selection_range(ctx).map(|r| {
             let start = r.start.as_usize().saturating_sub(1);
             let end = r.end.as_usize().saturating_sub(1);
             (start, end)
         });
 
-        // ── Build visible rows ─────────────────────────────────────────────────
-        let rows_with_offsets = build_visual_rows_with_offsets(&text, terminal_width);
-        let visible_start = scroll_offset as usize;
-        let visible_end =
-            (scroll_offset as usize + visible_rows as usize).min(rows_with_offsets.len());
-        let visible_rows_slice: Vec<(String, usize)> = if visible_start < rows_with_offsets.len() {
-            rows_with_offsets[visible_start..visible_end].to_vec()
-        } else {
-            vec![(String::new(), 0)]
-        };
-
-        // ── Selection spans per visible row (display-column based) ──────────────
-        // Selection offsets are char indices; terminal highlighting works in
-        // display columns, so convert via each char's display width (wide chars
-        // span two columns).
-        let mut selected_spans: Vec<(u16, u16, u16)> = Vec::new();
-        if let Some((sel_start, sel_end)) = sel_char_range {
-            if sel_start < sel_end {
-                for (vis_idx, (row_text, row_char_start)) in visible_rows_slice.iter().enumerate() {
-                    let row_chars: Vec<char> = row_text.chars().collect();
-                    let row_len = row_chars.len();
-                    let row_char_end = row_char_start + row_len;
-                    if sel_end > *row_char_start && sel_start < row_char_end {
-                        // Char sub-range of the selection within this row.
-                        let start_char = sel_start.saturating_sub(*row_char_start);
-                        let end_char = (sel_end - row_char_start).min(row_len);
-                        let disp_start: usize = row_chars[..start_char]
-                            .iter()
-                            .map(|&c| char_cell_display_width(c))
-                            .sum();
-                        let disp_end: usize = row_chars[..end_char]
-                            .iter()
-                            .map(|&c| char_cell_display_width(c))
-                            .sum();
-                        selected_spans.push((vis_idx as u16, disp_start as u16, disp_end as u16));
-                    }
-                }
-            }
-        }
-
-        // ── Assemble column ────────────────────────────────────────────────────
-        let dim = TuiStyle::default().add_modifier(Modifier::DIM);
-        let mut column = TuiColumn::new();
-        for (row_idx, (row_text, _)) in visible_rows_slice.iter().enumerate() {
-            let style = if row_idx as u32 == cursor_row_in_view {
-                TuiStyle::default()
-            } else {
-                dim
-            };
-            // An empty `TuiText` lays out to zero rows, which would collapse the
-            // row and clip the cursor (or following rows) off the column. Render
-            // a single space so every visual row keeps a height of exactly one.
-            let row_display = if row_text.is_empty() {
-                " ".to_string()
-            } else {
-                row_text.clone()
-            };
-            column = column.with_child(Box::new(
-                TuiText::new(row_display).with_style(style).truncate(),
-            ));
-        }
-
         Box::new(TuiInputElement {
-            column,
-            cursor_col: cursor_col as u16,
-            cursor_row_in_view: cursor_row_in_view as u16,
-            selected_spans,
+            model: self.model.clone(),
+            text,
+            cursor_offset,
+            sel_char_range,
+            scroll_offset: self.scroll_offset,
+            max_visible_rows: self.max_visible_rows,
+            column: TuiColumn::new(),
+            cursor_col: 0,
+            cursor_row_in_view: 0,
+            selected_spans: Vec::new(),
         })
     }
 }
@@ -422,6 +340,18 @@ impl TuiInputView {
         buffer.text().into_string()
     }
 
+    /// The terminal width (in cells) for char-cell layout, read from the backing
+    /// model. The model is the single source of truth — it must hold the width
+    /// for event-time navigation/scroll, so the view keeps no separate copy.
+    fn terminal_width(&self, ctx: &AppContext) -> u16 {
+        self.model
+            .as_ref(ctx)
+            .render_state()
+            .as_ref(ctx)
+            .char_cell_terminal_width()
+            .unwrap_or(0)
+    }
+
     fn cursor_offset(&self, ctx: &AppContext) -> CharOffset {
         self.model
             .as_ref(ctx)
@@ -562,7 +492,7 @@ impl TuiInputView {
         let cursor_gap = self.cursor_offset(ctx).as_usize();
         // 0-based index of the character at the cursor, for the pure helpers.
         let cursor_idx = cursor_gap.saturating_sub(1);
-        let end_idx = visual_line_end_exclusive(&text, cursor_idx, self.terminal_width);
+        let end_idx = visual_line_end_exclusive(&text, cursor_idx, self.terminal_width(ctx));
         if end_idx <= cursor_idx {
             return None;
         }
@@ -574,7 +504,7 @@ impl TuiInputView {
         let text = self.plain_text(ctx);
         let cursor_gap = self.cursor_offset(ctx).as_usize();
         let cursor_idx = cursor_gap.saturating_sub(1);
-        let start_idx = visual_line_start_idx(&text, cursor_idx, self.terminal_width);
+        let start_idx = visual_line_start_idx(&text, cursor_idx, self.terminal_width(ctx));
         if start_idx >= cursor_idx {
             return None;
         }
@@ -662,19 +592,130 @@ fn visual_line_start_idx(text: &str, cursor_idx: usize, terminal_width: u16) -> 
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The element returned from [`TuiInputView::render`].
+///
+/// `render` captures only width-independent state; the row wrapping, cursor
+/// placement, and selection spans are computed in [`TuiElement::layout`], the
+/// first point that knows the terminal width (from the layout constraint). This
+/// mirrors the GUI, where the element computes geometry in `layout`.
 struct TuiInputElement {
+    /// Backing model: used during layout to push the terminal width and read the
+    /// char-cell visual line count at that width.
+    model: ModelHandle<CodeEditorModel>,
+    /// Plain-text content captured at render time.
+    text: String,
+    /// Cursor gap offset (1-based) captured at render time.
+    cursor_offset: CharOffset,
+    /// Selection as 0-based `(start, end)` char indices, if any.
+    sel_char_range: Option<(usize, usize)>,
+    /// First visible visual row (0-indexed).
+    scroll_offset: u32,
+    /// Maximum number of visible rows before the input scrolls.
+    max_visible_rows: u32,
+    /// Visible rows, built during `layout`.
     column: TuiColumn,
-    /// The cursor's 0-based column within the visible area.
+    /// The cursor's 0-based column within the visible area (set during `layout`).
     cursor_col: u16,
-    /// The cursor's 0-based row within the visible area (after scroll_offset subtraction).
+    /// The cursor's 0-based row within the visible area (set during `layout`).
     cursor_row_in_view: u16,
-    /// Selected spans: `(row_in_view, start_col, exclusive_end_col)`.
+    /// Selected spans `(row_in_view, start_col, exclusive_end_col)` (set during `layout`).
     selected_spans: Vec<(u16, u16, u16)>,
 }
 
+impl TuiInputElement {
+    /// Builds the visible rows, cursor position, and selection spans for
+    /// `terminal_width`, storing them for `render`/`cursor_position`.
+    fn build(&mut self, terminal_width: u16, visible_rows: u32) {
+        let (cursor_visual_row, cursor_col) =
+            char_cell_cursor_pos(&self.text, self.cursor_offset, terminal_width);
+        let cursor_row_in_view = cursor_visual_row.saturating_sub(self.scroll_offset);
+
+        let rows_with_offsets = build_visual_rows_with_offsets(&self.text, terminal_width);
+        let visible_start = self.scroll_offset as usize;
+        let visible_end =
+            (self.scroll_offset as usize + visible_rows as usize).min(rows_with_offsets.len());
+        let visible_rows_slice: Vec<(String, usize)> = if visible_start < rows_with_offsets.len() {
+            rows_with_offsets[visible_start..visible_end].to_vec()
+        } else {
+            vec![(String::new(), 0)]
+        };
+
+        // Selection spans per visible row. Selection offsets are char indices;
+        // terminal highlighting works in display columns, so convert via each
+        // char's display width (wide chars span two columns).
+        let mut selected_spans: Vec<(u16, u16, u16)> = Vec::new();
+        if let Some((sel_start, sel_end)) = self.sel_char_range {
+            if sel_start < sel_end {
+                for (vis_idx, (row_text, row_char_start)) in visible_rows_slice.iter().enumerate() {
+                    let row_chars: Vec<char> = row_text.chars().collect();
+                    let row_len = row_chars.len();
+                    let row_char_end = row_char_start + row_len;
+                    if sel_end > *row_char_start && sel_start < row_char_end {
+                        let start_char = sel_start.saturating_sub(*row_char_start);
+                        let end_char = (sel_end - row_char_start).min(row_len);
+                        let disp_start: usize = row_chars[..start_char]
+                            .iter()
+                            .map(|&c| char_cell_display_width(c))
+                            .sum();
+                        let disp_end: usize = row_chars[..end_char]
+                            .iter()
+                            .map(|&c| char_cell_display_width(c))
+                            .sum();
+                        selected_spans.push((vis_idx as u16, disp_start as u16, disp_end as u16));
+                    }
+                }
+            }
+        }
+
+        // Assemble the column of visible rows.
+        let dim = TuiStyle::default().add_modifier(Modifier::DIM);
+        let mut column = TuiColumn::new();
+        for (row_idx, (row_text, _)) in visible_rows_slice.iter().enumerate() {
+            let style = if row_idx as u32 == cursor_row_in_view {
+                TuiStyle::default()
+            } else {
+                dim
+            };
+            // An empty `TuiText` lays out to zero rows, which would collapse the
+            // row and clip the cursor (or following rows) off the column. Render
+            // a single space so every visual row keeps a height of exactly one.
+            let row_display = if row_text.is_empty() {
+                " ".to_string()
+            } else {
+                row_text.clone()
+            };
+            column = column.with_child(Box::new(
+                TuiText::new(row_display).with_style(style).truncate(),
+            ));
+        }
+
+        self.column = column;
+        self.cursor_col = cursor_col as u16;
+        self.cursor_row_in_view = cursor_row_in_view as u16;
+        self.selected_spans = selected_spans;
+    }
+}
+
 impl TuiElement for TuiInputElement {
-    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
-        self.column.layout(constraint, ctx)
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSize {
+        // The layout constraint is the first place the real terminal width is
+        // known. Push it onto the model (interior-mutable) so event-time
+        // navigation/scroll read the right width, then build the rows at that
+        // width — mirroring how the GUI computes geometry during layout.
+        let terminal_width = constraint.constrain_width(constraint.max.width);
+        let render_state = self.model.as_ref(app).render_state().clone();
+        render_state
+            .as_ref(app)
+            .set_char_cell_terminal_width(terminal_width);
+        let visual_line_count = render_state.as_ref(app).max_line().as_u32().max(1);
+        let visible_rows = cmp::min(visual_line_count, self.max_visible_rows);
+
+        self.build(terminal_width, visible_rows);
+        self.column.layout(constraint, ctx, app)
     }
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {

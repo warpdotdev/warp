@@ -152,19 +152,14 @@ where
         // and returns a composited frame (buffer + cursor).
         let area = TuiRect::new(0, 0, size.width, size.height);
         let window_id = self.window_id;
-        let root_view_id = self.root_view.id();
         let presenter = &mut self.presenter;
         let root_view = &self.root_view;
         let frame = app.update(|ctx| {
-            // Notify the root view of a size change before layout so size-
-            // dependent state (e.g. a char-cell editor's terminal width) is
-            // refreshed; its re-render is then picked up by the invalidation
-            // pass below. The root forwards the size to any child views.
-            if size_changed {
-                ctx.resize_tui_view(window_id, root_view_id, size);
-            }
-            // Re-render only the views that changed this frame, then present
-            // the full tree (unchanged views reuse their cached elements).
+            // Re-render the views that changed this frame, then present the full
+            // tree (unchanged views reuse their cached elements). The presenter
+            // lays out against the current `area`, so a terminal resize is
+            // reflected without a dedicated hook: each element's `layout` pass
+            // sees the new size and refreshes any width-dependent state.
             let invalidation = ctx.take_all_invalidations_for_window(window_id);
             presenter.invalidate(&invalidation, ctx, window_id);
             presenter.present(ctx, root_view, area)

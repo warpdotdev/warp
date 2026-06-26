@@ -58,8 +58,13 @@ impl TuiEventHandler {
 }
 
 impl TuiElement for TuiEventHandler {
-    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
-        self.child.layout(constraint, ctx)
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSize {
+        self.child.layout(constraint, ctx, app)
     }
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {

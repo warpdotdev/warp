@@ -28,7 +28,7 @@ fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
         },
         |ctx| {
             let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(W, ctx));
-            TuiInputView::new(model, W, ctx)
+            TuiInputView::new(model, ctx)
         },
     );
     view
@@ -57,7 +57,7 @@ fn cursor_and_height(
     let mut lctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
     };
-    let size = element.layout(TuiConstraint::loose(TuiSize::new(W, 20)), &mut lctx);
+    let size = element.layout(TuiConstraint::loose(TuiSize::new(W, 20)), &mut lctx, ctx);
     let cursor = element.cursor_position(TuiRect::new(0, 0, size.width, size.height), &mut lctx);
     (cursor, size.height)
 }
@@ -88,6 +88,34 @@ fn cursor_at_origin_when_empty() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let view = build_view(ctx);
+            let (cursor, height) = cursor_and_height(&view, ctx);
+            assert_eq!(cursor, Some((0, 0)));
+            assert_eq!(height, 1);
+        });
+    });
+}
+
+/// Regression: navigating a freshly-built (empty, never-edited) view must not
+/// panic. The char-cell `line_starts` is seeded with `[0]` at construction, so
+/// the soft-wrap helpers reached via `move_to_line_start` etc. index it safely
+/// before the first edit ever runs `update_char_cell_text`.
+#[test]
+fn navigation_on_empty_buffer_does_not_panic() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            dispatch(
+                &view,
+                ctx,
+                &[
+                    TuiInputAction::MoveToLineStart,
+                    TuiInputAction::MoveToLineEnd,
+                    TuiInputAction::MoveLeft,
+                    TuiInputAction::MoveRight,
+                    TuiInputAction::MoveUp,
+                    TuiInputAction::MoveDown,
+                ],
+            );
             let (cursor, height) = cursor_and_height(&view, ctx);
             assert_eq!(cursor, Some((0, 0)));
             assert_eq!(height, 1);

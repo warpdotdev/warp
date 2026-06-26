@@ -158,32 +158,4 @@ impl AppContext {
             None => Err(anyhow!("view not found")),
         }
     }
-
-    /// Notifies the TUI view `view_id` that the terminal was resized to `size`.
-    ///
-    /// Mirrors the focus dispatch pattern (remove from the registry, invoke the
-    /// hook with `&mut AppContext`, then reinsert). No-op for GUI views. The
-    /// runtime calls this on the window's root view when the size changes; the
-    /// root is responsible for forwarding to its children.
-    pub fn resize_tui_view(
-        &mut self,
-        window_id: WindowId,
-        view_id: EntityId,
-        size: crate::elements::tui::TuiSize,
-    ) {
-        self.pending_flushes += 1;
-        if let Some(mut view) = self
-            .windows
-            .get_mut(&window_id)
-            .and_then(|w| w.views.remove(&view_id))
-        {
-            if let StoredView::Tui(tui) = &mut view {
-                tui.on_resize(size, self, window_id, view_id);
-            }
-            if let Some(window) = self.windows.get_mut(&window_id) {
-                window.views.insert(view_id, view);
-            }
-        }
-        self.flush_effects();
-    }
 }

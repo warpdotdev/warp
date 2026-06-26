@@ -35,7 +35,12 @@ impl TextDouble {
 }
 
 impl TuiElement for TextDouble {
-    fn layout(&mut self, constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
         constraint.clamp(TuiSize::new(self.width(), 1))
     }
 
@@ -68,7 +73,12 @@ impl ColumnDouble {
 }
 
 impl TuiElement for ColumnDouble {
-    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSize {
         self.child_sizes.clear();
         let mut total_height = 0u16;
         let mut max_width = 0u16;
@@ -77,7 +87,7 @@ impl TuiElement for ColumnDouble {
                 constraint.max.width,
                 constraint.max.height.saturating_sub(total_height),
             );
-            let size = child.layout(TuiConstraint::loose(available), ctx);
+            let size = child.layout(TuiConstraint::loose(available), ctx, app);
             total_height = total_height.saturating_add(size.height);
             max_width = max_width.max(size.width);
             self.child_sizes.push(size);
@@ -136,13 +146,18 @@ impl ContainerDouble {
 }
 
 impl TuiElement for ContainerDouble {
-    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSize {
         let inset = self.padding.saturating_mul(2);
         let inner_max = TuiSize::new(
             constraint.max.width.saturating_sub(inset),
             constraint.max.height.saturating_sub(inset),
         );
-        let size = self.child.layout(TuiConstraint::loose(inner_max), ctx);
+        let size = self.child.layout(TuiConstraint::loose(inner_max), ctx, app);
         self.child_size = size;
         constraint.clamp(TuiSize::new(
             size.width.saturating_add(inset),
@@ -186,7 +201,12 @@ impl CursorDouble {
 }
 
 impl TuiElement for CursorDouble {
-    fn layout(&mut self, constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
         constraint.clamp(TuiSize::new(5, 1))
     }
 
@@ -288,44 +308,59 @@ impl TuiView for ParentView {
 
 #[test]
 fn paints_single_root_element_into_area() {
-    let mut presenter = TuiPresenter::new();
-    let frame = presenter.present_element(
-        Box::new(TextDouble::new("HELLO")),
-        TuiRect::new(0, 0, 10, 1),
-    );
-    assert_eq!(frame.buffer.to_lines(), vec!["HELLO     "]);
-    assert_eq!(frame.cursor, None);
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                Box::new(TextDouble::new("HELLO")),
+                TuiRect::new(0, 0, 10, 1),
+                app_ctx,
+            );
+            assert_eq!(frame.buffer.to_lines(), vec!["HELLO     "]);
+            assert_eq!(frame.cursor, None);
+        });
+    });
 }
 
 #[test]
 fn composites_nested_container_column_text_with_offsets() {
-    let column = ColumnDouble::new(vec![
-        Box::new(TextDouble::new("AB")),
-        Box::new(TextDouble::new("CDE")),
-    ]);
-    let container = ContainerDouble::new(Box::new(column), 1, '.');
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let column = ColumnDouble::new(vec![
+                Box::new(TextDouble::new("AB")),
+                Box::new(TextDouble::new("CDE")),
+            ]);
+            let container = ContainerDouble::new(Box::new(column), 1, '.');
 
-    let mut presenter = TuiPresenter::new();
-    let frame = presenter.present_element(Box::new(container), TuiRect::new(0, 0, 5, 4));
+            let mut presenter = TuiPresenter::new();
+            let frame =
+                presenter.present_element(Box::new(container), TuiRect::new(0, 0, 5, 4), app_ctx);
 
-    assert_eq!(
-        frame.buffer.to_lines(),
-        vec![".....", ".AB..", ".CDE.", "....."],
-    );
+            assert_eq!(
+                frame.buffer.to_lines(),
+                vec![".....", ".AB..", ".CDE.", "....."],
+            );
+        });
+    });
 }
 
 #[test]
 fn surfaces_cursor_at_absolute_coordinates() {
-    let column = ColumnDouble::new(vec![
-        Box::new(TextDouble::new("HEADER")),
-        Box::new(CursorDouble::new((2, 0))),
-    ]);
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let column = ColumnDouble::new(vec![
+                Box::new(TextDouble::new("HEADER")),
+                Box::new(CursorDouble::new((2, 0))),
+            ]);
 
-    let mut presenter = TuiPresenter::new();
-    let frame = presenter.present_element(Box::new(column), TuiRect::new(0, 0, 8, 2));
+            let mut presenter = TuiPresenter::new();
+            let frame =
+                presenter.present_element(Box::new(column), TuiRect::new(0, 0, 8, 2), app_ctx);
 
-    // The cursor element sits on row 1 (below the header) at column 2.
-    assert_eq!(frame.cursor, Some((2, 1)));
+            // The cursor element sits on row 1 (below the header) at column 2.
+            assert_eq!(frame.cursor, Some((2, 1)));
+        });
+    });
 }
 
 #[test]

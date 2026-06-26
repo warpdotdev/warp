@@ -387,10 +387,14 @@ impl<'a> RenderContentTreeRef<'a> {
 /// mode-specific data; fields that are only meaningful in one mode are never
 /// scattered across the parent [`RenderState`].
 pub struct CharCellState {
-    /// Terminal width in character columns. Updated on resize.
-    pub terminal_width: u16,
+    /// Terminal width in character columns. Pushed from the element's layout
+    /// pass; interior-mutable so it can be set through a shared `&RenderState`
+    /// (mirroring how the GUI submits viewport state during layout).
+    pub terminal_width: Cell<u16>,
     /// The 0-indexed char offset of the start of each logical line (`\n`-split).
-    /// Rebuilt synchronously via [`RenderState::update_char_cell_text`].
+    /// Rebuilt synchronously via [`RenderState::update_char_cell_text`]. Invariant:
+    /// never empty — it always holds at least `[0]` (logical line 0 starts at char
+    /// 0), even before the first edit, so the soft-wrap helpers can index it safely.
     pub(crate) line_starts: RefCell<Vec<usize>>,
     /// The terminal display width (in cells) of each character of the buffer
     /// text, indexed in parallel with char offsets. This is **derived layout
@@ -405,8 +409,12 @@ pub struct CharCellState {
 impl CharCellState {
     fn new(terminal_width: u16) -> Self {
         Self {
-            terminal_width,
-            line_starts: RefCell::new(Vec::new()),
+            terminal_width: Cell::new(terminal_width),
+            // Seed with logical line 0 so `line_starts` is never empty, matching
+            // the post-`update_char_cell_text` state for an empty buffer. The
+            // soft-wrap helpers index `line_starts[0]` and must not panic if a
+            // navigation/scroll happens before the first edit.
+            line_starts: RefCell::new(vec![0]),
             char_widths: RefCell::new(Vec::new()),
         }
     }
@@ -415,7 +423,7 @@ impl CharCellState {
 impl std::fmt::Debug for CharCellState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CharCellState")
-            .field("terminal_width", &self.terminal_width)
+            .field("terminal_width", &self.terminal_width.get())
             .field("line_starts_len", &self.line_starts.borrow().len())
             .field("total_chars", &self.char_widths.borrow().len())
             .finish()
@@ -1952,6 +1960,17 @@ impl RenderState {
         matches!(self.layout_mode, LayoutMode::CharCell(_))
     }
 
+    /// The terminal width (in cells) used for char-cell layout, or `None` in
+    /// pixel (GUI) mode. This is the single source of truth for the TUI input's
+    /// width: navigation and scroll read it at event time, so it must live on
+    /// the model. Callers should read it here rather than caching a copy.
+    pub fn char_cell_terminal_width(&self) -> Option<u16> {
+        match &self.layout_mode {
+            LayoutMode::CharCell(cc) => Some(cc.terminal_width.get()),
+            LayoutMode::Pixels => None,
+        }
+    }
+
     /// Update the char-cell layout state from the current buffer text.
     ///
     /// Must only be called on a `LayoutMode::CharCell` `RenderState`.
@@ -2006,17 +2025,18 @@ impl RenderState {
     }
 
     /// Update the terminal width used by char-cell layout. Only valid in `CharCell` mode.
-    /// The caller must also call [`update_char_cell_text`] to rebuild line starts if the
-    /// width affects visual row count.
-    pub fn set_char_cell_terminal_width(&mut self, terminal_width: u16) {
-        let LayoutMode::CharCell(ref mut cc) = self.layout_mode else {
+    /// Takes `&self` (the width is interior-mutable) so the element can push it during its
+    /// layout pass, which only has a shared `&AppContext`. `line_starts`/`char_widths` don't
+    /// depend on the width, so nothing else needs rebuilding here.
+    pub fn set_char_cell_terminal_width(&self, terminal_width: u16) {
+        let LayoutMode::CharCell(ref cc) = self.layout_mode else {
             debug_assert!(
                 false,
                 "set_char_cell_terminal_width called on Pixels-mode RenderState"
             );
             return;
         };
-        cc.terminal_width = terminal_width;
+        cc.terminal_width.set(terminal_width);
     }
 
     fn final_trailing_newline_cursor(styles: &RichTextStyles) -> BlockItem {
@@ -2136,7 +2156,7 @@ impl RenderState {
             return char_cell_max_line(
                 &cc.line_starts.borrow(),
                 &cc.char_widths.borrow(),
-                cc.terminal_width,
+                cc.terminal_width.get(),
             );
         }
         self.content.borrow().summary().lines
@@ -3344,7 +3364,7 @@ impl RenderState {
                 offset,
                 &cc.line_starts.borrow(),
                 &cc.char_widths.borrow(),
-                cc.terminal_width,
+                cc.terminal_width.get(),
             );
         }
 
@@ -3366,7 +3386,7 @@ impl RenderState {
                 point,
                 &cc.line_starts.borrow(),
                 &cc.char_widths.borrow(),
-                cc.terminal_width,
+                cc.terminal_width.get(),
             );
         }
 

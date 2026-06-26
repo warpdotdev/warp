@@ -542,18 +542,6 @@ impl CodeEditorModel {
         }
     }
 
-    /// Update the terminal width for a char-cell `RenderState` and rebuild the
-    /// char-cell line index. Only valid when the model was created with
-    /// [`Self::new_tui`].
-    pub fn set_tui_terminal_width(&mut self, terminal_width: u16, ctx: &mut ModelContext<Self>) {
-        self.render_state.update(ctx, |r, _| {
-            r.set_char_cell_terminal_width(terminal_width);
-        });
-        let text = self.content.as_ref(ctx).text().into_string();
-        self.render_state
-            .update(ctx, |r, _| r.update_char_cell_text(&text));
-    }
-
     fn should_defer_syntax_tree_parsing(&self) -> bool {
         self.lazy_layout_enabled && !self.lazy_layout_initialized
     }
