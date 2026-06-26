@@ -31,6 +31,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use warp::appearance::Appearance;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp_tui::input::{TuiInputView, TuiInputViewEvent};
 use warpui_core::elements::tui::{
@@ -199,6 +200,10 @@ impl TypedActionView for ShellView {
 
 fn main() {
     App::test((), |mut app| async move {
+        // `CodeEditorModel::new_tui` reads syntax colors from the `Appearance`
+        // singleton, so register a mock one before constructing the editor.
+        app.add_singleton_model(|_| Appearance::mock());
+
         let quit = Rc::new(Cell::new(false));
         let quit_for_view = quit.clone();
 

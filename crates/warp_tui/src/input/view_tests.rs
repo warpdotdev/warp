@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
 use warp_editor::model::CoreEditorModel;
 use warpui_core::elements::tui::{TuiConstraint, TuiLayoutContext, TuiRect, TuiSize};
@@ -17,6 +18,9 @@ use super::{TuiInputAction, TuiInputView};
 const W: u16 = 80;
 
 fn build_view(ctx: &mut AppContext) -> ViewHandle<TuiInputView> {
+    // `CodeEditorModel::new_tui` reads syntax colors from the `Appearance`
+    // singleton, so register a mock one before constructing the editor.
+    ctx.add_singleton_model(|_| Appearance::mock());
     let (_window_id, view) = ctx.add_tui_window(
         AddWindowOptions {
             window_style: WindowStyle::NotStealFocus,

@@ -47,8 +47,9 @@ use warp_editor::editor::TextDecoration;
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::multiline::{AnyMultilineString, MultilineString, LF};
 use warp_editor::render::model::{
-    AutoScrollMode, BlockItem, ColumnUnit, Decoration, LineCount, LineDecoration, RenderEvent,
-    RenderLineLocation, RenderState, RichTextStyles, StyleUpdateAction,
+    AutoScrollMode, BlockItem, BlockSpacings, BrokenLinkStyle, CheckBoxStyle, ColumnUnit,
+    Decoration, HorizontalRuleStyle, InlineCodeStyle, LineCount, LineDecoration, ParagraphStyles,
+    RenderEvent, RenderLineLocation, RenderState, RichTextStyles, StyleUpdateAction, TableStyle,
     UpdateDecorationAfterLayout, WidthSetting,
 };
 use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
@@ -332,6 +333,72 @@ impl CodeEditorModel {
         content.update(ctx, |buffer, _| {
             buffer.set_session_platform(session_platform);
         });
+
+        Self::from_content(
+            content,
+            true,        // show_current_line_highlights
+            lazy_layout, // lazy_layout_enabled
+            false,       // lazy_layout_initialized
+            ctx,
+            |hidden_lines, ctx| {
+                ctx.add_model(|ctx| {
+                    RenderState::new(text_styles, lazy_layout, Some(hidden_lines.clone()), ctx)
+                        .with_width_setting(WidthSetting::InfiniteWidth)
+                })
+            },
+        )
+    }
+
+    /// Constructs a `CodeEditorModel` in TUI char-cell mode.
+    ///
+    /// Identical to `new` but creates the `RenderState` with
+    /// [`LayoutMode::CharCell`] so all soft-wrap positions use monospace
+    /// character-count arithmetic rather than font-aware pixel layout.
+    /// `TuiEditorModel` (in `warp_tui`) is a type alias for this type;
+    /// constructing via this method is what gives the TUI editor all of
+    /// `CodeEditorModel`'s features (vim, syntax, diff, hidden lines) for free
+    /// while sharing no GUI-rendering infrastructure.
+    ///
+    /// Like `new`, this reads syntax-highlight colors from the `Appearance`
+    /// singleton, so callers must register `Appearance` (a real one for the
+    /// runtime, `Appearance::mock()` for tests) before constructing the model.
+    pub fn new_tui(terminal_width: u16, ctx: &mut ModelContext<Self>) -> Self {
+        let content = ctx.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+
+        Self::from_content(
+            content,
+            false, // show_current_line_highlights: no GPU rendering in TUI
+            false, // lazy_layout_enabled: no lazy layout in TUI
+            true,  // lazy_layout_initialized: no lazy layout in TUI
+            ctx,
+            |_hidden_lines, ctx| {
+                // CharCell layout never consults `RichTextStyles`, so pass a stub.
+                ctx.add_model(|ctx| {
+                    RenderState::new_tui(terminal_width, Self::tui_stub_text_styles(), ctx)
+                })
+            },
+        )
+    }
+
+    /// Shared construction for [`Self::new`] and [`Self::new_tui`]. The two modes
+    /// differ only in how the backing `content` buffer and the `RenderState` are
+    /// built (GUI pixel layout vs. TUI char-cell layout) plus a few flags; all
+    /// other sub-models (selection, syntax tree, diff, hidden lines, comments)
+    /// and event subscriptions are identical and wired up here.
+    ///
+    /// `build_render_state` receives the freshly-created `hidden_lines` handle so
+    /// the GUI path can attach it; the TUI path ignores it.
+    fn from_content(
+        content: ModelHandle<Buffer>,
+        show_current_line_highlights: bool,
+        lazy_layout_enabled: bool,
+        lazy_layout_initialized: bool,
+        ctx: &mut ModelContext<Self>,
+        build_render_state: impl FnOnce(
+            &ModelHandle<HiddenLinesModel>,
+            &mut ModelContext<Self>,
+        ) -> ModelHandle<RenderState>,
+    ) -> Self {
         ctx.subscribe_to_model(&content, |me, _, event, ctx| {
             me.handle_content_model_event(event, ctx);
         });
@@ -355,10 +422,7 @@ impl CodeEditorModel {
         let hidden_lines =
             ctx.add_model(|_| HiddenLinesModel::new(content.clone(), selection_model.clone()));
 
-        let render_state = ctx.add_model(|ctx| {
-            RenderState::new(text_styles, lazy_layout, Some(hidden_lines.clone()), ctx)
-                .with_width_setting(WidthSetting::InfiniteWidth)
-        });
+        let render_state = build_render_state(&hidden_lines, ctx);
         ctx.subscribe_to_model(&render_state, |me, _, event, ctx| {
             me.handle_render_state_model_event(event, ctx);
         });
@@ -388,115 +452,99 @@ impl CodeEditorModel {
             hidden_lines,
             diff_navigation_state: DiffNavigationState::Collapsed,
             interaction_state: InteractionState::Editable,
-            show_current_line_highlights: true,
+            show_current_line_highlights,
             delay_rendering: None,
             vim_visual_tails: vec![],
             hovered_symbol_range: None,
             hide_lines_outside_of_active_diff: None,
-            lazy_layout_enabled: lazy_layout,
-            lazy_layout_initialized: false,
+            lazy_layout_enabled,
+            lazy_layout_initialized,
             pending_syntax_tree_bootstrap: false,
         }
     }
 
-    /// Constructs a `CodeEditorModel` in TUI char-cell mode.
+    /// A minimal [`RichTextStyles`] for the TUI char-cell editor.
     ///
-    /// Identical to `new` but creates the `RenderState` with
-    /// [`LayoutMode::CharCell`] so all soft-wrap positions use monospace
-    /// character-count arithmetic rather than font-aware pixel layout.
-    /// `TuiEditorModel` (in `warp_tui`) is a type alias for this type;
-    /// constructing via this method is what gives the TUI editor all of
-    /// `CodeEditorModel`'s features (vim, syntax, diff, hidden lines) for free
-    /// while sharing no GUI-rendering infrastructure.
-    #[cfg(feature = "tui")]
-    pub fn new_tui(terminal_width: u16, ctx: &mut ModelContext<Self>) -> Self {
-        let content = ctx.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
-        ctx.subscribe_to_model(&content, |me, _, event, ctx| {
-            me.handle_content_model_event(event, ctx);
-        });
+    /// `RenderState::new_tui` stores styles only for API compatibility and never
+    /// uses them for char-cell layout, so these values are placeholders. This
+    /// lives here (the caller of `RenderState::new_tui`) rather than in the core
+    /// editor crate so the editor API doesn't carry a TUI-specific stub.
+    fn tui_stub_text_styles() -> RichTextStyles {
+        use warpui::elements::{Border, Fill};
+        use warpui::fonts::{FamilyId, Weight};
 
-        let selection_model = ctx.add_model(|_| BufferSelectionModel::new(content.clone()));
-
-        // Use a zero-color stub map — no language is set on TUI input buffers,
-        // so syntax highlighting never fires. Avoids a dependency on `Appearance`
-        // that is not registered in lightweight TUI or test contexts.
-        let color_map = ColorMap {
-            keyword_color: pathfinder_color::ColorU::black(),
-            function_color: pathfinder_color::ColorU::black(),
-            string_color: pathfinder_color::ColorU::black(),
-            type_color: pathfinder_color::ColorU::black(),
-            number_color: pathfinder_color::ColorU::black(),
-            comment_color: pathfinder_color::ColorU::black(),
-            property_color: pathfinder_color::ColorU::black(),
-            tag_color: pathfinder_color::ColorU::black(),
+        const TRANSPARENT: warpui::color::ColorU = warpui::color::ColorU {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
         };
-        let buffer_version = content.as_ref(ctx).buffer_version();
-        let buffer_handle = content.downgrade();
-        let syntax_tree =
-            ctx.add_model(|_ctx| SyntaxTreeState::new(buffer_handle, buffer_version, color_map));
-        ctx.subscribe_to_model(&syntax_tree, |me, _, event, ctx| {
-            me.handle_syntax_tree_model_event(event, ctx);
-        });
-
-        let diff = ctx.add_model(|_| DiffModel::new());
-        ctx.subscribe_to_model(&diff, |me, _, event, ctx| {
-            me.handle_diff_model_event(event, ctx);
-        });
-
-        let hidden_lines =
-            ctx.add_model(|_| HiddenLinesModel::new(content.clone(), selection_model.clone()));
-
-        let render_state = ctx.add_model(|ctx| {
-            RenderState::new_tui(
-                terminal_width,
-                RichTextStyles::stub(), // not used by CharCell layout
-                ctx,
-            )
-        });
-        ctx.subscribe_to_model(&render_state, |me, _, event, ctx| {
-            me.handle_render_state_model_event(event, ctx);
-        });
-        let selection = ctx.add_model(|ctx| {
-            SelectionModel::new(
-                content.clone(),
-                render_state.clone(),
-                selection_model.clone(),
-                Some(hidden_lines.clone()),
-                ctx,
-            )
-            .with_disable_hidden_navigation()
-        });
-
-        let comments = ctx.add_model(|_| EditorCommentsModel {
-            pending_comment: PendingComment::Closed,
-        });
-
-        Self {
-            render_state,
-            diff,
-            content,
-            selection_model,
-            selection,
-            syntax_tree,
-            comments,
-            hidden_lines,
-            diff_navigation_state: DiffNavigationState::Collapsed,
-            interaction_state: InteractionState::Editable,
-            show_current_line_highlights: false, // no GPU rendering in TUI
-            delay_rendering: None,
-            vim_visual_tails: vec![],
-            hovered_symbol_range: None,
-            hide_lines_outside_of_active_diff: None,
-            lazy_layout_enabled: false,
-            lazy_layout_initialized: true, // no lazy layout in TUI
-            pending_syntax_tree_bootstrap: false,
+        let paragraph = |fixed_width_tab_size| ParagraphStyles {
+            font_family: FamilyId(0),
+            font_size: 10.,
+            font_weight: Weight::Normal,
+            line_height_ratio: 1.,
+            text_color: TRANSPARENT,
+            baseline_ratio: 0.7,
+            fixed_width_tab_size,
+        };
+        RichTextStyles {
+            base_text: paragraph(None),
+            code_text: paragraph(Some(4)),
+            code_background: Fill::None,
+            embedding_background: Fill::None,
+            embedding_text: paragraph(None),
+            code_border: Border::new(0.),
+            placeholder_color: TRANSPARENT,
+            selection_fill: Fill::None,
+            cursor_fill: Fill::None,
+            inline_code_style: InlineCodeStyle {
+                font_family: FamilyId(0),
+                background: TRANSPARENT,
+                font_color: TRANSPARENT,
+            },
+            check_box_style: CheckBoxStyle {
+                border_width: 0.,
+                border_color: TRANSPARENT,
+                icon_path: "",
+                background: TRANSPARENT,
+                hover_background: TRANSPARENT,
+            },
+            horizontal_rule_style: HorizontalRuleStyle {
+                rule_height: 0.,
+                color: TRANSPARENT,
+            },
+            broken_link_style: BrokenLinkStyle {
+                icon_path: "",
+                icon_color: TRANSPARENT,
+            },
+            block_spacings: BlockSpacings::default(),
+            minimum_paragraph_height: None,
+            show_placeholder_text_on_empty_block: false,
+            cursor_width: 0.,
+            highlight_urls: false,
+            table_style: TableStyle {
+                border_color: TRANSPARENT,
+                header_background: TRANSPARENT,
+                cell_background: TRANSPARENT,
+                alternate_row_background: None,
+                text_color: TRANSPARENT,
+                header_text_color: TRANSPARENT,
+                scrollbar_nonactive_thumb_color: TRANSPARENT,
+                scrollbar_active_thumb_color: TRANSPARENT,
+                font_family: FamilyId(0),
+                font_size: 10.,
+                cell_padding: 0.,
+                outer_border: false,
+                column_dividers: false,
+                row_dividers: false,
+            },
         }
     }
 
     /// Update the terminal width for a char-cell `RenderState` and rebuild the
     /// char-cell line index. Only valid when the model was created with
     /// [`Self::new_tui`].
-    #[cfg(feature = "tui")]
     pub fn set_tui_terminal_width(&mut self, terminal_width: u16, ctx: &mut ModelContext<Self>) {
         self.render_state.update(ctx, |r, _| {
             r.set_char_cell_terminal_width(terminal_width);
