@@ -168,7 +168,7 @@ impl TuiPresenter {
         let mut layout_ctx = TuiLayoutContext {
             rendered_views: &mut self.rendered_views,
         };
-        let arranged = arrange(element.as_mut(), area, &mut layout_ctx);
+        let arranged = arrange(element.as_mut(), area, &mut layout_ctx, ctx);
 
         let mut embeddings = HashMap::new();
         {
@@ -191,12 +191,17 @@ impl TuiPresenter {
     /// Exposed for the runtime and tests that drive layout/paint for an element
     /// tree produced outside the app's view registry. No view-ancestry is
     /// recorded and no `rendered_views` state is consulted or updated.
-    pub fn present_element(&mut self, mut root: Box<dyn TuiElement>, area: TuiRect) -> TuiFrame {
+    pub fn present_element(
+        &mut self,
+        mut root: Box<dyn TuiElement>,
+        area: TuiRect,
+        app: &AppContext,
+    ) -> TuiFrame {
         let mut empty_views = HashMap::new();
         let mut layout_ctx = TuiLayoutContext {
             rendered_views: &mut empty_views,
         };
-        let arranged = arrange(root.as_mut(), area, &mut layout_ctx);
+        let arranged = arrange(root.as_mut(), area, &mut layout_ctx, app);
         paint(root.as_ref(), arranged, area, &mut empty_views)
     }
 
@@ -210,8 +215,13 @@ impl TuiPresenter {
 /// Measure the root against `area` and anchor the measured size at the area's
 /// origin (the size is already within the area, but clamp defensively so
 /// writes stay in bounds).
-fn arrange(root: &mut dyn TuiElement, area: TuiRect, ctx: &mut TuiLayoutContext) -> TuiRect {
-    let measured = root.layout(TuiConstraint::loose(area.as_size()), ctx);
+fn arrange(
+    root: &mut dyn TuiElement,
+    area: TuiRect,
+    ctx: &mut TuiLayoutContext,
+    app: &AppContext,
+) -> TuiRect {
+    let measured = root.layout(TuiConstraint::loose(area.as_size()), ctx, app);
     TuiRect::new(
         area.x,
         area.y,

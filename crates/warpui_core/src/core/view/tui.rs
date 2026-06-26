@@ -21,6 +21,12 @@ pub trait TuiView: Entity {
     fn ui_name() -> &'static str;
 
     /// Produces the [`TuiElement`] representation of this view.
+    ///
+    /// Terminal resizes are handled through the layout pass, not a dedicated
+    /// hook: the presenter lays out against the current terminal size every
+    /// frame, and each [`TuiElement::layout`] receives the [`AppContext`], so
+    /// width-dependent state (e.g. a char-cell editor's terminal width) is
+    /// refreshed there.
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement>;
 
     /// Handles the view or its descendent receiving focus.
