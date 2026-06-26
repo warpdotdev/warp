@@ -477,6 +477,10 @@ pub enum WorkspaceAction {
     OpenFilePath {
         path: PathBuf,
     },
+    /// Open a local directory in a new terminal tab/session.
+    OpenDirectoryInNewTab {
+        path: PathBuf,
+    },
     TerminateApp,
     CloseWindow,
     /// Help the user call the Warp executable with the [`crate::args::DEBUG_DUMP_FLAG`].
@@ -965,6 +969,7 @@ impl WorkspaceAction {
             | OpenNotebook { .. }
             | RunWorkflow { .. }
             | OpenFileInNewTab { .. }
+            | OpenDirectoryInNewTab { .. }
             | RestoreOrNavigateToConversation { .. }
             | NewCodeFile
             | ForkAIConversation { .. }

@@ -24281,6 +24281,9 @@ impl TypedActionView for Workspace {
             OpenFilePath { path } => {
                 ctx.open_file_path(path);
             }
+            OpenDirectoryInNewTab { path } => {
+                self.open_directory_in_new_tab(path.clone(), ctx);
+            }
             NewTabInAgentMode {
                 entrypoint,
                 zero_state_prompt_suggestion_type,
