@@ -2770,6 +2770,28 @@ impl Workspace {
         });
     }
 
+    fn show_heap_profile_result(
+        &mut self,
+        result: anyhow::Result<PathBuf>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let toast = match result {
+            Ok(path) => {
+                ctx.open_file_path_in_explorer(&path);
+                DismissibleToast::success(format!("Wrote heap profile to {}", path.display()))
+                    .with_link(
+                        ToastLink::new("Show in file explorer".to_string())
+                            .with_onclick_action(WorkspaceAction::OpenInExplorer { path }),
+                    )
+            }
+            Err(err) => DismissibleToast::error(format!("Failed to write heap profile: {err:#}")),
+        };
+
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(toast, ctx)
+        });
+    }
+
     fn on_tips_model_changed(
         &mut self,
         _: ModelHandle<TipsCompleted>,
@@ -24426,8 +24448,12 @@ impl TypedActionView for Workspace {
                 panic!("WorkspaceAction::Panic triggered from command palette");
             }
             DumpHeapProfile => {
-                #[cfg(feature = "dhat_heap_profiling")]
-                crate::profiling::dump_dhat_heap_profile();
+                ctx.spawn(
+                    crate::profiling::dump_heap_profile_to_disk(),
+                    |me, result, ctx| {
+                        me.show_heap_profile_result(result, ctx);
+                    },
+                );
             }
             OpenViewTreeDebugWindow => {
                 let window_id = ctx.window_id();
