@@ -60,22 +60,26 @@ const TAB_INDICATOR_HEIGHT: f32 = 14.0;
 /// Label for the tab right-click menu's "Move to group" submenu parent.
 pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
 
-/// Decides which tab-group context-menu entries apply to a tab, based on whether
-/// it is currently in a group and whether any *other* groups exist.
+/// Decides which tab-group context-menu entries apply to a tab, based on its
+/// group membership, whether it is the sole member of that group, and whether
+/// any *other* groups exist.
 ///
 /// Returns `(show_new_group, show_move_to_group, show_remove_from_group)`:
-/// - `New group with tab` only when the tab is **not** already in a group —
-///   offering it on an already-grouped tab is meaningless and was a bug
-///   (the sibling `Remove from group` is the correct action there).
+/// - `New group with tab` everywhere except when the tab is the **only** member
+///   of its group. Pulling a tab into a brand-new group of its own is useful for
+///   an ungrouped tab or a tab that shares a group with siblings (à la Chrome),
+///   but is a no-op when the tab is already alone in its group.
 /// - `Move to group` when at least one group other than the tab's own exists.
 /// - `Remove from group` only when the tab **is** in a group.
 fn tab_group_menu_entry_flags(
     group_id: Option<TabGroupId>,
     tab_groups: &HashMap<TabGroupId, TabGroup>,
+    is_only_member_of_group: bool,
 ) -> (bool, bool, bool) {
     let in_group = group_id.is_some();
     let has_other_groups = tab_groups.keys().any(|gid| Some(*gid) != group_id);
-    (!in_group, has_other_groups, in_group)
+    let show_new_group = !(in_group && is_only_member_of_group);
+    (show_new_group, has_other_groups, in_group)
 }
 
 /// True when the user has opted into vertical tabs and the feature flag is on.
@@ -207,11 +211,13 @@ impl TabData {
     }
 
     /// Returns the menu items for the context menu on right mouse click.
+    #[allow(clippy::too_many_arguments)]
     pub fn menu_items(
         &self,
         index: usize,
         tabs_len: usize,
         tab_groups: &HashMap<TabGroupId, TabGroup>,
+        is_only_member_of_group: bool,
         can_move_left: bool,
         can_move_right: bool,
         ctx: &AppContext,
@@ -220,6 +226,7 @@ impl TabData {
             index,
             tabs_len,
             tab_groups,
+            is_only_member_of_group,
             can_move_left,
             can_move_right,
             None,
@@ -233,6 +240,7 @@ impl TabData {
         index: usize,
         tabs_len: usize,
         tab_groups: &HashMap<TabGroupId, TabGroup>,
+        is_only_member_of_group: bool,
         can_move_left: bool,
         can_move_right: bool,
         pane_name_target: Option<PaneNameMenuTarget>,
@@ -244,7 +252,7 @@ impl TabData {
 
         for section_items in [
             self.pin_menu_items(index),
-            self.tab_group_menu_items(index, tab_groups),
+            self.tab_group_menu_items(index, tab_groups, is_only_member_of_group),
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, can_move_left, can_move_right, pane_name_target, ctx),
@@ -598,8 +606,8 @@ impl TabData {
     }
 
     /// Returns the tab-group entries for the top-level right-click menu:
-    /// `New group with tab` (only when the tab is not already in a group),
-    /// `Move to group` (when at least one other group exists), and
+    /// `New group with tab` (hidden only when the tab is the sole member of its
+    /// group), `Move to group` (when at least one other group exists), and
     /// `Remove from group` (only when the tab is currently in a group).
     ///
     /// The `Move to group` item is a submenu parent — selecting/hovering it
@@ -609,12 +617,13 @@ impl TabData {
         &self,
         index: usize,
         tab_groups: &HashMap<TabGroupId, TabGroup>,
+        is_only_member_of_group: bool,
     ) -> Vec<MenuItem<WorkspaceAction>> {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return vec![];
         }
         let (show_new_group, show_move_to_group, show_remove_from_group) =
-            tab_group_menu_entry_flags(self.group_id, tab_groups);
+            tab_group_menu_entry_flags(self.group_id, tab_groups, is_only_member_of_group);
         let mut menu_items = vec![];
         if show_new_group {
             menu_items.push(
