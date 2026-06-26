@@ -350,6 +350,7 @@ pub enum CodeReviewAction {
     OpenCreatePrDialog,
     ViewPr(String),
     PublishBranch,
+    SubmitReviewComments,
 }
 
 pub struct FileState {
@@ -2789,6 +2790,8 @@ impl CodeReviewView {
                 ctx
             );
         }
+
+        ctx.focus_self();
     }
 
     /// Clears all review comments.
@@ -7537,6 +7540,12 @@ impl TypedActionView for CodeReviewView {
                     button.set_active(self.git_operations_menu_open, ctx);
                 });
                 ctx.notify();
+            }
+            CodeReviewAction::SubmitReviewComments => {
+                if self.comment_list_view.as_ref(ctx).can_send(ctx) {
+                    self.handle_submit_review_with_comments(ctx);
+                    ctx.notify();
+                }
             }
         }
     }
