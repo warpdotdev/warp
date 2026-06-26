@@ -111,15 +111,24 @@ impl TaskStore {
         None
     }
 
-    /// Modifies a task via the provided closure and rebuilds the exchange index.
+    /// Modifies a task via the provided closure and rebuilds the exchange index if the exchange
+    /// count changes.
     pub fn modify_task<R>(
         &mut self,
         task_id: &TaskId,
         f: impl FnOnce(&mut Task) -> R,
     ) -> Option<R> {
         let task = self.tasks.get_mut(task_id)?;
+        let exchange_count_before = task.exchanges_len();
         let result = f(task);
-        self.rebuild_linearized_refs_index();
+        let exchange_count_after = self
+            .tasks
+            .get(task_id)
+            .map(|t| t.exchanges_len())
+            .unwrap_or(0);
+        if exchange_count_before != exchange_count_after {
+            self.rebuild_linearized_refs_index();
+        }
         Some(result)
     }
 
