@@ -2992,9 +2992,13 @@ fn render_grouped_tab_container(
 
         // Pane view: uniform `GROUP_HORIZONTAL_PADDING` matches ungrouped-tab body padding.
         // Tab view: only apply bottom padding when expanded so a collapsed group has no trailing band.
+        // Expanded tab grou[s] have equal padding on the bottom and right edge.
         let mut padding = Padding::uniform(0.);
         if needs_outer_horizontal_padding {
             padding = Padding::uniform(GROUP_HORIZONTAL_PADDING);
+            if !is_collapsed {
+                padding = padding.with_bottom(GROUP_HORIZONTAL_PADDING + TAB_GROUP_CONTENT_INSET);
+            }
         } else if !is_collapsed {
             padding = padding.with_bottom(TAB_GROUP_CONTENT_INSET);
         }
