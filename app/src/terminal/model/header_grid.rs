@@ -210,7 +210,7 @@ impl HeaderGrid {
         self.prompt_grid = grid;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "tui_test_support"))]
     pub(super) fn set_prompt_and_command_grid(&mut self, grid: BlockGrid) {
         self.prompt_and_command_grid = grid;
     }

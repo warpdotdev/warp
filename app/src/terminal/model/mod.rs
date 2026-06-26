@@ -34,7 +34,7 @@ pub mod secrets;
 pub mod selection;
 pub mod session;
 pub mod terminal_model;
-#[cfg(test)]
+#[cfg(any(test, feature = "tui_test_support"))]
 pub mod test_utils;
 
 pub use secrets::{

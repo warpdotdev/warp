@@ -939,12 +939,12 @@ impl TerminalModel {
     pub fn set_is_input_dirty(&mut self, value: bool) {
         self.is_input_dirty = value;
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "tui_test_support"))]
     #[allow(clippy::too_many_arguments)]
     /// Returns a bootstrapped `TerminalModel` with no restored blocks
     /// and just one default block to avoid any side effects of being
     /// in the middle of the bootstrap sequence.
-    pub fn new_for_test(
+    pub(crate) fn new_for_test(
         sizes: BlockSize,
         colors: color::List,
         event_proxy: ChannelEventListener,

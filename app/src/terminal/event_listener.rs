@@ -76,10 +76,10 @@ impl ChannelEventListener {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "tui_test_support"))]
 mod testing;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "tui_test_support"))]
 pub use testing::*;
 
 use crate::terminal::model::terminal_model::HandlerEvent;

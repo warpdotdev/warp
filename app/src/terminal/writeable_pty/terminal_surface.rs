@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use async_channel::Sender;
 #[cfg(unix)]
 use warpui::AppContext;
-use warpui::{Entity, View, ViewContext};
+use warpui::{Entity, ViewContext};
 
 use crate::ai::agent::AIAgentPtyWriteMode;
 #[cfg(unix)]
@@ -46,7 +46,7 @@ pub trait PtyIntentEvent {
 /// A terminal frontend surface driven by `TerminalManager`.
 ///
 /// Each surface defines how its own event type collapses into a PTY/session intent.
-pub trait TerminalSurface: View + 'static
+pub trait TerminalSurface: Entity + 'static
 where
     <Self as Entity>::Event: PtyIntentEvent,
 {

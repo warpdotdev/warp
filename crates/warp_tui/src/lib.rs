@@ -11,6 +11,8 @@
 //!   upcoming transcript view.
 //! - Binary entry points under `src/bin/`.
 
+mod agent_block;
+mod args;
 pub mod input;
 pub mod root_view;
 pub mod session;
@@ -24,7 +26,12 @@ mod conversation_model;
 #[allow(dead_code)]
 mod conversation_selection;
 #[allow(dead_code)]
+mod grid_render;
 mod prompt_stream;
+mod root;
+mod terminal_block;
+mod terminal_history_index;
+mod transcript_view;
 
 pub use root_view::RootTuiView;
 pub use session::run;
