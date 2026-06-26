@@ -1510,14 +1510,20 @@ impl Line {
                 glyph_color = foreground_color;
             }
 
-            // Determine the horizontal span of this run's glyphs that will actually be
-            // drawn, so the background can be clamped to it. This mirrors the
-            // truncation/stop conditions in the glyph-drawing loop below (the ellipsis
-            // cutoff and the `remaining_width <= 0` stop) without mutating
-            // `remaining_width` or drawing anything; keep the two in sync.
-            let mut visible_left = f32::INFINITY;
-            let mut visible_right = f32::NEG_INFINITY;
-            {
+            // Paint the run's background/border BEFORE its glyphs and underline (the
+            // hyperlink underline is a filled rect in the same layer as the background,
+            // so painting the background afterward would cover and hide the underline on
+            // backgrounded runs such as an inline-code link). Only backgrounded/bordered
+            // runs need this, so the extra glyph walk to compute the visible span is
+            // skipped entirely for normal text runs (the common hot path).
+            if run.styles.border.is_some() || run.styles.background_color.is_some() {
+                // Determine the horizontal span of this run's glyphs that will actually
+                // be drawn, so the background can be clamped to it. This mirrors the
+                // truncation/stop conditions in the glyph-drawing loop below (the
+                // ellipsis cutoff and the `remaining_width <= 0` stop) without mutating
+                // `remaining_width` or drawing anything; keep the two in sync.
+                let mut visible_left = f32::INFINITY;
+                let mut visible_right = f32::NEG_INFINITY;
                 let mut sim_remaining_width = remaining_width;
                 let sim_glyph_iter = if is_start_clipping {
                     itertools::Either::Left(run.glyphs.iter().rev())
@@ -1543,24 +1549,21 @@ impl Line {
                     visible_left = visible_left.min(glyph_x);
                     visible_right = visible_right.max(glyph_x + glyph.width);
                 }
-            }
 
-            // Paint the run's background/border BEFORE its glyphs and underline (the
-            // hyperlink underline is a filled rect in the same layer as the background,
-            // so painting the background afterward would cover and hide the underline on
-            // backgrounded runs such as an inline-code link). Skip it entirely when no
-            // glyphs are visible so a fully truncated run paints no background.
-            if visible_right > visible_left {
-                self.paint_run_background(
-                    run,
-                    line_origin,
-                    bounds,
-                    visible_left,
-                    visible_right,
-                    font_cache,
-                    scene,
-                    baseline_position_fn,
-                );
+                // Skip the background entirely when no glyphs are visible so a fully
+                // truncated run paints no background.
+                if visible_right > visible_left {
+                    self.paint_run_background(
+                        run,
+                        line_origin,
+                        bounds,
+                        visible_left,
+                        visible_right,
+                        font_cache,
+                        scene,
+                        baseline_position_fn,
+                    );
+                }
             }
 
             let glyph_iter = if is_start_clipping {
