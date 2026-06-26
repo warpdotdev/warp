@@ -740,12 +740,13 @@ impl OnboardingStateModel {
     }
 
     fn send_completion_telemetry(&self, ctx: &mut ModelContext<Self>) {
-        let (intention, model, autonomy) = match &self.intention {
-            OnboardingIntention::Terminal => (self.intention.to_string(), None, None),
+        let (intention, model, autonomy, ai_access) = match &self.intention {
+            OnboardingIntention::Terminal => (self.intention.to_string(), None, None, None),
             OnboardingIntention::AgentDrivenDevelopment => (
                 self.intention.to_string(),
                 Some(self.agent_settings.selected_model_id.to_string()),
                 self.agent_settings.autonomy.map(|x| x.to_string()),
+                Some(self.ai_setup_choice.to_string()),
             ),
         };
 
@@ -760,6 +761,7 @@ impl OnboardingStateModel {
                 model,
                 autonomy,
                 has_project_path,
+                ai_access,
             },
             ctx
         );
