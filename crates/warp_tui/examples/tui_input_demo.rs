@@ -88,7 +88,13 @@ impl ShellView {
     ) {
         match event {
             TuiInputViewEvent::Submitted(text) => {
-                ctx.dispatch_typed_action(&ShellAction::Submitted(text.clone()));
+                // Defer the dispatch: this callback runs from inside
+                // `emit_event`, which has temporarily removed `ShellView` from
+                // the window's view map. A synchronous `dispatch_typed_action`
+                // here would fail to find `ShellView` in the responder chain, so
+                // `ShellAction::Submitted` would never be handled. Deferring
+                // queues it as an effect that runs after the view is reinserted.
+                ctx.dispatch_typed_action_deferred(ShellAction::Submitted(text.clone()));
             }
         }
     }

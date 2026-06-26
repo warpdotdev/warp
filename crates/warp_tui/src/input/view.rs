@@ -495,45 +495,101 @@ impl TuiInputView {
     }
 
     // ── Kill range helpers ────────────────────────────────────────────────────
+    //
+    // These compute ranges purely from the plain-text string using the same
+    // char-cell soft-wrap arithmetic as `build_visual_rows`, avoiding any
+    // dependency on the render-state softwrap API (which uses 0-indexed offsets
+    // that differ from the buffer's 1-indexed `CharOffset` convention).
 
     fn range_to_visual_line_end(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
-        let cursor = self.cursor_offset(ctx);
-        let inner = self.model.as_ref(ctx);
-        let render = inner.render_state().as_ref(ctx);
-        let max = inner.content().as_ref(ctx).max_charoffset();
-        let adjusted = cursor.saturating_sub(&CharOffset::from(1));
-        let pt = render.offset_to_softwrap_point(adjusted);
-        let line_end = render
-            .softwrap_point_to_offset(warp_editor::render::model::SoftWrapPoint::new(
-                pt.row() + 1,
-                warp_editor::render::model::ColumnUnit::chars_zero(),
-            ))
-            .saturating_sub(&CharOffset::from(1))
-            .min(max);
-        if line_end <= cursor {
-            None
-        } else {
-            Some(cursor..line_end)
+        let text = self.plain_text(ctx);
+        let cursor_text_offset = self.cursor_text_offset(ctx);
+        // Text-CharOffset is 1-indexed; convert to 0-based string char index.
+        let cursor_idx = cursor_text_offset.saturating_sub(1);
+        let end_idx = visual_line_end_exclusive(&text, cursor_idx, self.terminal_width);
+        if end_idx <= cursor_idx {
+            return None;
         }
+        // Convert back: char at text[i] lives at text-CharOffset(i + 1).
+        Some(CharOffset::from(cursor_text_offset)..CharOffset::from(end_idx + 1))
     }
 
     fn range_from_visual_line_start(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
-        let cursor = self.cursor_offset(ctx);
-        let inner = self.model.as_ref(ctx);
-        let render = inner.render_state().as_ref(ctx);
-        let adjusted = cursor.saturating_sub(&CharOffset::from(1));
-        let pt = render.offset_to_softwrap_point(adjusted);
-        let line_start =
-            render.softwrap_point_to_offset(warp_editor::render::model::SoftWrapPoint::new(
-                pt.row(),
-                warp_editor::render::model::ColumnUnit::chars_zero(),
-            ));
-        if line_start >= cursor {
-            None
-        } else {
-            Some(line_start..cursor)
+        let text = self.plain_text(ctx);
+        let cursor_text_offset = self.cursor_text_offset(ctx);
+        let cursor_idx = cursor_text_offset.saturating_sub(1);
+        let start_idx = visual_line_start_idx(&text, cursor_idx, self.terminal_width);
+        if start_idx >= cursor_idx {
+            return None;
         }
+        Some(CharOffset::from(start_idx + 1)..CharOffset::from(cursor_text_offset))
     }
+
+    /// The cursor position expressed in the *plain-text* coordinate space used by
+    /// [`Self::plain_text`] (i.e. `text_in_range(1..max)`).
+    ///
+    /// The cursor/anchor coordinate space counts the buffer's leading
+    /// block-marker sentinel, so a cursor sitting at the first visible character
+    /// reports `CharOffset(2)` even though that character is at index 0 in
+    /// `plain_text()` (text-CharOffset 1). Subtracting the one-offset sentinel
+    /// converts the cursor into the same 1-indexed text coordinate the kill
+    /// helpers operate in.
+    fn cursor_text_offset(&self, ctx: &AppContext) -> usize {
+        self.cursor_offset(ctx).as_usize().saturating_sub(1)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Kill range pure-text helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns the 0-based exclusive end index of the visual line segment at `cursor_idx`.
+/// Does NOT include any trailing `\n`.
+fn visual_line_end_exclusive(text: &str, cursor_idx: usize, terminal_width: u16) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let w = terminal_width as usize;
+
+    // Start of the logical line (after the previous '\n', or 0).
+    let logical_line_start = chars[..cursor_idx]
+        .iter()
+        .rposition(|&c| c == '\n')
+        .map(|p| p + 1)
+        .unwrap_or(0);
+
+    // End of the logical line (exclusive, not including the '\n' itself).
+    let logical_line_end = chars[cursor_idx..]
+        .iter()
+        .position(|&c| c == '\n')
+        .map(|p| cursor_idx + p)
+        .unwrap_or(chars.len());
+
+    if w == 0 {
+        return logical_line_end;
+    }
+
+    let pos_in_line = cursor_idx - logical_line_start;
+    let visual_seg_start_in_line = (pos_in_line / w) * w;
+    (logical_line_start + visual_seg_start_in_line + w).min(logical_line_end)
+}
+
+/// Returns the 0-based start index of the visual line segment at `cursor_idx`.
+fn visual_line_start_idx(text: &str, cursor_idx: usize, terminal_width: u16) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let w = terminal_width as usize;
+
+    let logical_line_start = chars[..cursor_idx]
+        .iter()
+        .rposition(|&c| c == '\n')
+        .map(|p| p + 1)
+        .unwrap_or(0);
+
+    if w == 0 {
+        return logical_line_start;
+    }
+
+    let pos_in_line = cursor_idx - logical_line_start;
+    let visual_seg_start_in_line = (pos_in_line / w) * w;
+    logical_line_start + visual_seg_start_in_line
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

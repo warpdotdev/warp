@@ -1695,8 +1695,6 @@ impl CodeEditorModel {
     fn update_cursor_line_highlights(&self, ctx: &mut ModelContext<CodeEditorModel>) {
         let selection_model = self.selection_model.as_ref(ctx);
 
-        let overlay = Appearance::as_ref(ctx).theme().surface_2();
-
         let highlight_line = if self.diff_nav_is_active() {
             // We don't show current line highlights during diff navigation so we don't need
             // to update the `RenderState`. This lets us keep the line decorations we set
@@ -1705,6 +1703,7 @@ impl CodeEditorModel {
         } else if selection_model.all_single_cursors() && self.show_current_line_highlights {
             // When diff is not expanded, the only source of line decoration is highlights
             // from the active cursor, e.g. the current line highlight.
+            let overlay = Appearance::as_ref(ctx).theme().surface_2();
             Some(
                 selection_model
                     .selected_lines(ctx)
