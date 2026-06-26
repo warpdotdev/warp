@@ -138,9 +138,6 @@ impl AgentToolbarItemKind {
             Self::NLDToggle => Some(Icon::NLD),
             Self::VoiceInput => Some(Icon::Microphone),
             Self::FileAttach => Some(Icon::Plus),
-            // Full-white circle as the representative/placeholder icon: under
-            // the remaining-context semantics a fresh conversation is at 100%
-            // remaining, and live usage replaces this via the render fn.
             Self::ContextWindowUsage => Some(Icon::ContextRemaining100),
             Self::FileExplorer => Some(Icon::FileCopy),
             Self::RichInput => Some(Icon::TextInput),

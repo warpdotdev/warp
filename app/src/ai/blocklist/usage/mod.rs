@@ -45,9 +45,6 @@ pub fn render_context_window_usage_icon(
 ) -> Box<dyn Element> {
     let icon = icon_for_context_window_usage(context_window_usage);
 
-    // Independent of the white/grey fill level, tint the whole circle red once
-    // the context window is nearly full (>= 80% used) to warn that the
-    // conversation is running out of context.
     let fill = if context_window_usage >= 0.8 {
         Fill::Solid(theme.ansi_fg_red())
     } else {

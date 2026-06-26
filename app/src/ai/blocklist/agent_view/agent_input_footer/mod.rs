@@ -609,9 +609,6 @@ impl AgentInputFooter {
 
         let context_window_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
-                // Placeholder before live usage loads: a fresh conversation is
-                // at 100% context remaining, i.e. an all-white circle. The real
-                // level is set by `update_context_window_button`.
                 .with_icon(Icon::ContextRemaining100)
                 .with_tooltip("Context window usage")
                 .with_size(button_size)
