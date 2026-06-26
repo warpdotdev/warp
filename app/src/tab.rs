@@ -1769,17 +1769,29 @@ impl<'a> TabComponent<'a> {
         )
         .finish();
 
-        // Grouped member: inset rounded highlight, no side dividers, no
-        // drop target (members can't be dragged currently).
+        // Grouped member: inset rounded highlight, no side dividers. It still
+        // gets its own drop target so a dragged pane can land at this member's
+        // slot (and the member highlights while hovered).
         if self.grouped_member {
             let highlight = Container::new(stack)
                 .with_background(background_color)
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.0)))
                 .finish();
-            return Container::new(highlight)
+            let member = Container::new(highlight)
                 .with_vertical_padding(3.)
                 .with_horizontal_padding(3.)
                 .finish();
+            return if self.for_drag_ghost {
+                member
+            } else {
+                DropTarget::new(
+                    member,
+                    TabBarDropTargetData {
+                        tab_bar_location: TabBarLocation::TabIndex(self.tab_index),
+                    },
+                )
+                .finish()
+            };
         }
 
         let mut tab = Container::new(stack)

@@ -19689,15 +19689,23 @@ impl Workspace {
             // instead, dragging the whole group rather than orphaning it.
             let is_sole_member = group_has_single_member(&self.tabs, group.id);
             for idx in member_range {
+                // Insertion divider before this member when a pane drop lands
+                // here (into the group at `idx`).
+                if show_before_indicator(self.hovered_tab_index, idx, Some(group.id)) {
+                    row.add_child(self.render_tab_hover_indicator(appearance));
+                }
                 let tab = &self.tabs[idx];
                 let effective_color = self.effective_tab_color(tab);
+                // Highlight the member when a drag is hovering directly over it.
+                let is_drag_target =
+                    self.hovered_tab_index == Some(TabBarHoverIndex::OverTab(idx));
                 let member = TabComponent::new(
                     idx,
                     tab_bar_state,
                     tab,
                     self.tab_rename_editor.clone(),
                     close_button_position,
-                    false,
+                    is_drag_target,
                     ctx,
                 )
                 .with_effective_color(effective_color)
@@ -19706,6 +19714,10 @@ impl Workspace {
                 .build()
                 .finish();
                 row.add_child(member);
+            }
+            // Divider after the last member (into the group's last slot).
+            if show_before_indicator(self.hovered_tab_index, first_index + run_len, Some(group.id)) {
+                row.add_child(self.render_tab_hover_indicator(appearance));
             }
         }
 
@@ -19758,6 +19770,34 @@ impl Workspace {
             Container::new(container)
                 .with_background_color(theme.background().into_solid_bias_top_color())
                 .finish()
+        } else {
+            container
+        };
+
+        // While a pane is being dragged, the whole group is a drop target.
+        // Members also carry their own, smaller targets, so the framework's
+        // smallest-area hit-test lets a member win wherever they overlap; this
+        // group target effectively just covers the header and the flex spacers
+        // on either side of the members.
+        //
+        // `tab_bar_location` is the input to the shared drag hit-testing, not a
+        // fixed landing slot. `TabIndex(first)` makes the resolver hit-test
+        // the first member's geometry against the cursor, then lets the
+        // workspace (which can see the group's rect) decide whether the drop is
+        // before the group or into it, and at which slot. A collapsed group has
+        // no visible members to drop between, so it uses `AfterTabIndex(first)`,
+        // which resolves straight to "before the group" with no hit-testing.
+        //
+        // (A drop over the trailing spacer resolves toward the group's front via
+        // `first`; in practice the last member's smaller target wins there, so
+        // it's a harmless fallback.)
+        let container = if vertical_tabs::any_workspace_pane_being_dragged(self, ctx) {
+            let tab_bar_location = if is_collapsed {
+                TabBarLocation::AfterTabIndex(first_index)
+            } else {
+                TabBarLocation::TabIndex(first_index)
+            };
+            DropTarget::new(container, TabBarDropTargetData { tab_bar_location }).finish()
         } else {
             container
         };
@@ -20702,6 +20742,11 @@ impl Workspace {
                         first_index,
                         run_len,
                     } => {
+                        // Ungrouped insertion just before the group; a drop into
+                        // the group highlights the group itself instead.
+                        if show_before_indicator(self.hovered_tab_index, *first_index, None) {
+                            tab_bar.add_child(self.render_tab_hover_indicator(appearance));
+                        }
                         // Filtered above; the group must exist in `tab_groups`.
                         let group = self.tab_groups[group_id].clone();
                         tab_bar.add_child(self.render_horizontal_tab_group(
@@ -28340,11 +28385,11 @@ impl Workspace {
     }
 
     /// Resolves the tab group a `BeforeTab` insertion lands in, using the drag
-    /// cursor, for the vertical tabs panel. The header computes the bare
+    /// cursor, for whichever tab bar is active. The header computes the bare
     /// before/over/after from the hovered row's geometry; this fills in the
     /// group from the workspace's own tab-group geometry (which the header can't
-    /// see) and clamps ungrouped insertions out of the pinned region. `OverTab`,
-    /// and any drag over the horizontal bar, are returned unchanged.
+    /// see) and clamps ungrouped insertions out of the pinned region. `OverTab`
+    /// is returned unchanged.
     fn refine_hovered_tab_index(
         &self,
         hovered: TabBarHoverIndex,
@@ -28354,13 +28399,11 @@ impl Workspace {
         let TabBarHoverIndex::BeforeTab { index, .. } = hovered else {
             return hovered;
         };
-        // Group-aware resolution + pinned clamping are scoped to the vertical
-        // tabs panel; the horizontal bar keeps its existing behavior.
-        if !uses_vertical_tabs(ctx) {
-            return hovered;
-        }
+        // Resolve the group along whichever axis the active tab bar uses, then
+        // clamp ungrouped insertions out of the pinned region below.
+        let is_vertical = uses_vertical_tabs(ctx);
         let group = if FeatureFlag::GroupedTabs.is_enabled() {
-            self.insertion_group(index, drag_position.center().y(), ctx)
+            self.insertion_group(index, drag_position.center(), is_vertical, ctx)
         } else {
             None
         };
@@ -28376,15 +28419,16 @@ impl Workspace {
     }
 
     /// Returns the expanded tab group a `BeforeTab` insertion at `index` should
-    /// join in the vertical tabs panel, based on the drag cursor's Y against the
-    /// group's saved container rect. Collapsed groups are excluded (you can't
-    /// drop into one). "Before the group" is only the leading half of the
-    /// header; the in-group zone runs to the group's trailing edge so the last
-    /// slot is easy to hit.
+    /// join, based on the drag cursor against the group's saved container rect
+    /// along the active axis (Y for the vertical panel, X for the horizontal
+    /// bar). Collapsed groups are excluded (you can't drop into one). "Before
+    /// the group" is only the leading half of the header; the in-group zone runs
+    /// to the group's trailing edge so the last slot is easy to hit.
     fn insertion_group(
         &self,
         index: usize,
-        cursor_y: f32,
+        cursor: Vector2F,
+        is_vertical: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Option<TabGroupId> {
         for (group_id, group) in &self.tab_groups {
@@ -28398,20 +28442,35 @@ impl Workspace {
             if index < first || index > last + 1 {
                 continue;
             }
-            let Some(group_rect) = ctx.element_position_by_id(vtab_group_position_id(*group_id))
-            else {
+            let position_id = if is_vertical {
+                vtab_group_position_id(*group_id)
+            } else {
+                htab_group_position_id(*group_id)
+            };
+            let Some(group_rect) = ctx.element_position_by_id(position_id) else {
                 continue;
             };
-            let group_start = group_rect.min_y();
-            let group_end = group_rect.max_y();
+            // Project the group rect and cursor onto the active axis.
+            let (group_start, group_end, cursor_pos) = if is_vertical {
+                (group_rect.min_y(), group_rect.max_y(), cursor.y())
+            } else {
+                (group_rect.min_x(), group_rect.max_x(), cursor.x())
+            };
             // "Before the group" is the leading half of the header (before the
-            // first member's top edge); everything past that, to the group's
-            // bottom edge, joins the group.
+            // first member's leading edge); everything past that, to the group's
+            // trailing edge, joins the group.
             let in_group_start = ctx
                 .element_position_by_id(tab_position_id(first))
-                .map(|first_rect| (group_start + first_rect.min_y()) / 2.)
+                .map(|first_rect| {
+                    let first_start = if is_vertical {
+                        first_rect.min_y()
+                    } else {
+                        first_rect.min_x()
+                    };
+                    (group_start + first_start) / 2.
+                })
                 .unwrap_or(group_start);
-            if cursor_y >= in_group_start && cursor_y <= group_end {
+            if cursor_pos >= in_group_start && cursor_pos <= group_end {
                 return Some(*group_id);
             }
         }
