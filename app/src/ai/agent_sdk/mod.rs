@@ -312,6 +312,9 @@ fn run_agent(
                     "--claude-auth-secret is only valid with --harness claude."
                 ));
             }
+            if args.runner.is_some() && !FeatureFlag::CloudRunners.is_enabled() {
+                return Err(anyhow::anyhow!("unexpected argument '--runner' found"));
+            }
             ambient::run_ambient_agent(ctx, args)
         }
         AgentCommand::Profile(sub) => profiles::run(ctx, global_options, sub),
@@ -359,6 +362,14 @@ fn build_merged_config_and_task(
     // Merge precedence: file < CLI < skill
     let file_merged = config_file::merge_with_precedence(loaded_file.as_ref(), Default::default());
 
+    // Runner support is gated. The `run` command has no `--runner` flag, but a
+    // config file can still set `runner_id`, so reject it when the flag is off.
+    if file_merged.runner_id.is_some() && !FeatureFlag::CloudRunners.is_enabled() {
+        return Err(anyhow::anyhow!(
+            "`runner_id` is set in the config file but runner support is not enabled"
+        ));
+    }
+
     // Skill provides base_prompt and optionally name
     let (skill_name, runtime_base_prompt) = match resolved_skill {
         Some(skill) => (Some(skill.name.clone()), Some(skill.instructions.clone())),
@@ -387,6 +398,7 @@ fn build_merged_config_and_task(
         // CLI name > skill name > file name
         name: args.name.clone().or(skill_name).or(file_merged.name),
         environment_id: args.environment.clone().or(file_merged.environment_id),
+        runner_id: file_merged.runner_id,
         model_id: oz_model,
         // Skill base_prompt takes precedence over file base_prompt
         base_prompt: runtime_base_prompt.clone().or(file_merged.base_prompt),
@@ -486,6 +498,7 @@ fn build_server_side_task(
     let config = AgentConfigSnapshot {
         name: args.name.clone().or(skill_name),
         environment_id: environment.clone(),
+        runner_id: None,
         model_id: model_id_string,
         base_prompt: None,
         mcp_servers: cli_mcp_servers,

@@ -20,6 +20,9 @@ pub enum OnboardingEvent {
         model: Option<String>,
         autonomy: Option<String>,
         has_project_path: bool,
+        /// How the user is accessing AI when intention is agent_driven:
+        /// "warp_agent" or "third_party". None when intention is not agent_driven.
+        ai_access: Option<String>,
     },
     /// The user clicked the "Get Started" button.
     GetStartedClicked,
@@ -87,11 +90,13 @@ impl TelemetryEvent for OnboardingEvent {
                 model,
                 autonomy,
                 has_project_path,
+                ai_access,
             } => Some(json!({
                 "intention": intention,
                 "model": model,
                 "autonomy": autonomy,
                 "has_project_path": has_project_path,
+                "ai_access": ai_access,
             })),
             OnboardingEvent::GetStartedClicked => None,
             OnboardingEvent::FolderSelectionStarted => None,

@@ -29,6 +29,7 @@ use crate::terminal::input::models::data_source::{AcceptModel, ModelSelectorData
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
 };
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
 use crate::view_components::alert::{Alert, AlertConfig};
@@ -113,8 +114,10 @@ pub struct InlineModelSelectorView {
 }
 
 impl InlineModelSelectorView {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         terminal_view_id: EntityId,
+        ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
         suggestions_mode_model: ModelHandle<InputSuggestionsModeModel>,
         agent_view_controller: ModelHandle<AgentViewController>,
         input_buffer_model: &ModelHandle<InputBufferModel>,
@@ -122,7 +125,9 @@ impl InlineModelSelectorView {
         positioner: &ModelHandle<InlineMenuPositioner>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let data_source = ctx.add_model(|_| ModelSelectorDataSource::new(terminal_view_id));
+        let data_source = ctx.add_model(|_| {
+            ModelSelectorDataSource::new(terminal_view_id, ambient_agent_view_model)
+        });
 
         let tab_configs = TAB_CONFIGS.clone();
         let initial_filters = tab_configs

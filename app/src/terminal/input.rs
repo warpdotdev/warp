@@ -3401,6 +3401,7 @@ impl Input {
         let inline_model_selector_view = ctx.add_view(|ctx| {
             InlineModelSelectorView::new(
                 terminal_view_id,
+                ambient_agent_view_model.clone(),
                 suggestions_mode_model.clone(),
                 agent_view_controller.clone(),
                 &buffer_model,

@@ -169,8 +169,11 @@ impl super::WarpConfig {
     /// Writes a custom model router to disk as a YAML file.
     ///
     /// When `existing_path` is provided (editing) the file at that path is
-    /// overwritten; otherwise a new file named `<name>.yaml` is created under
-    /// `custom_model_routers_dir()`. Returns the path written to.
+    /// overwritten; otherwise a new file is created under
+    /// `custom_model_routers_dir()`. The file name is derived from `name` by
+    /// lowercasing and replacing non-alphanumeric characters (except `-`) with
+    /// `_`. If the candidate path already exists, a numeric suffix is appended
+    /// (`_2`, `_3`, …) until a free slot is found. Returns the path written to.
     #[cfg(feature = "local_fs")]
     pub fn save_custom_model_router(
         name: &str,
@@ -183,7 +186,18 @@ impl super::WarpConfig {
         let path = if let Some(p) = existing_path {
             p.to_path_buf()
         } else {
-            dir.join(format!("{name}.yaml"))
+            let sanitized = name
+                .to_lowercase()
+                .replace(|c: char| !c.is_alphanumeric() && c != '-', "_");
+            let candidate = dir.join(format!("{sanitized}.yaml"));
+            if candidate.exists() {
+                (2..)
+                    .map(|n| dir.join(format!("{sanitized}_{n}.yaml")))
+                    .find(|p| !p.exists())
+                    .expect("infinite iterator always finds a free slot")
+            } else {
+                candidate
+            }
         };
         std::fs::write(&path, yaml)
             .map_err(|e| anyhow::anyhow!("could not write router file: {e}"))?;
