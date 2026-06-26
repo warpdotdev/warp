@@ -38,8 +38,10 @@ use crate::terminal::cli_agent_sessions::{
 /// a `terminal_view_id → task_id` mapping via `register_cli_session`.
 pub struct LocalAgentTaskSyncModel {
     ai_client: Arc<dyn AIClient>,
-    /// Maps terminal view IDs to task IDs for third-party harness sessions
-    /// that don't have conversations in `BlocklistAIHistoryModel`.
+    /// Maps terminal view IDs to task IDs for third-party harness runs that
+    /// don't have conversations in `BlocklistAIHistoryModel`. These mappings
+    /// live for the process-scoped `AgentDriver` run, which can span multiple
+    /// pane-scoped CLI agent sessions.
     cli_session_task_ids: HashMap<EntityId, AmbientAgentTaskId>,
     /// Serializes and coalesces model-owned updates independently per task.
     update_queue: LocalTaskUpdateQueue,
@@ -189,14 +191,12 @@ impl LocalAgentTaskSyncModel {
             } => {
                 self.on_cli_session_status_changed(*terminal_view_id, status, ctx);
             }
-            CLIAgentSessionsModelEvent::Ended {
-                terminal_view_id, ..
-            } => {
-                if let Some(task_id) = self.cli_session_task_ids.remove(terminal_view_id) {
-                    self.update_queue.remove_task(&task_id);
-                }
-            }
-            _ => {}
+            // Pane-scoped CLI agent sessions can end between preflight, the
+            // harness, and follow-ups, but the mapping belongs to the driver run.
+            CLIAgentSessionsModelEvent::Started { .. }
+            | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
+            | CLIAgentSessionsModelEvent::Ended { .. }
+            | CLIAgentSessionsModelEvent::SessionUpdated { .. } => {}
         }
     }
 
