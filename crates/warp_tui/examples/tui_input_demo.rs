@@ -31,7 +31,8 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use warp_tui::input::{TuiEditorModel, TuiEditorModelEvent, TuiInputView};
+use warp::editor::CodeEditorModel;
+use warp_tui::input::{TuiInputView, TuiInputViewEvent};
 use warpui_core::elements::tui::{
     Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiStyle, TuiText,
 };
@@ -52,7 +53,6 @@ enum ShellAction {
 }
 
 struct ShellView {
-    input_model: ModelHandle<TuiEditorModel>,
     input_view: warpui_core::ViewHandle<TuiInputView>,
     quit: Rc<Cell<bool>>,
     last_submitted: Option<String>,
@@ -64,38 +64,31 @@ impl Entity for ShellView {
 
 impl ShellView {
     fn new(quit: Rc<Cell<bool>>, ctx: &mut ViewContext<Self>) -> Self {
-        // Create the TuiInputModel backed by the real editor infrastructure.
-        let terminal_width = 80_u16; // initial; will update on first resize
-        let input_model = ctx.add_model(|ctx| TuiEditorModel::new(terminal_width, ctx));
+        let terminal_width = 80_u16;
+        let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(terminal_width, ctx));
 
-        // Subscribe to TuiInputModel events so we can react to Submit.
-        ctx.subscribe_to_model(&input_model, Self::handle_input_event);
-
-        // Create the TuiInputView wrapping the model.
-        let input_model_clone = input_model.clone();
-        let input_view =
-            ctx.add_typed_action_tui_view(move |_| TuiInputView::new(input_model_clone.clone()));
+        // Create TuiInputView — subscribe to its Submitted event for submit handling.
+        let input_view = ctx.add_typed_action_tui_view(move |ctx| {
+            TuiInputView::new(input_model, terminal_width, ctx)
+        });
+        ctx.subscribe_to_view(&input_view, Self::handle_input_view_event);
 
         Self {
-            input_model,
             input_view,
             quit,
             last_submitted: None,
         }
     }
 
-    fn handle_input_event(
+    fn handle_input_view_event(
         &mut self,
-        _model: ModelHandle<TuiEditorModel>,
-        event: &TuiEditorModelEvent,
+        _view: warpui_core::ViewHandle<TuiInputView>,
+        event: &TuiInputViewEvent,
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            TuiEditorModelEvent::Submit(text) => {
+            TuiInputViewEvent::Submitted(text) => {
                 ctx.dispatch_typed_action(&ShellAction::Submitted(text.clone()));
-            }
-            TuiEditorModelEvent::Changed => {
-                ctx.notify();
             }
         }
     }
@@ -107,8 +100,8 @@ impl TuiView for ShellView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        let model = self.input_model.as_ref(ctx);
-        let lines = model.visual_line_count(ctx);
+        let input_view = self.input_view.as_ref(ctx);
+        let lines = input_view.visual_line_count(ctx);
         let dim = TuiStyle::default().add_modifier(Modifier::DIM);
         let bold = TuiStyle::default().add_modifier(Modifier::BOLD);
 

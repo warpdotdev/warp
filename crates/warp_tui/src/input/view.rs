@@ -1,33 +1,57 @@
-//! [`TuiInputView`] — the ratatui-rendered view for the TUI input.
+//! [`TuiInputView`] — ratatui-rendered TUI prompt input.
 //!
-//! Implements [`TuiView`] + [`TypedActionView`]. The view's `render()` produces a
-//! [`TuiInputElement`] that:
+//! Implements [`TuiView`] + [`TypedActionView`]. The view:
 //!
-//! - Lays out and paints visible text rows from the model buffer.
-//! - Returns the cursor's cell position via `cursor_position()`.
-//! - Dispatches keystrokes as [`TuiInputAction`] typed actions via `dispatch_event()`.
+//! - Holds a [`ModelHandle<CodeEditorModel>`] constructed in `LayoutMode::CharCell`.
+//! - Owns all TUI-specific session state: kill buffer, scroll offset, terminal width.
+//! - Dispatches keystrokes as [`TuiInputAction`] typed actions.
+//! - Emits [`TuiInputViewEvent::Submitted`] when the user presses Enter.
 //!
-//! `handle_action()` receives the action and calls the corresponding model method.
+//! # Architecture
 //!
-//! See `specs/tui-input-view/TECH.md` for the full keybinding table and architecture.
+//! The view works directly with [`CodeEditorModel`] (char-cell mode) so that future
+//! TUI features — vim, syntax highlighting, diff, hidden lines — come for free from
+//! the shared editor infrastructure.  TUI-specific concepts (kill ring, terminal
+//! viewport scroll, readline keybindings) belong to this view layer, not to the
+//! underlying editor model.
+//!
+//! See `specs/tui-input-view/TECH.md` for the full keybinding table.
 
 use std::cmp;
+use std::ops::Range;
 
+use num_traits::SaturatingSub;
+use string_offset::CharOffset;
+use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
+use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
+use warp_editor::selection::TextUnit;
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiColumn, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
     TuiParentElement, TuiRect, TuiSize, TuiStyle, TuiText,
 };
+use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
 
-use super::model::TuiEditorModel;
+use super::kill_buffer::KillBuffer;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// View events
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Events emitted by [`TuiInputView`].
+#[derive(Debug, Clone)]
+pub enum TuiInputViewEvent {
+    /// The user pressed Enter to submit the current input. Contains the final text.
+    Submitted(String),
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Typed action enum
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// All editing operations that can be dispatched from `TuiInputElement::dispatch_event`.
+/// All editing operations dispatched from `TuiInputElement::dispatch_event`.
 ///
-/// Each variant corresponds to one or more keybindings from the spec's keybinding table.
+/// Each variant corresponds to one or more keybindings from the spec keybinding table.
 #[derive(Debug, Clone)]
 pub enum TuiInputAction {
     /// Insert a character (`Char(c)` key events).
@@ -78,11 +102,9 @@ pub enum TuiInputAction {
     Yank,
     /// Undo (`Ctrl+Z`).
     Undo,
-    /// Redo (`Ctrl+Shift+Z`, `Ctrl+Y` after redo — future).
+    /// Redo (`Ctrl+Shift+Z`).
     Redo,
 }
-
-// `TuiInputAction` satisfies the `Action` blanket impl (Any + Debug + Send + Sync).
 
 // ─────────────────────────────────────────────────────────────────────────────
 // View
@@ -90,22 +112,59 @@ pub enum TuiInputAction {
 
 /// The `TuiView`-implementing entry point for the TUI prompt input.
 pub struct TuiInputView {
-    model: ModelHandle<TuiEditorModel>,
-    /// Maximum number of visible rows before the input scrolls (matches spec: 6).
+    /// The backing code editor in char-cell (terminal) mode.
+    model: ModelHandle<CodeEditorModel>,
+    /// Single-entry kill buffer for `Ctrl+K` / `Ctrl+U` / `Ctrl+Y`.
+    kill_buffer: KillBuffer,
+    /// First visible visual row (0-indexed).
+    scroll_offset: u32,
+    /// Terminal width in columns. Kept in sync with the model's `CharCellState`.
+    terminal_width: u16,
+    /// Maximum number of visible rows before the input scrolls.
     max_visible_rows: u32,
 }
 
 impl Entity for TuiInputView {
-    type Event = ();
+    type Event = TuiInputViewEvent;
 }
 
 impl TuiInputView {
-    /// Construct a new `TuiInputView` wrapping `model`.
-    pub fn new(model: ModelHandle<TuiEditorModel>) -> Self {
+    /// Construct a new `TuiInputView` backed by `model` (must be in char-cell mode).
+    ///
+    /// Subscribes to [`CodeEditorModelEvent::ContentChanged`] to trigger re-renders
+    /// whenever the buffer changes from outside `handle_action`.
+    pub fn new(
+        model: ModelHandle<CodeEditorModel>,
+        terminal_width: u16,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        ctx.subscribe_to_model(&model, |_, _, event, ctx| {
+            if matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
+                ctx.notify();
+            }
+        });
         Self {
             model,
+            kill_buffer: KillBuffer::default(),
+            scroll_offset: 0,
+            terminal_width,
             max_visible_rows: 6,
         }
+    }
+
+    /// Returns a handle to the backing [`CodeEditorModel`].
+    pub fn model(&self) -> &ModelHandle<CodeEditorModel> {
+        &self.model
+    }
+
+    /// Update the terminal width, resizing the char-cell layout on the model.
+    pub fn set_terminal_width(&mut self, width: u16, ctx: &mut ViewContext<Self>) {
+        if self.terminal_width == width {
+            return;
+        }
+        self.terminal_width = width;
+        self.model
+            .update(ctx, |m, ctx| m.set_tui_terminal_width(width, ctx));
     }
 }
 
@@ -115,34 +174,25 @@ impl TuiView for TuiInputView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        let model = self.model.as_ref(ctx);
+        // ── Gather state ───────────────────────────────────────────────────────
+        let text = self.plain_text(ctx);
+        let terminal_width = self.terminal_width;
+        let scroll_offset = self.scroll_offset;
+        let visible_rows = cmp::min(self.visual_line_count(ctx), self.max_visible_rows);
 
-        // ── Gather model state ─────────────────────────────────────────────────
-        let text = model.plain_text(ctx);
-        let terminal_width = model.terminal_width;
-        let scroll_offset = model.scroll_offset();
-        let visible_rows = cmp::min(model.visual_line_count(ctx), self.max_visible_rows);
-
-        // Cursor position in visual coordinates.
-        let cursor_offset = model.cursor_offset(ctx);
+        let cursor_offset = self.cursor_offset(ctx);
         let (cursor_visual_row, cursor_col) =
             char_cell_cursor_pos(&text, cursor_offset, terminal_width);
-
-        // Cursor row relative to the scroll offset.
         let cursor_row_in_view = cursor_visual_row.saturating_sub(scroll_offset);
 
-        // Selection range (0-based char indices in the text string).
-        let sel_char_range = model.selection_range(ctx).map(|r| {
-            // CharOffset N maps to text char index N-1 (see char_cell_cursor_pos).
+        let sel_char_range = self.selection_range(ctx).map(|r| {
             let start = r.start.as_usize().saturating_sub(1);
             let end = r.end.as_usize().saturating_sub(1);
             (start, end)
         });
 
-        // ── Build visual rows with per-row char offsets ─────────────────────────
+        // ── Build visible rows ─────────────────────────────────────────────────
         let rows_with_offsets = build_visual_rows_with_offsets(&text, terminal_width);
-
-        // Take the visible slice.
         let visible_start = scroll_offset as usize;
         let visible_end =
             (scroll_offset as usize + visible_rows as usize).min(rows_with_offsets.len());
@@ -152,15 +202,13 @@ impl TuiView for TuiInputView {
             vec![(String::new(), 0)]
         };
 
-        // ── Compute selection spans per visible row ─────────────────────────────
+        // ── Selection spans per visible row ────────────────────────────────────
         let mut selected_spans: Vec<(u16, u16, u16)> = Vec::new();
         if let Some((sel_start, sel_end)) = sel_char_range {
             if sel_start < sel_end {
                 for (vis_idx, (row_text, row_char_start)) in visible_rows_slice.iter().enumerate() {
                     let row_len = row_text.chars().count();
                     let row_char_end = row_char_start + row_len;
-
-                    // Does the selection overlap this row?
                     if sel_end > *row_char_start && sel_start < row_char_end {
                         let span_start = sel_start.saturating_sub(*row_char_start);
                         let span_end = (sel_end - row_char_start).min(row_len);
@@ -170,15 +218,11 @@ impl TuiView for TuiInputView {
             }
         }
 
-        // ── Assemble TuiColumn ─────────────────────────────────────────────────
+        // ── Assemble column ────────────────────────────────────────────────────
         let dim = TuiStyle::default().add_modifier(Modifier::DIM);
         let mut column = TuiColumn::new();
-
         for (row_idx, (row_text, _)) in visible_rows_slice.iter().enumerate() {
-            let is_cursor_row = row_idx as u32 == cursor_row_in_view;
-            // DIM non-cursor rows; cursor row uses default style.
-            // Selection highlighting is applied as a post-render overlay in TuiInputElement.
-            let style = if is_cursor_row {
+            let style = if row_idx as u32 == cursor_row_in_view {
                 TuiStyle::default()
             } else {
                 dim
@@ -201,65 +245,309 @@ impl TypedActionView for TuiInputView {
     type Action = TuiInputAction;
 
     fn handle_action(&mut self, action: &TuiInputAction, ctx: &mut ViewContext<Self>) {
-        self.model.update(ctx, |model, ctx| match action {
-            TuiInputAction::InsertChar(c) => model.insert_char(*c, ctx),
-            TuiInputAction::InsertNewline => model.insert_newline(ctx),
-            TuiInputAction::Submit => model.submit(ctx),
-            TuiInputAction::Backspace => model.backspace(ctx),
-            TuiInputAction::DeleteForward => model.delete_forward(ctx),
-            TuiInputAction::MoveLeft => model.move_left(ctx),
-            TuiInputAction::MoveRight => model.move_right(ctx),
-            TuiInputAction::MoveUp => model.move_up(ctx),
-            TuiInputAction::MoveDown => model.move_down(ctx),
-            TuiInputAction::MoveWordLeft => model.move_word_left(ctx),
-            TuiInputAction::MoveWordRight => model.move_word_right(ctx),
-            TuiInputAction::MoveToLineStart => model.move_to_line_start(ctx),
-            TuiInputAction::MoveToLineEnd => model.move_to_line_end(ctx),
-            TuiInputAction::SelectLeft => model.select_left(ctx),
-            TuiInputAction::SelectRight => model.select_right(ctx),
-            TuiInputAction::SelectUp => model.select_up(ctx),
-            TuiInputAction::SelectDown => model.select_down(ctx),
-            TuiInputAction::SelectAll => model.select_all(ctx),
-            TuiInputAction::DeleteWordBackward => model.delete_word_backward(ctx),
-            TuiInputAction::DeleteWordForward => model.delete_word_forward(ctx),
-            TuiInputAction::KillToLineEnd => model.kill_to_line_end(ctx),
-            TuiInputAction::KillToLineStart => model.kill_to_line_start(ctx),
-            TuiInputAction::Yank => model.yank(ctx),
-            TuiInputAction::Undo => model.undo(ctx),
-            TuiInputAction::Redo => model.redo(ctx),
-        });
+        match action {
+            TuiInputAction::InsertChar(c) => {
+                let s = c.to_string();
+                self.model.update(ctx, |m, ctx| m.user_insert(&s, ctx));
+            }
+            TuiInputAction::InsertNewline => {
+                self.model.update(ctx, |m, ctx| m.user_insert("\n", ctx));
+            }
+            TuiInputAction::Submit => self.submit(ctx),
+            TuiInputAction::Backspace => {
+                self.model.update(ctx, |m, ctx| m.backspace(ctx));
+            }
+            TuiInputAction::DeleteForward => {
+                self.model.update(ctx, |m, ctx| {
+                    m.delete(
+                        warp_editor::selection::TextDirection::Forwards,
+                        TextUnit::Character,
+                        false,
+                        ctx,
+                    )
+                });
+            }
+            TuiInputAction::MoveLeft => {
+                self.model.update(ctx, |m, ctx| m.move_left(ctx));
+            }
+            TuiInputAction::MoveRight => {
+                self.model.update(ctx, |m, ctx| m.move_right(ctx));
+            }
+            TuiInputAction::MoveUp => {
+                self.model.update(ctx, |m, ctx| m.move_up(ctx));
+            }
+            TuiInputAction::MoveDown => {
+                self.model.update(ctx, |m, ctx| m.move_down(ctx));
+            }
+            TuiInputAction::MoveWordLeft => {
+                self.model.update(ctx, |m, ctx| {
+                    m.backward_word_with_unit(
+                        false,
+                        TextUnit::Word(WordBoundariesPolicy::Default),
+                        ctx,
+                    )
+                });
+            }
+            TuiInputAction::MoveWordRight => {
+                self.model.update(ctx, |m, ctx| {
+                    m.forward_word_with_unit(
+                        false,
+                        TextUnit::Word(WordBoundariesPolicy::Default),
+                        ctx,
+                    )
+                });
+            }
+            TuiInputAction::MoveToLineStart => {
+                self.model.update(ctx, |m, ctx| m.move_to_line_start(ctx));
+            }
+            TuiInputAction::MoveToLineEnd => {
+                self.model.update(ctx, |m, ctx| m.move_to_line_end(ctx));
+            }
+            TuiInputAction::SelectLeft => {
+                self.model.update(ctx, |m, ctx| m.select_left(ctx));
+            }
+            TuiInputAction::SelectRight => {
+                self.model.update(ctx, |m, ctx| m.select_right(ctx));
+            }
+            TuiInputAction::SelectUp => {
+                self.model.update(ctx, |m, ctx| m.select_up(ctx));
+            }
+            TuiInputAction::SelectDown => {
+                self.model.update(ctx, |m, ctx| m.select_down(ctx));
+            }
+            TuiInputAction::SelectAll => {
+                self.model.update(ctx, |m, ctx| m.select_all(ctx));
+            }
+            TuiInputAction::DeleteWordBackward => {
+                self.model.update(ctx, |m, ctx| {
+                    m.delete(
+                        warp_editor::selection::TextDirection::Backwards,
+                        TextUnit::Word(WordBoundariesPolicy::Default),
+                        false,
+                        ctx,
+                    )
+                });
+            }
+            TuiInputAction::DeleteWordForward => {
+                self.model.update(ctx, |m, ctx| {
+                    m.delete(
+                        warp_editor::selection::TextDirection::Forwards,
+                        TextUnit::Word(WordBoundariesPolicy::Default),
+                        false,
+                        ctx,
+                    )
+                });
+            }
+            TuiInputAction::KillToLineEnd => self.kill_to_line_end(ctx),
+            TuiInputAction::KillToLineStart => self.kill_to_line_start(ctx),
+            TuiInputAction::Yank => self.yank(ctx),
+            TuiInputAction::Undo => {
+                self.model.update(ctx, |m, ctx| m.undo(ctx));
+            }
+            TuiInputAction::Redo => {
+                self.model.update(ctx, |m, ctx| m.redo(ctx));
+            }
+        }
 
-        // After any action, scroll to keep the cursor visible and re-render.
-        let visible_rows = {
-            let m = self.model.as_ref(ctx);
-            cmp::min(m.visual_line_count(ctx), self.max_visible_rows)
-        };
-        self.model.update(ctx, |model, app| {
-            model.scroll_to_cursor(visible_rows.max(1), app);
-        });
+        let visible_rows = cmp::min(self.visual_line_count(ctx), self.max_visible_rows);
+        self.scroll_to_cursor(visible_rows.max(1), ctx);
         ctx.notify();
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TuiInputElement — the element returned from render()
+// View-level TUI helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl TuiInputView {
+    // ── Read helpers ──────────────────────────────────────────────────────────
+
+    fn plain_text(&self, ctx: &AppContext) -> String {
+        let inner = self.model.as_ref(ctx);
+        let buffer = inner.content().as_ref(ctx);
+        if buffer.is_empty() {
+            return String::new();
+        }
+        buffer.text().into_string()
+    }
+
+    fn cursor_offset(&self, ctx: &AppContext) -> CharOffset {
+        self.model
+            .as_ref(ctx)
+            .selection_model()
+            .as_ref(ctx)
+            .cursors(ctx)
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    }
+
+    fn selection_range(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
+        let inner = self.model.as_ref(ctx);
+        let sel = inner.buffer_selection_model().as_ref(ctx);
+        let head = sel.first_selection_head();
+        let tail = sel.first_selection_tail();
+        if head == tail {
+            None
+        } else {
+            let start = head.min(tail);
+            let end = head.max(tail);
+            Some(start..end)
+        }
+    }
+
+    pub fn visual_line_count(&self, ctx: &AppContext) -> u32 {
+        self.model
+            .as_ref(ctx)
+            .render_state()
+            .as_ref(ctx)
+            .max_line()
+            .as_u32()
+            .max(1)
+    }
+
+    // ── Scroll ────────────────────────────────────────────────────────────────
+
+    fn scroll_to_cursor(&mut self, visible_rows: u32, ctx: &AppContext) {
+        let cursor_offset = self.cursor_offset(ctx);
+        let inner = self.model.as_ref(ctx);
+        let render = inner.render_state().as_ref(ctx);
+        let adjusted = cursor_offset.saturating_sub(&CharOffset::from(1));
+        let pt = render.offset_to_softwrap_point(adjusted);
+        let cursor_row = pt.row();
+
+        if cursor_row < self.scroll_offset {
+            self.scroll_offset = cursor_row;
+        } else if cursor_row >= self.scroll_offset + visible_rows {
+            self.scroll_offset = cursor_row.saturating_sub(visible_rows - 1);
+        }
+    }
+
+    // ── Submit ────────────────────────────────────────────────────────────────
+
+    fn submit(&mut self, ctx: &mut ViewContext<Self>) {
+        let text = self.plain_text(ctx);
+        ctx.emit(TuiInputViewEvent::Submitted(text));
+        self.model.update(ctx, |m, ctx| m.clear_buffer(ctx));
+        self.scroll_offset = 0;
+    }
+
+    // ── Kill / yank ───────────────────────────────────────────────────────────
+
+    fn kill_to_line_end(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(range) = self.range_to_visual_line_end(ctx) {
+            let killed = self
+                .model
+                .as_ref(ctx)
+                .content()
+                .as_ref(ctx)
+                .text_in_range(range.clone())
+                .into_string();
+            self.kill_buffer.kill(killed);
+            self.model.update(ctx, |inner, ctx| {
+                use warp_editor::content::buffer::{BufferEditAction, EditOrigin};
+                inner.update_content(
+                    |mut content, ctx| {
+                        content.apply_edit(
+                            BufferEditAction::Delete(vec1::vec1![range]),
+                            EditOrigin::UserInitiated,
+                            inner.buffer_selection_model().clone(),
+                            ctx,
+                        );
+                    },
+                    ctx,
+                );
+            });
+        }
+    }
+
+    fn kill_to_line_start(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(range) = self.range_from_visual_line_start(ctx) {
+            let killed = self
+                .model
+                .as_ref(ctx)
+                .content()
+                .as_ref(ctx)
+                .text_in_range(range.clone())
+                .into_string();
+            self.kill_buffer.kill(killed);
+            self.model.update(ctx, |inner, ctx| {
+                use warp_editor::content::buffer::{BufferEditAction, EditOrigin};
+                inner.update_content(
+                    |mut content, ctx| {
+                        content.apply_edit(
+                            BufferEditAction::Delete(vec1::vec1![range]),
+                            EditOrigin::UserInitiated,
+                            inner.buffer_selection_model().clone(),
+                            ctx,
+                        );
+                    },
+                    ctx,
+                );
+            });
+        }
+    }
+
+    fn yank(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(text) = self.kill_buffer.yank().map(str::to_owned) {
+            self.model.update(ctx, |m, ctx| m.user_insert(&text, ctx));
+        }
+    }
+
+    // ── Kill range helpers ────────────────────────────────────────────────────
+
+    fn range_to_visual_line_end(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
+        let cursor = self.cursor_offset(ctx);
+        let inner = self.model.as_ref(ctx);
+        let render = inner.render_state().as_ref(ctx);
+        let max = inner.content().as_ref(ctx).max_charoffset();
+        let adjusted = cursor.saturating_sub(&CharOffset::from(1));
+        let pt = render.offset_to_softwrap_point(adjusted);
+        let line_end = render
+            .softwrap_point_to_offset(warp_editor::render::model::SoftWrapPoint::new(
+                pt.row() + 1,
+                warp_editor::render::model::ColumnUnit::chars_zero(),
+            ))
+            .saturating_sub(&CharOffset::from(1))
+            .min(max);
+        if line_end <= cursor {
+            None
+        } else {
+            Some(cursor..line_end)
+        }
+    }
+
+    fn range_from_visual_line_start(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
+        let cursor = self.cursor_offset(ctx);
+        let inner = self.model.as_ref(ctx);
+        let render = inner.render_state().as_ref(ctx);
+        let adjusted = cursor.saturating_sub(&CharOffset::from(1));
+        let pt = render.offset_to_softwrap_point(adjusted);
+        let line_start =
+            render.softwrap_point_to_offset(warp_editor::render::model::SoftWrapPoint::new(
+                pt.row(),
+                warp_editor::render::model::ColumnUnit::chars_zero(),
+            ));
+        if line_start >= cursor {
+            None
+        } else {
+            Some(line_start..cursor)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TuiInputElement — element returned from render()
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The element returned from [`TuiInputView::render`].
-///
-/// Wraps a [`TuiColumn`] of [`TuiText`] rows and overrides `cursor_position` and
-/// `dispatch_event`. Layout and paint are fully delegated to the inner column.
-/// After the column paints, `render` overlays `REVERSED` style on any selected
-/// character cells.
 struct TuiInputElement {
     column: TuiColumn,
     /// The cursor's 0-based column within the visible area.
     cursor_col: u16,
     /// The cursor's 0-based row within the visible area (after scroll_offset subtraction).
     cursor_row_in_view: u16,
-    /// Selected spans: `(row_in_view, start_col, exclusive_end_col)` for each
-    /// visual row that has a non-empty selection. Applied in `render` as a
-    /// [`Modifier::REVERSED`] overlay over the already-painted text.
+    /// Selected spans: `(row_in_view, start_col, exclusive_end_col)`.
     selected_spans: Vec<(u16, u16, u16)>,
 }
 
@@ -269,9 +557,7 @@ impl TuiElement for TuiInputElement {
     }
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
-        // Paint text rows.
         self.column.render(area, buffer, ctx);
-        // Overlay selection highlight: apply REVERSED modifier to selected cells.
         if !self.selected_spans.is_empty() {
             let reversed = TuiStyle::default().add_modifier(Modifier::REVERSED);
             for &(row_in_view, start_col, end_col) in &self.selected_spans {
@@ -288,10 +574,6 @@ impl TuiElement for TuiInputElement {
     }
 
     fn cursor_position(&self, area: TuiRect, _ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
-        // Return area-relative coordinates. The TuiColumn / presenter chain
-        // converts these to absolute terminal coordinates by adding the slot
-        // and root offsets at each level — if we added area.x/y here we'd
-        // double-count them.
         if self.cursor_col >= area.width || self.cursor_row_in_view >= area.height {
             return None;
         }
@@ -306,13 +588,10 @@ impl TuiElement for TuiInputElement {
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> bool {
-        // First offer the event to the child column (currently a no-op since
-        // TuiText and TuiColumn don't handle events themselves).
         if self.column.dispatch_event(event, area, event_ctx, ctx, app) {
             return true;
         }
 
-        // Decode the keystroke and dispatch a typed action.
         if let warpui_core::Event::KeyDown {
             keystroke, chars, ..
         } = event
@@ -323,7 +602,7 @@ impl TuiElement for TuiInputElement {
             let key = keystroke.key.as_str();
 
             let action: Option<TuiInputAction> = match (ctrl, alt, shift, key) {
-                // ── Submit / Newline ─────────────────────────────────────────────
+                // ── Submit / newline ─────────────────────────────────────────────
                 (false, false, false, "enter") => Some(TuiInputAction::Submit),
                 (false, false, true, "enter") => Some(TuiInputAction::InsertNewline),
                 (true, false, false, "j") => Some(TuiInputAction::InsertNewline),
@@ -333,11 +612,9 @@ impl TuiElement for TuiInputElement {
                 (true, false, false, "h") => Some(TuiInputAction::Backspace),
                 (false, false, false, "delete") => Some(TuiInputAction::DeleteForward),
                 (true, false, false, "d") => Some(TuiInputAction::DeleteForward),
-                // Word delete backward: Ctrl+W, Ctrl+Backspace, Alt+Backspace
                 (true, false, false, "w") => Some(TuiInputAction::DeleteWordBackward),
                 (true, false, false, "backspace") => Some(TuiInputAction::DeleteWordBackward),
                 (false, true, false, "backspace") => Some(TuiInputAction::DeleteWordBackward),
-                // Word delete forward: Alt+D, Alt+Delete, Ctrl+Delete
                 (false, true, false, "d") => Some(TuiInputAction::DeleteWordForward),
                 (false, true, false, "delete") => Some(TuiInputAction::DeleteWordForward),
                 (true, false, false, "delete") => Some(TuiInputAction::DeleteWordForward),
@@ -354,14 +631,12 @@ impl TuiElement for TuiInputElement {
                 (false, false, false, "down") | (true, false, false, "n") => {
                     Some(TuiInputAction::MoveDown)
                 }
-                // Word movement
                 (false, true, false, "left")
                 | (false, true, false, "b")
                 | (true, false, false, "left") => Some(TuiInputAction::MoveWordLeft),
                 (false, true, false, "right")
                 | (false, true, false, "f")
                 | (true, false, false, "right") => Some(TuiInputAction::MoveWordRight),
-                // Line start/end
                 (false, false, false, "home") | (true, false, false, "a") => {
                     Some(TuiInputAction::MoveToLineStart)
                 }
@@ -383,7 +658,6 @@ impl TuiElement for TuiInputElement {
                 (true, false, true, "z") => Some(TuiInputAction::Redo),
                 // ── Printable character ───────────────────────────────────────────
                 (false, false, _, _) if !chars.is_empty() && !ctrl && !alt => {
-                    // `chars` is set by the runtime for printable character keys.
                     chars.chars().next().map(TuiInputAction::InsertChar)
                 }
                 _ => None,
@@ -403,9 +677,7 @@ impl TuiElement for TuiInputElement {
 // Char-cell helpers (pure functions, no model dependency)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Splits `text` into visual rows, returning `(row_text, char_start_offset)` pairs
-/// where `char_start_offset` is the 0-based char index in `text` where the row starts.
-/// Used by `TuiInputView::render` to map selection char ranges to per-row column spans.
+/// Splits `text` into visual rows, returning `(row_text, char_start_offset)` pairs.
 pub fn build_visual_rows_with_offsets(text: &str, terminal_width: u16) -> Vec<(String, usize)> {
     let w = terminal_width as usize;
     let mut rows: Vec<(String, usize)> = Vec::new();
@@ -428,8 +700,6 @@ pub fn build_visual_rows_with_offsets(text: &str, terminal_width: u16) -> Vec<(S
                 start = end;
             }
         }
-        // +1 for the '\n' separator (absent for the last line, but we add it
-        // anyway since there is no next logical line to care about).
         global_char_offset += line_len + 1;
     }
 
@@ -440,7 +710,6 @@ pub fn build_visual_rows_with_offsets(text: &str, terminal_width: u16) -> Vec<(S
 }
 
 /// Splits `text` into visual rows of at most `terminal_width` chars each.
-/// Each `\n` starts a new logical line; empty logical lines produce one empty row.
 pub fn build_visual_rows(text: &str, terminal_width: u16) -> Vec<String> {
     let w = terminal_width as usize;
     let mut rows = Vec::new();
@@ -467,18 +736,13 @@ pub fn build_visual_rows(text: &str, terminal_width: u16) -> Vec<String> {
     rows
 }
 
-/// Returns the `(visual_row, visual_col)` of `cursor_offset` in char-cell coordinates.
-///
-/// `cursor_offset` is a 1-indexed [`CharOffset`] (the editor convention).
-/// The result uses 0-based row and column indices.
+/// Returns `(visual_row, visual_col)` for `cursor_offset` in char-cell coordinates.
 pub fn char_cell_cursor_pos(
     text: &str,
-    cursor_offset: string_offset::CharOffset,
+    cursor_offset: CharOffset,
     terminal_width: u16,
 ) -> (u32, u32) {
-    // Convert to 0-based char index (buffer is 1-indexed).
     let cursor_char_idx = cursor_offset.as_usize().saturating_sub(1);
-
     let w = terminal_width as usize;
     let mut visual_row: u32 = 0;
     let mut chars_so_far: usize = 0;
@@ -488,7 +752,6 @@ pub fn char_cell_cursor_pos(
         let line_end_exclusive = chars_so_far + line_len;
 
         if cursor_char_idx <= line_end_exclusive {
-            // Cursor is within this logical line (or at the end of it).
             let offset_in_line = cursor_char_idx.saturating_sub(chars_so_far);
             let (row_in_line, col) = if w == 0 {
                 (0, offset_in_line as u32)
@@ -498,17 +761,14 @@ pub fn char_cell_cursor_pos(
             return (visual_row + row_in_line, col);
         }
 
-        // Account for this logical line's visual rows.
         let line_rows = if w == 0 || line_len == 0 {
             1
         } else {
             line_len.div_ceil(w).max(1)
         };
         visual_row += line_rows as u32;
-        // +1 for the `\n` character itself.
         chars_so_far = line_end_exclusive + 1;
     }
 
-    // Cursor is past the end of the text.
     (visual_row, 0)
 }
