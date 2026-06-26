@@ -417,7 +417,19 @@ impl CodeEditorModel {
 
         let selection_model = ctx.add_model(|_| BufferSelectionModel::new(content.clone()));
 
-        let color_map = Self::syntax_highlighting_color_map(ctx);
+        // Use a zero-color stub map — no language is set on TUI input buffers,
+        // so syntax highlighting never fires. Avoids a dependency on `Appearance`
+        // that is not registered in lightweight TUI or test contexts.
+        let color_map = ColorMap {
+            keyword_color: pathfinder_color::ColorU::black(),
+            function_color: pathfinder_color::ColorU::black(),
+            string_color: pathfinder_color::ColorU::black(),
+            type_color: pathfinder_color::ColorU::black(),
+            number_color: pathfinder_color::ColorU::black(),
+            comment_color: pathfinder_color::ColorU::black(),
+            property_color: pathfinder_color::ColorU::black(),
+            tag_color: pathfinder_color::ColorU::black(),
+        };
         let buffer_version = content.as_ref(ctx).buffer_version();
         let buffer_handle = content.downgrade();
         let syntax_tree =

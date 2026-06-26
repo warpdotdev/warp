@@ -39,7 +39,7 @@ use warpui_core::elements::tui::{
 use warpui_core::platform::WindowStyle;
 use warpui_core::runtime::TuiRuntime;
 use warpui_core::{
-    AddWindowOptions, App, AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext,
+    AddWindowOptions, App, AppContext, Entity, TuiView, TypedActionView, ViewContext,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
