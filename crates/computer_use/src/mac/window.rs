@@ -5,17 +5,13 @@
 //! AppKit route them, we reconstruct the target window (its number and bounds) so the event
 //! can be built as a window-targeted `NSEvent` with window-local coordinates.
 
-use std::ffi::c_void;
-
-use core_foundation::base::TCFType;
-use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
-use core_foundation::number::{CFNumber, CFNumberRef};
-use core_foundation::string::{CFString, CFStringRef};
-use core_graphics::window::{
-    copy_window_info, kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
-    kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
-    kCGWindowOwnerPID,
+use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType};
+use objc2_core_graphics::{
+    CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID, kCGWindowBounds,
+    kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName, kCGWindowOwnerPID,
 };
+type WindowDictionary = CFDictionary<CFString, CFType>;
+type BoundsDictionary = CFDictionary<CFString, CFNumber>;
 
 /// Describes an on-screen window: its window number and bounds in global screen points
 /// (top-left origin), matching `kCGWindowBounds` and `CGEvent` location coordinates.
@@ -39,21 +35,17 @@ impl WindowInfo {
 /// The point is in global screen points with a top-left origin. When no owned window's bounds
 /// contain the point, this falls back to the frontmost normal window owned by `pid`.
 pub fn window_at(pid: libc::pid_t, x: f64, y: f64) -> Option<WindowInfo> {
-    let option = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
     // The returned list is ordered front-to-back.
-    let info = copy_window_info(option, 0)?;
+    let info = window_list()?;
 
     // Read the window-info keys once; accessing the framework statics is unsafe.
-    let owner_pid_key = unsafe { kCGWindowOwnerPID } as *const c_void;
-    let layer_key = unsafe { kCGWindowLayer } as *const c_void;
-    let number_key = unsafe { kCGWindowNumber } as *const c_void;
-    let bounds_key = unsafe { kCGWindowBounds } as *const c_void;
+    let owner_pid_key = unsafe { kCGWindowOwnerPID };
+    let layer_key = unsafe { kCGWindowLayer };
+    let number_key = unsafe { kCGWindowNumber };
+    let bounds_key = unsafe { kCGWindowBounds };
 
     let mut fallback: Option<WindowInfo> = None;
-    for entry in info.iter() {
-        let dict: CFDictionary =
-            unsafe { CFDictionary::wrap_under_get_rule(*entry as CFDictionaryRef) };
-
+    for dict in info.iter() {
         // Only consider windows owned by the target process.
         if dict_i64(&dict, owner_pid_key) != Some(pid as i64) {
             continue;
@@ -66,7 +58,7 @@ pub fn window_at(pid: libc::pid_t, x: f64, y: f64) -> Option<WindowInfo> {
 
         let (Some(number), Some((bx, by, bw, bh))) = (
             dict_i64(&dict, number_key),
-            dict_dict(&dict, bounds_key).and_then(|b| read_bounds(&b)),
+            dict_bounds(&dict, bounds_key).and_then(|b| read_bounds(&b)),
         ) else {
             continue;
         };
@@ -96,19 +88,16 @@ pub fn window_at(pid: libc::pid_t, x: f64, y: f64) -> Option<WindowInfo> {
 /// global screen points (top-left origin). Used to resolve a `Target::Window` to concrete
 /// geometry for window-local coordinate remapping and window-scoped screenshot scaling.
 pub fn window_by_id(window_id: u32) -> Option<WindowInfo> {
-    let option = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
-    let info = copy_window_info(option, 0)?;
+    let info = window_list()?;
 
-    let number_key = unsafe { kCGWindowNumber } as *const c_void;
-    let bounds_key = unsafe { kCGWindowBounds } as *const c_void;
+    let number_key = unsafe { kCGWindowNumber };
+    let bounds_key = unsafe { kCGWindowBounds };
 
-    for entry in info.iter() {
-        let dict: CFDictionary =
-            unsafe { CFDictionary::wrap_under_get_rule(*entry as CFDictionaryRef) };
+    for dict in info.iter() {
         if dict_i64(&dict, number_key) != Some(window_id as i64) {
             continue;
         }
-        let (bx, by, bw, bh) = dict_dict(&dict, bounds_key).and_then(|b| read_bounds(&b))?;
+        let (bx, by, bw, bh) = dict_bounds(&dict, bounds_key).and_then(|b| read_bounds(&b))?;
         return Some(WindowInfo {
             number: window_id as i64,
             x: bx,
@@ -124,17 +113,14 @@ pub fn window_by_id(window_id: u32) -> Option<WindowInfo> {
 /// window that currently has input focus. Used to deactivate the previous window when moving
 /// focus to a target without raising it.
 pub fn frontmost_window() -> Option<(libc::pid_t, i64)> {
-    let option = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
-    let info = copy_window_info(option, 0)?;
+    let info = window_list()?;
 
-    let owner_pid_key = unsafe { kCGWindowOwnerPID } as *const c_void;
-    let layer_key = unsafe { kCGWindowLayer } as *const c_void;
-    let number_key = unsafe { kCGWindowNumber } as *const c_void;
+    let owner_pid_key = unsafe { kCGWindowOwnerPID };
+    let layer_key = unsafe { kCGWindowLayer };
+    let number_key = unsafe { kCGWindowNumber };
 
     // The list is front-to-back; the first normal (layer 0) window is the focused one.
-    for entry in info.iter() {
-        let dict: CFDictionary =
-            unsafe { CFDictionary::wrap_under_get_rule(*entry as CFDictionaryRef) };
+    for dict in info.iter() {
         if dict_i64(&dict, layer_key) != Some(0) {
             continue;
         }
@@ -177,29 +163,25 @@ pub fn enumerate_windows() -> Vec<crate::WindowInfo> {
 
 /// Lists on-screen windows (excluding desktop elements), front-to-back, for diagnostics.
 pub fn list_windows() -> Vec<WindowDescription> {
-    let option = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
-    let Some(info) = copy_window_info(option, 0) else {
+    let Some(info) = window_list() else {
         return Vec::new();
     };
 
-    let owner_pid_key = unsafe { kCGWindowOwnerPID } as *const c_void;
-    let owner_name_key = unsafe { kCGWindowOwnerName } as *const c_void;
-    let name_key = unsafe { kCGWindowName } as *const c_void;
-    let layer_key = unsafe { kCGWindowLayer } as *const c_void;
-    let number_key = unsafe { kCGWindowNumber } as *const c_void;
-    let bounds_key = unsafe { kCGWindowBounds } as *const c_void;
+    let owner_pid_key = unsafe { kCGWindowOwnerPID };
+    let owner_name_key = unsafe { kCGWindowOwnerName };
+    let name_key = unsafe { kCGWindowName };
+    let layer_key = unsafe { kCGWindowLayer };
+    let number_key = unsafe { kCGWindowNumber };
+    let bounds_key = unsafe { kCGWindowBounds };
 
     let mut windows = Vec::new();
-    for entry in info.iter() {
-        let dict: CFDictionary =
-            unsafe { CFDictionary::wrap_under_get_rule(*entry as CFDictionaryRef) };
-
+    for dict in info.iter() {
         let (Some(number), Some(owner_pid)) =
             (dict_i64(&dict, number_key), dict_i64(&dict, owner_pid_key))
         else {
             continue;
         };
-        let (bx, by, bw, bh) = dict_dict(&dict, bounds_key)
+        let (bx, by, bw, bh) = dict_bounds(&dict, bounds_key)
             .and_then(|b| read_bounds(&b))
             .unwrap_or((0.0, 0.0, 0.0, 0.0));
 
@@ -220,33 +202,41 @@ pub fn list_windows() -> Vec<WindowDescription> {
     windows
 }
 
-/// Reads a string value from a CF dictionary keyed by a `*const c_void` (CFString) key.
-fn dict_string(dict: &CFDictionary, key: *const c_void) -> Option<String> {
-    let value = dict.find(key)?;
-    let string = unsafe { CFString::wrap_under_get_rule(*value as CFStringRef) };
-    Some(string.to_string())
+/// Returns the on-screen window list with its documented key and value types.
+fn window_list() -> Option<CFRetained<CFArray<WindowDictionary>>> {
+    let option =
+        CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
+    let info = CGWindowListCopyWindowInfo(option, kCGNullWindowID)?;
+
+    // SAFETY: Core Graphics documents the result as an array of dictionaries with CFString
+    // keys and heterogeneous CFType values.
+    Some(unsafe { CFRetained::cast_unchecked(info) })
 }
 
-/// Reads an integer value from a CF dictionary keyed by a `*const c_void` (CFString) key.
-fn dict_i64(dict: &CFDictionary, key: *const c_void) -> Option<i64> {
-    let value = dict.find(key)?;
-    let number = unsafe { CFNumber::wrap_under_get_rule(*value as CFNumberRef) };
-    number.to_i64()
+/// Reads a string value from a window dictionary.
+fn dict_string(dict: &WindowDictionary, key: &CFString) -> Option<String> {
+    Some(dict.get(key)?.downcast::<CFString>().ok()?.to_string())
 }
 
-/// Reads a nested CF dictionary value from a CF dictionary.
-fn dict_dict(dict: &CFDictionary, key: *const c_void) -> Option<CFDictionary> {
-    let value = dict.find(key)?;
-    Some(unsafe { CFDictionary::wrap_under_get_rule(*value as CFDictionaryRef) })
+/// Reads an integer value from a window dictionary.
+fn dict_i64(dict: &WindowDictionary, key: &CFString) -> Option<i64> {
+    dict.get(key)?.downcast::<CFNumber>().ok()?.as_i64()
+}
+
+/// Reads a bounds dictionary from a window dictionary.
+fn dict_bounds(dict: &WindowDictionary, key: &CFString) -> Option<CFRetained<BoundsDictionary>> {
+    let bounds = dict.get(key)?.downcast::<CFDictionary>().ok()?;
+
+    // SAFETY: Core Graphics documents kCGWindowBounds as a dictionary with CFString keys and
+    // CFNumber values.
+    Some(unsafe { CFRetained::cast_unchecked(bounds) })
 }
 
 /// Reads the `X`, `Y`, `Width`, `Height` numbers from a `kCGWindowBounds` dictionary.
-fn read_bounds(bounds: &CFDictionary) -> Option<(f64, f64, f64, f64)> {
+fn read_bounds(bounds: &BoundsDictionary) -> Option<(f64, f64, f64, f64)> {
     let get = |name: &'static str| -> Option<f64> {
-        let key = CFString::from_static_string(name);
-        let value = bounds.find(key.as_concrete_TypeRef() as *const c_void)?;
-        let number = unsafe { CFNumber::wrap_under_get_rule(*value as CFNumberRef) };
-        number.to_f64()
+        let key = CFString::from_static_str(name);
+        bounds.get(&key)?.as_f64()
     };
 
     Some((get("X")?, get("Y")?, get("Width")?, get("Height")?))

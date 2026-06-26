@@ -3183,8 +3183,6 @@ dependencies = [
  "clap",
  "command",
  "computer_use",
- "core-foundation 0.10.1",
- "core-graphics 0.25.0",
  "dispatch2",
  "futures",
  "image",

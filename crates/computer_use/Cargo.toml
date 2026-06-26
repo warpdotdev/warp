@@ -25,9 +25,6 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 command.workspace = true
-core-foundation.workspace = true
-# Used (alongside core-foundation) for the experimental window-number lookup in `mac/window.rs`.
-core-graphics = "0.25.0"
 dispatch2 = "0.3.0"
 image.workspace = true
 instant.workspace = true
