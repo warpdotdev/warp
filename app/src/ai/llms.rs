@@ -129,6 +129,17 @@ impl LLMProvider {
             LLMProvider::Unknown => None,
         }
     }
+
+    /// Human-readable provider name for user-facing copy.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            LLMProvider::OpenAI => "OpenAI",
+            LLMProvider::Anthropic => "Anthropic",
+            LLMProvider::Google => "Google",
+            LLMProvider::Xai => "xAI",
+            LLMProvider::Unknown => "this provider",
+        }
+    }
 }
 
 /// The host where an LLM can be routed to.
