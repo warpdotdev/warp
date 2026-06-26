@@ -31,6 +31,7 @@ num-traits.workspace = true
 ordered-float.workspace = true
 html5ever.workspace = true
 markup5ever = "0.35.0"
+ipynb_parser.workspace = true
 markdown_parser.workspace = true
 mermaid_to_svg.workspace = true
 parking_lot.workspace = true

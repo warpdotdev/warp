@@ -143,6 +143,9 @@ pub struct Network {
     /// The next event number to use when sending a write to pty request to the server.
     write_to_pty_event_no: WriteToPtySeqNo,
     pty_bytes_batch_status: PtyBytesBatchStatus,
+
+    /// Input updates buffered while disconnected, to be flushed on reconnect.
+    pending_input_updates: Vec<InputUpdate>,
 }
 
 impl Network {
@@ -184,6 +187,7 @@ impl Network {
             pty_bytes_batch_status: PtyBytesBatchStatus::NotBatching {
                 last_sent_at: Instant::now(),
             },
+            pending_input_updates: Vec::new(),
         };
 
         model.start_write_to_pty_events_listener(write_to_pty_events_rx, ctx);
@@ -245,6 +249,7 @@ impl Network {
             pty_bytes_batch_status: PtyBytesBatchStatus::NotBatching {
                 last_sent_at: Instant::now(),
             },
+            pending_input_updates: Vec::new(),
         };
 
         ctx.emit(NetworkEvent::JoinedSuccessfully {
@@ -595,6 +600,7 @@ impl Network {
                 }
                 log::info!("Successfully reconnected to shared session as viewer.");
                 self.stage = Stage::JoinedSuccessfully;
+                self.flush_pending_input_updates_to_server();
                 // Events where we only care about the latest value were dropped before we reconnected.
                 self.send_latest_state_to_server();
                 ctx.emit(NetworkEvent::ReconnectedSuccessfully);
@@ -842,6 +848,8 @@ impl Network {
         // with are monotonically increasing.
         if block_id != &self.next_buffer_seq_no.0 {
             self.next_buffer_seq_no = (block_id.to_owned(), InputOperationSeqNo::zero());
+            // Clear buffered ops for the old block since they're now stale.
+            self.pending_input_updates.clear();
         }
 
         let operations = operations
@@ -863,7 +871,20 @@ impl Network {
         };
         self.next_buffer_seq_no.1.advance();
 
-        self.send_message_to_server(UpstreamMessage::UpdateInput(InputUpdate { id, ops }));
+        let update = InputUpdate { id, ops };
+        if matches!(self.stage, Stage::JoinedSuccessfully) {
+            if let Err(e) = self
+                .ws_proxy_tx
+                .try_send(UpstreamMessage::UpdateInput(update))
+            {
+                log::warn!(
+                    "Failed to send input update over ws_proxy channel in viewer network: {e}"
+                );
+            }
+        } else {
+            // Not connected; buffer the update to be flushed on reconnect.
+            self.pending_input_updates.push(update);
+        }
     }
 
     pub fn send_write_to_pty(&mut self) {
@@ -962,6 +983,21 @@ impl Network {
 
     pub fn send_report_terminal_size(&mut self, window_size: WindowSize) {
         self.send_message_to_server(UpstreamMessage::ReportTerminalSize { window_size });
+    }
+
+    /// Sends all input updates buffered during disconnection to the server, then clears the buffer.
+    fn flush_pending_input_updates_to_server(&mut self) {
+        for update in self.pending_input_updates.drain(..) {
+            if let Err(e) = self
+                .ws_proxy_tx
+                .try_send(UpstreamMessage::UpdateInput(update))
+            {
+                log::warn!(
+                    "Failed to send pending input update over ws_proxy channel in viewer network: {e}"
+                );
+                return;
+            }
+        }
     }
 
     /// Send everything in `self.cached_latest_state` to the server.

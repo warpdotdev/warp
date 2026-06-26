@@ -232,6 +232,7 @@ vte.workspace = true
 walkdir.workspace = true
 warp-workflows.workspace = true
 warp_assets.workspace = true
+warp_channel_config.workspace = true
 warp_completer.workspace = true
 warp_core.workspace = true
 warp_editor.workspace = true
@@ -269,6 +270,7 @@ rmcp.workspace = true
 warp_isolation_platform.workspace = true
 warp_ripgrep.workspace = true
 warp_managed_secrets.workspace = true
+warp_multi_agent_client.workspace = true
 local_control.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -461,6 +463,7 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
+tui = []
 ai_resume_button = []
 autoupdate = []
 figma_detection = []
@@ -685,6 +688,7 @@ default = [
     "remote_codebase_indexing",
     "solo_user_byok",
     "custom_inference_endpoints",
+    "custom_model_routers",
     "supergrok",
     "billing_and_usage_page_v2",
     "remote_code_review",
@@ -739,6 +743,8 @@ agent_mode_evals = [
     "rust-embed/debug-embed",
     "warpui/log_named_telemetry_events",
     "warp_logging/agent_mode_evals",
+    "warp_multi_agent_client/agent_mode_evals",
+    "warp_server_client/agent_mode_evals",
 ]
 ambient_agents_command_line = []
 ambient_agents_image_upload = []
@@ -929,6 +935,7 @@ inline_code_review = []
 integration_command = []
 artifact_command = []
 cloud_environments = []
+cloud_runners = []
 create_environment_slash_command = []
 summarize_conversation_command = []
 mcp_grouped_server_context = []
@@ -999,6 +1006,7 @@ open_code_notifications = []
 transfer_control_tool = []
 skip_firebase_anonymous_user = []
 custom_inference_endpoints = []
+custom_model_routers = []
 solo_user_byok = []
 billing_and_usage_page_v2 = []
 gpt_configurable_context_window = []

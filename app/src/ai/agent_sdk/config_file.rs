@@ -20,6 +20,8 @@ pub struct AgentConfigSnapshotFile {
     #[serde(default)]
     pub environment_id: Option<String>,
     #[serde(default)]
+    pub runner_id: Option<String>,
+    #[serde(default)]
     pub model_id: Option<String>,
     #[serde(default)]
     pub base_prompt: Option<String>,
@@ -93,7 +95,7 @@ fn parse_yaml(input: &str) -> anyhow::Result<AgentConfigSnapshotFile> {
 }
 
 fn supported_keys_context() -> String {
-    "Supported keys: name, environment_id, model_id, base_prompt, mcp_servers, host, computer_use_enabled".to_string()
+    "Supported keys: name, environment_id, runner_id, model_id, base_prompt, mcp_servers, host, computer_use_enabled".to_string()
 }
 
 /// Convert an unwrapped `mcp_servers` map into runtime MCP specs for AgentDriver.
@@ -148,6 +150,7 @@ pub fn merge_with_precedence(
 
     let name = cli.name.or_else(|| file.name.clone());
     let environment_id = cli.environment_id.or_else(|| file.environment_id.clone());
+    let runner_id = cli.runner_id.or_else(|| file.runner_id.clone());
     let model_id = cli.model_id.or_else(|| file.model_id.clone());
     let base_prompt = cli.base_prompt.or_else(|| file.base_prompt.clone());
 
@@ -158,6 +161,7 @@ pub fn merge_with_precedence(
     AgentConfigSnapshot {
         name,
         environment_id,
+        runner_id,
         model_id,
         base_prompt,
         mcp_servers,

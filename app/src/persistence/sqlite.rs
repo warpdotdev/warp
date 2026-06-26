@@ -1135,7 +1135,9 @@ fn save_pane_state(
         LeafContents::AIFact(_) => AI_FACT_PANE_KIND,
         LeafContents::CodeReview(_) => CODE_REVIEW_PANE_KIND,
         LeafContents::AmbientAgent(_) => AMBIENT_AGENT_PANE_KIND,
-        LeafContents::ExecutionProfileEditor => EXECUTION_PROFILE_EDITOR_PANE_KIND,
+        LeafContents::ExecutionProfileEditor | LeafContents::CustomRouterEditor => {
+            EXECUTION_PROFILE_EDITOR_PANE_KIND
+        }
         LeafContents::GetStarted => GET_STARTED_PANE_KIND,
         LeafContents::AIDocument(_) => AI_DOCUMENT_PANE_KIND,
         LeafContents::EnvironmentManagement(_) | LeafContents::NetworkLog => {
@@ -1329,8 +1331,8 @@ fn save_pane_state(
                 .values(code_review)
                 .execute(conn)?;
         }
-        LeafContents::ExecutionProfileEditor => {
-            // TODO: Implement execution profile editor pane saving.
+        LeafContents::ExecutionProfileEditor | LeafContents::CustomRouterEditor => {
+            // Editor panes: no pane-specific data to save.
         }
         LeafContents::GetStarted => {
             // Stateless

@@ -44,11 +44,6 @@ impl TryFrom<StaticQueryType> for api::request::input::query_with_canned_respons
                     api::request::input::query_with_canned_response::SomethingElse {},
                 ),
             ),
-            StaticQueryType::CustomOnboardingRequest => Ok(
-                api::request::input::query_with_canned_response::Type::CustomOnboardingRequest(
-                    api::request::input::query_with_canned_response::CustomOnboardingRequest {},
-                ),
-            ),
             StaticQueryType::EvaluationSuite => {
                 Err(anyhow::anyhow!("EvaluationSuite StaticQueryType not yet supported").into())
             }
