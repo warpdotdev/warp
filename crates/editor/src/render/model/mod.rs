@@ -381,22 +381,58 @@ impl<'a> RenderContentTreeRef<'a> {
     }
 }
 
+/// All state specific to the TUI char-cell rendering path.
+///
+/// Bundled into a single struct so the [`LayoutMode`] enum cleanly separates
+/// mode-specific data; fields that are only meaningful in one mode are never
+/// scattered across the parent [`RenderState`].
+pub struct CharCellState {
+    /// Terminal width in character columns. Updated on resize.
+    pub terminal_width: u16,
+    /// The 0-indexed char offset of the start of each logical line (`\n`-split).
+    /// Rebuilt synchronously via [`RenderState::update_char_cell_text`].
+    pub(crate) line_starts: RefCell<Vec<usize>>,
+    /// Total char count of the last text passed to `update_char_cell_text`.
+    /// Used to compute the length of the last logical line.
+    pub(crate) total_chars: Cell<usize>,
+}
+
+impl CharCellState {
+    fn new(terminal_width: u16) -> Self {
+        Self {
+            terminal_width,
+            line_starts: RefCell::new(Vec::new()),
+            total_chars: Cell::new(0),
+        }
+    }
+}
+
+impl std::fmt::Debug for CharCellState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CharCellState")
+            .field("terminal_width", &self.terminal_width)
+            .field("line_starts_len", &self.line_starts.borrow().len())
+            .field("total_chars", &self.total_chars.get())
+            .finish()
+    }
+}
+
 /// Determines which soft-wrap layout pipeline `RenderState` uses.
 ///
 /// - [`LayoutMode::Pixels`]: font-aware pixel layout for the GPU-rendered GUI. Uses the
 ///   `SumTree<BlockItem>` content tree and the async font-shaping channel.
 /// - [`LayoutMode::CharCell`]: monospace char-cell layout for the TUI. Skips font shaping;
-///   computes positions from `char_cell_line_starts` using character-count arithmetic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///   computes positions from [`CharCellState`] using character-count arithmetic.
+///
+/// This is always set explicitly at construction — there is no sensible default since
+/// the rendering path is determined by whether the client is a GUI or TUI.
+#[derive(Debug)]
 pub enum LayoutMode {
     /// GPU-rendered GUI path: font-aware, pixel-based soft-wrap.
-    #[default]
     Pixels,
     /// TUI path: monospace char-cell layout, no font engine required.
-    CharCell {
-        /// Terminal width in character columns. Updated via [`RenderState::set_char_cell_terminal_width`].
-        terminal_width: u16,
-    },
+    /// All TUI-specific state lives in [`CharCellState`].
+    CharCell(CharCellState),
 }
 
 /// Model for rendering rich text.
@@ -452,15 +488,8 @@ pub struct RenderState {
     document_path: Option<std::path::PathBuf>,
 
     /// The active layout mode for soft-wrap computation.
+    /// For the TUI path (`CharCell`), this also carries all char-cell-specific state.
     layout_mode: LayoutMode,
-
-    /// Char-cell layout state. Only populated when `layout_mode == LayoutMode::CharCell`.
-    /// Stores the 0-indexed character index of the start of each logical line (split on `\n`).
-    /// Updated synchronously via [`RenderState::update_char_cell_text`].
-    char_cell_line_starts: RefCell<Vec<usize>>,
-    /// Total char count of the last text passed to `update_char_cell_text`. Used for computing
-    /// the width of the last logical line (which has no trailing sentinel in `line_starts`).
-    char_cell_total_chars: Cell<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -704,31 +733,49 @@ impl ColumnUnit {
     }
 
     /// Returns the element-wise max of two same-variant values.
-    /// Panics if the variants differ.
+    /// Variants must match; mixing Pixels and Chars is always a bug.
     pub fn col_max(self, other: ColumnUnit) -> ColumnUnit {
         match (self, other) {
             (ColumnUnit::Pixels(a), ColumnUnit::Pixels(b)) => ColumnUnit::Pixels(a.max(b)),
             (ColumnUnit::Chars(a), ColumnUnit::Chars(b)) => ColumnUnit::Chars(a.max(b)),
-            _ => panic!("ColumnUnit::col_max: mixed Pixels and Chars variants"),
-        }
-    }
-
-    /// Unwraps the pixel value. Panics if this is a `Chars` variant.
-    pub fn as_pixels(self) -> Pixels {
-        match self {
-            ColumnUnit::Pixels(p) => p,
-            ColumnUnit::Chars(_) => {
-                panic!("ColumnUnit::as_pixels called on a Chars variant")
+            _ => {
+                debug_assert!(
+                    false,
+                    "ColumnUnit::col_max: mixed Pixels and Chars variants — this is a bug"
+                );
+                self // graceful fallback: keep self unchanged
             }
         }
     }
 
-    /// Unwraps the char-column value. Panics if this is a `Pixels` variant.
+    /// Unwraps the pixel value.
+    /// Calling this on a `Chars` variant is always a bug; in debug builds it asserts,
+    /// in release builds it returns [`Pixels::zero()`] as a safe fallback.
+    pub fn as_pixels(self) -> Pixels {
+        match self {
+            ColumnUnit::Pixels(p) => p,
+            ColumnUnit::Chars(_) => {
+                debug_assert!(
+                    false,
+                    "ColumnUnit::as_pixels called on a Chars variant — this is a bug"
+                );
+                Pixels::zero()
+            }
+        }
+    }
+
+    /// Unwraps the char-column value.
+    /// Calling this on a `Pixels` variant is always a bug; in debug builds it asserts,
+    /// in release builds it returns `0` as a safe fallback.
     pub fn as_chars(self) -> u16 {
         match self {
             ColumnUnit::Chars(c) => c,
             ColumnUnit::Pixels(_) => {
-                panic!("ColumnUnit::as_chars called on a Pixels variant")
+                debug_assert!(
+                    false,
+                    "ColumnUnit::as_chars called on a Pixels variant — this is a bug"
+                );
+                0
             }
         }
     }
@@ -1790,8 +1837,13 @@ impl RenderState {
     /// don't cause panics), but `BufferEdit` actions are no-ops — the caller must drive layout
     /// updates via [`Self::update_char_cell_text`].
     ///
-    /// No `RichTextStyles` is required; the style fields are ignored in CharCell mode.
-    pub fn new_char_cell(terminal_width: u16, ctx: &mut ModelContext<Self>) -> Self {
+    /// `styles` is stored on the struct for API compatibility but is **not used** for rendering
+    /// in CharCell mode. Callers (e.g. `warp_tui`) should supply a minimal stub.
+    pub fn new_tui(
+        terminal_width: u16,
+        styles: RichTextStyles,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
         let (element_tx, element_rx) = async_channel::unbounded();
         ctx.spawn_stream_local(element_rx, Self::apply_element_update, |_, _| {});
 
@@ -1803,7 +1855,7 @@ impl RenderState {
         let entity_id = ctx.model_id();
         let (viewport_width, viewport_height) = (Pixels::zero(), Pixels::zero());
         Self {
-            styles: RichTextStyles::stub(),
+            styles,
             show_final_trailing_newline_when_non_empty: false,
             has_final_trailing_newline: Cell::new(false),
             viewport: ViewportState::new(viewport_width, viewport_height),
@@ -1823,9 +1875,7 @@ impl RenderState {
             layout_options: Default::default(),
             document_path: None,
             hidden_lines: None,
-            layout_mode: LayoutMode::CharCell { terminal_width },
-            char_cell_line_starts: RefCell::new(Vec::new()),
-            char_cell_total_chars: Cell::new(0),
+            layout_mode: LayoutMode::CharCell(CharCellState::new(terminal_width)),
         }
     }
 
@@ -1889,30 +1939,52 @@ impl RenderState {
             document_path: None,
             hidden_lines,
             layout_mode,
-            char_cell_line_starts: RefCell::new(Vec::new()),
-            char_cell_total_chars: Cell::new(0),
         }
     }
 
-    /// Returns the active layout mode.
-    pub fn layout_mode(&self) -> LayoutMode {
-        self.layout_mode
+    /// Returns whether this `RenderState` is in TUI char-cell mode.
+    pub fn is_char_cell_mode(&self) -> bool {
+        matches!(self.layout_mode, LayoutMode::CharCell(_))
     }
 
     /// Update the char-cell layout state from the current buffer text.
     ///
-    /// Must only be called when `layout_mode == LayoutMode::CharCell`. Recomputes
-    /// [`char_cell_line_starts`] from the provided text. The `TuiInputModel` is
-    /// responsible for calling this after every buffer edit and after every resize.
+    /// Must only be called on a `LayoutMode::CharCell` `RenderState`.
+    ///
+    /// ## Why TUI needs this explicit call but GUI doesn't
+    ///
+    /// The GUI keeps layout in sync via an **async font-shaping pipeline**:
+    /// `CoreEditorModel::update_content` → buffer emits `ContentChanged` →
+    /// `add_pending_edit(delta)` → `layout_tx` channel → `handle_layout_action` →
+    /// `layout_edit_delta` (font shaping) → SumTree updated.
+    /// `offset_to_softwrap_point` then reads that SumTree.
+    ///
+    /// `LayoutMode::CharCell` intentionally **skips that entire channel** (no font
+    /// engine needed). [`CharCellState::line_starts`] must be refreshed via a different
+    /// path. Two reasons the async channel can't drive this:
+    ///
+    /// 1. The channel only carries an [`EditDelta`], not the full buffer text that
+    ///    `line_starts` recomputation requires.
+    /// 2. The channel is async; TUI cursor queries (e.g. `scroll_to_cursor`,
+    ///    `is_cursor_on_first_visual_row`) need fresh `line_starts` synchronously
+    ///    within the same frame as the edit.
+    ///
+    /// [`on_buffer_version_updated`](warp_editor::model::CoreEditorModel::on_buffer_version_updated)
+    /// is the model's guaranteed-synchronous post-edit hook — the right place to call
+    /// this. Char-cell layout (O(n) char scan) is cheap, so synchronous execution is
+    /// fine unlike font shaping, which is deferred to the async channel for that reason.
     ///
     /// `text` should be the current plain-text content of the buffer (without any
     /// trailing sentinel newline injected by the buffer layer).
     pub fn update_char_cell_text(&self, text: &str) {
-        debug_assert!(
-            matches!(self.layout_mode, LayoutMode::CharCell { .. }),
-            "update_char_cell_text called on a Pixels-mode RenderState"
-        );
-        let mut starts = self.char_cell_line_starts.borrow_mut();
+        let LayoutMode::CharCell(ref cc) = self.layout_mode else {
+            debug_assert!(
+                false,
+                "update_char_cell_text called on a Pixels-mode RenderState"
+            );
+            return;
+        };
+        let mut starts = cc.line_starts.borrow_mut();
         starts.clear();
         // Logical line 0 starts at char index 0.
         starts.push(0_usize);
@@ -1924,24 +1996,21 @@ impl RenderState {
                 starts.push(char_idx);
             }
         }
-        self.char_cell_total_chars.set(char_idx);
+        cc.total_chars.set(char_idx);
     }
 
     /// Update the terminal width used by char-cell layout. Only valid in `CharCell` mode.
     /// The caller must also call [`update_char_cell_text`] to rebuild line starts if the
     /// width affects visual row count.
     pub fn set_char_cell_terminal_width(&mut self, terminal_width: u16) {
-        match &mut self.layout_mode {
-            LayoutMode::CharCell {
-                terminal_width: w, ..
-            } => *w = terminal_width,
-            LayoutMode::Pixels => {
-                debug_assert!(
-                    false,
-                    "set_char_cell_terminal_width called on Pixels-mode RenderState"
-                )
-            }
-        }
+        let LayoutMode::CharCell(ref mut cc) = self.layout_mode else {
+            debug_assert!(
+                false,
+                "set_char_cell_terminal_width called on Pixels-mode RenderState"
+            );
+            return;
+        };
+        cc.terminal_width = terminal_width;
     }
 
     fn final_trailing_newline_cursor(styles: &RichTextStyles) -> BlockItem {
@@ -2057,9 +2126,12 @@ impl RenderState {
     }
 
     pub fn max_line(&self) -> LineCount {
-        if let LayoutMode::CharCell { terminal_width } = self.layout_mode {
-            let starts = self.char_cell_line_starts.borrow();
-            return char_cell_max_line(&starts, self.char_cell_total_chars.get(), terminal_width);
+        if let LayoutMode::CharCell(ref cc) = self.layout_mode {
+            return char_cell_max_line(
+                &cc.line_starts.borrow(),
+                cc.total_chars.get(),
+                cc.terminal_width,
+            );
         }
         self.content.borrow().summary().lines
     }
@@ -2563,9 +2635,21 @@ impl RenderState {
                 }
             }
             LayoutAction::LayoutTemporaryBlock(blocks) => {
-                // CharCell mode skips font layout entirely — temporary blocks have no
-                // char-cell representation and TuiInputModel doesn't use them.
-                if matches!(self.layout_mode, LayoutMode::CharCell { .. }) {
+                // CharCell mode skips font layout for temporary blocks.
+                //
+                // Temporary blocks represent interleaved deleted/replaced lines in diff
+                // views (only created by `CodeEditorModel::refresh_diff_state` for code
+                // review). They are not needed for M1 (basic TUI text input).
+                //
+                // TODO(TUI-diff): When a TUI diff/code-review view is built, add:
+                //   `temporary_blocks: Vec<CharCellTemporaryBlock>` to `CharCellState`
+                //   with fields: `{ content: String, insert_before: LineCount,
+                //   line_decoration: Option<ColorU>, inline_decorations: Vec<(Range<usize>, ColorU)> }`.
+                //   Populate it here instead of no-op'ing. The `TuiInputView` render loop
+                //   then merges them as extra `TuiText` rows with `Style::bg(color)`,
+                //   interleaved at their `insert_before` line positions. No SumTree or
+                //   font-shaping changes needed — the GUI path is unaffected.
+                if matches!(self.layout_mode, LayoutMode::CharCell(_)) {
                     ctx.emit(RenderEvent::LayoutUpdated);
                     ctx.notify();
                     return;
@@ -2588,7 +2672,7 @@ impl RenderState {
             LayoutAction::BufferEdit {
                 delta: _,
                 buffer_version,
-            } if matches!(self.layout_mode, LayoutMode::CharCell { .. }) => {
+            } if matches!(self.layout_mode, LayoutMode::CharCell(_)) => {
                 // CharCell mode skips font shaping. The TuiInputModel drives char-cell layout
                 // synchronously via RenderState::update_char_cell_text after each buffer edit.
                 self.buffer_version.borrow_mut().next_render_version = Some(buffer_version);
@@ -3249,11 +3333,11 @@ impl RenderState {
 
     pub fn offset_to_softwrap_point(&self, offset: CharOffset) -> SoftWrapPoint {
         // CharCell path: compute visual row/col from character-count arithmetic.
-        if let LayoutMode::CharCell { terminal_width } = self.layout_mode {
+        if let LayoutMode::CharCell(ref cc) = self.layout_mode {
             return char_cell_offset_to_softwrap_point(
                 offset,
-                &self.char_cell_line_starts.borrow(),
-                terminal_width,
+                &cc.line_starts.borrow(),
+                cc.terminal_width,
             );
         }
 
@@ -3270,11 +3354,11 @@ impl RenderState {
 
     pub fn softwrap_point_to_offset(&self, point: SoftWrapPoint) -> CharOffset {
         // CharCell path.
-        if let LayoutMode::CharCell { terminal_width } = self.layout_mode {
+        if let LayoutMode::CharCell(ref cc) = self.layout_mode {
             return char_cell_softwrap_point_to_offset(
                 point,
-                &self.char_cell_line_starts.borrow(),
-                terminal_width,
+                &cc.line_starts.borrow(),
+                cc.terminal_width,
             );
         }
 
@@ -3576,8 +3660,13 @@ impl IntoPixels for Height {
 }
 
 impl RichTextStyles {
-    /// A minimal stub instance of `RichTextStyles` for use in TUI char-cell mode,
-    /// where style fields are never read for rendering.
+    /// A minimal stub instance of `RichTextStyles` for use when style fields are irrelevant
+    /// (e.g. TUI char-cell mode). Defined here only as a convenience for callers that
+    /// need a syntactically valid `RichTextStyles` without a real appearance system.
+    ///
+    /// **TUI-specific callers should define their own stub locally** (e.g. in `warp_tui`)
+    /// rather than depending on this method.
+    #[doc(hidden)]
     pub fn stub() -> Self {
         use warpui_core::elements::{Border, Fill};
         use warpui_core::fonts::{FamilyId, Weight};

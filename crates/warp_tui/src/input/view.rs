@@ -20,7 +20,7 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
 
-use super::model::TuiInputModel;
+use super::model::TuiEditorModel;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Typed action enum
@@ -91,7 +91,7 @@ pub enum TuiInputAction {
 
 /// The `TuiView`-implementing entry point for the TUI prompt input.
 pub struct TuiInputView {
-    model: ModelHandle<TuiInputModel>,
+    model: ModelHandle<TuiEditorModel>,
     /// Maximum number of visible rows before the input scrolls (matches spec: 6).
     max_visible_rows: u32,
 }
@@ -102,7 +102,7 @@ impl Entity for TuiInputView {
 
 impl TuiInputView {
     /// Construct a new `TuiInputView` wrapping `model`.
-    pub fn new(model: ModelHandle<TuiInputModel>) -> Self {
+    pub fn new(model: ModelHandle<TuiEditorModel>) -> Self {
         Self {
             model,
             max_visible_rows: 6,
@@ -145,7 +145,8 @@ impl TuiView for TuiInputView {
 
         // Take the visible slice.
         let visible_start = scroll_offset as usize;
-        let visible_end = (scroll_offset as usize + visible_rows as usize).min(rows_with_offsets.len());
+        let visible_end =
+            (scroll_offset as usize + visible_rows as usize).min(rows_with_offsets.len());
         let visible_rows_slice: Vec<(String, usize)> = if visible_start < rows_with_offsets.len() {
             rows_with_offsets[visible_start..visible_end].to_vec()
         } else {
@@ -164,11 +165,7 @@ impl TuiView for TuiInputView {
                     if sel_end > *row_char_start && sel_start < row_char_end {
                         let span_start = sel_start.saturating_sub(*row_char_start);
                         let span_end = (sel_end - row_char_start).min(row_len);
-                        selected_spans.push((
-                            vis_idx as u16,
-                            span_start as u16,
-                            span_end as u16,
-                        ));
+                        selected_spans.push((vis_idx as u16, span_start as u16, span_end as u16));
                     }
                 }
             }
@@ -286,7 +283,8 @@ impl TuiElement for TuiInputElement {
                 let x = area.x.saturating_add(start_col);
                 let width = end_col.saturating_sub(start_col);
                 if y < area.y + area.height && width > 0 {
-                    let sel_rect = TuiRect::new(x, y, width.min(area.width.saturating_sub(start_col)), 1);
+                    let sel_rect =
+                        TuiRect::new(x, y, width.min(area.width.saturating_sub(start_col)), 1);
                     buffer.set_style(sel_rect, reversed);
                 }
             }

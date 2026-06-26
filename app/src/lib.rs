@@ -83,7 +83,7 @@ mod throttle;
 mod tips;
 mod tracing;
 #[cfg(feature = "tui")]
-pub mod tui;
+mod tui;
 mod ui_components;
 mod undo_close;
 mod uri;

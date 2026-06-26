@@ -31,6 +31,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use warp_tui::input::{TuiEditorModel, TuiEditorModelEvent, TuiInputView};
 use warpui_core::elements::tui::{
     Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiStyle, TuiText,
 };
@@ -39,8 +40,6 @@ use warpui_core::runtime::TuiRuntime;
 use warpui_core::{
     AddWindowOptions, App, AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext,
 };
-
-use warp::tui::input::{TuiInputModel, TuiInputModelEvent, TuiInputView};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shell view: wraps TuiInputView with a status bar and handles Submit/quit
@@ -53,7 +52,7 @@ enum ShellAction {
 }
 
 struct ShellView {
-    input_model: ModelHandle<TuiInputModel>,
+    input_model: ModelHandle<TuiEditorModel>,
     input_view: warpui_core::ViewHandle<TuiInputView>,
     quit: Rc<Cell<bool>>,
     last_submitted: Option<String>,
@@ -67,16 +66,15 @@ impl ShellView {
     fn new(quit: Rc<Cell<bool>>, ctx: &mut ViewContext<Self>) -> Self {
         // Create the TuiInputModel backed by the real editor infrastructure.
         let terminal_width = 80_u16; // initial; will update on first resize
-        let input_model = ctx.add_model(|ctx| TuiInputModel::new(terminal_width, ctx));
+        let input_model = ctx.add_model(|ctx| TuiEditorModel::new(terminal_width, ctx));
 
         // Subscribe to TuiInputModel events so we can react to Submit.
         ctx.subscribe_to_model(&input_model, Self::handle_input_event);
 
         // Create the TuiInputView wrapping the model.
         let input_model_clone = input_model.clone();
-        let input_view = ctx.add_typed_action_tui_view(move |_| {
-            TuiInputView::new(input_model_clone.clone())
-        });
+        let input_view =
+            ctx.add_typed_action_tui_view(move |_| TuiInputView::new(input_model_clone.clone()));
 
         Self {
             input_model,
@@ -88,15 +86,15 @@ impl ShellView {
 
     fn handle_input_event(
         &mut self,
-        _model: ModelHandle<TuiInputModel>,
-        event: &TuiInputModelEvent,
+        _model: ModelHandle<TuiEditorModel>,
+        event: &TuiEditorModelEvent,
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            TuiInputModelEvent::Submit(text) => {
+            TuiEditorModelEvent::Submit(text) => {
                 ctx.dispatch_typed_action(&ShellAction::Submitted(text.clone()));
             }
-            TuiInputModelEvent::Changed => {
+            TuiEditorModelEvent::Changed => {
                 ctx.notify();
             }
         }
@@ -147,15 +145,14 @@ impl TuiView for ShellView {
         ));
 
         // ── TuiInputView (editor-backed) ─────────────────────────────────────
-        column = column.with_child(Box::new(
-            warpui_core::elements::tui::TuiChildView::new(&self.input_view),
-        ));
+        column = column.with_child(Box::new(warpui_core::elements::tui::TuiChildView::new(
+            &self.input_view,
+        )));
 
         // ── Escape handler (quit) ─────────────────────────────────────────────
-        Box::new(
-            TuiEventHandler::new(column)
-                .on_key("escape", |_, ctx, _| ctx.dispatch_typed_action(ShellAction::Quit)),
-        )
+        Box::new(TuiEventHandler::new(column).on_key("escape", |_, ctx, _| {
+            ctx.dispatch_typed_action(ShellAction::Quit)
+        }))
     }
 
     fn child_view_ids(&self, _ctx: &AppContext) -> Vec<warpui_core::EntityId> {
@@ -207,8 +204,7 @@ fn main() {
             )
         });
 
-        let mut runtime =
-            TuiRuntime::enter(&app, window_id, root).expect("enter alternate screen");
+        let mut runtime = TuiRuntime::enter(&app, window_id, root).expect("enter alternate screen");
         let quit_for_loop = quit.clone();
         runtime
             .run_until(&mut app, move |_| quit_for_loop.get())

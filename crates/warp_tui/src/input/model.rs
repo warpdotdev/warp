@@ -1,4 +1,4 @@
-//! [`TuiInputModel`] — the editor-backed model for the TUI input view.
+//! [`TuiEditorModel`] — the editor-backed model for the TUI input view.
 //!
 //! This model implements [`CoreEditorModel`] from `warp_editor`, which gives it all standard
 //! text-editing operations (insert, backspace, delete, word movement, undo/redo, selection)
@@ -15,7 +15,10 @@ use warp_editor::content::buffer::{Buffer, BufferEditAction, EditOrigin};
 use warp_editor::content::selection_model::BufferSelectionModel;
 use warp_editor::content::text::{IndentBehavior, TextStyles};
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
-use warp_editor::render::model::RenderState;
+use warp_editor::render::model::{
+    BlockSpacings, BrokenLinkStyle, CheckBoxStyle, HorizontalRuleStyle, InlineCodeStyle,
+    ParagraphStyles, RenderState, RichTextStyles, TableStyle,
+};
 use warp_editor::selection::{SelectionModel, TextDirection, TextUnit};
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 use warpui_core::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle};
@@ -26,9 +29,9 @@ use super::kill_buffer::KillBuffer;
 // Events
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Events emitted by [`TuiInputModel`].
+/// Events emitted by [`TuiEditorModel`].
 #[derive(Debug, Clone)]
-pub enum TuiInputModelEvent {
+pub enum TuiEditorModelEvent {
     /// The buffer text, cursor position, or selection changed. The view should
     /// re-render on receiving this event.
     Changed,
@@ -42,11 +45,31 @@ pub enum TuiInputModelEvent {
 
 /// The editing model behind [`super::view::TuiInputView`].
 ///
-/// Owns the text buffer, selection state, and char-cell layout. All standard
-/// editing operations are provided by [`CoreEditorModel`]; the model only adds
-/// TUI-specific helpers (`visual_line_count`, `is_cursor_on_first_visual_row`,
-/// `kill_to_line_end`, `kill_to_line_start`, `yank`, `submit`).
-pub struct TuiInputModel {
+/// ## Why a new struct instead of reusing `CodeEditorModel` / `NotebooksEditorModel`?
+///
+/// The **editor infrastructure IS reused**: `TuiEditorModel` implements
+/// [`CoreEditorModel`] and [`PlainTextEditorModel`] from `warp_editor`, which
+/// provides the full editing engine (insert, backspace, word movement, undo/redo,
+/// selection, kill/yank) for free.
+///
+/// The two existing concrete GUI structs that also implement `CoreEditorModel` are
+/// incompatible with TUI for two reasons:
+///
+/// 1. **LayoutMode coupling**: `CodeEditorModel` and `NotebooksEditorModel` always
+///    construct [`RenderState::new`] with [`LayoutMode::Pixels`] (font-aware GPU
+///    layout). The TUI path requires [`RenderState::new_tui`] with
+///    [`LayoutMode::CharCell`] (monospace char-cell arithmetic, no font engine).
+///    There is no way to construct the GUI models with the TUI layout mode.
+///
+/// 2. **GUI-specific fields**: both carry deps that are unconstructable in a
+///    terminal — `CodeEditorModel` has vim mode, syntax tree, diff model, comments,
+///    hidden lines, and `SessionPlatform`; `NotebooksEditorModel` has child models
+///    (mermaid/command blocks), a `WindowId` binding, and viewport resize channels.
+///    None of these apply to a TUI input field.
+///
+/// `TuiEditorModel` is therefore the minimal TUI-appropriate implementation: a buffer,
+/// selection state, char-cell `RenderState`, and a kill buffer — nothing more.
+pub struct TuiEditorModel {
     /// The plain-text backing store.
     buffer: ModelHandle<Buffer>,
     /// Buffer-level selection (head/tail offsets, anchors).
@@ -63,16 +86,16 @@ pub struct TuiInputModel {
     scroll_offset: u32,
 }
 
-impl Entity for TuiInputModel {
-    type Event = TuiInputModelEvent;
+impl Entity for TuiEditorModel {
+    type Event = TuiEditorModelEvent;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CoreEditorModel implementation
 // ─────────────────────────────────────────────────────────────────────────────
 
-impl CoreEditorModel for TuiInputModel {
-    type T = TuiInputModel;
+impl CoreEditorModel for TuiEditorModel {
+    type T = TuiEditorModel;
 
     fn content(&self) -> &ModelHandle<Buffer> {
         &self.buffer
@@ -110,25 +133,26 @@ impl CoreEditorModel for TuiInputModel {
         self.render.update(ctx, |render_state, _| {
             render_state.update_char_cell_text(&text);
         });
-        ctx.emit(TuiInputModelEvent::Changed);
+        ctx.emit(TuiEditorModelEvent::Changed);
     }
 }
 
-impl PlainTextEditorModel for TuiInputModel {}
+impl PlainTextEditorModel for TuiEditorModel {}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Construction
 // ─────────────────────────────────────────────────────────────────────────────
 
-impl TuiInputModel {
-    /// Create a new, empty `TuiInputModel`.
+impl TuiEditorModel {
+    /// Create a new, empty `TuiEditorModel`.
     ///
     /// `terminal_width` is the initial terminal width in character columns.
     /// Call [`set_terminal_width`] when the terminal is resized.
     pub fn new(terminal_width: u16, ctx: &mut ModelContext<Self>) -> Self {
         let buffer = ctx.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
         let buffer_selection = ctx.add_model(|_| BufferSelectionModel::new(buffer.clone()));
-        let render = ctx.add_model(|ctx| RenderState::new_char_cell(terminal_width, ctx));
+        let render =
+            ctx.add_model(|ctx| RenderState::new_tui(terminal_width, tui_stub_styles(), ctx));
         let selection = ctx.add_model(|ctx| {
             SelectionModel::new(
                 buffer.clone(),
@@ -152,10 +176,94 @@ impl TuiInputModel {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Stub RichTextStyles for TUI (styles are ignored by CharCell RenderState)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Minimal [`RichTextStyles`] for TUI char-cell mode.
+/// `RenderState::new_tui` stores styles for API compatibility but never reads them
+/// during char-cell layout. Defined here (in `warp_tui`) rather than in `warp_editor`
+/// since it is purely a TUI concern.
+fn tui_stub_styles() -> RichTextStyles {
+    use warpui_core::color::ColorU;
+    use warpui_core::elements::{Border, Fill};
+    use warpui_core::fonts::{FamilyId, Weight};
+    const ZERO: ColorU = ColorU {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    let para = ParagraphStyles {
+        font_family: FamilyId(0),
+        font_size: 10.,
+        font_weight: Weight::Normal,
+        line_height_ratio: 1.,
+        text_color: ZERO,
+        baseline_ratio: 0.7,
+        fixed_width_tab_size: None,
+    };
+    RichTextStyles {
+        base_text: para,
+        code_text: ParagraphStyles {
+            fixed_width_tab_size: Some(4),
+            ..para
+        },
+        code_background: Fill::None,
+        embedding_background: Fill::None,
+        embedding_text: para,
+        code_border: Border::new(0.),
+        placeholder_color: ZERO,
+        selection_fill: Fill::None,
+        cursor_fill: Fill::None,
+        inline_code_style: InlineCodeStyle {
+            font_family: FamilyId(0),
+            background: ZERO,
+            font_color: ZERO,
+        },
+        check_box_style: CheckBoxStyle {
+            border_width: 0.,
+            border_color: ZERO,
+            icon_path: "",
+            background: ZERO,
+            hover_background: ZERO,
+        },
+        horizontal_rule_style: HorizontalRuleStyle {
+            rule_height: 0.,
+            color: ZERO,
+        },
+        broken_link_style: BrokenLinkStyle {
+            icon_path: "",
+            icon_color: ZERO,
+        },
+        block_spacings: BlockSpacings::default(),
+        minimum_paragraph_height: None,
+        show_placeholder_text_on_empty_block: false,
+        cursor_width: 0.,
+        highlight_urls: false,
+        table_style: TableStyle {
+            border_color: ZERO,
+            header_background: ZERO,
+            cell_background: ZERO,
+            alternate_row_background: None,
+            text_color: ZERO,
+            header_text_color: ZERO,
+            scrollbar_nonactive_thumb_color: ZERO,
+            scrollbar_active_thumb_color: ZERO,
+            font_family: FamilyId(0),
+            font_size: 10.,
+            cell_padding: 0.,
+            outer_border: false,
+            column_dividers: false,
+            row_dividers: false,
+        },
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TUI-specific public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-impl TuiInputModel {
+impl TuiEditorModel {
     // ── Cursor queries ────────────────────────────────────────────────────────
 
     /// Returns the total number of visual rows occupied by the current buffer
@@ -233,7 +341,7 @@ impl TuiInputModel {
             render_state.set_char_cell_terminal_width(width);
             render_state.update_char_cell_text(&text);
         });
-        ctx.emit(TuiInputModelEvent::Changed);
+        ctx.emit(TuiEditorModelEvent::Changed);
     }
 
     // ── Kill/yank (Emacs readline) ────────────────────────────────────────────
@@ -297,11 +405,11 @@ impl TuiInputModel {
 
     // ── Submit ────────────────────────────────────────────────────────────────
 
-    /// Submit the current input: emits a [`TuiInputModelEvent::Submit`] with the
+    /// Submit the current input: emits a [`TuiEditorModelEvent::Submit`] with the
     /// text and resets the buffer to empty.
     pub fn submit(&mut self, ctx: &mut ModelContext<Self>) {
         let text = self.plain_text_without_trailing_sentinel(ctx);
-        ctx.emit(TuiInputModelEvent::Submit(text));
+        ctx.emit(TuiEditorModelEvent::Submit(text));
         // Clear the buffer.
         self.clear_buffer(ctx);
         self.scroll_offset = 0;
