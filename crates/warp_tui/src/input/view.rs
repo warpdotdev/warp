@@ -13,7 +13,6 @@
 
 use std::cmp;
 
-use warp_editor::model::CoreEditorModel;
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiColumn, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
     TuiParentElement, TuiRect, TuiSize, TuiStyle, TuiText,
@@ -119,8 +118,8 @@ impl TuiView for TuiInputView {
         let model = self.model.as_ref(ctx);
 
         // ── Gather model state ─────────────────────────────────────────────────
-        let text = model.plain_text_without_trailing_sentinel(ctx);
-        let terminal_width = model.terminal_width();
+        let text = model.plain_text(ctx);
+        let terminal_width = model.terminal_width;
         let scroll_offset = model.scroll_offset();
         let visible_rows = cmp::min(model.visual_line_count(ctx), self.max_visible_rows);
 
@@ -203,11 +202,8 @@ impl TypedActionView for TuiInputView {
 
     fn handle_action(&mut self, action: &TuiInputAction, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |model, ctx| match action {
-            TuiInputAction::InsertChar(c) => {
-                let s = c.to_string();
-                model.user_insert(&s, ctx);
-            }
-            TuiInputAction::InsertNewline => model.user_insert("\n", ctx),
+            TuiInputAction::InsertChar(c) => model.insert_char(*c, ctx),
+            TuiInputAction::InsertNewline => model.insert_newline(ctx),
             TuiInputAction::Submit => model.submit(ctx),
             TuiInputAction::Backspace => model.backspace(ctx),
             TuiInputAction::DeleteForward => model.delete_forward(ctx),
@@ -221,8 +217,8 @@ impl TypedActionView for TuiInputView {
             TuiInputAction::MoveToLineEnd => model.move_to_line_end(ctx),
             TuiInputAction::SelectLeft => model.select_left(ctx),
             TuiInputAction::SelectRight => model.select_right(ctx),
-            TuiInputAction::SelectUp => model.extend_select_up(ctx),
-            TuiInputAction::SelectDown => model.extend_select_down(ctx),
+            TuiInputAction::SelectUp => model.select_up(ctx),
+            TuiInputAction::SelectDown => model.select_down(ctx),
             TuiInputAction::SelectAll => model.select_all(ctx),
             TuiInputAction::DeleteWordBackward => model.delete_word_backward(ctx),
             TuiInputAction::DeleteWordForward => model.delete_word_forward(ctx),

@@ -399,6 +399,101 @@ impl CodeEditorModel {
         }
     }
 
+    /// Constructs a `CodeEditorModel` in TUI char-cell mode.
+    ///
+    /// Identical to `new` but creates the `RenderState` with
+    /// [`LayoutMode::CharCell`] so all soft-wrap positions use monospace
+    /// character-count arithmetic rather than font-aware pixel layout.
+    /// `TuiEditorModel` (in `warp_tui`) is a type alias for this type;
+    /// constructing via this method is what gives the TUI editor all of
+    /// `CodeEditorModel`'s features (vim, syntax, diff, hidden lines) for free
+    /// while sharing no GUI-rendering infrastructure.
+    #[cfg(feature = "tui")]
+    pub fn new_tui(terminal_width: u16, ctx: &mut ModelContext<Self>) -> Self {
+        let content = ctx.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        ctx.subscribe_to_model(&content, |me, _, event, ctx| {
+            me.handle_content_model_event(event, ctx);
+        });
+
+        let selection_model = ctx.add_model(|_| BufferSelectionModel::new(content.clone()));
+
+        let color_map = Self::syntax_highlighting_color_map(ctx);
+        let buffer_version = content.as_ref(ctx).buffer_version();
+        let buffer_handle = content.downgrade();
+        let syntax_tree =
+            ctx.add_model(|_ctx| SyntaxTreeState::new(buffer_handle, buffer_version, color_map));
+        ctx.subscribe_to_model(&syntax_tree, |me, _, event, ctx| {
+            me.handle_syntax_tree_model_event(event, ctx);
+        });
+
+        let diff = ctx.add_model(|_| DiffModel::new());
+        ctx.subscribe_to_model(&diff, |me, _, event, ctx| {
+            me.handle_diff_model_event(event, ctx);
+        });
+
+        let hidden_lines =
+            ctx.add_model(|_| HiddenLinesModel::new(content.clone(), selection_model.clone()));
+
+        let render_state = ctx.add_model(|ctx| {
+            RenderState::new_tui(
+                terminal_width,
+                RichTextStyles::stub(), // not used by CharCell layout
+                ctx,
+            )
+        });
+        ctx.subscribe_to_model(&render_state, |me, _, event, ctx| {
+            me.handle_render_state_model_event(event, ctx);
+        });
+        let selection = ctx.add_model(|ctx| {
+            SelectionModel::new(
+                content.clone(),
+                render_state.clone(),
+                selection_model.clone(),
+                Some(hidden_lines.clone()),
+                ctx,
+            )
+            .with_disable_hidden_navigation()
+        });
+
+        let comments = ctx.add_model(|_| EditorCommentsModel {
+            pending_comment: PendingComment::Closed,
+        });
+
+        Self {
+            render_state,
+            diff,
+            content,
+            selection_model,
+            selection,
+            syntax_tree,
+            comments,
+            hidden_lines,
+            diff_navigation_state: DiffNavigationState::Collapsed,
+            interaction_state: InteractionState::Editable,
+            show_current_line_highlights: false, // no GPU rendering in TUI
+            delay_rendering: None,
+            vim_visual_tails: vec![],
+            hovered_symbol_range: None,
+            hide_lines_outside_of_active_diff: None,
+            lazy_layout_enabled: false,
+            lazy_layout_initialized: true, // no lazy layout in TUI
+            pending_syntax_tree_bootstrap: false,
+        }
+    }
+
+    /// Update the terminal width for a char-cell `RenderState` and rebuild the
+    /// char-cell line index. Only valid when the model was created with
+    /// [`Self::new_tui`].
+    #[cfg(feature = "tui")]
+    pub fn set_tui_terminal_width(&mut self, terminal_width: u16, ctx: &mut ModelContext<Self>) {
+        self.render_state.update(ctx, |r, _| {
+            r.set_char_cell_terminal_width(terminal_width);
+        });
+        let text = self.content.as_ref(ctx).text().into_string();
+        self.render_state
+            .update(ctx, |r, _| r.update_char_cell_text(&text));
+    }
+
     fn should_defer_syntax_tree_parsing(&self) -> bool {
         self.lazy_layout_enabled && !self.lazy_layout_initialized
     }
@@ -3650,11 +3745,20 @@ impl CoreEditorModel for CodeEditorModel {
         buffer_version: BufferVersion,
         ctx: &mut ModelContext<Self::T>,
     ) {
-        // Synchronously convert hidden range anchors into offsets for the given version. This allows the render model
-        // to accurately hide line ranges based on the corresponding incoming buffer state.
+        // Synchronously convert hidden range anchors into offsets for the given version. This allows
+        // the render model to accurately hide line ranges based on the corresponding incoming buffer state.
         self.hidden_lines.update(ctx, |hidden_lines_model, ctx| {
             hidden_lines_model.materialize_hidden_range_offsets(buffer_version, ctx);
         });
+        // In TUI char-cell mode the async font-shaping pipeline is bypassed entirely (the
+        // LayoutAction::BufferEdit arm is a no-op for CharCell). We must therefore refresh the
+        // char-cell line index synchronously here so that offset_to_softwrap_point, max_line,
+        // and all cursor-positioning queries see up-to-date data in the same frame.
+        if self.render_state.as_ref(ctx).is_char_cell_mode() {
+            let text = self.content.as_ref(ctx).text().into_string();
+            self.render_state
+                .update(ctx, |r, _| r.update_char_cell_text(&text));
+        }
     }
 
     fn content(&self) -> &ModelHandle<Buffer> {

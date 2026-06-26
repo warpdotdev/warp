@@ -108,7 +108,6 @@ impl TuiView for ShellView {
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         let model = self.input_model.as_ref(ctx);
-        let _text = model.plain_text_without_trailing_sentinel(ctx);
         let lines = model.visual_line_count(ctx);
         let dim = TuiStyle::default().add_modifier(Modifier::DIM);
         let bold = TuiStyle::default().add_modifier(Modifier::BOLD);
