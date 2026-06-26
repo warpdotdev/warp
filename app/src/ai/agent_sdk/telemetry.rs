@@ -51,21 +51,21 @@ pub(super) enum CliTelemetryEvent {
     ModelList,
     /// Executing `warp memory-store list`
     MemoryStoreList,
-    /// Executing `warp memory-store list-memories`
+    /// Executing `warp memory list`
     MemoryStoreListMemories,
-    /// Executing `warp memory-store create-memory`
+    /// Executing `warp memory create`
     MemoryStoreCreateMemory,
-    /// Executing `warp memory-store update-memory`
+    /// Executing `warp memory update`
     MemoryStoreUpdateMemory,
-    /// Executing `warp memory-store delete-memory`
+    /// Executing `warp memory delete`
     MemoryStoreDeleteMemory,
-    /// Executing `warp memory-store get-store`
+    /// Executing `warp memory-store get`
     MemoryStoreGetStore,
-    /// Executing `warp memory-store update-store`
+    /// Executing `warp memory-store update`
     MemoryStoreUpdateStore,
     /// Executing `warp memory-store list-store-agents`
     MemoryStoreListStoreAgents,
-    /// Executing `warp memory-store list-versions`
+    /// Executing `warp memory versions`
     MemoryStoreListVersions,
     /// Executing `warp task list`
     TaskList,

@@ -24,7 +24,7 @@ use warp_cli::federate::FederateCommand;
 use warp_cli::harness_support::{HarnessSupportCommand, ReportArtifactCommand, TaskStatus};
 use warp_cli::integration::IntegrationCommand;
 use warp_cli::mcp::MCPCommand;
-use warp_cli::memory_store::MemoryStoreCommand;
+use warp_cli::memory_store::{MemoryCommand, MemoryStoreCommand};
 use warp_cli::model::ModelCommand;
 use warp_cli::provider::ProviderCommand;
 use warp_cli::schedule::ScheduleSubcommand;
@@ -154,6 +154,7 @@ fn dispatch_command(
         CliCommand::MemoryStore(memory_store_cmd) => {
             memory_store::run(ctx, global_options, memory_store_cmd)
         }
+        CliCommand::Memory(memory_cmd) => memory_store::run_memory(ctx, global_options, memory_cmd),
         CliCommand::Login => admin::login(ctx),
         CliCommand::Logout => admin::logout(ctx),
         CliCommand::Whoami => admin::whoami(ctx, global_options.output_format),
@@ -1517,6 +1518,7 @@ fn command_requires_auth(command: &CliCommand) -> bool {
             ModelCommand::List => true,
         },
         CliCommand::MemoryStore(_) => true,
+        CliCommand::Memory(_) => true,
         CliCommand::Login => false,
         CliCommand::Logout => false,
         CliCommand::Whoami => true,
@@ -1708,14 +1710,16 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
         CliCommand::Model(ModelCommand::List) => CliTelemetryEvent::ModelList,
         CliCommand::MemoryStore(memory_store_cmd) => match memory_store_cmd {
             MemoryStoreCommand::List => CliTelemetryEvent::MemoryStoreList,
-            MemoryStoreCommand::ListMemories(_) => CliTelemetryEvent::MemoryStoreListMemories,
-            MemoryStoreCommand::CreateMemory(_) => CliTelemetryEvent::MemoryStoreCreateMemory,
-            MemoryStoreCommand::UpdateMemory(_) => CliTelemetryEvent::MemoryStoreUpdateMemory,
-            MemoryStoreCommand::DeleteMemory(_) => CliTelemetryEvent::MemoryStoreDeleteMemory,
-            MemoryStoreCommand::GetStore(_) => CliTelemetryEvent::MemoryStoreGetStore,
-            MemoryStoreCommand::UpdateStore(_) => CliTelemetryEvent::MemoryStoreUpdateStore,
+            MemoryStoreCommand::Get(_) => CliTelemetryEvent::MemoryStoreGetStore,
+            MemoryStoreCommand::Update(_) => CliTelemetryEvent::MemoryStoreUpdateStore,
             MemoryStoreCommand::ListStoreAgents(_) => CliTelemetryEvent::MemoryStoreListStoreAgents,
-            MemoryStoreCommand::ListVersions(_) => CliTelemetryEvent::MemoryStoreListVersions,
+        },
+        CliCommand::Memory(memory_cmd) => match memory_cmd {
+            MemoryCommand::List(_) => CliTelemetryEvent::MemoryStoreListMemories,
+            MemoryCommand::Create(_) => CliTelemetryEvent::MemoryStoreCreateMemory,
+            MemoryCommand::Update(_) => CliTelemetryEvent::MemoryStoreUpdateMemory,
+            MemoryCommand::Delete(_) => CliTelemetryEvent::MemoryStoreDeleteMemory,
+            MemoryCommand::Versions(_) => CliTelemetryEvent::MemoryStoreListVersions,
         },
         CliCommand::Login => CliTelemetryEvent::Login,
         CliCommand::Logout => CliTelemetryEvent::Logout,

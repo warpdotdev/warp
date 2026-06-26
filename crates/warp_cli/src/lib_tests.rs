@@ -8,7 +8,7 @@ use crate::artifact::ArtifactCommand;
 use crate::environment::{EnvironmentCommand, ImageCommand};
 use crate::harness_support::{HarnessSupportCommand, TaskStatus};
 use crate::integration::IntegrationCommand;
-use crate::memory_store::MemoryStoreCommand;
+use crate::memory_store::{MemoryCommand, MemoryStoreCommand};
 use crate::schedule::ScheduleSubcommand;
 use crate::secret::{CodexMethod, CreateProvider, SecretCommand};
 use crate::task::{MessageCommand, TaskCommand};
@@ -157,40 +157,99 @@ fn memory_stores_alias_parses() {
 }
 
 #[test]
-fn memory_store_list_memories_parses() {
-    let args =
-        Args::try_parse_from(["warp", "memory-store", "list-memories", "store-123"]).unwrap();
+fn memory_list_parses() {
+    let args = Args::try_parse_from(["warp", "memory", "list", "store-123"]).unwrap();
 
     let Some(Command::CommandLine(boxed_cmd)) = args.command else {
-        panic!("Expected `warp memory-store list-memories` command");
+        panic!("Expected `warp memory list` command");
     };
-    let CliCommand::MemoryStore(MemoryStoreCommand::ListMemories(args)) = boxed_cmd.as_ref() else {
-        panic!("Expected `warp memory-store list-memories` command");
+    let CliCommand::Memory(MemoryCommand::List(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory list` command");
     };
 
     assert_eq!(args.store_uid, "store-123");
 }
 
 #[test]
-fn memory_store_memories_alias_parses() {
-    let args = Args::try_parse_from(["warp", "memory-store", "memories", "store-123"]).unwrap();
+fn memory_store_get_parses() {
+    let args = Args::try_parse_from(["warp", "memory-store", "get", "store-123"]).unwrap();
 
     let Some(Command::CommandLine(boxed_cmd)) = args.command else {
-        panic!("Expected `warp memory-store memories` command");
+        panic!("Expected `warp memory-store get` command");
     };
-    let CliCommand::MemoryStore(MemoryStoreCommand::ListMemories(args)) = boxed_cmd.as_ref() else {
-        panic!("Expected `warp memory-store memories` alias to parse as list-memories command");
+    let CliCommand::MemoryStore(MemoryStoreCommand::Get(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory-store get` command");
     };
 
     assert_eq!(args.store_uid, "store-123");
 }
 
 #[test]
-fn memory_store_create_memory_parses() {
+fn memory_store_get_store_alias_parses() {
+    let args = Args::try_parse_from(["warp", "memory-store", "get-store", "store-123"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp memory-store get-store` command");
+    };
+    let CliCommand::MemoryStore(MemoryStoreCommand::Get(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory-store get-store` alias to parse as get command");
+    };
+
+    assert_eq!(args.store_uid, "store-123");
+}
+
+#[test]
+fn memory_store_update_parses() {
     let args = Args::try_parse_from([
         "warp",
         "memory-store",
-        "create-memory",
+        "update",
+        "store-123",
+        "--description",
+        "team memory store",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp memory-store update` command");
+    };
+    let CliCommand::MemoryStore(MemoryStoreCommand::Update(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory-store update` command");
+    };
+
+    assert_eq!(args.store_uid, "store-123");
+    assert_eq!(args.description.as_deref(), Some("team memory store"));
+}
+
+#[test]
+fn memory_store_update_store_alias_parses() {
+    let args = Args::try_parse_from([
+        "warp",
+        "memory-store",
+        "update-store",
+        "store-123",
+        "--description",
+        "team memory store",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp memory-store update-store` command");
+    };
+    let CliCommand::MemoryStore(MemoryStoreCommand::Update(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory-store update-store` alias to parse as update command");
+    };
+
+    assert_eq!(args.store_uid, "store-123");
+    assert_eq!(args.description.as_deref(), Some("team memory store"));
+}
+
+#[test]
+fn memory_create_parses() {
+    let args = Args::try_parse_from([
+        "warp",
+        "memory",
+        "create",
         "store-123",
         "--content",
         "remember this",
@@ -202,10 +261,10 @@ fn memory_store_create_memory_parses() {
     .unwrap();
 
     let Some(Command::CommandLine(boxed_cmd)) = args.command else {
-        panic!("Expected `warp memory-store create-memory` command");
+        panic!("Expected `warp memory create` command");
     };
-    let CliCommand::MemoryStore(MemoryStoreCommand::CreateMemory(args)) = boxed_cmd.as_ref() else {
-        panic!("Expected `warp memory-store create-memory` command");
+    let CliCommand::Memory(MemoryCommand::Create(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory create` command");
     };
 
     assert_eq!(args.store_uid, "store-123");
@@ -215,30 +274,98 @@ fn memory_store_create_memory_parses() {
 }
 
 #[test]
-fn memory_store_add_memory_alias_parses() {
+fn memory_update_parses() {
     let args = Args::try_parse_from([
         "warp",
-        "memory-store",
-        "add-memory",
+        "memory",
+        "update",
+        "memory-123",
+        "--store",
         "store-123",
-        "-c",
-        "remember this",
-        "-r",
-        "manual note",
+        "--content",
+        "updated memory",
+        "--reason",
+        "manual edit",
     ])
     .unwrap();
 
     let Some(Command::CommandLine(boxed_cmd)) = args.command else {
-        panic!("Expected `warp memory-store add-memory` command");
+        panic!("Expected `warp memory update` command");
     };
-    let CliCommand::MemoryStore(MemoryStoreCommand::CreateMemory(args)) = boxed_cmd.as_ref() else {
-        panic!("Expected `warp memory-store add-memory` alias to parse as create-memory command");
+    let CliCommand::Memory(MemoryCommand::Update(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory update` command");
     };
 
+    assert_eq!(args.memory_uid, "memory-123");
     assert_eq!(args.store_uid, "store-123");
-    assert_eq!(args.content, "remember this");
-    assert_eq!(args.reason, "manual note");
-    assert!(args.version.is_none());
+    assert_eq!(args.content, "updated memory");
+    assert_eq!(args.reason, "manual edit");
+}
+
+#[test]
+fn memory_delete_parses() {
+    let args = Args::try_parse_from([
+        "warp",
+        "memory",
+        "delete",
+        "memory-123",
+        "--store",
+        "store-123",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp memory delete` command");
+    };
+    let CliCommand::Memory(MemoryCommand::Delete(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory delete` command");
+    };
+
+    assert_eq!(args.memory_uid, "memory-123");
+    assert_eq!(args.store_uid, "store-123");
+}
+
+#[test]
+fn memory_versions_parses() {
+    let args = Args::try_parse_from([
+        "warp",
+        "memory",
+        "versions",
+        "memory-123",
+        "--store",
+        "store-123",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp memory versions` command");
+    };
+    let CliCommand::Memory(MemoryCommand::Versions(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory versions` command");
+    };
+
+    assert_eq!(args.memory_uid, "memory-123");
+    assert_eq!(args.store_uid, "store-123");
+}
+
+#[test]
+fn legacy_memory_store_memory_commands_are_rejected() {
+    for command in [
+        "list-memories",
+        "memories",
+        "create-memory",
+        "add-memory",
+        "update-memory",
+        "edit-memory",
+        "delete-memory",
+        "remove-memory",
+        "list-versions",
+        "versions",
+    ] {
+        let err = Args::try_parse_from(["warp", "memory-store", command, "memory-123"])
+            .expect_err("legacy memory-store memory command should not parse");
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    }
 }
 
 #[test]

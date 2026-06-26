@@ -1,34 +1,36 @@
 use clap::{Args, Subcommand};
 
-/// Memory-store related subcommands.
+/// Memory store related subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub enum MemoryStoreCommand {
     /// List memory stores.
     List,
-    /// List memories in a memory store.
-    #[command(name = "list-memories", visible_alias = "memories")]
-    ListMemories(ListMemoriesArgs),
-    /// Create a manual memory in a memory store.
-    #[command(name = "create-memory", visible_alias = "add-memory")]
-    CreateMemory(CreateMemoryArgs),
-    /// Update a memory in a memory store, creating a new version.
-    #[command(name = "update-memory", visible_alias = "edit-memory")]
-    UpdateMemory(UpdateMemoryArgs),
-    /// Delete a memory from a memory store.
-    #[command(name = "delete-memory", visible_alias = "remove-memory")]
-    DeleteMemory(DeleteMemoryArgs),
     /// Get details of a single memory store.
-    #[command(name = "get-store")]
-    GetStore(GetStoreArgs),
+    #[command(name = "get", alias = "get-store")]
+    Get(GetStoreArgs),
     /// Update a memory store's description.
-    #[command(name = "update-store", visible_alias = "edit-store")]
-    UpdateStore(UpdateStoreArgs),
+    #[command(name = "update", alias = "update-store", visible_alias = "edit-store")]
+    Update(UpdateStoreArgs),
     /// List agents attached to a memory store.
     #[command(name = "list-store-agents", visible_alias = "store-agents")]
     ListStoreAgents(ListStoreAgentsArgs),
+}
+/// Memory related subcommands.
+#[derive(Debug, Clone, Subcommand)]
+pub enum MemoryCommand {
+    /// List memories in a memory store.
+    List(ListMemoriesArgs),
+    /// Create a manual memory in a memory store.
+    #[command(visible_alias = "add")]
+    Create(CreateMemoryArgs),
+    /// Update a memory in a memory store, creating a new version.
+    #[command(visible_alias = "edit")]
+    Update(UpdateMemoryArgs),
+    /// Delete a memory from a memory store.
+    #[command(visible_alias = "remove")]
+    Delete(DeleteMemoryArgs),
     /// List version history for a memory.
-    #[command(name = "list-versions", visible_alias = "versions")]
-    ListVersions(ListVersionsArgs),
+    Versions(ListVersionsArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -123,14 +125,21 @@ impl MemoryStoreCommand {
     pub(crate) fn as_str_for_tracing(&self) -> &'static str {
         match self {
             MemoryStoreCommand::List => "memory-store list",
-            MemoryStoreCommand::ListMemories(_) => "memory-store list-memories",
-            MemoryStoreCommand::CreateMemory(_) => "memory-store create-memory",
-            MemoryStoreCommand::UpdateMemory(_) => "memory-store update-memory",
-            MemoryStoreCommand::DeleteMemory(_) => "memory-store delete-memory",
-            MemoryStoreCommand::GetStore(_) => "memory-store get-store",
-            MemoryStoreCommand::UpdateStore(_) => "memory-store update-store",
+            MemoryStoreCommand::Get(_) => "memory-store get",
+            MemoryStoreCommand::Update(_) => "memory-store update",
             MemoryStoreCommand::ListStoreAgents(_) => "memory-store list-store-agents",
-            MemoryStoreCommand::ListVersions(_) => "memory-store list-versions",
+        }
+    }
+}
+
+impl MemoryCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            MemoryCommand::List(_) => "memory list",
+            MemoryCommand::Create(_) => "memory create",
+            MemoryCommand::Update(_) => "memory update",
+            MemoryCommand::Delete(_) => "memory delete",
+            MemoryCommand::Versions(_) => "memory versions",
         }
     }
 }

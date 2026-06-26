@@ -4,7 +4,7 @@ use serde::Serialize;
 use warp_cli::agent::OutputFormat;
 use warp_cli::memory_store::{
     CreateMemoryArgs, DeleteMemoryArgs, GetStoreArgs, ListMemoriesArgs, ListStoreAgentsArgs,
-    ListVersionsArgs, MemoryStoreCommand, UpdateMemoryArgs, UpdateStoreArgs,
+    ListVersionsArgs, MemoryCommand, MemoryStoreCommand, UpdateMemoryArgs, UpdateStoreArgs,
 };
 use warp_cli::GlobalOptions;
 use warpui::platform::TerminationMode;
@@ -33,37 +33,13 @@ pub fn run(
             });
             Ok(())
         }
-        MemoryStoreCommand::ListMemories(args) => {
-            runner.update(ctx, |runner, ctx| {
-                runner.list_memories(global_options.output_format, args, ctx)
-            });
-            Ok(())
-        }
-        MemoryStoreCommand::CreateMemory(args) => {
-            runner.update(ctx, |runner, ctx| {
-                runner.create_memory(global_options.output_format, args, ctx)
-            });
-            Ok(())
-        }
-        MemoryStoreCommand::UpdateMemory(args) => {
-            runner.update(ctx, |runner, ctx| {
-                runner.update_memory(global_options.output_format, args, ctx)
-            });
-            Ok(())
-        }
-        MemoryStoreCommand::DeleteMemory(args) => {
-            runner.update(ctx, |runner, ctx| {
-                runner.delete_memory(global_options.output_format, args, ctx)
-            });
-            Ok(())
-        }
-        MemoryStoreCommand::GetStore(args) => {
+        MemoryStoreCommand::Get(args) => {
             runner.update(ctx, |runner, ctx| {
                 runner.get_store(global_options.output_format, args, ctx)
             });
             Ok(())
         }
-        MemoryStoreCommand::UpdateStore(args) => {
+        MemoryStoreCommand::Update(args) => {
             runner.update(ctx, |runner, ctx| {
                 runner.update_store(global_options.output_format, args, ctx)
             });
@@ -75,7 +51,42 @@ pub fn run(
             });
             Ok(())
         }
-        MemoryStoreCommand::ListVersions(args) => {
+    }
+}
+
+/// Run memory related commands.
+pub fn run_memory(
+    ctx: &mut AppContext,
+    global_options: GlobalOptions,
+    command: MemoryCommand,
+) -> Result<()> {
+    let runner = ctx.add_singleton_model(|_ctx| MemoryStoreCommandRunner);
+    match command {
+        MemoryCommand::List(args) => {
+            runner.update(ctx, |runner, ctx| {
+                runner.list_memories(global_options.output_format, args, ctx)
+            });
+            Ok(())
+        }
+        MemoryCommand::Create(args) => {
+            runner.update(ctx, |runner, ctx| {
+                runner.create_memory(global_options.output_format, args, ctx)
+            });
+            Ok(())
+        }
+        MemoryCommand::Update(args) => {
+            runner.update(ctx, |runner, ctx| {
+                runner.update_memory(global_options.output_format, args, ctx)
+            });
+            Ok(())
+        }
+        MemoryCommand::Delete(args) => {
+            runner.update(ctx, |runner, ctx| {
+                runner.delete_memory(global_options.output_format, args, ctx)
+            });
+            Ok(())
+        }
+        MemoryCommand::Versions(args) => {
             runner.update(ctx, |runner, ctx| {
                 runner.list_versions(global_options.output_format, args, ctx)
             });
