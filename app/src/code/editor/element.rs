@@ -280,6 +280,9 @@ pub struct EditorWrapperState {
     hovered_diff_hunk: Mutex<Option<EditorLineLocation>>,
     /// Whether there is an active click.
     in_click: AtomicBool,
+    /// Whether the cursor is currently over a collapsed hidden-section row, so the
+    /// pointer cursor is only set/reset on transitions.
+    over_hidden_section: AtomicBool,
     /// Mouse state handle for the plus button.
     add_as_context_mouse_state: MouseStateHandle,
     /// Mouse state handle for the revert button.
@@ -1614,9 +1617,25 @@ impl<V: EditorView> Element for EditorWrapper<V> {
             Some(Event::MouseMoved { position, .. }) => {
                 let only_check_y_axis =
                     matches!(self.gutter_element_hover_target, GutterHoverTarget::Line);
-                let hovered_line = self
-                    .gutter_element_range_containing_position(*position, only_check_y_axis)
-                    .map(|gutter_range| gutter_range.line().clone());
+                let hovered_range =
+                    self.gutter_element_range_containing_position(*position, only_check_y_axis);
+
+                // The whole collapsed hidden-section row is clickable, so show a pointer
+                // cursor over it (reset on leave). Set on every move so the overlapping
+                // bar's `Hoverable` can't clear it when resetting later in this dispatch.
+                let over_hidden_section =
+                    matches!(&hovered_range, Some(GutterRange::HiddenSection { .. }));
+                let was_over_hidden_section = self
+                    .state_handle
+                    .over_hidden_section
+                    .swap(over_hidden_section, Ordering::Relaxed);
+                if over_hidden_section {
+                    ctx.set_cursor(warpui::platform::Cursor::PointingHand, z_index);
+                } else if was_over_hidden_section {
+                    ctx.reset_cursor();
+                }
+
+                let hovered_line = hovered_range.map(|gutter_range| gutter_range.line().clone());
                 let mut hovered_diff_hunk = self.state_handle.hovered_diff_hunk.lock();
                 if hovered_diff_hunk.as_ref() != hovered_line.as_ref() {
                     // When hovering over a new range, clear the previously clicked range
