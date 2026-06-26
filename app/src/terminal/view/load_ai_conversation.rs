@@ -32,7 +32,7 @@ use crate::ai::blocklist::history_model::{
 use crate::ai::blocklist::model::AIBlockModelImpl;
 use crate::ai::blocklist::{
     AIBlock, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
-    ClientIdentifiers,
+    ClientIdentifiers, SerializedBlockListItem,
 };
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
