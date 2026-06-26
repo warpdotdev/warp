@@ -6,8 +6,9 @@
 //!   - Resize reflows cleanly (no flicker)
 //!   - Full event loop (keypress → action → `ctx.notify()` → repaint)
 //!
-//! **Note**: The full editor-backed `TuiInputView` lives in `app/src/tui/input/`
-//! and requires the warp binary. This example proves out the TUI runtime layer.
+//! **Note**: The full editor-backed `TuiInputView` lives in `crates/warp_tui/src/input/`
+//! (see the `tui_input_demo` example in that crate). This example proves out the
+//! TUI runtime layer independently of the editor.
 //!
 //! Run from a real terminal:
 //!
