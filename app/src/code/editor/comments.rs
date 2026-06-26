@@ -47,6 +47,7 @@ pub struct EditorReviewComment {
     pub diff_content: LineDiffContent,
     pub comment_content: String,
     pub last_update_time: DateTime<Local>,
+    pub origin: CommentOrigin,
 }
 
 impl EditorReviewComment {
@@ -61,6 +62,7 @@ impl EditorReviewComment {
             diff_content,
             comment_content,
             last_update_time: Local::now(),
+            origin: CommentOrigin::default(),
         }
     }
 
@@ -76,6 +78,7 @@ impl EditorReviewComment {
             diff_content,
             comment_content,
             last_update_time: Local::now(),
+            origin: CommentOrigin::default(),
         }
     }
 }
@@ -91,6 +94,7 @@ impl TryFrom<AttachedReviewComment> for EditorReviewComment {
                 diff_content: content,
                 comment_content: comment.content,
                 last_update_time: comment.last_update_time,
+                origin: comment.origin,
             }),
             _ => Err(()),
         }

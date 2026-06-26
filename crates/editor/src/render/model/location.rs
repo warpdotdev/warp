@@ -218,6 +218,7 @@ impl<'a> Positioned<'a, BlockItem> {
             | BlockItem::Image { .. }
             | BlockItem::TrailingNewLine(_)
             | BlockItem::TemporaryBlock { .. }
+            | BlockItem::EmbeddedComment { .. }
             | BlockItem::Hidden { .. } => Location::Text {
                 char_offset: self.start_char_offset,
                 clamped: true,

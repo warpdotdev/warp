@@ -1086,9 +1086,17 @@ impl TypedActionView for CodeEditorView {
             }
             NewCommentOnLine { line: line_info } => {
                 if FeatureFlag::InlineCodeReview.is_enabled() {
+                    if FeatureFlag::EmbeddedCodeReviewComments.is_enabled() {
+                        let view = self.inline_comments.open_draft(line_info.clone(), ctx);
+                        self.sync_inline_comment_blocks(ctx);
+                        ctx.emit(CodeEditorEvent::CommentEditorOpened);
+                        view.update(ctx, |view, ctx| view.focus_body(ctx));
+                        return;
+                    }
                     self.model.update(ctx, |model: &mut CodeEditorModel, ctx| {
                         model.open_comment_line(line_info, ctx);
                     });
+                    self.sync_inline_comment_blocks(ctx);
                     ctx.emit(CodeEditorEvent::CommentEditorOpened);
 
                     ctx.focus(&self.active_comment_editor);

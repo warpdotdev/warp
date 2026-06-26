@@ -41,7 +41,8 @@ use self::text_block::RenderableTextBlock;
 use self::unordered_list::RenderableBulletList;
 use super::model::viewport::{SizeInfo, ViewportItem};
 use super::model::{
-    BlockItem, ElementUpdate, HitTestOptions, Location, RenderState, RichTextStyles, UNIT_MARGIN,
+    BlockItem, ElementUpdate, HitTestOptions, Location, RenderLineLocation, RenderState,
+    RichTextStyles, UNIT_MARGIN,
 };
 use crate::content::version::BufferVersion;
 use crate::editor::EditorView;
@@ -281,8 +282,12 @@ pub trait RenderableBlock {
         false
     }
 
-    fn is_embedded_comment(&self) -> bool {
-        false
+    /// The anchor of the inline comment block backing this renderable, or `None` if this block is
+    /// not an inline comment. Carrying the anchor on the renderable lets gutter rendering classify
+    /// comment rows (including the removed-line side) without a per-frame reverse lookup into the
+    /// content tree.
+    fn embedded_comment_location(&self) -> Option<RenderLineLocation> {
+        None
     }
 
     fn finish(self) -> Box<dyn RenderableBlock>
@@ -906,7 +911,7 @@ impl<V: EditorView> RichTextElement<V> {
                     BlockItem::Table { .. } => RenderableTable::new(item).finish(),
                     BlockItem::TrailingNewLine(_) => Empty::new(item).finish(),
                     BlockItem::Hidden { .. } => RenderableHiddenSection::new(item, ctx).finish(),
-                    BlockItem::Embedded(embed) => {
+                    BlockItem::Embedded(embed) | BlockItem::EmbeddedComment { item: embed, .. } => {
                         let start_offset = item.block_offset;
                         let child_model = parent.embedded_item_at(start_offset, ctx);
                         embed.element(model, item, child_model, ctx)

@@ -14,8 +14,9 @@ pub enum CommentOrigin {
     /// Comments originally created in the Warp UI.
     #[default]
     Native,
-    /// Comments imported from a GitHub pull request.
-    ImportedFromGitHub(ImportedCommentDetails),
+    /// Comments imported from a GitHub pull request. Boxed to keep `CommentOrigin` (and the
+    /// `EditorReviewComment` that carries it through the editor's saved-comment events) small.
+    ImportedFromGitHub(Box<ImportedCommentDetails>),
 }
 
 impl CommentOrigin {
@@ -214,7 +215,7 @@ impl AttachedReviewComment {
             },
             last_update_time: comment.last_update_time,
             outdated: false,
-            origin: CommentOrigin::Native,
+            origin: comment.origin,
         }
     }
 
