@@ -384,7 +384,8 @@ impl CodeView {
                         CodeEditorView::new(
                             None,
                             Some(buffer_state.buffer),
-                            CodeEditorRenderOptions::new(VerticalExpansionBehavior::FillMaxHeight),
+                            CodeEditorRenderOptions::new(VerticalExpansionBehavior::FillMaxHeight)
+                                .with_soft_wrap(true),
                             ctx,
                         )
                         .with_horizontal_scrollbar_appearance(
@@ -428,7 +429,8 @@ impl CodeView {
             CodeEditorView::new(
                 None,
                 None,
-                CodeEditorRenderOptions::new(VerticalExpansionBehavior::FillMaxHeight),
+                CodeEditorRenderOptions::new(VerticalExpansionBehavior::FillMaxHeight)
+                    .with_soft_wrap(true),
                 ctx,
             )
             .with_horizontal_scrollbar_appearance(
