@@ -3059,11 +3059,23 @@ fn render_grouped_tab_container(
             padding = padding.with_bottom(TAB_GROUP_CONTENT_INSET);
         }
 
-        Container::new(content.finish())
+        let mut container = Container::new(content.finish())
             .with_padding(padding)
-            .with_background(background)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)))
-            .finish()
+            .with_background(background);
+        if needs_outer_horizontal_padding {
+            // Pane view: match regular tab containers — flat corners with a top
+            // divider (plus a bottom divider when this is the last item) rather
+            // than a rounded card.
+            container = container.with_border(
+                Border::new(1.)
+                    .with_sides(true, false, last_member_after_index.is_some(), false)
+                    .with_border_fill(internal_colors::fg_overlay_1(theme)),
+            );
+        } else {
+            container = container
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)));
+        }
+        container.finish()
     })
     // Right-click on group chrome (not member rows) opens the group menu.
     .on_right_click(move |ctx, _, position| {
