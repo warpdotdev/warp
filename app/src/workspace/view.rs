@@ -6274,14 +6274,23 @@ impl Workspace {
                     }
                     LocalOrRemotePath::Remote(_) => {
                         #[cfg(feature = "local_fs")]
-                        self.open_code(
-                            code_source,
-                            crate::util::openable_file_type::EditorLayout::SplitPane,
-                            *line_col,
-                            false,
-                            &[],
-                            ctx,
-                        );
+                        {
+                            // Honor a notebook-viewer target (e.g. a remote
+                            // Jupyter notebook) instead of always opening remote
+                            // files as raw code in the editor.
+                            if let FileTarget::MarkdownViewer(layout) = target {
+                                self.open_file_notebook(location.clone(), None, *layout, ctx);
+                            } else {
+                                self.open_code(
+                                    code_source,
+                                    crate::util::openable_file_type::EditorLayout::SplitPane,
+                                    *line_col,
+                                    false,
+                                    &[],
+                                    ctx,
+                                );
+                            }
+                        }
                     }
                 }
             }
