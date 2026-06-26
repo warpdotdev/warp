@@ -216,24 +216,51 @@ impl TuiView for FileViewerView {
             let row_in_area = HEADER_ROWS + vi as u16;
             gutter_rows.push((row_in_area, gutter_width));
 
+            // Expand tabs to spaces for display and track visual column per char.
+            // `col` = raw char index (used for CharOffset lookup)
+            // `vcol` = visual column after tab expansion (used for color_cells x)
+            let mut display_line = String::new();
+            let mut vcol: u16 = 0;
             if let Some(highlights) = highlights.as_ref() {
-                for (col, _) in line.chars().enumerate() {
-                    // CharOffset(global + col + 2): the buffer is 1-indexed with a
-                    // BlockMarker at CharOffset(1), so the char at 0-based string position
-                    // (global + col) lives at CharOffset(global + col + 2).
+                for (col, ch) in line.chars().enumerate() {
                     let offset = CharOffset::from(global + col + 2);
                     if let Some(color) = highlights.get(&offset) {
                         color_cells.push((
                             row_in_area,
-                            gutter_width + col as u16,
+                            gutter_width + vcol,
                             Color::Rgb(color.r, color.g, color.b),
                         ));
+                    }
+                    if ch == '\t' {
+                        let spaces = 4 - (vcol as usize % 4);
+                        for _ in 0..spaces {
+                            display_line.push(' ');
+                        }
+                        vcol += spaces as u16;
+                    } else {
+                        display_line.push(ch);
+                        vcol += 1;
+                    }
+                }
+            } else {
+                // No highlights yet — just expand tabs for display.
+                for ch in line.chars() {
+                    if ch == '\t' {
+                        let spaces = 4 - (vcol as usize % 4);
+                        for _ in 0..spaces {
+                            display_line.push(' ');
+                        }
+                        vcol += spaces as u16;
+                    } else {
+                        display_line.push(ch);
+                        vcol += 1;
                     }
                 }
             }
 
-            column =
-                column.with_child(Box::new(TuiText::new(format!("{prefix}{line}")).truncate()));
+            column = column.with_child(Box::new(
+                TuiText::new(format!("{prefix}{display_line}")).truncate(),
+            ));
             global += line.chars().count() + 1;
         }
 
