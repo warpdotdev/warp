@@ -309,18 +309,17 @@ impl TuiInputModel {
 
     // ── Raw text access ───────────────────────────────────────────────────────
 
-    /// Returns the plain-text content of the buffer, stripping the internal
-    /// trailing sentinel character that the buffer always maintains.
+    /// Returns the plain-text content of the buffer as a `String`.
+    ///
+    /// Uses the same range as `Buffer::text()` — from offset 1 through
+    /// `max_charoffset()` — which covers the full text without the block
+    /// marker at offset 0 and without any extra sentinel.
     pub fn plain_text_without_trailing_sentinel(&self, ctx: &impl ModelAsRef) -> String {
         let buffer = self.buffer.as_ref(ctx);
-        // The buffer is 1-indexed; offset 1 is the first real character.
-        // `max_charoffset` points at the trailing sentinel, so subtract 1 to exclude it.
-        let start = CharOffset::from(1);
-        let end = buffer.max_charoffset().saturating_sub(&1.into());
-        if end <= start {
+        if buffer.is_empty() {
             return String::new();
         }
-        buffer.text_in_range(start..end).into_string()
+        buffer.text().into_string()
     }
 
     /// Returns the cursor's [`CharOffset`] (first selection head).
@@ -420,19 +419,23 @@ impl TuiInputModel {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     /// The range from the cursor to the end of its visual line, used by `Ctrl+K`.
+    ///
+    /// Finds the start of the next visual row via `row+1, col=0`, subtracts 1
+    /// to land at the end of the current row, then clamps to `max_charoffset()`
+    /// so single-line buffers don't produce huge phantom offsets.
     fn range_to_visual_line_end(&self, ctx: &AppContext) -> Option<Range<CharOffset>> {
         let cursor = self.cursor_offset(ctx);
+        let max = self.buffer.as_ref(ctx).max_charoffset();
         let render = self.render.as_ref(ctx);
         let adjusted = cursor.saturating_sub(&CharOffset::from(1));
+        let pt = render.offset_to_softwrap_point(adjusted);
         let line_end = render
-            .softwrap_point_to_offset({
-                let pt = render.offset_to_softwrap_point(adjusted);
-                warp_editor::render::model::SoftWrapPoint::new(
-                    pt.row() + 1,
-                    warp_editor::render::model::ColumnUnit::chars_zero(),
-                )
-            })
-            .saturating_sub(&CharOffset::from(1));
+            .softwrap_point_to_offset(warp_editor::render::model::SoftWrapPoint::new(
+                pt.row() + 1,
+                warp_editor::render::model::ColumnUnit::chars_zero(),
+            ))
+            .saturating_sub(&CharOffset::from(1))
+            .min(max);
 
         if line_end <= cursor {
             return None;

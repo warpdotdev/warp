@@ -15844,6 +15844,7 @@ dependencies = [
  "warp",
  "warp_channel_config",
  "warp_core",
+ "warpui_core",
 ]
 
 [[package]]

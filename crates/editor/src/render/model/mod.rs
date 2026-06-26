@@ -5217,7 +5217,13 @@ pub(crate) fn char_cell_softwrap_point_to_offset(
     terminal_width: u16,
 ) -> CharOffset {
     let target_row = point.row();
-    let target_col = point.column().as_chars() as usize;
+    // Accept either variant: Chars is the normal CharCell column; Pixels is produced
+    // by GUI-path navigation helpers (e.g. navigate_line_boundary) that hard-code
+    // ColumnUnit::pixels_zero() to mean "start of row". Treat any Pixels value as 0.
+    let target_col = match point.column() {
+        ColumnUnit::Chars(c) => c as usize,
+        ColumnUnit::Pixels(_) => 0,
+    };
     let w = terminal_width as usize;
 
     let mut current_row: u32 = 0;

@@ -205,7 +205,7 @@ impl TypedActionView for TuiInputView {
             TuiInputAction::Redo => model.redo(ctx),
         });
 
-        // After any action, scroll to keep the cursor visible.
+        // After any action, scroll to keep the cursor visible and re-render.
         let visible_rows = {
             let m = self.model.as_ref(ctx);
             cmp::min(m.visual_line_count(ctx), self.max_visible_rows)
@@ -213,6 +213,7 @@ impl TypedActionView for TuiInputView {
         self.model.update(ctx, |model, app| {
             model.scroll_to_cursor(visible_rows.max(1), app);
         });
+        ctx.notify();
     }
 }
 
