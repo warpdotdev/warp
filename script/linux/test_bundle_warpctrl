@@ -18,7 +18,7 @@ EOF
 chmod +x "$temp_dir/bin/rustup"
 
 target="$(uname -m)-unknown-linux-musl"
-for compiler in "$target-gcc" "$target-g++"; do
+for compiler in "$target-gcc" "$target-g++" "$target-strip"; do
   cat > "$temp_dir/bin/$compiler" <<'EOF'
 #!/usr/bin/env bash
 exit 0

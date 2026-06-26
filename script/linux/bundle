@@ -252,8 +252,6 @@ if [[ "$BUILD" == "true" ]]; then
   echo "Building and bundling Warp for channel $RELEASE_CHANNEL and bundle id $BUNDLE_ID"
   cargo build -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" ${TARGET_TRIPLE:+--target $TARGET_TRIPLE}
 
-  exit 0
-
   echo "Making debug copy of '$EXECUTABLE_PATH' at '$DEBUG_EXECUTABLE_PATH'"
   cp "$EXECUTABLE_PATH" "$DEBUG_EXECUTABLE_PATH"
 
@@ -261,11 +259,11 @@ if [[ "$BUILD" == "true" ]]; then
   if [[ $RELEASE_CHANNEL = "dev" ]]; then
     # For dev builds, only strip debug symbols, as we want to keep some
     # symbols for profiling purposes.
-    strip --strip-debug "$EXECUTABLE_PATH"
+    "${WARP_MUSL_STRIP:-strip}" --strip-debug "$EXECUTABLE_PATH"
   else
     # For production builds, strip all symbols, to keep the binary size
     # smaller.
-    strip --strip-all "$EXECUTABLE_PATH"
+    "${WARP_MUSL_STRIP:-strip}" --strip-all "$EXECUTABLE_PATH"
   fi
 else
   echo 'Skipping `cargo build` step due to --skip-build argument'

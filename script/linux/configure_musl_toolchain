@@ -24,20 +24,25 @@ configure_musl_toolchain() {
   local compiler_prefix
   local musl_cc=""
   local musl_cxx=""
+  local musl_strip=""
   for compiler_prefix in "$target" "${target/unknown-/}"; do
     if command -v "$compiler_prefix-gcc" &>/dev/null \
-      && command -v "$compiler_prefix-g++" &>/dev/null; then
+      && command -v "$compiler_prefix-g++" &>/dev/null \
+      && command -v "$compiler_prefix-strip" &>/dev/null; then
       musl_cc="$(command -v "$compiler_prefix-gcc")"
       musl_cxx="$(command -v "$compiler_prefix-g++")"
+      musl_strip="$(command -v "$compiler_prefix-strip")"
       break
     fi
   done
 
   if [[ -z "$musl_cc" && "$target" == "$(uname -m)-unknown-linux-musl" ]] \
     && command -v musl-gcc &>/dev/null \
-    && command -v musl-g++ &>/dev/null; then
+    && command -v musl-g++ &>/dev/null \
+    && command -v strip &>/dev/null; then
     musl_cc="$(command -v musl-gcc)"
     musl_cxx="$(command -v musl-g++)"
+    musl_strip="$(command -v strip)"
   fi
 
   local musl_cross_root="${WARP_MUSL_CROSS_ROOT:-/tmp/warp-musl-cross}"
@@ -45,19 +50,27 @@ configure_musl_toolchain() {
   local toolchain_dir="$install_root/$target"
   local toolchain_bin="$toolchain_dir/bin"
 
-  if [[ -z "$musl_cc" && -x "$toolchain_bin/$target-gcc" && -x "$toolchain_bin/$target-g++" ]]; then
+  if [[ -z "$musl_cc" \
+    && -x "$toolchain_bin/$target-gcc" \
+    && -x "$toolchain_bin/$target-g++" \
+    && -x "$toolchain_bin/$target-strip" ]]; then
     case ":$PATH:" in
       *":$toolchain_bin:"*) ;;
       *) export PATH="$toolchain_bin:$PATH" ;;
     esac
     musl_cc="$(command -v "$target-gcc")"
     musl_cxx="$(command -v "$target-g++")"
+    musl_strip="$(command -v "$target-strip")"
   fi
 
   if [[ -z "$musl_cc" ]]; then
     if [[ "$(uname -s)" != "Linux" ]]; then
       echo "Error: no complete C and C++ toolchain for '$target' was found on PATH." >&2
       echo "Automatic musl-cross installation is only supported on Linux." >&2
+      return 1
+    fi
+    if [[ "$(uname -m)" != "x86_64" ]]; then
+      echo "Error: automatic musl-cross installation is only supported on x86_64 hosts." >&2
       return 1
     fi
 
@@ -89,14 +102,17 @@ configure_musl_toolchain() {
       printf '%s  %s\n' "$musl_cross_sha256" "$download_dir/$archive_name" | sha256sum -c - || exit 1
       tar -xf "$download_dir/$archive_name" -C "$download_dir" || exit 1
       if [[ ! -x "$download_dir/$target/bin/$target-gcc" \
-        || ! -x "$download_dir/$target/bin/$target-g++" ]]; then
-        echo "Error: the downloaded archive does not contain the expected C and C++ compilers." >&2
+        || ! -x "$download_dir/$target/bin/$target-g++" \
+        || ! -x "$download_dir/$target/bin/$target-strip" ]]; then
+        echo "Error: the downloaded archive does not contain the expected C, C++, and strip tools." >&2
         exit 1
       fi
 
       chmod u+w "$download_dir/$target" || exit 1
       mkdir -p "$install_root" || exit 1
-      if [[ -x "$toolchain_bin/$target-gcc" && -x "$toolchain_bin/$target-g++" ]]; then
+      if [[ -x "$toolchain_bin/$target-gcc" \
+        && -x "$toolchain_bin/$target-g++" \
+        && -x "$toolchain_bin/$target-strip" ]]; then
         exit 0
       fi
       if [[ -e "$toolchain_dir" ]]; then
@@ -114,7 +130,16 @@ configure_musl_toolchain() {
     esac
     musl_cc="$(command -v "$target-gcc")"
     musl_cxx="$(command -v "$target-g++")"
+    musl_strip="$(command -v "$target-strip")"
   fi
+
+  local tool
+  for tool in "$musl_cc" "$musl_cxx" "$musl_strip"; do
+    if ! "$tool" --version &>/dev/null; then
+      echo "Error: musl tool '$tool' cannot execute on this host." >&2
+      return 1
+    fi
+  done
 
   local target_env="${target//-/_}"
   local cargo_target_env
@@ -126,8 +151,9 @@ configure_musl_toolchain() {
   export WARP_MUSL_TARGET="$target"
   export WARP_MUSL_CC="$musl_cc"
   export WARP_MUSL_CXX="$musl_cxx"
+  export WARP_MUSL_STRIP="$musl_strip"
 
-  echo "Configured the $target toolchain with $musl_cc and $musl_cxx"
+  echo "Configured the $target toolchain with $musl_cc, $musl_cxx, and $musl_strip"
 }
 
 if [[ -n "${BASH_VERSION:-}" && "${BASH_SOURCE[0]}" == "$0" ]]; then
