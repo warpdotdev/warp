@@ -2705,9 +2705,13 @@ impl AIConversation {
                             }
                         }
                         Some(api::message::Message::ToolCallResult(tcr)) => {
-                            // Clean up temp directories from conversation search subagents.
-                            if let Some(api::message::tool_call_result::Result::Subagent(_)) =
-                                &tcr.result
+                            // Shared-session viewers do not own temp directories created by
+                            // conversation search subagents.
+                            if !self.is_viewing_shared_session
+                                && matches!(
+                                    &tcr.result,
+                                    Some(api::message::tool_call_result::Result::Subagent(_))
+                                )
                             {
                                 cleanup_conversation_search_temp_dir(
                                     &tcr.tool_call_id,
