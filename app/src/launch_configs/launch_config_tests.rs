@@ -306,6 +306,52 @@ windows:
 }
 
 #[test]
+fn test_tab_level_commands_are_applied_to_first_pane_without_focused_pane() {
+    let config: LaunchConfig = serde_yaml::from_str(
+        r#"
+name: Legacy Commands
+windows:
+  - tabs:
+      - layout:
+          split_direction: horizontal
+          panes:
+            - cwd: /tmp/left
+            - cwd: /tmp/right
+        commands:
+          - exec: echo first
+"#,
+    )
+    .expect("launch config should parse");
+
+    let layout = config.windows[0].tabs[0].layout_with_tab_commands();
+
+    assert_eq!(
+        layout,
+        PaneTemplateType::PaneBranchTemplate {
+            split_direction: SplitDirection::Horizontal.into(),
+            panes: vec![
+                PaneTemplateType::PaneTemplate {
+                    cwd: PathBuf::from("/tmp/left"),
+                    commands: vec![CommandTemplate {
+                        exec: "echo first".to_string()
+                    }],
+                    is_focused: None,
+                    pane_mode: PaneMode::Terminal,
+                    shell: None,
+                },
+                PaneTemplateType::PaneTemplate {
+                    cwd: PathBuf::from("/tmp/right"),
+                    commands: vec![],
+                    is_focused: None,
+                    pane_mode: PaneMode::Terminal,
+                    shell: None,
+                },
+            ],
+        }
+    );
+}
+
+#[test]
 fn test_config_with_active_tab_index() {
     let state = multi_tab_snapshot(
         1,
