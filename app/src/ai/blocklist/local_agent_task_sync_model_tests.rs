@@ -392,7 +392,8 @@ fn register_cli_agent_sessions_model(app: &mut App) {
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
 }
 
-/// A pane-scoped CLI session can end during setup without ending the driver run.
+/// A pane-scoped CLI session can end during setup without ending the driver run,
+/// while explicit driver cleanup prevents later status updates.
 #[test]
 fn cli_task_mapping_survives_cli_session_end() {
     App::test((), |mut app| async move {
@@ -431,13 +432,24 @@ fn cli_task_mapping_survives_cli_session_end() {
                 session_context: Box::default(),
             });
         });
+        model.update(&mut app, |model, _| {
+            model.unregister_cli_session(terminal_view_id);
+        });
+        cli_sessions_model.update(&mut app, |_, ctx| {
+            ctx.emit(CLIAgentSessionsModelEvent::StatusChanged {
+                terminal_view_id,
+                agent: CLIAgent::Claude,
+                status: CLIAgentSessionStatus::Success,
+                session_context: Box::default(),
+            });
+        });
 
         pump_spawned_tasks().await;
 
         assert_eq!(
             succeeded_updates.load(Ordering::SeqCst),
             1,
-            "a pane-scoped session ending must not prevent the driver run from reporting success"
+            "the accepted success must drain, but a status emitted after unregister must be ignored"
         );
     });
 }

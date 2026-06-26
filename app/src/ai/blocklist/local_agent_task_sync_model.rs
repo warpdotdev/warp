@@ -132,6 +132,16 @@ impl LocalAgentTaskSyncModel {
         );
     }
 
+    /// Stops reporting CLI agent status changes for a completed driver run.
+    /// Task updates accepted before unregistration remain queued until delivery
+    /// finishes.
+    #[cfg_attr(target_family = "wasm", expect(dead_code))]
+    pub fn unregister_cli_session(&mut self, terminal_view_id: EntityId) {
+        if let Some(task_id) = self.cli_session_task_ids.remove(&terminal_view_id) {
+            self.update_queue.remove_task(&task_id);
+        }
+    }
+
     fn remove_queued_update_state_for_run_id(&mut self, run_id: Option<&str>) {
         let Some(task_id) = run_id.and_then(|run_id| run_id.parse::<AmbientAgentTaskId>().ok())
         else {
