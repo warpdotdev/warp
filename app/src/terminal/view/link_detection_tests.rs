@@ -3,7 +3,7 @@ use std::iter;
 use warp_util::path::CleanPathResult;
 
 use super::super::TerminalView;
-use super::{path_without_trailing_sentence_period, GridHighlightedLink};
+use super::{path_without_trailing_sentence_punctuation, GridHighlightedLink};
 use crate::terminal::model::grid::grid_handler::PossiblePath;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::WithinModel;
@@ -12,30 +12,59 @@ use crate::terminal::model::terminal_model::WithinModel;
 fn strips_only_sentence_periods() {
     // A trailing period after a real file name is sentence punctuation.
     assert_eq!(
-        path_without_trailing_sentence_period("notes/README.md."),
+        path_without_trailing_sentence_punctuation("notes/README.md.").map(|trimmed| trimmed.path),
         Some("notes/README.md")
     );
     assert_eq!(
-        path_without_trailing_sentence_period(".gitignore."),
+        path_without_trailing_sentence_punctuation(".gitignore.").map(|trimmed| trimmed.path),
         Some(".gitignore")
     );
     assert_eq!(
-        path_without_trailing_sentence_period("C:/Users/c/warp-md-test.md."),
+        path_without_trailing_sentence_punctuation("C:/Users/c/warp-md-test.md.")
+            .map(|trimmed| trimmed.path),
         Some("C:/Users/c/warp-md-test.md")
     );
 
     // No trailing period -> nothing to trim.
     assert_eq!(
-        path_without_trailing_sentence_period("notes/README.md"),
+        path_without_trailing_sentence_punctuation("notes/README.md").map(|trimmed| trimmed.path),
         None
     );
 
     // `.`/`..` path components must be preserved, not treated as punctuation.
-    assert_eq!(path_without_trailing_sentence_period("."), None);
-    assert_eq!(path_without_trailing_sentence_period(".."), None);
-    assert_eq!(path_without_trailing_sentence_period("foo/."), None);
-    assert_eq!(path_without_trailing_sentence_period("foo/.."), None);
-    assert_eq!(path_without_trailing_sentence_period("foo.."), None);
+    assert_eq!(
+        path_without_trailing_sentence_punctuation(".").map(|trimmed| trimmed.path),
+        None
+    );
+    assert_eq!(
+        path_without_trailing_sentence_punctuation("..").map(|trimmed| trimmed.path),
+        None
+    );
+    assert_eq!(
+        path_without_trailing_sentence_punctuation("foo/.").map(|trimmed| trimmed.path),
+        None
+    );
+    assert_eq!(
+        path_without_trailing_sentence_punctuation("foo/..").map(|trimmed| trimmed.path),
+        None
+    );
+    assert_eq!(
+        path_without_trailing_sentence_punctuation("foo..").map(|trimmed| trimmed.path),
+        None
+    );
+}
+
+#[test]
+fn strips_trailing_fullwidth_sentence_punctuation() {
+    let trimmed = path_without_trailing_sentence_punctuation("notes/README.md，")
+        .expect("fullwidth comma should be stripped");
+    assert_eq!(trimmed.path, "notes/README.md");
+    assert_eq!(trimmed.removed_width, 2);
+
+    let trimmed = path_without_trailing_sentence_punctuation("notes/README.md。！？")
+        .expect("CJK sentence punctuation should be stripped");
+    assert_eq!(trimmed.path, "notes/README.md");
+    assert_eq!(trimmed.removed_width, 6);
 }
 
 // Regression test for https://github.com/warpdotdev/warp/issues/11477:
@@ -86,6 +115,97 @@ fn compute_valid_paths_excludes_trailing_sentence_period() {
         Point {
             row: 0,
             col: end_col - 1,
+        }
+    );
+}
+
+#[test]
+fn compute_valid_paths_excludes_trailing_fullwidth_sentence_punctuation() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("warp-md-test.md");
+    std::fs::write(&file, "# Hello\n").unwrap();
+
+    let token = format!("{}，", file.to_string_lossy());
+    let punctuation_width = 2;
+    let end_col = token.chars().count();
+    let candidate = WithinModel::AltScreen(PossiblePath {
+        path: CleanPathResult {
+            path: token,
+            line_and_column_num: None,
+        },
+        range: Point { row: 0, col: 0 }..=Point {
+            row: 0,
+            col: end_col,
+        },
+    });
+
+    let link = TerminalView::compute_valid_paths(
+        dir.path().to_str().unwrap(),
+        iter::once(candidate),
+        1000,
+        None,
+    )
+    .expect("the markdown file should be detected as a link");
+
+    let GridHighlightedLink::File(file_link) = link else {
+        panic!("expected a file link");
+    };
+    let file_link = file_link.get_inner();
+
+    assert_eq!(
+        file_link.absolute_path.file_name().unwrap(),
+        "warp-md-test.md"
+    );
+    assert_eq!(
+        *file_link.link.range().end(),
+        Point {
+            row: 0,
+            col: end_col - punctuation_width,
+        }
+    );
+}
+
+#[test]
+fn compute_valid_paths_keeps_trailing_fullwidth_punctuation_when_it_is_the_filename() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("warp-md-test.md，");
+    std::fs::write(&file, "# Hello\n").unwrap();
+
+    let token = file.to_string_lossy().to_string();
+    let end_col = token.chars().count();
+    let candidate = WithinModel::AltScreen(PossiblePath {
+        path: CleanPathResult {
+            path: token,
+            line_and_column_num: None,
+        },
+        range: Point { row: 0, col: 0 }..=Point {
+            row: 0,
+            col: end_col,
+        },
+    });
+
+    let link = TerminalView::compute_valid_paths(
+        dir.path().to_str().unwrap(),
+        iter::once(candidate),
+        1000,
+        None,
+    )
+    .expect("the file with fullwidth punctuation should be detected as a link");
+
+    let GridHighlightedLink::File(file_link) = link else {
+        panic!("expected a file link");
+    };
+    let file_link = file_link.get_inner();
+
+    assert_eq!(
+        file_link.absolute_path.file_name().unwrap(),
+        "warp-md-test.md，"
+    );
+    assert_eq!(
+        *file_link.link.range().end(),
+        Point {
+            row: 0,
+            col: end_col,
         }
     );
 }

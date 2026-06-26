@@ -58,6 +58,12 @@ fn test_possible_file_paths_in_word() {
 }
 
 #[test]
+fn test_detect_urls_stops_at_fullwidth_punctuation() {
+    assert_eq!(detect_urls("go https://example.com，next"), vec![3..22]);
+    assert_eq!(detect_urls("go https://example.com。"), vec![3..22]);
+}
+
+#[test]
 fn test_possible_file_paths_in_word_multibyte() {
     let word = "/path/音楽/テストファイル.txt:16:ḧeĹḹo";
     let possible_paths = possible_file_paths_in_word(word).collect_vec();
