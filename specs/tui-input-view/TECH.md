@@ -56,9 +56,7 @@ pub struct CharCellState {
 Construction and APIs:
 - `RenderState::new_internal` gains a `layout_mode` parameter; existing pixel constructors pass `LayoutMode::Pixels`.
 - New `RenderState::new_tui(terminal_width, styles, ctx)` constructs a `CharCell` `RenderState`. Callers supply a stub `RichTextStyles` (the field is never read for char-cell layout).
-- `is_char_cell_mode() -> bool`.
-- `update_char_cell_text(&str)` rebuilds `line_starts` and the per-char `char_widths` from the current buffer text (O(n) char scan).
-- `set_char_cell_terminal_width(u16)` updates the width. It takes `&self` (the width is interior-mutable) so the element can push it during its layout pass, which only has a shared `&AppContext`.
+- `RenderState::char_cell() -> Option<&CharCellState>` is the single gateway to char-cell state. It returns `Some` only in `CharCell` mode, so the char-cell ops below are simply unreachable in pixel mode (no implicit "CharCell-only" runtime contract on `RenderState`). On `CharCellState`: `terminal_width()` / `set_terminal_width(u16)` (interior-mutable, so the element can push width during its layout pass with only a shared `&AppContext`) and `update_text(&str)` (rebuilds `line_starts` + per-char `char_widths` from the buffer text, O(n) char scan).
 - Public per-line primitives are the single source of truth for the wrapping rule, shared by both the editor conversions and the `warp_tui` view, and all operate on a line's per-char display widths (`&[u8]`): `char_cell_display_width(char)` (terminal cell width via `unicode-width`, used to build the width slices), `char_cell_line_row_starts(widths, terminal_width)` (char indices where each visual row begins), and `char_cell_line_gap_position(widths, terminal_width, char_in_line)` (`(row, display_col)` of a cursor gap).
 
 Layout behaviour in `CharCell` mode:
@@ -75,8 +73,8 @@ There is **no** `TuiInputModel`. The TUI input is backed directly by the existin
 
 - `CodeEditorModel::new_tui(terminal_width, ctx)` builds the model with a `CharCell` `RenderState`. It shares all sub-model wiring (buffer, `BufferSelectionModel`, `SyntaxTreeState`, `DiffModel`, `HiddenLinesModel`, `SelectionModel`, comments) with the GUI `new()` via a common `from_content(..)` helper; the only differences are the `RenderState` constructor and a few flags (`show_current_line_highlights = false`, lazy layout disabled).
 - Syntax colours come from the `Appearance` singleton via the same `syntax_highlighting_color_map(ctx)` path as the GUI, so callers must register `Appearance` (a real one at runtime; `Appearance::mock()` in tests/examples). The `RichTextStyles` handed to `RenderState::new_tui` is a local stub (`tui_stub_text_styles()`), since char-cell layout never reads it.
-- The terminal width is pushed during the element's layout pass (see §2) via `RenderState::set_char_cell_terminal_width` (interior-mutable). `line_starts`/`char_widths` don't depend on the width, so no text rebuild is needed on resize.
-- **Keeping char-cell layout in sync**: `CodeEditorModel`'s `CoreEditorModel::on_buffer_version_updated` override checks `is_char_cell_mode()` and, when true, synchronously calls `update_char_cell_text(text)`. Because the async font-shaping pipeline is bypassed in `CharCell` mode, this guaranteed-synchronous post-edit hook is what keeps `max_line` / `offset_to_softwrap_point` correct within the same frame as each edit.
+- The terminal width is pushed during the element's layout pass (see §2) via `render_state.char_cell()?.set_terminal_width(..)` (interior-mutable). `line_starts`/`char_widths` don't depend on the width, so no text rebuild is needed on resize.
+- **Keeping char-cell layout in sync**: `CodeEditorModel`'s `CoreEditorModel::on_buffer_version_updated` override calls `render_state.char_cell()` and, when `Some`, synchronously calls `update_text(text)` on it. Because the async font-shaping pipeline is bypassed in `CharCell` mode, this guaranteed-synchronous post-edit hook is what keeps `max_line` / `offset_to_softwrap_point` correct within the same frame as each edit.
 
 `app/src/editor/mod.rs` re-exports `CodeEditorModel` / `CodeEditorModelEvent` so the `warp_tui` crate can construct and subscribe to it.
 
@@ -93,7 +91,7 @@ pub struct TuiInputView {
 }
 ```
 
-**Rendering**: `render(&self, ctx) -> Box<dyn TuiElement>` only gathers width-*independent* state (plain text, cursor offset, selection range, scroll offset) plus a model-handle clone into a `TuiInputElement`. All width-dependent work happens in `TuiInputElement::layout(constraint, ctx, app)` — the first point that knows the terminal width (from the constraint), mirroring the GUI where the element computes geometry in `layout`. There it: pushes the width onto the model (`set_char_cell_terminal_width`, interior-mutable) so event-time navigation/scroll read it; builds the visible rows with `build_visual_rows_with_offsets(text, width)` and the cursor `(row, col)` with `char_cell_cursor_pos(...)`; then assembles the `TuiColumn`, applies `Modifier::REVERSED` to selected spans, and reports the block cursor via `cursor_position()`. These pure helpers operate directly on the plain text (independent of the `RenderState` SumTree).
+**Rendering**: `render(&self, ctx) -> Box<dyn TuiElement>` only gathers width-*independent* state (plain text, cursor offset, selection range, scroll offset) plus a model-handle clone into a `TuiInputElement`. All width-dependent work happens in `TuiInputElement::layout(constraint, ctx, app)` — the first point that knows the terminal width (from the constraint), mirroring the GUI where the element computes geometry in `layout`. There it: pushes the width onto the model (`char_cell().set_terminal_width`, interior-mutable) so event-time navigation/scroll read it; builds the visible rows with `build_visual_rows_with_offsets(text, width)` and the cursor `(row, col)` with `char_cell_cursor_pos(...)`; then assembles the `TuiColumn`, applies `Modifier::REVERSED` to selected spans, and reports the block cursor via `cursor_position()`. These pure helpers operate directly on the plain text (independent of the `RenderState` SumTree).
 
 `visual_line_count()` reads `render_state().max_line()` and `scroll_to_cursor()` uses `render_state().offset_to_softwrap_point()` — both reading the width the element pushed during the previous layout. Height is effectively capped at `max_visible_rows` (6) via the scroll logic.
 
@@ -158,7 +156,7 @@ TuiInputView : TuiView + TypedActionView
 ├── render() gathers plain_text, cursor_offset, selection_range
 │   → TuiInputElement
 │        └─ layout(constraint, ctx, app):
-│             push width → model (set_char_cell_terminal_width)
+│             push width → model (char_cell().set_terminal_width)
 │             build_visual_rows_with_offsets() + char_cell_cursor_pos()
 │             → TuiColumn rows, REVERSED selection, cursor_position() ─► ratatui Buffer
 │
@@ -166,7 +164,7 @@ TuiInputView : TuiView + TypedActionView
 │      keybinding table                                     ├── Buffer (rope, undo/redo, word ops)
 │                                                           ├── SelectionModel (non-generic)
 │                                                           │     └── navigate_line() sticky-column (ColumnUnit)
-│                                                           ├── on_buffer_version_updated → update_char_cell_text
+│                                                           ├── on_buffer_version_updated → char_cell().update_text
 │                                                           └── RenderState (CharCell)
 │                                                                 ├── line_starts + char_widths (derived; no text copy)
 │                                                                 ├── offset_to_softwrap_point → ColumnUnit::Chars

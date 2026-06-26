@@ -1440,7 +1440,7 @@ mod char_cell {
     };
 
     /// Build the `(line_starts, char_widths)` pair from a text string (mirrors
-    /// `RenderState::update_char_cell_text` logic) so tests can construct the
+    /// `CharCellState::update_text` logic) so tests can construct the
     /// char-cell layout inputs without a full `RenderState`. `char_widths` holds
     /// the per-char display width (the derived data the layout actually needs).
     fn line_starts_for(text: &str) -> (Vec<usize>, Vec<u8>) {

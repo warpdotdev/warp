@@ -388,11 +388,11 @@ impl<'a> RenderContentTreeRef<'a> {
 /// scattered across the parent [`RenderState`].
 pub struct CharCellState {
     /// Terminal width in character columns. Pushed from the element's layout
-    /// pass; interior-mutable so it can be set through a shared `&RenderState`
+    /// pass; interior-mutable so it can be set through a shared `&CharCellState`
     /// (mirroring how the GUI submits viewport state during layout).
-    pub terminal_width: Cell<u16>,
+    pub(crate) terminal_width: Cell<u16>,
     /// The 0-indexed char offset of the start of each logical line (`\n`-split).
-    /// Rebuilt synchronously via [`RenderState::update_char_cell_text`]. Invariant:
+    /// Rebuilt synchronously via [`CharCellState::update_text`]. Invariant:
     /// never empty — it always holds at least `[0]` (logical line 0 starts at char
     /// 0), even before the first edit, so the soft-wrap helpers can index it safely.
     pub(crate) line_starts: RefCell<Vec<usize>>,
@@ -402,7 +402,7 @@ pub struct CharCellState {
     /// char's width, and the render-state query methods are `&self` with no
     /// `AppContext`, so they can't read the `Buffer` model at query time. One
     /// byte per char (0 for zero-width/combining marks, 2 for wide CJK/emoji, 1
-    /// otherwise). Rebuilt via [`RenderState::update_char_cell_text`].
+    /// otherwise). Rebuilt via [`CharCellState::update_text`].
     pub(crate) char_widths: RefCell<Vec<u8>>,
 }
 
@@ -411,11 +411,57 @@ impl CharCellState {
         Self {
             terminal_width: Cell::new(terminal_width),
             // Seed with logical line 0 so `line_starts` is never empty, matching
-            // the post-`update_char_cell_text` state for an empty buffer. The
-            // soft-wrap helpers index `line_starts[0]` and must not panic if a
-            // navigation/scroll happens before the first edit.
+            // the post-`update_text` state for an empty buffer. The soft-wrap
+            // helpers index `line_starts[0]` and must not panic if a navigation/
+            // scroll happens before the first edit.
             line_starts: RefCell::new(vec![0]),
             char_widths: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// The terminal width (in cells) used for char-cell wrapping.
+    pub fn terminal_width(&self) -> u16 {
+        self.terminal_width.get()
+    }
+
+    /// Update the terminal width used for char-cell wrapping. Interior-mutable so
+    /// it can be set through a shared `&CharCellState` during the element's layout
+    /// pass (which only has a shared `&AppContext`). `line_starts`/`char_widths`
+    /// don't depend on the width, so nothing else is rebuilt here.
+    pub fn set_terminal_width(&self, terminal_width: u16) {
+        self.terminal_width.set(terminal_width);
+    }
+
+    /// Rebuild the char-cell layout index — `line_starts` and the per-char display
+    /// `char_widths` — from the current buffer `text` (O(n) char scan).
+    ///
+    /// ## Why TUI needs this explicit call but GUI doesn't
+    ///
+    /// The GUI keeps layout in sync via an async font-shaping pipeline
+    /// (`update_content` → `ContentChanged` → `layout_tx` → `handle_layout_action`),
+    /// which `offset_to_softwrap_point` then reads. `LayoutMode::CharCell` skips that
+    /// channel (no font engine): the channel only carries an `EditDelta` (not the
+    /// full text this rebuild needs) and is async, whereas TUI cursor queries need
+    /// fresh `line_starts` synchronously within the same frame as the edit.
+    /// [`on_buffer_version_updated`](warp_editor::model::CoreEditorModel::on_buffer_version_updated)
+    /// is the guaranteed-synchronous post-edit hook that calls this.
+    ///
+    /// `text` should be the buffer's current plain text (without any trailing
+    /// sentinel newline injected by the buffer layer).
+    pub fn update_text(&self, text: &str) {
+        let mut starts = self.line_starts.borrow_mut();
+        let mut char_widths = self.char_widths.borrow_mut();
+        starts.clear();
+        char_widths.clear();
+        // Logical line 0 starts at char index 0.
+        starts.push(0_usize);
+        for ch in text.chars() {
+            // Store only the derived display width, never the character itself.
+            char_widths.push(char_cell_display_width(ch) as u8);
+            if ch == '\n' {
+                // The next logical line starts at the char index after this '\n'.
+                starts.push(char_widths.len());
+            }
         }
     }
 }
@@ -1955,88 +2001,20 @@ impl RenderState {
         }
     }
 
-    /// Returns whether this `RenderState` is in TUI char-cell mode.
-    pub fn is_char_cell_mode(&self) -> bool {
-        matches!(self.layout_mode, LayoutMode::CharCell(_))
-    }
-
-    /// The terminal width (in cells) used for char-cell layout, or `None` in
-    /// pixel (GUI) mode. This is the single source of truth for the TUI input's
-    /// width: navigation and scroll read it at event time, so it must live on
-    /// the model. Callers should read it here rather than caching a copy.
-    pub fn char_cell_terminal_width(&self) -> Option<u16> {
+    /// Returns the char-cell layout state, or `None` in pixel (GUI) mode.
+    ///
+    /// All char-cell queries and mutations go through this accessor and the
+    /// methods on [`CharCellState`], so they are only reachable when the model is
+    /// actually in char-cell mode — there is no implicit "CharCell-only" contract
+    /// on `RenderState` for callers to violate. The width stored there is the
+    /// single source of truth for the TUI input's width: navigation and scroll
+    /// read it at event time, so callers should read it via
+    /// [`CharCellState::terminal_width`] rather than caching a copy.
+    pub fn char_cell(&self) -> Option<&CharCellState> {
         match &self.layout_mode {
-            LayoutMode::CharCell(cc) => Some(cc.terminal_width.get()),
+            LayoutMode::CharCell(cc) => Some(cc),
             LayoutMode::Pixels => None,
         }
-    }
-
-    /// Update the char-cell layout state from the current buffer text.
-    ///
-    /// Must only be called on a `LayoutMode::CharCell` `RenderState`.
-    ///
-    /// ## Why TUI needs this explicit call but GUI doesn't
-    ///
-    /// The GUI keeps layout in sync via an **async font-shaping pipeline**:
-    /// `CoreEditorModel::update_content` → buffer emits `ContentChanged` →
-    /// `add_pending_edit(delta)` → `layout_tx` channel → `handle_layout_action` →
-    /// `layout_edit_delta` (font shaping) → SumTree updated.
-    /// `offset_to_softwrap_point` then reads that SumTree.
-    ///
-    /// `LayoutMode::CharCell` intentionally **skips that entire channel** (no font
-    /// engine needed). [`CharCellState::line_starts`] must be refreshed via a different
-    /// path. Two reasons the async channel can't drive this:
-    ///
-    /// 1. The channel only carries an [`EditDelta`], not the full buffer text that
-    ///    `line_starts` recomputation requires.
-    /// 2. The channel is async; TUI cursor queries (e.g. `scroll_to_cursor`,
-    ///    `is_cursor_on_first_visual_row`) need fresh `line_starts` synchronously
-    ///    within the same frame as the edit.
-    ///
-    /// [`on_buffer_version_updated`](warp_editor::model::CoreEditorModel::on_buffer_version_updated)
-    /// is the model's guaranteed-synchronous post-edit hook — the right place to call
-    /// this. Char-cell layout (O(n) char scan) is cheap, so synchronous execution is
-    /// fine unlike font shaping, which is deferred to the async channel for that reason.
-    ///
-    /// `text` should be the current plain-text content of the buffer (without any
-    /// trailing sentinel newline injected by the buffer layer).
-    pub fn update_char_cell_text(&self, text: &str) {
-        let LayoutMode::CharCell(ref cc) = self.layout_mode else {
-            debug_assert!(
-                false,
-                "update_char_cell_text called on a Pixels-mode RenderState"
-            );
-            return;
-        };
-        let mut starts = cc.line_starts.borrow_mut();
-        let mut char_widths = cc.char_widths.borrow_mut();
-        starts.clear();
-        char_widths.clear();
-        // Logical line 0 starts at char index 0.
-        starts.push(0_usize);
-        for ch in text.chars() {
-            // Store only the derived display width, never the character itself.
-            char_widths.push(char_cell_display_width(ch) as u8);
-            if ch == '\n' {
-                // The next logical line starts at the char index after this '\n'.
-                starts.push(char_widths.len());
-            }
-        }
-    }
-
-    /// Update the terminal width used by char-cell layout. Only valid in `CharCell` mode.
-    /// Takes `&self` (the width is interior-mutable) so the element can push it during its
-    /// layout pass, which only has a shared `&AppContext`. `line_starts`/`char_widths` don't
-    /// depend on the width, so nothing else needs rebuilding here.
-    pub fn set_char_cell_terminal_width(&self, terminal_width: u16) {
-        let LayoutMode::CharCell(ref cc) = self.layout_mode else {
-            debug_assert!(
-                false,
-                "set_char_cell_terminal_width called on Pixels-mode RenderState"
-            );
-            return;
-        };
-        cc.terminal_width.set(terminal_width);
     }
 
     fn final_trailing_newline_cursor(styles: &RichTextStyles) -> BlockItem {
@@ -2699,8 +2677,8 @@ impl RenderState {
                 delta: _,
                 buffer_version,
             } if matches!(self.layout_mode, LayoutMode::CharCell(_)) => {
-                // CharCell mode skips font shaping. The TuiInputModel drives char-cell layout
-                // synchronously via RenderState::update_char_cell_text after each buffer edit.
+                // CharCell mode skips font shaping. CodeEditorModel drives char-cell layout
+                // synchronously via CharCellState::update_text after each buffer edit.
                 self.buffer_version.borrow_mut().next_render_version = Some(buffer_version);
                 ctx.emit(RenderEvent::LayoutUpdated);
                 ctx.notify();

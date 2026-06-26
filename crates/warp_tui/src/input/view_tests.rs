@@ -98,7 +98,7 @@ fn cursor_at_origin_when_empty() {
 /// Regression: navigating a freshly-built (empty, never-edited) view must not
 /// panic. The char-cell `line_starts` is seeded with `[0]` at construction, so
 /// the soft-wrap helpers reached via `move_to_line_start` etc. index it safely
-/// before the first edit ever runs `update_char_cell_text`.
+/// before the first edit ever runs `CharCellState::update_text`.
 #[test]
 fn navigation_on_empty_buffer_does_not_panic() {
     App::test((), |mut app| async move {

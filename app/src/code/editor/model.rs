@@ -3801,10 +3801,9 @@ impl CoreEditorModel for CodeEditorModel {
         // LayoutAction::BufferEdit arm is a no-op for CharCell). We must therefore refresh the
         // char-cell line index synchronously here so that offset_to_softwrap_point, max_line,
         // and all cursor-positioning queries see up-to-date data in the same frame.
-        if self.render_state.as_ref(ctx).is_char_cell_mode() {
+        if let Some(char_cell) = self.render_state.as_ref(ctx).char_cell() {
             let text = self.content.as_ref(ctx).text().into_string();
-            self.render_state
-                .update(ctx, |r, _| r.update_char_cell_text(&text));
+            char_cell.update_text(&text);
         }
     }
 

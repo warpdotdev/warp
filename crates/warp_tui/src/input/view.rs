@@ -348,7 +348,8 @@ impl TuiInputView {
             .as_ref(ctx)
             .render_state()
             .as_ref(ctx)
-            .char_cell_terminal_width()
+            .char_cell()
+            .map(|cc| cc.terminal_width())
             .unwrap_or(0)
     }
 
@@ -708,9 +709,9 @@ impl TuiElement for TuiInputElement {
         // width — mirroring how the GUI computes geometry during layout.
         let terminal_width = constraint.constrain_width(constraint.max.width);
         let render_state = self.model.as_ref(app).render_state().clone();
-        render_state
-            .as_ref(app)
-            .set_char_cell_terminal_width(terminal_width);
+        if let Some(cc) = render_state.as_ref(app).char_cell() {
+            cc.set_terminal_width(terminal_width);
+        }
         let visual_line_count = render_state.as_ref(app).max_line().as_u32().max(1);
         let visible_rows = cmp::min(visual_line_count, self.max_visible_rows);
 
