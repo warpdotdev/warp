@@ -132,26 +132,56 @@ impl TuiView for TuiInputView {
         // Cursor row relative to the scroll offset.
         let cursor_row_in_view = cursor_visual_row.saturating_sub(scroll_offset);
 
-        // ── Build visual rows ──────────────────────────────────────────────────
-        let all_rows = build_visual_rows(&text, terminal_width);
+        // Selection range (0-based char indices in the text string).
+        let sel_char_range = model.selection_range(ctx).map(|r| {
+            // CharOffset N maps to text char index N-1 (see char_cell_cursor_pos).
+            let start = r.start.as_usize().saturating_sub(1);
+            let end = r.end.as_usize().saturating_sub(1);
+            (start, end)
+        });
+
+        // ── Build visual rows with per-row char offsets ─────────────────────────
+        let rows_with_offsets = build_visual_rows_with_offsets(&text, terminal_width);
 
         // Take the visible slice.
         let visible_start = scroll_offset as usize;
-        let visible_end = (scroll_offset as usize + visible_rows as usize).min(all_rows.len());
-        let visible_row_strings: Vec<String> = if visible_start < all_rows.len() {
-            all_rows[visible_start..visible_end].to_vec()
+        let visible_end = (scroll_offset as usize + visible_rows as usize).min(rows_with_offsets.len());
+        let visible_rows_slice: Vec<(String, usize)> = if visible_start < rows_with_offsets.len() {
+            rows_with_offsets[visible_start..visible_end].to_vec()
         } else {
-            vec![String::new()]
+            vec![(String::new(), 0)]
         };
+
+        // ── Compute selection spans per visible row ─────────────────────────────
+        let mut selected_spans: Vec<(u16, u16, u16)> = Vec::new();
+        if let Some((sel_start, sel_end)) = sel_char_range {
+            if sel_start < sel_end {
+                for (vis_idx, (row_text, row_char_start)) in visible_rows_slice.iter().enumerate() {
+                    let row_len = row_text.chars().count();
+                    let row_char_end = row_char_start + row_len;
+
+                    // Does the selection overlap this row?
+                    if sel_end > *row_char_start && sel_start < row_char_end {
+                        let span_start = sel_start.saturating_sub(*row_char_start);
+                        let span_end = (sel_end - row_char_start).min(row_len);
+                        selected_spans.push((
+                            vis_idx as u16,
+                            span_start as u16,
+                            span_end as u16,
+                        ));
+                    }
+                }
+            }
+        }
 
         // ── Assemble TuiColumn ─────────────────────────────────────────────────
         let dim = TuiStyle::default().add_modifier(Modifier::DIM);
         let mut column = TuiColumn::new();
 
-        for (row_idx, row_text) in visible_row_strings.iter().enumerate() {
+        for (row_idx, (row_text, _)) in visible_rows_slice.iter().enumerate() {
             let is_cursor_row = row_idx as u32 == cursor_row_in_view;
-            // Highlight the cursor row slightly (DIM everything else).
-            // Full selection highlighting is a follow-up (Step M2).
+            // DIM non-cursor rows; cursor row uses default style.
+            // Selection highlighting is applied as a post-render overlay in TuiInputElement.
             let style = if is_cursor_row {
                 TuiStyle::default()
             } else {
@@ -166,6 +196,7 @@ impl TuiView for TuiInputView {
             column,
             cursor_col: cursor_col as u16,
             cursor_row_in_view: cursor_row_in_view as u16,
+            selected_spans,
         })
     }
 }
@@ -225,12 +256,18 @@ impl TypedActionView for TuiInputView {
 ///
 /// Wraps a [`TuiColumn`] of [`TuiText`] rows and overrides `cursor_position` and
 /// `dispatch_event`. Layout and paint are fully delegated to the inner column.
+/// After the column paints, `render` overlays `REVERSED` style on any selected
+/// character cells.
 struct TuiInputElement {
     column: TuiColumn,
     /// The cursor's 0-based column within the visible area.
     cursor_col: u16,
     /// The cursor's 0-based row within the visible area (after scroll_offset subtraction).
     cursor_row_in_view: u16,
+    /// Selected spans: `(row_in_view, start_col, exclusive_end_col)` for each
+    /// visual row that has a non-empty selection. Applied in `render` as a
+    /// [`Modifier::REVERSED`] overlay over the already-painted text.
+    selected_spans: Vec<(u16, u16, u16)>,
 }
 
 impl TuiElement for TuiInputElement {
@@ -239,18 +276,32 @@ impl TuiElement for TuiInputElement {
     }
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+        // Paint text rows.
         self.column.render(area, buffer, ctx);
+        // Overlay selection highlight: apply REVERSED modifier to selected cells.
+        if !self.selected_spans.is_empty() {
+            let reversed = TuiStyle::default().add_modifier(Modifier::REVERSED);
+            for &(row_in_view, start_col, end_col) in &self.selected_spans {
+                let y = area.y.saturating_add(row_in_view);
+                let x = area.x.saturating_add(start_col);
+                let width = end_col.saturating_sub(start_col);
+                if y < area.y + area.height && width > 0 {
+                    let sel_rect = TuiRect::new(x, y, width.min(area.width.saturating_sub(start_col)), 1);
+                    buffer.set_style(sel_rect, reversed);
+                }
+            }
+        }
     }
 
     fn cursor_position(&self, area: TuiRect, _ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
-        let x = area.x.saturating_add(self.cursor_col);
-        let y = area.y.saturating_add(self.cursor_row_in_view);
-        // Clamp to the allocated area.
-        if x >= area.x + area.width || y >= area.y + area.height {
-            // Cursor is out of the visible area — don't show it.
+        // Return area-relative coordinates. The TuiColumn / presenter chain
+        // converts these to absolute terminal coordinates by adding the slot
+        // and root offsets at each level — if we added area.x/y here we'd
+        // double-count them.
+        if self.cursor_col >= area.width || self.cursor_row_in_view >= area.height {
             return None;
         }
-        Some((x, y))
+        Some((self.cursor_col, self.cursor_row_in_view))
     }
 
     fn dispatch_event(
@@ -357,6 +408,42 @@ impl TuiElement for TuiInputElement {
 // ─────────────────────────────────────────────────────────────────────────────
 // Char-cell helpers (pure functions, no model dependency)
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Splits `text` into visual rows, returning `(row_text, char_start_offset)` pairs
+/// where `char_start_offset` is the 0-based char index in `text` where the row starts.
+/// Used by `TuiInputView::render` to map selection char ranges to per-row column spans.
+pub fn build_visual_rows_with_offsets(text: &str, terminal_width: u16) -> Vec<(String, usize)> {
+    let w = terminal_width as usize;
+    let mut rows: Vec<(String, usize)> = Vec::new();
+    let mut global_char_offset: usize = 0;
+
+    for logical_line in text.split('\n') {
+        let line_char_start = global_char_offset;
+        let line_len = logical_line.chars().count();
+
+        if logical_line.is_empty() {
+            rows.push((String::new(), line_char_start));
+        } else if w == 0 {
+            rows.push((logical_line.to_owned(), line_char_start));
+        } else {
+            let chars: Vec<char> = logical_line.chars().collect();
+            let mut start = 0;
+            while start < chars.len() {
+                let end = (start + w).min(chars.len());
+                rows.push((chars[start..end].iter().collect(), line_char_start + start));
+                start = end;
+            }
+        }
+        // +1 for the '\n' separator (absent for the last line, but we add it
+        // anyway since there is no next logical line to care about).
+        global_char_offset += line_len + 1;
+    }
+
+    if rows.is_empty() {
+        rows.push((String::new(), 0));
+    }
+    rows
+}
 
 /// Splits `text` into visual rows of at most `terminal_width` chars each.
 /// Each `\n` starts a new logical line; empty logical lines produce one empty row.
