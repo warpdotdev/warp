@@ -2,15 +2,23 @@
 ///
 /// This is used to convert between pixel coordinates (as returned by screenshot tools)
 /// and point coordinates (as used by CGEvent and screencapture).
+///
+/// This intentionally avoids `NSScreen::mainScreen`, which must run on the main thread and is
+/// reached via a synchronous dispatch to the main queue. In the headless `agent run` CLI the
+/// main thread never services that queue, so such a dispatch deadlocks. The backing scale factor
+/// is instead derived purely from thread-safe Core Graphics calls as the ratio of the main
+/// display's current mode pixel width to its point width.
 pub fn main_display_scale_factor() -> f64 {
-    use dispatch2::run_on_main;
-    use objc2_app_kit::NSScreen;
+    use objc2_core_graphics::{CGDisplayCopyDisplayMode, CGDisplayMode, CGMainDisplayID};
 
-    run_on_main(|mtm| {
-        NSScreen::mainScreen(mtm)
-            .map(|screen| screen.backingScaleFactor())
-            .unwrap_or(1.0)
-    })
+    let Some(mode) = CGDisplayCopyDisplayMode(CGMainDisplayID()) else {
+        return 1.0;
+    };
+    let width_points = CGDisplayMode::width(Some(&mode));
+    if width_points == 0 {
+        return 1.0;
+    }
+    CGDisplayMode::pixel_width(Some(&mode)) as f64 / width_points as f64
 }
 
 /// Returns the backing scale factor of the display that fully contains a window.

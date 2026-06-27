@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use instant::Instant;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_core_foundation::CGPoint;
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventSource, CGEventSourceStateID, CGEventType, CGMouseButton,
@@ -38,15 +37,6 @@ pub fn from_cgpoint(point: CGPoint) -> Vector2I {
     Vector2I::new((point.x * scale) as i32, (point.y * scale) as i32)
 }
 
-/// Records a focus-without-raise change so it can be undone later.
-#[derive(Clone, Copy)]
-struct FocusChange {
-    /// The (pid, window) that was focused before we changed it (to restore).
-    previous: (libc::pid_t, i64),
-    /// The (pid, window) we most recently activated.
-    activated: (libc::pid_t, i64),
-}
-
 /// Manages mouse state and posts mouse events to the system.
 pub struct Mouse {
     held_buttons: HeldButtons,
@@ -58,8 +48,6 @@ pub struct Mouse {
     /// cursor, so the global cursor position cannot be used to locate clicks. We track the
     /// intended position here and use it as the location for button and move events.
     virtual_position: CGPoint,
-    /// The focus change made by the first PID-targeted click, for later restoration.
-    focus_change: Option<FocusChange>,
 }
 
 impl Mouse {
@@ -68,7 +56,6 @@ impl Mouse {
             held_buttons: HeldButtons::default(),
             target,
             virtual_position: CGPoint { x: 0.0, y: 0.0 },
-            focus_change: None,
         }
     }
 
@@ -76,18 +63,6 @@ impl Mouse {
     /// drive the HID tap for some actions and a specific process for others.
     pub fn set_target(&mut self, target: PostTarget) {
         self.target = target;
-    }
-
-    /// Restores input focus to the window that was focused before our first PID-targeted
-    /// click, undoing the focus-without-raise. No-op if we never changed focus.
-    pub fn restore_focus(&mut self) {
-        if let Some(change) = self.focus_change.take() {
-            super::skylight::focus_window_without_raise(
-                change.previous.0,
-                change.previous.1,
-                Some(change.activated),
-            );
-        }
     }
 
     pub async fn move_to(&mut self, target: Vector2I) -> Result<(), String> {
@@ -238,41 +213,6 @@ impl Mouse {
         Ok(pos)
     }
 
-    /// Flips the target window into the AppKit-active input state without raising it (yabai
-    /// focus-without-raise), recording the change so it can be restored later.
-    ///
-    /// This now runs for a hover (mouse-moved) as well as a press, so the pre-click move lands on
-    /// a key window. Controls that gate on the window being key and on hover tracking (e.g.
-    /// NSToolbar buttons) need this; a forgiving control like NSTextView accepts a click without
-    /// it, which is why background clicks into a text body worked but toolbar buttons did not.
-    /// Idempotent: repeated moves to the same already-activated window do not re-focus.
-    fn ensure_window_focused(&mut self, pid: libc::pid_t, window_number: i64) {
-        if let Some(change) = self.focus_change
-            && change.activated == (pid, window_number)
-        {
-            return;
-        }
-        let previous = window::frontmost_window();
-        super::skylight::focus_window_without_raise(pid, window_number, previous);
-        match self.focus_change.as_mut() {
-            Some(change) => change.activated = (pid, window_number),
-            None => {
-                if let Some(previous) = previous {
-                    self.focus_change = Some(FocusChange {
-                        previous,
-                        activated: (pid, window_number),
-                    });
-                }
-            }
-        }
-        if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
-            eprintln!(
-                "[computer_use] focus-without-raise pid={pid} window#={window_number} \
-                 previous={previous:?}"
-            );
-        }
-    }
-
     /// Posts a mouse event.
     ///
     /// `click_state` is the click count (1 for a single click, 2 for a double click, etc.) and
@@ -287,9 +227,9 @@ impl Mouse {
         click_state: i64,
     ) -> Result<(), String> {
         // For a PID target with an owned window under the point, deliver a window-targeted event
-        // directly to the process via SkyLight, without raising the window or moving the cursor.
-        // Falls back to a plain CGEvent via the configured target when there is no PID target or
-        // no owned window under the point.
+        // directly to the owning process via `CGEventPostToPid`, without raising the window or
+        // moving the cursor. Falls back to a plain CGEvent via the configured target when there
+        // is no PID target or no owned window under the point.
         if let Some(pid) = self.target.pid()
             && let Some(info) = window::window_at(pid, point.x, point.y)
         {
@@ -300,28 +240,23 @@ impl Mouse {
                     | CGEventType::OtherMouseDown
             );
             let is_move = matches!(event_type, CGEventType::MouseMoved);
-            // Establish focus-without-raise on a hover or a press (not on drags) so the pre-click
-            // mouse-moved and the press both land on a key window, which toolbar buttons require.
+            // Activate the target window in the background on a hover or a press (not on drags),
+            // so the pre-click mouse-moved and the press both land on an active window. This is
+            // idempotent per window and does not raise the window or steal the user's frontmost
+            // focus.
             if is_down || is_move {
-                self.ensure_window_focused(pid, info.number);
+                super::activation::ensure_activated(pid, &info);
             }
-            if is_down && primer_click_enabled() {
-                // Prime Chromium's user-activation gate with a decoy off-screen click. Opt-in
-                // (default off): the off-window down/up disrupts AppKit controls that run a modal
-                // tracking loop in `mouseDown:` (e.g. NSToolbar buttons). Enable via
-                // COMPUTER_USE_PRIMER_CLICK only when targeting Chromium/Electron.
-                post_primer_click(pid);
-            }
-
-            // Window-targeted NSEvent bridged to a CGEvent, delivered via SkyLight's
-            // SLEventPostToPid (accepted by Chromium/Electron renderers).
-            if let Some(event) =
-                build_window_targeted_event(pid, info, event_type, point, click_state)
-            {
-                super::skylight::post_event_to_pid(pid, &event);
-                return Ok(());
-            }
-            // Non-mouse event type: fall through to the generic path below.
+            post_window_mouse_event(
+                pid,
+                &info,
+                event_type,
+                button,
+                point,
+                click_state,
+                event_pressure(event_type),
+            );
+            return Ok(());
         }
 
         // Fallback: no PID target, or no owned window under the point. Post a plain event via the
@@ -332,100 +267,93 @@ impl Mouse {
     }
 }
 
-/// Builds a mouse event targeted at `info` (the window under `point`) for the given process.
+/// Builds and posts a mouse event targeted at `info` (the window under `global_point`) directly
+/// to the owning process via `CGEventPostToPid`.
 ///
-/// The event is synthesized via `NSEvent` so it carries the target window number and a
-/// window-local location, then bridged to a `CGEvent` with the window-under-pointer fields
-/// stamped. Returns `None` when the event type is not a mouse event.
-fn build_window_targeted_event(
+/// On the `postToPid` path the WindowServer does not run its normal hit-testing, so the event
+/// must carry the fields AppKit reads to route and interpret it: the click state, the pressure,
+/// the target pid, the window-under-pointer number, the private window-addressing fields, and
+/// the window-local location.
+pub(super) fn post_window_mouse_event(
     pid: libc::pid_t,
-    info: window::WindowInfo,
+    info: &window::WindowInfo,
     event_type: CGEventType,
-    point: CGPoint,
+    button: CGMouseButton,
+    global_point: CGPoint,
     click_state: i64,
-) -> Option<Retained<CGEvent>> {
-    let ns_type = ns_event_type(event_type)?;
-
-    // `NSEvent` locations are window-local in the window's base (bottom-left origin) coordinate
-    // system, whereas `point` and the window bounds are global, top-left origin.
-    let ns_local = CGPoint {
-        x: point.x - info.x,
-        y: info.height - (point.y - info.y),
+    pressure: f64,
+) {
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
+    let Some(event) = CGEvent::new_mouse_event(source.as_deref(), event_type, global_point, button)
+    else {
+        log::warn!("Failed to create window-targeted mouse event (type={event_type:?}).");
+        return;
     };
 
-    // `CGEventSetWindowLocation`, by contrast, wants window-local coordinates with a top-left
-    // origin (just the screen point translated by the window origin).
+    // `CGEventSetWindowLocation` wants window-local coordinates with a top-left origin (the
+    // global screen point translated by the window origin).
     let window_local = CGPoint {
-        x: point.x - info.x,
-        y: point.y - info.y,
+        x: global_point.x - info.x,
+        y: global_point.y - info.y,
     };
 
-    // Diagnostics for the background-input experiment. Enabled via COMPUTER_USE_DEBUG so it
-    // stays silent in normal use.
-    if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
-        eprintln!(
-            "[computer_use] post pid={pid} type={event_type:?} click_state={click_state} \
-             window#={} bounds=({:.1},{:.1},{:.1},{:.1}) global=({:.1},{:.1}) \
-             window_local=({:.1},{:.1})",
-            info.number,
-            info.x,
-            info.y,
-            info.width,
-            info.height,
-            point.x,
-            point.y,
-            window_local.x,
-            window_local.y,
+    if click_state > 0 {
+        CGEvent::set_integer_value_field(
+            Some(&event),
+            CGEventField::MouseEventClickState,
+            click_state,
         );
     }
-
-    let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
-        ns_type,
-        ns_local,
-        NSEventModifierFlags::empty(),
-        0.0,
-        info.number as isize,
-        None,
-        0,
-        click_state as isize,
-        1.0,
-    )?;
-
-    let cg_event = event.CGEvent()?;
-
-    // `-[NSEvent CGEvent]` re-derives the event's screen location by flipping window-local
-    // coordinates, but the target window belongs to another process so that flip can't resolve
-    // it and yields a bogus location. Overwrite it with the true global screen point (top-left
-    // origin), which is what AppKit uses to hit-test the event on delivery.
-    CGEvent::set_location(Some(&cg_event), point);
-
-    // On the `postToPid` path the WindowServer never computes the event's window-local
-    // coordinate (it normally does this during hit-testing), so AppKit dispatches using
-    // whatever the event carries. Set it explicitly via the private `CGEventSetWindowLocation`.
-    set_window_location(&cg_event, window_local);
-
-    // Chromium/Electron renderers check the mouse-event subtype as part of deciding whether a
-    // synthesized event is trusted; real mouse events carry subtype 3 here.
-    CGEvent::set_integer_value_field(Some(&cg_event), CGEventField::MouseEventSubtype, 3);
-
-    // Stamp the window-under-pointer fields so AppKit routes the event to the target window.
+    CGEvent::set_double_value_field(Some(&event), CGEventField::MouseEventPressure, pressure);
     CGEvent::set_integer_value_field(
-        Some(&cg_event),
+        Some(&event),
+        CGEventField::EventTargetUnixProcessID,
+        pid as i64,
+    );
+    CGEvent::set_integer_value_field(
+        Some(&event),
         CGEventField::MouseEventWindowUnderMousePointer,
         info.number,
     );
     CGEvent::set_integer_value_field(
-        Some(&cg_event),
+        Some(&event),
         CGEventField::MouseEventWindowUnderMousePointerThatCanHandleThisEvent,
         info.number,
     );
+    set_window_addressing_fields(&event, info.number);
+    set_window_location(&event, window_local);
 
-    Some(cg_event)
+    if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
+        eprintln!(
+            "[computer_use] post pid={pid} type={event_type:?} click_state={click_state} \
+             pressure={pressure} window#={} global=({:.1},{:.1}) window_local=({:.1},{:.1})",
+            info.number, global_point.x, global_point.y, window_local.x, window_local.y,
+        );
+    }
+
+    CGEvent::post_to_pid(pid, Some(&event));
 }
 
-/// Returns whether the experimental off-window "primer" click is enabled (opt-in, default off).
-fn primer_click_enabled() -> bool {
-    std::env::var_os("COMPUTER_USE_PRIMER_CLICK").is_some()
+/// Stamps the private window-addressing fields the WindowServer uses to route an event to a
+/// specific window on the `postToPid` path: field 51 carries the target window number, and field
+/// 58 flags that the window number is valid.
+pub(super) fn set_window_addressing_fields(event: &CGEvent, window_number: i64) {
+    CGEvent::set_integer_value_field(Some(event), CGEventField(51), window_number);
+    CGEvent::set_integer_value_field(Some(event), CGEventField(58), 1);
+}
+
+/// Returns the pressure value for a mouse event: full pressure while a button is held (a press
+/// or drag) and zero otherwise (a move or release), mirroring what a real device reports.
+fn event_pressure(event_type: CGEventType) -> f64 {
+    match event_type {
+        CGEventType::LeftMouseDown
+        | CGEventType::RightMouseDown
+        | CGEventType::OtherMouseDown
+        | CGEventType::LeftMouseDragged
+        | CGEventType::RightMouseDragged
+        | CGEventType::OtherMouseDragged => 1.0,
+        _ => 0.0,
+    }
 }
 
 /// Builds a plain CGEvent mouse event at the global `point`, stamping the click state. Used by the
@@ -454,29 +382,6 @@ fn build_plain_mouse_event(
         );
     }
     Ok(event.into())
-}
-
-/// Posts a decoy left click off-screen (at `(-1, -1)`) to the target process via SkyLight.
-///
-/// Chromium's renderer gates activation-sensitive actions (video play/pause, `window.open`,
-/// fullscreen) behind a recent "trusted user gesture". Posting this decoy first ticks that gate
-/// so the subsequent real click is treated as a trusted continuation. It is off-screen, so it
-/// does not hit any window. This is opt-in because it breaks AppKit controls that track in
-/// `mouseDown:`; see the call site for details.
-fn post_primer_click(pid: libc::pid_t) {
-    if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
-        eprintln!("[computer_use] primer click pid={pid} global=(-1.0,-1.0)");
-    }
-    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
-    let point = CGPoint { x: -1.0, y: -1.0 };
-    for event_type in [CGEventType::LeftMouseDown, CGEventType::LeftMouseUp] {
-        if let Some(event) =
-            CGEvent::new_mouse_event(source.as_deref(), event_type, point, CGMouseButton::Left)
-        {
-            CGEvent::set_integer_value_field(Some(&event), CGEventField::MouseEventClickState, 1);
-            super::skylight::post_event_to_pid(pid, &event);
-        }
-    }
 }
 
 /// Sets the window-local location on a `CGEvent` via the private `CGEventSetWindowLocation`.
@@ -512,23 +417,6 @@ fn set_window_location(event: &CGEvent, location: CGPoint) {
             );
         }
     }
-}
-
-/// Maps a Quartz mouse event type to the corresponding AppKit event type.
-fn ns_event_type(event_type: CGEventType) -> Option<NSEventType> {
-    Some(match event_type {
-        CGEventType::LeftMouseDown => NSEventType::LeftMouseDown,
-        CGEventType::LeftMouseUp => NSEventType::LeftMouseUp,
-        CGEventType::LeftMouseDragged => NSEventType::LeftMouseDragged,
-        CGEventType::RightMouseDown => NSEventType::RightMouseDown,
-        CGEventType::RightMouseUp => NSEventType::RightMouseUp,
-        CGEventType::RightMouseDragged => NSEventType::RightMouseDragged,
-        CGEventType::OtherMouseDown => NSEventType::OtherMouseDown,
-        CGEventType::OtherMouseUp => NSEventType::OtherMouseUp,
-        CGEventType::OtherMouseDragged => NSEventType::OtherMouseDragged,
-        CGEventType::MouseMoved => NSEventType::MouseMoved,
-        _ => return None,
-    })
 }
 
 // ----------------------------------------------------------------------------

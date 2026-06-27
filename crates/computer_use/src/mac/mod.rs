@@ -1,18 +1,17 @@
+mod activation;
 mod keyboard;
 mod keycode_cache;
 mod mouse;
 mod post;
 mod screenshot;
-mod skylight;
 mod util;
 mod window;
 
 use async_trait::async_trait;
 use pathfinder_geometry::vector::Vector2I;
-use warpui_core::r#async::Timer;
-
 use post::PostTarget;
 use util::{display_scale_factor_for_window, main_display_scale_factor};
+use warpui_core::r#async::Timer;
 
 use crate::{Action, ActionResult, Options, Target, TargetedAction};
 
@@ -200,13 +199,6 @@ impl super::Actor for Actor {
                     self.keyboard.key_up(key)?;
                 }
             }
-        }
-
-        // Experimental: optionally restore the user's previous input focus after the batch of
-        // actions completes, undoing the focus-without-raise. Gated so it does not break flows
-        // that span multiple invocations (e.g. click in one call, type in the next).
-        if std::env::var_os("COMPUTER_USE_RESTORE_FOCUS").is_some() {
-            self.mouse.restore_focus();
         }
 
         let (screenshot, captured_window) = match options.screenshot_params {
