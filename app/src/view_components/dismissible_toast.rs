@@ -32,7 +32,6 @@ const VERTICAL_PADDING: f32 = 8.;
 const HORIZONTAL_PADDING: f32 = 12.;
 const ICON_RIGHT_MARGIN: f32 = 8.;
 const CLOSE_BUTTON_SIZE: f32 = 16.;
-const LINK_SEPARATOR_MARGIN: f32 = 6.;
 
 const SUCCESS_ICON_PATH: &str = "bundled/svg/check-skinny.svg";
 const ERROR_ICON_PATH: &str = "bundled/svg/alert-circle.svg";
@@ -312,9 +311,7 @@ pub type OnBodyClickCallback<A> = Rc<dyn Fn(&mut ViewContext<DismissibleToastSta
 pub struct DismissibleToast<A: Action + Clone> {
     flavor: ToastFlavor,
     main_text: String,
-    /// Zero or more links rendered on the right side of the toast, in order,
-    /// separated by a divider when there is more than one.
-    links: Vec<ToastLink<A>>,
+    link: Option<ToastLink<A>>,
     close_button_mouse_state: MouseStateHandle,
     close_button_hover_state: MouseStateHandle,
     /// An optional string-based ID representing the object that is the subject of this toast.
@@ -335,7 +332,7 @@ impl<A: Action + Clone> DismissibleToast<A> {
         Self {
             flavor,
             main_text,
-            links: Vec::new(),
+            link: None,
             close_button_mouse_state: Default::default(),
             close_button_hover_state: Default::default(),
             object_id: Default::default(),
@@ -356,10 +353,8 @@ impl<A: Action + Clone> DismissibleToast<A> {
         Self::new(main_text, ToastFlavor::Error)
     }
 
-    /// Appends a link to the toast. Call multiple times to render several links
-    /// (e.g. `View in Finder | New Session`); they are shown in call order.
     pub fn with_link(mut self, link: ToastLink<A>) -> Self {
-        self.links.push(link);
+        self.link = Some(link);
         self
     }
 
@@ -425,24 +420,14 @@ impl<A: Action + Clone> DismissibleToast<A> {
             .with_main_axis_alignment(MainAxisAlignment::End)
             .with_main_axis_size(MainAxisSize::Min);
 
-        if !self.links.is_empty() {
-            let mut links_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-            for (index, link) in self.links.iter().enumerate() {
-                if index > 0 {
-                    links_row.add_child(
-                        Container::new(self.render_link_separator(ui_builder, appearance))
-                            .with_margin_left(LINK_SEPARATOR_MARGIN)
-                            .with_margin_right(LINK_SEPARATOR_MARGIN)
-                            .finish(),
-                    );
-                }
-                links_row.add_child(link.render(ui_builder, self.flavor.text_color(appearance)));
-            }
+        if let Some(link) = &self.link {
             right_aligned.add_child(
                 Container::new(
-                    ConstrainedBox::new(links_row.finish())
-                        .with_max_width(TOAST_WIDTH * 2. / 3.)
-                        .finish(),
+                    ConstrainedBox::new(
+                        link.render(ui_builder, self.flavor.text_color(appearance)),
+                    )
+                    .with_max_width(TOAST_WIDTH / 3.)
+                    .finish(),
                 )
                 .with_margin_left(TEXT_MARGIN)
                 .finish(),
@@ -511,22 +496,6 @@ impl<A: Action + Clone> DismissibleToast<A> {
         })
         .with_hover_out_delay(Duration::from_millis(500))
         .finish()
-    }
-
-    /// Renders the `|` divider shown between adjacent toast links.
-    fn render_link_separator(
-        &self,
-        ui_builder: &UiBuilder,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        ui_builder
-            .wrappable_text("|".to_string(), false)
-            .with_style(UiComponentStyles {
-                font_color: Some(self.flavor.text_color(appearance)),
-                ..Default::default()
-            })
-            .build()
-            .finish()
     }
 
     fn render_icon(&self, icon_size: f32, appearance: &Appearance) -> Option<Box<dyn Element>> {
@@ -619,7 +588,3 @@ impl ToastFlavor {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "dismissible_toast_tests.rs"]
-mod tests;

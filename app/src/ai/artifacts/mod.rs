@@ -518,8 +518,8 @@ fn download_success_message(filename: &str, directory: &Path) -> String {
 
 /// Builds the success toast for a completed file-artifact download. When the
 /// saved path has a parent directory, the toast reports where the file landed
-/// and offers links to reveal it in the file manager and to open a new session
-/// in that directory; otherwise it falls back to a plain confirmation.
+/// and offers a link to reveal it in the file manager; otherwise it falls back
+/// to a plain confirmation.
 #[cfg(feature = "local_fs")]
 fn file_download_success_toast(
     filename: &str,
@@ -528,21 +528,13 @@ fn file_download_success_toast(
     let Some(directory) = file_path.parent() else {
         return DismissibleToast::success(format!("Downloaded {filename}."));
     };
-    DismissibleToast::success(download_success_message(filename, directory))
-        .with_link(
-            ToastLink::new(reveal_in_file_manager_label().to_string()).with_onclick_action(
-                WorkspaceAction::OpenInExplorer {
-                    path: file_path.to_path_buf(),
-                },
-            ),
-        )
-        .with_link(
-            ToastLink::new("New Session".to_string()).with_onclick_action(
-                WorkspaceAction::OpenDirectoryInNewTab {
-                    path: directory.to_path_buf(),
-                },
-            ),
-        )
+    DismissibleToast::success(download_success_message(filename, directory)).with_link(
+        ToastLink::new(reveal_in_file_manager_label().to_string()).with_onclick_action(
+            WorkspaceAction::OpenInExplorer {
+                path: file_path.to_path_buf(),
+            },
+        ),
+    )
 }
 
 fn non_empty_trimmed(value: &str) -> Option<&str> {
