@@ -3560,6 +3560,36 @@ type Team {
   uid: ID!
 }
 
+type TeamByoEndpointMetaData {
+  id: String!
+  name: String!
+  enabled: Boolean!
+  models: [TeamByoEndpointModelMetaData!]!
+}
+
+type TeamByoEndpointModelMetaData {
+  configKey: String!
+  slug: String!
+  alias: String
+  displayName: String!
+  enabled: Boolean!
+}
+
+type TeamByoFirstPartyKeys {
+  openaiConfigured: Boolean!
+  anthropicConfigured: Boolean!
+  googleConfigured: Boolean!
+}
+
+type TeamByoSettings {
+  firstPartyEnabled: Boolean!
+  endpointsEnabled: Boolean!
+  allowUserKeys: Boolean!
+  allowUserEndpoints: Boolean!
+  firstParty: TeamByoFirstPartyKeys!
+  endpoints: [TeamByoEndpointMetaData!]!
+}
+
 enum TeamDiscoveryEntrypoint {
   TeamSettings
   WebSignup
@@ -4429,6 +4459,7 @@ type WorkspaceSettings {
   llmSettings: LlmSettings!
   sandboxedAgentSettings: SandboxedAgentSettings
   secretRedactionSettings: SecretRedactionSettings!
+  teamByo: TeamByoSettings
   telemetrySettings: TelemetrySettings!
   ugcCollectionSettings: UgcCollectionSettings!
   usageBasedPricingSettings: UsageBasedPricingSettings!

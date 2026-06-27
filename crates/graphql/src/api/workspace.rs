@@ -152,6 +152,45 @@ pub struct WorkspaceSettings {
     pub codebase_context_settings: CodebaseContextSettings,
     pub sandboxed_agent_settings: Option<SandboxedAgentSettings>,
     pub ambient_agent_settings: Option<AmbientAgentSettings>,
+    /// Team-managed BYOK/BYOE projection for the requesting member. Display/reference
+    /// metadata only — never an API key, endpoint base URL, or ciphertext. `None` for
+    /// teams without team-managed BYO configured. Shipped by the server as a plain field
+    /// (disabled endpoints/models are already filtered out server-side).
+    pub team_byo: Option<TeamByoSettings>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct TeamByoSettings {
+    pub first_party_enabled: bool,
+    pub endpoints_enabled: bool,
+    pub allow_user_keys: bool,
+    pub allow_user_endpoints: bool,
+    pub first_party: TeamByoFirstPartyKeys,
+    pub endpoints: Vec<TeamByoEndpointMetaData>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct TeamByoFirstPartyKeys {
+    pub openai_configured: bool,
+    pub anthropic_configured: bool,
+    pub google_configured: bool,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct TeamByoEndpointMetaData {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub models: Vec<TeamByoEndpointModelMetaData>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct TeamByoEndpointModelMetaData {
+    pub config_key: String,
+    pub slug: String,
+    pub alias: Option<String>,
+    pub display_name: String,
+    pub enabled: bool,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
