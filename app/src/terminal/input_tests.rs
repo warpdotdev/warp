@@ -8788,3 +8788,275 @@ fn ctrl_enter_inserts_newline_in_normal_input_after_rich_input_closes() {
         });
     });
 }
+
+/// Builds an Agent Mode (saved prompt) workflow with a single text argument.
+fn agent_mode_prompt_workflow(name: &str, query: &str, arg: &str) -> Workflow {
+    Workflow::AgentMode {
+        name: name.to_owned(),
+        query: query.to_owned(),
+        description: None,
+        arguments: vec![Argument::new(arg, ArgumentType::Text)],
+    }
+}
+
+/// Regression test for the saved-prompt → terminal-command bug: selecting an Agent Mode saved
+/// prompt from the slash menu must put the terminal input into AI mode (so Enter sends it to the
+/// agent), even with NLD-in-terminal disabled (the default). Before the fix the AI request was
+/// `{AI, locked}`, which the AgentView terminal-mode guard rejected, leaving the input in Shell
+/// mode so the prompt ran as a shell command (and unbalanced quotes produced a `quote>`).
+#[test]
+fn agent_mode_saved_prompt_selection_enters_ai_mode_in_terminal() {
+    App::test((), |mut app| async move {
+        let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        // Sanity: the terminal input starts in Shell mode.
+        let initial = input.read(&app, |input, _| {
+            app.read_model(input.ai_input_model(), |ai_input, _| {
+                ai_input.input_config()
+            })
+        });
+        assert_eq!(initial.input_type, InputType::Shell);
+
+        input.update(&mut app, |input, ctx| {
+            input.show_workflows_info_box_on_workflow_selection(
+                WorkflowType::Local(agent_mode_prompt_workflow(
+                    "fe code review",
+                    "please do a code review of this PR: {{pr_link}}",
+                    "pr_link",
+                )),
+                WorkflowSource::Global,
+                WorkflowSelectionSource::Undefined,
+                None,
+                ctx,
+            );
+        });
+
+        let (config, anchored) = input.read(&app, |input, _| {
+            app.read_model(input.ai_input_model(), |ai_input, _| {
+                (
+                    ai_input.input_config(),
+                    ai_input.has_agent_prompt_ai_anchor(),
+                )
+            })
+        });
+        assert_eq!(
+            config.input_type,
+            InputType::AI,
+            "selecting an Agent Mode saved prompt must put the input into AI mode"
+        );
+        assert!(
+            anchored,
+            "an Agent Mode prompt anchor should be active after insertion"
+        );
+    });
+}
+
+/// With NLD-in-terminal enabled, the anchor must still keep the input in AI mode and prevent the
+/// classifier from running, so filling in the prompt's argument can't flip it back to Shell.
+#[test]
+fn agent_mode_saved_prompt_anchor_suppresses_nld_when_terminal_nld_enabled() {
+    App::test((), |mut app| async move {
+        let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .nld_in_terminal_enabled_internal
+                .set_value(true, ctx);
+            assert!(ai_settings.is_nld_in_terminal_enabled(ctx));
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.show_workflows_info_box_on_workflow_selection(
+                WorkflowType::Local(agent_mode_prompt_workflow(
+                    "diff review",
+                    "git diff main...{{branch}} and review it",
+                    "branch",
+                )),
+                WorkflowSource::Global,
+                WorkflowSelectionSource::Undefined,
+                None,
+                ctx,
+            );
+        });
+
+        let (config, anchored, autodetect) = input.read(&app, |input, _| {
+            app.read_model(input.ai_input_model(), |ai_input, ctx| {
+                (
+                    ai_input.input_config(),
+                    ai_input.has_agent_prompt_ai_anchor(),
+                    ai_input.should_run_input_autodetection(ctx),
+                )
+            })
+        });
+        assert_eq!(config.input_type, InputType::AI);
+        assert!(anchored);
+        assert!(
+            !autodetect,
+            "NLD must be suppressed while an Agent Mode prompt anchor is active"
+        );
+    });
+}
+
+/// A shell (Command) workflow must not be affected by the anchor — it still lands in Shell mode
+/// with no anchor set.
+#[test]
+fn shell_workflow_selection_stays_in_shell_mode() {
+    App::test((), |mut app| async move {
+        let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.show_workflows_info_box_on_workflow_selection(
+                WorkflowType::Local(Workflow::new("list", "ls -la")),
+                WorkflowSource::Global,
+                WorkflowSelectionSource::Undefined,
+                None,
+                ctx,
+            );
+        });
+
+        let (config, anchored) = input.read(&app, |input, _| {
+            app.read_model(input.ai_input_model(), |ai_input, _| {
+                (
+                    ai_input.input_config(),
+                    ai_input.has_agent_prompt_ai_anchor(),
+                )
+            })
+        });
+        assert_eq!(
+            config.input_type,
+            InputType::Shell,
+            "a shell workflow must not switch the input to AI mode"
+        );
+        assert!(
+            !anchored,
+            "a shell workflow must not set an Agent Mode prompt anchor"
+        );
+    });
+}
+
+/// Explicitly toggling to Shell (cmd+I) after inserting a saved prompt must clear the anchor so
+/// the user can still use the terminal as a shell.
+#[test]
+fn agent_mode_saved_prompt_anchor_cleared_on_manual_toggle_to_shell() {
+    App::test((), |mut app| async move {
+        let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.show_workflows_info_box_on_workflow_selection(
+                WorkflowType::Local(agent_mode_prompt_workflow(
+                    "fe code review",
+                    "review this PR: {{pr_link}}",
+                    "pr_link",
+                )),
+                WorkflowSource::Global,
+                WorkflowSelectionSource::Undefined,
+                None,
+                ctx,
+            );
+        });
+
+        assert!(input.read(&app, |input, _| {
+            app.read_model(input.ai_input_model(), |ai_input, _| {
+                ai_input.has_agent_prompt_ai_anchor()
+            })
+        }));
+
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_terminal(/* steal_focus */ false, ctx);
+        });
+
+        let (config, anchored) = input.read(&app, |input, _| {
+            app.read_model(input.ai_input_model(), |ai_input, _| {
+                (
+                    ai_input.input_config(),
+                    ai_input.has_agent_prompt_ai_anchor(),
+                )
+            })
+        });
+        assert_eq!(config.input_type, InputType::Shell);
+        assert!(config.is_locked);
+        assert!(
+            !anchored,
+            "manual toggle to Shell must clear the Agent Mode prompt anchor"
+        );
+    });
+}
+
+/// Abandoning the composed prompt by clearing the buffer drops the anchor and returns the input
+/// to its natural Shell resting state so the next command is classified normally.
+#[test]
+fn agent_mode_saved_prompt_anchor_cleared_when_buffer_cleared() {
+    App::test((), |mut app| async move {
+        let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.show_workflows_info_box_on_workflow_selection(
+                WorkflowType::Local(agent_mode_prompt_workflow(
+                    "fe code review",
+                    "review this PR: {{pr_link}}",
+                    "pr_link",
+                )),
+                WorkflowSource::Global,
+                WorkflowSelectionSource::Undefined,
+                None,
+                ctx,
+            );
+        });
+
+        assert!(input.read(&app, |input, _| {
+            app.read_model(input.ai_input_model(), |ai_input, _| {
+                ai_input.has_agent_prompt_ai_anchor()
+            })
+        }));
+
+        input.update(&mut app, |input, ctx| {
+            input.ai_input_model().update(ctx, |ai_input, ctx| {
+                ai_input.handle_agent_prompt_buffer_cleared(ctx);
+            });
+        });
+
+        let (config, anchored) = input.read(&app, |input, _| {
+            app.read_model(input.ai_input_model(), |ai_input, _| {
+                (
+                    ai_input.input_config(),
+                    ai_input.has_agent_prompt_ai_anchor(),
+                )
+            })
+        });
+        assert_eq!(config.input_type, InputType::Shell);
+        assert!(
+            !anchored,
+            "clearing the buffer must clear the Agent Mode prompt anchor"
+        );
+    });
+}
