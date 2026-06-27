@@ -2,7 +2,6 @@ use command::blocking::Command;
 use image::GenericImageView;
 
 use super::util::main_display_scale_factor;
-use super::window;
 use crate::{CapturedWindow, ScreenshotParams, Target};
 
 /// Captures a screenshot according to `params`, using the built-in macOS `screencapture` CLI.
@@ -84,18 +83,6 @@ fn take_window(
         .decode()
         .map_err(|e| format!("Failed to decode screenshot: {e}"))?;
     let (full_width_px, full_height_px) = image.dimensions();
-    let window = window::window_by_id(window_id)
-        .ok_or_else(|| format!("Failed to resolve captured window {window_id}."))?;
-    if window.width <= 0.0 {
-        return Err(format!(
-            "Captured window {window_id} has invalid point width."
-        ));
-    }
-
-    // A single capture-derived ratio correctly maps windows wholly contained on any one display.
-    // Windows spanning displays with different backing scale factors are not yet supported,
-    // because no single pixels-per-point ratio can accurately map the entire window.
-    let pixels_per_point = full_width_px as f64 / window.width;
     let image = if let Some(region) = params.region {
         region.validate()?;
         if region.bottom_right.x() as u32 > full_width_px
@@ -119,25 +106,6 @@ fn take_window(
         image
     };
     let screenshot = crate::screenshot_utils::process_screenshot(image, params)?;
-
-    // Diagnostics for target-relative capture and coordinate mapping. The model is shown the
-    // `sent` image after resize, while server coordinate translation uses the `native` size.
-    // Logging both sizes and the capture-derived point ratio makes mapping errors visible.
-    if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
-        let (pt_w, pt_h) = (window.width, window.height);
-        let downscale = screenshot.width as f64 / (screenshot.original_width.max(1) as f64);
-        log::info!(
-            "[computer_use] window capture window#={window_id} native_px={}x{} sent_px={}x{} \
-             downscale={downscale:.4} window_pt={pt_w:.1}x{pt_h:.1} pixels_per_point={pixels_per_point:.3} \
-             (max_long_edge_px={:?} max_total_px={:?})",
-            screenshot.original_width,
-            screenshot.original_height,
-            screenshot.width,
-            screenshot.height,
-            params.max_long_edge_px,
-            params.max_total_px,
-        );
-    }
 
     // The captured metadata refers to the native (pre-downscale) capture, so window-local pixel
     // coordinates sent by the agent map directly onto the captured window image.

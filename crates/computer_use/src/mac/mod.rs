@@ -48,7 +48,6 @@ fn remap_action_for_target(action: &Action, target: Target) -> Result<Action, St
     let Target::Window { window_id, .. } = target else {
         return Ok(action.clone());
     };
-    let log_remap = std::env::var_os("COMPUTER_USE_DEBUG").is_some();
     let remap = |p: Vector2I| -> Result<Vector2I, String> {
         let info = window::window_by_id(window_id)
             .ok_or_else(|| format!("Failed to resolve target window {window_id}."))?;
@@ -67,22 +66,6 @@ fn remap_action_for_target(action: &Action, target: Target) -> Result<Action, St
             (global_point_x * screen_scale).round() as i32,
             (global_point_y * screen_scale).round() as i32,
         );
-        if log_remap {
-            log::info!(
-                "[computer_use] remap window#={window_id} in_coord=({},{}) \
-                 window_bounds_pt=({:.1},{:.1},{:.1},{:.1}) pixels_per_point={:.3} \
-                 window_local_px=({},{}) -> global_point=({global_point_x:.1},{global_point_y:.1})",
-                p.x(),
-                p.y(),
-                info.x,
-                info.y,
-                info.width,
-                info.height,
-                pixels_per_point,
-                p.x(),
-                p.y(),
-            );
-        }
         Ok(global)
     };
     Ok(match action {

@@ -48,10 +48,6 @@ const PRIMER_CLICK_SETTLE: Duration = Duration::from_millis(20);
 /// How long each run-loop service iteration blocks before re-checking the stop flag.
 const RUN_LOOP_SERVICE_INTERVAL: f64 = 0.1;
 
-fn debug_enabled() -> bool {
-    std::env::var_os("COMPUTER_USE_DEBUG").is_some()
-}
-
 /// Ensures the window described by `info` (owned by `target_pid`) is in the AppKit-active input
 /// state so background events are accepted, without raising it or moving the cursor.
 ///
@@ -103,13 +99,6 @@ pub fn ensure_activated(target_pid: libc::pid_t, info: &WindowInfo) {
     );
     thread::sleep(APPKIT_PRIMER_DELAY);
     post_center_primer(target_pid, info);
-
-    if debug_enabled() {
-        eprintln!(
-            "[computer_use] activated pid={target_pid} window#={window_number} \
-             previous={previous:?} taps={has_taps}"
-        );
-    }
 
     registry.insert(
         key,

@@ -2,9 +2,9 @@ use objc2_core_graphics::{CGEvent, CGEventTapLocation};
 
 /// Describes where synthesized Quartz events are delivered.
 ///
-/// This is an experimental knob for evaluating background, non-interfering control. The
-/// default (`HidTap`) reproduces the historical behavior of injecting events as if they came
-/// from real hardware.
+/// This selects between the legacy whole-screen delivery and background, per-window delivery.
+/// `HidTap` reproduces the historical behavior of injecting events as if they came from real
+/// hardware, while `Pid` delivers directly to a process for background, non-interfering control.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PostTarget {
     /// Inject at the HID event tap, exactly as real hardware would. This moves the real

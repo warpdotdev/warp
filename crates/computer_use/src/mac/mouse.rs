@@ -323,14 +323,6 @@ pub(super) fn post_window_mouse_event(
     set_window_addressing_fields(&event, info.number);
     set_window_location(&event, window_local);
 
-    if std::env::var_os("COMPUTER_USE_DEBUG").is_some() {
-        eprintln!(
-            "[computer_use] post pid={pid} type={event_type:?} click_state={click_state} \
-             pressure={pressure} window#={} global=({:.1},{:.1}) window_local=({:.1},{:.1})",
-            info.number, global_point.x, global_point.y, window_local.x, window_local.y,
-        );
-    }
-
     CGEvent::post_to_pid(pid, Some(&event));
 }
 
