@@ -230,6 +230,15 @@ pub struct KeystrokeWithDetails<'a> {
 
 impl<T: ModeProvider> ToEscapeSequence<T> for KeystrokeWithDetails<'_> {
     fn to_escape_sequence(&self, mode_provider: &T) -> Option<Vec<u8>> {
+        if let Some(win32_input) = maybe_convert_keystroke_to_win32_input(
+            self.keystroke,
+            self.key_without_modifiers,
+            self.chars,
+            mode_provider,
+        ) {
+            return Some(win32_input);
+        }
+
         if let Some(csi_u) = maybe_convert_keystroke_to_csi_u(
             self.keystroke,
             self.key_without_modifiers,
@@ -249,6 +258,90 @@ impl<T: ModeProvider> ToEscapeSequence<T> for KeystrokeWithDetails<'_> {
             .or_else(|| meta_keystroke_to_escape_sequence(keystroke, mode_provider))
             .or_else(|| backspace_keystroke_to_escape_sequence(keystroke))
     }
+}
+
+fn maybe_convert_keystroke_to_win32_input(
+    keystroke: &Keystroke,
+    key_without_modifiers: Option<&str>,
+    chars: Option<&str>,
+    mode_provider: &impl ModeProvider,
+) -> Option<Vec<u8>> {
+    if !mode_provider.is_term_mode_set(TermMode::WIN32_INPUT) {
+        return None;
+    }
+
+    if !keystroke.ctrl || keystroke.alt || keystroke.shift || keystroke.meta || keystroke.cmd {
+        return None;
+    }
+
+    let key = key_without_modifiers.unwrap_or(keystroke.key.as_str());
+    let key = key.chars().next()?.to_ascii_lowercase();
+    let (virtual_key, scan_code) = win32_letter_key_codes(key)?;
+    let unicode_char = chars
+        .and_then(|text| text.chars().next())
+        .map(|c| c as u16)
+        .unwrap_or_else(|| virtual_key & 0x1f);
+
+    Some(win32_input_mode_sequence(
+        virtual_key,
+        scan_code,
+        unicode_char,
+        1,
+        win32_control_key_state::LEFT_CTRL_PRESSED,
+        1,
+    ))
+}
+
+fn win32_letter_key_codes(key: char) -> Option<(u16, u16)> {
+    let virtual_key = key.to_ascii_uppercase() as u16;
+    let scan_code = match key {
+        'a' => 0x1e,
+        'b' => 0x30,
+        'c' => 0x2e,
+        'd' => 0x20,
+        'e' => 0x12,
+        'f' => 0x21,
+        'g' => 0x22,
+        'h' => 0x23,
+        'i' => 0x17,
+        'j' => 0x24,
+        'k' => 0x25,
+        'l' => 0x26,
+        'm' => 0x32,
+        'n' => 0x31,
+        'o' => 0x18,
+        'p' => 0x19,
+        'q' => 0x10,
+        'r' => 0x13,
+        's' => 0x1f,
+        't' => 0x14,
+        'u' => 0x16,
+        'v' => 0x2f,
+        'w' => 0x11,
+        'x' => 0x2d,
+        'y' => 0x15,
+        'z' => 0x2c,
+        _ => return None,
+    };
+    Some((virtual_key, scan_code))
+}
+
+fn win32_input_mode_sequence(
+    virtual_key: u16,
+    scan_code: u16,
+    unicode_char: u16,
+    key_down: u8,
+    control_key_state: u32,
+    repeat_count: u16,
+) -> Vec<u8> {
+    format!(
+        "\x1b[{virtual_key};{scan_code};{unicode_char};{key_down};{control_key_state};{repeat_count}_"
+    )
+    .into_bytes()
+}
+
+mod win32_control_key_state {
+    pub const LEFT_CTRL_PRESSED: u32 = 0x0008;
 }
 
 impl<T: ModeProvider> ToEscapeSequence<T> for MouseState {

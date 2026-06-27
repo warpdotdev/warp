@@ -1034,6 +1034,7 @@ impl ansi::Handler for GridHandler {
                     .send_terminal_event(Event::CursorBlinkingChange(true));
             }
             ansi::Mode::SyncOutput => {}
+            ansi::Mode::Win32Input => self.ansi_handler_state.mode.insert(TermMode::WIN32_INPUT),
         }
     }
 
@@ -1093,6 +1094,7 @@ impl ansi::Handler for GridHandler {
                     .event_proxy
                     .send_terminal_event(Event::CursorBlinkingChange(false));
             }
+            ansi::Mode::Win32Input => self.ansi_handler_state.mode.remove(TermMode::WIN32_INPUT),
             _ => {}
         }
     }

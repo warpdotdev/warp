@@ -71,6 +71,23 @@ fn test_shift_backspace_emits_del_sequence() {
 }
 
 #[test]
+fn test_win32_input_mode_ctrl_j_preserves_virtual_key() {
+    let mut terminal_model_mock = TerminalModelMock::new();
+    terminal_model_mock.set_mode(TermMode::WIN32_INPUT);
+
+    let ctrl_j = Keystroke::parse("ctrl-j").unwrap();
+    assert_eq!(
+        KeystrokeWithDetails {
+            keystroke: &ctrl_j,
+            key_without_modifiers: Some("j"),
+            chars: Some("\n"),
+        }
+        .to_escape_sequence(&terminal_model_mock),
+        Some(b"\x1b[74;36;10;1;8;1_".to_vec())
+    );
+}
+
+#[test]
 fn test_mouse_actions_to_escape_sequence() {
     // Validating we produce the correct escape sequences.
     let test_cases: &[(MouseState, Vec<u8>)] = &[

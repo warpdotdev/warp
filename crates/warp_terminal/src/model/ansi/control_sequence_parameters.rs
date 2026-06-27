@@ -105,6 +105,9 @@ pub enum Mode {
     /// ?2026
     /// See https://gist.github.com/christianparpart/d8a62cc1ab659194337d73e399004036.
     SyncOutput,
+    /// ?9001
+    /// Windows Terminal private mode for passing Win32 input records through ConPTY.
+    Win32Input,
 }
 
 impl Mode {
@@ -147,6 +150,7 @@ impl Mode {
                 },
                 2004 => Mode::BracketedPaste,
                 2026 => Mode::SyncOutput,
+                9001 => Mode::Win32Input,
                 _ => {
                     trace!("[unimplemented] primitive mode: {num}");
                     return None;
@@ -705,6 +709,19 @@ impl TryFrom<&[u8]> for PromptKind {
             b"r" => Ok(PromptKind::Right),
             _ => Err(Self::Error::UnknownValue),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Mode;
+
+    #[test]
+    fn parses_win32_input_private_mode() {
+        assert_eq!(
+            Mode::from_primitive(Some(&b'?'), 9001),
+            Some(Mode::Win32Input)
+        );
     }
 }
 
