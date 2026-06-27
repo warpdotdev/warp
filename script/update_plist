@@ -67,7 +67,6 @@ if [[ -z "$WARP_PLIST_NO_FILE_TYPES" ]]; then
     <dict>
       <key>CFBundleTypeName</key><string>Terminal shell script</string>
       <key>CFBundleTypeRole</key><string>Shell</string>
-      <key>LSHandlerRank</key><string>Alternate</string>
       <key>LSItemContentTypes</key>
       <array>
         <string>com.apple.terminal.shell-script</string>
@@ -76,7 +75,6 @@ if [[ -z "$WARP_PLIST_NO_FILE_TYPES" ]]; then
     <dict>
       <key>CFBundleTypeName</key><string>Unix Executable File</string>
       <key>CFBundleTypeRole</key><string>Shell</string>
-      <key>LSHandlerRank</key><string>Alternate</string>
       <key>LSItemContentTypes</key>
       <array>
         <string>public.unix-executable</string>
