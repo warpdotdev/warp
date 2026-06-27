@@ -1181,6 +1181,40 @@ impl AIBlock {
             _ => {}
         });
 
+        ctx.subscribe_to_model(&active_session, |me, _, event, ctx| match event {
+            ActiveSessionEvent::UpdatedPwd => {
+                me.update_imported_comments_disabled_state(ctx);
+            }
+            ActiveSessionEvent::Bootstrapped => {}
+        });
+
+        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, _, event, ctx| {
+            if let AIRequestUsageModelEvent::RequestBonusRefunded {
+                requests_refunded,
+                server_conversation_id,
+                request_id,
+            } = event
+            {
+                let server_conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&me.client_ids.conversation_id)
+                    .and_then(|conversation| conversation.server_conversation_token())
+                    .cloned();
+
+                let server_output_id = me.model.server_output_id(ctx);
+
+                if let (Some(server_conversation_token), Some(server_output_id)) =
+                    (server_conversation_token, server_output_id)
+                {
+                    if request_id.eq(server_output_id.to_string().as_str())
+                        && server_conversation_id.eq(server_conversation_token.as_str())
+                    {
+                        me.request_refunded_count = Some(*requests_refunded);
+                        ctx.notify();
+                    }
+                }
+            }
+        });
+
         // Subscriptions below are only needed for live (non-restored) blocks.
         if !model.is_restored() {
             ctx.subscribe_to_model(
@@ -1247,44 +1281,10 @@ impl AIBlock {
 
             Self::register_action_model_subscription(&action_model, ctx);
 
-            ctx.subscribe_to_model(&active_session, |me, _, event, ctx| match event {
-                ActiveSessionEvent::UpdatedPwd => {
-                    me.update_imported_comments_disabled_state(ctx);
-                }
-                ActiveSessionEvent::Bootstrapped => {}
-            });
-
             ctx.subscribe_to_model(&get_relevant_files_controller, |me, _, event, ctx| {
                 if let GetRelevantFilesControllerEvent::Success { action_id, .. } = event {
                     if me.requested_action_ids.contains(action_id) {
                         ctx.notify();
-                    }
-                }
-            });
-
-            ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, _, event, ctx| {
-                if let AIRequestUsageModelEvent::RequestBonusRefunded {
-                    requests_refunded,
-                    server_conversation_id,
-                    request_id,
-                } = event
-                {
-                    let server_conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
-                        .conversation(&me.client_ids.conversation_id)
-                        .and_then(|conversation| conversation.server_conversation_token())
-                        .cloned();
-
-                    let server_output_id = me.model.server_output_id(ctx);
-
-                    if let (Some(server_conversation_token), Some(server_output_id)) =
-                        (server_conversation_token, server_output_id)
-                    {
-                        if request_id.eq(server_output_id.to_string().as_str())
-                            && server_conversation_id.eq(server_conversation_token.as_str())
-                        {
-                            me.request_refunded_count = Some(*requests_refunded);
-                            ctx.notify();
-                        }
                     }
                 }
             });
