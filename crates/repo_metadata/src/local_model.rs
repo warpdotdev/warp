@@ -543,24 +543,6 @@ impl LocalRepoMetadataModel {
         event: &BulkFilesystemWatcherEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Diagnostics: surface the volume and a sample of the changed paths that
-        // triggered this rebuild, so the source of watcher churn can be traced.
-        let added_count = event.added.len();
-        let modified_count = event.modified.len();
-        let deleted_count = event.deleted.len();
-        let moved_count = event.moved.len();
-        let total_count = added_count + modified_count + deleted_count + moved_count;
-        let sample = event
-            .added_or_updated_iter()
-            .chain(event.deleted.iter())
-            .take(20)
-            .map(|path| path.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        log::error!(
-            "[watcher-diag] fs event: added={added_count} modified={modified_count} deleted={deleted_count} moved={moved_count} total={total_count} sample=[{sample}]"
-        );
-
         // Create a map to collect changes per repository
         let mut repo_updates: HashMap<StandardizedPath, RepoUpdate> = HashMap::new();
         let symlink_target_paths = self.add_symlink_target_updates(event, &mut repo_updates);
@@ -603,12 +585,6 @@ impl LocalRepoMetadataModel {
         // Phase 1 (background thread): compute lightweight mutations via filesystem I/O.
         // Phase 2 (main thread callback): apply mutations directly to the tree — no clone needed.
         for (repo_path, repo_scoped_update) in repo_updates {
-            let n_added = repo_scoped_update.added.len();
-            let n_deleted = repo_scoped_update.deleted.len();
-            let n_moved = repo_scoped_update.moved.len();
-            log::error!(
-                "[watcher-diag] repo={repo_path} input added={n_added} deleted={n_deleted} moved={n_moved}"
-            );
             if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(&repo_path) {
                 let repo_path_clone = repo_path.clone();
                 let gitignores_clone = state.gitignores.clone();
@@ -1232,11 +1208,7 @@ impl LocalRepoMetadataModel {
                 let mut files = Vec::new();
                 let mut gitignores = gitignores.to_owned();
                 let mut file_limit = MAX_FILES_PER_REPO;
-                // Diagnostics: time and size each full subtree rebuild so the
-                // expensive directories (the watcher-storm culprits) are
-                // identifiable.
-                let rebuild_start = std::time::Instant::now();
-                let build_result = Entry::build_tree_with_standing_queries(
+                match Entry::build_tree_with_standing_queries(
                     path_to_add,
                     &mut files,
                     &mut gitignores,
@@ -1250,14 +1222,7 @@ impl LocalRepoMetadataModel {
                     },
                     &mut standing_results,
                     standing_query_definitions,
-                );
-                log::error!(
-                    "[watcher-diag] rebuilt subtree dir={} files={} elapsed_ms={}",
-                    path_to_add.display(),
-                    files.len(),
-                    rebuild_start.elapsed().as_millis()
-                );
-                match build_result {
+                ) {
                     Ok(subtree) => {
                         mutations.push(FileTreeMutation::AddDirectorySubtree {
                             dir_path: path_to_add.clone(),
