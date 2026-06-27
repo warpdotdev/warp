@@ -691,7 +691,7 @@ pub fn is_git_internal_path(path: &Path) -> bool {
 /// `force_included_paths`. Each force-included path is a relative component
 /// sequence (e.g. `.agents/skills`) matched against the tail of `path`, so a
 /// match also holds for the ancestor prefixes leading to it.
-fn matches_force_included_path(path: &Path, force_included_paths: &[PathBuf]) -> bool {
+pub(crate) fn matches_force_included_path(path: &Path, force_included_paths: &[PathBuf]) -> bool {
     let path_components: Vec<_> = path
         .components()
         .filter_map(|component| match component {
