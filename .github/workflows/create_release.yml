@@ -671,7 +671,7 @@ jobs:
 
   release_linux_cli_x86:
     name: Build Release (Linux CLI x86_64)
-    runs-on: namespace-profile-ubuntu-20-04
+    runs-on: namespace-profile-ubuntu-22-04
     needs: prepare_release
     if: ${{ inputs.build_linux != false }}
     timeout-minutes: 90

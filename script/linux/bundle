@@ -123,9 +123,15 @@ eval set -- "$PARAMS"
 # Statically compile the CLI and warpctrl artifacts so they can run on older Linux distros.
 if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
   TARGET_TRIPLE="${BUILD_ARCH}-unknown-linux-musl"
-  source "$WORKSPACE_ROOT_DIR/script/linux/configure_musl_toolchain" "$TARGET_TRIPLE"
-  # Make sure we have the rust musl target available.
-  rustup target add "$TARGET_TRIPLE"
+  # Only configure the musl toolchain when we are actually compiling.  Packaging-only
+  # runs (--skip-build) just need TARGET_TRIPLE to locate the prebuilt binary, and
+  # configuring the toolchain there would force an unnecessary (and potentially
+  # failing) musl-cross download on hosts that never compile.
+  if [[ "$BUILD" == "true" ]]; then
+    source "$WORKSPACE_ROOT_DIR/script/linux/configure_musl_toolchain" "$TARGET_TRIPLE"
+    # Make sure we have the rust musl target available.
+    rustup target add "$TARGET_TRIPLE"
+  fi
 fi
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT_DIR/target}"
 CARGO_TARGET_OUTPUT_ROOT="$CARGO_TARGET_DIR${TARGET_TRIPLE:+/$TARGET_TRIPLE}"
