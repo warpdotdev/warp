@@ -2142,8 +2142,7 @@ fn shell_submission_is_not_queued_when_v2_disabled() {
 
 /// `/fork` emits an action and does not reiterate input into the conversation, so it must bypass
 /// prompt queuing and run immediately even while an agent is in progress with queued-prompts mode
-/// on. Regression test for the bug where `/fork` was captured as a queued prompt instead of
-/// forking.
+/// on.
 #[test]
 fn slash_fork_bypasses_prompt_queue_while_in_progress() {
     App::test((), |mut app| async move {

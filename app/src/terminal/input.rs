@@ -13900,11 +13900,11 @@ impl Input {
                     None => return false,
                 }
             } else if !slash_command_is_submitted_as_prompt(&detected.command) {
-                // Action-emitting slash commands (e.g. /fork, /model, /rewind) execute
-                // immediately and must not be captured by prompt queuing — they emit an action
-                // rather than reiterating input into the conversation. Bypass the queue and let
-                // the slash-command executor handle them now. Only the prompt-submitting commands
-                // (/compact, /plan, /orchestrate) fall through to be queued.
+                // Action-emitting slash commands (e.g. `/fork`) execute immediately and must not
+                // be captured by prompt queuing — they emit an action rather than reiterating
+                // input into the conversation. Bypass the queue and let the slash-command
+                // executor handle them now; commands that submit a prompt to the conversation
+                // instead fall through to be queued (see `slash_command_is_submitted_as_prompt`).
                 return false;
             } else {
                 prompt
