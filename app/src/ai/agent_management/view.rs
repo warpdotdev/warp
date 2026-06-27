@@ -55,7 +55,8 @@ use crate::ai::agent_management::telemetry::{
 };
 use crate::ai::ambient_agents::{cancel_task_with_toast, AgentSource};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
-use crate::ai::blocklist::format_credits;
+use crate::ai::blocklist::orchestration_topology::conversation_and_ancestors;
+use crate::ai::blocklist::{format_credits, BlocklistAIHistoryModel};
 use crate::ai::conversation_details_panel::{
     ConversationDetailsData, ConversationDetailsPanel, ConversationDetailsPanelEvent,
 };
@@ -1349,32 +1350,46 @@ impl AgentManagementView {
         });
     }
 
-    /// Update just the artifact buttons for a specific conversation
+    /// Update the artifact buttons for a specific conversation and its
+    /// orchestration ancestors (parent cards display aggregated subtree
+    /// artifacts). Each card is updated at most once per call, and cards
+    /// whose artifacts are unchanged no-op in `update_artifacts`.
     fn update_artifacts_for_conversation(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
         let model = AgentConversationsModel::as_ref(ctx);
-        let Some((index, entry)) = self.items.iter().enumerate().find_map(|(index, card)| {
-            let entry = model.get_entry_by_id(&card.item_id, ctx)?;
-            (entry.identity.local_conversation_id == Some(conversation_id))
-                .then_some((index, entry))
-        }) else {
+        let affected_conversation_ids =
+            conversation_and_ancestors(BlocklistAIHistoryModel::as_ref(ctx), conversation_id);
+        let updates: Vec<(usize, Vec<Artifact>)> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, card)| {
+                let entry = model.get_entry_by_id(&card.item_id, ctx)?;
+                let local_conversation_id = entry.identity.local_conversation_id?;
+                affected_conversation_ids
+                    .contains(&local_conversation_id)
+                    .then_some((index, entry.display.artifacts))
+            })
+            .collect();
+        if updates.is_empty() {
             return;
-        };
-        let artifacts = entry.display.artifacts;
+        }
 
-        // Update the artifact buttons for this card
-        if should_show_artifacts(&artifacts) {
-            if let Some(view) = &self.items[index].artifact_buttons_view {
-                view.update(ctx, |v, ctx| v.update_artifacts(&artifacts, ctx));
+        for (index, artifacts) in updates {
+            // Update the artifact buttons for this card
+            if should_show_artifacts(&artifacts) {
+                if let Some(view) = &self.items[index].artifact_buttons_view {
+                    view.update(ctx, |v, ctx| v.update_artifacts(&artifacts, ctx));
+                } else {
+                    let new_view = self.create_artifact_buttons_view(&artifacts, ctx);
+                    self.items[index].artifact_buttons_view = Some(new_view);
+                }
             } else {
-                let new_view = self.create_artifact_buttons_view(&artifacts, ctx);
-                self.items[index].artifact_buttons_view = Some(new_view);
+                self.items[index].artifact_buttons_view = None;
             }
-        } else {
-            self.items[index].artifact_buttons_view = None;
         }
         ctx.notify();
     }

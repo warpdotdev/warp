@@ -2,12 +2,17 @@ use std::sync::Arc;
 
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::AnsiColorIdentifier;
-use warpui::elements::{ChildView, Element, Empty, ParentElement, Wrap};
-use warpui::{AppContext, Entity, TypedActionView, View, ViewContext, ViewHandle};
+use warpui::elements::{
+    ChildView, Container, CrossAxisAlignment, Element, Empty, Flex, MainAxisSize, ParentElement,
+    Text, Wrap,
+};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::{file_button_label, Artifact};
+use crate::appearance::Appearance;
 use crate::notebooks::NotebookId;
 use crate::terminal::input::MenuPositioning;
+use crate::ui_components::blended_colors;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, SecondaryTheme, TooltipAlignment,
 };
@@ -15,8 +20,14 @@ use crate::view_components::action_button::{
 const BUTTON_SPACING: f32 = 8.;
 const BUTTON_MAX_TEXT_WIDTH: f32 = 200.;
 
+/// Maximum number of artifact pills rendered before collapsing the remainder
+/// into a single "+N more" indicator, so an orchestration tree with many
+/// artifacts (e.g. 100 PRs) doesn't flood the row.
+const MAX_VISIBLE_ARTIFACT_BUTTONS: usize = 25;
+
 /// A view that renders a set of artifact buttons (plans, branches, PRs)
 pub struct ArtifactButtonsRow {
+    artifacts: Vec<Artifact>,
     buttons: Vec<ViewHandle<ActionButton>>,
     theme: Arc<dyn ActionButtonTheme>,
 }
@@ -25,6 +36,7 @@ impl ArtifactButtonsRow {
     pub fn new(artifacts: &[Artifact], ctx: &mut ViewContext<Self>) -> Self {
         let theme: Arc<dyn ActionButtonTheme> = Arc::new(SecondaryTheme);
         Self {
+            artifacts: artifacts.to_vec(),
             buttons: collect_buttons(artifacts, &theme, ctx),
             theme,
         }
@@ -36,12 +48,20 @@ impl ArtifactButtonsRow {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         Self {
+            artifacts: artifacts.to_vec(),
             buttons: collect_buttons(artifacts, &theme, ctx),
             theme,
         }
     }
 
+    /// Rebuilds the buttons for `artifacts`. No-ops when the artifacts are
+    /// unchanged, so redundant refreshes (e.g. several children reporting
+    /// into the same ancestor card) skip the rebuild and re-render.
     pub fn update_artifacts(&mut self, artifacts: &[Artifact], ctx: &mut ViewContext<Self>) {
+        if self.artifacts == artifacts {
+            return;
+        }
+        self.artifacts = artifacts.to_vec();
         self.buttons = collect_buttons(artifacts, &self.theme, ctx);
         ctx.notify();
     }
@@ -77,18 +97,51 @@ impl View for ArtifactButtonsRow {
         "ArtifactButtonsRow"
     }
 
-    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+    fn render(&self, app: &AppContext) -> Box<dyn Element> {
         if self.buttons.is_empty() {
             return Empty::new().finish();
         }
 
-        Wrap::row()
+        let pills = Wrap::row()
             .with_spacing(BUTTON_SPACING)
             .with_run_spacing(BUTTON_SPACING)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_children(
                 self.buttons
                     .iter()
+                    .take(MAX_VISIBLE_ARTIFACT_BUTTONS)
                     .map(|button| ChildView::new(button).finish()),
+            )
+            .finish();
+
+        let hidden_count = self
+            .buttons
+            .len()
+            .saturating_sub(MAX_VISIBLE_ARTIFACT_BUTTONS);
+        if hidden_count == 0 {
+            return pills;
+        }
+
+        // Plain, muted text on its own line below the pills — deliberately not a
+        // button/chip, so it has no hover or click affordance.
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let more_label = Text::new(
+            format!("+{hidden_count} more"),
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+        .finish();
+
+        Flex::column()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(pills)
+            .with_child(
+                Container::new(more_label)
+                    .with_margin_top(BUTTON_SPACING)
+                    .finish(),
             )
             .finish()
     }

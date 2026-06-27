@@ -870,6 +870,9 @@ pub(crate) fn build_rename_conversation_url(conversation_id: &str) -> String {
 
 struct ListRunsResponse {
     runs: Vec<AmbientAgentTask>,
+    /// Opaque cursor for the next page, from the server's `page_info.next_cursor`.
+    /// `None` once the result set is exhausted.
+    next_cursor: Option<String>,
 }
 
 impl<'de> serde::Deserialize<'de> for ListRunsResponse {
@@ -880,6 +883,14 @@ impl<'de> serde::Deserialize<'de> for ListRunsResponse {
         #[derive(serde::Deserialize)]
         struct RawResponse {
             runs: Vec<serde_json::Value>,
+            #[serde(default)]
+            page_info: Option<RawPageInfo>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct RawPageInfo {
+            #[serde(default)]
+            next_cursor: Option<String>,
         }
 
         let raw = RawResponse::deserialize(deserializer)?;
@@ -895,7 +906,10 @@ impl<'de> serde::Deserialize<'de> for ListRunsResponse {
             }
         }
 
-        Ok(ListRunsResponse { runs })
+        Ok(ListRunsResponse {
+            runs,
+            next_cursor: raw.page_info.and_then(|page_info| page_info.next_cursor),
+        })
     }
 }
 
@@ -1130,6 +1144,16 @@ pub trait AIClient: 'static + Send + Sync {
         limit: i32,
         filter: TaskListFilter,
     ) -> anyhow::Result<Vec<AmbientAgentTask>, anyhow::Error>;
+
+    /// Fetches a single page of agent runs, returning the page's runs along with
+    /// the opaque `page_info.next_cursor` (`None` once the result set is
+    /// exhausted). Callers paginate by feeding the returned cursor back in via
+    /// [`TaskListFilter::cursor`].
+    async fn list_ambient_agent_tasks_page(
+        &self,
+        limit: i32,
+        filter: TaskListFilter,
+    ) -> anyhow::Result<(Vec<AmbientAgentTask>, Option<String>), anyhow::Error>;
 
     /// List agent runs and return the raw server JSON response.
     async fn list_agent_runs_raw(
@@ -2013,9 +2037,17 @@ impl AIClient for ServerApi {
         limit: i32,
         filter: TaskListFilter,
     ) -> anyhow::Result<Vec<AmbientAgentTask>, anyhow::Error> {
+        Ok(self.list_ambient_agent_tasks_page(limit, filter).await?.0)
+    }
+
+    async fn list_ambient_agent_tasks_page(
+        &self,
+        limit: i32,
+        filter: TaskListFilter,
+    ) -> anyhow::Result<(Vec<AmbientAgentTask>, Option<String>), anyhow::Error> {
         let url = build_list_agent_runs_url(limit, &filter);
         let response: ListRunsResponse = self.get_public_api(&url).await?;
-        Ok(response.runs)
+        Ok((response.runs, response.next_cursor))
     }
 
     async fn list_agent_runs_raw(
