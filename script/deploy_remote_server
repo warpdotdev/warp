@@ -129,9 +129,7 @@ echo "    Binary: $WARP_BIN -> $BINARY_NAME"
 echo "    Features: $FEATURES"
 echo ""
 
-# Override the target rustflags to avoid macOS-specific flags from .cargo/config.toml.
-CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C symbol-mangling-version=v0" \
-  cargo build \
+cargo build \
     -p warp \
     --bin "$WARP_BIN" \
     --target "$TARGET" \

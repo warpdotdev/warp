@@ -80,8 +80,7 @@ LOCAL_BUNDLE_TARBALL="$OUTPUT_DIR/remote-server-integration-bundle.tar.gz"
 
 echo "==> Building Integration-channel Oz CLI for $TARGET (profile=$CARGO_PROFILE)"
 
-CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C symbol-mangling-version=v0" \
-  cargo build \
+cargo build \
     -p warp \
     --bin "$WARP_BIN" \
     --target "$TARGET" \
