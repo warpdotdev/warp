@@ -103,7 +103,51 @@ impl Renderer {
 
         let mut encoder = device.create_command_encoder(&ENCODER_DESCRIPTOR);
         let (_, error) = with_error_scope(device, || {
-            frame.draw(resources, &mut encoder, &surface_texture);
+            let surface_width = surface_texture.texture.width();
+            let surface_height = surface_texture.texture.height();
+            let surface_size = Vector2F::new(surface_width as f32, surface_height as f32);
+
+            match resources.offscreen_target(surface_width, surface_height) {
+                Some((offscreen_texture, offscreen_view)) => {
+                    // Render the scene into the persistent offscreen target, then
+                    // copy it into the swapchain image. The copy is a cheap GPU
+                    // blit (not a re-rasterization); keeping the offscreen target
+                    // between frames is what will let damage frames re-rasterize
+                    // and copy only the changed region.
+                    frame.draw(resources, &mut encoder, &offscreen_view, surface_size);
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &offscreen_texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &surface_texture.texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: surface_width,
+                            height: surface_height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+                None => {
+                    // Surface can't be a copy destination; render straight to it.
+                    let view =
+                        surface_texture
+                            .texture
+                            .create_view(&wgpu::TextureViewDescriptor {
+                                format: Some(surface_texture.texture.format()),
+                                ..Default::default()
+                            });
+                    frame.draw(resources, &mut encoder, &view, surface_size);
+                }
+            }
+
             queue.submit(Some(encoder.finish()));
         });
 
