@@ -20,8 +20,7 @@ pub struct TaskStore {
     root_task_id: TaskId,
     tasks: HashMap<TaskId, Task>,
     linearized_refs: Vec<ExchangeRef>,
-    /// Map from exchange ID to its position in `linearized_refs` for faster lookup.
-    exchange_id_index: HashMap<AIAgentExchangeId, usize>,
+    exchange_id_index: HashMap<AIAgentExchangeId, ExchangeRef>,
     /// If the root task was upgraded from an optimistic (client-generated) ID
     /// to a server-assigned ID, stores the original optimistic ID so that
     /// deferred event handlers referencing the stale ID can still resolve
@@ -157,8 +156,29 @@ impl TaskStore {
     }
 
     pub fn exchange_by_id(&self, exchange_id: AIAgentExchangeId) -> Option<&AIAgentExchange> {
-        let idx = self.exchange_id_index.get(&exchange_id)?;
-        self.lookup_exchange(self.linearized_refs.get(*idx)?)
+        let exchange_ref = self.exchange_id_index.get(&exchange_id)?;
+        self.lookup_exchange(exchange_ref)
+    }
+
+    pub(super) fn rebuild_exchange_id_index(&mut self) {
+        self.exchange_id_index = self
+            .tasks
+            .values()
+            .flat_map(|task| {
+                let task_id = task.id().clone();
+                task.exchanges()
+                    .enumerate()
+                    .map(move |(exchange_index, exchange)| {
+                        (
+                            exchange.id,
+                            ExchangeRef {
+                                task_id: task_id.clone(),
+                                exchange_index,
+                            },
+                        )
+                    })
+            })
+            .collect();
     }
 
     pub fn first_exchange(&self) -> Option<&AIAgentExchange> {
@@ -295,15 +315,7 @@ impl TaskStore {
     /// Rebuilds the linearized index from scratch using DFS traversal.
     fn rebuild_linearized_refs_index(&mut self) {
         self.linearized_refs = Self::build_linearized_refs(&self.tasks, &self.root_task_id);
-        self.exchange_id_index = self
-            .linearized_refs
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, r)| {
-                let exchange = self.lookup_exchange(r)?;
-                Some((exchange.id, idx))
-            })
-            .collect();
+        self.rebuild_exchange_id_index();
     }
 
     /// Builds linearized exchange refs via DFS traversal without mutating self.
