@@ -63,7 +63,8 @@ The intended iteration cycle:
 4. **Read the summary** — focus on **IDLE** avg/peak (ACTIVE is expected ~50% on
    4K integrated GPUs and is unchanged by the idle blink fix).
 
-5. **Optional human sanity check** — launch one binary at a time in btop:
+5. **Optional human sanity check** — launch one binary at a time; watch the GPU
+   graph in **Mission Center** (or btop render-engine %) for ~20s while idle:
 
    ```bash
    WARP_ENABLE_WAYLAND=1 target/gpu_idle_test/bin/warp-oss-rel-base
@@ -126,7 +127,7 @@ session restore, and UI settings. The **delta** is what matters.
 | Measurement | rel-base | rel-candidate |
 |-------------|----------|---------------|
 | Harness IDLE avg | ~12.4% | ~9.6% |
-| Manual IDLE (btop) | ~6% | ~3% |
+| Manual IDLE (Mission Center graph) | ~6% | ~3% |
 
 Active key-mash / scroll GPU (~50%) and **responsiveness** should match between
 base and candidate in release builds.
