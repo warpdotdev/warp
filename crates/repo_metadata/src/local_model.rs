@@ -39,8 +39,8 @@ pub struct RepoContents<'a> {
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::entry::{
-    BudgetExceededBehavior, BuildTreeError, BuildTreeOptions, Entry, FileId, IgnoredPathStrategy,
-    matches_force_included_path,
+    matches_force_included_path, BudgetExceededBehavior, BuildTreeError, BuildTreeOptions, Entry,
+    FileId, IgnoredPathStrategy,
 };
 use crate::repository::Repository;
 use crate::standing_queries::{
