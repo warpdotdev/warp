@@ -152,6 +152,7 @@ args = [
 filetypes = [{ pattern = "*.java" }]
 initialization_options.settings.java.import.gradle.enabled = true
 initialization_options.settings.java.import.maven.enabled = true
+initialization_options.workspaceFolders = ["file://{{workspace_root}}"]
 ```
 
 All of `name`, `command`, `args`, `filetypes`, and `initialization_options` are fields of the same `[[editor.language_servers]]` entry — they are not shared with any other custom server. Two custom entries each have their own `initialization_options`; nothing leaks across rows.
@@ -161,9 +162,11 @@ Key observations:
 - `{{workspace_slug}}` makes each workspace's `-data` directory unique, which JDTLS requires; without per-workspace substitution, opening a second Java workspace would fail with a lock error.
 - The platform-specific `-configuration` path is hardcoded by the user; cross-platform settings sync is out of scope for v1 (see invariant 20's neighborhood — no `{{os}}`/`{{arch}}` placeholders are part of v1's minimum set).
 - The launcher jar filename is timestamp-versioned. Upgrading JDTLS requires the user to update the path in `args`. This stays the user's responsibility — Warp will not add JDTLS-specific auto-discovery; v1 of this feature does not grow the built-in server list, and out-of-the-box install support for non-built-in servers is a non-goal (invariant 26).
+- `initialization_options.workspaceFolders` hands JDTLS the project root explicitly. JDTLS resolves its project from `rootUri`/`rootPath`/`initializationOptions.workspaceFolders` — **not** from the standard `workspaceFolders` field that invariant 17 sends — so without this line it imports no project and runs in JDTLS's degraded "non-project" mode, where cross-file go-to-definition and hover silently return nothing. `file://{{workspace_root}}` re-supplies (as a `file://` URI) the same root Warp already sends in the standard field, in the form JDTLS reads. Servers like rust-analyzer and gopls read the standard field and need no such duplication.
 - The inner `settings` key in `initialization_options.settings.java.import...` is a JDTLS-specific payload convention, not a Warp field. JDTLS reads its Java-language configuration from a nested `settings` object inside the LSP `initializationOptions` payload, which is the shape vscode-java, coc-java, and nvim-jdtls all send. The TOML above produces this JSON on the wire in the `initialize` request:
   ```json
   "initializationOptions": {
+    "workspaceFolders": ["file:///abs/path/to/workspace"],
     "settings": {
       "java": { "import": { "gradle": { "enabled": true }, "maven": { "enabled": true } } }
     }

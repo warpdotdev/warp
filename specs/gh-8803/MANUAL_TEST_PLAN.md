@@ -62,13 +62,14 @@ command = "jdtls"
 args = ["-data", "{{cache_dir}}/jdtls-data/{{workspace_slug}}"]
 filetypes = [{ pattern = "*.java" }]
 env = { JAVA_HOME = "{{env_HOME}}/.sdkman/candidates/java/21.0.11-amzn" }
+initialization_options.workspaceFolders = ["file://{{workspace_root}}"]
 ```
 
 **Record:** open `App.java` **fresh** (close the Clip 1 pane first so the footer re-resolves) → footer shows an **"Enable jdtls"** button → click it → jdtls spawns (footer progress/indexing) → **wait for indexing to settle, then hover over a method (e.g. `getGreeting`)** → a type-info tooltip appears.
 
 **Expected:** the button label is the descriptor's `name` ("jdtls"); clicking it launches the server; and once indexed, hover returns type info.
 
-**Description (post with the clip):** *A `[[editor.language_servers]]` entry surfaces an **Enable jdtls** button (label = descriptor `name`); clicking it launches the server, and hover then returns type info.* (Paste the 6-line TOML so reviewers see the config.)
+**Description (post with the clip):** *A `[[editor.language_servers]]` entry surfaces an **Enable jdtls** button (label = descriptor `name`); clicking it launches the server, and hover then returns type info.* (Paste the 7-line TOML so reviewers see the config.)
 
 ## Clip 3 — Custom override of a built-in (gopls-custom / Go)
 
