@@ -6,9 +6,10 @@
 ; this query re-targets the same grammar nodes onto the names Warp understands: keyword,
 ; function, string, type, comment, property, and tag.
 ;
-; This is the block-level grammar only. Inline emphasis and language-specific highlighting
-; inside fenced code blocks require tree-sitter injections, which the editor's highlighter
-; does not yet support.
+; This is the block-level grammar; fenced code blocks are highlighted in their own language via
+; tree-sitter injection (see `injected_highlights` in crates/syntax_tree). Inline emphasis is
+; still unsupported — it needs the separate Markdown inline grammar, which arborium does not yet
+; package upstream.
 
 ; Headings — the `#` markers (or setext underlines) and the heading text.
 [
