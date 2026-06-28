@@ -1421,10 +1421,6 @@ impl EditorModel {
         };
         self.change_selections(new_selections, ctx);
 
-        // Re-anchor the Vim visual tails against the rebuilt buffer so visual
-        // mode keeps a valid selection range after the buffer was torn down and
-        // restored (see this method's doc comment for why the offsets are
-        // captured by the caller).
         let new_visual_tails: Vec<Anchor> = {
             let buffer = self.buffer(ctx);
             vim_visual_tail_offsets
