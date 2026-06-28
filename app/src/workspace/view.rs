@@ -11720,14 +11720,12 @@ impl Workspace {
 
         match index.cmp(&self.active_tab_index) {
             Ordering::Equal => {
-                // Horizontal tabs should activate the tab that was immediately to the
-                // right of the closed tab. After removal, that tab has the same index.
-                // If the closed tab was the last tab, fall back to the previous tab.
-                let active_index = if uses_vertical_tabs(ctx) {
-                    index.saturating_sub(1)
-                } else {
-                    index.min(self.tabs.len() - 1)
-                };
+                // Activate the tab that was immediately after the closed one — to the
+                // right for horizontal tabs, below for vertical tabs. After removal that
+                // tab occupies the same index. If the closed tab was the last one, fall
+                // back to the new last tab (the previous neighbor). This matches the
+                // browser / macOS convention for both layouts.
+                let active_index = index.min(self.tabs.len() - 1);
                 self.activate_tab_internal(active_index, ctx);
             }
             Ordering::Less => {
