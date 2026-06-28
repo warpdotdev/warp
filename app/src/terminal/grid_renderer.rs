@@ -1133,6 +1133,9 @@ fn render_grid_with_ligatures<'a>(
         // and filter-match styling survive on complex-script cells, and so HarfBuzz
         // shapes the run with the correct face.
         let mut deferred_str_cells: Vec<(usize, ColorU, FontId, Properties, String)> = Vec::new();
+        // Tracks which column was consumed as the SARA AM tail of a preceding consonant cluster,
+        // so the SARA AM cell itself can be skipped during rendering.
+        let mut skip_sara_am_at: Option<usize> = None;
 
         let Some(row) = grid.row(row_idx) else {
             log::error!("grid_renderer should not try to render an out-of-bounds row");
@@ -1455,37 +1458,65 @@ fn render_grid_with_ligatures<'a>(
                         .entry(font_style)
                         .or_insert_with(|| ctx.font_cache.select_font(font_family, properties));
 
+                    // Look ahead: if the next cell is SARA AM, shape this cell's content
+                    // and SARA AM together as one HarfBuzz cluster. This lets the Thai shaper
+                    // place the nikhahit dot above the correct consonant via GPOS, matching
+                    // what render_cell_glyph does in the non-ligature path.
+                    let following_sara_am = (col + 1 < grid.columns())
+                        .then(|| match row[col + 1].content_for_display() {
+                            CharOrStr::Char(c) => decompose_sara_am(c).map(|_| c),
+                            CharOrStr::Str(_) => None,
+                        })
+                        .flatten();
+
                     match cell.content_for_display() {
                         CharOrStr::Str(s) => {
                             string_builder.append_placeholder(col);
+                            let content = if let Some(sa) = following_sara_am {
+                                skip_sara_am_at = Some(col + 1);
+                                let mut combined = s.to_owned();
+                                combined.push(sa);
+                                combined
+                            } else {
+                                s.to_owned()
+                            };
                             deferred_str_cells.push((
                                 col,
                                 cell_colors.foreground_color,
                                 styled_font_id,
                                 properties,
-                                s.to_owned(),
+                                content,
                             ));
                         }
-                        // Thai/Lao SARA AM: defer like a Str cell, splitting it into the spacing
-                        // "aa" tail (this cell) and the nikhahit dot drawn over the preceding
-                        // consonant cell, so the vowel stays attached. See [`decompose_sara_am`].
+                        // SARA AM cell: rendered as part of the preceding consonant's cluster
+                        // (see look-ahead above). Only draw it standalone when at the start of
+                        // the line and there was no preceding consonant to consume it.
                         CharOrStr::Char(c) if decompose_sara_am(c).is_some() => {
-                            let (nikhahit, sara_aa) =
-                                decompose_sara_am(c).expect("checked by guard");
+                            string_builder.append_placeholder(col);
+                            if skip_sara_am_at != Some(col) {
+                                let (_, sara_aa) =
+                                    decompose_sara_am(c).expect("checked by guard");
+                                deferred_str_cells.push((
+                                    col,
+                                    cell_colors.foreground_color,
+                                    styled_font_id,
+                                    properties,
+                                    sara_aa.to_string(),
+                                ));
+                            }
+                        }
+                        // Consonant followed by SARA AM: defer both together so HarfBuzz shapes
+                        // the cluster and positions the nikhahit dot above the consonant via GPOS.
+                        CharOrStr::Char(c) if following_sara_am.is_some() => {
+                            let sa = following_sara_am.expect("checked by guard");
+                            skip_sara_am_at = Some(col + 1);
                             string_builder.append_placeholder(col);
                             deferred_str_cells.push((
                                 col,
                                 cell_colors.foreground_color,
                                 styled_font_id,
                                 properties,
-                                sara_aa.to_string(),
-                            ));
-                            deferred_str_cells.push((
-                                col.saturating_sub(1),
-                                cell_colors.foreground_color,
-                                styled_font_id,
-                                properties,
-                                nikhahit.to_string(),
+                                format!("{c}{sa}"),
                             ));
                         }
                         other => string_builder.append_content(other, col),
