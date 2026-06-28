@@ -40,7 +40,8 @@ use style::BgAndStyle;
 
 use super::row::Row;
 use super::{cell, CellType};
-use crate::model::{ansi, grid::HyperlinkId, Point};
+use crate::model::grid::HyperlinkId;
+use crate::model::{ansi, Point};
 
 const DEFAULT_FG_COLOR: ansi::Color = ansi::Color::Named(ansi::NamedColor::Foreground);
 

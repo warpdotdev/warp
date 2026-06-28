@@ -7,9 +7,8 @@
 //! collapses unbroken runs of plain output to no map entries at all — keeping
 //! the storage cost zero for the overwhelming majority of cells.
 
-use crate::model::grid::HyperlinkId;
-
 use super::attribute_map::AttributeMap;
+use crate::model::grid::HyperlinkId;
 
 /// Map holding each cell's OSC 8 hyperlink id (or `None` for cells that
 /// aren't part of a hyperlink).
