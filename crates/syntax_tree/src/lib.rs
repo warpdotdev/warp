@@ -179,6 +179,21 @@ impl SyntaxTreeState {
             for (highlight_range, color) in highlights.iter() {
                 combined_highlights.insert(highlight_range.clone(), *color);
             }
+
+            // If this language embeds others (e.g. Markdown fenced code blocks), highlight the
+            // embedded content with its own grammar and merge it over the base highlights.
+            if let Some(injections_query) = &language_queries.language.injections_query {
+                let injected = queries::highlight_query::injected_highlights(
+                    injections_query,
+                    &self.color_map,
+                    range.clone(),
+                    buffer.as_ref(ctx),
+                    tree,
+                );
+                for (highlight_range, color) in injected.iter() {
+                    combined_highlights.insert(highlight_range.clone(), *color);
+                }
+            }
         }
 
         // Once we have rendered content version X, we could discard syntax trees belonging to versions before X.

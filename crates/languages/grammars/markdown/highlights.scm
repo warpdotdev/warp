@@ -24,11 +24,10 @@
 (atx_heading (inline) @keyword)
 (setext_heading (paragraph) @keyword)
 
-; Code — fenced and indented blocks, the fence delimiters, and the info-string language.
-[
-  (indented_code_block)
-  (code_fence_content)
-] @string
+; Code — indented blocks, the fence delimiters, and the info-string language.
+; Fenced bodies (`code_fence_content`) are intentionally left uncolored here so the injected
+; per-language highlighting shows through with default-colored gaps between tokens.
+(indented_code_block) @string
 (fenced_code_block_delimiter) @comment
 (info_string (language) @type)
 
