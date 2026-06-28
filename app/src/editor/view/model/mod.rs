@@ -721,11 +721,17 @@ impl EditorModel {
         // This needs to be done _before_ we start the batch below so that
         // 1) we take the snapshot of the correct (regular vs. ephemeral) buffer
         // 2) we star the the batch on the correct (regular vs. ephemeral) buffer
+        // Capture the Vim visual tail offsets against the buffer the snapshot is
+        // taken from, before any ephemeral/regular buffer swap, so they can be
+        // re-anchored against the rebuilt buffer in `restore_from_snapshot` (the
+        // anchors themselves are tied to the pre-swap buffer and would otherwise
+        // go stale).
         let restore_from_snapshot = if can_edit && edit.is_ephemeral() {
             let snapshot = self.as_snapshot(ctx);
+            let vim_visual_tail_offsets = self.vim_visual_tail_offsets(ctx);
             self.buffer_and_display_map
                 .activate_new_ephemeral_state(ctx);
-            Some(snapshot)
+            Some((snapshot, vim_visual_tail_offsets))
         } else if can_edit && self.is_ephemeral() && edit.update_buffer.is_some() {
             if self.buffer_and_display_map.ephemeral_is_display_only {
                 // Display-only ephemeral: discard the ephemeral content entirely and
@@ -738,8 +744,9 @@ impl EditorModel {
                 // Regular ephemeral (history picker, model selector, etc.): snapshot the
                 // ephemeral buffer so its content can be applied to the regular buffer.
                 let snapshot = self.as_snapshot(ctx);
+                let vim_visual_tail_offsets = self.vim_visual_tail_offsets(ctx);
                 self.buffer_and_display_map.deactivate_ephemeral_state();
-                Some(snapshot)
+                Some((snapshot, vim_visual_tail_offsets))
             }
         } else {
             None
@@ -756,8 +763,8 @@ impl EditorModel {
         // right buffer state. For example, if we tried to select
         // without having restored the snapshot, we would be selecting
         // on the wrong underlying buffer.
-        if let Some(snapshot) = restore_from_snapshot {
-            self.restore_from_snapshot(snapshot, ctx);
+        if let Some((snapshot, vim_visual_tail_offsets)) = restore_from_snapshot {
+            self.restore_from_snapshot(snapshot, vim_visual_tail_offsets, ctx);
             // Refresh batch version here as we already recorded edits for the snapshot
             // restoration.
             self.refresh_batch_version(ctx);
@@ -1329,8 +1336,36 @@ impl EditorModel {
         );
     }
 
+    /// The current Vim visual tails resolved to char offsets against the active
+    /// buffer. Used to preserve the visual selection across an ephemeral/regular
+    /// buffer swap, where the tail anchors would otherwise go stale (see
+    /// [`Self::restore_from_snapshot`]).
+    fn vim_visual_tail_offsets<C: ModelAsRef>(&self, ctx: &C) -> Vec<CharOffset> {
+        let buffer = self.buffer(ctx);
+        self.vim_visual_tails
+            .iter()
+            .filter_map(|tail| tail.to_char_offset(buffer).ok())
+            .collect()
+    }
+
     // Used for restoring the buffer from a snapshot.
-    fn restore_from_snapshot(&mut self, snapshot: EditorSnapshot, ctx: &mut ModelContext<Self>) {
+    //
+    // `vim_visual_tail_offsets` are the char offsets of the Vim visual tails,
+    // captured by the caller against the buffer the snapshot was taken from
+    // (before any ephemeral/regular buffer swap). The anchors stored in
+    // `vim_visual_tails` reference that pre-swap buffer; left untouched they
+    // become stale once we rebuild the buffer here, so
+    // `vim_visual_selection_range` could no longer resolve them — collapsing the
+    // visual selection and breaking visual-mode operations (e.g. pasting over a
+    // selection in a command recalled from history). The buffer is rebuilt with
+    // the same text the offsets were taken from, so they stay valid and are
+    // re-anchored below.
+    fn restore_from_snapshot(
+        &mut self,
+        snapshot: EditorSnapshot,
+        vim_visual_tail_offsets: Vec<CharOffset>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let version = self.buffer_handle().as_ref(ctx).versions();
         self.clear_selections(ctx);
         self.clear_buffer(ctx);
@@ -1405,6 +1440,19 @@ impl EditorModel {
             }]
         };
         self.change_selections(new_selections, ctx);
+
+        // Re-anchor the Vim visual tails against the rebuilt buffer so visual
+        // mode keeps a valid selection range after the buffer was torn down and
+        // restored (see this method's doc comment for why the offsets are
+        // captured by the caller).
+        let new_visual_tails: Vec<Anchor> = {
+            let buffer = self.buffer(ctx);
+            vim_visual_tail_offsets
+                .iter()
+                .filter_map(|offset| buffer.anchor_before(*offset).ok())
+                .collect()
+        };
+        self.vim_visual_tails = new_visual_tails;
     }
 
     pub fn selection_insertion_index(&self, start: &Anchor, app: &AppContext) -> usize {
