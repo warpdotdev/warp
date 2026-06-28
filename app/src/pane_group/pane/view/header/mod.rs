@@ -324,78 +324,61 @@ impl<P: BackingView> PaneHeader<P> {
         self.is_visible_in_pane_group
     }
 
-    /// Based on the drag position and tab bar location, returns whether or not the given drag
-    /// is over a tab, or between two tabs. This is done by splitting the tabs into quadrants and seeing
-    /// what quadrant the center of the dragged element lives.
+    /// Based on the drag position and tab bar location, returns whether the drag
+    /// is over a tab or between two tabs, by splitting the hovered tab into
+    /// quarters along the active axis (X for the horizontal bar, Y for the
+    /// vertical panel): the leading quarter inserts before, the middle half
+    /// merges onto the tab, and the trailing quarter inserts after.
     fn calculate_tab_focus_hover_index(
         drag_position: &RectF,
         tab_bar_location: &TabBarLocation,
+        axis: TabBarAxis,
         ctx: &ViewContext<Self>,
     ) -> TabBarHoverIndex {
+        let is_vertical = matches!(axis, TabBarAxis::Vertical);
         match tab_bar_location {
             TabBarLocation::TabIndex(idx) => {
-                if let Some(tab_rect) = ctx.element_position_by_id(tab_position_id(*idx)) {
-                    let tab_center_x = tab_rect.center().x();
-                    let tab_quarter_x = (tab_center_x + tab_rect.lower_left().x()) / 2.;
-                    let tab_three_quarters_x = (tab_center_x + tab_rect.lower_right().x()) / 2.;
-                    if drag_position.center().x() < tab_quarter_x {
+                let Some(tab_rect) = ctx.element_position_by_id(tab_position_id(*idx)) else {
+                    // If for some reason we can't retrieve the tab position, fall
+                    // back to the per-axis default: the vertical panel inserts
+                    // before the tab, the horizontal bar merges onto it.
+                    return if is_vertical {
                         TabBarHoverIndex::BeforeTab {
                             index: *idx,
                             group: None,
                         }
-                    } else if drag_position.center().x() < tab_three_quarters_x {
-                        TabBarHoverIndex::OverTab(*idx)
                     } else {
-                        TabBarHoverIndex::BeforeTab {
-                            index: *idx + 1,
-                            group: None,
-                        }
-                    }
-                } else {
-                    // If for some reason we can't retrieve the tab position, just default to the index
-                    TabBarHoverIndex::OverTab(*idx)
-                }
-            }
-            TabBarLocation::AfterTabIndex(tab_count) => TabBarHoverIndex::BeforeTab {
-                index: *tab_count,
-                group: None,
-            },
-        }
-    }
-
-    /// Vertical-tabs variant of [`Self::calculate_tab_focus_hover_index`]:
-    /// splits the hovered tab row into quarters along the Y axis (top quarter
-    /// inserts before, middle half merges onto the tab, bottom quarter inserts
-    /// after).
-    fn calculate_vertical_tab_focus_hover_index(
-        drag_position: &RectF,
-        tab_bar_location: &TabBarLocation,
-        ctx: &ViewContext<Self>,
-    ) -> TabBarHoverIndex {
-        match tab_bar_location {
-            TabBarLocation::TabIndex(idx) => {
-                if let Some(tab_rect) = ctx.element_position_by_id(tab_position_id(*idx)) {
-                    let tab_center_y = tab_rect.center().y();
-                    let tab_quarter_y = (tab_center_y + tab_rect.min_y()) / 2.;
-                    let tab_three_quarters_y = (tab_center_y + tab_rect.max_y()) / 2.;
-                    let drag_y = drag_position.center().y();
-                    if drag_y < tab_quarter_y {
-                        TabBarHoverIndex::BeforeTab {
-                            index: *idx,
-                            group: None,
-                        }
-                    } else if drag_y < tab_three_quarters_y {
                         TabBarHoverIndex::OverTab(*idx)
-                    } else {
-                        TabBarHoverIndex::BeforeTab {
-                            index: *idx + 1,
-                            group: None,
-                        }
-                    }
+                    };
+                };
+                // Project the tab rect and drag cursor onto the active axis.
+                let (drag, center, near, far) = if is_vertical {
+                    (
+                        drag_position.center().y(),
+                        tab_rect.center().y(),
+                        tab_rect.min_y(),
+                        tab_rect.max_y(),
+                    )
                 } else {
-                    // Default to index if we can not find the tab position.
+                    (
+                        drag_position.center().x(),
+                        tab_rect.center().x(),
+                        tab_rect.min_x(),
+                        tab_rect.max_x(),
+                    )
+                };
+                let tab_quarter = (center + near) / 2.;
+                let tab_three_quarters = (center + far) / 2.;
+                if drag < tab_quarter {
                     TabBarHoverIndex::BeforeTab {
                         index: *idx,
+                        group: None,
+                    }
+                } else if drag < tab_three_quarters {
+                    TabBarHoverIndex::OverTab(*idx)
+                } else {
+                    TabBarHoverIndex::BeforeTab {
+                        index: *idx + 1,
                         group: None,
                     }
                 }
@@ -955,18 +938,12 @@ impl<P: BackingView> TypedActionView for PaneHeader<P> {
                         self.is_visible_in_pane_group = false;
                     }
                     let axis = tab_bar_axis.unwrap_or(TabBarAxis::Horizontal);
-                    let tab_hover_index = match axis {
-                        TabBarAxis::Horizontal => Self::calculate_tab_focus_hover_index(
-                            drag_position,
-                            tab_bar_location,
-                            ctx,
-                        ),
-                        TabBarAxis::Vertical => Self::calculate_vertical_tab_focus_hover_index(
-                            drag_position,
-                            tab_bar_location,
-                            ctx,
-                        ),
-                    };
+                    let tab_hover_index = Self::calculate_tab_focus_hover_index(
+                        drag_position,
+                        tab_bar_location,
+                        axis,
+                        ctx,
+                    );
                     ctx.emit(Event::DraggedOverTabBar {
                         origin: *origin,
                         tab_hover_index,
