@@ -27,7 +27,7 @@ use warp::terminal::block_list_element::GridType;
 use warp::terminal::model::index::Point;
 use warp::terminal::model::terminal_model::{WithinBlock, WithinModel};
 use warp::terminal::view::{GridHighlightedLink, TerminalAction};
-use warpui::async_assert;
+use warpui_core::async_assert;
 
 use super::new_builder;
 use crate::Builder;
