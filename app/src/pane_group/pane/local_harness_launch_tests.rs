@@ -8,16 +8,35 @@ use warp_core::features::FeatureFlag;
 
 use super::{
     build_local_claude_child_command, build_local_codex_child_command,
-    build_local_opencode_child_command, local_child_task_config, normalize_local_child_harness,
-    prepare_local_harness_child_launch, validate_local_harness_shell,
+    build_local_opencode_child_command, local_child_task_config, local_claude_child_prompt,
+    normalize_local_child_harness, prepare_local_harness_child_launch,
+    validate_local_harness_shell,
 };
+use crate::ai::agent_sdk::driver::OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV;
 use crate::ai::ambient_agents::task::{normalize_orchestrator_agent_name, HarnessConfig};
+use crate::ai::local_harness_setup::LOCAL_CODEX_HARNESS_DISABLED_MESSAGE;
 use crate::server::server_api::ai::MockAIClient;
 use crate::terminal::shell::ShellType;
 
 struct EnvVarGuard {
     key: &'static str,
     original: Option<OsString>,
+}
+#[test]
+fn local_claude_child_prompt_includes_oz_cli_messaging_instructions() {
+    let prompt = local_claude_child_prompt("List files");
+
+    assert!(prompt.contains("OZ_CLI"));
+    assert!(prompt.contains("OZ_RUN_ID"));
+    assert!(prompt.contains("OZ_PARENT_RUN_ID"));
+    assert!(prompt.contains("run message send --sender-run-id"));
+    assert!(prompt.contains("All four send arguments are required"));
+    assert!(prompt.contains("Do not pass \"$OZ_PARENT_RUN_ID\" as a positional argument to send"));
+    assert!(prompt.contains("run message list \"$OZ_RUN_ID\" --limit 25"));
+    assert!(prompt.contains("do not rely on --unread"));
+    assert!(!prompt.contains("--unread --limit"));
+    assert!(prompt.contains("Do not use Claude Code Agent or SendMessage tools"));
+    assert!(prompt.ends_with("Task:\nList files"));
 }
 
 impl EnvVarGuard {
@@ -218,8 +237,42 @@ fn normalize_orchestrator_agent_name_trims_and_drops_empty() {
 
 #[tokio::test]
 #[serial_test::serial]
-async fn prepare_local_codex_child_launch_does_not_rewrite_global_codex_state() {
-    let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
+async fn prepare_local_codex_child_launch_rejects_without_rewriting_global_codex_state() {
+    let fake_home = TempDir::new().unwrap();
+    let fake_bin_dir = TempDir::new().unwrap();
+    let working_dir = fake_home.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    write_fake_cli(fake_bin_dir.path(), "codex");
+
+    let _home = EnvVarGuard::set("HOME", fake_home.path().as_os_str().to_os_string());
+    let _path = EnvVarGuard::set("PATH", fake_bin_dir.path().as_os_str().to_os_string());
+
+    let mut ai_client = MockAIClient::new();
+    ai_client.expect_create_agent_task().times(0);
+
+    let result = prepare_local_harness_child_launch(
+        "hello world".to_string(),
+        "codex".to_string(),
+        None,
+        Some("parent-run".to_string()),
+        None,
+        Some(ShellType::Zsh),
+        Some(working_dir),
+        Arc::new(ai_client),
+    )
+    .await;
+
+    match result {
+        Ok(_) => panic!("disabled local codex should be rejected"),
+        Err(err) => assert_eq!(err, LOCAL_CODEX_HARNESS_DISABLED_MESSAGE),
+    }
+    assert!(!fake_home.path().join(".codex").exists());
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn prepare_local_codex_child_launch_succeeds_when_testing_flag_is_enabled() {
+    let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
     let fake_home = TempDir::new().unwrap();
     let fake_bin_dir = TempDir::new().unwrap();
     let working_dir = fake_home.path().join("workspace");
@@ -238,7 +291,7 @@ async fn prepare_local_codex_child_launch_does_not_rewrite_global_codex_state() 
     let prepared = prepare_local_harness_child_launch(
         "hello world".to_string(),
         "codex".to_string(),
-        None,
+        Some("ignored-model".to_string()),
         Some("parent-run".to_string()),
         None,
         Some(ShellType::Zsh),
@@ -252,13 +305,16 @@ async fn prepare_local_codex_child_launch_does_not_rewrite_global_codex_state() 
         prepared.command,
         "codex --dangerously-bypass-approvals-and-sandbox 'hello world'"
     );
+    assert!(!prepared
+        .env_vars
+        .contains_key(&OsString::from("ANTHROPIC_MODEL")));
+    assert_eq!(prepared.run_id, "550e8400-e29b-41d4-a716-446655440000");
     assert!(!fake_home.path().join(".codex").exists());
 }
 
 #[tokio::test]
 #[serial_test::serial]
 async fn prepare_local_claude_child_merges_anthropic_model_env_var() {
-    let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
     let fake_home = TempDir::new().unwrap();
     let fake_bin_dir = TempDir::new().unwrap();
     let working_dir = fake_home.path().join("workspace");
@@ -266,6 +322,10 @@ async fn prepare_local_claude_child_merges_anthropic_model_env_var() {
     write_fake_cli(fake_bin_dir.path(), "claude");
 
     let _home = EnvVarGuard::set("HOME", fake_home.path().as_os_str().to_os_string());
+    let _claude_home = EnvVarGuard::set(
+        "CLAUDE_HOME",
+        fake_home.path().join(".claude").as_os_str().to_os_string(),
+    );
     let _path = EnvVarGuard::set("PATH", fake_bin_dir.path().as_os_str().to_os_string());
 
     let mut ai_client = MockAIClient::new();
@@ -291,12 +351,21 @@ async fn prepare_local_claude_child_merges_anthropic_model_env_var() {
         prepared.env_vars.get(&OsString::from("ANTHROPIC_MODEL")),
         Some(&OsString::from("opus"))
     );
+    assert!(!prepared
+        .env_vars
+        .contains_key(&OsString::from(OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV)));
+    assert!(!prepared
+        .env_vars
+        .contains_key(&OsString::from("OZ_PARENT_LISTENER_MANAGED_EXTERNALLY")));
+    assert!(prepared
+        .command
+        .contains("run message send --sender-run-id"));
+    assert!(prepared.command.contains("OZ_PARENT_RUN_ID"));
 }
 
 #[tokio::test]
 #[serial_test::serial]
 async fn prepare_local_claude_child_no_anthropic_model_when_empty() {
-    let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
     let fake_home = TempDir::new().unwrap();
     let fake_bin_dir = TempDir::new().unwrap();
     let working_dir = fake_home.path().join("workspace");
@@ -304,6 +373,10 @@ async fn prepare_local_claude_child_no_anthropic_model_when_empty() {
     write_fake_cli(fake_bin_dir.path(), "claude");
 
     let _home = EnvVarGuard::set("HOME", fake_home.path().as_os_str().to_os_string());
+    let _claude_home = EnvVarGuard::set(
+        "CLAUDE_HOME",
+        fake_home.path().join(".claude").as_os_str().to_os_string(),
+    );
     let _path = EnvVarGuard::set("PATH", fake_bin_dir.path().as_os_str().to_os_string());
 
     let mut ai_client = MockAIClient::new();
@@ -331,11 +404,11 @@ async fn prepare_local_claude_child_no_anthropic_model_when_empty() {
 }
 
 #[tokio::test]
-async fn prepare_local_harness_child_launch_rejects_disabled_claude_before_shell_validation() {
+async fn prepare_local_harness_child_launch_rejects_disabled_codex_before_shell_validation() {
     let ai_client = Arc::new(MockAIClient::new());
     let result = prepare_local_harness_child_launch(
         "hello world".to_string(),
-        "claude".to_string(),
+        "codex".to_string(),
         None,
         Some("parent-run".to_string()),
         None,
@@ -346,10 +419,7 @@ async fn prepare_local_harness_child_launch_rejects_disabled_claude_before_shell
     .await;
 
     match result {
-        Ok(_) => panic!("disabled local claude should be rejected"),
-        Err(err) => assert_eq!(
-            err,
-            "Local Claude Code child agents are temporarily disabled."
-        ),
+        Ok(_) => panic!("disabled local codex should be rejected"),
+        Err(err) => assert_eq!(err, LOCAL_CODEX_HARNESS_DISABLED_MESSAGE),
     }
 }

@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod auth;
+mod base_client;
 pub mod block;
 pub mod harness_support;
 pub mod integrations;
@@ -10,8 +11,6 @@ pub mod referral;
 pub mod team;
 pub mod workspace;
 
-use std::borrow::Cow;
-use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,9 +18,10 @@ use std::time::Duration;
 use ::http::header::CONTENT_LENGTH;
 use ai::AIClient;
 use anyhow::{anyhow, Context, Result};
-use auth::{AuthClient, AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
+use auth::AuthClient;
 use base64::prelude::BASE64_URL_SAFE;
 use base64::Engine;
+use base_client::{AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
 use block::BlockClient;
 use channel_versions::ChannelVersions;
 use chrono::{DateTime, FixedOffset};
@@ -34,17 +34,19 @@ use referral::ReferralsClient;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use team::TeamClient;
+use tracing_futures::Instrument as _;
 use url::Url;
 use warp_core::context_flag::ContextFlag;
 use warp_core::errors::{register_error, AnyhowErrorExt, ErrorExt};
 use warp_core::telemetry::TelemetryEvent;
 use warp_managed_secrets::client::ManagedSecretsClient;
+use warp_server_client::auth::{AuthClientImpl, AuthEvent, AuthSession, EXPERIMENT_ID_HEADER};
+use warp_server_client::base_client::BaseClient as _;
 use warpui::r#async::BoxFuture;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use workspace::WorkspaceClient;
 
 use super::experiments::{ServerExperiment, ServerExperiments};
-use super::graphql::GraphQLError;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::get_relevant_files::api::{GetRelevantFiles, GetRelevantFilesResponse};
 use crate::ai::predict::generate_ai_input_suggestions::GenerateAIInputSuggestionsRequest;
@@ -55,15 +57,13 @@ use crate::ai::voice::transcribe::{TranscribeRequest, TranscribeResponse};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
 use crate::auth::UserUid;
-use crate::server::graphql::default_request_options;
+use crate::server::iap::{IapManager, IapState};
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
 use crate::{settings_view, ChannelState};
 
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
-
-const EXPERIMENT_ID_HEADER: &str = "X-Warp-Experiment-Id";
 
 /// We use a special error code header `X-Warp-Error-Code` to allow the server to send
 /// more specific error code information, so that the client can discern between different
@@ -185,6 +185,12 @@ pub enum AIApiError {
         #[source]
         source: anyhow::Error,
     },
+
+    /// Synthesized client-side when a response stream ends without a stream-finished
+    /// event: the server always sends one, but the transport can truncate the response
+    /// between chunks, surfacing as a clean EOF.
+    #[error("Response stream ended unexpectedly before completion.")]
+    UnexpectedEof,
 }
 
 impl From<http_client::ResponseError> for AIApiError {
@@ -305,24 +311,25 @@ impl AIApiError {
         }
     }
 
-    /// Returns whether or not the error can be retried.
-    pub fn is_retryable(&self) -> bool {
-        // Don't retry client errors, except for timeouts and quota limits.
-        fn is_retryable_status(status: http::StatusCode) -> bool {
+    /// Whether the error is worth an automatic recovery attempt — a fresh request may
+    /// succeed. Gates both retry (pre-actions) and resume (post-actions).
+    pub fn is_recoverable(&self) -> bool {
+        // Don't recover from client errors, except timeouts and rate limits.
+        fn is_recoverable_status(status: http::StatusCode) -> bool {
             !status.is_client_error()
                 || status == http::StatusCode::REQUEST_TIMEOUT
                 || status == http::StatusCode::TOO_MANY_REQUESTS
         }
 
         match self {
-            AIApiError::ErrorStatus(status, _) => is_retryable_status(*status),
+            AIApiError::ErrorStatus(status, _) => is_recoverable_status(*status),
             AIApiError::Transport(e) => {
                 if let Some(status) = e.status() {
-                    return is_retryable_status(status);
+                    return is_recoverable_status(status);
                 }
                 true
             }
-            // By default, retry on error.
+            // By default, attempt recovery on error.
             _ => true,
         }
     }
@@ -335,7 +342,8 @@ impl ErrorExt for AIApiError {
             AIApiError::Transport(error) => error.is_actionable(),
             AIApiError::Other(error) => error.is_actionable(),
             AIApiError::Stream { source, .. } => source.is_actionable(),
-            AIApiError::ErrorStatus(_, _) => self.is_retryable(),
+            AIApiError::ErrorStatus(_, _) => self.is_recoverable(),
+            AIApiError::UnexpectedEof => true,
             AIApiError::QuotaLimit { .. }
             | AIApiError::ServerOverloaded
             | AIApiError::NoContextFound => false,
@@ -374,39 +382,6 @@ cfg_if::cfg_if! {
     }
 }
 
-/// An event related to the server API itself (and not a particular API call).
-/// Most errors should be handled in callbacks to individual APIs, rather than sent over the
-/// server API channel.
-#[derive(Clone)]
-pub enum ServerApiEvent {
-    /// We made a staging API call that was blocked, which may indicate a firewall misconfiguration.
-    StagingAccessBlocked,
-    /// The user's access token was invalid, so they need to reauth before they can make
-    /// requests to warp-server.
-    NeedsReauth,
-    /// The user's account has been disabled.
-    UserAccountDisabled,
-    /// The current bearer token was refreshed.
-    AccessTokenRefreshed {
-        #[cfg_attr(target_family = "wasm", allow(dead_code))]
-        token: String,
-    },
-}
-
-impl fmt::Debug for ServerApiEvent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::StagingAccessBlocked => f.write_str("StagingAccessBlocked"),
-            Self::NeedsReauth => f.write_str("NeedsReauth"),
-            Self::UserAccountDisabled => f.write_str("UserAccountDisabled"),
-            Self::AccessTokenRefreshed { .. } => f
-                .debug_struct("AccessTokenRefreshed")
-                .field("token", &"<redacted>")
-                .finish(),
-        }
-    }
-}
-
 /// An API wrapper struct with methods to requests to warp-server.
 ///
 /// Prefer NOT adding new methods directly on this struct; instead, add to one of the existing
@@ -415,18 +390,19 @@ impl fmt::Debug for ServerApiEvent {
 pub struct ServerApi {
     client: Arc<http_client::Client>,
     auth_state: Arc<AuthState>,
-    event_sender: async_channel::Sender<ServerApiEvent>,
+    event_sender: async_channel::Sender<AuthEvent>,
+    auth_session: Arc<AuthSession>,
     // TODO(jeff): Make `TelemetryApi` another type of client, and move it off `ServerApi`.
     telemetry_api: TelemetryApi,
     last_server_time: Arc<Mutex<Option<ServerTime>>>,
-    // We technically use OAuth2 for headless device authentication.
-    oauth_client: self::auth::OAuth2Client,
     /// Cached ambient workload token for requests from ambient agents.
     ambient_workload_token: Arc<Mutex<Option<warp_isolation_platform::WorkloadToken>>>,
     /// The ambient agent task ID for requests from cloud agents.
     ambient_agent_task_id: Arc<RwLock<Option<AmbientAgentTaskId>>>,
     /// The source of agent runs (e.g. CLI, GitHub Action). Set once at startup and immutable.
     agent_source: Option<ai::AgentSource>,
+    /// IAP credential cache for staging server access. [`None`] on production builds.
+    iap_state: Option<Arc<super::iap::IapState>>,
 
     #[cfg(feature = "agent_mode_evals")]
     eval_user_id: Option<i32>,
@@ -435,18 +411,36 @@ pub struct ServerApi {
 impl ServerApi {
     fn new(
         auth_state: Arc<AuthState>,
-        event_sender: async_channel::Sender<ServerApiEvent>,
+        event_sender: async_channel::Sender<AuthEvent>,
         agent_source: Option<ai::AgentSource>,
+        iap_state: Option<Arc<IapState>>,
+        ctx: &mut ModelContext<ServerApiProvider>,
     ) -> Self {
-        let client = Arc::new(http_client::Client::new());
-        Self::new_with_parts(client, auth_state, event_sender, agent_source)
+        let mut client = http_client::Client::new();
+        if let Some(state) = iap_state.as_ref() {
+            client.set_iap_token_provider(state.clone());
+        }
+        let mut telemetry_api = TelemetryApi::new();
+        if ContextFlag::NetworkLogConsole.is_enabled() {
+            super::network_logging::init([&mut client, &mut telemetry_api.client], ctx);
+        }
+        Self::new_with_parts(
+            Arc::new(client),
+            auth_state,
+            event_sender,
+            agent_source,
+            iap_state,
+            telemetry_api,
+        )
     }
 
     fn new_with_parts(
         client: Arc<http_client::Client>,
         auth_state: Arc<AuthState>,
-        event_sender: async_channel::Sender<ServerApiEvent>,
+        event_sender: async_channel::Sender<AuthEvent>,
         agent_source: Option<ai::AgentSource>,
+        iap_state: Option<Arc<IapState>>,
+        telemetry_api: TelemetryApi,
     ) -> Self {
         // We generate a random user ID for evals so we can run evals in parallel.
         #[cfg(feature = "agent_mode_evals")]
@@ -455,18 +449,23 @@ impl ServerApi {
             Some(EVAL_USER_IDS[rand::thread_rng().gen_range(0..EVAL_USER_IDS.len())])
         };
 
-        let oauth_client = Self::create_oauth_client();
+        let auth_session = Arc::new(AuthSession::new(
+            client.clone(),
+            auth_state.clone(),
+            event_sender.clone(),
+        ));
 
         Self {
             client,
             auth_state,
             event_sender,
-            telemetry_api: TelemetryApi::new(),
+            auth_session,
+            telemetry_api,
             last_server_time: Arc::new(Mutex::new(None)),
-            oauth_client,
             ambient_workload_token: Arc::new(Mutex::new(None)),
             ambient_agent_task_id: Arc::new(RwLock::new(None)),
             agent_source,
+            iap_state,
             #[cfg(feature = "agent_mode_evals")]
             eval_user_id,
         }
@@ -478,13 +477,13 @@ impl ServerApi {
         let auth_state = Arc::new(AuthState::new_for_test());
         let client = Arc::new(http_client::Client::new_for_test());
 
-        Self::new_with_parts(client, auth_state, tx, None)
+        Self::new_with_parts(client, auth_state, tx, None, None, TelemetryApi::new())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "skip_login"))]
     fn new_for_test_with_bearer_token(
         bearer_token: Option<String>,
-        event_sender: async_channel::Sender<ServerApiEvent>,
+        event_sender: async_channel::Sender<AuthEvent>,
     ) -> Self {
         let auth_state = Arc::new(AuthState::new_logged_out_for_test());
         if let Some(bearer_token) = bearer_token {
@@ -495,13 +494,17 @@ impl ServerApi {
             auth_state,
             event_sender,
             None,
+            None,
+            TelemetryApi::new(),
         )
     }
 
     pub fn allowed_to_refresh_token(&self) -> bool {
-        self.auth_state
-            .credentials()
-            .is_none_or(|credentials| !credentials.is_externally_managed())
+        self.auth_session.allowed_to_refresh_token()
+    }
+
+    pub async fn get_or_refresh_access_token(&self) -> Result<crate::auth::credentials::AuthToken> {
+        self.auth_session.get_or_refresh_access_token().await
     }
 
     fn access_token_ignoring_validity(&self) -> Option<String> {
@@ -520,6 +523,86 @@ impl ServerApi {
     pub fn set_ambient_agent_task_id(&self, task_id: Option<AmbientAgentTaskId>) {
         *self.ambient_agent_task_id.write() = task_id;
     }
+
+    /// Inspects a response for the IAP challenge header and emits an
+    /// `IapChallengeReceived` event if detected. Returns `true` if the
+    /// response was an IAP challenge.
+    ///
+    /// TODO(isaiah): implement retries on IAP challenge failures so the
+    /// triggering request transparently succeeds after the refresh
+    /// completes instead of bubbling up a one-off error to the caller.
+    fn check_for_iap_challenge(&self, response: &http_client::Response) {
+        if self.iap_state.is_none() {
+            return;
+        }
+        if http_client::iap::is_iap_challenge(response.status(), response.headers()) {
+            log::warn!(
+                "Received IAP challenge (status {}); notifying IapManager",
+                response.status()
+            );
+            if let Err(err) = self.event_sender.try_send(AuthEvent::IapChallengeReceived) {
+                log::warn!("Failed to enqueue IapChallengeReceived event: {err}");
+            }
+        }
+    }
+
+    /// Wraps an eventsource stream so that any `InvalidStatusCode` error
+    /// carrying an IAP challenge header triggers an `IapChallengeReceived`
+    /// event. The original error is passed through unchanged — the
+    /// stream is not transparently reconnected after the refresh.
+    ///
+    /// TODO(isaiah): implement retries on IAP challenge failures so
+    /// streams transparently reconnect after the refresh completes.
+    fn wrap_eventsource_with_iap_detection(
+        &self,
+        stream: http_client::EventSourceStream,
+    ) -> http_client::EventSourceStream {
+        if self.iap_state.is_none() {
+            return stream;
+        }
+        let event_sender = self.event_sender.clone();
+        let wrapped = stream.map(move |event| {
+            if let Err(reqwest_eventsource::Error::InvalidStatusCode(status, ref response)) = event
+            {
+                if http_client::iap::is_iap_challenge(status, response.headers()) {
+                    log::warn!(
+                        "Received IAP challenge on eventsource (status {status}); notifying IapManager"
+                    );
+                    if let Err(err) = event_sender.try_send(AuthEvent::IapChallengeReceived) {
+                        log::warn!(
+                            "Failed to enqueue IapChallengeReceived event from eventsource: {err}"
+                        );
+                    }
+                }
+            }
+            event
+        });
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                wrapped.boxed_local()
+            } else {
+                wrapped.boxed()
+            }
+        }
+    }
+
+    /// Inspects a websocket *handshake* connect error for an IAP challenge and
+    /// enqueues an `IapChallengeReceived` event if detected.
+    #[cfg(not(target_family = "wasm"))]
+    fn report_ws_iap_challenge(&self, err: &anyhow::Error) {
+        if self.iap_state.is_none() {
+            return;
+        }
+        if super::iap::ws_connect_is_iap_challenge(err) {
+            log::warn!("Received IAP challenge on websocket handshake; notifying IapManager");
+            if let Err(err) = self.event_sender.try_send(AuthEvent::IapChallengeReceived) {
+                log::warn!("Failed to enqueue IapChallengeReceived: {err}");
+            }
+        }
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn report_ws_iap_challenge(&self, _err: &anyhow::Error) {}
 
     /// Returns ambient agent headers to attach to requests.
     async fn ambient_agent_headers(&self) -> Result<Vec<(&'static str, String)>> {
@@ -554,139 +637,15 @@ impl ServerApi {
         Ok(headers)
     }
 
-    fn create_oauth_client() -> self::auth::OAuth2Client {
-        let server_root =
-            Url::parse(&ChannelState::server_root_url()).expect("Server root URL must be valid");
-
-        let token_url = server_root
-            .join("/api/v1/oauth/token")
-            .expect("Invalid token URL");
-
-        let device_url = server_root
-            .join("/api/v1/oauth/device/auth")
-            .expect("Invalid device URL");
-
-        oauth2::basic::BasicClient::new(oauth2::ClientId::new("warp-cli".to_string()))
-            .set_token_uri(oauth2::TokenUrl::from_url(token_url))
-            .set_device_authorization_url(oauth2::DeviceAuthorizationUrl::from_url(device_url))
-    }
-
     pub fn send_graphql_request<'a, QF, O: warp_graphql::client::Operation<QF> + Send + 'a>(
         &'a self,
         operation: O,
         timeout: Option<Duration>,
-    ) -> BoxFuture<'a, Result<QF>> {
-        let client = self.client.clone();
-        let event_sender = self.event_sender.clone();
-
-        #[cfg(feature = "agent_mode_evals")]
-        let headers = if let Some(eval_user_id) = self.eval_user_id {
-            std::collections::HashMap::from([(
-                EVAL_USER_ID_HEADER.to_string(),
-                eval_user_id.to_string(),
-            )])
-        } else {
-            Default::default()
-        };
-
-        Box::pin(async move {
-            let operation_name = operation.operation_name().map(Cow::into_owned);
-            let auth_token = self
-                .access_token()
-                .await
-                .context("Failed to get access token for GraphQL request")?;
-
-            #[cfg(feature = "agent_mode_evals")]
-            let mut headers = headers;
-            #[cfg(not(feature = "agent_mode_evals"))]
-            let mut headers = std::collections::HashMap::new();
-
-            for (name, value) in self.ambient_agent_headers().await? {
-                headers.insert(name.to_string(), value);
-            }
-
-            let options = warp_graphql::client::RequestOptions {
-                auth_token: auth_token.bearer_token(),
-                timeout,
-                headers,
-                ..default_request_options()
-            };
-
-            let response = match operation.send_request(client, options).await {
-                Ok(response) => response,
-                Err(GraphQLError::StagingAccessBlocked) => {
-                    let _ = event_sender.try_send(ServerApiEvent::StagingAccessBlocked);
-                    anyhow::bail!(GraphQLError::StagingAccessBlocked)
-                }
-                Err(err) => {
-                    if !self.allowed_to_refresh_token() && Self::is_graphql_auth_rejection(&err) {
-                        anyhow::bail!("server rejected authentication credentials");
-                    }
-                    anyhow::bail!(err)
-                }
-            };
-
-            if let Some(errors) = response.errors.as_ref() {
-                crate::safe_error!(
-                    safe: ("graphql response for {:?} had errors", operation_name),
-                    full: ("graphql response for {:?} had errors {:?}", operation_name, errors)
-                );
-
-                // "User not in context: Not found" comes from warp-server as an error when attempting
-                // to get a required user for some gql field. If we see that, since we have already
-                // successfully refreshed the user's access token earlier in this function, we know
-                // that this error is the result of the user's account being disabled/deleted.
-                if errors
-                    .iter()
-                    .any(|error| error.message.contains("User not in context: Not found"))
-                {
-                    if self.allowed_to_refresh_token() {
-                        log::error!("GraphQL request failed due to unauthenticated user");
-                        let _ = event_sender.try_send(ServerApiEvent::UserAccountDisabled);
-                    } else {
-                        anyhow::bail!("server rejected authentication credentials");
-                    }
-                }
-            }
-
-            response.data.ok_or_else(|| {
-                let operation_label = operation_name
-                    .as_deref()
-                    .unwrap_or("unknown GraphQL operation");
-                let error_messages = response
-                    .errors
-                    .as_ref()
-                    .map(|errors| {
-                        errors
-                            .iter()
-                            .filter_map(|error| {
-                                let message = error.message.trim();
-                                (!message.is_empty()).then(|| message.to_string())
-                            })
-                            .collect::<Vec<_>>()
-                            .join("; ")
-                    })
-                    .filter(|messages| !messages.is_empty());
-
-                match error_messages {
-                    Some(messages) => {
-                        anyhow!("missing response data for {operation_label}: {messages}")
-                    }
-                    None => anyhow!("missing response data for {operation_label}"),
-                }
-            })
-        })
-    }
-
-    fn is_graphql_auth_rejection(err: &GraphQLError) -> bool {
-        match err {
-            GraphQLError::HttpError { status, .. } => {
-                *status == StatusCode::UNAUTHORIZED || *status == StatusCode::FORBIDDEN
-            }
-            GraphQLError::RequestError(_)
-            | GraphQLError::StagingAccessBlocked
-            | GraphQLError::ResponseError(_) => false,
-        }
+    ) -> BoxFuture<'a, Result<QF>>
+    where
+        QF: 'a,
+    {
+        warp_server_client::graphql_helpers::send_graphql_request(self, operation, timeout)
     }
 
     /// Sends a GET request to a public API endpoint.
@@ -734,6 +693,7 @@ impl ServerApi {
         if response.status().is_success() {
             Ok(response)
         } else {
+            self.check_for_iap_challenge(&response);
             // Put `HttpStatusError` in the error chain so shared retry classifiers
             // (`is_transient_http_error`) can distinguish transient 5xx / 408 / 429
             // from permanent 4xx without string-matching the Display output.
@@ -792,7 +752,46 @@ impl ServerApi {
             request = request.header(name, value);
         }
 
-        Ok(request.eventsource())
+        Ok(self.wrap_eventsource_with_iap_detection(request.eventsource()))
+    }
+
+    /// Opens an SSE stream against the ancestor-scoped agent event endpoint.
+    pub async fn stream_agent_events_for_ancestor(
+        &self,
+        ancestor_run_id: &str,
+        include_self: bool,
+        since_sequence: i64,
+    ) -> Result<http_client::EventSourceStream> {
+        debug_assert!(
+            !ancestor_run_id.is_empty(),
+            "ancestor_run_id must not be empty"
+        );
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for SSE stream")?;
+
+        let include_self_param = if include_self {
+            "&include_self=true"
+        } else {
+            ""
+        };
+        let url = format!(
+            "{}/api/v1/agent/events/stream?ancestor_run_id={}&since={since_sequence}{include_self_param}",
+            ChannelState::rtc_http_url(),
+            urlencoding::encode(ancestor_run_id),
+        );
+
+        let mut request = self.client.get(&url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        Ok(self.wrap_eventsource_with_iap_detection(request.eventsource()))
     }
 
     pub async fn stream_agent_events_for_task(
@@ -826,7 +825,7 @@ impl ServerApi {
             request = request.header(name, value);
         }
 
-        Ok(request.eventsource())
+        Ok(self.wrap_eventsource_with_iap_detection(request.eventsource()))
     }
 
     /// Sends a POST request to a public API endpoint and returns the raw response on success.
@@ -862,6 +861,7 @@ impl ServerApi {
         if response.status().is_success() {
             Ok(response)
         } else {
+            self.check_for_iap_challenge(&response);
             Err(Self::error_from_response(response).await)
         }
     }
@@ -1361,7 +1361,8 @@ impl ServerApi {
             }
         }
 
-        let output_stream = request.eventsource().filter_map(|event| async {
+        let raw_stream = self.wrap_eventsource_with_iap_detection(request.eventsource());
+        let output_stream = raw_stream.filter_map(|event| async {
             let result = match event {
                 Ok(reqwest_eventsource::Event::Message(message_event)) => {
                     match BASE64_URL_SAFE.decode(message_event.data.trim_matches('"')) {
@@ -1386,6 +1387,33 @@ impl ServerApi {
             .map(|item| item.map_err(Arc::new));
             result
         });
+
+        // Once we get the init event, add some identifiers to the trace span.
+        let output_stream = output_stream.inspect(|event| {
+            if let Ok(event) = &event {
+                match &event.r#type {
+                    Some(warp_multi_agent_api::response_event::Type::Init(init)) => {
+                        tracing::info!("StreamInit");
+                        tracing::Span::current().record("conversation_id", &init.conversation_id);
+                        tracing::Span::current().record("request_id", &init.request_id);
+                        tracing::Span::current().record("run_id", &init.run_id);
+                    }
+                    Some(warp_multi_agent_api::response_event::Type::Finished(_finished)) => {
+                        tracing::info!("StreamFinished");
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        // Wrap the output stream with a trace span.
+        let output_stream = output_stream.instrument(tracing::info_span!(
+            "generate_multi_agent_output",
+            tags.cloud_agent = true,
+            conversation_id = tracing::field::Empty,
+            request_id = tracing::field::Empty,
+            run_id = tracing::field::Empty,
+        ));
 
         cfg_if::cfg_if! {
             if #[cfg(target_family = "wasm")] {
@@ -1420,6 +1448,10 @@ impl ServerApi {
         let time_endpoint = format!("{}/current_time", ChannelState::server_root_url());
         log::info!("Sending server time request to {}", &time_endpoint);
         let res = self.client.get(&time_endpoint).send().await?;
+
+        if !res.status().is_success() {
+            self.check_for_iap_challenge(&res);
+        }
 
         match res.status() {
             StatusCode::OK => {
@@ -1490,6 +1522,9 @@ impl ServerApi {
         }
 
         let response = request_builder.send().await?;
+        if !response.status().is_success() {
+            self.check_for_iap_challenge(&response);
+        }
         let versions: ChannelVersions = response.json().await?;
         log::info!("Received channel versions from Warp server: {versions}");
         Ok(versions)
@@ -1500,34 +1535,33 @@ impl ServerApi {
 /// or any of its implemented trait objects.
 pub struct ServerApiProvider {
     server_api: Arc<ServerApi>,
+    auth_client: Arc<dyn AuthClient>,
 }
 
 impl ServerApiProvider {
     /// Constructs a new ServerApiProvider.
+    #[cfg_attr(target_family = "wasm", allow(unused_variables))]
     pub fn new(
         auth_state: Arc<AuthState>,
         agent_source: Option<ai::AgentSource>,
+        iap_state: Option<Arc<super::iap::IapState>>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (event_sender, event_receiver) = async_channel::bounded(10);
-        let mut server_api = ServerApi::new(auth_state.clone(), event_sender, agent_source);
 
-        if ContextFlag::NetworkLogConsole.is_enabled() {
-            super::network_logging::init(
-                [
-                    Arc::get_mut(&mut server_api.client)
-                        .expect("guaranteed there is only one copy of client"),
-                    &mut server_api.telemetry_api.client,
-                ],
-                ctx,
-            );
-        }
+        let server_api = ServerApi::new(
+            auth_state.clone(),
+            event_sender,
+            agent_source,
+            iap_state,
+            ctx,
+        );
 
         ctx.spawn_stream_local(
             event_receiver,
             move |_, event, ctx| {
                 match event {
-                    ServerApiEvent::UserAccountDisabled => {
+                    AuthEvent::UserAccountDisabled => {
                         // We dispatch a global action here because the log out code requires
                         // `server_api`, causing a circular model reference panic when it calls
                         // `ServerApiProvider` to get access.
@@ -1535,13 +1569,17 @@ impl ServerApiProvider {
                         // to events; it's prone to these sorts of circular reference issues.
                         ctx.dispatch_global_action("app:log_out", ());
                     }
-                    ServerApiEvent::NeedsReauth => {
+                    AuthEvent::NeedsReauth => {
                         // AuthManager depends on a reference to ServerApi, so ServerApi can't easily
                         // hold a ref to AuthManager. To get around this, we emit an event on ServerApi
                         // and handle calling the AuthManager here instead.
                         AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
                             auth_manager.set_needs_reauth(true, ctx);
                         });
+                    }
+                    AuthEvent::IapChallengeReceived => {
+                        IapManager::handle(ctx)
+                            .update(ctx, |manager, ctx| manager.handle_challenge(ctx));
                     }
                     // Re-emit the event for subscribers.
                     // TODO: we probably want a different type for the event emitted to subscribers
@@ -1551,8 +1589,14 @@ impl ServerApiProvider {
             },
             |_, _| {},
         );
+        let server_api = Arc::new(server_api);
+        let auth_client = Arc::new(AuthClientImpl::new(
+            server_api.clone(),
+            server_api.auth_session.clone(),
+        ));
         Self {
-            server_api: Arc::new(server_api),
+            server_api,
+            auth_client,
         }
     }
 
@@ -1572,8 +1616,14 @@ impl ServerApiProvider {
     /// Constructs a new SeverApiProvider for tests.
     #[cfg(test)]
     pub fn new_for_test() -> Self {
+        let server_api = Arc::new(ServerApi::new_for_test());
+        let auth_client = Arc::new(AuthClientImpl::new(
+            server_api.clone(),
+            server_api.auth_session.clone(),
+        ));
         Self {
-            server_api: Arc::new(ServerApi::new_for_test()),
+            server_api,
+            auth_client,
         }
     }
 
@@ -1584,7 +1634,7 @@ impl ServerApiProvider {
     }
 
     pub fn get_auth_client(&self) -> Arc<dyn AuthClient> {
-        self.server_api.clone()
+        self.auth_client.clone()
     }
 
     pub fn get_referrals_client(&self) -> Arc<dyn ReferralsClient> {
@@ -1632,222 +1682,7 @@ impl ServerApiProvider {
 }
 
 impl Entity for ServerApiProvider {
-    type Event = ServerApiEvent;
+    type Event = AuthEvent;
 }
 
 impl SingletonEntity for ServerApiProvider {}
-
-#[cfg(test)]
-mod tests {
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use cynic::{GraphQlError, GraphQlResponse};
-    use futures::executor::block_on;
-
-    use super::*;
-
-    struct FakeGraphqlOperation {
-        expected_auth_token: Option<String>,
-        send_count: Arc<AtomicUsize>,
-        result: FakeGraphqlResult,
-    }
-
-    enum FakeGraphqlResult {
-        Success,
-        Rejected(StatusCode),
-        ResponseErrors(Vec<String>),
-    }
-
-    impl FakeGraphqlOperation {
-        fn successful(expected_auth_token: Option<&str>, send_count: Arc<AtomicUsize>) -> Self {
-            Self {
-                expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
-                send_count,
-                result: FakeGraphqlResult::Success,
-            }
-        }
-
-        fn rejected(
-            expected_auth_token: Option<&str>,
-            send_count: Arc<AtomicUsize>,
-            status: StatusCode,
-        ) -> Self {
-            Self {
-                expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
-                send_count,
-                result: FakeGraphqlResult::Rejected(status),
-            }
-        }
-
-        fn response_errors(
-            expected_auth_token: Option<&str>,
-            send_count: Arc<AtomicUsize>,
-            messages: Vec<String>,
-        ) -> Self {
-            Self {
-                expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
-                send_count,
-                result: FakeGraphqlResult::ResponseErrors(messages),
-            }
-        }
-    }
-
-    impl warp_graphql::client::Operation<()> for FakeGraphqlOperation {
-        fn operation_name(&self) -> Option<Cow<'_, str>> {
-            Some(Cow::Borrowed("FakeGraphqlOperation"))
-        }
-
-        fn send_request(
-            self,
-            _client: Arc<http_client::Client>,
-            options: warp_graphql::client::RequestOptions,
-        ) -> Pin<
-            Box<
-                dyn Future<Output = std::result::Result<GraphQlResponse<()>, GraphQLError>>
-                    + Send
-                    + 'static,
-            >,
-        >
-        where
-            Self: Sized,
-        {
-            Box::pin(async move {
-                assert_eq!(options.auth_token, self.expected_auth_token);
-                self.send_count.fetch_add(1, Ordering::SeqCst);
-                match self.result {
-                    FakeGraphqlResult::Success => Ok(GraphQlResponse {
-                        data: Some(()),
-                        errors: None,
-                    }),
-                    FakeGraphqlResult::Rejected(status) => Err(GraphQLError::HttpError {
-                        status,
-                        body: "redacted auth rejection".to_string(),
-                    }),
-                    FakeGraphqlResult::ResponseErrors(messages) => Ok(GraphQlResponse {
-                        data: None,
-                        errors: Some(
-                            messages
-                                .into_iter()
-                                .map(|message| GraphQlError::new(message, None, None, None))
-                                .collect(),
-                        ),
-                    }),
-                }
-            })
-        }
-    }
-
-    fn has_error_message(error: &anyhow::Error, expected: &str) -> bool {
-        error.chain().any(|cause| cause.to_string() == expected)
-    }
-
-    #[test]
-    fn send_graphql_request_refresh_enabled_uses_auth_state() {
-        let server_api = ServerApi::new_for_test();
-        let send_count = Arc::new(AtomicUsize::new(0));
-
-        block_on(server_api.send_graphql_request(
-            FakeGraphqlOperation::successful(None, send_count.clone()),
-            None,
-        ))
-        .unwrap();
-
-        assert!(server_api.allowed_to_refresh_token());
-        assert_eq!(send_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn send_graphql_request_refresh_disabled_uses_provided_bearer_token() {
-        let (event_sender, _) = async_channel::unbounded();
-        let server_api = ServerApi::new_for_test_with_bearer_token(
-            Some("daemon-token".to_string()),
-            event_sender,
-        );
-        let send_count = Arc::new(AtomicUsize::new(0));
-
-        block_on(server_api.send_graphql_request(
-            FakeGraphqlOperation::successful(Some("daemon-token"), send_count.clone()),
-            None,
-        ))
-        .unwrap();
-
-        assert!(!server_api.allowed_to_refresh_token());
-        assert_eq!(send_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn send_graphql_request_refresh_disabled_missing_token_returns_auth_error() {
-        let (event_sender, event_receiver) = async_channel::unbounded();
-        let server_api = ServerApi::new_for_test_with_bearer_token(None, event_sender);
-        let send_count = Arc::new(AtomicUsize::new(0));
-
-        let error = block_on(server_api.send_graphql_request(
-            FakeGraphqlOperation::successful(Some("unused-token"), send_count.clone()),
-            None,
-        ))
-        .unwrap_err();
-
-        assert!(has_error_message(
-            &error,
-            "missing authentication credentials"
-        ));
-        assert_eq!(send_count.load(Ordering::SeqCst), 0);
-        assert!(event_receiver.try_recv().is_err());
-    }
-
-    #[test]
-    fn send_graphql_request_refresh_disabled_auth_rejection_is_credentials_rejected() {
-        let (event_sender, event_receiver) = async_channel::unbounded();
-        let server_api = ServerApi::new_for_test_with_bearer_token(
-            Some("daemon-token".to_string()),
-            event_sender,
-        );
-        let send_count = Arc::new(AtomicUsize::new(0));
-
-        let error = block_on(server_api.send_graphql_request(
-            FakeGraphqlOperation::rejected(
-                Some("daemon-token"),
-                send_count.clone(),
-                StatusCode::UNAUTHORIZED,
-            ),
-            None,
-        ))
-        .unwrap_err();
-
-        assert!(has_error_message(
-            &error,
-            "server rejected authentication credentials"
-        ));
-        assert_eq!(send_count.load(Ordering::SeqCst), 1);
-        assert!(event_receiver.try_recv().is_err());
-    }
-
-    #[test]
-    fn send_graphql_request_refresh_disabled_user_not_in_context_is_credentials_rejected() {
-        let (event_sender, event_receiver) = async_channel::unbounded();
-        let server_api = ServerApi::new_for_test_with_bearer_token(
-            Some("daemon-token".to_string()),
-            event_sender,
-        );
-        let send_count = Arc::new(AtomicUsize::new(0));
-
-        let error = block_on(server_api.send_graphql_request(
-            FakeGraphqlOperation::response_errors(
-                Some("daemon-token"),
-                send_count.clone(),
-                vec!["User not in context: Not found".to_string()],
-            ),
-            None,
-        ))
-        .unwrap_err();
-
-        assert!(has_error_message(
-            &error,
-            "server rejected authentication credentials"
-        ));
-        assert_eq!(send_count.load(Ordering::SeqCst), 1);
-        assert!(event_receiver.try_recv().is_err());
-    }
-}

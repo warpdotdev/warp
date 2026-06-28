@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use warp_core::ui::appearance::Appearance;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::elements::{
     Align, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CrossAxisAlignment, Expanded, Flex, MainAxisAlignment, MainAxisSize, ParentElement,
@@ -55,7 +56,7 @@ impl std::fmt::Display for AIFactPage {
 pub enum AIFactViewEvent {
     Pane(PaneEvent),
     OpenSettings,
-    OpenFile(PathBuf),
+    OpenFile(LocalOrRemotePath),
     InitializeProject(PathBuf),
 }
 

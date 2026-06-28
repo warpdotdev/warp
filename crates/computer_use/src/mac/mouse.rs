@@ -7,7 +7,7 @@ use objc2_core_graphics::{
     CGScrollEventUnit,
 };
 use pathfinder_geometry::vector::Vector2I;
-use warpui::r#async::Timer;
+use warpui_core::r#async::Timer;
 
 use super::util::main_display_scale_factor;
 use crate::{MouseButton, ScrollDirection, ScrollDistance};

@@ -2,21 +2,22 @@ use prost::Message;
 
 use super::*;
 use crate::proto::{
-    client_message, server_message, ClientMessage, Initialize, InitializeResponse, ServerMessage,
+    client_message, server_message, session_scoped_request, BundledSkillProto,
+    BundledSkillsSnapshot, ClientMessage, Initialize, InitializeResponse, ServerMessage,
 };
 
 #[tokio::test]
 async fn round_trip_client_message() {
-    let msg = ClientMessage {
-        request_id: "test-123".to_string(),
-        message: Some(client_message::Message::Initialize(Initialize {
+    let msg = ClientMessage::session_scoped(
+        "test-123".to_string(),
+        session_scoped_request::Message::Initialize(Initialize {
             auth_token: String::new(),
             user_id: String::new(),
             user_email: String::new(),
             crash_reporting_enabled: true,
             codebase_index_limits: None,
-        })),
-    };
+        }),
+    );
 
     let mut buf = Vec::new();
     write_client_message(&mut buf, &msg).await.unwrap();
@@ -26,7 +27,7 @@ async fn round_trip_client_message() {
 
     assert_eq!(decoded.request_id, "test-123");
     match decoded.message {
-        Some(client_message::Message::Initialize(_)) => {}
+        Some(client_message::Message::SessionScoped(_)) => {}
         other => panic!("unexpected message variant: {other:?}"),
     }
 }
@@ -53,6 +54,49 @@ async fn round_trip_server_message() {
     match decoded.message {
         Some(server_message::Message::InitializeResponse(resp)) => {
             assert_eq!(resp.server_version, "0.1.0");
+            assert_eq!(resp.host_id, "test-host");
+        }
+        other => panic!("unexpected message variant: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn round_trip_bundled_skills_snapshot() {
+    let msg = ServerMessage {
+        request_id: String::new(),
+        message: Some(server_message::Message::BundledSkillsSnapshot(
+            BundledSkillsSnapshot {
+                skills: vec![BundledSkillProto {
+                    id: "pr-comments".to_string(),
+                    name: "pr-comments".to_string(),
+                    description: "Fetch PR comments".to_string(),
+                    path: "/home/user/.warp/remote-server/bundled_resources/bundled/skills/pr-comments/SKILL.md".to_string(),
+                    content: "---\nname: pr-comments\n---\nbody".to_string(),
+                    requires_mcp: None,
+                }, BundledSkillProto {
+                    id: "figma-skill".to_string(),
+                    name: "figma-skill".to_string(),
+                    description: "Figma helper".to_string(),
+                    path: "/path/SKILL.md".to_string(),
+                    content: "body".to_string(),
+                    requires_mcp: Some("figma".to_string()),
+                }],
+            },
+        )),
+    };
+
+    let mut buf = Vec::new();
+    write_server_message(&mut buf, &msg).await.unwrap();
+
+    let mut cursor = &buf[..];
+    let decoded: ServerMessage = read_server_message(&mut cursor).await.unwrap();
+
+    match decoded.message {
+        Some(server_message::Message::BundledSkillsSnapshot(snapshot)) => {
+            assert_eq!(snapshot.skills.len(), 2);
+            assert_eq!(snapshot.skills[0].id, "pr-comments");
+            assert_eq!(snapshot.skills[0].requires_mcp, None);
+            assert_eq!(snapshot.skills[1].requires_mcp, Some("figma".to_string()));
         }
         other => panic!("unexpected message variant: {other:?}"),
     }
@@ -122,16 +166,16 @@ async fn write_message_too_large() {
 
 #[test]
 fn try_extract_request_id_from_valid_message() {
-    let msg = ClientMessage {
-        request_id: "abc-123".to_string(),
-        message: Some(client_message::Message::Initialize(Initialize {
+    let msg = ClientMessage::session_scoped(
+        "abc-123".to_string(),
+        session_scoped_request::Message::Initialize(Initialize {
             auth_token: String::new(),
             user_id: String::new(),
             user_email: String::new(),
             crash_reporting_enabled: true,
             codebase_index_limits: None,
-        })),
-    };
+        }),
+    );
     let buf = msg.encode_to_vec();
     assert_eq!(try_extract_request_id(&buf), Some("abc-123".to_string()));
 }

@@ -64,6 +64,7 @@ pub enum AuthSecretFetchState {
 #[derive(Debug, Clone)]
 pub struct AuthSecretEntry {
     pub name: String,
+    pub owner: SecretOwner,
 }
 
 pub enum HarnessAvailabilityEvent {
@@ -79,6 +80,17 @@ pub enum HarnessAvailabilityEvent {
         name: String,
     },
     AuthSecretCreationFailed {
+        error: String,
+    },
+    AuthSecretDeleted {
+        harness: Harness,
+        name: String,
+        owner: SecretOwner,
+    },
+    AuthSecretDeletionFailed {
+        harness: Harness,
+        name: String,
+        owner: SecretOwner,
         error: String,
     },
 }
@@ -210,7 +222,10 @@ impl HarnessAvailabilityModel {
                 RequestState::RequestSucceeded(secrets) => {
                     let entries = secrets
                         .into_iter()
-                        .map(|s| AuthSecretEntry { name: s.name })
+                        .map(|s| AuthSecretEntry {
+                            owner: secret_owner_from_space(&s.owner),
+                            name: s.name,
+                        })
                         .collect();
                     me.auth_secrets
                         .insert(harness, AuthSecretFetchState::Loaded(entries));
@@ -262,6 +277,7 @@ impl HarnessAvailabilityModel {
             Ok(secret) => {
                 let entry = AuthSecretEntry {
                     name: secret.name.clone(),
+                    owner: secret_owner_from_space(&secret.owner),
                 };
                 match me.auth_secrets.get_mut(&harness) {
                     Some(AuthSecretFetchState::Loaded(entries)) => {
@@ -281,6 +297,43 @@ impl HarnessAvailabilityModel {
                 let msg = e.to_string();
                 report_error!(e.context("Failed to create harness auth secret"));
                 ctx.emit(HarnessAvailabilityEvent::AuthSecretCreationFailed { error: msg });
+            }
+        });
+    }
+
+    pub fn delete_auth_secret(
+        &mut self,
+        harness: Harness,
+        name: String,
+        owner: SecretOwner,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let manager = ManagedSecretManager::handle(ctx);
+        let delete_future = manager
+            .as_ref(ctx)
+            .delete_secret(owner.clone(), name.clone());
+        ctx.spawn(delete_future, move |me, result, ctx| match result {
+            Ok(()) => {
+                if let Some(AuthSecretFetchState::Loaded(entries)) =
+                    me.auth_secrets.get_mut(&harness)
+                {
+                    remove_deleted_auth_secret_entry(entries, &name, &owner);
+                }
+                ctx.emit(HarnessAvailabilityEvent::AuthSecretDeleted {
+                    harness,
+                    name,
+                    owner,
+                });
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                report_error!(e.context("Failed to delete harness auth secret"));
+                ctx.emit(HarnessAvailabilityEvent::AuthSecretDeletionFailed {
+                    harness,
+                    name,
+                    owner,
+                    error: msg,
+                });
             }
         });
     }
@@ -334,6 +387,22 @@ fn get_cached(ctx: &ModelContext<HarnessAvailabilityModel>) -> Option<Vec<Harnes
     serde_json::from_str::<Vec<HarnessAvailability>>(&raw).ok()
 }
 
+fn secret_owner_from_space(space: &warp_graphql::object::Space) -> SecretOwner {
+    match space.type_ {
+        warp_graphql::object::SpaceType::Team => SecretOwner::Team {
+            team_uid: space.uid.clone().into_inner(),
+        },
+        warp_graphql::object::SpaceType::User => SecretOwner::CurrentUser,
+    }
+}
+
+fn remove_deleted_auth_secret_entry(
+    entries: &mut Vec<AuthSecretEntry>,
+    name: &str,
+    owner: &SecretOwner,
+) {
+    entries.retain(|entry| entry.name.as_str() != name || &entry.owner != owner);
+}
 fn harness_to_graphql_harness(harness: Harness) -> Option<warp_graphql::ai::AgentHarness> {
     match harness {
         Harness::Oz => Some(warp_graphql::ai::AgentHarness::Oz),

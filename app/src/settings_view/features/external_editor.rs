@@ -24,7 +24,7 @@ use crate::{report_if_error, send_telemetry_from_ctx};
 const TABBED_FILE_VIEWER_TOGGLE_HEADER: &str = "Group files into single editor pane";
 const TABBED_FILE_VIEWER_TOGGLE_DESCRIPTION: &str = "When this setting is on, any files opened in the same tab will be automatically grouped into a single editor pane.";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ExternalEditorAction {
     SetEditor(EditorChoice),
     SetCodePanelsEditor(EditorChoice),

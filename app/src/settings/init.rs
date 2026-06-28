@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use settings::{Setting as _, SettingsManager};
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
@@ -14,8 +16,8 @@ use super::{
     AISettings, AccessibilitySettings, AliasExpansionSettings, AppEditorSettings,
     BlockVisibilitySettings, ChangelogSettings, CodeSettings, DebugSettings, EmacsBindingsSettings,
     FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings,
-    InputSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings, SelectionSettings,
-    SshSettings, ThemeSettings, VimBannerSettings, WarpDrivePrivacySettings,
+    InputSettings, LocalControlSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
+    SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings, WarpDrivePrivacySettings,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::banner::BannerState;
@@ -94,6 +96,9 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     EmacsBindingsSettings::register(ctx);
     SameLinePromptBlockSettings::register(ctx);
     SemanticSelection::register(ctx);
+    if FeatureFlag::WarpControlCli.is_enabled() {
+        LocalControlSettings::register(ctx);
+    }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     super::LinuxAppConfiguration::register(ctx);
@@ -330,11 +335,14 @@ pub fn init_public_user_preferences() -> (user_preferences::Model, Option<user_p
 /// 3. The migration-complete marker is absent from the native store
 ///    (handles the case where a user deletes `settings.toml` to reset).
 fn needs_settings_file_migration(ctx: &AppContext) -> bool {
+    needs_settings_file_migration_for_path(ctx, &super::user_preferences_toml_file_path())
+}
+
+fn needs_settings_file_migration_for_path(ctx: &AppContext, settings_file_path: &Path) -> bool {
     if !FeatureFlag::SettingsFile.is_enabled() {
         return false;
     }
-
-    if super::user_preferences_toml_file_path().exists() {
+    if settings_file_path.exists() {
         return false;
     }
 

@@ -613,8 +613,9 @@ jobs:
         run:
           cargo metadata --locked --format-version=1 > ${{ matrix.null_device }} || (echo "::error::Cargo.lock is out-of-date with Cargo.toml. Run 'cargo check' to update." && exit 1)
 
-      - name: Run cargo fmt
-        run: cargo fmt --check
+      - name: Run ./script/format
+        shell: bash
+        run: ./script/format --check
 
       - name: Run cargo clippy
         shell: bash
@@ -699,6 +700,9 @@ jobs:
             exit 1
           fi
 
+      - name: Check for inline Rust test modules
+        run: ./script/check_no_inline_test_modules
+
   wasm-lint:
     name: Formatting + Clippy (wasm)
     timeout-minutes: 20
@@ -724,8 +728,15 @@ jobs:
         run:
           cargo metadata --locked --format-version=1 >/dev/null || (echo "::error::Cargo.lock is out-of-date with Cargo.toml. Run 'cargo check' to update." && exit 1)
 
-      - name: Run cargo fmt
-        run: cargo fmt --check
+      - name: Check Rust formatting
+        shell: bash
+        run: |
+          # TODO(vorporeal): Once people have gotten used to ./script/format, in a week or so,
+          # we can have CI enforce the new formatting.
+          #./script/format --check
+
+          # Until then, we'll keep running the traditional formatting check.
+          cargo fmt --check
 
       - name: Run cargo clippy
         run: |

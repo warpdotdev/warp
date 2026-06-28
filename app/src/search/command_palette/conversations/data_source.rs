@@ -195,9 +195,7 @@ impl SyncDataSource for DataSource {
             self.searcher
                 .search(&query.text.trim().to_lowercase(), app)
                 .map_err(|err| {
-                    let search_error = DataSourceSearchError {
-                        message: err.to_string(),
-                    };
+                    let search_error = DataSourceSearchError::new(err.to_string());
                     Box::new(search_error) as DataSourceRunErrorWrapper
                 })
         };

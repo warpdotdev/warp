@@ -4,19 +4,23 @@ use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode};
 use ai::agent::action_result::StartAgentVersion;
 use ai::skills::SkillReference;
 use settings::Setting;
-use warp_core::features::FeatureFlag;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    default_collapsible_state_for_orchestration_action, received_message_collapsible_id,
-    CollapsibleElementState, CollapsibleExpansionState,
+    default_collapsible_state_for_orchestration_action,
+    default_collapsible_state_for_orchestration_message, received_message_collapsible_id,
+    user_avatar_info_for_conversation_creator, CollapsibleElementState, CollapsibleExpansionState,
+    UserAvatarInfo,
 };
 use crate::ai::agent::{AIAgentActionType, StartAgentExecutionMode};
 use crate::ai::blocklist::action_model::{
     compose_run_agents_child_prompt, run_agents_to_start_agent_mode,
 };
-use crate::settings::AISettings;
+use crate::auth::UserUid;
+use crate::settings::{AISettings, OrchestrationMessageDisplayMode};
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 
 #[test]
 fn reasoning_auto_collapses_when_user_has_not_manually_toggled() {
@@ -45,6 +49,37 @@ fn collapsed_initializer_starts_collapsed() {
 }
 
 #[test]
+fn orchestration_show_and_collapse_collapses_after_finish() {
+    let mut state = default_collapsible_state_for_orchestration_message(
+        OrchestrationMessageDisplayMode::ShowAndCollapse,
+    );
+
+    state.finish_orchestration_message(OrchestrationMessageDisplayMode::ShowAndCollapse);
+
+    assert!(matches!(
+        state.expansion_state,
+        CollapsibleExpansionState::Collapsed
+    ));
+}
+
+#[test]
+fn orchestration_always_show_stays_expanded_after_finish() {
+    let mut state = default_collapsible_state_for_orchestration_message(
+        OrchestrationMessageDisplayMode::AlwaysShow,
+    );
+
+    state.finish_orchestration_message(OrchestrationMessageDisplayMode::AlwaysShow);
+
+    assert!(matches!(
+        state.expansion_state,
+        CollapsibleExpansionState::Expanded {
+            is_finished: true,
+            scroll_pinned_to_bottom: false
+        }
+    ));
+}
+
+#[test]
 fn orchestration_send_message_starts_collapsed() {
     let state = default_collapsible_state_for_orchestration_action(
         &AIAgentActionType::SendMessageToAgent {
@@ -52,6 +87,7 @@ fn orchestration_send_message_starts_collapsed() {
             subject: "Status".to_string(),
             message: "Body".to_string(),
         },
+        OrchestrationMessageDisplayMode::AlwaysCollapse,
     )
     .expect("send-message actions should get a collapsible state");
 
@@ -62,16 +98,54 @@ fn orchestration_send_message_starts_collapsed() {
 }
 
 #[test]
-fn orchestration_start_agent_keeps_expanded_default() {
-    let state =
-        default_collapsible_state_for_orchestration_action(&AIAgentActionType::StartAgent {
-            version: StartAgentVersion::V1,
-            name: "child-agent".to_string(),
-            prompt: "Investigate".to_string(),
-            execution_mode: StartAgentExecutionMode::local_harness("claude-code".to_string()),
-            lifecycle_subscription: None,
-        })
+fn orchestration_start_agent_prompt_stays_expanded_for_all_message_modes() {
+    for display_mode in [
+        OrchestrationMessageDisplayMode::ShowAndCollapse,
+        OrchestrationMessageDisplayMode::AlwaysCollapse,
+        OrchestrationMessageDisplayMode::AlwaysShow,
+    ] {
+        let state = default_collapsible_state_for_orchestration_action(
+            &AIAgentActionType::StartAgent {
+                version: StartAgentVersion::V1,
+                name: "child-agent".to_string(),
+                prompt: "Investigate".to_string(),
+                execution_mode: StartAgentExecutionMode::local_harness("claude-code".to_string()),
+                lifecycle_subscription: None,
+            },
+            display_mode,
+        )
         .expect("start-agent actions should get a collapsible state");
+
+        assert!(matches!(
+            state.expansion_state,
+            CollapsibleExpansionState::Expanded {
+                is_finished: false,
+                scroll_pinned_to_bottom: true
+            }
+        ));
+    }
+}
+
+#[test]
+fn non_orchestration_actions_do_not_get_collapsible_state_defaults() {
+    assert!(default_collapsible_state_for_orchestration_action(
+        &AIAgentActionType::OpenCodeReview,
+        OrchestrationMessageDisplayMode::AlwaysCollapse,
+    )
+    .is_none());
+}
+
+#[test]
+fn orchestration_show_and_collapse_starts_sent_messages_expanded() {
+    let state = default_collapsible_state_for_orchestration_action(
+        &AIAgentActionType::SendMessageToAgent {
+            addresses: vec!["child-agent".to_string()],
+            subject: "Status".to_string(),
+            message: "Body".to_string(),
+        },
+        OrchestrationMessageDisplayMode::ShowAndCollapse,
+    )
+    .expect("send-message actions should get a collapsible state");
 
     assert!(matches!(
         state.expansion_state,
@@ -83,11 +157,56 @@ fn orchestration_start_agent_keeps_expanded_default() {
 }
 
 #[test]
-fn non_orchestration_actions_do_not_get_collapsible_state_defaults() {
-    assert!(
-        default_collapsible_state_for_orchestration_action(&AIAgentActionType::OpenCodeReview)
-            .is_none()
+fn orchestration_always_show_starts_sent_messages_expanded() {
+    let state = default_collapsible_state_for_orchestration_action(
+        &AIAgentActionType::SendMessageToAgent {
+            addresses: vec!["child-agent".to_string()],
+            subject: "Status".to_string(),
+            message: "Body".to_string(),
+        },
+        OrchestrationMessageDisplayMode::AlwaysShow,
+    )
+    .expect("send-message actions should get a collapsible state");
+
+    assert!(matches!(
+        state.expansion_state,
+        CollapsibleExpansionState::Expanded {
+            is_finished: false,
+            scroll_pinned_to_bottom: true
+        }
+    ));
+}
+
+#[test]
+fn orchestration_received_messages_follow_initial_message_display_mode() {
+    let show_and_collapse = default_collapsible_state_for_orchestration_message(
+        OrchestrationMessageDisplayMode::ShowAndCollapse,
     );
+    assert!(matches!(
+        show_and_collapse.expansion_state,
+        CollapsibleExpansionState::Expanded {
+            is_finished: false,
+            scroll_pinned_to_bottom: true
+        }
+    ));
+    let collapsed = default_collapsible_state_for_orchestration_message(
+        OrchestrationMessageDisplayMode::AlwaysCollapse,
+    );
+    assert!(matches!(
+        collapsed.expansion_state,
+        CollapsibleExpansionState::Collapsed
+    ));
+    let expanded = default_collapsible_state_for_orchestration_message(
+        OrchestrationMessageDisplayMode::AlwaysShow,
+    );
+
+    assert!(matches!(
+        expanded.expansion_state,
+        CollapsibleExpansionState::Expanded {
+            is_finished: false,
+            scroll_pinned_to_bottom: true
+        }
+    ));
 }
 
 #[test]
@@ -167,6 +286,66 @@ fn received_message_collapsible_id_prefixes_row_ids() {
 }
 
 #[test]
+fn user_avatar_info_prefers_conversation_creator_profile() {
+    App::test((), |app| async move {
+        let creator = UserProfileWithUID {
+            firebase_uid: UserUid::new("creator-uid"),
+            display_name: Some("Creator Name".to_string()),
+            email: "creator@example.com".to_string(),
+            photo_url: "https://example.com/creator.png".to_string(),
+        };
+        let fallback = UserAvatarInfo {
+            display_name: "Current User".to_string(),
+            profile_image_path: Some("https://example.com/current.png".to_string()),
+        };
+
+        app.read(|ctx| {
+            let avatar_info = user_avatar_info_for_conversation_creator(
+                Some(&creator),
+                Some("fallback-uid"),
+                fallback,
+                ctx,
+            );
+
+            assert_eq!(avatar_info.display_name, "Creator Name");
+            assert_eq!(
+                avatar_info.profile_image_path.as_deref(),
+                Some("https://example.com/creator.png")
+            );
+        });
+    });
+}
+
+#[test]
+fn user_avatar_info_uses_cached_profile_for_creator_uid() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| {
+            UserProfiles::new(vec![UserProfileWithUID {
+                firebase_uid: UserUid::new("creator-uid"),
+                display_name: Some("Cached Creator".to_string()),
+                email: "cached@example.com".to_string(),
+                photo_url: "https://example.com/cached.png".to_string(),
+            }])
+        });
+        let fallback = UserAvatarInfo {
+            display_name: "Current User".to_string(),
+            profile_image_path: Some("https://example.com/current.png".to_string()),
+        };
+
+        app.read(|ctx| {
+            let avatar_info =
+                user_avatar_info_for_conversation_creator(None, Some("creator-uid"), fallback, ctx);
+
+            assert_eq!(avatar_info.display_name, "Cached Creator");
+            assert_eq!(
+                avatar_info.profile_image_path.as_deref(),
+                Some("https://example.com/cached.png")
+            );
+        });
+    });
+}
+
+#[test]
 fn compose_child_prompt_concatenates_when_both_non_empty() {
     let composed = compose_run_agents_child_prompt("base", "do X");
     assert_eq!(composed, "base\n\ndo X");
@@ -208,7 +387,9 @@ fn agent_cfg() -> RunAgentsAgentRunConfig {
 fn remote_arm_propagates_skills_into_skill_references() {
     let skills = vec![
         SkillReference::BundledSkillId("writing-pr-descriptions".to_string()),
-        SkillReference::Path(PathBuf::from("/tmp/skill/SKILL.md")),
+        SkillReference::Path(LocalOrRemotePath::Local(PathBuf::from(
+            "/tmp/skill/SKILL.md",
+        ))),
     ];
     let mode = run_agents_to_start_agent_mode(
         &RunAgentsExecutionMode::Remote {
@@ -289,26 +470,21 @@ fn remote_arm_rejects_opencode() {
 }
 
 #[test]
-fn local_arm_rejects_disabled_claude() {
+fn local_arm_rejects_disabled_codex() {
     let err = run_agents_to_start_agent_mode(
         &RunAgentsExecutionMode::Local,
-        "claude",
+        "codex",
         "auto",
         &[],
         None,
         &agent_cfg(),
     )
-    .expect_err("Local+claude must be rejected while disabled");
-    assert_eq!(
-        err,
-        "Local Claude Code child agents are temporarily disabled."
-    );
+    .expect_err("Local+codex must be rejected while disabled");
+    assert_eq!(err, "Local Codex child agents are temporarily disabled.");
 }
 
 #[test]
-fn local_arm_allows_claude_when_feature_enabled() {
-    let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
-
+fn local_arm_allows_claude() {
     let mode = run_agents_to_start_agent_mode(
         &RunAgentsExecutionMode::Local,
         "claude",
@@ -317,7 +493,7 @@ fn local_arm_allows_claude_when_feature_enabled() {
         None,
         &agent_cfg(),
     )
-    .expect("Local+claude should convert when feature is enabled");
+    .expect("Local+claude should convert");
     assert!(matches!(
         mode,
         StartAgentExecutionMode::Local {
@@ -377,7 +553,6 @@ fn remote_arm_filters_whitespace_auth_secret_name_to_none() {
 
 #[test]
 fn local_arm_ignores_auth_secret_name() {
-    let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
     let mode = run_agents_to_start_agent_mode(
         &RunAgentsExecutionMode::Local,
         "claude",
@@ -386,7 +561,7 @@ fn local_arm_ignores_auth_secret_name() {
         Some("my-claude-key"),
         &agent_cfg(),
     )
-    .expect("Local+claude should convert when feature is enabled");
+    .expect("Local+claude should convert");
     // Local children don't carry an auth_secret_name field.
     assert!(matches!(mode, StartAgentExecutionMode::Local { .. }));
 }

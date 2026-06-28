@@ -110,8 +110,24 @@ pub(super) static QUERY_RESULT_RENDERER_STYLES: LazyLock<QueryResultRendererStyl
         ..Default::default()
     });
 
-impl<A: InlineMenuAction> QueryResultRenderer<A> {
-    pub fn render_inline(
+pub trait QueryResultRendererExt {
+    fn render_inline(
+        &self,
+        result_index: usize,
+        is_selected: bool,
+        app: &AppContext,
+    ) -> Box<dyn Element>;
+
+    fn render_inline_with_highlight_state(
+        &self,
+        highlight_state: ItemHighlightState,
+        is_static_separator: bool,
+        app: &AppContext,
+    ) -> Box<dyn Element>;
+}
+
+impl<A: InlineMenuAction> QueryResultRendererExt for QueryResultRenderer<A> {
+    fn render_inline(
         &self,
         result_index: usize,
         is_selected: bool,

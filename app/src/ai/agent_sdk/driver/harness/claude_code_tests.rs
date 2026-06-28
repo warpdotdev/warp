@@ -843,7 +843,7 @@ fn prepare_local_wake_command_rehydrates_transcript_with_self_managed_listener()
 }
 
 #[tokio::test]
-async fn prime_parent_bridge_for_wake_clears_acked_output_and_surfaces_new_message() {
+async fn prime_parent_bridge_staged_for_self_managed_wake_keeps_message_in_staged() {
     let tmp = TempDir::new().unwrap();
     let state_dir = tmp.path().join("session-123");
     ensure_parent_bridge_state_dir(&state_dir).unwrap();
@@ -852,19 +852,10 @@ async fn prime_parent_bridge_for_wake_clears_acked_output_and_surfaces_new_messa
         41,
         "stale-msg",
         "Old direction",
-        "This message should be acknowledged and cleared.",
+        "This message should be returned to staged.",
     );
     write_surfaced_parent_bridge_message(&state_dir, &stale);
-    fs::write(
-        parent_bridge_hook_output_file(&state_dir),
-        serde_json::to_vec(&MessageBridgeHookOutput {
-            additional_context: "stale context".to_string(),
-            remaining_staged_count: 0,
-            surfaced_count: 1,
-        })
-        .unwrap(),
-    )
-    .unwrap();
+    fs::write(parent_bridge_hook_output_file(&state_dir), "stale context").unwrap();
     fs::write(parent_bridge_hook_output_ack_file(&state_dir), "").unwrap();
 
     let wake_message = AgentMessageEventMetadata {
@@ -880,11 +871,6 @@ async fn prime_parent_bridge_for_wake_clears_acked_output_and_surfaces_new_messa
     );
 
     let mut ai_client = MockAIClient::new();
-    ai_client
-        .expect_mark_message_delivered()
-        .with(eq("stale-msg"))
-        .times(1)
-        .returning(|_| Ok(()));
     let expected_message = expected.clone();
     ai_client
         .expect_read_agent_message()
@@ -902,32 +888,26 @@ async fn prime_parent_bridge_for_wake_clears_acked_output_and_surfaces_new_messa
             })
         });
     let hydrator = MessageHydrator::new(Arc::new(ai_client) as Arc<dyn AIClient>);
-    prime_parent_bridge_for_wake(&hydrator, &state_dir, Some(&wake_message))
+    prime_parent_bridge_staged_for_self_managed_wake(&hydrator, &state_dir, Some(&wake_message))
         .await
         .unwrap();
 
     assert_eq!(read_parent_bridge_event_cursor(&state_dir).unwrap(), 42);
+    assert!(!parent_bridge_hook_output_file(&state_dir).exists());
     assert!(!parent_bridge_hook_output_ack_file(&state_dir).exists());
+    assert!(parent_bridge_staged_message_path(&state_dir, 41, "stale-msg").exists());
     assert!(!parent_bridge_surfaced_message_path(&state_dir, 41, "stale-msg").exists());
 
-    let surfaced_path = parent_bridge_surfaced_message_path(&state_dir, 42, "msg-123");
-    assert!(surfaced_path.exists());
-    assert!(!parent_bridge_staged_message_path(&state_dir, 42, "msg-123").exists());
+    let staged_path = parent_bridge_staged_message_path(&state_dir, 42, "msg-123");
+    assert!(staged_path.exists());
+    assert!(!parent_bridge_surfaced_message_path(&state_dir, 42, "msg-123").exists());
 
-    let hook_output: MessageBridgeHookOutput =
-        serde_json::from_slice(&fs::read(parent_bridge_hook_output_file(&state_dir)).unwrap())
-            .unwrap();
-    assert_eq!(hook_output.surfaced_count, 1);
-    assert_eq!(hook_output.remaining_staged_count, 0);
-    assert!(hook_output.additional_context.contains("Please pivot"));
-
-    let surfaced_record: MessageBridgeMessageRecord =
-        serde_json::from_slice(&fs::read(&surfaced_path).unwrap()).unwrap();
-    assert_eq!(surfaced_record.subject, expected.subject);
-    assert_eq!(surfaced_record.body, expected.body);
-    assert_eq!(surfaced_record.occurred_at, wake_message.occurred_at);
+    let staged_record: MessageBridgeMessageRecord =
+        serde_json::from_slice(&fs::read(&staged_path).unwrap()).unwrap();
+    assert_eq!(staged_record.subject, expected.subject);
+    assert_eq!(staged_record.body, expected.body);
+    assert_eq!(staged_record.occurred_at, wake_message.occurred_at);
 }
-
 #[test]
 #[serial_test::serial]
 fn suffix_uses_worker_injected_env_when_present() {

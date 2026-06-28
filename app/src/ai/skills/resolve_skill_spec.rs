@@ -302,7 +302,7 @@ fn resolve_unqualified(
     let home_matches: Vec<PathBuf> = all_matching_paths
         .iter()
         .filter(|p| home_skill_paths.contains(p))
-        .cloned()
+        .filter_map(|p| p.to_local_path().map(Path::to_path_buf))
         .collect();
 
     if let Some(skill_path) = best_match_by_directory_precedence(home_matches, home_dir.as_deref())
@@ -333,6 +333,7 @@ fn resolve_unqualified(
     // If we're not in a known repo, try searching across repos under the working directory.
     let in_scope_matches: Vec<PathBuf> = all_matching_paths
         .into_iter()
+        .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
         .filter(|p| {
             // Only include project skills (not home skills) that are under working_dir
             skill_manager.skill_paths_in_scope(working_dir).contains(p)
@@ -384,6 +385,7 @@ fn resolve_in_single_repo_root(
     let cached_paths: Vec<PathBuf> = skill_manager
         .skill_paths_by_name(&spec.skill_identifier)
         .into_iter()
+        .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
         .filter(|p| repo_skill_paths.contains(p))
         .collect();
 
@@ -454,7 +456,10 @@ fn parsed_skill_from_manager_or_disk(
     skill_manager: &SkillManager,
     skill_path: &Path,
 ) -> Result<ParsedSkill, ResolveSkillError> {
-    if let Some(parsed) = skill_manager.skill_by_path(skill_path).cloned() {
+    if let Some(parsed) = skill_manager
+        .skill_by_path(&LocalOrRemotePath::Local(skill_path.to_path_buf()))
+        .cloned()
+    {
         return Ok(parsed);
     }
 

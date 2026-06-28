@@ -4,14 +4,18 @@ use std::sync::Arc;
 
 use ignore::gitignore::Gitignore;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::ModelHandle;
+use warpui_core::ModelHandle;
 
 use crate::file_tree_store::file_tree_state::FileTreeMapStore;
 use crate::{BuildTreeError, Entry, FileId, FileMetadata, Repository};
 
 #[derive(Debug, Clone)]
 pub struct FileTreeEntry {
-    state_map: FileTreeMapStore,
+    // Wrapped in an `Arc` so cloning a `FileTreeEntry` is O(1) (a refcount
+    // bump) instead of deep-copying the whole tree. Mutations go through
+    // `Arc::make_mut`, which copies-on-write only when the store is actually
+    // shared with another holder (e.g. the model and a view).
+    state_map: Arc<FileTreeMapStore>,
     root_path: Arc<StandardizedPath>,
 }
 
@@ -40,7 +44,7 @@ impl FileTreeEntry {
     }
 
     pub fn rename_path(&mut self, path: &StandardizedPath, new_path: &StandardizedPath) -> bool {
-        self.state_map.rename_path(path, new_path)
+        Arc::make_mut(&mut self.state_map).rename_path(path, new_path)
     }
 
     pub fn load_at_path(
@@ -48,11 +52,11 @@ impl FileTreeEntry {
         path: &StandardizedPath,
         gitignores: &mut Vec<Gitignore>,
     ) -> Result<(), BuildTreeError> {
-        self.state_map.load_at_path(path, gitignores)
+        Arc::make_mut(&mut self.state_map).load_at_path(path, gitignores)
     }
 
     pub fn insert_entry_at_path(&mut self, path: Arc<StandardizedPath>, entry: Entry) {
-        self.state_map.insert_entry_at_path(path, entry);
+        Arc::make_mut(&mut self.state_map).insert_entry_at_path(path, entry);
     }
 
     pub fn child_paths(
@@ -63,16 +67,16 @@ impl FileTreeEntry {
     }
 
     pub fn get_mut(&mut self, path: &StandardizedPath) -> Option<&mut FileTreeEntryState> {
-        self.state_map.get_mut(path)
+        Arc::make_mut(&mut self.state_map).get_mut(path)
     }
 
     pub fn remove(&mut self, path: &StandardizedPath) {
-        self.state_map.remove(path);
+        Arc::make_mut(&mut self.state_map).remove(path);
     }
 
     pub fn new_for_directory(root_path: Arc<StandardizedPath>) -> Self {
         Self {
-            state_map: FileTreeMapStore::new_for_directory(root_path.clone()),
+            state_map: Arc::new(FileTreeMapStore::new_for_directory(root_path.clone())),
             root_path,
         }
     }
@@ -84,8 +88,10 @@ impl FileTreeEntry {
         parent_path: &StandardizedPath,
         target_path: &StandardizedPath,
     ) -> Option<&mut FileTreeEntryState> {
+        // `contains_child` is a read, so check it before `make_mut` to avoid
+        // a copy-on-write when the child already exists.
         if self.state_map.contains_child(parent_path, target_path) {
-            return self.state_map.get_mut(target_path);
+            return Arc::make_mut(&mut self.state_map).get_mut(target_path);
         }
 
         // Child not found, create new directory entry
@@ -95,9 +101,9 @@ impl FileTreeEntry {
             loaded: false,
         });
 
-        self.state_map
-            .insert_child(Arc::new(parent_path.clone()), new_entry);
-        self.state_map.get_mut(target_path)
+        let store = Arc::make_mut(&mut self.state_map);
+        store.insert_child(Arc::new(parent_path.clone()), new_entry);
+        store.get_mut(target_path)
     }
 
     pub fn find_parent_directory(&self, path: &StandardizedPath) -> Option<Arc<StandardizedPath>> {
@@ -132,8 +138,7 @@ impl FileTreeEntry {
             return None;
         };
 
-        self.state_map
-            .insert_child(Arc::new(parent_path.clone()), new_entry)
+        Arc::make_mut(&mut self.state_map).insert_child(Arc::new(parent_path.clone()), new_entry)
     }
 
     pub fn insert_child_state(
@@ -141,8 +146,7 @@ impl FileTreeEntry {
         parent_path: &StandardizedPath,
         child_state: FileTreeEntryState,
     ) -> Option<Arc<StandardizedPath>> {
-        self.state_map
-            .insert_child(Arc::new(parent_path.clone()), child_state)
+        Arc::make_mut(&mut self.state_map).insert_child(Arc::new(parent_path.clone()), child_state)
     }
 
     /// Ensures all ancestor directories between root and `target_parent`
@@ -341,7 +345,7 @@ pub struct FileTreeDirectoryEntryState {
 impl From<Entry> for FileTreeEntry {
     fn from(value: Entry) -> Self {
         let root_path = Arc::new(value.path().clone());
-        let state_map = FileTreeMapStore::from(value);
+        let state_map = Arc::new(FileTreeMapStore::from(value));
 
         FileTreeEntry {
             state_map,

@@ -12,7 +12,7 @@ use warpui::{Entity, ModelContext, SingletonEntity, ViewHandle};
 
 use crate::appearance::Appearance;
 use crate::completer::SessionAgnosticContext;
-use crate::debounce::debounce;
+use crate::debounce;
 use crate::editor::{EditorView, TextStyleOperation};
 use crate::terminal::input::decorations::{
     parse_current_commands_and_tokens, ParsedTokenData, ParsedTokensSnapshot,

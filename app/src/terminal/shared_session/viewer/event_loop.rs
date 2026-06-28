@@ -16,7 +16,9 @@ use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{self};
 use crate::terminal::model::block::AgentInteractionMetadata;
 use crate::terminal::shared_session::ai_agent::decode_agent_response_event;
+use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
 use crate::terminal::shared_session::{decode_scrollback, SharedSessionStatus};
+use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::{TerminalModel, TerminalView};
 
 /// If we end up buffering more than this many events,
@@ -57,6 +59,7 @@ pub struct EventLoop {
     sink: Sink,
 
     channel_event_listener: ChannelEventListener,
+    remote_update_guard: RemoteUpdateGuard,
 
     /// The next event number we need from the server.
     next_event_no: usize,
@@ -80,6 +83,7 @@ impl EventLoop {
         scrollback: Scrollback,
         catching_up_to_event_no: Option<usize>,
         load_mode: SharedSessionInitialLoadMode,
+        remote_update_guard: RemoteUpdateGuard,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let scrollback_blocks = decode_scrollback(&scrollback);
@@ -125,6 +129,7 @@ impl EventLoop {
             parser: ansi::Processor::new(),
             sink: sink(),
             channel_event_listener,
+            remote_update_guard,
             // Eventually once we have pagination, the server might need to tell us this.
             next_event_no: 0,
             buffer: HashMap::new(),
@@ -174,6 +179,7 @@ impl EventLoop {
 
         // Flush out as many contiguous events as we can.
         while let Some(next_event) = self.buffer.remove(&self.next_event_no) {
+            let _active_remote_update = self.remote_update_guard.start_remote_update();
             match next_event {
                 OrderedTerminalEventType::PtyBytesRead { bytes } => {
                     let mut model = self.terminal_model.lock();
@@ -191,6 +197,23 @@ impl EventLoop {
                     if ai_metadata.is_none() {
                         if let Some(view) = self.terminal_view.upgrade(ctx) {
                             view.update(ctx, |view, ctx| {
+                                // Skip during cloud setup: clearing on every setup command would
+                                // wipe a follow-up the viewer is composing. Mirrors the
+                                // `InputUpdated` guard.
+                                let skip_clear_during_setup =
+                                    FeatureFlag::CloudModeSetupV2.is_enabled() && {
+                                        let model = view.model.lock();
+                                        is_cloud_agent_pre_first_exchange(
+                                            view.ambient_agent_view_model(),
+                                            view.agent_view_controller(),
+                                            &model,
+                                            ctx,
+                                        )
+                                    };
+                                if skip_clear_during_setup || view.has_queued_command_in_flight(ctx)
+                                {
+                                    return;
+                                }
                                 view.input().update(ctx, |input, ctx| {
                                     input.unfreeze_and_clear_agent_input(ctx);
                                 });
@@ -271,7 +294,10 @@ impl EventLoop {
                 OrderedTerminalEventType::Resize { window_size } => {
                     self.process_resize_event(window_size, ctx)
                 }
-                OrderedTerminalEventType::CommandExecutionFinished { .. } => (),
+                OrderedTerminalEventType::CommandExecutionFinished { .. } => {
+                    // Queue advancement waits for block completion so input cleanup can observe
+                    // the in-flight queued command and preserve any local draft.
+                }
                 OrderedTerminalEventType::AgentResponseEvent {
                     response_initiator,
                     response_event,
@@ -342,6 +368,20 @@ impl EventLoop {
                                 controller
                                     .set_should_suppress_existing_agent_conversation_replay(false);
                             });
+                        });
+                    }
+                }
+                OrderedTerminalEventType::CloudModeSetupPhaseEnded => {
+                    // Canonical setup-complete signal from the sharer. Legacy
+                    // AppendedExchange-driven teardowns remain idempotently as
+                    // a fallback for pre-feature sharers.
+                    if let Some(view) = self.terminal_view.upgrade(ctx) {
+                        view.update(ctx, |view, ctx| {
+                            view.tear_down_cloud_mode_setup_phase(ctx);
+                            // A promptless handoff run never fires a first turn,
+                            // so this is the only point a prompt queued during
+                            // setup can be auto-sent.
+                            view.maybe_drain_queue_after_promptless_setup(ctx);
                         });
                     }
                 }

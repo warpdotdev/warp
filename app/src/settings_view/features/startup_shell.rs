@@ -30,7 +30,7 @@ pub struct StartupShellView {
     is_custom_path_valid: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NewSessionShellAction {
     /// Changes the user's startup shell to the given option. This also hides
     /// the custom shell path editor if a non-custom shell was chosen.

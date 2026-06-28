@@ -1,12 +1,11 @@
 use std::slice;
 
-use cocoa::base::{id, nil, BOOL};
-use cocoa::foundation::{NSArray, NSString, NSUInteger};
-use objc::{msg_send, sel, sel_impl};
+use cocoa::base::{id, BOOL};
+use cocoa::foundation::NSUInteger;
+use objc2::rc::Retained;
+use objc2_foundation::{NSArray, NSNumber, NSString};
 use warpui_core::keymap::Keystroke;
 use warpui_core::platform::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
-
-use super::make_nsstring;
 
 // Modifier key mask values for the Carbon API.
 pub const CMD_KEY: u16 = 256;
@@ -30,10 +29,11 @@ impl Keycode {
             #[allow(clippy::useless_conversion)]
             let key = keyCodeToChar(self.0 as u64, shift_key_pressed.into());
 
-            if key == nil {
+            if key.is_null() {
                 return None;
             }
 
+            let key = &*key.cast::<NSString>();
             let cstr = key.UTF8String() as *const u8;
             std::str::from_utf8(slice::from_raw_parts(cstr, key.len()))
                 .ok()
@@ -44,16 +44,21 @@ impl Keycode {
     // There could have multiple keycodes mapping to one virtual key. Return an iterator
     // to all possible values of keycode here.
     pub fn keycodes_from_key_name(key_name: &str) -> impl Iterator<Item = Keycode> {
-        unsafe {
-            let keycodes: id = charToKeyCodes(make_nsstring(key_name));
-            let keycodes_length = keycodes.count();
+        let key_name = NSString::from_str(key_name);
+        // `charToKeyCodes` borrows the string only for the duration of the call
+        // and returns an autoreleased array of NSNumber keycodes.
+        let keycodes: *const NSArray<NSNumber> =
+            unsafe { charToKeyCodes(Retained::as_ptr(&key_name) as id) }.cast();
+        let keycodes_length = if keycodes.is_null() {
+            0
+        } else {
+            unsafe { (*keycodes).count() }
+        };
 
-            (0..keycodes_length).map(move |i| {
-                let keycode: NSUInteger =
-                    msg_send![keycodes.objectAtIndex(i), unsignedIntegerValue];
-                Self(keycode as u16)
-            })
-        }
+        (0..keycodes_length).map(move |i| {
+            let keycode = unsafe { (*keycodes).objectAtIndex(i).unsignedIntegerValue() };
+            Self(keycode as u16)
+        })
     }
 }
 

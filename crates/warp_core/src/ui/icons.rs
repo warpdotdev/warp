@@ -1,11 +1,11 @@
-use warpui::elements::Icon as WarpUiIcon;
+use warpui_core::elements::Icon as WarpUiIcon;
 
 use crate::ui::theme::Fill;
 
 /// Default icon dimensions that apply to all icons used within the ui system.
 pub const ICON_DIMENSIONS: f32 = 24.;
 
-/// Icon enum to be used within the app in place of the warpui::elements::Icon directly. It
+/// Icon enum to be used within the app in place of the warpui_core::elements::Icon directly. It
 /// abstracts things like svg paths out and provides a utility method to convert into the actual Icon.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
@@ -275,6 +275,7 @@ pub enum Icon {
     ClaudeLogo,
     GeminiLogo,
     OpenAILogo,
+    XLogo,
     AmpLogo,
     DroidLogo,
     OpenCodeLogo,
@@ -299,6 +300,7 @@ pub enum Icon {
     CalloutTriangleBorderLeft,
     CalloutTriangleFillLeft,
     DragIndicator,
+    DragIndicatorVertical,
     Ellipse,
     Inbox,
     Menu01,
@@ -315,9 +317,11 @@ pub enum Icon {
     MessageChatSquare,
     Pin,
     PinFilled,
+    PinFilledDiagonal,
     Atom,
     Cognition,
     Dataflow04,
+    LayersThree01,
     Aws,
     // Language-specific icons for the code block dropdown
     MermaidLang,
@@ -338,6 +342,7 @@ impl From<Icon> for &'static str {
             Icon::Menu => "bundled/svg/layout-left.svg",
             Icon::Pin => "bundled/svg/pin-01.svg",
             Icon::PinFilled => "bundled/svg/pin-filled.svg",
+            Icon::PinFilledDiagonal => "bundled/svg/pin-filled-diagonal.svg",
             Icon::AtSign => "bundled/svg/at-sign.svg",
             Icon::Plus => "bundled/svg/plus.svg",
             Icon::Copy => "bundled/svg/copy.svg",
@@ -604,6 +609,7 @@ impl From<Icon> for &'static str {
             Icon::ClaudeLogo => "bundled/svg/claude.svg",
             Icon::GeminiLogo => "bundled/svg/gemini_cli.svg",
             Icon::OpenAILogo => "bundled/svg/openai.svg",
+            Icon::XLogo => "bundled/svg/x-logo.svg",
             Icon::AmpLogo => "bundled/svg/amp.svg",
             Icon::DroidLogo => "bundled/svg/droid.svg",
             Icon::OpenCodeLogo => "bundled/svg/opencode.svg",
@@ -628,6 +634,7 @@ impl From<Icon> for &'static str {
             Icon::CalloutTriangleBorderLeft => "bundled/svg/callout-triangle-border-left.svg",
             Icon::CalloutTriangleFillLeft => "bundled/svg/callout-triangle-fill-left.svg",
             Icon::DragIndicator => "bundled/svg/drag_indicator.svg",
+            Icon::DragIndicatorVertical => "bundled/svg/drag_indicator_vertical.svg",
             Icon::Ellipse => "bundled/svg/ellipse.svg",
             Icon::Inbox => "bundled/svg/inbox-01.svg",
             Icon::Menu01 => "bundled/svg/menu-01.svg",
@@ -644,6 +651,7 @@ impl From<Icon> for &'static str {
             Icon::Atom => "bundled/svg/atom-02.svg",
             Icon::Cognition => "bundled/svg/cognition.svg",
             Icon::Dataflow04 => "bundled/svg/dataflow-04.svg",
+            Icon::LayersThree01 => "bundled/svg/layers-three-01.svg",
             Icon::Aws => "bundled/svg/aws.svg",
             Icon::MermaidLang => "bundled/svg/file_type/mermaid.svg",
             Icon::GoLang => "bundled/svg/file_type/go.svg",

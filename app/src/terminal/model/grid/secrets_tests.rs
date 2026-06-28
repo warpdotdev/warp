@@ -4,6 +4,7 @@ use super::*;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{self, Handler as _};
 use crate::terminal::model::blockgrid::BlockGrid;
+use crate::terminal::model::secrets::RespectObfuscatedSecrets;
 use crate::terminal::SizeInfo;
 
 fn secret_ranges(grid_handler: &GridHandler) -> Vec<RangeInclusive<Point>> {
@@ -61,6 +62,73 @@ fn test_secret_redacted_after_byte_processing() {
     // There should no longer be any secrets ("ABC" does not match the regex).
     assert!(grid_handler.secrets.is_empty());
     assert!(secret_ranges(grid_handler).is_empty());
+}
+
+#[test]
+fn test_secret_redacted_after_multibyte_prefix() {
+    let secret = "AAAAC3NzaC1lZDI1NTE5AAAAIThisIsNotARealKeyItIsJustForTestingWarpRedact";
+    crate::terminal::model::secrets::set_user_and_enterprise_secret_regexes(
+        [&Regex::new("AAAAC3NzaC1lZDI1NTE5[A-Za-z0-9+/=]{20,}")
+            .expect("Should be able to construct regex")],
+        std::iter::empty(), // No enterprise secrets
+    );
+
+    let mut blockgrid = empty_blockgrid(10, 10, 1, ObfuscateSecrets::Yes);
+    let grid_handler = blockgrid.grid_handler_mut();
+
+    grid_handler.input_at_cursor(&format!("💣 {secret}"));
+    grid_handler.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+    // 💣 is a single char; input_at_cursor advances the cursor by one column per
+    // char regardless of display width, so the secret starts at col 2 (bomb + space).
+    let secret_start = Point::new(0, 2);
+    let secret_end = Point::new(7, 1);
+
+    assert_eq!(grid_handler.secrets.len(), 1);
+    assert_eq!(secret_ranges(grid_handler), vec![secret_start..=secret_end]);
+    assert_eq!(
+        grid_handler.bounds_to_string(
+            Point::new(0, 0),
+            secret_end,
+            false,
+            RespectObfuscatedSecrets::Yes,
+            false,
+            RespectDisplayedOutput::No,
+        ),
+        format!("💣 {}", "*".repeat(secret.len()))
+    );
+}
+
+#[test]
+fn test_secret_with_word_boundaries_redacted_after_multibyte_prefix() {
+    crate::terminal::model::secrets::set_user_and_enterprise_secret_regexes(
+        [&Regex::new(r"\bTOKEN123\b").expect("Should be able to construct regex")],
+        std::iter::empty(), // No enterprise secrets
+    );
+
+    let mut blockgrid = empty_blockgrid(5, 20, 1, ObfuscateSecrets::Yes);
+    let grid_handler = blockgrid.grid_handler_mut();
+
+    grid_handler.input_at_cursor("💣 TOKEN123");
+    grid_handler.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+    // Same column arithmetic as above: bomb = col 0, space = col 1, secret starts col 2.
+    let secret_start = Point::new(0, 2);
+    let secret_end = Point::new(0, 9);
+
+    assert_eq!(grid_handler.secrets.len(), 1);
+    assert_eq!(secret_ranges(grid_handler), vec![secret_start..=secret_end]);
+    assert_eq!(
+        grid_handler.bounds_to_string(
+            Point::new(0, 0),
+            secret_end,
+            false,
+            RespectObfuscatedSecrets::Yes,
+            false,
+            RespectDisplayedOutput::No,
+        ),
+        "💣 ********"
+    );
 }
 
 #[test]

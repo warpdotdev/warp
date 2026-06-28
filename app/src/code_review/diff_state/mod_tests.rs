@@ -48,8 +48,6 @@ fn branch_info_none_for_test_model() {
             assert!(model.unpushed_commits(ctx).is_empty());
             assert_eq!(model.upstream_ref(ctx), None);
             assert!(!model.upstream_differs_from_main(ctx));
-            assert!(model.pr_info(ctx).is_none());
-            assert!(!model.is_pr_info_refreshing(ctx));
             assert!(!model.is_git_operation_blocked(ctx));
         });
     });

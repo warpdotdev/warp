@@ -289,7 +289,7 @@ pub struct DisplayChip {
     chip_kind: ContextChipKind,
     display_chip_kind: DisplayChipKind,
     next_chip_kind: Option<ContextChipKind>,
-    first_on_click_value: Option<String>,
+    on_click_values: Vec<String>,
     quota_reset_popup: ViewHandle<FeaturePopup>,
     session_context: Option<SessionContext>,
     menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
@@ -446,8 +446,23 @@ pub struct DisplayChipConfig {
 pub struct GitBranch(String);
 
 impl GitBranch {
-    fn command(&self) -> String {
-        format_git_branch_command(&self.0)
+    fn prompt_chip_command(&self) -> PromptChipShellCommand {
+        let branch = GitBranchOnClickValue::decode(&self.0);
+        if let Some(worktree_path) = branch.worktree_path {
+            return PromptChipShellCommand::ChangeDirectory {
+                dir_name: worktree_path,
+            };
+        }
+
+        if branch.is_linked_worktree {
+            return PromptChipShellCommand::Echo {
+                message: "The branch is already checked out in another worktree, but Warp couldn't find its path.",
+            };
+        }
+
+        PromptChipShellCommand::GitCheckout {
+            branch_name: branch.branch_name,
+        }
     }
 
     fn icon_for_menu(&self) -> Icon {
@@ -494,8 +509,10 @@ impl CreateGitBranch {
         &self.0
     }
 
-    fn command(&self) -> String {
-        format_create_git_branch_command(&self.0)
+    fn prompt_chip_command(&self) -> PromptChipShellCommand {
+        PromptChipShellCommand::GitCreateAndCheckoutBranch {
+            branch_name: self.0.clone(),
+        }
     }
 }
 
@@ -614,11 +631,11 @@ impl DisplayChip {
                         let action_item = generic_event.action_item.as_any();
                         let command =
                             if let Some(git_branch) = action_item.downcast_ref::<GitBranch>() {
-                                git_branch.command()
+                                git_branch.prompt_chip_command()
                             } else if let Some(create_branch) =
                                 action_item.downcast_ref::<CreateGitBranch>()
                             {
-                                create_branch.command()
+                                create_branch.prompt_chip_command()
                             } else {
                                 log::warn!(
                                 "MenuAction event should contain a GitBranch or CreateGitBranch \
@@ -671,17 +688,16 @@ impl DisplayChip {
                 });
 
                 // Subscribe to DirectoryFetcher events to update menu
-                let directory_fetcher_clone = directory_fetcher.clone();
                 ctx.subscribe_to_model(
                     &directory_fetcher,
-                    move |display_chip, _model, event, ctx| {
+                    move |display_chip, model, event, ctx| {
                         match event {
                             DirectoryFetcherEvent::DirectoryContentsUpdated => {
                                 // Update the existing menu with new directory contents
                                 if let DisplayChipKind::WorkingDirectory { menu, .. } =
                                     &mut display_chip.display_chip_kind
                                 {
-                                    let new_files = directory_fetcher_clone
+                                    let new_files = model
                                         .read(ctx, |fetcher, _| fetcher.cached_files().to_vec());
                                     // Update the existing menu with new content instead of recreating it
                                     menu.update(ctx, |menu_view, menu_ctx| {
@@ -714,7 +730,9 @@ impl DisplayChip {
                             DirectoryType::Directory => {
                                 // For directories, navigate action is change directory
                                 ctx.emit(PromptDisplayChipEvent::TryExecuteCommand(
-                                    format_change_directory_command(&directory_item.name),
+                                    PromptChipShellCommand::ChangeDirectory {
+                                        dir_name: directory_item.name.clone(),
+                                    },
                                 ));
                                 me.close_working_directory_menu(ctx);
                                 ctx.notify();
@@ -737,7 +755,9 @@ impl DisplayChip {
                             }
                             DirectoryType::NavigateToParent => {
                                 ctx.emit(PromptDisplayChipEvent::TryExecuteCommand(
-                                    format_change_directory_command(".."),
+                                    PromptChipShellCommand::ChangeDirectory {
+                                        dir_name: "..".to_string(),
+                                    },
                                 ));
                                 me.close_working_directory_menu(ctx);
                                 ctx.notify();
@@ -775,9 +795,11 @@ impl DisplayChip {
                         ctx.focus_self();
                     }
                     NodeVersionPopupEvent::SelectVersion { version } => {
-                        ctx.emit(PromptDisplayChipEvent::TryExecuteCommand(format!(
-                            "nvm use {version}"
-                        )));
+                        ctx.emit(PromptDisplayChipEvent::TryExecuteCommand(
+                            PromptChipShellCommand::NvmUse {
+                                version: version.clone(),
+                            },
+                        ));
                         me.close_node_version_popup(ctx);
                         ctx.focus_self();
                     }
@@ -795,7 +817,7 @@ impl DisplayChip {
                     }
                     NodeVersionPopupEvent::InstallLatestNodeVersion => {
                         ctx.emit(PromptDisplayChipEvent::TryExecuteCommand(
-                            "nvm install node".to_string(),
+                            PromptChipShellCommand::NvmInstallLatestNode,
                         ));
                         me.close_node_version_popup(ctx);
                     }
@@ -865,7 +887,7 @@ impl DisplayChip {
             chip_kind: chip_result.kind,
             display_chip_kind,
             next_chip_kind,
-            first_on_click_value: chip_result.on_click_values.first().cloned(),
+            on_click_values: chip_result.on_click_values,
             quota_reset_popup,
             session_context: config.session_context,
             menu_positioning_provider: config.menu_positioning_provider,
@@ -905,8 +927,8 @@ impl DisplayChip {
         &self.display_chip_kind
     }
 
-    pub fn first_on_click_value(&self) -> Option<&String> {
-        self.first_on_click_value.as_ref()
+    pub(crate) fn on_click_values(&self) -> &[String] {
+        &self.on_click_values
     }
 
     pub fn close_git_branch_menu(&mut self, ctx: &mut ViewContext<Self>) {
@@ -1611,6 +1633,30 @@ impl View for DisplayChip {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptChipShellCommand {
+    GitCheckout {
+        branch_name: String,
+    },
+    GitCreateAndCheckoutBranch {
+        branch_name: String,
+    },
+    ChangeDirectory {
+        dir_name: String,
+    },
+    NvmUse {
+        version: String,
+    },
+    NvmInstallLatestNode,
+    Echo {
+        /// The message to echo.
+        ///
+        /// This is very intentionally a `&'static str` to ensure that the message is a compile-time constant.
+        /// This is to prevent accidental injection of user input into the message.
+        message: &'static str,
+    },
+}
+
 pub enum PromptDisplayChipEvent {
     OpenFile(String),
     OpenTextFileInCodeEditor(String),
@@ -1620,7 +1666,7 @@ pub enum PromptDisplayChipEvent {
     OpenCodeReview,
     OpenConversationHistory,
     OpenCommandPaletteFiles,
-    TryExecuteCommand(String),
+    TryExecuteCommand(PromptChipShellCommand),
     RunAgentQuery(String),
     OpenAIDocument {
         document_id: AIDocumentId,
@@ -1848,41 +1894,6 @@ impl ActionButtonTheme for EnterAgentViewButton {
     fn should_opt_out_of_contrast_adjustment(&self) -> bool {
         true
     }
-}
-
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace("'", "'\\''"))
-}
-
-fn format_change_directory_command(dir_name: &str) -> String {
-    format!("cd {}", shell_single_quote(dir_name))
-}
-
-pub fn format_git_branch_command(encoded_git_branch_on_click_value: &str) -> String {
-    let branch = GitBranchOnClickValue::decode(encoded_git_branch_on_click_value);
-    if let Some(worktree_path) = branch.worktree_path {
-        return format_change_directory_command(&worktree_path);
-    }
-
-    if branch.is_linked_worktree {
-        return format!(
-            "echo {}",
-            shell_single_quote(&format!(
-                "Branch '{}' is already checked out in another worktree, but Warp couldn't find its path.",
-                branch.branch_name
-            ))
-        );
-    }
-
-    format!("git checkout {}", shell_single_quote(&branch.branch_name))
-}
-
-/// Format a `git checkout -b <branch>` command for the given (already-trimmed)
-/// branch name. The trailing `--` ensures the branch name is treated as a
-/// positional argument rather than a flag if it happens to contain unusual
-/// characters that survived our front-end validation.
-pub fn format_create_git_branch_command(branch_name: &str) -> String {
-    format!("git checkout -b {} --", shell_single_quote(branch_name))
 }
 
 pub(crate) fn chip_container(

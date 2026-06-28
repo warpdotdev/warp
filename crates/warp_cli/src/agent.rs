@@ -312,6 +312,15 @@ pub struct RunAgentArgs {
     /// LEGACY: MCP servers to start before executing the agent, identified by UUID.
     #[arg(long = "mcp-server", value_name = "UUID", hide = true)]
     pub mcp_servers: Vec<uuid::Uuid>,
+    /// Fail the run when any requested MCP server fails to start.
+    ///
+    /// By default, MCP servers that don't start within the startup timeout are
+    /// skipped and the agent runs without their tools.
+    #[arg(long = "strict-mcp-startup")]
+    pub strict_mcp_startup: bool,
+    /// Maximum time to wait for requested MCP servers to start (e.g. `30s`, `1m`).
+    #[arg(long = "mcp-startup-timeout", value_name = "DURATION")]
+    pub mcp_startup_timeout: Option<humantime::Duration>,
     /// Cloud environment to use, identified by ID.
     #[arg(long = "environment", short = 'e', value_name = "ID")]
     pub environment: Option<String>,
@@ -380,6 +389,21 @@ pub struct RunAgentArgs {
     /// "claude" delegates to the `claude` CLI.
     #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz, hide = true)]
     pub harness: Harness,
+
+    /// Skip the initial LLM turn for this run. Used by the empty-prompt cloud-handoff
+    /// path so the cloud agent comes up ready for follow-up without hallucinating a
+    /// response against an empty user message.
+    ///
+    /// Requires `--idle-on-complete` to also be set: with the initial turn skipped, the
+    /// driver has nothing to drive a completion event, so the process would exit
+    /// immediately on success without an idle window for the user's follow-up to arrive.
+    #[arg(
+        long = "skip-initial-turn",
+        hide = true,
+        requires_all = ["task_id", "idle_on_complete"],
+        conflicts_with_all = ["prompt", "saved_prompt", "file"]
+    )]
+    pub skip_initial_turn: bool,
 }
 
 impl RunAgentArgs {

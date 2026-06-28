@@ -47,7 +47,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/pr-walkthrough/SKILL.md",
-      "computedHash": "990e8549611cff4b82036d4c7cc50d23eb2cbb27272926142d3fd8ad17a5e18f"
+      "computedHash": "fd5ff2a22f4cc80ef8d0ab3a7bdef427d6463719f9e5fdf47f6fa1371fc4d3f9"
     },
     "reproduce-bug-report": {
       "source": "warpdotdev/common-skills",
@@ -61,6 +61,12 @@
       "skillPath": ".agents/skills/resolve-merge-conflicts/SKILL.md",
       "computedHash": "5376b5692901c624e8f20a5a04aeea5f5a94f5168d29852a8a639aded6408f2e"
     },
+    "respond-to-pr-comments-in-blocklist": {
+      "source": "warpdotdev/common-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/respond-to-pr-comments-in-blocklist/SKILL.md",
+      "computedHash": "f7408cf90c10397aa9048f14ab985a138641fc1e5f3245e290150437d62875f0"
+    },
     "review-pr": {
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
@@ -71,13 +77,19 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/spec-driven-implementation/SKILL.md",
-      "computedHash": "e334d0f6f0e8fc39055314acad911f36d92d1919372b5e2973cc99d7f8c901b4"
+      "computedHash": "45793ca1e35b032ddfd2596f2e86fd6f6e938549373bfe4aeb74683486a179e4"
     },
     "update-skill": {
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/update-skill/SKILL.md",
       "computedHash": "1e23c5a5c37ed084eced7fa507031e3cdb8e23f09cd5d004e00efd6f66bf200f"
+    },
+    "validate-changes-match-specs": {
+      "source": "warpdotdev/common-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/validate-changes-match-specs/SKILL.md",
+      "computedHash": "9123fd70ced064bdd773fd8d2baa8d5d5291fef910eb2c028084074b3ac72c27"
     },
     "write-product-spec": {
       "source": "warpdotdev/common-skills",
@@ -89,7 +101,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/write-tech-spec/SKILL.md",
-      "computedHash": "3b5eb4ef021112d473984eca28412d372e87d9337ad5d9754f3ad3e01f94d39b"
+      "computedHash": "c7913bfd1ea2be7ce38d5beb7e923b96f5689f6145250af1d81b985e8be4a882"
     }
   }
 }

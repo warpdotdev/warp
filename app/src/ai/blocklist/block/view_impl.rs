@@ -43,9 +43,10 @@ use warp_core::ui::color::contrast::{
 use warp_core::ui::color::Rgb;
 use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::{
-    Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Expanded,
-    Flex, FormattedTextElement, Highlight, HighlightedRange, Hoverable, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition, SelectableArea, Text,
+    Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Expanded, Flex, FormattedTextElement, Highlight, HighlightedRange, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
+    SelectableArea, Text,
 };
 use warpui::fonts::Properties;
 use warpui::platform::Cursor;
@@ -85,6 +86,7 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::util::link_detection::DetectedLinkType;
 use crate::util::truncation::truncate_from_end;
+use crate::view_components::dropdown::DropdownItemAction;
 use crate::workspace::WorkspaceAction;
 
 /// Helper function to create gray strikethrough highlight for secrets
@@ -730,56 +732,63 @@ pub fn render_autonomy_dropdown_setting_speedbump_footer<A>(
     app: &AppContext,
 ) -> Box<dyn Element>
 where
-    A: warpui::Action + Clone,
+    A: DropdownItemAction,
 {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_main_axis_size(MainAxisSize::Max)
-        .with_child(
-            Container::new(
-                Text::new(
-                    description,
-                    appearance.ui_font_family(),
-                    appearance.monospace_font_size() - 1.,
+    Clipped::new(
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(
+                Container::new(
+                    Text::new(
+                        description,
+                        appearance.ui_font_family(),
+                        appearance.monospace_font_size() - 1.,
+                    )
+                    .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+                    .with_selectable(false)
+                    .finish(),
                 )
-                .with_color(blended_colors::text_sub(theme, theme.surface_1()))
-                .with_selectable(false)
+                .with_margin_right(8.)
                 .finish(),
             )
-            .with_margin_right(8.)
-            .finish(),
-        )
-        .with_child(warpui::elements::ChildView::new(dropdown).finish())
-        .with_child(
-            Expanded::new(
-                1.,
-                Align::new(
-                    appearance
-                        .ui_builder()
-                        .link(
-                            "Manage AI Autonomy permissions".into(),
-                            None,
-                            Some(Box::new(move |ctx| {
-                                ctx.dispatch_typed_action(
-                                    WorkspaceAction::ShowSettingsPageWithSearch {
-                                        search_query: "Autonomy".to_string(),
-                                        section: Some(SettingsSection::AI),
-                                    },
-                                );
-                            })),
-                            settings_link_handle,
-                        )
-                        .build()
-                        .finish(),
+            .with_child(
+                Container::new(warpui::elements::ChildView::new(dropdown).finish())
+                    .with_margin_right(8.)
+                    .finish(),
+            )
+            .with_child(
+                Expanded::new(
+                    1.,
+                    Align::new(
+                        appearance
+                            .ui_builder()
+                            .link(
+                                "Manage AI Autonomy permissions".into(),
+                                None,
+                                Some(Box::new(move |ctx| {
+                                    ctx.dispatch_typed_action(
+                                        WorkspaceAction::ShowSettingsPageWithSearch {
+                                            search_query: "Autonomy".to_string(),
+                                            section: Some(SettingsSection::AI),
+                                        },
+                                    );
+                                })),
+                                settings_link_handle,
+                            )
+                            .build()
+                            .finish(),
+                    )
+                    .right()
+                    .finish(),
                 )
-                .right()
                 .finish(),
             )
             .finish(),
-        )
-        .finish()
+    )
+    .finish()
 }
 
 /// TODO: All AIBlock footer-related rendering logic should probably be put into its own View.
@@ -1059,6 +1068,7 @@ impl View for AIBlock {
                 action_buttons: &self.action_buttons,
                 view_screenshot_buttons: &self.view_screenshot_buttons,
                 action_model: &self.action_model,
+                active_session: &self.active_session,
                 editor_views: &self.code_editor_views,
                 current_working_directory: self.current_working_directory.as_ref(),
                 shell_launch_data: self.shell_launch_data.as_ref(),

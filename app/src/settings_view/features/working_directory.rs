@@ -13,7 +13,7 @@ use crate::view_components::dropdown::TOP_MENU_BAR_HEIGHT;
 use crate::view_components::{Dropdown, DropdownItem};
 use crate::{report_if_error, send_telemetry_from_ctx};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::enum_variant_names)]
 pub enum WorkingDirectoryAction {
     /// Sets the mode that should be used for all new sessions, independent of

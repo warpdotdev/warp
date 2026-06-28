@@ -14,8 +14,8 @@ use parking_lot::{FairMutex, Mutex};
 use pathfinder_geometry::vector::Vector2F;
 use session_sharing_protocol::common::{
     ActivePrompt, AgentPromptFailureReason, CLIAgentSessionState, CommandExecutionFailureReason,
-    ControlAction, ControlActionFailureReason, SelectedAgentModel,
-    UniversalDeveloperInputContextUpdate, WriteToPtyFailureReason,
+    ControlAction, ControlActionFailureReason, LongRunningCommandAgentInteraction,
+    SelectedAgentModel, UniversalDeveloperInputContextUpdate, WriteToPtyFailureReason,
 };
 #[cfg(not(any(test, feature = "integration_tests")))]
 use session_sharing_protocol::common::{
@@ -28,7 +28,7 @@ use session_sharing_protocol::sharer::{
 };
 use settings::Setting as _;
 use warp_core::execution_mode::AppExecutionMode;
-use warp_core::send_telemetry_from_ctx;
+use warp_core::{send_telemetry_from_ctx, SessionId};
 use warpui::r#async::executor::Background;
 use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
 #[cfg(unix)]
@@ -55,8 +55,10 @@ use crate::auth::auth_state::AuthState;
 use crate::auth::AuthStateProvider;
 use crate::banner::BannerState;
 use crate::context_chips::current_prompt::CurrentPrompt;
+use crate::context_chips::prompt::Prompt;
 use crate::context_chips::prompt_snapshot::PromptSnapshot;
 use crate::context_chips::prompt_type::PromptType;
+use crate::context_chips::ContextChipKind;
 use crate::editor::CrdtOperation;
 use crate::features::FeatureFlag;
 use crate::network::{NetworkStatusEvent, NetworkStatusKind};
@@ -74,7 +76,9 @@ use crate::terminal::model::session::Sessions;
 use crate::terminal::model::terminal_model::ExitReason;
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
+use crate::terminal::session_settings::{
+    SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
+};
 use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::terminal::shared_session::presence_manager::PresenceManager;
@@ -95,7 +99,6 @@ use crate::terminal::shared_session::{
 };
 use crate::terminal::shell::ShellName;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as TerminalViewEvent};
-use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
     init_pty_controller_model, init_remote_server_controller, wire_up_pty_controller_with_view,
@@ -606,7 +609,7 @@ impl TerminalManager {
                         }
                         send_telemetry_from_ctx!(
                             TelemetryEvent::AgentViewExited {
-                                origin: TelemetryAgentViewEntryOrigin::from(*origin),
+                                origin: TelemetryAgentViewEntryOrigin::from(origin.clone()),
                                 was_empty: *final_exchange_count == 0,
                             },
                             ctx
@@ -949,11 +952,23 @@ impl TerminalManager {
             .lock()
             .set_pending_shell_launch_data(shell_launch_data.clone());
 
+        // Register the session ID that was generated during shell starter construction.
+        // For bash, fish, and PowerShell, the session ID is already baked into the command
+        // args. For zsh and MSYS2, enqueue_init_script injects this same ID.
+        let generated_session_id = match &shell_starter {
+            ShellStarter::Direct(starter) | ShellStarter::MSYS2(starter) => starter.session_id(),
+            ShellStarter::DockerSandbox(starter) => starter.session_id(),
+            ShellStarter::Wsl(starter) => starter.session_id(),
+        };
+        self.model()
+            .lock()
+            .register_session_id(generated_session_id);
+
         // Enqueue the init shell script (for shells that need it), then create
         // the PTY and start its corresponding event loop.
         let model = self.model();
         let pty = match self
-            .enqueue_init_script(&shell_starter)
+            .enqueue_init_script(&shell_starter, generated_session_id)
             .context("Failed to write shell init script to the pty")
             .and_then(|_| {
                 Self::create_pty(
@@ -1052,14 +1067,21 @@ impl TerminalManager {
         }
     }
 
-    fn enqueue_init_script(&self, shell_starter: &ShellStarter) -> Result<(), SendError<Message>> {
+    fn enqueue_init_script(
+        &self,
+        shell_starter: &ShellStarter,
+        session_id: SessionId,
+    ) -> Result<(), SendError<Message>> {
         let shell_type = shell_starter.shell_type();
         if shell_type == crate::terminal::shell::ShellType::Zsh
             // For more on why this is necessary on Git Bash, see https://linear.app/warpdotdev/issue/CORE-3202.
             || shell_starter.is_msys2()
         {
-            let init_shell_script =
-                crate::terminal::bootstrap::init_shell_script_for_shell(shell_type, &crate::ASSETS);
+            let init_shell_script = crate::terminal::bootstrap::init_shell_script_for_shell(
+                shell_type,
+                &crate::ASSETS,
+                session_id,
+            );
             let tx = self.event_loop_tx.lock();
             tx.send(Message::Input(init_shell_script.into_bytes().into()))?;
             tx.send(Message::Input(shell_type.execute_command_bytes().into()))
@@ -1082,15 +1104,35 @@ impl TerminalManager {
         let is_honor_ps1_enabled = *SessionSettings::as_ref(ctx).honor_ps1;
         let is_crash_reporting_enabled = PrivacySettings::as_ref(ctx).is_crash_reporting_enabled;
 
-        // The TMUX SSH wrapper supercedes the original ControlMaster wrapper.
-        let enable_ssh_wrapper = if FeatureFlag::SSHTmuxWrapper.is_enabled() {
-            *WarpifySettings::as_ref(ctx)
-                .enable_ssh_warpification
-                .value()
-                && !*WarpifySettings::as_ref(ctx).use_ssh_tmux_wrapper.value()
-        } else {
-            *SshSettings::as_ref(ctx).enable_legacy_ssh_wrapper.value()
+        // Determine whether the Node.js Version chip is enabled anywhere it could be
+        // shown (the Warp prompt, the agent footer, or the CLI agent footer). When it
+        // is not, the shell bootstrap skips the expensive per-prompt `node --version`
+        // detection. The chip value is fed by the same precmd payload regardless of
+        // where it is displayed, so we must check all three locations.
+        let node_version_chip_enabled = {
+            let in_prompt = !is_honor_ps1_enabled
+                && Prompt::as_ref(ctx)
+                    .chip_kinds()
+                    .contains(&ContextChipKind::NodeVersion);
+            let settings = SessionSettings::as_ref(ctx);
+            in_prompt
+                || settings
+                    .agent_footer_chip_selection
+                    .all_chips()
+                    .contains(&ContextChipKind::NodeVersion)
+                || settings
+                    .cli_agent_footer_chip_selection
+                    .all_chips()
+                    .contains(&ContextChipKind::NodeVersion)
         };
+
+        let enable_ssh_wrapper = *SshSettings::as_ref(ctx).enable_ssh_wrapper.value();
+
+        // Only meaningful when the legacy ControlMaster wrapper is active.
+        let reuse_ssh_control_master = enable_ssh_wrapper
+            && *SshSettings::as_ref(ctx)
+                .reuse_existing_control_master
+                .value();
 
         let size: crate::terminal::SizeInfo = model.lock().block_list().size().to_owned();
         let options = PtyOptions {
@@ -1100,8 +1142,10 @@ impl TerminalManager {
             start_dir: startup_directory,
             env_vars,
             enable_ssh_wrapper,
+            reuse_ssh_control_master,
             shell_debug_mode: is_shell_debug_mode_enabled,
             honor_ps1: is_honor_ps1_enabled,
+            node_version_chip_enabled,
             close_fds: true,
         };
 
@@ -1358,6 +1402,13 @@ impl TerminalManager {
         // the orchestrator task id is discoverable regardless of which variant
         // the share is.
         model.lock().set_shared_session_source(source.clone());
+        Self::log_shared_session_lifecycle(
+            &terminal_view,
+            &model,
+            "start_requested",
+            "trigger=terminal_view_start_sharing",
+            ctx,
+        );
         if matches!(source.source_type, SessionSourceType::AmbientAgent { .. }) {
             let terminal_view_id = terminal_view.id();
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _ctx| {
@@ -1438,21 +1489,30 @@ impl TerminalManager {
                     )
                     .and_then(|update| update.selected_conversation);
 
-                let long_running_command_agent_interaction_state = {
+                let (
+                    long_running_command_agent_interaction_state,
+                    long_running_command_agent_interaction,
+                ) = {
                     let model = model.lock();
                     let active_block = model.block_list().active_block();
-                    let state = if active_block.is_active_and_long_running() {
-                        if active_block.is_agent_in_control() {
-                            LongRunningCommandAgentInteractionState::InControl
-                        } else if active_block.is_agent_tagged_in() {
-                            LongRunningCommandAgentInteractionState::TaggedIn
-                        } else {
-                            LongRunningCommandAgentInteractionState::NotInteracting
-                        }
+                    if active_block.is_active_and_long_running() {
+                        let state = if active_block.is_agent_in_control() {
+                                LongRunningCommandAgentInteractionState::InControl
+                            } else if active_block.is_agent_tagged_in() {
+                                LongRunningCommandAgentInteractionState::TaggedIn
+                            } else {
+                                LongRunningCommandAgentInteractionState::NotInteracting
+                            };
+                        (
+                            Some(state),
+                            Some(LongRunningCommandAgentInteraction {
+                                block_id: active_block.id().clone().into(),
+                                state,
+                            }),
+                        )
                     } else {
-                        LongRunningCommandAgentInteractionState::NotInteracting
-                    };
-                    Some(state)
+                        (Some(LongRunningCommandAgentInteractionState::NotInteracting), None)
+                    }
                 };
 
                 // Include CLI agent session state in initial context so
@@ -1475,6 +1535,7 @@ impl TerminalManager {
                     auto_approve_agent_actions: Some(auto_approve_agent_actions),
                     selected_model: None,
                     long_running_command_agent_interaction_state,
+                    long_running_command_agent_interaction,
                     cli_agent_session,
                 };
 
@@ -1535,6 +1596,13 @@ impl TerminalManager {
                         controller.set_sharer_participant_id(sharer_id.clone());
                     });
                 });
+                Self::log_shared_session_lifecycle(
+                    &terminal_view,
+                    &model,
+                    "session_established",
+                    "outcome=active_sharer",
+                    ctx,
+                );
 
                 // Let the manager know the share is active with the relevant metadata.
                 Manager::handle(ctx).update(ctx, |manager, ctx| {
@@ -1576,7 +1644,7 @@ impl TerminalManager {
                     Self::stream_historical_agent_conversations(&terminal_view, &model, ctx);
                 }
 
-                // `LocalSharedSessionLinkModel` fires the (task_id,
+                // `LocalAgentTaskSyncModel` fires the (task_id,
                 // session_id) link in response to the event emitted above.
             }
             NetworkEvent::FailedToCreateSharedSession {
@@ -1866,6 +1934,7 @@ impl TerminalManager {
                         input.try_execute_command_on_behalf_of_shared_session_participant(
                             command,
                             participant_id.clone(),
+                            false,
                             ctx,
                         );
                     });
@@ -2161,16 +2230,21 @@ impl TerminalManager {
                     .active_block()
                     .is_active_and_long_running()
                 {
-                    if let Some(interaction_state) =
+                    if let Some(interaction) =
+                        context_update.long_running_command_agent_interaction.clone()
+                    {
+                        terminal_view.update(ctx, |view, ctx| {
+                            view.apply_long_running_command_agent_interaction(interaction, ctx);
+                        });
+                    } else if let Some(interaction_state) =
                         context_update.long_running_command_agent_interaction_state
                     {
-                        log::info!(
-                            "[sharer] UniversalDeveloperInputContextUpdated: \
-                             applying LRC interaction_state={interaction_state:?}"
-                        );
+                        // TODO (roland): this is kept around for backward compatibility. Remove after 6 weeks (around Jul 23, 2026) 
+                        // once clients have updated to use context_update.long_running_command_agent_interaction above
                         terminal_view.update(ctx, |view, ctx| {
                             view.apply_long_running_command_agent_interaction_state(
                                 interaction_state,
+                                None,
                                 ctx,
                             );
                         });
@@ -2180,6 +2254,35 @@ impl TerminalManager {
         });
 
         *session_sharer = Some(network);
+    }
+
+    fn log_shared_session_lifecycle(
+        terminal_view: &ViewHandle<TerminalView>,
+        model: &Arc<FairMutex<TerminalModel>>,
+        event: &'static str,
+        details: impl std::fmt::Display,
+        ctx: &AppContext,
+    ) {
+        let session_id = terminal_view.as_ref(ctx).shared_session_id().cloned();
+        let (source_type, source_task_id) = {
+            let model = model.lock();
+            match model.shared_session_source() {
+                Some(source) => {
+                    let source_type = match &source.source_type {
+                        SessionSourceType::User => "user",
+                        SessionSourceType::AmbientAgent { .. } => "ambient_agent",
+                    };
+                    (
+                        source_type,
+                        source.orchestrator_task_id().map(str::to_owned),
+                    )
+                }
+                None => ("unknown", None),
+            }
+        };
+        log::info!(
+            "Shared session local lifecycle: event={event} session_id={session_id:?} source_type={source_type} source_task_id={source_task_id:?} {details}"
+        );
     }
 
     /// Contains necessary logic for stopping the current shared session.
@@ -2234,6 +2337,13 @@ impl TerminalManager {
         model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut AppContext,
     ) {
+        Self::log_shared_session_lifecycle(
+            terminal_view,
+            &model,
+            "end_requested",
+            format_args!("reason={reason:?}"),
+            ctx,
+        );
         Self::cleanup_shared_session(terminal_view, model, ctx);
 
         // Drop the ModelHandle<Network> and set session_sharer to None.
@@ -2293,6 +2403,13 @@ impl TerminalManager {
             }
             TerminalViewEvent::StopSharingCurrentSession { reason } => {
                 Self::end_shared_session(&view, session_sharer.clone(), *reason, model.clone(), ctx)
+            }
+            TerminalViewEvent::ExtendSessionRetention { reason } => {
+                if let Some(network) = session_sharer.borrow().as_ref() {
+                    network.update(ctx, |network, _| {
+                        network.extend_session_retention(*reason);
+                    });
+                }
             }
             TerminalViewEvent::SelectedBlocksChanged | TerminalViewEvent::SelectedTextChanged => {
                 if let Some(network) = session_sharer.borrow().as_ref() {
@@ -2409,16 +2526,27 @@ impl TerminalManager {
                     });
                 }
             }
-            TerminalViewEvent::LongRunningCommandAgentInteractionStateChanged { state } => {
+            TerminalViewEvent::LongRunningCommandAgentInteractionStateChanged {
+                state,
+                block_id,
+            } => {
                 if !sharer_remote_update_guard.should_broadcast() {
                     return;
                 }
 
                 if let Some(network) = session_sharer.borrow().as_ref() {
+                    let interaction =
+                        block_id
+                            .clone()
+                            .map(|block_id| LongRunningCommandAgentInteraction {
+                                block_id: block_id.into(),
+                                state: *state,
+                            });
                     network.update(ctx, |network, _| {
                         network.send_universal_developer_input_context_update(
                             UniversalDeveloperInputContextUpdate {
                                 long_running_command_agent_interaction_state: Some(*state),
+                                long_running_command_agent_interaction: interaction,
                                 ..Default::default()
                             },
                         )
@@ -2622,11 +2750,18 @@ impl crate::terminal::TerminalManager for TerminalManager {
         // The detach type is intentionally ignored: a sharer always stops sharing immediately,
         // even on a reversible `HiddenForClose` detach. This is desirable for security — a sharer
         // should not continue accepting commands from viewers while the session is not visible.
-        _detach_type: crate::pane_group::pane::DetachType,
+        detach_type: crate::pane_group::pane::DetachType,
         app: &mut AppContext,
     ) {
         let shared_session_status = self.model.lock().shared_session_status().clone();
         if shared_session_status.is_sharer() {
+            Self::log_shared_session_lifecycle(
+                &self.view,
+                &self.model,
+                "view_detached",
+                format_args!("detach_type={detach_type:?}"),
+                app,
+            );
             let is_confirm_close_session =
                 *SessionSettings::as_ref(app).should_confirm_close_session;
             self.view.update(app, |terminal_view, ctx| {

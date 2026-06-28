@@ -7,7 +7,7 @@ use vec1::vec1;
 use warp_core::features::FeatureFlag;
 use warp_graphql::managed_secrets::ManagedSecret;
 use warp_graphql::queries::task_secrets::ManagedSecretValue as GqlManagedSecretValue;
-use warpui::{Entity, SingletonEntity};
+use warpui_core::{Entity, SingletonEntity};
 
 use crate::ManagedSecretValue;
 use crate::client::{

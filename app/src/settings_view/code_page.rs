@@ -128,43 +128,8 @@ fn remote_codebase_index_limit_reached(status: &RemoteCodebaseIndexStatus) -> bo
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]
-mod tests {
-    use remote_server::codebase_index_proto::{
-        RemoteCodebaseIndexState, RemoteCodebaseIndexStatus,
-    };
-
-    use super::remote_codebase_index_limit_reached;
-
-    fn remote_status_with_failure(failure_message: Option<&str>) -> RemoteCodebaseIndexStatus {
-        RemoteCodebaseIndexStatus {
-            repo_path: "/workspaces/repo".to_string(),
-            state: RemoteCodebaseIndexState::Unavailable,
-            last_updated_epoch_millis: Some(1),
-            progress_completed: None,
-            progress_total: None,
-            failure_message: failure_message.map(ToOwned::to_owned),
-            root_hash: None,
-        }
-    }
-
-    #[test]
-    fn remote_index_limit_failure_is_detected_from_status_message() {
-        let status = remote_status_with_failure(Some(
-            "Cannot index remote codebase because the maximum number of codebase indexes has been reached.",
-        ));
-
-        assert!(remote_codebase_index_limit_reached(&status));
-    }
-
-    #[test]
-    fn other_unavailable_failures_are_not_index_limit_failures() {
-        let status = remote_status_with_failure(Some(
-            "Cannot index remote codebase because indexing did not start.",
-        ));
-
-        assert!(!remote_codebase_index_limit_reached(&status));
-    }
-}
+#[path = "code_page_tests.rs"]
+mod tests;
 
 #[derive(Clone, Default)]
 struct LspServerRowMouseStates {
@@ -406,6 +371,7 @@ impl CodeSettingsPageView {
                 Box::new(CodeReviewDiffStatsToggleWidget::default()),
                 Box::new(ProjectExplorerToggleWidget::default()),
                 Box::new(GlobalSearchToggleWidget::default()),
+                Box::new(FormatOnSaveToggleWidget::default()),
             ]);
             let categories = vec![
                 Category::new("Codebase Indexing", codebase_indexing_widgets),
@@ -489,6 +455,7 @@ impl CodeSettingsPageView {
                             Box::new(CodeReviewDiffStatsToggleWidget::default()),
                             Box::new(ProjectExplorerToggleWidget::default()),
                             Box::new(GlobalSearchToggleWidget::default()),
+                            Box::new(FormatOnSaveToggleWidget::default()),
                         ]);
                     }
                 }
@@ -538,6 +505,7 @@ impl CodeSettingsPageView {
                 Box::new(CodeReviewDiffStatsToggleWidget::default()),
                 Box::new(ProjectExplorerToggleWidget::default()),
                 Box::new(GlobalSearchToggleWidget::default()),
+                Box::new(FormatOnSaveToggleWidget::default()),
             ]);
             let categories = vec![
                 Category::new("Codebase Indexing", codebase_indexing_widgets),
@@ -657,6 +625,7 @@ pub enum CodeSettingsPageAction {
     ToggleAutoOpenCodeReviewPane,
     ToggleProjectExplorer,
     ToggleGlobalSearch,
+    ToggleFormatOnSave,
     /// Install (if needed) and enable a suggested LSP server.
     InstallAndEnableLspServer {
         workspace_path: PathBuf,
@@ -857,6 +826,12 @@ impl TypedActionView for CodeSettingsPageView {
                 });
                 ctx.notify();
             }
+            CodeSettingsPageAction::ToggleFormatOnSave => {
+                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.format_on_save.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
             CodeSettingsPageAction::ToggleAutoOpenCodeReviewPane => {
                 GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
@@ -964,6 +939,54 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 &(context.clone() & id!(flags::IS_CODEBASE_INDEXING_ENABLED)),
                 flags::IS_AUTOINDEXING_ENABLED,
             )],
+            app,
+        );
+    }
+
+    if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+        ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
+            vec![
+                ToggleSettingActionPair::new(
+                    "auto open code review panel",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleAutoOpenCodeReviewPane,
+                    )),
+                    context,
+                    flags::AUTO_OPEN_CODE_REVIEW_PANE_FLAG,
+                ),
+                ToggleSettingActionPair::new(
+                    "code review button",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleCodeReviewPanel,
+                    )),
+                    context,
+                    flags::SHOW_CODE_REVIEW_BUTTON_FLAG,
+                ),
+                ToggleSettingActionPair::new(
+                    "diff stats on code review button",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleShowCodeReviewDiffStats,
+                    )),
+                    context,
+                    flags::SHOW_CODE_REVIEW_DIFF_STATS_FLAG,
+                ),
+                ToggleSettingActionPair::new(
+                    "project explorer",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleProjectExplorer,
+                    )),
+                    context,
+                    flags::SHOW_PROJECT_EXPLORER,
+                ),
+                ToggleSettingActionPair::new(
+                    "global file search",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleGlobalSearch,
+                    )),
+                    context,
+                    flags::SHOW_GLOBAL_SEARCH,
+                ),
+            ],
             app,
         );
     }
@@ -2830,6 +2853,49 @@ impl SettingsWidget for GlobalSearchToggleWidget {
                 })
                 .finish(),
             Some("Adds global file search to the left side tools panel.".into()),
+        )
+    }
+}
+
+#[derive(Default)]
+struct FormatOnSaveToggleWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for FormatOnSaveToggleWidget {
+    type View = CodeSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "format on save lsp language server formatting reformat editor"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let code_settings = CodeSettings::as_ref(app);
+
+        render_body_item::<CodeSettingsPageAction>(
+            "Format on save (requires an active language server)".into(),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*code_settings.format_on_save)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleFormatOnSave);
+                })
+                .finish(),
+            Some(
+                "Only applies when a language server is active for the file. Automatically formats the file with the language server on save; other LSP features (hover, go-to-definition, references, diagnostics) are unaffected."
+                    .into(),
+            ),
         )
     }
 }

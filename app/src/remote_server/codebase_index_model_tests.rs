@@ -7,6 +7,12 @@ fn host_with_name(name: &str) -> HostId {
     HostId::new(name.to_string())
 }
 
+fn host_label(label: &str) -> HostLabel {
+    HostLabel {
+        label: label.to_string(),
+    }
+}
+
 fn remote_path(repo_path: &str) -> RemotePath {
     remote_path_from_repo_path(&host(), repo_path).unwrap()
 }
@@ -57,6 +63,42 @@ fn snapshot_replaces_statuses_for_host() {
 
     assert!(model.status_for_repo(&remote_path("/old")).is_none());
     assert!(model.status_for_repo(&remote_path("/new")).is_some());
+}
+
+#[test]
+fn snapshot_replaces_statuses_for_same_host_label() {
+    let mut model = RemoteCodebaseIndexModel::default();
+    let old_host = host_with_name("old-daemon");
+    let new_host = host_with_name("new-daemon");
+    model
+        .host_labels
+        .insert(old_host.clone(), host_label("user@remote-host"));
+    model
+        .host_labels
+        .insert(new_host.clone(), host_label("user@remote-host"));
+    assert!(model.apply_statuses_snapshot(
+        &old_host,
+        &[RemoteCodebaseIndexStatusWithPath {
+            remote_path: remote_path_for_host(&old_host, "/old"),
+            status: ready_status("/old"),
+        }],
+    ));
+
+    assert!(model.apply_statuses_snapshot(
+        &new_host,
+        &[RemoteCodebaseIndexStatusWithPath {
+            remote_path: remote_path_for_host(&new_host, "/new"),
+            status: ready_status("/new"),
+        }],
+    ));
+
+    assert!(model
+        .status_for_repo(&remote_path_for_host(&new_host, "/old"))
+        .is_none());
+    assert!(model
+        .status_for_repo(&remote_path_for_host(&new_host, "/new"))
+        .is_some());
+    assert_eq!(model.entries_for_settings().len(), 1);
 }
 #[test]
 fn status_update_reports_only_actual_changes() {
@@ -129,11 +171,11 @@ fn entries_for_settings_use_host_label_when_available() {
     let host = host();
     model
         .host_labels
-        .insert(host.clone(), "kevinyang@ssh-testing".to_string());
+        .insert(host.clone(), host_label("user@ssh-testing"));
     model.apply_status_update(remote_path("/repo"), ready_status("/repo"));
 
     let entries = model.entries_for_settings();
-    assert_eq!(entries[0].host_label, "kevinyang@ssh-testing");
+    assert_eq!(entries[0].host_label, "user@ssh-testing");
 }
 
 #[test]
@@ -145,6 +187,63 @@ fn entries_for_settings_fall_back_to_host_id_without_label() {
     let entries = model.entries_for_settings();
 
     assert_eq!(entries[0].host_label, host.to_string());
+}
+
+#[test]
+fn entries_for_settings_dedupe_same_ssh_host_and_path() {
+    let mut model = RemoteCodebaseIndexModel::default();
+    let old_host = host_with_name("old-daemon");
+    let new_host = host_with_name("new-daemon");
+    model
+        .host_labels
+        .insert(old_host.clone(), host_label("user@remote-host"));
+    model
+        .host_labels
+        .insert(new_host.clone(), host_label("user@remote-host"));
+    model.apply_status_update(
+        remote_path_for_host(&old_host, "/repo"),
+        ready_status("/repo"),
+    );
+    model.apply_status_update(
+        remote_path_for_host(&new_host, "/repo"),
+        ready_status("/repo"),
+    );
+
+    let entries = model.entries_for_settings();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(model.statuses.len(), 1);
+    assert_eq!(entries[0].host_label, "user@remote-host");
+    assert_eq!(entries[0].remote_path.path.as_str(), "/repo");
+}
+
+#[test]
+fn entries_for_settings_do_not_dedupe_different_ssh_hosts_or_paths() {
+    let mut model = RemoteCodebaseIndexModel::default();
+    let first_host = host_with_name("first-daemon");
+    let second_host = host_with_name("second-daemon");
+    model
+        .host_labels
+        .insert(first_host.clone(), host_label("user@first-host"));
+    model
+        .host_labels
+        .insert(second_host.clone(), host_label("user@second-host"));
+    model.apply_status_update(
+        remote_path_for_host(&first_host, "/repo"),
+        ready_status("/repo"),
+    );
+    model.apply_status_update(
+        remote_path_for_host(&second_host, "/repo"),
+        ready_status("/repo"),
+    );
+    model.apply_status_update(
+        remote_path_for_host(&first_host, "/other-repo"),
+        ready_status("/other-repo"),
+    );
+
+    let entries = model.entries_for_settings();
+
+    assert_eq!(entries.len(), 3);
 }
 
 #[test]
@@ -221,17 +320,14 @@ fn availability_uses_unmatched_explicit_path_as_not_indexed() {
     let availability = model.availability_for_remote(
         &host,
         Some("/workspaces/warp"),
-        Some("/Users/moirahuang/code/warp"),
+        Some("/Users/user/code/warp"),
     );
 
     assert!(matches!(
         availability,
         RemoteCodebaseSearchAvailability::NotIndexed { .. }
     ));
-    assert_eq!(
-        availability.repo_path(),
-        Some("/Users/moirahuang/code/warp")
-    );
+    assert_eq!(availability.repo_path(), Some("/Users/user/code/warp"));
 }
 
 #[test]
@@ -290,7 +386,7 @@ fn codebases_for_agent_context_includes_searchable_remote_paths() {
         status_with_state("/workspaces/stale", RemoteCodebaseIndexState::Stale),
     );
 
-    let entries = model.codebases_for_agent_context();
+    let entries = model.codebases_for_agent_context(&host());
 
     assert_eq!(
         entries,
@@ -325,7 +421,75 @@ fn codebases_for_agent_context_skips_unsearchable_remote_paths() {
         status_with_state("/workspaces/failed", RemoteCodebaseIndexState::Failed),
     );
 
-    assert!(model.codebases_for_agent_context().is_empty());
+    assert!(model.codebases_for_agent_context(&host()).is_empty());
+}
+
+#[test]
+fn codebases_for_agent_context_only_includes_active_host_paths() {
+    let mut model = RemoteCodebaseIndexModel::default();
+    let active_host = host_with_name("active-host");
+    let other_host = host_with_name("other-host");
+    model.apply_status_update(
+        remote_path_for_host(&active_host, "/workspaces/active"),
+        ready_status("/workspaces/active"),
+    );
+    model.apply_status_update(
+        remote_path_for_host(&other_host, "/workspaces/other"),
+        ready_status("/workspaces/other"),
+    );
+
+    let entries = model.codebases_for_agent_context(&active_host);
+
+    assert_eq!(
+        entries,
+        vec![RemoteCodebaseContextEntry {
+            name: "active".to_string(),
+            path: "/workspaces/active".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn clear_remote_codebase_indexing_state_returns_paths_and_removes_client_state() {
+    let mut model = RemoteCodebaseIndexModel::default();
+    let host = host();
+    model.apply_status_update(
+        remote_path("/workspaces/warp"),
+        ready_status("/workspaces/warp"),
+    );
+    model.record_navigated_directory(session(1), &remote_path("/workspaces/warp"), true);
+
+    let remote_paths = model.clear_remote_codebase_indexing_state();
+
+    assert_eq!(remote_paths, vec![remote_path("/workspaces/warp")]);
+    assert!(model.entries_for_settings().is_empty());
+    assert!(matches!(
+        model.availability_for_remote(&host, Some("/workspaces/warp"), None),
+        RemoteCodebaseSearchAvailability::NotIndexed { .. }
+    ));
+}
+
+#[test]
+fn active_git_repo_paths_needing_auto_index_skips_searchable_and_indexing_repos_across_hosts() {
+    let mut model = RemoteCodebaseIndexModel::default();
+    let host_ready = host_with_name("ready-host");
+    let host_new = host_with_name("new-host");
+    let host_indexing = host_with_name("indexing-host");
+    let ready_path = remote_path_for_host(&host_ready, "/ready");
+    let new_path = remote_path_for_host(&host_new, "/new");
+    let indexing_path = remote_path_for_host(&host_indexing, "/indexing");
+    model.record_navigated_directory(session(1), &ready_path, true);
+    model.record_navigated_directory(session(2), &new_path, true);
+    model.record_navigated_directory(session(3), &indexing_path, true);
+    model.apply_status_update(ready_path, ready_status("/ready"));
+    model.apply_status_update(
+        indexing_path,
+        status_with_state("/indexing", RemoteCodebaseIndexState::Indexing),
+    );
+
+    let remote_paths = model.active_git_repo_paths_needing_auto_index();
+
+    assert_eq!(remote_paths, vec![new_path]);
 }
 
 #[test]

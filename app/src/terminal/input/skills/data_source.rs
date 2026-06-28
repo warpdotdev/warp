@@ -1,10 +1,9 @@
-use std::path::PathBuf;
-
 use ai::skills::{SkillProvider, SkillReference, SkillScope};
 use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
 use ordered_float::OrderedFloat;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::Fill;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Flex, Highlight, ParentElement, Shrinkable, Text,
 };
@@ -104,12 +103,11 @@ impl SkillSelectorDataSource {
         self.include_bundled = include_bundled;
     }
 
-    /// Get the current working directory from the active session
-    fn get_current_working_directory(&self, app: &AppContext) -> Option<PathBuf> {
+    /// Get the current working directory location from the active session.
+    fn get_current_working_directory(&self, app: &AppContext) -> Option<LocalOrRemotePath> {
         self.active_session
             .as_ref(app)
-            .current_working_directory()
-            .map(PathBuf::from)
+            .current_working_directory_location(app)
     }
 }
 
@@ -123,10 +121,12 @@ impl SyncDataSource for SkillSelectorDataSource {
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         let cwd = self.get_current_working_directory(app);
         let cli_agent_providers = self.active_cli_agent_providers(app);
-        let skills =
-            SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_deref(), app);
+        let skills = SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
 
         // Filter out bundled skills when in open mode, since they cannot be opened.
+        // Bundled skills are identified by scope rather than reference: local
+        // catalog entries are `BundledSkillId`-referenced, but remote catalog
+        // entries are path-referenced, and both must be excluded here.
         // When CLI agent input is open, filter to skills that exist in a supported
         // provider folder. We check all paths for the skill name (not just the
         // deduplicated provider) because deduplication may pick a higher-priority
@@ -138,8 +138,7 @@ impl SyncDataSource for SkillSelectorDataSource {
                 if let Some(providers) = &cli_agent_providers {
                     skill_manager.skill_exists_for_any_provider(skill, providers)
                 } else {
-                    self.include_bundled
-                        || !matches!(skill.reference, SkillReference::BundledSkillId(_))
+                    self.include_bundled || skill.scope != SkillScope::Bundled
                 }
             })
             .map(|mut skill| {

@@ -12,15 +12,14 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
+pub use cloud_object_models::{CloudNotebook, CloudNotebookModel, NotebookId, SerializedNotebook};
 use serde::{Deserialize, Serialize};
-use warp_server_client::cloud_object::CloudObjectUpsertParams;
 use warpui::AppContext;
 
-use crate::ai::document::ai_document_model::AIDocumentId;
 use crate::appearance::Appearance;
 use crate::cloud_object::{
-    CloudModelType, CloudObjectEventEntrypoint, CreateCloudObjectResult, CreateObjectRequest,
-    GenericCloudObject, GenericServerObject, ObjectType, Owner, Revision, UpdateCloudObjectResult,
+    CloudModelType, CloudObjectEventEntrypoint, CloudObjectUpsertParams, CreateCloudObjectResult,
+    CreateObjectRequest, GenericServerObject, ObjectType, Owner, Revision, UpdateCloudObjectResult,
 };
 use crate::drive::items::notebook::WarpDriveNotebook;
 use crate::drive::items::WarpDriveItem;
@@ -30,28 +29,6 @@ use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::object::ObjectClient;
 use crate::server::sync_queue::{QueueItem, SerializedModel};
-
-/// Serialized representation of a notebook for sync queue
-/// The AIDocumentID and ConversationID are stored here to avoid polluting the
-/// generic CreateObjectRequest type.
-#[derive(Serialize, Deserialize)]
-pub(crate) struct SerializedNotebook {
-    pub(crate) data: String,
-    pub(crate) ai_document_id: Option<String>,
-    pub(crate) conversation_id: Option<String>,
-}
-
-/// `CloudNotebook` is a notebook retrieved from the server.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct CloudNotebookModel {
-    pub title: String,
-    pub data: String,
-    pub ai_document_id: Option<AIDocumentId>,
-    /// This is the server-generated conversation token, not the client-side AIConversationId.
-    pub conversation_id: Option<String>,
-}
-
-pub type CloudNotebook = GenericCloudObject<NotebookId, CloudNotebookModel>;
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -190,17 +167,6 @@ impl CloudModelType for CloudNotebookModel {
             notebook.clone(),
             notebook.model().ai_document_id.is_some(),
         )))
-    }
-}
-
-/// This is the notebook_id in the database associated with this notebook.
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub struct NotebookId(ServerId);
-crate::server_id_traits! { NotebookId, "Notebook" }
-
-impl From<NotebookId> for SyncId {
-    fn from(id: NotebookId) -> Self {
-        Self::ServerId(id.into())
     }
 }
 

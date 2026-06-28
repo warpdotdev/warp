@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
+#[cfg(not(target_family = "wasm"))]
+use remote_server::manager::RemoteServerManager;
 use warp_core::ui::icons::ICON_DIMENSIONS;
 use warp_editor::model::CoreEditorModel;
 #[cfg(feature = "local_fs")]
@@ -133,6 +135,7 @@ pub enum FileNotebookAction {
     OpenAsCode,
     ContextMenu(ContextMenuAction),
     ToggleMarkdownDisplayMode(MarkdownDisplayMode),
+    ToggleMaximized,
 }
 
 impl From<ContextMenuAction> for FileNotebookAction {
@@ -585,21 +588,22 @@ impl FileNotebookView {
 
         let host_id = remote_path.host_id.clone();
         let manager = remote_server::manager::RemoteServerManager::handle(ctx);
-        let client = manager.as_ref(ctx).client_for_host(&host_id).cloned();
 
-        let Some(client) = client else {
-            safe_warn!(
-                safe: ("No remote server client for host when opening markdown file"),
-                full: ("No remote server client for host {host_id:?} when opening markdown file")
-            );
-            self.file_state = match mem::replace(&mut self.file_state, FileState::NoFile) {
-                FileState::Loading(source) => FileState::Error(source),
-                other => other,
-            };
-            ctx.notify();
-            return;
-        };
-
+        // Subscribe to host connect/disconnect events so the disconnection
+        // banner appears/disappears when the remote session state changes.
+        let watched_host_id = host_id.clone();
+        ctx.subscribe_to_model(&manager, move |_me, _handle, event, ctx| {
+            use remote_server::manager::RemoteServerManagerEvent;
+            match event {
+                RemoteServerManagerEvent::HostDisconnected { host_id }
+                | RemoteServerManagerEvent::HostConnected { host_id }
+                    if *host_id == watched_host_id =>
+                {
+                    ctx.notify();
+                }
+                _ => {}
+            }
+        });
         let request = remote_server::proto::ReadFileContextRequest {
             files: vec![remote_server::proto::ReadFileContextFile {
                 path: path_str,
@@ -609,8 +613,9 @@ impl FileNotebookView {
             max_batch_bytes: None,
         };
 
+        let handle = manager.as_ref(ctx).host_request_handle(&host_id);
         ctx.spawn(
-            async move { client.read_file_context(request).await },
+            async move { handle.read_file_context(request).await },
             move |me, result, ctx| match result {
                 Ok(response) => {
                     if let Some(file_ctx) = response.file_contexts.first() {
@@ -911,13 +916,36 @@ impl FileNotebookView {
         .finish()
     }
 
-    fn render_body(&self, appearance: &Appearance) -> Box<dyn Element> {
+    /// Returns `true` when this notebook is backed by a remote file whose
+    /// host no longer has any connected session.
+    #[cfg(not(target_family = "wasm"))]
+    fn is_remote_disconnected(&self, app: &AppContext) -> bool {
+        let Some(LocalOrRemotePath::Remote(remote_path)) = self.file_state.path() else {
+            return false;
+        };
+        RemoteServerManager::as_ref(app)
+            .client_for_host(&remote_path.host_id)
+            .is_none()
+    }
+
+    fn render_body(&self, appearance: &Appearance, _app: &AppContext) -> Box<dyn Element> {
         let body = match &self.file_state {
             FileState::NoFile => self.render_no_file(appearance),
             FileState::Loading(source) => self.render_loading(source, appearance),
             FileState::Error(source) => self.render_error(source, appearance),
             FileState::Loaded(_) => ChildView::new(&self.editor).finish(),
         };
+
+        #[cfg(not(target_family = "wasm"))]
+        if matches!(self.file_state, FileState::Loaded(_)) && self.is_remote_disconnected(_app) {
+            let banner =
+                crate::code::local_code_editor::render_remote_disconnected_banner(appearance);
+            let mut col = Flex::column();
+            col.add_child(banner);
+            col.add_child(Shrinkable::new(1., styles::wrap_body(body)).finish());
+            return col.finish();
+        }
+
         styles::wrap_body(body)
     }
 }
@@ -944,7 +972,7 @@ impl View for FileNotebookView {
 
         let column = Flex::column().with_children([
             self.render_title(appearance, font_settings),
-            Shrinkable::new(1., self.render_body(appearance)).finish(),
+            Shrinkable::new(1., self.render_body(appearance, app)).finish(),
         ]);
 
         let mut stack = Stack::new().with_child(column.finish());
@@ -1047,6 +1075,12 @@ impl TypedActionView for FileNotebookView {
                     }
                 }
             }
+            FileNotebookAction::ToggleMaximized => {
+                ctx.emit(FileNotebookEvent::Pane(PaneEvent::ToggleMaximized));
+                self.pane_configuration.update(ctx, |pane_config, ctx| {
+                    pane_config.refresh_pane_header_overflow_menu_items(ctx);
+                });
+            }
         }
     }
 }
@@ -1066,10 +1100,20 @@ impl BackingView for FileNotebookView {
 
     fn pane_header_overflow_menu_items(
         &self,
-        _ctx: &AppContext,
+        ctx: &AppContext,
     ) -> Vec<MenuItem<FileNotebookAction>> {
-        let mut actions = vec![];
+        // Mirror the toggle that `CodeView` (the Raw markdown mode) exposes, so the Rendered
+        // markdown pane's overflow menu offers the same "Maximize pane" / "Minimize pane" entry.
+        let is_maximized = self
+            .focus_handle
+            .as_ref()
+            .is_some_and(|h| h.is_maximized(ctx));
+        let mut actions = vec![MenuItemFields::toggle_pane_action(is_maximized)
+            .with_on_select_action(FileNotebookAction::ToggleMaximized)
+            .into_item()];
+
         if let Some(SourceFile::FileBased { .. }) = self.file_state.source() {
+            actions.push(MenuItem::Separator);
             actions.push(
                 MenuItemFields::new("Refresh file")
                     .with_on_select_action(FileNotebookAction::ReloadFile)

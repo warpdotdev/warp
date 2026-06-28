@@ -1,5 +1,5 @@
 use anyhow::Result;
-use warpui::{AppContext, SingletonEntity};
+use warpui_core::{AppContext, SingletonEntity};
 
 use crate::manager::SettingsManager;
 use crate::{Setting, SupportedPlatforms, SyncToCloud, *};
@@ -51,7 +51,7 @@ struct EventListener {
 }
 
 impl EventListener {
-    fn new(ctx: &mut warpui::ModelContext<Self>) -> Self {
+    fn new(ctx: &mut warpui_core::ModelContext<Self>) -> Self {
         let test_settings = TestSettings::handle(ctx);
         ctx.subscribe_to_model(&test_settings, |me, event, _ctx| {
             // Update our internal state if we get a change event for
@@ -65,7 +65,7 @@ impl EventListener {
     }
 }
 
-impl warpui::Entity for EventListener {
+impl warpui_core::Entity for EventListener {
     type Event = ();
 }
 
@@ -90,7 +90,7 @@ fn test_can_override_storage_key() {
 
 #[test]
 fn test_set_value_raises_changed_event_no_save() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
 
@@ -122,7 +122,7 @@ fn test_set_value_raises_changed_event_no_save() {
 
 #[test]
 fn test_set_value_raises_changed_event_save() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
 
@@ -154,7 +154,7 @@ fn test_set_value_raises_changed_event_save() {
 
 #[test]
 fn test_save_and_load_lifecycle() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
 
@@ -193,7 +193,7 @@ fn test_save_and_load_lifecycle() {
 
 #[test]
 fn test_toggleable_setting() -> Result<()> {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
 
@@ -252,7 +252,7 @@ fn test_explicit_value_tracking_with_some() {
 
 #[test]
 fn test_explicit_value_tracking_after_set_value() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
 
@@ -282,7 +282,7 @@ fn test_explicit_value_tracking_after_set_value() {
 
 #[test]
 fn test_explicit_value_tracking_after_clear_value() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
 
@@ -323,7 +323,7 @@ fn test_explicit_value_tracking_after_clear_value() {
 
 #[test]
 fn test_explicit_value_tracking_from_storage() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
 
@@ -397,7 +397,7 @@ fn test_private_setting_storage_key_is_explicit_override() {
 
 #[test]
 fn test_load_value_updates_value_without_persisting() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -428,7 +428,7 @@ fn test_load_value_updates_value_without_persisting() {
 
 #[test]
 fn test_load_value_emits_event_on_change() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -459,7 +459,7 @@ fn test_load_value_emits_event_on_change() {
 
 #[test]
 fn test_load_value_skips_event_when_unchanged() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -488,7 +488,7 @@ fn test_load_value_skips_event_when_unchanged() {
 
 #[test]
 fn test_load_value_updates_explicitly_set_flag() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -524,7 +524,7 @@ fn test_load_value_updates_explicitly_set_flag() {
 
 #[test]
 fn test_load_value_resets_explicitly_set_flag() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -567,7 +567,7 @@ fn test_load_value_resets_explicitly_set_flag() {
 
 #[test]
 fn test_explicit_value_tracking_cloud_sync() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
 
@@ -638,7 +638,7 @@ fn test_is_private_returns_true_for_private_setting() {
 #[test]
 fn test_public_setting_writes_to_public_prefs_when_flag_enabled() {
     let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -675,7 +675,7 @@ fn test_public_setting_writes_to_public_prefs_when_flag_enabled() {
 #[test]
 fn test_private_setting_writes_to_private_prefs_when_flag_enabled() {
     let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -721,7 +721,7 @@ fn test_private_setting_writes_to_private_prefs_when_flag_enabled() {
 #[test]
 fn test_new_from_storage_reads_from_correct_backend_when_flag_enabled() {
     let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -758,7 +758,7 @@ fn test_new_from_storage_reads_from_correct_backend_when_flag_enabled() {
 #[test]
 fn test_clear_value_clears_from_correct_backend() {
     let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -813,7 +813,7 @@ fn test_clear_value_clears_from_correct_backend() {
 #[test]
 fn test_public_setting_uses_private_prefs_when_flag_disabled() {
     let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(false);
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -853,7 +853,7 @@ fn test_public_setting_uses_private_prefs_when_flag_disabled() {
 #[test]
 fn test_private_setting_uses_private_prefs_when_flag_disabled() {
     let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(false);
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -886,7 +886,7 @@ fn test_private_setting_uses_private_prefs_when_flag_disabled() {
 #[test]
 fn test_new_from_storage_reads_from_private_backend_when_flag_disabled() {
     let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(false);
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -927,7 +927,7 @@ fn test_new_from_storage_reads_from_private_backend_when_flag_disabled() {
 
 #[test]
 fn test_manager_is_private_for_storage_key() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -952,7 +952,7 @@ fn test_manager_is_private_for_storage_key() {
 
 #[test]
 fn test_manager_default_values_for_settings_file_excludes_private() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -982,7 +982,7 @@ fn test_manager_default_values_for_settings_file_excludes_private() {
 #[test]
 fn test_manager_read_local_setting_value_routes_when_flag_enabled() {
     let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -1029,7 +1029,7 @@ fn test_manager_read_local_setting_value_routes_when_flag_enabled() {
 #[test]
 fn test_manager_read_local_setting_value_falls_back_when_flag_disabled() {
     let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(false);
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
         TestSettings::register(&mut app);
@@ -1084,7 +1084,7 @@ fn test_manager_read_local_setting_value_respects_hierarchy_with_settings_file()
     let dir = tempfile::tempdir().unwrap();
     let file_path = dir.path().join("settings.toml");
 
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         // Use the TOML-backed store for public preferences so the hierarchy
         // routing actually matters; in-memory preferences ignore hierarchy
         // entirely and would hide this bug.

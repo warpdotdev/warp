@@ -813,24 +813,25 @@ impl GlobalBufferModel {
                 let host_id = remote_path.host_id.clone();
                 let path = remote_path.path.as_str().to_string();
                 let manager = RemoteServerManager::handle(ctx);
-                let Some(client) = manager.as_ref(ctx).client_for_host(&host_id).cloned() else {
-                    safe_error!(
-                        safe: ("[remote-buffer] No remote server client at buffer save time"),
-                        full: ("[remote-buffer] No remote server client for save: host={host_id:?}")
-                    );
-                    return Err(FileSaveError::RemoteError(
-                        "No remote server client available".to_string(),
-                    ));
-                };
 
                 // Flush any pending edit batch so the server has the latest
                 // content before persisting to disk.
                 if let Some(batch) = pending_batch.take() {
-                    batch.flush(&client, &path);
+                    let Some(client) = manager.as_ref(ctx).client_for_host(&host_id) else {
+                        safe_error!(
+                            safe: ("[remote-buffer] No remote server client at buffer save time"),
+                            full: ("[remote-buffer] No remote server client for save: host={host_id:?}")
+                        );
+                        return Err(FileSaveError::RemoteError(
+                            "No remote server client available".to_string(),
+                        ));
+                    };
+                    batch.flush(client, &path);
                 }
 
+                let handle = manager.as_ref(ctx).host_request_handle(&host_id);
                 ctx.spawn(
-                    async move { client.save_buffer(path).await.map_err(|e| format!("{e}")) },
+                    async move { handle.save_buffer(path).await },
                     move |_me, result, ctx| match result {
                         Ok(()) => {
                             ctx.emit(GlobalBufferModelEvent::FileSaved { file_id });
@@ -839,7 +840,7 @@ impl GlobalBufferModel {
                             log::warn!("Remote save failed: {error}");
                             ctx.emit(GlobalBufferModelEvent::FailedToSave {
                                 file_id,
-                                error: Rc::new(FileSaveError::RemoteError(error)),
+                                error: Rc::new(FileSaveError::RemoteError(error.to_string())),
                             });
                         }
                     },
@@ -1767,29 +1768,13 @@ impl GlobalBufferModel {
             },
         );
 
-        // Look up the client on the main thread, then send OpenBuffer asynchronously.
-        let Some(client) = client_for_sub else {
-            safe_error!(
-                safe: ("[remote-buffer] No remote server client at buffer open time"),
-                full: ("[remote-buffer] No remote server client for host {host_id:?}")
-            );
-            ctx.emit(GlobalBufferModelEvent::FailedToLoad {
-                file_id,
-                error: Rc::new(FileLoadError::DoesNotExist),
-            });
-            return BufferState::new(file_id, buffer);
-        };
-
+        // Send OpenBuffer via the manager for daemon-side failover.
         log::debug!("[remote-buffer] Sending OpenBuffer for path={path_str} host={host_id:?}");
+        let handle = RemoteServerManager::as_ref(ctx).host_request_handle(&host_id);
         ctx.spawn(
-            async move {
-                client
-                    .open_buffer(path_str, false)
-                    .await
-                    .map_err(|e| format!("{e}"))
-            },
+            async move { handle.open_buffer(path_str, false).await },
             move |me, result, ctx| {
-                me.apply_open_buffer_response(file_id, result, ctx);
+                me.apply_open_buffer_response(file_id, result.map_err(|e| e.to_string()), ctx);
             },
         );
 
@@ -2200,26 +2185,12 @@ impl GlobalBufferModel {
         let path_str = remote_path.path.as_str().to_string();
         let host_id = remote_path.host_id.clone();
 
-        let manager = RemoteServerManager::handle(ctx);
-        let Some(client) = manager.as_ref(ctx).client_for_host(&host_id).cloned() else {
-            log::warn!("[remote-buffer] reopen: no client for host {host_id:?}");
-            ctx.emit(GlobalBufferModelEvent::FailedToLoad {
-                file_id,
-                error: Rc::new(FileLoadError::DoesNotExist),
-            });
-            return;
-        };
-
         log::debug!("[remote-buffer] Re-opening buffer with force_reload: path={path_str}");
+        let handle = RemoteServerManager::as_ref(ctx).host_request_handle(&host_id);
         ctx.spawn(
-            async move {
-                client
-                    .open_buffer(path_str, true)
-                    .await
-                    .map_err(|e| format!("{e}"))
-            },
+            async move { handle.open_buffer(path_str, true).await },
             move |me, result, ctx| {
-                me.apply_open_buffer_response(file_id, result, ctx);
+                me.apply_open_buffer_response(file_id, result.map_err(|e| e.to_string()), ctx);
             },
         );
     }

@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use cloud_object_client::MockObjectClient;
 use warp_core::settings::macros::define_settings_group;
 use warp_core::settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
 use warp_core::user_preferences::GetUserPreferences;
@@ -26,7 +27,6 @@ use crate::server::cloud_objects::test_utils::{
 };
 use crate::server::cloud_objects::update_manager::{InitialLoadResponse, UpdateManager};
 use crate::server::ids::{ClientId, ServerId, ServerIdAndType, SyncId};
-use crate::server::server_api::object::MockObjectClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::cloud_preferences::{
     CloudPreferenceModel, CloudPreferencesSettings, Platform,

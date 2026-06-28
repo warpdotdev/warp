@@ -7,12 +7,12 @@ mod context_model;
 mod controller;
 pub(crate) mod handoff;
 
-pub(crate) mod local_shared_session_link_model;
+pub(crate) mod local_agent_task_sync_model;
 pub(crate) mod orchestration_event_streamer;
 pub(crate) mod orchestration_events;
 pub(crate) mod orchestration_topology;
 mod passive_suggestions;
-pub(crate) mod task_status_sync_model;
+pub(crate) mod queued_query;
 pub(super) use controller::RequestInput;
 pub mod history_model;
 pub mod inline_action;
@@ -55,8 +55,9 @@ pub(crate) use controller::{
     SlashCommandRequest,
 };
 pub(crate) use history_model::{
-    AIQueryHistory, AIQueryHistoryOutputStatus, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    ConversationStatusUpdate, FORK_PREFIX, PRE_REWIND_PREFIX,
+    AIQueryHistory, AIQueryHistoryOutputStatus, BeginConversationRenameError,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FORK_PREFIX,
+    PRE_REWIND_PREFIX,
 };
 pub(crate) use input_model::{
     BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
@@ -70,6 +71,10 @@ pub use permissions::{BlocklistAIPermissions, CommandExecutionPermissionAllowedR
 #[cfg_attr(target_family = "wasm", allow(unused))]
 pub(crate) use persistence::PersistedAIInputType;
 pub(crate) use persistence::{PersistedAIInput, SerializedBlockListItem};
+pub(crate) use queued_query::{
+    AutofireAction, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
+    QueuedQueryOrigin,
+};
 pub use suggestion_chip_view::*;
 pub use view_util::error_color;
 pub(crate) use view_util::{

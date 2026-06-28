@@ -11,8 +11,10 @@ use warpui::ModelContext;
 pub enum SkillRepositoryMessage {
     /// Initial scan of a home skills directory (e.g., `~/.agents`).
     HomeInitialScan { skills: Vec<ParsedSkill> },
-    /// Incremental file system updates from either a home provider directory or a project skills directory.
-    RepositoryUpdate { update: RepositoryUpdate },
+    /// Incremental file system updates from a local project fallback watcher.
+    ProjectRepositoryUpdate { update: RepositoryUpdate },
+    /// Incremental file system updates from a home provider directory.
+    HomeRepositoryUpdate { update: RepositoryUpdate },
     /// File changes detected in a resolved symlink target directory.
     SymlinkTargetUpdate { update: RepositoryUpdate },
 }
@@ -28,9 +30,8 @@ impl RepositorySubscriber for ProjectSkillSubscriber {
         _repository: &Repository,
         _ctx: &mut ModelContext<Repository>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
-        // Initial skill scanning is handled via RepositoryMetadataEvent::RepositoryUpdated,
-        // which fires AFTER the file tree is built. This subscriber is only used for
-        // incremental file change updates via on_files_updated.
+        // Initial fallback scans are triggered directly when repo metadata indexing fails.
+        // This subscriber only keeps failed local repos hot-reloaded afterward.
         Box::pin(async {})
     }
 
@@ -45,7 +46,7 @@ impl RepositorySubscriber for ProjectSkillSubscriber {
 
         Box::pin(async move {
             let _ = tx
-                .send(SkillRepositoryMessage::RepositoryUpdate { update })
+                .send(SkillRepositoryMessage::ProjectRepositoryUpdate { update })
                 .await;
         })
     }
@@ -132,7 +133,7 @@ impl RepositorySubscriber for HomeSkillSubscriber {
 
         Box::pin(async move {
             let _ = tx
-                .send(SkillRepositoryMessage::RepositoryUpdate { update })
+                .send(SkillRepositoryMessage::HomeRepositoryUpdate { update })
                 .await;
         })
     }

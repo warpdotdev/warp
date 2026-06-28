@@ -1,4 +1,5 @@
 use chrono::Utc;
+use cloud_object_client::MockObjectClient;
 use itertools::Itertools;
 use warpui::{AddSingletonModel, App};
 
@@ -9,7 +10,6 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions, ServerWorkflow};
 use crate::server::cloud_objects::update_manager::InitialLoadResponse;
 use crate::server::ids::SyncId;
-use crate::server::server_api::object::MockObjectClient;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::{MockWorkspaceClient, WorkspaceClient};
 use crate::server::sync_queue::SyncQueue;

@@ -194,6 +194,53 @@ fn idle_timeout_sender_later_send_after_supersedes_earlier() {
 }
 
 #[test]
+fn idle_timeout_sender_complete_with_optional_idle_none_sends_immediately() {
+    // `complete_with_optional_idle(None, value)` routes to `end_run_now` and
+    // delivers `value` synchronously.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(None, 7);
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_optional_idle_some_defers_then_delivers() {
+    // `complete_with_optional_idle(Some(d), value)` routes to `end_run_after`
+    // and defers delivery by `d`.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(Some(Duration::from_millis(50)), 7);
+
+    // Not delivered yet.
+    assert_eq!(rx.try_recv().unwrap(), None);
+
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_timer() {
+    // Cross-path cancellation: the Stage 2c skip-initial-turn driver path
+    // schedules a deferred `Success` via `complete_with_optional_idle(Some(_), _)`
+    // *before* the history subscription is wired up; a later
+    // `AppendedExchange` in that subscription closure invalidates the timer
+    // via `cancel_idle_timeout()`. The shared `Arc<AtomicUsize>` generation
+    // counter is what makes that work across the two logical code paths.
+    // This test exercises the same sequence in isolation: schedule via the
+    // helper, then cancel via the unrelated `cancel_idle_timeout` entry point,
+    // and verify the value is never delivered.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(Some(Duration::from_millis(50)), 7);
+    idle_timeout.cancel_idle_timeout();
+
+    std::thread::sleep(Duration::from_millis(100));
+    // Sender was never consumed by the cancelled timer, so the channel is
+    // still open but empty.
+    assert_eq!(rx.try_recv().unwrap(), None);
+}
+
+#[test]
 fn task_env_vars_include_parent_run_id_when_present() {
     let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
     let env_vars = task_env_vars(Some(&task_id), Some("parent-run-123"), Harness::Claude);

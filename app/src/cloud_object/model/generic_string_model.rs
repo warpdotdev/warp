@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use warp_server_client::cloud_object::CloudObjectUpsertParams;
-// Re-exported from warp_server_client.
+use cloud_objects::cloud_object::CloudObjectUpsertParams;
+// Re-exported from cloud_objects.
+pub use cloud_objects::cloud_object::{GenericStringModel, Serializer};
 pub use warp_server_client::ids::GenericStringObjectId;
 
 use crate::appearance::Appearance;
@@ -117,27 +118,6 @@ pub trait StringModel: Clone + Debug + PartialEq + Send + Sync + 'static {
     /// to enforce that only one object with a given key can exist in the generic string
     /// object server database.
     fn uniqueness_key(&self) -> Option<GenericStringObjectUniqueKey>;
-}
-
-/// A serializer goes from a model to a string and back.
-pub trait Serializer<M>: Debug + Clone + 'static {
-    fn serialize(model: &M) -> SerializedModel;
-    fn deserialize_owned(serialized: &str) -> Result<M>
-    where
-        Self: Sized;
-}
-
-/// A `GenericStringModel` is a generic implementation of model types that can serialize to/from string.
-/// given a particular serializer.
-#[derive(Clone, Debug, PartialEq, Default)]
-pub struct GenericStringModel<M, S>
-where
-    M: StringModel<
-        CloudObjectType = GenericCloudObject<GenericStringObjectId, GenericStringModel<M, S>>,
-    >,
-    S: Serializer<M>,
-{
-    pub string_model: M,
 }
 
 impl<M, S> CloudStringObject for GenericCloudObject<GenericStringObjectId, GenericStringModel<M, S>>
@@ -344,27 +324,5 @@ where
         object: &GenericCloudObject<GenericStringObjectId, Self>,
     ) -> Option<Box<dyn WarpDriveItem>> {
         self.string_model.to_warp_drive_item(id, appearance, object)
-    }
-}
-
-impl<M, S> GenericStringModel<M, S>
-where
-    M: StringModel<
-        CloudObjectType = GenericCloudObject<GenericStringObjectId, GenericStringModel<M, S>>,
-    >,
-    S: Serializer<M>,
-{
-    pub fn deserialize_owned(serialized: &str) -> Result<Self> {
-        S::deserialize_owned(serialized).map(Self::new)
-    }
-
-    pub fn new(model: M) -> Self {
-        Self {
-            string_model: model,
-        }
-    }
-
-    pub fn json_model(&self) -> &M {
-        &self.string_model
     }
 }

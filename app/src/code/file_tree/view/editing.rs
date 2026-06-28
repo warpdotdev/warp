@@ -21,8 +21,8 @@ use crate::server::telemetry::TelemetryEvent;
 
 /// Custom ordering function for items in the file tree.
 ///
-/// Directories are ordered first, sorted alphabetically.
-/// Files are ordered second, sorted alphabetically.
+/// Directories are ordered first, sorted by natural (numeric-aware) order.
+/// Files are ordered second, sorted by natural (numeric-aware) order.
 /// Within each group, dotfiles (entries starting with a dot) are ordered first.
 pub(super) fn sort_entries_for_file_tree(
     entry_1: &StandardizedPath,
@@ -68,7 +68,7 @@ pub(super) fn sort_entries_for_file_tree(
     match (starts_with_dot_1, starts_with_dot_2) {
         (true, false) => Ordering::Less,
         (false, true) => Ordering::Greater,
-        _ => name_1.cmp(name_2),
+        _ => alphanumeric_sort::compare_str(name_1, name_2),
     }
 }
 

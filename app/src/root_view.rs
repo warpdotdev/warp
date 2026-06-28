@@ -18,6 +18,7 @@ use session_sharing_protocol::common::SessionId;
 use settings::Setting as _;
 use url::Url;
 use warp_core::context_flag::ContextFlag;
+use warp_core::safe_error;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_graphql::billing::StripeSubscriptionPlan;
 use warpui::clipboard::ClipboardContent;
@@ -1497,6 +1498,8 @@ pub enum NewWorkspaceSource {
         options: Box<NewTerminalOptions>,
         initial_query: Option<String>,
     },
+    /// Starts the workspace with the Cloud Agent setup tab.
+    AmbientAgent,
     /// A tab is being transferred from another window via the transferable views framework.
     /// The workspace will create a placeholder tab, which will be replaced by the transferred
     /// PaneGroup after window creation.
@@ -2156,16 +2159,6 @@ impl RootView {
                     mark_hoa_onboarding_completed(ctx);
                 }
 
-                // Terminal-intent users should not see the conversation list
-                // auto-opened for discoverability.
-                if matches!(selected_settings, SelectedSettings::Terminal { .. }) {
-                    AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                        report_if_error!(settings
-                            .has_auto_opened_conversation_list
-                            .set_value(true, ctx));
-                    });
-                }
-
                 let is_logged_in = AuthStateProvider::as_ref(ctx).get().is_logged_in();
                 // If the user isn't logged in, only require login if the applied
                 // settings need an account (AI or Warp Drive enabled).
@@ -2480,7 +2473,10 @@ impl RootView {
                 });
             }
             Err(error) => {
-                log::error!("Unable to parse AuthResult from url: {error}");
+                safe_error!(
+                    safe: ("Unable to parse AuthResult from url"),
+                    full: ("Unable to parse AuthResult from url: {error}")
+                );
                 self.auth_view.update(ctx, |view, ctx| {
                     view.last_login_failure_reason =
                         Some(LoginFailureReason::InvalidRedirectUrl { was_pasted: false });

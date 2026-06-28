@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::io;
-use std::io::Write;
 use std::path::PathBuf;
 
 use hex;
@@ -28,9 +27,18 @@ struct MockHandler {
     pluggable_notifications: Vec<(Option<String>, String)>,
     hyperlink_events: Vec<Option<Hyperlink>>,
     cwd_updates: Vec<String>,
+    registered_session_ids: HashSet<SessionId>,
+    should_validate_dcs_hook_session_id: bool,
 }
 
 impl Handler for MockHandler {
+    fn is_registered_session(&self, session_id: SessionId) -> bool {
+        self.registered_session_ids.contains(&session_id)
+    }
+
+    fn should_validate_dcs_hook_session_id(&self) -> bool {
+        self.should_validate_dcs_hook_session_id
+    }
     fn terminal_attribute(&mut self, attr: Attr) {
         self.attr = Some(attr);
     }
@@ -51,7 +59,13 @@ impl Handler for MockHandler {
     fn report_xtversion<W: io::Write>(&mut self, _: &mut W) {}
 
     fn reset_state(&mut self) {
-        *self = Self::default();
+        let registered_session_ids = self.registered_session_ids.clone();
+        let should_validate_dcs_hook_session_id = self.should_validate_dcs_hook_session_id;
+        *self = Self {
+            registered_session_ids,
+            should_validate_dcs_hook_session_id,
+            ..Self::default()
+        };
     }
 
     fn set_title(&mut self, _: Option<String>) {}
@@ -217,10 +231,6 @@ impl Handler for MockHandler {
             .push(DProtoHook::InitSubshell { value: data })
     }
 
-    fn init_ssh(&mut self, data: InitSshValue) {
-        self.d_proto_hooks.push(DProtoHook::InitSsh { value: data })
-    }
-
     fn sourced_rc_file(&mut self, data: SourcedRcFileForWarpValue) {
         self.d_proto_hooks
             .push(DProtoHook::SourcedRcFileForWarp { value: data })
@@ -263,6 +273,8 @@ impl Default for MockHandler {
             pluggable_notifications: Vec::new(),
             hyperlink_events: Vec::new(),
             cwd_updates: Vec::new(),
+            registered_session_ids: HashSet::new(),
+            should_validate_dcs_hook_session_id: true,
         }
     }
 }
@@ -273,8 +285,27 @@ fn hex_encoded_dcs_string(dcs_payload: &str) -> Vec<u8> {
 }
 
 fn parse_bytes(bytes: &[u8]) -> (Processor, MockHandler) {
+    parse_bytes_with_registered_sessions(bytes, [SessionId::from(167303092612201)])
+}
+
+fn parse_bytes_with_registered_sessions(
+    bytes: &[u8],
+    registered_session_ids: impl IntoIterator<Item = SessionId>,
+) -> (Processor, MockHandler) {
+    parse_bytes_with_registered_sessions_and_validation(bytes, registered_session_ids, true)
+}
+
+fn parse_bytes_with_registered_sessions_and_validation(
+    bytes: &[u8],
+    registered_session_ids: impl IntoIterator<Item = SessionId>,
+    should_validate_dcs_hook_session_id: bool,
+) -> (Processor, MockHandler) {
     let mut parser = Processor::new();
-    let mut handler = MockHandler::default();
+    let mut handler = MockHandler {
+        registered_session_ids: registered_session_ids.into_iter().collect(),
+        should_validate_dcs_hook_session_id,
+        ..Default::default()
+    };
 
     parser.parse_bytes(&mut handler, bytes, &mut io::sink());
 
@@ -488,7 +519,9 @@ fn parse_dcs_ssh() {
                 "hook": "SSH",
                 "value": {
                     "socket_path": "~/.ssh/9001",
-                    "remote_shell": "zsh"
+                    "remote_shell": "zsh",
+                    "session_id": 167303092612201,
+                    "remote_session_id": 167303092612202
                 }
             }"#,
     );
@@ -501,6 +534,41 @@ fn parse_dcs_ssh() {
             SSHValue {
                 socket_path: PathBuf::from("~/.ssh/9001"),
                 remote_shell: "zsh".to_string(),
+                session_id: Some(167303092612201),
+                remote_session_id: Some(167303092612202),
+                external_control_master: false,
+            }
+        ),
+        _ => panic!("incorrect dcs value"),
+    };
+}
+
+#[test]
+fn parse_dcs_ssh_with_external_control_master() {
+    let bytes = hex_encoded_dcs_string(
+        r#"{
+                "hook": "SSH",
+                "value": {
+                    "socket_path": "/home/user/.ssh/cm-user@host:22",
+                    "remote_shell": "zsh",
+                    "session_id": 167303092612201,
+                    "remote_session_id": 167303092612202,
+                    "external_control_master": true
+                }
+            }"#,
+    );
+    let (_, handler) = parse_bytes(&bytes);
+
+    assert_eq!(handler.d_proto_hooks.len(), 1);
+    match handler.d_proto_hooks.first().unwrap() {
+        DProtoHook::SSH { value } => assert_eq!(
+            *value,
+            SSHValue {
+                socket_path: PathBuf::from("/home/user/.ssh/cm-user@host:22"),
+                remote_shell: "zsh".to_string(),
+                session_id: Some(167303092612201),
+                remote_session_id: Some(167303092612202),
+                external_control_master: true,
             }
         ),
         _ => panic!("incorrect dcs value"),
@@ -552,13 +620,50 @@ fn parse_dcs_precmd() {
 }
 
 #[test]
+fn parse_dcs_unregistered_session_id_rejected() {
+    let bytes = hex_encoded_dcs_string(
+        r#"{
+                "hook": "Precmd",
+                "value": {
+                    "pwd": "/Users",
+                    "session_id": 167303092612201
+                }
+            }"#,
+    );
+    let (_, handler) = parse_bytes_with_registered_sessions(&bytes, []);
+
+    assert_eq!(handler.d_proto_hooks.len(), 0);
+}
+
+#[test]
+fn parse_dcs_unregistered_session_id_allowed_when_validation_disabled() {
+    let bytes = hex_encoded_dcs_string(
+        r#"{
+                "hook": "Precmd",
+                "value": {
+                    "pwd": "/Users",
+                    "session_id": 167303092612201
+                }
+            }"#,
+    );
+    let (_, handler) = parse_bytes_with_registered_sessions_and_validation(&bytes, [], false);
+
+    assert_eq!(handler.d_proto_hooks.len(), 1);
+    match handler.d_proto_hooks.first().unwrap() {
+        DProtoHook::Precmd { value } => assert_eq!(value.session_id, Some(167303092612201)),
+        _ => panic!("incorrect dcs value"),
+    };
+}
+
+#[test]
 fn parse_dcs_command_finished() {
     let bytes = hex_encoded_dcs_string(
         r#"{
                 "hook": "CommandFinished",
                 "value": {
                     "exit_code": 127,
-                    "next_block_id": "block_id"
+                    "next_block_id": "block_id",
+                    "session_id": 167303092612201
                 }
             }"#,
     );
@@ -571,7 +676,8 @@ fn parse_dcs_command_finished() {
                 *value,
                 CommandFinishedValue {
                     exit_code: ExitCode::from(127),
-                    next_block_id: "block_id".to_owned().into()
+                    next_block_id: "block_id".to_owned().into(),
+                    session_id: Some(167303092612201)
                 }
             )
         }
@@ -615,6 +721,7 @@ fn parse_dcs_bootstrapped() {
         DProtoHook::Bootstrapped { value } => assert_eq!(
             **value,
             BootstrappedValue {
+                session_id: Some(167303092612201),
                 histfile: Some("/Users/andy/.zsh_history".to_string()),
                 shell: "bash".to_string(),
                 home_dir: Some("/Users/andy".to_string()),
@@ -717,7 +824,8 @@ fn parse_dcs_input_buffer() {
         r#"{
                 "hook": "InputBuffer",
                 "value": {
-                    "buffer": "ls -al dir"
+                    "buffer": "ls -al dir",
+                    "session_id": 167303092612201
                 }
             }"#,
     );
@@ -729,7 +837,8 @@ fn parse_dcs_input_buffer() {
         DProtoHook::InputBuffer { value } => assert_eq!(
             *value,
             InputBufferValue {
-                buffer: "ls -al dir".to_string()
+                buffer: "ls -al dir".to_string(),
+                session_id: Some(167303092612201)
             }
         ),
         _ => panic!("incorrect dcs value"),
@@ -755,7 +864,6 @@ fn parse_sourced_rc_file_hook() {
             SourcedRcFileForWarpValue {
                 shell: "zsh".to_owned(),
                 uname: None,
-                tmux: None,
             }
         ),
         _ => panic!("incorrect dcs value"),
@@ -782,7 +890,6 @@ fn parse_sourced_rc_file_hook_with_uname() {
             SourcedRcFileForWarpValue {
                 shell: "zsh".to_owned(),
                 uname: Some("Darwin".to_owned()),
-                tmux: None,
             }
         ),
         _ => panic!("incorrect dcs value"),
@@ -1032,7 +1139,7 @@ fn parse_osc7_path_with_unescaped_semicolons_preserved() {
 #[test]
 fn parse_osc7_empty_host_ignored() {
     // Hostless payload (`file:///path`) is terminal-controlled and a remote
-    // shell over legacy SSH can emit it just as easily as a local one; reject.
+    // shell over a wrapper SSH session can emit it just as easily as a local one; reject.
     let bytes: &[u8] = b"\x1b]7;file:///Users/foo/bar\x07";
     let (_, handler) = parse_bytes(bytes);
 
@@ -1116,45 +1223,4 @@ fn parse_osc7_empty_payload_ignored() {
     let (_, handler) = parse_bytes(bytes);
 
     assert!(handler.cwd_updates.is_empty());
-}
-
-#[test]
-fn tmux_pane_writer_formats_bytes_as_send_keys() {
-    // Test that TmuxPaneWriter correctly converts writes to tmux send-keys format
-    let mut output = Vec::new();
-    {
-        let mut writer = super::TmuxPaneWriter::new(&mut output, 123);
-        // Write a cursor position response (ESC[1;1R)
-        writer.write_all(b"\x1b[1;1R").unwrap();
-    }
-
-    let output_str = String::from_utf8(output).unwrap();
-    // The output should be a send-keys command with hex bytes
-    // Format: send-keys -Ht %{pane_id} {hex} {hex}...\n
-    assert!(output_str.starts_with("send-keys -Ht %123"));
-    assert!(output_str.contains("1B")); // ESC = 0x1B
-    assert!(output_str.ends_with('\n'));
-}
-
-#[test]
-fn tmux_pane_writer_empty_write_returns_zero() {
-    let mut output = Vec::new();
-    let mut writer = super::TmuxPaneWriter::new(&mut output, 42);
-    let result = writer.write(&[]).unwrap();
-
-    assert_eq!(result, 0);
-    assert!(output.is_empty());
-}
-
-#[test]
-fn tmux_pane_writer_returns_original_byte_count() {
-    let mut output = Vec::new();
-    let mut writer = super::TmuxPaneWriter::new(&mut output, 42);
-    let input = b"test";
-    let result = writer.write(input).unwrap();
-
-    assert_eq!(result, 4);
-    let output_str = String::from_utf8(output).unwrap();
-    assert!(output_str.starts_with("send-keys -Ht %42"));
-    assert!(output_str.ends_with('\n'));
 }

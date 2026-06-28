@@ -25,7 +25,7 @@ use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlign
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
 use warpui::{
-    Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
+    id, Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
     UpdateModel, View, ViewContext, ViewHandle,
 };
 
@@ -80,8 +80,6 @@ const TELEMETRY_TITLE: &str = "Help improve Warp";
 const TELEMETRY_DESCRIPTION: &str =
     "App analytics help us make the product better for you. We may collect \
     certain console interactions to improve Warp's AI capabilities.";
-const TELEMETRY_FREE_TIER_NOTE: &str =
-    "On the free tier, analytics must be enabled to use AI features.";
 const TELEMETRY_DOCS_URL: &str =
     "https://docs.warp.dev/support-and-community/privacy-and-security/privacy#what-telemetry-data-does-warp-collect-and-why";
 
@@ -1517,13 +1515,6 @@ impl SettingsWidget for AppAnalyticsWidget {
                 .finish()
         };
 
-        // Check if user is on free tier to show the AI requirement note
-        // Fail safe: if billing status is unknown, assume paid (don't show free tier note)
-        let is_on_paid_plan = UserWorkspaces::as_ref(app)
-            .current_workspace()
-            .map(|w| w.billing_metadata.is_user_on_paid_plan())
-            .unwrap_or(true);
-
         let mut column = Flex::column();
         column.add_child(super::settings_page::build_toggle_element(
             zdr_label_component,
@@ -1546,23 +1537,6 @@ impl SettingsWidget for AppAnalyticsWidget {
                 .build()
                 .finish(),
         );
-
-        // Show free tier note only for non-paid users
-        if !is_on_paid_plan {
-            column.add_child(
-                ui_builder
-                    .paragraph(TELEMETRY_FREE_TIER_NOTE)
-                    .with_style(UiComponentStyles {
-                        font_color: Some(description_text_color),
-                        margin: Some(
-                            Coords::default().bottom(styles::DESCRIPTION_LINE_MARGIN_BOTTOM),
-                        ),
-                        ..Default::default()
-                    })
-                    .build()
-                    .finish(),
-            );
-        }
 
         column.add_child(
             Align::new(
@@ -2012,6 +1986,20 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         context,
         flags::SAFE_MODE_FLAG,
     ));
+
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
+            "cloud AI conversation storage",
+            builder(SettingsAction::PrivacyPageToggle(
+                PrivacyPageAction::ToggleCloudConversationStorage,
+            )),
+            &(context.clone()
+                & id!(flags::IS_ANY_AI_ENABLED)
+                & id!(flags::CLOUD_CONVERSATION_STORAGE_EDITABLE_FLAG)),
+            flags::CLOUD_CONVERSATION_STORAGE_FLAG,
+        )
+        .with_enabled(|| FeatureFlag::CloudConversations.is_enabled()),
+    );
 
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(toggle_binding_pairs, app);
 }

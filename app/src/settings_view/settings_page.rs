@@ -38,6 +38,7 @@ use super::main_page::MainSettingsPageView;
 use super::mcp_servers_page::MCPServersSettingsPageView;
 use super::privacy_page::PrivacyPageView;
 use super::referrals_page::ReferralsPageView;
+use super::scripting_page::ScriptingSettingsPageView;
 use super::show_blocks_view::ShowBlocksView;
 use super::teams_page::TeamsPageView;
 use super::warp_drive_page::WarpDriveSettingsPageView;
@@ -48,7 +49,7 @@ use crate::settings::CloudPreferencesSettings;
 use crate::themes::theme::Fill;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
-use crate::view_components::{Dropdown, SubmittableTextInput};
+use crate::view_components::{Dropdown, DropdownItemAction, SubmittableTextInput};
 
 pub const TOGGLE_BUTTON_RIGHT_PADDING: f32 = 5.;
 pub const HEADER_PADDING: f32 = 15.;
@@ -111,6 +112,7 @@ pub enum SettingsPageViewHandle {
     Privacy(ViewHandle<PrivacyPageView>),
     Warpify(ViewHandle<WarpifyPageView>),
     Referrals(ViewHandle<ReferralsPageView>),
+    Scripting(ViewHandle<ScriptingSettingsPageView>),
     AI(ViewHandle<AISettingsPageView>),
     CloudEnvironments(ViewHandle<EnvironmentsPageView>),
     BillingAndUsage(ViewHandle<BillingAndUsageDispatchView>),
@@ -134,6 +136,7 @@ impl SettingsPageViewHandle {
             Privacy(view_handle) => ChildView::new(view_handle).finish(),
             Warpify(view_handle) => ChildView::new(view_handle).finish(),
             Referrals(view_handle) => ChildView::new(view_handle).finish(),
+            Scripting(view_handle) => ChildView::new(view_handle).finish(),
             AI(view_handle) => ChildView::new(view_handle).finish(),
             CloudEnvironments(view_handle) => ChildView::new(view_handle).finish(),
             BillingAndUsage(view_handle) => ChildView::new(view_handle).finish(),
@@ -914,7 +917,7 @@ pub fn render_dropdown_item_label(
     }
 }
 
-pub(crate) fn render_dropdown_item<T: Clone + Action>(
+pub(crate) fn render_dropdown_item<T: DropdownItemAction>(
     appearance: &Appearance,
     label: &str,
     secondary_text: Option<&str>,

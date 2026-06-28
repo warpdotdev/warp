@@ -20,9 +20,9 @@ use weight::CustomWeight;
 /// Trait for an "action" that can be dispatched via a hyperlink click handler.
 /// This purposefully shadows the `Action` trait from `warpui`.
 ///
-/// Since `warpui` depends on this crate, we can't depend on the `warpui::Action` trait directly.
+/// Since `warpui` depends on this crate, we can't depend on the `warpui_core::Action` trait directly.
 /// Instead, we create a new trait with a blanket implementation that implicitly results
-/// in any `warpui::Action` implementing this `Action`.
+/// in any `warpui_core::Action` implementing this `Action`.
 pub trait Action: Any + Debug + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 }

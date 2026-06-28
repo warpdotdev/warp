@@ -1,6 +1,7 @@
 use std::cmp;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
@@ -206,7 +207,7 @@ pub struct DisplayChipMenu {
     list_state: UniformListState,
     scroll_state: ScrollStateHandle,
     menu_items: Vec<Arc<dyn GenericMenuItem>>,
-    filtered_items: Vec<FilteredMenuItem>,
+    filtered_items: Rc<Vec<FilteredMenuItem>>,
     selected_index: usize,
     is_footer_selected: bool,
     fixed_footer: Option<FixedFooter>,
@@ -368,13 +369,15 @@ impl DisplayChipMenu {
             })
             .collect();
 
-        let filtered_items: Vec<FilteredMenuItem> = menu_items
-            .iter()
-            .map(|item| FilteredMenuItem {
-                item: item.clone(),
-                match_result: None,
-            })
-            .collect();
+        let filtered_items: Rc<Vec<FilteredMenuItem>> = Rc::new(
+            menu_items
+                .iter()
+                .map(|item| FilteredMenuItem {
+                    item: item.clone(),
+                    match_result: None,
+                })
+                .collect(),
+        );
 
         // Always start selection at the top (first item) for consistent behavior
         let initial_selected_index = 0;
@@ -444,19 +447,20 @@ impl DisplayChipMenu {
     fn update_filtered_items(&mut self) {
         if self.search_query.is_empty() {
             // No search query - show all items
-            self.filtered_items = self
-                .menu_items
-                .iter()
-                .map(|item| FilteredMenuItem {
-                    item: item.clone(),
-                    match_result: None,
-                })
-                .collect();
+            self.filtered_items = Rc::new(
+                self.menu_items
+                    .iter()
+                    .map(|item| FilteredMenuItem {
+                        item: item.clone(),
+                        match_result: None,
+                    })
+                    .collect(),
+            );
             return;
         }
 
         // Filter items based on search query
-        self.filtered_items = self
+        let mut filtered_items: Vec<FilteredMenuItem> = self
             .menu_items
             .iter()
             .filter_map(|item| {
@@ -471,7 +475,7 @@ impl DisplayChipMenu {
             .collect();
 
         // Sort by match score (higher scores first)
-        self.filtered_items.sort_by(|a, b| {
+        filtered_items.sort_by(|a, b| {
             let score_a = a.match_result.as_ref().map(|r| r.score).unwrap_or(0);
             let score_b = b.match_result.as_ref().map(|r| r.score).unwrap_or(0);
             score_b.cmp(&score_a)
@@ -489,7 +493,7 @@ impl DisplayChipMenu {
             );
             if !already_matches_existing {
                 if let Some(synthetic) = builder(trimmed) {
-                    self.filtered_items.insert(
+                    filtered_items.insert(
                         0,
                         FilteredMenuItem {
                             item: synthetic,
@@ -499,6 +503,8 @@ impl DisplayChipMenu {
                 }
             }
         }
+
+        self.filtered_items = Rc::new(filtered_items);
     }
 
     pub fn update_search_query(&mut self, query: String, ctx: &mut ViewContext<Self>) {
@@ -1499,36 +1505,5 @@ impl TypedActionView for DisplayChipMenu {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::query_matches_existing_name;
-
-    #[test]
-    fn query_matches_existing_name_is_ascii_case_insensitive() {
-        let names = ["main", "feature/Foo"];
-        assert!(query_matches_existing_name(names, "main"));
-        assert!(query_matches_existing_name(names, "Main"));
-        assert!(query_matches_existing_name(names, "MAIN"));
-        assert!(query_matches_existing_name(names, "feature/foo"));
-        assert!(query_matches_existing_name(names, "FEATURE/FOO"));
-    }
-
-    #[test]
-    fn query_matches_existing_name_returns_false_when_no_overlap() {
-        let names = ["main", "feature/foo"];
-        assert!(!query_matches_existing_name(names, "develop"));
-        assert!(!query_matches_existing_name(names, "feature/bar"));
-    }
-
-    #[test]
-    fn query_matches_existing_name_returns_false_for_empty_input() {
-        let names: [&str; 0] = [];
-        assert!(!query_matches_existing_name(names, "main"));
-    }
-
-    #[test]
-    fn query_matches_existing_name_works_with_owned_strings() {
-        let names = [String::from("main"), String::from("Develop")];
-        assert!(query_matches_existing_name(names.iter(), "Main"));
-        assert!(query_matches_existing_name(names.iter(), "develop"));
-    }
-}
+#[path = "display_menu_tests.rs"]
+mod tests;

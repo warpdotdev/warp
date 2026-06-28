@@ -228,7 +228,7 @@ pub fn assert_command_executor_is_remote_server(tab_idx: usize) -> AssertionCall
 }
 
 /// Returns a `TestStep` action that writes a file on the remote host via
-/// the `RemoteServerClient::write_file` proto API. The write is dispatched
+/// the `HostRequestHandle::write_file` API. The write is dispatched
 /// on a background thread using `tokio::runtime::Runtime::block_on` since
 /// the action callback is synchronous.
 pub fn write_file_via_remote_server(
@@ -238,21 +238,22 @@ pub fn write_file_via_remote_server(
 ) -> RemoteServerActionCallback {
     Box::new(move |app, window_id, _| {
         let terminal_view = single_terminal_view_for_tab(app, window_id, tab_idx);
-        let maybe_client = terminal_view.read(app, |view, ctx| {
+        let maybe_handle = terminal_view.read(app, |view, ctx| {
             let session_id = view.active_block_session_id()?;
-            RemoteServerManager::as_ref(ctx)
-                .client_for_session(session_id)
-                .cloned()
+            let host_id = RemoteServerManager::as_ref(ctx)
+                .host_id_for_session(session_id)?
+                .clone();
+            Some(RemoteServerManager::as_ref(ctx).host_request_handle(&host_id))
         });
 
-        if let Some(client) = maybe_client {
+        if let Some(handle) = maybe_handle {
             let path = path.clone();
             let content = content.clone();
             // Spawn on a background thread because the action callback is sync
-            // but write_file is async.
+            // but send is async.
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-                let result = rt.block_on(client.write_file(path.clone(), content));
+                let result = rt.block_on(handle.write_file(path.clone(), content));
                 if let Err(e) = &result {
                     log::error!("write_file_via_remote_server failed for {path}: {e}");
                 }

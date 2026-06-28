@@ -1,22 +1,21 @@
 use std::collections::HashMap;
 use std::future::Future;
 
+pub use cloud_object_models::{
+    CloudScheduledAmbientAgent, CloudScheduledAmbientAgentModel, ScheduledAmbientAgent,
+};
 use futures::channel::oneshot;
 use futures::FutureExt;
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use warp_graphql::queries::get_scheduled_agent_history::ScheduledAgentHistory;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use super::AgentConfigSnapshot;
-use crate::cloud_object::model::generic_string_model::{
-    GenericStringModel, GenericStringObjectId, StringModel,
-};
-use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::cloud_object::model::json_model::JsonModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{
-    CloudObjectLookup as _, GenericCloudObject, GenericStringObjectFormat,
-    GenericStringObjectUniqueKey, JsonObjectType, Owner, Revision,
+    CloudObjectLookup as _, GenericStringObjectFormat, GenericStringObjectUniqueKey,
+    JsonObjectType, Owner, Revision,
 };
 use crate::drive::CloudObjectTypeAndId;
 use crate::server::cloud_objects::update_manager::{
@@ -25,47 +24,6 @@ use crate::server::cloud_objects::update_manager::{
 use crate::server::ids::{ClientId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::QueueItem;
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-/// A ScheduledAmbientAgent represents configuration for ambient agents that run on a cron schedule.
-pub struct ScheduledAmbientAgent {
-    /// Agent name
-    #[serde(default)]
-    pub name: String,
-    /// Cron schedule expression
-    #[serde(default)]
-    pub cron_schedule: String,
-    /// Whether the scheduled agent is enabled
-    #[serde(default)]
-    pub enabled: bool,
-    /// The prompt to use for the scheduled agent
-    #[serde(default)]
-    pub prompt: String,
-    /// The latest failure to execute this scheduled agent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_spawn_error: Option<String>,
-    /// Configuration for how the ambient agent should run.
-    #[serde(default, skip_serializing_if = "AgentConfigSnapshot::is_empty")]
-    pub agent_config: AgentConfigSnapshot,
-}
-
-pub type CloudScheduledAmbientAgent =
-    GenericCloudObject<GenericStringObjectId, CloudScheduledAmbientAgentModel>;
-pub type CloudScheduledAmbientAgentModel =
-    GenericStringModel<ScheduledAmbientAgent, JsonSerializer>;
-
-impl ScheduledAmbientAgent {
-    pub fn new(name: String, cron_schedule: String, enabled: bool, prompt: String) -> Self {
-        Self {
-            name,
-            cron_schedule,
-            enabled,
-            prompt,
-            last_spawn_error: None,
-            agent_config: Default::default(),
-        }
-    }
-}
 
 impl StringModel for ScheduledAmbientAgent {
     type CloudObjectType = CloudScheduledAmbientAgent;

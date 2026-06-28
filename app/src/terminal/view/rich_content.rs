@@ -10,17 +10,15 @@ use crate::ai::blocklist::telemetry_banner::TelemetryBanner;
 use crate::ai::blocklist::AIBlock;
 use crate::env_vars::env_var_collection_block::EnvVarCollectionBlock;
 use crate::terminal::block_list_viewport::ScrollPositionUpdate;
-use crate::terminal::model::blocks::RichContentItem;
+use crate::terminal::model::blocks::{RemovableBlocklistItem, RichContentItem};
 use crate::terminal::model::rich_content::RichContentType;
 use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::ssh::error::SshErrorBlock;
-use crate::terminal::ssh::install_tmux::SshInstallTmuxBlock;
-use crate::terminal::ssh::warpify::SshWarpifyBlock;
 use crate::terminal::view::ambient_agent::AmbientAgentEntryBlock;
 use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingAgenticSuggestionsBlock;
 use crate::terminal::view::init_environment::InitEnvironmentBlock;
 use crate::terminal::view::ssh_remote_server_choice_view::SshRemoteServerChoiceView;
 use crate::terminal::view::ssh_remote_server_failed_banner::SshRemoteServerFailedBanner;
+use crate::terminal::view::ssh_tmux_deprecation_banner::SshTmuxDeprecationBanner;
 use crate::terminal::warpify::success_block::WarpifySuccessBlock;
 use crate::terminal::TerminalView;
 
@@ -34,6 +32,9 @@ pub enum RichContentInsertionPosition {
     },
     /// Insert before the block at the given index.
     BeforeBlockIndex(BlockIndex),
+    /// Insert after the rich content item with the given view ID, falling back to appending if it
+    /// is no longer present.
+    AfterRichContent(EntityId),
     /// Pin to the bottom of the blocklist. The BlockList will automatically
     /// keep this item at the end by reordering it after any subsequent insertions.
     /// Only one item can be pinned at a time.
@@ -243,20 +244,14 @@ pub enum RichContentMetadata {
     EnvVarCollectionBlock {
         env_var_collection_block_handle: ViewHandle<EnvVarCollectionBlock>,
     },
-    SshWarpifyBlock {
-        ssh_warpify_block_handle: ViewHandle<SshWarpifyBlock>,
-    },
-    SshInstallTmuxBlock {
-        ssh_install_tmux_block_handle: ViewHandle<SshInstallTmuxBlock>,
-    },
-    SshErrorBlock {
-        ssh_error_block_handle: ViewHandle<SshErrorBlock>,
-    },
     SshRemoteServerChoiceBlock {
         handle: ViewHandle<SshRemoteServerChoiceView>,
     },
     SshRemoteServerFailedBanner {
         handle: ViewHandle<SshRemoteServerFailedBanner>,
+    },
+    SshTmuxDeprecationBanner {
+        handle: ViewHandle<SshTmuxDeprecationBanner>,
     },
     WarpifySuccessBlock {
         bootstrap_success_block_handle: ViewHandle<WarpifySuccessBlock>,
@@ -349,6 +344,16 @@ impl TerminalView {
                     .lock()
                     .block_list_mut()
                     .insert_rich_content_before_block_index(item, block_index);
+            }
+            RichContentInsertionPosition::AfterRichContent(view_id) => {
+                let mut model = self.model.lock();
+                let inserted = model.block_list_mut().insert_rich_content_after_item(
+                    RemovableBlocklistItem::RichContent(view_id),
+                    item,
+                );
+                if !inserted {
+                    model.block_list_mut().append_rich_content(item, true);
+                }
             }
             RichContentInsertionPosition::PinToBottom => {
                 self.model

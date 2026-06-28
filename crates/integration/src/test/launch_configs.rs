@@ -16,8 +16,8 @@ use warp::search::command_palette::launch_config;
 use warp::search::data_source::Query;
 use warp::search::SyncDataSource;
 use warp::workspace::NEW_TAB_BUTTON_POSITION_ID;
-use warpui::integration::{AssertionOutcome, TestStep};
-use warpui::{async_assert, ModelHandle};
+use warpui_core::integration::{AssertionOutcome, TestStep};
+use warpui_core::{async_assert, ModelHandle};
 
 use super::{assert_approx_eq, new_builder, TEST_ONLY_ASSETS};
 use crate::Builder;
@@ -161,7 +161,7 @@ pub fn test_launch_config_single_child_branch() -> Builder {
     use warp::launch_configs::launch_config::{
         LaunchConfig, PaneMode, PaneTemplateType, SplitDirection, TabTemplate, WindowTemplate,
     };
-    use warpui::actions::StandardAction;
+    use warpui_core::actions::StandardAction;
 
     /// Create a launch config that has a branch with a single child
     fn create_launch_config() -> LaunchConfig {

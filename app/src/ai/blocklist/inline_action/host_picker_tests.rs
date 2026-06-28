@@ -10,7 +10,7 @@ use super::{
 /// Extracts the visible label text out of a `MenuItem::Item`, panicking
 /// on the unreachable `Header` / `Separator` cases that our builder
 /// doesn't emit.
-fn item_label(item: &MenuItem<DropdownAction<InternalAction>>) -> &str {
+fn item_label(item: &MenuItem<DropdownAction>) -> &str {
     match item {
         MenuItem::Item(fields) => fields.label(),
         other => panic!("expected MenuItem::Item, got {other:?}"),
@@ -18,7 +18,7 @@ fn item_label(item: &MenuItem<DropdownAction<InternalAction>>) -> &str {
 }
 
 /// Extracts the on-select action from a `MenuItem::Item`.
-fn item_action(item: &MenuItem<DropdownAction<InternalAction>>) -> &DropdownAction<InternalAction> {
+fn item_action(item: &MenuItem<DropdownAction>) -> &DropdownAction {
     match item {
         MenuItem::Item(fields) => fields
             .on_select_action()
@@ -91,8 +91,17 @@ fn build_menu_items_adds_connected_hosts_before_recent_and_dedups_known_hosts() 
 fn build_menu_items_warp_entry_dispatches_select_known_warp() {
     let items = build_menu_items(None, None, &[]);
     match item_action(&items[0]) {
-        DropdownAction::SelectActionAndClose(InternalAction::SelectKnown(slug)) => {
-            assert_eq!(slug, ORCHESTRATION_WARP_WORKER_HOST);
+        DropdownAction::SelectActionAndClose(action) => {
+            let action = action
+                .as_any()
+                .downcast_ref::<InternalAction>()
+                .expect("expected InternalAction");
+            match action {
+                InternalAction::SelectKnown(slug) => {
+                    assert_eq!(slug, ORCHESTRATION_WARP_WORKER_HOST);
+                }
+                other => panic!("expected SelectKnown, got {other:?}"),
+            }
         }
         other => panic!("expected SelectActionAndClose(SelectKnown), got {other:?}"),
     }
@@ -103,7 +112,12 @@ fn build_menu_items_custom_entry_dispatches_enter_custom_mode() {
     let items = build_menu_items(None, None, &[]);
     let custom = items.last().expect("custom entry is always last");
     match item_action(custom) {
-        DropdownAction::SelectActionAndClose(InternalAction::EnterCustomMode) => {}
+        DropdownAction::SelectActionAndClose(action) => {
+            assert_eq!(
+                action.as_any().downcast_ref::<InternalAction>(),
+                Some(&InternalAction::EnterCustomMode)
+            );
+        }
         other => panic!("expected EnterCustomMode, got {other:?}"),
     }
 }

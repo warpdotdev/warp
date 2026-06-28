@@ -211,6 +211,43 @@ fn test_open_local_image_uses_system_generic_target() {
 }
 
 #[test]
+fn test_open_extensionless_non_text_file_does_not_emit_open_event() {
+    // Regression test: an extensionless file (e.g. a disguised executable) is classified as
+    // binary by `is_file_openable_in_warp`, which previously routed it to `SystemGeneric` and
+    // ultimately `NSWorkspace.openURL` — allowing arbitrary code execution. After the fix,
+    // such files are revealed in Finder / Explorer instead of opened, so no `OpenFileWithTarget`
+    // event should be emitted.
+    App::test((), |mut app| async move {
+        let base = tempdir().unwrap();
+        let base_path = base.path();
+        let malicious_path = base_path.join("abc");
+        touch(&malicious_path).await;
+        let links = init_link_model(&mut app, Some(base_path));
+
+        let events = Arc::new(Mutex::new(vec![]));
+        {
+            let events = events.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&links, move |_, event, _| {
+                    events.lock().push(event.clone());
+                })
+            });
+        }
+
+        links.update(&mut app, |links, ctx| {
+            links.open(local_file(&malicious_path), ctx);
+        });
+
+        let events = events.lock();
+        assert!(
+            events.is_empty(),
+            "Expected no LinkEvent to be emitted for an extensionless non-text file, \
+             but got: {events:?}"
+        );
+    });
+}
+
+#[test]
 fn test_resolve_valid_url() {
     App::test((), |mut app| async move {
         let links = init_link_model(&mut app, None);
@@ -403,6 +440,11 @@ fn test_open_markdown_file_uses_viewer_when_preferred() {
 
 #[test]
 fn test_open_markdown_file_respects_disabled_viewer_preference() {
+    // With `prefer_markdown_viewer = false`, the markdown file would otherwise
+    // resolve to `FileTarget::SystemDefault`. The security fix in #25353 routes
+    // both `SystemDefault` and `SystemGeneric` through
+    // `open_file_path_in_explorer`, so no `OpenFileWithTarget` event is emitted
+    // — the file is revealed in Finder / Explorer instead.
     let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     if !root.join("README.md").exists() {
         root = root.parent().unwrap().to_path_buf();
@@ -436,18 +478,10 @@ fn test_open_markdown_file_respects_disabled_viewer_preference() {
             .await;
 
         let events = events.lock();
-        assert_eq!(events.len(), 1);
-        match events.first() {
-            Some(LinkEvent::OpenFileWithTarget {
-                path,
-                target,
-                line_col,
-            }) => {
-                assert_eq!(path, &root.join("README.md"));
-                assert_eq!(target, &FileTarget::SystemDefault);
-                assert_eq!(line_col, &None);
-            }
-            other => panic!("Expected OpenFileWithTarget event, got {other:?}"),
-        }
+        assert!(
+            events.is_empty(),
+            "Expected no LinkEvent when markdown viewer is disabled (file is \
+             revealed in explorer instead), but got: {events:?}"
+        );
     });
 }

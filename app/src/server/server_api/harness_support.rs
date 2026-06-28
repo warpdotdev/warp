@@ -17,7 +17,6 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
-use crate::server::server_api::auth::AuthClient;
 
 /// A presigned upload target returned by the server.
 #[serde_with::serde_as]

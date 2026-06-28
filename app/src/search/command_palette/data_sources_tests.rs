@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use cloud_object_client::MockObjectClient;
 use settings::manager::SettingsManager;
 use warpui::{App, SingletonEntity};
 
@@ -18,11 +19,7 @@ use crate::search::data_source::Query;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::ServerId;
 use crate::server::ids::SyncId::{self};
-#[cfg(test)]
-use crate::server::server_api::object::MockObjectClient;
-#[cfg(test)]
 use crate::server::server_api::team::MockTeamClient;
-#[cfg(test)]
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;

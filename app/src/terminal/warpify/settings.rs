@@ -52,6 +52,11 @@ maybe_define_setting!(EnableSshWarpification, group: WarpifySettings, {
     description: "Whether to enable Warp features in SSH sessions.",
 });
 
+// NOTE: The tmux-based SSH wrapper is deprecated in favor of the remote-server SSH
+// extension. This setting is no longer surfaced in the UI or used to gate any behavior;
+// it is retained only so the one-time deprecation migration (see `register`) can read a
+// user's previous opt-in and reset it. It can be deleted in a future release once the
+// migration has shipped to all users.
 maybe_define_setting!(UseSshTmuxWrapper, group: WarpifySettings, {
     type: bool,
     default: false,
@@ -59,7 +64,21 @@ maybe_define_setting!(UseSshTmuxWrapper, group: WarpifySettings, {
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
     toml_path: "warpify.ssh.use_ssh_tmux_wrapper",
-    description: "Whether to use a tmux-based wrapper for SSH warpification.",
+    description: "Deprecated: whether to use a tmux-based wrapper for SSH warpification.",
+});
+
+// When set, the user previously opted into the now-deprecated tmux SSH wrapper and should
+// be shown a one-time inline banner pointing them to the remote-server SSH extension on
+// their next interactive SSH session. Set by the migration in `register`; cleared once the
+// banner has been shown.
+maybe_define_setting!(SshTmuxDeprecationNoticePending, group: WarpifySettings, {
+    type: bool,
+    default: false,
+    supported_platforms: SupportedPlatforms::OR(SupportedPlatforms::MAC.into(), SupportedPlatforms::LINUX.into()),
+    sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    private: false,
+    toml_path: "warpify.ssh.ssh_tmux_deprecation_notice_pending",
+    description: "Internal: whether to show the one-time tmux SSH deprecation notice.",
 });
 
 /// Controls how Warp handles the SSH extension (remote server binary) when connecting
@@ -87,7 +106,7 @@ pub enum SshExtensionInstallMode {
     AlwaysAsk,
     /// Automatically install and connect without prompting.
     AlwaysInstall,
-    /// Never install; fall back to legacy warpification.
+    /// Never install; fall back to wrapper-only SSH warpification.
     NeverInstall,
 }
 
@@ -151,9 +170,13 @@ pub struct WarpifySettings {
     /// This setting controls whether we should ever warpify ssh sessions.
     pub enable_ssh_warpification: EnableSshWarpification,
 
-    /// This setting controls whether we should prompt the user to warpify an ssh session using the
-    /// tmux wrapper instead of the default legacy wrapper.
+    /// Deprecated opt-in for the tmux-based SSH wrapper. Retained only so the deprecation
+    /// migration can read and reset a user's previous value; not used to gate any behavior.
     pub use_ssh_tmux_wrapper: UseSshTmuxWrapper,
+
+    /// When `true`, the user should be shown a one-time inline banner explaining that the
+    /// tmux SSH wrapper is deprecated in favor of the remote-server SSH extension.
+    pub ssh_tmux_deprecation_notice_pending: SshTmuxDeprecationNoticePending,
 
     /// Controls the installation behavior for the SSH extension (remote server) when the binary
     /// is not installed on the remote host.
@@ -223,6 +246,9 @@ impl WarpifySettings {
             ssh_hosts_denylist,
             enable_ssh_warpification: EnableSshWarpification::new_from_storage(ctx),
             use_ssh_tmux_wrapper: UseSshTmuxWrapper::new_from_storage(ctx),
+            ssh_tmux_deprecation_notice_pending: SshTmuxDeprecationNoticePending::new_from_storage(
+                ctx,
+            ),
             ssh_extension_install_mode: SshExtensionInstallModeSetting::new_from_storage(ctx),
         }
     }
@@ -246,6 +272,7 @@ impl WarpifySettings {
             ssh_hosts_denylist,
             enable_ssh_warpification: EnableSshWarpification::new(None),
             use_ssh_tmux_wrapper: UseSshTmuxWrapper::new(None),
+            ssh_tmux_deprecation_notice_pending: SshTmuxDeprecationNoticePending::new(None),
             ssh_extension_install_mode: SshExtensionInstallModeSetting::new(None),
         }
     }
@@ -271,8 +298,26 @@ impl WarpifySettings {
                 }
                 WarpifySettingsChangedEvent::EnableSshWarpification { .. } => {}
                 WarpifySettingsChangedEvent::UseSshTmuxWrapper { .. } => {}
+                WarpifySettingsChangedEvent::SshTmuxDeprecationNoticePending { .. } => {}
                 WarpifySettingsChangedEvent::SshExtensionInstallModeSetting { .. } => {}
             })
+        });
+
+        // One-time migration: the tmux-based SSH wrapper is deprecated in favor of the
+        // remote-server SSH extension. If a user had explicitly opted into the tmux wrapper,
+        // flag that we should show them a one-time deprecation notice on their next SSH, then
+        // reset the opt-in. Because we only act when the value is still `true`, resetting it to
+        // `false` ensures this migration does not run again.
+        handle.clone().update(ctx, |me, ctx| {
+            if me.use_ssh_tmux_wrapper.is_value_explicitly_set() && *me.use_ssh_tmux_wrapper.value()
+            {
+                if let Err(e) = me.ssh_tmux_deprecation_notice_pending.set_value(true, ctx) {
+                    log::error!("Failed to set ssh_tmux_deprecation_notice_pending: {e}");
+                }
+                if let Err(e) = me.use_ssh_tmux_wrapper.set_value(false, ctx) {
+                    log::error!("Failed to reset use_ssh_tmux_wrapper: {e}");
+                }
+            }
         });
 
         register_settings_events!(
@@ -303,6 +348,14 @@ impl WarpifySettings {
             WarpifySettings,
             use_ssh_tmux_wrapper,
             UseSshTmuxWrapper,
+            handle.clone(),
+            ctx
+        );
+
+        register_settings_events!(
+            WarpifySettings,
+            ssh_tmux_deprecation_notice_pending,
+            SshTmuxDeprecationNoticePending,
             handle.clone(),
             ctx
         );
@@ -344,6 +397,9 @@ pub enum WarpifySettingsChangedEvent {
     UseSshTmuxWrapper {
         change_event_reason: ChangeEventReason,
     },
+    SshTmuxDeprecationNoticePending {
+        change_event_reason: ChangeEventReason,
+    },
     SshExtensionInstallModeSetting {
         change_event_reason: ChangeEventReason,
     },
@@ -382,9 +438,7 @@ impl WarpifySettings {
             return true;
         }
 
-        if !self.use_ssh_tmux_wrapper.value()
-            && SshWarpifyCommand::matches(command)
-                .is_some_and(|command| command.is_ssh_like_command())
+        if SshWarpifyCommand::matches(command).is_some_and(|command| command.is_ssh_like_command())
         {
             return true;
         }
@@ -413,6 +467,22 @@ impl WarpifySettings {
             .iter()
             .flatten()
             .any(|regex| regex.is_match(ssh_host.trim()))
+    }
+
+    /// Returns whether the one-time tmux SSH deprecation notice should be shown to the user.
+    pub fn should_show_tmux_deprecation_notice(&self) -> bool {
+        *self.ssh_tmux_deprecation_notice_pending.value()
+    }
+
+    /// Marks the one-time tmux SSH deprecation notice as shown so it is not shown again.
+    pub fn mark_tmux_deprecation_notice_shown(&mut self, ctx: &mut ModelContext<Self>) {
+        if let Err(e) = self
+            .ssh_tmux_deprecation_notice_pending
+            .set_value(false, ctx)
+        {
+            log::error!("Failed to clear ssh_tmux_deprecation_notice_pending: {e}");
+        }
+        ctx.notify();
     }
 
     fn parse_added_subshell_commands(

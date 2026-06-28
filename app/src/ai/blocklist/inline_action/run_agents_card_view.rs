@@ -180,7 +180,7 @@ struct RunAgentsCardHandles {
     pickers: OrchestrationPickerHandles<RunAgentsCardViewAction>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RunAgentsCardViewAction {
     Accept,
     AcceptWithoutOrchestration,
@@ -435,14 +435,18 @@ impl RunAgentsCardView {
                 }
                 HarnessAvailabilityEvent::Changed
                 | HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed => {
+                | HarnessAvailabilityEvent::AuthSecretsFetchFailed
+                | HarnessAvailabilityEvent::AuthSecretDeleted { .. } => {
                     // Repopulate even on fetch failure to replace "Loading…".
+                    // Deleted events also force a repopulate so this card
+                    // stops surfacing the deleted secret as an option.
                     oc::repopulate_all_pickers(&mut me.state.orch, &me.handles.pickers, ctx);
                     me.refresh_accept_button_state(ctx);
                     me.maybe_auto_open_create_modal(ctx);
                     ctx.notify();
                 }
-                HarnessAvailabilityEvent::AuthSecretCreationFailed { .. } => {}
+                HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
+                | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
         );
 
@@ -730,8 +734,8 @@ impl RunAgentsCardView {
                 state.orch.model_id.clone()
             };
             let is_local = !state.orch.execution_mode.is_remote();
-            let handle = oc::new_standard_picker_dropdown(&colors, ctx);
-            Self::set_upward_menu_position(&handle, ctx);
+            let handle = oc::new_standard_filterable_picker_dropdown(&styles, ctx);
+            Self::set_upward_filterable_menu_position(&handle, ctx);
             oc::populate_model_picker_for_harness(
                 &handle,
                 &initial_model_id,
@@ -739,7 +743,7 @@ impl RunAgentsCardView {
                 is_local,
                 ctx,
             );
-            Self::subscribe_picker_close(&handle, ctx);
+            Self::subscribe_filterable_picker_close(&handle, ctx);
             self.handles.pickers.model_picker = Some(handle);
         }
 
@@ -852,6 +856,17 @@ impl RunAgentsCardView {
         });
     }
 
+    fn set_upward_filterable_menu_position(
+        dropdown_handle: &ViewHandle<
+            crate::view_components::FilterableDropdown<RunAgentsCardViewAction>,
+        >,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        dropdown_handle.update(ctx, |dropdown, _| {
+            dropdown.set_orientation(FilterableDropdownOrientation::Up)
+        });
+    }
+
     fn subscribe_picker_close(
         dropdown_handle: &ViewHandle<
             crate::view_components::dropdown::Dropdown<RunAgentsCardViewAction>,
@@ -860,6 +875,19 @@ impl RunAgentsCardView {
     ) {
         ctx.subscribe_to_view(dropdown_handle, move |me, _, event, ctx| {
             if let DropdownEvent::Close = event {
+                me.refocus_after_picker_close(ctx);
+            }
+        });
+    }
+
+    fn subscribe_filterable_picker_close(
+        dropdown_handle: &ViewHandle<
+            crate::view_components::FilterableDropdown<RunAgentsCardViewAction>,
+        >,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        ctx.subscribe_to_view(dropdown_handle, move |me, _, event, ctx| {
+            if let FilterableDropdownEvent::Close = event {
                 me.refocus_after_picker_close(ctx);
             }
         });
@@ -1336,21 +1364,28 @@ pub(crate) fn format_terminal_state(result: &RunAgentsResult) -> (String, Status
                 .iter()
                 .filter(|a| matches!(a.kind, RunAgentsAgentOutcomeKind::Launched { .. }))
                 .count();
-            let label = if launched == total {
-                if total == 1 {
+            if launched == total {
+                let label = if total == 1 {
                     "Spawned 1 agent".to_string()
                 } else {
                     format!("Spawned {total} agents")
-                }
+                };
+                (label, StatusKind::Success)
+            } else if launched == 0 {
+                // Every child failed to launch: surface a terminal failure
+                // rather than the in-progress-looking mixed state.
+                let label = if total == 1 {
+                    "Failed to spawn agent".to_string()
+                } else {
+                    format!("Failed to spawn {total} agents")
+                };
+                (label, StatusKind::Failure)
             } else {
-                format!("Spawned {launched} of {total} agents")
-            };
-            let kind = if launched == total {
-                StatusKind::Success
-            } else {
-                StatusKind::Mixed
-            };
-            (label, kind)
+                (
+                    format!("Spawned {launched} of {total} agents"),
+                    StatusKind::Mixed,
+                )
+            }
         }
         RunAgentsResult::Denied { reason } => {
             let body = if reason.is_empty() {
@@ -1406,7 +1441,10 @@ fn render_status_only_card(
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let icon = match kind {
-        StatusKind::Spawning | StatusKind::Mixed => icons::yellow_running_icon(appearance).finish(),
+        StatusKind::Spawning => icons::yellow_running_icon(appearance).finish(),
+        // Partial success is terminal, so use a static warning glyph rather
+        // than the in-progress-looking running circle.
+        StatusKind::Mixed => inline_action_icons::warning_icon(appearance).finish(),
         StatusKind::Success => inline_action_icons::green_check_icon(appearance).finish(),
         StatusKind::Failure => inline_action_icons::red_x_icon(appearance).finish(),
         StatusKind::Cancelled => inline_action_icons::cancelled_icon(appearance).finish(),
