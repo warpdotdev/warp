@@ -355,12 +355,18 @@ impl super::TerminalView {
 
         let (hyperlink_at_point, url_at_point, new_fragment_boundary) = {
             let model = self.model.lock();
-            // OSC 8 wins over auto-detected URLs on the same cell, so check
-            // for a hyperlink first; url_at_point only matters when no OSC 8
+            // OSC 8 wins over auto-detected URLs on the same cell, so check for
+            // a hyperlink first and only run the urlocator scan when no OSC 8
             // span covers `position`.
+            let hyperlink_at_point = model.hyperlink_at_point(position);
+            let url_at_point = if hyperlink_at_point.is_none() {
+                model.url_at_point(position)
+            } else {
+                None
+            };
             (
-                model.hyperlink_at_point(position),
-                model.url_at_point(position),
+                hyperlink_at_point,
+                url_at_point,
                 model.fragment_boundary_at_point(position),
             )
         };
