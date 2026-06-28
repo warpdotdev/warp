@@ -968,6 +968,7 @@ cloud_mode_input_v2 = ["cloud_mode"]
 configurable_context_window = []
 handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
+osc_hyperlinks = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

@@ -162,9 +162,8 @@ impl ansi::Handler for GridHandler {
     fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
         // `and_then` is intentional: if `intern` returns None (registry cap
         // hit), `active_hyperlink_id` stays None and subsequent `input(c)`
-        // writes plain non-clickable cells. Per `specs/GH6393/tech.md` §3c
-        // there must never be a path where a cell's `hyperlink_id` references
-        // an entry the registry doesn't hold.
+        // writes plain non-clickable cells, so a cell's `hyperlink_id` never
+        // references an entry the registry doesn't hold.
         self.active_hyperlink_id = hyperlink.and_then(|h| self.hyperlink_registry.intern(h));
     }
 

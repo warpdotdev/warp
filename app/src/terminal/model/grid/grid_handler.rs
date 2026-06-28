@@ -30,7 +30,7 @@ use urlocator::{UrlLocation, UrlLocator};
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::{SemanticSelection, SMART_SELECT_MATCH_WINDOW_LIMIT};
 use warp_core::{safe_assert, safe_assert_eq};
-use warp_terminal::model::grid::{CellType, FlatStorage};
+use warp_terminal::model::grid::{CellType, FlatStorage, HyperlinkId, HyperlinkRegistry};
 pub use warp_terminal::model::TermMode;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warp_util::path::CleanPathResult;
@@ -353,16 +353,14 @@ pub struct GridHandler {
     /// Per-grid OSC 8 hyperlink registry. Owns the URI strings; cells store
     /// `HyperlinkId` handles into this registry. No reclamation: entries
     /// are appended on intern and live until this `GridHandler` is dropped.
-    /// See `specs/GH6393/tech.md` §3e.
-    hyperlink_registry: warp_terminal::model::grid::HyperlinkRegistry,
+    hyperlink_registry: HyperlinkRegistry,
 
     /// Active OSC 8 hyperlink, set by `set_hyperlink` and consumed by
     /// `write_at_cursor` when stamping new cells. `None` means subsequent
-    /// `input(c)` writes plain (non-clickable) cells. Single-owner per
-    /// `specs/GH6393/tech.md` §3c — `BlockGrid` and `Block` delegate
-    /// `set_hyperlink` to this `GridHandler` rather than carrying their
-    /// own copies.
-    active_hyperlink_id: Option<warp_terminal::model::grid::HyperlinkId>,
+    /// `input(c)` writes plain (non-clickable) cells. This `GridHandler` is
+    /// the single owner — `BlockGrid` and `Block` delegate `set_hyperlink`
+    /// here rather than carrying their own copies.
+    active_hyperlink_id: Option<HyperlinkId>,
 
     /// Info about the subset of rows we want to show to the user. If None, we
     /// show the entire blockgrid to the user.
@@ -834,15 +832,17 @@ impl GridHandler {
     }
 
     /// Returns the contiguous OSC 8 hyperlink span at `displayed_point`, if
-    /// the cell there is part of one. The returned range is contiguous —
-    /// cross-run grouping by `id` is intentionally out of scope (see
-    /// `specs/GH6393/tech.md` Follow-ups).
+    /// the cell there is part of one. The returned range is contiguous;
+    /// cross-run grouping by `id` is intentionally out of scope.
     ///
     /// Mirrors the shape of [`Self::url_at_point`] but skips
     /// `urlocator`: the URI doesn't live in the visible cell text, so
     /// detection reduces to "walk left/right while the next adjacent cell
     /// carries the same `HyperlinkId`."
     pub fn hyperlink_at_point(&self, displayed_point: Point) -> Option<Link> {
+        if !FeatureFlag::OscHyperlinks.is_enabled() {
+            return None;
+        }
         let original_point = self.maybe_translate_point_from_displayed_to_original(displayed_point);
         let row_idx = original_point.row;
 
@@ -889,6 +889,9 @@ impl GridHandler {
     /// any. Cheaper than `hyperlink_at_point` when the caller only needs the
     /// destination (e.g. tooltip text or click-open).
     pub fn hyperlink_uri_at_point(&self, displayed_point: Point) -> Option<&str> {
+        if !FeatureFlag::OscHyperlinks.is_enabled() {
+            return None;
+        }
         let original_point = self.maybe_translate_point_from_displayed_to_original(displayed_point);
         let grid_line = self.row(original_point.row)?;
         if original_point.col >= grid_line.line_length() {

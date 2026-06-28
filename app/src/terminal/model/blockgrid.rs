@@ -723,7 +723,7 @@ impl ansi::Handler for BlockGrid {
 
     fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
         // Delegate to the inner `GridHandler` — that's where the active id
-        // is stored and where `input(c)` reads it. See `specs/GH6393/tech.md` §3c.
+        // is stored and where `input(c)` reads it.
         self.ansi_handler().set_hyperlink(hyperlink);
     }
 

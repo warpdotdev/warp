@@ -1868,7 +1868,6 @@ impl TerminalModel {
 
     /// OSC 8 hyperlink span at `point`, paired with its URI. Routes to alt
     /// screen or block list depending on which surface the point lives on.
-    /// See `specs/GH6393/tech.md` Layer 4.
     pub fn hyperlink_at_point(
         &self,
         point: &WithinModel<Point>,

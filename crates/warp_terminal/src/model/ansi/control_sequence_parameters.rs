@@ -708,18 +708,13 @@ impl TryFrom<&[u8]> for PromptKind {
     }
 }
 
-/// Maximum byte length of a URI carried by an OSC 8 hyperlink. Sequences
-/// whose URI exceeds this cap are dropped at parse time before the URI
-/// `String` is allocated, so a hostile sender can't trigger an arbitrarily
-/// large heap allocation. Matches VTE's OSC 8 URI cap.
+/// Maximum byte length of a URI carried by an OSC 8 hyperlink. Terminal output
+/// is untrusted, so the URI is checked against this cap before its `String` is
+/// allocated. Matches VTE's OSC 8 URI cap.
 pub const MAX_URI_BYTES: usize = 2083;
 
-/// Maximum byte length of the OSC 8 `id` param value. The id is attacker-
-/// controlled terminal data and ends up in the `Hyperlink` registry key, so
-/// it has to be bounded for the same reason `MAX_URI_BYTES` is: otherwise a
-/// process can emit `MAX_DISTINCT_ENTRIES` links with small URIs but very
-/// large unique ids and blow past the documented per-grid memory ceiling.
-/// Oversized ids are dropped (the URI is still kept and remains clickable).
+/// Maximum byte length of the OSC 8 `id` param value. Oversized ids are dropped
+/// (the URI is still kept and remains clickable).
 pub const MAX_ID_BYTES: usize = 256;
 
 /// A hyperlink declared via the OSC 8 escape sequence.
@@ -746,8 +741,6 @@ pub enum HyperlinkParseError {
     InvalidUtf8,
     #[error("hyperlink URI exceeds the {MAX_URI_BYTES} byte cap (got {len})")]
     UriTooLong { len: usize },
-    #[error("hyperlink param is malformed (no '=' found)")]
-    MalformedParam,
 }
 
 impl Hyperlink {
@@ -802,27 +795,19 @@ impl Hyperlink {
         }
         let uri = String::from_utf8(uri_bytes).map_err(|_| HyperlinkParseError::InvalidUtf8)?;
 
+        // Per the OSC 8 spec, unknown or malformed params are silently
+        // ignored — the link itself stays clickable. We only read `id`.
         let mut id: Option<String> = None;
-        if !params_field.is_empty() {
-            for pair in params_field.split(|byte| *byte == b':') {
-                if pair.is_empty() {
-                    continue;
-                }
-                let Some(eq_idx) = pair.iter().position(|byte| *byte == b'=') else {
-                    return Err(HyperlinkParseError::MalformedParam);
-                };
-                let key = &pair[..eq_idx];
-                let value = &pair[eq_idx + 1..];
-                if key == b"id" {
-                    // Bound the id length before allocating: it's untrusted
-                    // terminal data and the `Hyperlink` it ends up in is used
-                    // as the registry key. Oversized ids are dropped (the URI
-                    // remains usable as a hyperlink without an id).
-                    if value.len() > MAX_ID_BYTES {
-                        continue;
-                    }
-                    let value =
-                        str::from_utf8(value).map_err(|_| HyperlinkParseError::InvalidUtf8)?;
+        for pair in params_field.split(|byte| *byte == b':') {
+            let Some(eq_idx) = pair.iter().position(|byte| *byte == b'=') else {
+                continue;
+            };
+            let key = &pair[..eq_idx];
+            let value = &pair[eq_idx + 1..];
+            // An empty `id=` is equivalent to omitting the param. Oversized or
+            // non-UTF-8 ids are dropped rather than rejecting the whole link.
+            if key == b"id" && !value.is_empty() && value.len() <= MAX_ID_BYTES {
+                if let Ok(value) = str::from_utf8(value) {
                     id = Some(value.to_owned());
                 }
             }
@@ -893,9 +878,20 @@ mod hyperlink_parse_tests {
     }
 
     #[test]
-    fn malformed_param_without_equals_is_rejected() {
-        let result = Hyperlink::parse_osc_params(&[b"badparam", b"https://example.com"]);
-        assert!(matches!(result, Err(HyperlinkParseError::MalformedParam)));
+    fn param_without_equals_is_ignored_link_still_parses() {
+        // The OSC 8 spec says unknown/malformed params are silently ignored;
+        // the link itself must remain usable.
+        let parsed = Hyperlink::parse_osc_params(&[b"badparam", b"https://example.com"]).unwrap();
+        let hyperlink = parsed.unwrap();
+        assert_eq!(hyperlink.id, None);
+        assert_eq!(hyperlink.uri, "https://example.com");
+    }
+
+    #[test]
+    fn empty_id_is_treated_as_omitted() {
+        // `id=` with no value is equivalent to omitting the id param.
+        let parsed = Hyperlink::parse_osc_params(&[b"id=", b"https://example.com"]).unwrap();
+        assert_eq!(parsed.unwrap().id, None);
     }
 
     /// Anti-regression: vte splits OSC params on `;`, so a URI with literal

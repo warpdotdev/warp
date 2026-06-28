@@ -36,6 +36,9 @@ use super::new_builder;
 use crate::Builder;
 
 const HTTPS_URL: &str = "https://example.com/osc8-test";
+// A `file://` URL with no hostname (the common form). The official OSC 8 spec
+// suggests including a hostname, but we deliberately don't require one.
+const FILE_URL: &str = "file:///tmp/osc8-test.txt";
 const VISIBLE_TEXT: &str = "Click me";
 
 /// Build a `printf` command that emits an OSC 8 hyperlink wrapping
@@ -174,7 +177,60 @@ pub fn test_osc8_open_link_action_opens_url() -> Builder {
         )
 }
 
-/// 4. Plain-text URL auto-detection still works with `OscHyperlinks`
+/// 4. A `file://` OSC 8 hyperlink opens too — the implementation does not
+///    restrict schemes, and a missing hostname (`file:///path`) is accepted.
+pub fn test_osc8_file_scheme_opens_url() -> Builder {
+    osc8_prelude()
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            osc8_printf(FILE_URL, VISIBLE_TEXT),
+            ExpectedExitStatus::Success,
+            ExactLine::from(VISIBLE_TEXT),
+        ))
+        .with_step(
+            new_step_with_default_assertions("Dispatch OpenGridLink for the file:// hyperlink")
+                .with_action(|app, _window_id, _| {
+                    captured_urls().lock().clear();
+                    app.update(|ctx| {
+                        ctx.set_before_open_url(|url, _ctx| {
+                            captured_urls().lock().push(url.to_owned());
+                            url.to_owned()
+                        });
+                    });
+                })
+                .with_action(|app, window_id, _| {
+                    let view = single_terminal_view(app, window_id);
+                    let view_id = view.id();
+                    let link_and_uri = view.read(app, |view, _ctx| {
+                        let model = view.model.lock();
+                        let block_index = model.block_list().last_non_hidden_block()?.index();
+                        let point = WithinModel::BlockList(WithinBlock::new(
+                            Point::new(0, 0),
+                            block_index,
+                            GridType::Output,
+                        ));
+                        model.hyperlink_at_point(&point)
+                    });
+                    let (link, uri) = link_and_uri
+                        .expect("file:// OSC 8 hyperlink should resolve at the first output cell");
+                    assert_eq!(uri, FILE_URL, "looked-up URI should match the printed one");
+                    app.dispatch_typed_action(
+                        window_id,
+                        &[view_id],
+                        &TerminalAction::OpenGridLink(GridHighlightedLink::Hyperlink { link, uri }),
+                    );
+                })
+                .add_assertion(|_app, _window_id| {
+                    let urls = captured_urls().lock();
+                    async_assert!(
+                        urls.iter().any(|u| u == FILE_URL),
+                        "expected open_url to be called with {FILE_URL:?}, captured: {urls:?}"
+                    )
+                }),
+        )
+}
+
+/// 5. Plain-text URL auto-detection still works with `OscHyperlinks`
 ///    enabled — i.e. plain URLs without OSC 8 wrappers continue to be
 ///    captured by the model's auto-detect link table.
 ///

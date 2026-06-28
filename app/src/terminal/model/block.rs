@@ -2977,7 +2977,7 @@ impl ansi::Handler for Block {
     }
 
     fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
-        // Delegate to BlockGrid -> GridHandler. See `specs/GH6393/tech.md` §3c.
+        // Delegate to BlockGrid -> GridHandler.
         delegate!(self.set_hyperlink(hyperlink));
     }
 

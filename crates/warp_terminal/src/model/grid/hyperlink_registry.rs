@@ -42,8 +42,8 @@ impl GetSize for HyperlinkId {}
 pub struct HyperlinkRegistry {
     /// Reverse map: hyperlink → id. Lets `intern` dedupe.
     by_link: HashMap<Hyperlink, HyperlinkId>,
-    /// Forward array: id → hyperlink. The id's `NonZeroU32` value is
-    /// `index_in_by_id + 1`.
+    /// Forward array: id → hyperlink. An id's `NonZeroU32` value is its index
+    /// in this vec plus one (the `+ 1` keeps the first id non-zero).
     by_id: Vec<Hyperlink>,
     /// Whether we've already logged a warning that the distinct-entries cap
     /// was hit. Untrusted terminal output can emit unlimited unique URIs, so

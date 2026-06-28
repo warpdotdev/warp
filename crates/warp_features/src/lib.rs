@@ -186,7 +186,7 @@ pub enum FeatureFlag {
     MaximizeFlatStorage,
 
     /// Recognizes the OSC 8 hyperlink escape sequence and makes the
-    /// linked text Cmd+click-able. See `specs/GH6393/`.
+    /// linked text Cmd+click-able.
     OscHyperlinks,
 
     ImeMarkedText,
@@ -953,7 +953,6 @@ pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::BlocklistMarkdownTableRendering,
     FeatureFlag::MarkdownTables,
     FeatureFlag::GitOperationsInCodeReview,
-    FeatureFlag::OscHyperlinks,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).

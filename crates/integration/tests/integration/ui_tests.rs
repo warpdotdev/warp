@@ -212,6 +212,7 @@ integration_tests! {
     test_osc8_open_close_renders_visible_text,
     test_osc8_copy_block_yields_visible_text_only,
     test_osc8_open_link_action_opens_url,
+    test_osc8_file_scheme_opens_url,
     test_osc8_no_regression_on_url_autodetect,
 
     test_active_session_follows_focus,

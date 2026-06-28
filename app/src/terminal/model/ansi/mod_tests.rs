@@ -853,13 +853,16 @@ fn parse_osc8_uri_with_semicolons_dispatches_full_uri() {
 }
 
 #[test]
-fn parse_osc8_malformed_param_drops_event() {
+fn parse_osc8_malformed_param_is_ignored_link_still_opens() {
     let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
-    // A param without `=` is malformed; no set_hyperlink event should fire.
+    // A param without `=` is ignored (per the OSC 8 spec); the link still opens.
     let bytes: &[u8] = b"\x1b]8;notavalidparam;https://example.com\x07";
     let (_, handler) = parse_bytes(bytes);
 
-    assert_eq!(handler.hyperlink_events.len(), 0);
+    assert_eq!(handler.hyperlink_events.len(), 1);
+    let hyperlink = handler.hyperlink_events[0].as_ref().expect("opening link");
+    assert_eq!(hyperlink.id, None);
+    assert_eq!(hyperlink.uri, "https://example.com");
 }
 
 #[test]
