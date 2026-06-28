@@ -96,7 +96,7 @@ use warpui::elements::{
     Highlight, Hoverable, Icon as WarpUiIcon, Image, MainAxisAlignment, MainAxisSize,
     MouseInBehavior, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect,
-    SavePosition, Shrinkable, Stack, Text,
+    SavePosition, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::{vec2f, Vector2F};
@@ -354,8 +354,8 @@ use crate::settings_view::{flags, SettingsSection, SettingsView, SettingsViewEve
 use crate::shell_indicator::ShellIndicatorType;
 use crate::tab::{
     tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
-    TabBarState, TabComponent, TabData, TabTelemetryAction, MOVE_TO_GROUP_LABEL,
-    TAB_BAR_BORDER_HEIGHT, TAB_PIN_INDICATOR_ICON_SIZE,
+    TabBarState, TabComponent, TabData, TabTelemetryAction, COMPACT_TAB_WIDTH_THRESHOLD,
+    MOVE_TO_GROUP_LABEL, TAB_BAR_BORDER_HEIGHT, TAB_INDICATOR_HEIGHT, TAB_PIN_INDICATOR_ICON_SIZE,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
@@ -19708,8 +19708,6 @@ impl Workspace {
         let header_selected = is_collapsed && any_member_active;
 
         let member_kinds = self.compute_group_member_kinds(group.id, ctx);
-        let icon_circle =
-            render_group_member_icon_collage(&member_kinds, GROUP_ICON_COLLAGE_SIZE, appearance);
 
         let is_being_renamed = self
             .current_workspace_state
@@ -19736,21 +19734,56 @@ impl Workspace {
                 .finish()
         };
 
-        let mut row = Flex::row()
+        // Full header: collage + name, with the horizontal padding inside it so
+        // the size switch below measures the full slot width, like a tab.
+        let mut full_row = Flex::row()
             // Fill the slot and center the icon + title.
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::Center)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.)
-            .with_child(icon_circle)
+            .with_child(render_group_member_icon_collage(
+                &member_kinds,
+                GROUP_ICON_COLLAGE_SIZE,
+                appearance,
+            ))
             .with_child(Shrinkable::new(1.0, name_element).finish());
         // Collapsed + pinned: pin indicator to the right of the name, where an
         // ungrouped tab would show its close button. Expanded groups show the
         // pin after their last member instead.
         if FeatureFlag::PinnedTabs.is_enabled() && group.pinned && is_collapsed {
-            row.add_child(render_horizontal_group_pin_indicator(appearance));
+            full_row.add_child(render_horizontal_group_pin_indicator(appearance));
         }
-        let row = row.finish();
+        let full_content = Container::new(full_row.finish())
+            .with_padding_left(8.)
+            .with_padding_right(if is_collapsed { 8. } else { 9. })
+            .finish();
+
+        // Compact header (narrow slot): just the collage at the tab's compact
+        // icon size, centered and clipped, like a tab dropping its title.
+        let compact_content = Clipped::new(
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::Center)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(render_group_member_icon_collage(
+                    &member_kinds,
+                    TAB_INDICATOR_HEIGHT,
+                    appearance,
+                ))
+                .finish(),
+        )
+        .finish();
+
+        // Go compact at the same width as a tab, so headers and tabs shrink in step.
+        let content = SizeConstraintSwitch::new(
+            full_content,
+            vec![(
+                SizeConstraintCondition::WidthLessThan(COMPACT_TAB_WIDTH_THRESHOLD),
+                compact_content,
+            )],
+        )
+        .finish();
 
         let header_active_bg = internal_colors::fg_overlay_2(theme);
         let header_hover_bg = internal_colors::fg_overlay_1(theme);
@@ -19764,13 +19797,10 @@ impl Workspace {
                 ElementFill::None
             };
 
-            // Tab-style border: left edge if first; right edge only when collapsed
-            // (the divider). Expanded, the divider moves to the container's far
-            // edge, so swap that 1px border for 1px right padding so the title
-            // doesn't shift.
-            Container::new(row)
-                .with_padding_left(8.)
-                .with_padding_right(if is_collapsed { 8. } else { 9. })
+            // Tab-style border: left edge if first, right edge only when
+            // collapsed (the divider). Expanded swaps that right border for
+            // padding so the title doesn't shift on collapse/expand.
+            Container::new(content)
                 .with_vertical_padding(6.)
                 .with_background(bg)
                 .with_border(
