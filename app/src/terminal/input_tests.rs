@@ -2132,7 +2132,7 @@ fn slash_fork_bypasses_prompt_queue_while_in_progress() {
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let conversation_id = seed_in_progress_conversation(&mut app, &terminal);
-        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        select_conversation(&mut app, &terminal, conversation_id);
         QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
             model.toggle_queue_next_prompt(conversation_id, ctx);
         });
@@ -2167,7 +2167,7 @@ fn slash_compact_still_queues_while_in_progress() {
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let conversation_id = seed_in_progress_conversation(&mut app, &terminal);
-        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        select_conversation(&mut app, &terminal, conversation_id);
         QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
             model.toggle_queue_next_prompt(conversation_id, ctx);
         });
