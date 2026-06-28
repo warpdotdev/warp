@@ -19697,8 +19697,7 @@ impl Workspace {
                 let tab = &self.tabs[idx];
                 let effective_color = self.effective_tab_color(tab);
                 // Highlight the member when a drag is hovering directly over it.
-                let is_drag_target =
-                    self.hovered_tab_index == Some(TabBarHoverIndex::OverTab(idx));
+                let is_drag_target = self.hovered_tab_index == Some(TabBarHoverIndex::OverTab(idx));
                 let member = TabComponent::new(
                     idx,
                     tab_bar_state,
@@ -19716,7 +19715,11 @@ impl Workspace {
                 row.add_child(member);
             }
             // Divider after the last member (into the group's last slot).
-            if show_before_indicator(self.hovered_tab_index, first_index + run_len, Some(group.id)) {
+            if show_before_indicator(
+                self.hovered_tab_index,
+                first_index + run_len,
+                Some(group.id),
+            ) {
                 row.add_child(self.render_tab_hover_indicator(appearance));
             }
         }
