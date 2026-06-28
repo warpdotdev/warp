@@ -721,11 +721,6 @@ impl EditorModel {
         // This needs to be done _before_ we start the batch below so that
         // 1) we take the snapshot of the correct (regular vs. ephemeral) buffer
         // 2) we star the the batch on the correct (regular vs. ephemeral) buffer
-        // Capture the Vim visual tail offsets against the buffer the snapshot is
-        // taken from, before any ephemeral/regular buffer swap, so they can be
-        // re-anchored against the rebuilt buffer in `restore_from_snapshot` (the
-        // anchors themselves are tied to the pre-swap buffer and would otherwise
-        // go stale).
         let restore_from_snapshot = if can_edit && edit.is_ephemeral() {
             let snapshot = self.as_snapshot(ctx);
             let vim_visual_tail_offsets = self.vim_visual_tail_offsets(ctx);
@@ -1336,10 +1331,6 @@ impl EditorModel {
         );
     }
 
-    /// The current Vim visual tails resolved to char offsets against the active
-    /// buffer. Used to preserve the visual selection across an ephemeral/regular
-    /// buffer swap, where the tail anchors would otherwise go stale (see
-    /// [`Self::restore_from_snapshot`]).
     fn vim_visual_tail_offsets<C: ModelAsRef>(&self, ctx: &C) -> Vec<CharOffset> {
         let buffer = self.buffer(ctx);
         self.vim_visual_tails
@@ -1349,17 +1340,6 @@ impl EditorModel {
     }
 
     // Used for restoring the buffer from a snapshot.
-    //
-    // `vim_visual_tail_offsets` are the char offsets of the Vim visual tails,
-    // captured by the caller against the buffer the snapshot was taken from
-    // (before any ephemeral/regular buffer swap). The anchors stored in
-    // `vim_visual_tails` reference that pre-swap buffer; left untouched they
-    // become stale once we rebuild the buffer here, so
-    // `vim_visual_selection_range` could no longer resolve them — collapsing the
-    // visual selection and breaking visual-mode operations (e.g. pasting over a
-    // selection in a command recalled from history). The buffer is rebuilt with
-    // the same text the offsets were taken from, so they stay valid and are
-    // re-anchored below.
     fn restore_from_snapshot(
         &mut self,
         snapshot: EditorSnapshot,

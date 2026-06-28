@@ -7142,15 +7142,14 @@ fn test_vim_visual_mode_paste_after_history_recall() {
             view.vim_user_insert("y", ctx);
         });
 
-        // Simulate scrolling up the command history (e.g. pressing "k" in normal
-        // mode), which replaces the editor buffer with a previously run command
-        // via an ephemeral edit.
+        // Simulate scrolling up the command history (e.g. pressing "k" in normal mode), which
+        // replaces the editor buffer with a previously run command via an ephemeral edit.
         editor.update(&mut app, |view, ctx| {
             view.set_buffer_text_ignoring_undo("echo xxx bar", ctx);
         });
 
-        // Select "xxx" in the recalled command and paste "foo" over it. The
-        // selected range should be replaced, not appended to.
+        // Select "xxx" in the recalled command and paste "foo" over it. The selected range should
+        // be replaced, not appended to.
         editor.update(&mut app, |view, ctx| {
             view.vim_user_insert("0wve", ctx);
             view.vim_user_insert("p", ctx);
