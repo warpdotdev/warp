@@ -253,33 +253,36 @@ impl PrivacySettings {
             .value();
 
         // Listen for changes to the cloud model and update ourselves when they happen.
-        ctx.subscribe_to_model(&WarpDrivePrivacySettings::handle(ctx), |me, event, ctx| {
-            let privacy_settings = WarpDrivePrivacySettings::as_ref(ctx);
-            match event {
-                WarpDrivePrivacySettingsChangedEvent::IsTelemetryEnabled { .. } => {
-                    me.set_is_telemetry_enabled(
-                        *privacy_settings.is_telemetry_enabled.value(),
-                        ctx,
-                    );
+        ctx.subscribe_to_model(
+            &WarpDrivePrivacySettings::handle(ctx),
+            |me, _, event, ctx| {
+                let privacy_settings = WarpDrivePrivacySettings::as_ref(ctx);
+                match event {
+                    WarpDrivePrivacySettingsChangedEvent::IsTelemetryEnabled { .. } => {
+                        me.set_is_telemetry_enabled(
+                            *privacy_settings.is_telemetry_enabled.value(),
+                            ctx,
+                        );
+                    }
+                    WarpDrivePrivacySettingsChangedEvent::IsCrashReportingEnabled { .. } => {
+                        me.set_is_crash_reporting_enabled(
+                            *privacy_settings.is_crash_reporting_enabled.value(),
+                            ctx,
+                        );
+                    }
+                    WarpDrivePrivacySettingsChangedEvent::IsCloudConversationStorageEnabled {
+                        ..
+                    } => {
+                        me.set_is_cloud_conversation_storage_enabled(
+                            *privacy_settings
+                                .is_cloud_conversation_storage_enabled
+                                .value(),
+                            ctx,
+                        );
+                    }
                 }
-                WarpDrivePrivacySettingsChangedEvent::IsCrashReportingEnabled { .. } => {
-                    me.set_is_crash_reporting_enabled(
-                        *privacy_settings.is_crash_reporting_enabled.value(),
-                        ctx,
-                    );
-                }
-                WarpDrivePrivacySettingsChangedEvent::IsCloudConversationStorageEnabled {
-                    ..
-                } => {
-                    me.set_is_cloud_conversation_storage_enabled(
-                        *privacy_settings
-                            .is_cloud_conversation_storage_enabled
-                            .value(),
-                        ctx,
-                    );
-                }
-            }
-        });
+            },
+        );
 
         let user_secret_regex_list: CustomSecretRegexList =
             CustomSecretRegexList::new_from_storage(ctx);

@@ -130,7 +130,7 @@ pub(crate) struct AutoCloudHandoffController {
 
 impl AutoCloudHandoffController {
     pub(crate) fn new(ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&SystemStats::handle(ctx), |controller, event, ctx| {
+        ctx.subscribe_to_model(&SystemStats::handle(ctx), |controller, _, event, ctx| {
             controller.handle_system_stats_event(event, ctx);
         });
 

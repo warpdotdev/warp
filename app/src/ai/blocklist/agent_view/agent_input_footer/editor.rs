@@ -8,6 +8,7 @@ use warpui::keymap::FixedBinding;
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::toolbar_item::AgentToolbarItemKind;
+use crate::appearance::AppearanceEvent;
 use crate::chip_configurator::{
     render_chip_editor_modal, render_chip_editor_sections, ChipConfigurator,
     ChipConfiguratorAction, ChipConfiguratorLayout, ChipEditorModalConfig, ChipEditorMouseHandles,
@@ -180,6 +181,19 @@ impl AgentToolbarInlineEditor {
             }
         });
 
+        // Chip colors are derived from the theme, so rebuild the chips from
+        // settings when the theme changes to keep an open editor readable after a
+        // theme switch (this inline editor persists its arrangement on every
+        // edit, so reloading preserves the user's layout).
+        ctx.subscribe_to_model(&Appearance::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, AppearanceEvent::ThemeChanged)
+                && me.chip_configurator.current_dragging_state.is_none()
+            {
+                me.reset_from_settings(ctx);
+                ctx.notify();
+            }
+        });
+
         editor
     }
 
@@ -294,7 +308,21 @@ fn save_toolbar_selection<V: View>(
 }
 
 impl AgentToolbarEditorModal {
-    pub fn new(_ctx: &mut ViewContext<Self>) -> Self {
+    pub fn new(ctx: &mut ViewContext<Self>) -> Self {
+        // Chip colors are derived from the theme, so rebuild the chips when the
+        // theme changes to keep an open editor readable after a theme switch.
+        // Only rebuild while the modal is actually open (has chips) and not
+        // mid-drag.
+        ctx.subscribe_to_model(&Appearance::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, AppearanceEvent::ThemeChanged)
+                && me.chip_configurator.current_dragging_state.is_none()
+                && me.chip_configurator.has_items()
+            {
+                let mode = me.mode;
+                open_toolbar_items_from_settings(&mut me.chip_configurator, mode, ctx);
+                ctx.notify();
+            }
+        });
         Self {
             mouse_handles: Default::default(),
             chip_configurator: ChipConfigurator::new(ChipConfiguratorLayout::LeftRightZones),

@@ -35,6 +35,7 @@ use crate::ai::blocklist::{
     BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIInputEvent, BlocklistAIInputModel,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::{
     available_model_menu_items, has_reasoning_variants, is_auto,
 };
@@ -697,8 +698,14 @@ impl ProfileModelSelector {
                 llm_preferences.get_active_base_model(ctx, Some(self.terminal_view_id))
             };
 
-            if let Some(description) = &active_llm.description {
-                format!("{} ({})", active_llm.display_name, description)
+            // Don't append description for custom model routers — it would add a
+            // redundant "(Custom auto · Local)" suffix to the button label.
+            if !is_custom_router_id(active_llm.id.as_str()) {
+                if let Some(description) = &active_llm.description {
+                    format!("{} ({})", active_llm.display_name, description)
+                } else {
+                    active_llm.display_name.clone()
+                }
             } else {
                 active_llm.display_name.clone()
             }

@@ -8,8 +8,12 @@ license = "MIT"
 
 [features]
 traces = []
+tui = ["dep:ratatui"]
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = ["dep:minimp4", "dep:openh264"]
+# When enabled, skip eager scene building from the window-invalidation callback
+# and rely on the normal platform redraw path instead; see core/app.rs.
+defer_scene_build = []
 # If enabled, writes named telemetry events to the info log.  Should never be
 # enabled in release builds without a PII audit of telemetry data.
 log_named_telemetry_events = []
@@ -58,6 +62,9 @@ pathfinder_color.workspace = true
 pathfinder_geometry.workspace = true
 rand.workspace = true
 rangemap.workspace = true
+ratatui = { version = "0.30", optional = true, features = [
+    "unstable-rendered-line-info",
+] }
 raw-window-handle = "0.6.2"
 resvg.workspace = true
 rstar = "0.12.2"
@@ -105,3 +112,19 @@ woothee = "0.13.0"
 
 [build-dependencies]
 cfg_aliases.workspace = true
+
+# The TUI integration test references tui-only API, so it must be skipped
+# entirely when the feature is off; `required-features` needs an explicit
+# target section.
+[[test]]
+name = "tui_integration"
+required-features = ["tui"]
+
+# Interactive manual smoke test for the TUI backend; tui-only API.
+[[example]]
+name = "tui_demo"
+required-features = ["tui"]
+
+[[example]]
+name = "tui_file_viewer"
+required-features = ["tui"]

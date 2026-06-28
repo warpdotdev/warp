@@ -6,6 +6,7 @@ use instant::Duration;
 use warp_graphql::client::{GraphQLError, Operation};
 use warpui_core::r#async::BoxFuture;
 
+use crate::auth::AuthEvent;
 use crate::base_client::BaseClient;
 
 /// Sends a GraphQL operation through a base client supplied by the application.
@@ -13,7 +14,7 @@ use crate::base_client::BaseClient;
 /// This function is deliberately generic so concrete endpoint operation
 /// instantiations occur in server client crates rather than in the app crate.
 pub fn send_graphql_request<'a, QF: 'a, O>(
-    base_client: &'a dyn BaseClient,
+    base_client: &'a BaseClient,
     operation: O,
     timeout: Option<Duration>,
 ) -> BoxFuture<'a, Result<QF>>
@@ -24,16 +25,16 @@ where
         let operation_name = operation.operation_name().map(Cow::into_owned);
         let options = base_client.graphql_request_options(timeout).await?;
         let response = match operation
-            .send_request(base_client.http_client(), options)
+            .send_request(base_client.owned_http_client(), options)
             .await
         {
             Ok(response) => response,
             Err(GraphQLError::StagingAccessBlocked) => {
-                base_client.on_graphql_staging_access_blocked();
+                let _ = base_client.send_auth_event(AuthEvent::StagingAccessBlocked);
                 anyhow::bail!(GraphQLError::StagingAccessBlocked);
             }
             Err(GraphQLError::IapChallengeBlocked) => {
-                base_client.on_graphql_iap_challenge_received();
+                let _ = base_client.send_auth_event(AuthEvent::IapChallengeReceived);
                 anyhow::bail!(GraphQLError::IapChallengeBlocked);
             }
             Err(err) => {
@@ -67,7 +68,7 @@ where
             {
                 if base_client.is_auth_refresh_allowed() {
                     log::error!("GraphQL request failed due to unauthenticated user");
-                    base_client.on_graphql_user_account_disabled();
+                    let _ = base_client.send_auth_event(AuthEvent::UserAccountDisabled);
                 } else {
                     anyhow::bail!("server rejected authentication credentials");
                 }

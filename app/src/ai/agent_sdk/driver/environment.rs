@@ -20,7 +20,7 @@ use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 use super::terminal::TerminalDriver;
 use super::AgentDriverError;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
-use crate::ai::cloud_environments::{AmbientAgentEnvironment, GithubRepo};
+use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
 
@@ -62,16 +62,13 @@ pub fn prepare_environment(
 ) -> impl Future<Output = Result<(), PrepareEnvironmentError>> {
     let spawner = ctx.spawner();
     async move {
-        let AmbientAgentEnvironment {
-            github_repos,
-            setup_commands,
-            ..
-        } = environment;
+        let source_repos = environment.effective_repos();
+        let setup_commands = environment.setup_commands;
 
         // Only index the codebase for the Oz harness; third-party harnesses (e.g. Claude)
         // have their own methods for navigating a codebase.
         let should_index_codebase = harness == Harness::Oz;
-        let should_subscribe_to_index_updates = should_index_codebase && !github_repos.is_empty();
+        let should_subscribe_to_index_updates = should_index_codebase && !source_repos.is_empty();
         let repo_channels = Arc::new(Mutex::new(HashMap::<PathBuf, oneshot::Sender<()>>::new()));
 
         if should_subscribe_to_index_updates {
@@ -82,7 +79,7 @@ pub fn prepare_environment(
             &spawner,
             working_dir.as_path(),
             is_sandbox,
-            &github_repos,
+            &source_repos,
             setup_commands,
             should_index_codebase,
             Arc::clone(&repo_channels),
@@ -107,7 +104,7 @@ async fn prepare_environment_impl(
     spawner: &ModelSpawner<TerminalDriver>,
     working_dir: &Path,
     is_sandbox: bool,
-    github_repos: &[GithubRepo],
+    source_repos: &[SourceRepo],
     setup_commands: Vec<String>,
     should_index_codebase: bool,
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
@@ -127,11 +124,11 @@ async fn prepare_environment_impl(
     }
     let mut codebase_context_receivers = Vec::new();
 
-    if !github_repos.is_empty() {
+    if !source_repos.is_empty() {
         setup_events
             .record_result(SetupStep::EnvironmentRepoClone, async {
-                clone_repos(github_repos, working_dir, spawner).await?;
-                for repo in github_repos {
+                clone_repos(source_repos, working_dir, spawner).await?;
+                for repo in source_repos {
                     register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
                     if !is_sandbox && should_index_codebase {
                         let receiver = index_repo_codebase(
@@ -201,7 +198,7 @@ async fn prepare_environment_impl(
                 Ok::<(), PrepareEnvironmentError>(())
             })
             .await?;
-    } else if should_index_codebase && github_repos.is_empty() {
+    } else if should_index_codebase && source_repos.is_empty() {
         let _ = spawner
             .spawn(|_, ctx| {
                 ctx.unsubscribe_from_model(&CodebaseIndexManager::handle(ctx));
@@ -209,13 +206,13 @@ async fn prepare_environment_impl(
             .await;
     }
 
-    if should_index_codebase && github_repos.is_empty() {
+    if should_index_codebase && source_repos.is_empty() {
         log::info!("No repositories to index for codebase context");
     }
 
     // If there's only one repo in the environment, start the agent in that repo.
     // This way, it doesn't have to locate the correct repo to work on.
-    if let Some(repo_name) = single_repo_name(github_repos) {
+    if let Some(repo_name) = single_repo_name(source_repos) {
         safe_info!(
             safe: ("Changing directory into single repository"),
             full: ("Changing directory into single repository: {repo_name}")
@@ -264,7 +261,7 @@ fn record_codebase_indexing(
     });
 }
 
-fn build_parallel_clone_command(repos: &[GithubRepo], shell_type: ShellType) -> String {
+fn build_parallel_clone_command(repos: &[SourceRepo], shell_type: ShellType) -> String {
     let mut script = String::from(
         r#"set +e
 failed=0
@@ -291,7 +288,7 @@ clone_repo() {
     let mut log_outputs = String::new();
     for (index, repo) in repos.iter().enumerate() {
         let repo_name = format!("{}/{}", repo.owner, repo.repo);
-        let repo_url = format!("https://github.com/{repo_name}.git");
+        let repo_url = repo.https_clone_url();
         let escaped_repo_name = shell_escape_single_quotes(&repo_name, ShellType::Bash);
         let escaped_repo_url = shell_escape_single_quotes(&repo_url, ShellType::Bash);
         let escaped_target = shell_escape_single_quotes(&repo.repo, ShellType::Bash);
@@ -330,10 +327,10 @@ exit "$failed"
     format!("sh -c '{escaped_script}'")
 }
 
-/// Clone all GitHub repositories to `{working_dir}/{repo.repo}` if they do not already exist.
+/// Clone all source repositories to `{working_dir}/{repo.repo}` if they do not already exist.
 /// Multiple repositories are cloned in parallel to reduce environment setup time.
 pub(super) async fn clone_repos(
-    repos: &[GithubRepo],
+    repos: &[SourceRepo],
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<(), PrepareEnvironmentError> {
@@ -376,16 +373,16 @@ pub(super) async fn clone_repos(
     }
 }
 
-/// Clone a GitHub repository to `{working_dir}/{repo.repo}` if it does not already exist.
+/// Clone a source repository to `{working_dir}/{repo.repo}` if it does not already exist.
 /// This only performs the clone -- it does NOT register the repo with `DetectedRepositories`.
 #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo))]
 pub(super) async fn clone_repo(
-    repo: &GithubRepo,
+    repo: &SourceRepo,
     working_dir: &Path,
     spawner: &ModelSpawner<TerminalDriver>,
 ) -> Result<(), PrepareEnvironmentError> {
     let repo_name = format!("{}/{}", repo.owner, repo.repo);
-    let repo_url = format!("https://github.com/{repo_name}.git");
+    let repo_url = repo.https_clone_url();
     // Get the session's shell type for proper escaping, falling back to Bash
     // when the session is not yet bootstrapped or the spawn fails.
     let shell_type = spawner
@@ -437,11 +434,11 @@ pub(super) async fn clone_repo(
     Ok(())
 }
 
-/// Register a cloned GitHub repository with `DetectedRepositories` so that the
+/// Register a cloned source repository with `DetectedRepositories` so that the
 /// skill watcher and other repo-aware subsystems can discover it.
 #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo, is_sandbox = is_sandbox))]
 pub(super) async fn register_cloned_repo(
-    repo: &GithubRepo,
+    repo: &SourceRepo,
     working_dir: &Path,
     is_sandbox: bool,
     spawner: &ModelSpawner<TerminalDriver>,
@@ -499,9 +496,7 @@ async fn subscribe_to_codebase_index_events(
     spawner
         .spawn(move |_, ctx| {
             let repo_channels = Arc::clone(&repo_channels);
-            ctx.subscribe_to_model(
-                &CodebaseIndexManager::handle(ctx),
-                move |_, event, ctx| {
+            ctx.subscribe_to_model(&CodebaseIndexManager::handle(ctx), move |_, _, event, ctx| {
                     if !matches!(
                         event,
                         CodebaseIndexManagerEvent::SyncStateUpdated { .. }
@@ -541,8 +536,7 @@ async fn subscribe_to_codebase_index_events(
                             let _ = tx.send(());
                         }
                     }
-                },
-            );
+                });
         })
         .await
         .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)
@@ -648,7 +642,7 @@ async fn cd_in_terminal(
         })
 }
 
-fn single_repo_name(repos: &[GithubRepo]) -> Option<String> {
+fn single_repo_name(repos: &[SourceRepo]) -> Option<String> {
     if repos.len() != 1 {
         return None;
     }

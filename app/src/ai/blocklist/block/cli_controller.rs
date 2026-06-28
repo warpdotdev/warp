@@ -142,7 +142,7 @@ impl CLISubagentController {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         ctx.subscribe_to_model(&history_model, Self::handle_history_model_event);
 
-        ctx.subscribe_to_model(action_model, |me, event, ctx| match event {
+        ctx.subscribe_to_model(action_model, |me, _, event, ctx| match event {
             BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_) => {
                 let mut terminal_model = me.terminal_model.lock();
                 let active_block = terminal_model.block_list_mut().active_block_mut();
@@ -197,7 +197,7 @@ impl CLISubagentController {
             _ => (),
         });
 
-        ctx.subscribe_to_model(model_event_dispatcher, |me, event, ctx| {
+        ctx.subscribe_to_model(model_event_dispatcher, |me, _, event, ctx| {
             if let ModelEvent::BlockCompleted(block_completed_event) = event {
                 let terminal_model = me.terminal_model.lock();
                 let Some(block) = terminal_model
@@ -478,6 +478,7 @@ impl CLISubagentController {
 
     fn handle_history_model_event(
         &mut self,
+        _: ModelHandle<BlocklistAIHistoryModel>,
         event: &BlocklistAIHistoryEvent,
         ctx: &mut ModelContext<Self>,
     ) {

@@ -89,6 +89,7 @@ const VIEWING_MCP_TOOL_DETAIL_MESSAGE: &str = "Viewing MCP tool call detail";
 const EDIT_COMMAND_ACTION_NAME: &str = "requested_command:edit";
 
 const EDIT_MODE_OPEN_KEYMAP_CONTEXT: &str = "RequestedCommandViewEditModeOpen";
+const REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT: &str = "RequestedActionBlocked";
 
 const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 const MAX_EDITOR_HEIGHT: f32 = 500.0;
@@ -119,32 +120,42 @@ pub fn init(app: &mut AppContext) {
         FixedBinding::new(
             "ctrl-c",
             RequestedCommandViewAction::Reject,
-            id!(RequestedCommandView::ui_name()),
+            id!(RequestedCommandView::ui_name()) & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT),
         ),
         FixedBinding::new(
             "enter",
             RequestedCommandViewAction::Accept,
-            id!(RequestedCommandView::ui_name()) & !id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
+            id!(RequestedCommandView::ui_name())
+                & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT)
+                & !id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
         ),
         FixedBinding::new(
             "numpadenter",
             RequestedCommandViewAction::Accept,
-            id!(RequestedCommandView::ui_name()) & !id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
+            id!(RequestedCommandView::ui_name())
+                & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT)
+                & !id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
         ),
         FixedBinding::new(
             "cmdorctrl-enter",
             RequestedCommandViewAction::Accept,
-            id!(RequestedCommandView::ui_name()) & id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
+            id!(RequestedCommandView::ui_name())
+                & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT)
+                & id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
         ),
         FixedBinding::new(
             "escape",
             RequestedCommandViewAction::CloseEditMode,
-            id!(RequestedCommandView::ui_name()) & id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
+            id!(RequestedCommandView::ui_name())
+                & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT)
+                & id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
         ),
         FixedBinding::new(
             "tab",
             RequestedCommandViewAction::FocusEditor,
-            id!(RequestedCommandView::ui_name()) & id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
+            id!(RequestedCommandView::ui_name())
+                & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT)
+                & id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
         ),
     ]);
 
@@ -155,7 +166,9 @@ pub fn init(app: &mut AppContext) {
     )
     .with_key_binding(cmd_or_ctrl_shift("e"))
     .with_context_predicate(
-        id!(RequestedCommandView::ui_name()) & !id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
+        id!(RequestedCommandView::ui_name())
+            & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT)
+            & !id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
     )]);
 }
 
@@ -617,6 +630,13 @@ impl RequestedCommandView {
 
     fn get_position_id_for_accept_split_button(prefix: &str) -> String {
         format!("RequestedCommandView-{prefix}-accept-split")
+    }
+
+    fn is_waiting_for_user_confirmation(&self, app: &AppContext) -> bool {
+        self.action_model
+            .as_ref(app)
+            .get_action_status(&self.action_id)
+            .is_some_and(|status| status.is_blocked())
     }
 
     pub fn is_header_expanded(&self) -> bool {
@@ -1522,7 +1542,7 @@ impl View for RequestedCommandView {
                                     !exchange
                                         .input
                                         .iter()
-                                        .any(|input| input.user_query().is_some())
+                                        .any(|input| input.display_query().is_some())
                                 })
                     }))
                 && !is_input_pinned_to_top);
@@ -1572,8 +1592,11 @@ impl View for RequestedCommandView {
         root_stack.finish()
     }
 
-    fn keymap_context(&self, _app: &AppContext) -> Context {
+    fn keymap_context(&self, app: &AppContext) -> Context {
         let mut context = Self::default_keymap_context();
+        if self.is_waiting_for_user_confirmation(app) {
+            context.set.insert(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT);
+        }
 
         if self.is_editing {
             context.set.insert(EDIT_MODE_OPEN_KEYMAP_CONTEXT);
@@ -1586,6 +1609,19 @@ impl TypedActionView for RequestedCommandView {
     type Action = RequestedCommandViewAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        if matches!(
+            action,
+            RequestedCommandViewAction::Accept
+                | RequestedCommandViewAction::AcceptAndAutoExecute
+                | RequestedCommandViewAction::ToggleAcceptMenu
+                | RequestedCommandViewAction::Reject
+                | RequestedCommandViewAction::OpenEditMode
+                | RequestedCommandViewAction::CloseEditMode
+                | RequestedCommandViewAction::FocusEditor
+        ) && !self.is_waiting_for_user_confirmation(ctx)
+        {
+            return;
+        }
         match action {
             RequestedCommandViewAction::Accept => {
                 self.commit_editor_contents(ctx);

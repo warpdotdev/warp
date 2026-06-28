@@ -15,6 +15,15 @@ pub enum FederateCommand {
     IssueGcpToken(IssueGcpTokenArgs),
 }
 
+impl FederateCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            FederateCommand::IssueToken(_) => "federate issue-token",
+            FederateCommand::IssueGcpToken(_) => "federate issue-gcp-token",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 #[command(name = "issue-token")]
 pub struct IssueTokenArgs {

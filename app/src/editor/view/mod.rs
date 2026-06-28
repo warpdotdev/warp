@@ -3235,6 +3235,23 @@ impl EditorView {
         ctx.emit(Event::BufferReinitialized);
     }
 
+    /// Exits the ephemeral loading state created by `set_buffer_text_ignoring_undo`
+    /// without touching the CRDT buffer or emitting any `UpdatePeers` operations.
+    /// The editor switches back to displaying the regular collaborative buffer.
+    pub fn exit_ephemeral_loading_state(&mut self, ctx: &mut ViewContext<Self>) {
+        self.editor_model.update(ctx, |model, ctx| {
+            model.exit_ephemeral_loading_state(ctx);
+        });
+    }
+
+    /// Shows an empty display-only ephemeral overlay for immediate visual feedback.
+    /// See [`EditorModel::show_display_only_empty_buffer`] for the full contract.
+    pub fn show_display_only_empty_buffer(&mut self, ctx: &mut ViewContext<Self>) {
+        self.editor_model.update(ctx, |model, ctx| {
+            model.show_display_only_empty_buffer(ctx);
+        });
+    }
+
     pub fn register_remote_peer(
         &mut self,
         replica_id: ReplicaId,

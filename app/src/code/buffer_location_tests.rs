@@ -641,7 +641,7 @@ fn server_push_does_not_echo_back_as_client_edit() {
             // If a user-originated ContentChanged fires, it means the echo loop
             // guard (origin.from_user()) failed.
             let tx = user_edit_tx.clone();
-            ctx.subscribe_to_model(&state.buffer, move |_me, event, _ctx| {
+            ctx.subscribe_to_model(&state.buffer, move |_me, _, event, _ctx| {
                 use warp_editor::content::buffer::BufferEvent;
                 if let BufferEvent::ContentChanged { origin, .. } = event {
                     if origin.from_user() {

@@ -140,7 +140,7 @@ impl Sessions {
         #[cfg(feature = "local_tty")]
         if FeatureFlag::SshRemoteServer.is_enabled() {
             let mgr = RemoteServerManager::handle(ctx);
-            ctx.subscribe_to_model(&mgr, |sessions, event, ctx| match event {
+            ctx.subscribe_to_model(&mgr, |sessions, _, event, ctx| match event {
                 RemoteServerManagerEvent::SessionConnected {
                     session_id: sid,
                     host_id,
@@ -169,7 +169,7 @@ impl Sessions {
                 | RemoteServerManagerEvent::SessionConnectionFailed { .. }
                 | RemoteServerManagerEvent::HostConnected { .. }
                 | RemoteServerManagerEvent::HostDisconnected { .. }
-                | RemoteServerManagerEvent::BundledSkillsSnapshot { .. }
+                | RemoteServerManagerEvent::RemoteAgentContextSnapshot { .. }
                 | RemoteServerManagerEvent::NavigatedToDirectory { .. }
                 | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
                 | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
@@ -900,11 +900,17 @@ impl From<BootstrapSessionType> for SessionType {
 #[derive(Debug)]
 pub struct Session {
     info: SessionInfo,
-    external_commands: Arc<OnceCell<HashSet<SmolStr>>>,
+    external_commands: OnceCell<HashSet<SmolStr>>,
+    /// Function names collected asynchronously after bootstrap via an in-band command.
+    additional_function_names: OnceCell<HashSet<SmolStr>>,
+    /// builtin/cmdlet names collected asynchronously after bootstrap via an in-band command.
+    additional_builtin_names: OnceCell<HashSet<SmolStr>>,
     /// The command executor for this session. Behind a `RwLock` so it can be
     /// swapped after a remote server reconnect (via `set_command_executor`).
     command_executor: RwLock<Arc<dyn CommandExecutor>>,
     load_external_commands_future: OnceCell<Shared<BoxFuture<'static, ()>>>,
+    load_all_function_names_future: OnceCell<Shared<BoxFuture<'static, ()>>>,
+    load_all_builtins_future: OnceCell<Shared<BoxFuture<'static, ()>>>,
     command_case_sensitivity: TopLevelCommandCaseSensitivity,
     /// The authoritative session type, initially derived from the
     /// [`BootstrapSessionType`] in `SessionInfo` and updated by [`Sessions`]
@@ -928,9 +934,13 @@ impl Session {
         let session_type = SessionType::from(session_info.session_type.clone());
         Self {
             info: session_info,
-            external_commands: Arc::new(OnceCell::new()),
+            external_commands: OnceCell::new(),
+            additional_function_names: OnceCell::new(),
+            additional_builtin_names: OnceCell::new(),
             command_executor: RwLock::new(command_executor),
             load_external_commands_future: Default::default(),
+            load_all_function_names_future: Default::default(),
+            load_all_builtins_future: Default::default(),
             command_case_sensitivity,
             session_type: Mutex::new(session_type),
         }
@@ -1045,11 +1055,19 @@ impl Session {
     }
 
     pub fn builtin_names(&self) -> impl Iterator<Item = &str> {
-        self.info.builtins.iter().map(Deref::deref)
+        self.info
+            .builtins
+            .iter()
+            .chain(self.additional_builtin_names.get().into_iter().flatten())
+            .map(Deref::deref)
     }
 
     pub fn function_names(&self) -> impl Iterator<Item = &str> {
-        self.info.function_names.iter().map(Deref::deref)
+        self.info
+            .function_names
+            .iter()
+            .chain(self.additional_function_names.get().into_iter().flatten())
+            .map(Deref::deref)
     }
 
     pub fn executable_names(&self) -> impl Iterator<Item = &str> {
@@ -1115,6 +1133,96 @@ impl Session {
         self.external_commands.get().is_some()
     }
 
+    /// Asynchronously collects all function names via an in-band shell command.
+    pub async fn load_all_function_names(&self) {
+        let Some(command) = self
+            .info
+            .shell
+            .shell_type()
+            .shell_command_to_get_all_functions()
+        else {
+            return;
+        };
+        self.load_deferred_name_set(
+            command,
+            &self.info.function_names,
+            &self.additional_function_names,
+            &self.load_all_function_names_future,
+            "function",
+        )
+        .await;
+    }
+
+    /// Asynchronously collects all builtin (cmdlet) names via an in-band shell command.
+    pub async fn load_all_builtins(&self) {
+        let Some(command) = self
+            .info
+            .shell
+            .shell_type()
+            .shell_command_to_get_all_builtins()
+        else {
+            return;
+        };
+        self.load_deferred_name_set(
+            command,
+            &self.info.builtins,
+            &self.additional_builtin_names,
+            &self.load_all_builtins_future,
+            "builtin",
+        )
+        .await;
+    }
+
+    /// Shared helper for [`Self::load_all_function_names`] and [`Self::load_all_builtins`].
+    async fn load_deferred_name_set(
+        &self,
+        command: &'static str,
+        existing: &HashSet<SmolStr>,
+        storage: &OnceCell<HashSet<SmolStr>>,
+        future_cell: &OnceCell<Shared<BoxFuture<'static, ()>>>,
+        label: &'static str,
+    ) {
+        let (load_future, receiver) = (async {
+            let result = self
+                .execute_command(command, None, None, ExecuteCommandOptions::default())
+                .await;
+
+            let new_names: HashSet<SmolStr> = match result {
+                Ok(output) if output.status == CommandExitStatus::Success => {
+                    match output.to_string() {
+                        Ok(output_string) => output_string
+                            .lines()
+                            .filter(|name| !name.is_empty() && !existing.contains(*name))
+                            .map(Into::into)
+                            .collect(),
+                        Err(e) => {
+                            log::warn!("Failed to decode {label} names output: {e:#}");
+                            HashSet::new()
+                        }
+                    }
+                }
+                Ok(_) => {
+                    log::warn!("In-band command for {label} names returned non-success status");
+                    HashSet::new()
+                }
+                Err(e) => {
+                    log::warn!("Failed to load {label} names: {e:#}");
+                    HashSet::new()
+                }
+            };
+
+            if storage.set(new_names).is_err() {
+                log::warn!("Additional {label} names were already set for this session.");
+            }
+        })
+        .remote_handle();
+
+        match future_cell.try_insert(receiver.boxed().shared()) {
+            Ok(_) => load_future.await,
+            Err((existing_receiver, _)) => existing_receiver.clone().await,
+        };
+    }
+
     /// Asynchronously loads the external commands.
     ///
     /// If this is called while a previous call to `load_external_commands` is
@@ -1129,7 +1237,6 @@ impl Session {
     pub async fn load_external_commands(&self) {
         let (load_future, receiver) = (async {
             let shell = self.info.shell.clone();
-            let external_commands = self.external_commands.clone();
             let shell_command_to_get_executables =
                 shell.shell_type().shell_command_to_get_executables();
             let env_vars = self
@@ -1187,7 +1294,7 @@ impl Session {
                     .executables_from_shell_command_output(result, is_msys2)
                     .into_iter(),
             );
-            if external_commands.set(new_commands).is_err() {
+            if self.external_commands.set(new_commands).is_err() {
                 log::warn!("External commands should only be loaded once per session.");
             }
         })
@@ -1210,9 +1317,11 @@ impl Session {
             .into_iter()
             .flatten()
             .chain(&self.info.function_names)
+            .chain(self.additional_function_names.get().into_iter().flatten())
             .chain(self.info.aliases.keys())
             .chain(self.info.abbreviations.keys())
             .chain(&self.info.builtins)
+            .chain(self.additional_builtin_names.get().into_iter().flatten())
             .chain(&self.info.keywords)
             .map(Deref::deref)
     }
@@ -1462,8 +1571,8 @@ impl Session {
     }
 
     #[cfg(feature = "integration_tests")]
-    pub fn external_commands(&self) -> Arc<OnceCell<HashSet<SmolStr>>> {
-        self.external_commands.clone()
+    pub fn external_commands(&self) -> &OnceCell<HashSet<SmolStr>> {
+        &self.external_commands
     }
 
     /// Returns a reference to the session's command executor for integration
@@ -1761,6 +1870,10 @@ pub mod testing {
                 load_external_commands_future: Default::default(),
                 command_case_sensitivity: TopLevelCommandCaseSensitivity::CaseSensitive,
                 session_type: Mutex::new(session_type),
+                additional_function_names: Default::default(),
+                load_all_function_names_future: Default::default(),
+                additional_builtin_names: Default::default(),
+                load_all_builtins_future: Default::default(),
             }
         }
 
@@ -1776,6 +1889,10 @@ pub mod testing {
                 load_external_commands_future: Default::default(),
                 command_case_sensitivity: TopLevelCommandCaseSensitivity::CaseSensitive,
                 session_type: Mutex::new(session_type),
+                additional_function_names: Default::default(),
+                load_all_function_names_future: Default::default(),
+                additional_builtin_names: Default::default(),
+                load_all_builtins_future: Default::default(),
             }
         }
 

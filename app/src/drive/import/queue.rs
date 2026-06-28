@@ -102,7 +102,7 @@ pub(super) struct ImportQueue {
 impl ImportQueue {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let update_manager = UpdateManager::handle(ctx);
-        ctx.subscribe_to_model(&update_manager, |me, event, ctx| {
+        ctx.subscribe_to_model(&update_manager, |me, _, event, ctx| {
             me.handle_update_manager_event(event, ctx);
         });
 

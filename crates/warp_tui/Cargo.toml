@@ -1,0 +1,60 @@
+[package]
+name = "warp_tui"
+edition = "2021"
+description = "Headless terminal-UI front-end for Warp"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+autobins = false
+default-run = "warp-tui-oss"
+
+# One binary per channel, mirroring the GUI app's `app/src/bin/*` layout. The
+# OSS bin is the `default-run` so bare `cargo run -p warp_tui` builds without the
+# internal `warp-channel-config` generator; `./script/run-tui` selects the local
+# bin when the generator is available.
+[[bin]]
+name = "warp-tui-oss"
+path = "src/bin/oss.rs"
+
+[[bin]]
+name = "warp-tui"
+path = "src/bin/local.rs"
+
+[[bin]]
+name = "warp-tui-dev"
+path = "src/bin/dev.rs"
+
+[[bin]]
+name = "warp-tui-preview"
+path = "src/bin/preview.rs"
+
+[[bin]]
+name = "warp-tui-stable"
+path = "src/bin/stable.rs"
+
+[dependencies]
+anyhow.workspace = true
+num-traits.workspace = true
+string-offset.workspace = true
+vec1.workspace = true
+warp = { workspace = true, features = ["tui"] }
+warp_channel_config.workspace = true
+warp_core.workspace = true
+warp_editor.workspace = true
+warpui_core = { workspace = true, features = ["tui"] }
+
+[dev-dependencies]
+# `test-util` exposes `Appearance::mock()`, used to register the `Appearance`
+# singleton that the editor-backed TUI input view depends on in tests/examples.
+warp_core = { workspace = true, features = ["test-util"] }
+
+[[example]]
+name = "tui_input_demo"
+required-features = []
+
+[features]
+# Declared so the `warp_channel_config::load_config!` macro's
+# `cfg(feature = "release_bundle")` branch is a known cfg in this crate. Today it
+# stays off and the local bin uses the runtime generator; wiring the embedded
+# config path (a `build.rs`) is phase 2 of the channel setup.
+release_bundle = ["warp/release_bundle"]

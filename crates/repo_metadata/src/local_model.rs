@@ -355,10 +355,10 @@ impl LocalRepoMetadataModel {
                         ctx,
                     )
                 });
-                ctx.subscribe_to_model(&watcher, Self::handle_watcher_event);
+                ctx.subscribe_to_model(&watcher, |me, _, event, ctx| me.handle_watcher_event(event, ctx));
                 model.watcher = Some(watcher);
 
-                ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, event, ctx| {
+                ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), |me, _, event, ctx| {
                     let DetectedRepositoriesEvent::DetectedGitRepo { repository, .. } = event;
                     let repo_path = repository.as_ref(ctx).root_dir().clone();
                     if let Err(e) = me.index_directory(repository.clone(), ctx) {

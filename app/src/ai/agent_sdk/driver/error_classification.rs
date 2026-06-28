@@ -17,10 +17,10 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::InternalError,
             ),
         ),
-        AgentDriverError::BootstrapFailed => (
+        AgentDriverError::BootstrapFailed { error } => (
             AgentTaskState::Error,
             TaskStatusUpdate::with_error_code(
-                "Terminal session failed to start. Please try running your task again.",
+                format!("Terminal session failed to start: {error}"),
                 PlatformErrorCode::InternalError,
             ),
         ),
@@ -97,6 +97,13 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 format!(
                     "MCP server {uuid} was not found. Verify the server exists in your Warp Drive and the UUID is correct."
                 ),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
+        AgentDriverError::ManagedMcpResolutionFailed { uid, message } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                format!("Managed MCP server {uid} could not be resolved: {message}"),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),

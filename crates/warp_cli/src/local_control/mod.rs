@@ -63,11 +63,17 @@ impl ControlArgs {
         Self::try_parse_from_args(std::env::args_os(), bin_name).unwrap_or_else(|err| err.exit())
     }
 
+    /// Parse Warp Control arguments only when the wrapper-injected mode flag is present.
+    ///
+    /// Startup calls this before the normal Warp/Oz parser. Arguments through
+    /// `--warpctrl` are removed, and the remaining arguments are parsed as if
+    /// the standalone command name were `warpctrl`.
     pub fn from_control_mode_env() -> Option<Self> {
         Self::try_parse_control_mode_from(std::env::args_os())
             .map(|result| result.unwrap_or_else(|err| err.exit()))
     }
 
+    /// Testable implementation of [`Self::from_control_mode_env`].
     pub fn try_parse_control_mode_from<I, T>(args: I) -> Option<Result<Self, clap::Error>>
     where
         I: IntoIterator<Item = T>,

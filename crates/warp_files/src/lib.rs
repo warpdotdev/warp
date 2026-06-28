@@ -301,7 +301,7 @@ impl FileModel {
         let watcher =
             ctx.add_model(|ctx| BulkFilesystemWatcher::new(Duration::from_millis(200), ctx));
 
-        ctx.subscribe_to_model(&watcher, |me, event, ctx| {
+        ctx.subscribe_to_model(&watcher, |me, _, event, ctx| {
             me.handle_watcher_event(event, ctx);
         });
 

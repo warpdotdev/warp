@@ -18,7 +18,7 @@ use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, DragAxis, Draggable, DraggableState, Empty, Expanded, Fill,
     Flex, Hoverable, MinSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Stack, Text,
+    ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack, Text,
     DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 use warpui::fonts::{Properties, Style, Weight};
@@ -59,6 +59,9 @@ const SEND_NOW_DURING_CLOUD_SETUP_TOOLTIP: &str =
     "Prompts cannot be sent until environment setup is complete.";
 const SEND_NOW_TO_FULL_TERMINAL_USE_AGENT_TOOLTIP: &str = "Send to full terminal use agent";
 const SEND_NOW_AS_READ_ONLY_VIEWER_TOOLTIP: &str = "Read-only viewers cannot send prompts.";
+/// Suffix on rows auto-queued during an agent-requested long-running command, which fire
+/// when that command completes rather than at the end of the full response.
+const LRC_AUTO_QUEUE_ROW_SUFFIX: &str = "(queued until the command finishes)";
 
 /// Returns the position-cache id used to look up a row's bounding rect during a drag.
 /// Indexed by the row's current visual index so swaps maintain stable lookups.
@@ -325,6 +328,13 @@ impl QueuedPromptsPanelView {
                 .queue(conv_id)
                 .first()
                 .is_some_and(|row| !row.is_locked())
+    }
+
+    /// Returns whether the reusable inline edit editor is currently holding focus for an active
+    /// queued prompt row. Parent views use this to avoid stealing focus during async AI/tool
+    /// updates.
+    pub(in crate::terminal) fn is_inline_edit_editor_focused(&self, ctx: &AppContext) -> bool {
+        self.editing_row_id(ctx).is_some() && self.edit_editor.is_focused(ctx)
     }
 
     /// Re-renders when the host input transitions between empty and non-empty, so the header
@@ -601,7 +611,7 @@ impl QueuedPromptsPanelView {
         QueuedQueryModel::as_ref(ctx).editing_row(conv_id)
     }
 
-    fn commit_edit(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn commit_edit(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(conv_id) = self.active_conversation_id else {
             return;
         };
@@ -681,6 +691,17 @@ impl QueuedPromptsPanelView {
     /// Test accessor: whether the header currently shows the "⏎ to send" hint.
     pub(super) fn enter_hint_shown_for_test(&self, ctx: &AppContext) -> bool {
         self.should_show_enter_hint(ctx)
+    }
+
+    /// Test helper: replaces the inline edit editor buffer.
+    pub(super) fn set_edit_buffer_text_for_test(
+        &mut self,
+        text: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.edit_editor.update(ctx, |editor, ctx| {
+            editor.set_buffer_text(text, ctx);
+        });
     }
 }
 
@@ -913,7 +934,8 @@ fn build_edit_editor(ctx: &mut ViewContext<QueuedPromptsPanelView>) -> ViewHandl
             soft_wrap: true,
             text: text_options,
             propagate_and_no_op_escape_key: PropagateAndNoOpEscapeKey::PropagateFirst,
-            propagate_and_no_op_vertical_navigation_keys: PropagateAndNoOpNavigationKeys::Always,
+            // Keep up/down inside the inline editor so they move the cursor between lines.
+            propagate_and_no_op_vertical_navigation_keys: PropagateAndNoOpNavigationKeys::Never,
             propagate_horizontal_navigation_keys: PropagateHorizontalNavigationKeys::AtBoundary,
             ..Default::default()
         };
@@ -1141,7 +1163,8 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             .with_clip(ClipConfig::ellipsis())
             .finish();
             // Command rows are prefaced with a blue `!` so they read as shell commands; prompt
-            // rows render their text directly.
+            // rows render their text directly. Rows auto-queued during an agent-requested
+            // long-running command carry an italic suffix explaining when they will fire.
             if is_command {
                 Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -1153,6 +1176,29 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
                             .finish(),
                     )
                     .with_child(Expanded::new(1., preview).finish())
+                    .finish()
+            } else if origin == QueuedQueryOrigin::LrcAutoQueue {
+                let suffix_color: ColorU = theme.sub_text_color(theme.surface_1()).into();
+                let suffix = Text::new(
+                    LRC_AUTO_QUEUE_ROW_SUFFIX.to_owned(),
+                    appearance.ui_font_family(),
+                    queued_input_font_size,
+                )
+                .with_color(suffix_color)
+                .with_style(Properties {
+                    style: Style::Italic,
+                    weight: Weight::Normal,
+                })
+                .with_selectable(false)
+                .soft_wrap(false)
+                .finish();
+                // The preview shrinks to its text (clipping with an ellipsis when long) so the
+                // suffix hugs it, mirroring the model picker's "(selected)" treatment.
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(6.)
+                    .with_child(Shrinkable::new(1., preview).finish())
+                    .with_child(suffix)
                     .finish()
             } else {
                 preview

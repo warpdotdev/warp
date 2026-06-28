@@ -286,6 +286,8 @@ elif [[ $RELEASE_CHANNEL = "dev" ]]; then
     FEATURES="$FEATURES,agent_mode_debug"
     # Enable heap usage tracking & profiling using jemalloc through pprof.
     FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
+    # Enable the Warp Control CLI wrapper for local scripting/automation.
+    FEATURES="$FEATURES,warp_control_cli"
     # For dev builds, use different versions of our bundled frameworks (e.g.:
     # Sentry).  This needs to be exported so it can be referenced by
     # app/build.rs later, while running `cargo bundle`.
@@ -555,15 +557,19 @@ EOF
   chmod +x "$CLI_SCRIPT_PATH"
 
   if [[ ",$FEATURES," =~ ",warp_control_cli," ]]; then
-    WARPCTRL_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/warpctrl"
-    echo "Creating warpctrl wrapper script..."
-    cat > "$WARPCTRL_SCRIPT_PATH" << 'EOF'
-#!/bin/bash
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec -a "$0" "$script_dir/../../MacOS/WARP_BIN_PLACEHOLDER" --warpctrl "$@"
-EOF
-    sed -i '' "s/WARP_BIN_PLACEHOLDER/$WARP_BIN/" "$WARPCTRL_SCRIPT_PATH"
-    chmod +x "$WARPCTRL_SCRIPT_PATH"
+    # Each value must match `Channel::warpctrl_command_name` in the Rust source.
+    if [[ $RELEASE_CHANNEL = "stable" ]]; then
+      WARPCTRL_COMMAND_NAME="warpctrl"
+    elif [[ $RELEASE_CHANNEL = "oss" ]]; then
+      WARPCTRL_COMMAND_NAME="warpctrl-oss"
+    else
+      WARPCTRL_COMMAND_NAME="warpctrl-$RELEASE_CHANNEL"
+    fi
+    WARPCTRL_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/$WARPCTRL_COMMAND_NAME"
+    echo "Creating warpctrl wrapper script at $WARPCTRL_SCRIPT_PATH..."
+    "$WORKSPACE_ROOT_DIR/script/macos/create_warpctrl_wrapper" \
+      "$WARPCTRL_SCRIPT_PATH" \
+      "../../MacOS/$WARP_BIN"
   fi
 
   # Store the built artifact locations for GitHub Actions outputs.
@@ -603,13 +609,9 @@ elif [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
     fi
     WARPCTRL_SCRIPT_PATH="$OUT_DIR/warpctrl"
     echo "Creating warpctrl wrapper script at $WARPCTRL_SCRIPT_PATH"
-    cat > "$WARPCTRL_SCRIPT_PATH" << 'EOF'
-#!/bin/bash
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec -a "$0" "$script_dir/WARP_BIN_PLACEHOLDER" --warpctrl "$@"
-EOF
-    sed -i '' "s/WARP_BIN_PLACEHOLDER/$WARP_BIN/" "$WARPCTRL_SCRIPT_PATH"
-    chmod +x "$WARPCTRL_SCRIPT_PATH"
+    "$WORKSPACE_ROOT_DIR/script/macos/create_warpctrl_wrapper" \
+      "$WARPCTRL_SCRIPT_PATH" \
+      "$WARP_BIN"
   fi
 
   if [[ -n "$TARGET_ARCH" && -e "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM" ]]; then

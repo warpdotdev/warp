@@ -170,7 +170,7 @@ impl RequestFileEditsExecutor {
         let (result_tx, result_rx) = oneshot::channel();
         let mut result_tx = Some(result_tx);
 
-        ctx.subscribe_to_view(diff_view, move |_me, event, ctx| match event {
+        ctx.subscribe_to_view(diff_view, move |_me, _, event, ctx| match event {
             CodeDiffViewEvent::Rejected => {
                 let Some(result_tx) = result_tx.take() else {
                     return;

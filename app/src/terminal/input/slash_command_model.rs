@@ -133,7 +133,7 @@ impl SlashCommandModel {
         data_source: ModelHandle<SlashCommandDataSource>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(buffer_model, |me, event, ctx| {
+        ctx.subscribe_to_model(buffer_model, |me, _, event, ctx| {
             me.handle_input_buffer_update(event, ctx);
         });
 
@@ -142,7 +142,7 @@ impl SlashCommandModel {
             //
             // In the new modality, slash commands _are_ accessible in the terminal view, which is
             // in locked shell mode if NLD is disabled.
-            ctx.subscribe_to_model(ai_input_model, |me, event, ctx| match event {
+            ctx.subscribe_to_model(ai_input_model, |me, _, event, ctx| match event {
                 BlocklistAIInputEvent::InputTypeChanged { config }
                 | BlocklistAIInputEvent::LockChanged { config } => {
                     if config.is_locked {

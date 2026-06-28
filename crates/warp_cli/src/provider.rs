@@ -7,6 +7,15 @@ pub enum ProviderCommand {
     List,
 }
 
+impl ProviderCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            ProviderCommand::Setup(_) => "provider setup",
+            ProviderCommand::List => "provider list",
+        }
+    }
+}
+
 // If we want these at the top level, we can also set provider as a top level subcommand:
 #[derive(Debug, Clone, ValueEnum)]
 #[value(rename_all = "snake_case")]
