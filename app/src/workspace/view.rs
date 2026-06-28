@@ -20637,33 +20637,9 @@ impl Workspace {
             }
         }
 
-        // Trailing spacer fills leftover width, and re-adds the flex each
-        // collapsed group gives up vs expanded (its members + 2 spacers), so the
-        // bar's total flex stays constant across collapse/expand and headers
-        // don't move.
-        let collapsed_group_flex_giveback: f32 = if FeatureFlag::GroupedTabs.is_enabled() {
-            self.tab_groups
-                .values()
-                .filter(|group| group.collapsed)
-                .map(|group| {
-                    let members = self
-                        .tabs
-                        .iter()
-                        .filter(|tab| tab.group_id == Some(group.id))
-                        .count();
-                    if members == 0 {
-                        0.0
-                    } else {
-                        members as f32 + 2.0 * Self::GROUP_EDGE_SPACER_FLEX
-                    }
-                })
-                .sum()
-        } else {
-            0.0
-        };
-        tab_bar.add_child(
-            Shrinkable::new(0.5 + collapsed_group_flex_giveback, Empty::new().finish()).finish(),
-        );
+        // Trailing spacer fills only the leftover width. When groups are collapsed
+        // the freed flex is distributed accross the remaining flex items in the tab bar.
+        tab_bar.add_child(Shrinkable::new(0.5, Empty::new().finish()).finish());
 
         self.add_configurable_right_side_tab_bar_controls(
             &mut tab_bar,
