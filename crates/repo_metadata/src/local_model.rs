@@ -1188,15 +1188,6 @@ impl LocalRepoMetadataModel {
                     continue;
                 }
 
-                // Gitignored directories (e.g. build output such as `target/`)
-                // are represented in the canonical tree as unloaded
-                // placeholders, exactly as the initial index does via
-                // `IgnoredPathStrategy::IncludeLazy`. Recursively walking them
-                // here would re-index enormous ignored subtrees (tens of
-                // thousands of files) on every filesystem event, which is the
-                // root cause of the watcher rebuild storm. Force-included paths
-                // (e.g. skill provider directories) must still be materialized
-                // even when they live under an ignored directory.
                 if is_ignored && !matches_force_included_path(path_to_add, force_included_paths) {
                     mutations.push(FileTreeMutation::AddUnloadedDirectory {
                         path: path_to_add.clone(),
