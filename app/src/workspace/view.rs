@@ -8838,7 +8838,7 @@ impl Workspace {
     fn install_oz(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(async { cli_install::install_oz() }, |view, result, ctx| {
             let command_name = ChannelState::channel().cli_command_name();
-            let message = format!("Successfully installed the Oz CLI! You can now run '{command_name}' from the command line.");
+            let message = format!("Installed the Oz CLI globally. You can now run '{command_name}' from any terminal outside of Warp.");
             let toast = DismissibleToast::success(message).with_link(
                 ToastLink::new("Learn more".to_string())
                     .with_href("https://docs.warp.dev/reference/cli".to_string()),
@@ -8854,7 +8854,8 @@ impl Workspace {
             async { cli_install::uninstall_oz() },
             |view, result, ctx| {
                 let toast = DismissibleToast::success(
-                    "Successfully uninstalled the Oz command.".to_string(),
+                    "Removed the global Oz CLI installation — it still works inside Warp."
+                        .to_string(),
                 );
                 view.handle_cli_command_result(
                     result,
@@ -8873,7 +8874,7 @@ impl Workspace {
             async { cli_install::install_warpctrl() },
             |view, result, ctx| {
                 let command_name = ChannelState::channel().warpctrl_command_name();
-                let message = format!("Successfully installed the Warp Control CLI! You can now run '{command_name}' from the command line.");
+                let message = format!("Installed the Warp Control CLI globally. You can now run '{command_name}' from any terminal outside of Warp.");
                 let toast = DismissibleToast::success(message);
                 view.handle_cli_command_result(
                     result,
@@ -8892,7 +8893,8 @@ impl Workspace {
             async { cli_install::uninstall_warpctrl() },
             |view, result, ctx| {
                 let toast = DismissibleToast::success(
-                    "Successfully uninstalled the Warp Control command.".to_string(),
+                    "Removed the global Warp Control CLI installation — it still works inside Warp."
+                        .to_string(),
                 );
                 view.handle_cli_command_result(
                     result,

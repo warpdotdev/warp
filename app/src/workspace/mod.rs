@@ -1218,14 +1218,14 @@ pub fn init(app: &mut AppContext) {
         app.register_editable_bindings([
             EditableBinding::new(
                 "workspace:install_cli",
-                "Install Oz CLI command",
+                "Install Oz CLI globally for use outside of Warp",
                 WorkspaceAction::InstallOz,
             )
             .with_group(bindings::BindingGroup::Settings.as_str())
             .with_context_predicate(id!("Workspace")),
             EditableBinding::new(
                 "workspace:uninstall_cli",
-                "Uninstall Oz CLI command",
+                "Undo global Oz CLI installation (oz will still work within Warp)",
                 WorkspaceAction::UninstallOz,
             )
             .with_group(bindings::BindingGroup::Settings.as_str())
@@ -1235,14 +1235,14 @@ pub fn init(app: &mut AppContext) {
             app.register_editable_bindings([
                 EditableBinding::new(
                     "workspace:install_warpctrl",
-                    "Install Warp Control CLI command",
+                    "Install Warp Control CLI globally for use outside of Warp",
                     WorkspaceAction::InstallWarpctrl,
                 )
                 .with_group(bindings::BindingGroup::Settings.as_str())
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(
                     "workspace:uninstall_warpctrl",
-                    "Uninstall Warp Control CLI command",
+                    "Undo global Warp Control CLI installation (warpctrl will still work within Warp)",
                     WorkspaceAction::UninstallWarpctrl,
                 )
                 .with_group(bindings::BindingGroup::Settings.as_str())
