@@ -87,6 +87,8 @@ impl<'a> Frame<'a> {
         encoder: &mut CommandEncoder,
         target_view: &wgpu::TextureView,
         target_size: Vector2F,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        damage_scissor: Option<RectF>,
     ) {
         let surface_size = target_size;
 
@@ -96,7 +98,9 @@ impl<'a> Frame<'a> {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    // `Clear` for a normal full frame; `Load` for a partial
+                    // (damage) repaint that preserves the rest of the target.
+                    load: load_op,
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -107,20 +111,31 @@ impl<'a> Frame<'a> {
         let device_bounds = RectF::new(Vector2F::zero(), surface_size);
 
         for layer_state in &self.layer_state {
-            if let Some(bounds) = layer_state.layer.clip_bounds {
-                // Make sure the scissor rect doesn't extend beyond the boundaries
-                // of the window.
-                let bounds = (bounds * self.scene.scale_factor()).intersection(device_bounds);
-                let Some(intersection) = bounds else {
-                    // The layer's clip bounds don't intersect the window bounds
-                    // at all; we can skip drawing anything in this layer.
-                    continue;
-                };
+            // Per-layer scissor: the layer's clip bounds (clamped to the window),
+            // or the whole window if the layer has no clip.
+            let layer_bounds = match layer_state.layer.clip_bounds {
+                Some(bounds) => {
+                    match (bounds * self.scene.scale_factor()).intersection(device_bounds) {
+                        Some(intersection) => intersection,
+                        // The layer's clip bounds don't intersect the window at
+                        // all; skip drawing anything in this layer.
+                        None => continue,
+                    }
+                }
+                None => device_bounds,
+            };
 
-                Self::set_scissor_rect(&mut render_pass, intersection);
-            } else {
-                Self::set_scissor_rect(&mut render_pass, device_bounds);
-            }
+            // For a partial (cursor-only) repaint, further constrain the scissor
+            // to the damage region so only those pixels are re-rasterized.
+            let scissor = match damage_scissor {
+                Some(damage) => match layer_bounds.intersection(damage) {
+                    Some(intersection) => intersection,
+                    None => continue,
+                },
+                None => layer_bounds,
+            };
+
+            Self::set_scissor_rect(&mut render_pass, scissor);
 
             if let Some(rect_layer_state) = &layer_state.rect_layer_state {
                 self.rect_pipeline.draw(

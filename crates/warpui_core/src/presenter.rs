@@ -17,7 +17,7 @@ use crate::elements::{DropTargetPosition, Point, Selection};
 use crate::event::DispatchedEvent;
 use crate::fonts::Cache as FontCache;
 use crate::platform::Cursor;
-use crate::scene::{Scene, ZIndex};
+use crate::scene::{Scene, SceneDamage, ZIndex};
 use crate::text_layout::LayoutCache;
 use crate::zoom::Scale;
 use crate::{
@@ -34,6 +34,9 @@ pub struct Presenter {
     text_layout_cache: LayoutCache,
     position_cache: PositionCache,
     highlighted_view: Option<EntityId>,
+    /// Damage to stamp onto the next scene built by [`Self::build_scene`], then
+    /// reset to [`SceneDamage::Full`]. Set via [`Self::set_next_scene_damage`].
+    pending_damage: SceneDamage,
 }
 
 pub struct LayoutContext<'a> {
@@ -312,7 +315,14 @@ impl Presenter {
             text_layout_cache: LayoutCache::new(),
             position_cache: PositionCache::default(),
             highlighted_view: None,
+            pending_damage: SceneDamage::Full,
         }
+    }
+
+    /// Sets the damage stamped onto the next scene built by [`Self::build_scene`].
+    /// It is reset to [`SceneDamage::Full`] after that build.
+    pub fn set_next_scene_damage(&mut self, damage: SceneDamage) {
+        self.pending_damage = damage;
     }
 
     pub fn invalidate(&mut self, invalidation: WindowInvalidation, app: &AppContext) {
@@ -361,12 +371,13 @@ impl Presenter {
         // * Decouple after_layout from the presenter so it can take a AppContext
         // * Extend the AfterLayoutContext API to allow state updates, but not other effects
         self.after_layout(ctx);
-        let (scene, repaint_at, pending_assets) = self.paint(
+        let (mut scene, repaint_at, pending_assets) = self.paint(
             zoomed_scale_factor,
             zoomed_window_size,
             max_texture_dimension_2d,
             ctx,
         );
+        scene.set_damage(std::mem::take(&mut self.pending_damage));
         // After paint, collect a delayed repaint if it exists and start the timer.
         if let Some(repaint_at) = repaint_at {
             ctx.manage_delayed_repaint_timers(self.window_id, repaint_at);

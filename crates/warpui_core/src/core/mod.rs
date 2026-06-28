@@ -199,6 +199,14 @@ pub struct WindowInvalidation {
     /// only store a boolean. In the future we can extend this to store entity ids
     /// for specific views that need to be redrawn once we have that capability.
     pub redraw_requested: bool,
+    /// Set when a normal (full) view notification occurred this frame. When this
+    /// is false and `cursor_damage` is true, the renderer may repaint only the
+    /// cursor region instead of re-rasterizing the whole window.
+    pub full_repaint_requested: bool,
+    /// Set when a cursor-blink-only notification occurred this frame (see
+    /// [`crate::ViewContext::notify_cursor_only`]). On its own this enables a
+    /// partial cursor repaint; combined with `full_repaint_requested` it does not.
+    pub cursor_damage: bool,
 }
 
 pub enum Effect {
@@ -210,6 +218,13 @@ pub enum Effect {
         model_id: EntityId,
     },
     ViewNotification {
+        window_id: WindowId,
+        view_id: EntityId,
+    },
+    /// Like [`Effect::ViewNotification`], but signals that the only thing that
+    /// changed is the text cursor (e.g. a 500ms blink toggle), which lets the
+    /// renderer repaint just the cursor region instead of the whole window.
+    ViewCursorNotification {
         window_id: WindowId,
         view_id: EntityId,
     },
