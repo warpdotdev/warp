@@ -2801,6 +2801,9 @@ impl AISettingsPageView {
                 }
                 widgets.push(Box::new(CloudHandoffWidget::default()));
                 widgets.push(Box::new(CLIAgentWidget::default()));
+                if UserWorkspaces::as_ref(ctx).current_team_byo().is_some() {
+                    widgets.push(Box::new(TeamProvidedModelsWidget));
+                }
                 widgets.push(Box::new(ApiKeysWidget::new(ctx)));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(AgentAttributionWidget::default()));
@@ -2842,6 +2845,9 @@ impl AISettingsPageView {
                     widgets.push(Box::new(VoiceWidget::default()));
                 }
                 widgets.push(Box::new(CloudHandoffWidget::default()));
+                if UserWorkspaces::as_ref(ctx).current_team_byo().is_some() {
+                    widgets.push(Box::new(TeamProvidedModelsWidget));
+                }
                 widgets.push(Box::new(ApiKeysWidget::new(ctx)));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 if FeatureFlag::CustomModelRouters.is_enabled() {
@@ -8721,6 +8727,253 @@ impl ApiKeysWidget {
     }
 }
 
+fn render_team_provided_info_line(
+    appearance: &Appearance,
+    text: String,
+    indent: f32,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    Container::new(
+        Text::new_inline(text, appearance.ui_font_family(), CONTENT_FONT_SIZE)
+            .with_color(styles::header_font_color(true, app).into())
+            .finish(),
+    )
+    .with_margin_left(indent)
+    .with_margin_bottom(6.)
+    .finish()
+}
+
+/// Sub-section label inside the "Provided by your team" section, matching the
+/// "Custom endpoints" sub-label used for the member's own endpoints.
+fn render_team_provided_sublabel(
+    appearance: &Appearance,
+    label: &str,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    Container::new(
+        Text::new_inline(
+            label.to_string(),
+            appearance.ui_font_family(),
+            CONTENT_FONT_SIZE,
+        )
+        .with_color(styles::header_font_color(true, app).into())
+        .with_style(Properties::default().weight(Weight::Semibold))
+        .finish(),
+    )
+    .with_margin_top(16.)
+    .with_margin_bottom(8.)
+    .finish()
+}
+
+/// A team-provided first-party key, shown as a read-only card with the provider
+/// logo and a key icon (the admin manages the actual key server-side).
+fn render_team_provided_first_party_card(
+    appearance: &Appearance,
+    icon: Icon,
+    label: &str,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let text_color = styles::header_font_color(true, app);
+    let icon_size = appearance.ui_font_size();
+
+    let logo = ConstrainedBox::new(icon.to_warpui_icon(text_color).finish())
+        .with_width(icon_size)
+        .with_height(icon_size)
+        .finish();
+    let name = Text::new_inline(
+        label.to_string(),
+        appearance.ui_font_family(),
+        CONTENT_FONT_SIZE,
+    )
+    .with_color(text_color.into())
+    .finish();
+    let key_icon = ConstrainedBox::new(
+        Icon::Key
+            .to_warpui_icon(theme.disabled_ui_text_color())
+            .finish(),
+    )
+    .with_width(icon_size)
+    .with_height(icon_size)
+    .finish();
+
+    let row = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(8.)
+                .with_child(logo)
+                .with_child(name)
+                .finish(),
+        )
+        .with_child(key_icon)
+        .finish();
+
+    Container::new(row)
+        .with_uniform_padding(12.)
+        .with_background(internal_colors::fg_overlay_1(theme))
+        .with_border(Border::all(1.).with_border_fill(internal_colors::fg_overlay_3(theme)))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+        .finish()
+}
+
+/// A team-provided custom endpoint, mirroring the member's own custom-endpoint
+/// card (name + model chips) but without edit controls.
+fn render_team_provided_endpoint_card(
+    appearance: &Appearance,
+    name: &str,
+    model_labels: Vec<String>,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let text_color = styles::header_font_color(true, app);
+
+    let chips = super::render_model_chips(model_labels, appearance, text_color);
+    let endpoint_name = Text::new_inline(
+        name.to_string(),
+        appearance.ui_font_family(),
+        appearance.ui_font_size(),
+    )
+    .with_style(Properties::default().weight(Weight::Semibold))
+    .with_color(text_color.into())
+    .finish();
+
+    let left = Flex::column()
+        .with_spacing(8.)
+        .with_child(endpoint_name)
+        .with_child(chips)
+        .finish();
+
+    let row = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(Shrinkable::new(1., left).finish())
+        .finish();
+
+    Container::new(row)
+        .with_uniform_padding(12.)
+        .with_background(internal_colors::fg_overlay_1(theme))
+        .with_border(Border::all(1.).with_border_fill(internal_colors::fg_overlay_3(theme)))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+        .finish()
+}
+
+/// Read-only section mirroring the team's secret-less `team_byo` projection so
+/// members can see which provider keys / custom endpoints their admin has
+/// configured. Members do not edit these here — the admin manages them
+/// server-side via the web admin card.
+struct TeamProvidedModelsWidget;
+
+impl SettingsWidget for TeamProvidedModelsWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "team provided byo managed keys endpoints models admin enterprise"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let Some(team_byo) = UserWorkspaces::as_ref(app).current_team_byo() else {
+            return Flex::column().finish();
+        };
+
+        let mut column = Flex::column().with_child(render_separator(appearance));
+        column.add_child(
+            build_sub_header(appearance, "Provided by your team", None)
+                .with_padding_bottom(HEADER_PADDING)
+                .finish(),
+        );
+        column.add_child(render_team_provided_info_line(
+            appearance,
+            "Your team admin manages these provider keys and endpoints. They're applied to your requests automatically."
+                .to_string(),
+            0.,
+            app,
+        ));
+
+        if team_byo.first_party_enabled {
+            let configured: Vec<(Icon, &str)> = [
+                (
+                    team_byo.first_party.openai_configured,
+                    Icon::OpenAILogo,
+                    "OpenAI API key",
+                ),
+                (
+                    team_byo.first_party.anthropic_configured,
+                    Icon::ClaudeLogo,
+                    "Anthropic API key",
+                ),
+                (
+                    team_byo.first_party.google_configured,
+                    Icon::GeminiLogo,
+                    "Google API key",
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(configured, icon, label)| configured.then_some((icon, label)))
+            .collect();
+            if !configured.is_empty() {
+                column.add_child(render_team_provided_sublabel(
+                    appearance,
+                    "Provider keys",
+                    app,
+                ));
+                let mut keys = Flex::column().with_spacing(12.);
+                for (icon, label) in configured {
+                    keys.add_child(render_team_provided_first_party_card(
+                        appearance, icon, label, app,
+                    ));
+                }
+                column.add_child(keys.finish());
+            }
+        }
+
+        let enabled_endpoints: Vec<_> = team_byo
+            .endpoints
+            .iter()
+            .filter(|endpoint| endpoint.enabled)
+            .collect();
+        if team_byo.endpoints_enabled && !enabled_endpoints.is_empty() {
+            column.add_child(render_team_provided_sublabel(
+                appearance,
+                "Custom endpoints",
+                app,
+            ));
+            let mut endpoints = Flex::column().with_spacing(12.);
+            for endpoint in enabled_endpoints {
+                let model_labels: Vec<String> = endpoint
+                    .models
+                    .iter()
+                    .filter(|model| model.enabled)
+                    .map(|model| {
+                        model
+                            .alias
+                            .clone()
+                            .unwrap_or_else(|| model.display_name.clone())
+                    })
+                    .filter(|label| !label.trim().is_empty())
+                    .collect();
+                endpoints.add_child(render_team_provided_endpoint_card(
+                    appearance,
+                    &endpoint.name,
+                    model_labels,
+                    app,
+                ));
+            }
+            column.add_child(endpoints.finish());
+        }
+
+        column.finish()
+    }
+}
+
 impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
@@ -8742,10 +8995,27 @@ impl SettingsWidget for ApiKeysWidget {
         let provider_keys_enabled = is_any_ai_enabled && is_byo_enabled;
         let custom_inference_controls_enabled = is_any_ai_enabled && is_custom_inference_enabled;
         let show_custom_inference = is_custom_inference_enabled;
+        // A team admin can disable members bringing their own keys / endpoints.
+        // When disabled, hide (not just disable) that UI entirely — including any
+        // custom endpoints the member added while previously allowed. The server
+        // enforces the same policy regardless of what the client renders.
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        let team_allows_user_keys = user_workspaces
+            .current_team_byo()
+            .is_none_or(|byo| byo.allow_user_keys);
+        let team_allows_user_endpoints = user_workspaces
+            .current_team_byo()
+            .is_none_or(|byo| byo.allow_user_endpoints);
+        let show_provider_keys = team_allows_user_keys;
+        let show_custom_endpoints = show_custom_inference && team_allows_user_endpoints;
+        // Nothing for the member to bring when the team disallows both halves.
+        if !show_provider_keys && !show_custom_endpoints {
+            return Flex::column().finish();
+        }
 
         let mut column = Flex::column().with_child(render_separator(appearance));
 
-        if show_custom_inference {
+        if show_custom_endpoints {
             // Header row: "Custom inference" + info icon on left, "+ Add custom model" on right
             let header_left = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -8793,11 +9063,17 @@ impl SettingsWidget for ApiKeysWidget {
             );
         }
 
-        // Provider key editors (always visible)
-        column.add_child(self.render_provider_key_editors(appearance, provider_keys_enabled, app));
+        // Provider key editors (hidden when the team disallows member keys).
+        if show_provider_keys {
+            column.add_child(self.render_provider_key_editors(
+                appearance,
+                provider_keys_enabled,
+                app,
+            ));
+        }
 
-        // Custom endpoints sub-label + list (only when flag on and endpoints non-empty)
-        if show_custom_inference {
+        // Custom endpoints sub-label + list (only when shown and non-empty)
+        if show_custom_endpoints {
             let endpoints = &ApiKeyManager::as_ref(app).keys().custom_endpoints;
             if !endpoints.is_empty() {
                 column.add_child(
@@ -8828,7 +9104,8 @@ impl SettingsWidget for ApiKeysWidget {
         }
 
         // Entrypoint for connecting a SuperGrok (xAI) subscription via OAuth.
-        if FeatureFlag::SuperGrok.is_enabled() {
+        // Hidden when the team disallows member keys (Grok is a member key).
+        if show_provider_keys && FeatureFlag::SuperGrok.is_enabled() {
             #[cfg(not(target_family = "wasm"))]
             let grok_tokens = ApiKeyManager::as_ref(app).grok_tokens();
             #[cfg(not(target_family = "wasm"))]
