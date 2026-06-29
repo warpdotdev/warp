@@ -3940,6 +3940,110 @@ fn test_new_conversation_keybinding_requires_double_press_in_non_empty_agent_vie
     });
 }
 
+/// Pressing `?` while editing a queued prompt must NOT toggle the agent help/shortcuts panel —
+/// the keystroke should fall through to the inline editor so a literal `?` is typed. The `shift-?`
+/// binding is gated on an empty *main* input buffer, which is also true while the queued-prompt
+/// inline editor is focused, so without the `QueuedPromptInlineEditorOpen` guard the help panel
+/// would wrongly open instead of inserting `?`.
+#[test]
+fn question_mark_does_not_toggle_shortcuts_while_editing_queued_prompt() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let (window_id, terminal) =
+            add_window_with_bootstrapped_terminal_and_window_id(&mut app, None, None).await;
+        let (input, editor) = terminal.read(&app, |terminal, ctx| {
+            let input = terminal.input().clone();
+            let editor = input.as_ref(ctx).editor().clone();
+            (input, editor)
+        });
+
+        // Enter fullscreen agent view so the `shift-?` binding's ACTIVE_AGENT_VIEW context is set.
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("Should be able to enter agent view")
+            })
+        });
+
+        // Queue a prompt and put it into inline edit mode; the main input buffer stays empty.
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(
+                    "queued prompt".to_owned(),
+                    QueuedQueryOrigin::QueueSlashCommand,
+                ),
+                ctx,
+            )
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.enter_edit_mode(conversation_id, query_id, ctx);
+        });
+
+        let focus_path = [terminal.id(), input.id(), editor.id()];
+
+        // While editing the queued prompt, `?` must NOT be consumed by the shortcuts binding.
+        let handled = app
+            .dispatch_keystroke(
+                window_id,
+                &focus_path,
+                &Keystroke::parse("shift-?").unwrap(),
+                false,
+            )
+            .unwrap();
+        assert!(
+            !handled,
+            "`?` must not be consumed by the shortcuts binding while editing a queued prompt"
+        );
+        input.read(&app, |input, ctx| {
+            assert!(
+                !input
+                    .agent_shortcut_view_model
+                    .as_ref(ctx)
+                    .is_shortcut_view_open(),
+                "help/shortcuts panel must not open when typing `?` in the queued-prompt editor"
+            );
+        });
+
+        // Control: with no queued-prompt edit in progress, the same `?` DOES toggle the panel,
+        // confirming the binding is otherwise active in this exact state.
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.cancel_edit(conversation_id, ctx);
+        });
+        let handled = app
+            .dispatch_keystroke(
+                window_id,
+                &focus_path,
+                &Keystroke::parse("shift-?").unwrap(),
+                false,
+            )
+            .unwrap();
+        assert!(
+            handled,
+            "`?` should toggle the shortcuts panel in agent view when not editing a queued prompt"
+        );
+        input.read(&app, |input, ctx| {
+            assert!(
+                input
+                    .agent_shortcut_view_model
+                    .as_ref(ctx)
+                    .is_shortcut_view_open(),
+                "help/shortcuts panel should open for `?` outside the queued-prompt editor"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_new_conversation_keybinding_does_not_require_confirmation_in_empty_agent_view() {
     App::test((), |mut app| async move {
