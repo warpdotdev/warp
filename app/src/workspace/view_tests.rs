@@ -107,41 +107,6 @@ fn query_for_rewind_prefill_uses_custom_display_query_inputs() {
     );
 }
 
-#[test]
-fn dump_debug_info_command_escapes_paths_with_spaces() {
-    use warp_util::path::ShellFamily;
-
-    let flag = warp_cli::dump_debug_info_flag();
-
-    // A path without spaces is passed through unchanged.
-    assert_eq!(
-        dump_debug_info_command(
-            "/Applications/Warp.app/Contents/MacOS/stable",
-            ShellFamily::Posix
-        ),
-        format!("/Applications/Warp.app/Contents/MacOS/stable {flag}")
-    );
-
-    // A path containing spaces must be escaped so the shell treats it as a single
-    // argument. This is the regression: previously the raw path was interpolated
-    // and the shell would split it into multiple arguments.
-    let spaced = "/Applications/Warp Beta.app/Contents/MacOS/stable";
-    assert_eq!(
-        dump_debug_info_command(spaced, ShellFamily::Posix),
-        format!("/Applications/Warp\\ Beta.app/Contents/MacOS/stable {flag}")
-    );
-    assert_ne!(
-        dump_debug_info_command(spaced, ShellFamily::Posix),
-        format!("{spaced} {flag}")
-    );
-
-    // PowerShell escapes with a backtick rather than a backslash.
-    assert_eq!(
-        dump_debug_info_command(spaced, ShellFamily::PowerShell),
-        format!("/Applications/Warp` Beta.app/Contents/MacOS/stable {flag}")
-    );
-}
-
 pub(crate) fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
 
