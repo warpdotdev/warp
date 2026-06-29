@@ -8794,11 +8794,14 @@ impl Workspace {
             .ok()
             .map(|path| path.to_string_lossy().into_owned())
         {
+            // Get the active session for this tab if it exists.
             let mut active_session_handle = self
                 .active_tab_pane_group()
                 .read(ctx, |pane_group_view, ctx| {
                     pane_group_view.active_session_view(ctx)
                 });
+            // A tab may not have any active session, say if it only contains notebook(s). If
+            // that's the case, create a new tab.
             if active_session_handle.is_none() {
                 self.add_new_session_tab_with_default_mode(
                     NewSessionSource::Tab,
