@@ -2168,7 +2168,11 @@ impl AIConversation {
         // on the same conversation (it will be immediately set back to InProgress), or if the
         // user manually took over the long-running command (the conversation remains in progress
         // and will resume once the command finishes or control is handed back).
-        if !reason.should_preserve_in_progress_status() {
+        //
+        // A shell-exit failure is finalized as `Error` (with a message) by
+        // `BlocklistAIController::fail_conversation_due_to_shell_exit`, so don't
+        // overwrite that terminal status with `Cancelled` here.
+        if !reason.should_preserve_in_progress_status() && !reason.is_agent_exited_shell() {
             self.update_status(ConversationStatus::Cancelled, terminal_surface_id, ctx);
         }
         Ok(())

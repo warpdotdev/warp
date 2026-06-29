@@ -443,6 +443,12 @@ impl BlocklistAIController {
             else {
                 return;
             };
+            // Shell-exit failures are finalized as `Error` (with a message) by
+            // `fail_conversation_due_to_shell_exit`; don't trigger a follow-up or
+            // overwrite the terminal status here.
+            if cancellation_reason.is_some_and(|reason| reason.is_agent_exited_shell()) {
+                return;
+            }
             let action_model = me.action_model.as_ref(ctx);
             if action_model.has_unfinished_actions_for_conversation(*conversation_id) {
                 return;
@@ -2617,6 +2623,89 @@ impl BlocklistAIController {
                 action_model.cancel_all_pending_actions(conversation_id, Some(reason), ctx);
             });
             self.set_input_mode_for_cancellation(ctx);
+        }
+    }
+
+    /// Finalizes a conversation as a terminal failure because an agent-issued
+    /// command caused the shell process to exit (e.g. it ran `exit`, or ran a
+    /// failing command after enabling `set -e`).
+    ///
+    /// Invoked from the terminal view's shell-exit handler before the pane is
+    /// torn down. The conversation is moved into a terminal `Error` state with a
+    /// shell-exit message so that the Oz run reports `FAILED` (with an
+    /// explanation) instead of "Cancelled by user", and so the subsequent
+    /// pane-close cancellation — which is guarded by `is_in_progress` — becomes a
+    /// no-op and cannot overwrite the failure.
+    pub fn fail_conversation_due_to_shell_exit(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let terminal_surface_id = self.terminal_surface_id;
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
+
+        // Only act on conversations that are still running. A finished
+        // conversation (e.g. the agent already completed) must not be
+        // retroactively marked as failed.
+        let is_in_progress = history_model
+            .as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|conversation| conversation.status().is_in_progress());
+        if !is_in_progress {
+            return;
+        }
+
+        // Finish any in-flight response stream(s) with the shell-exit error. This
+        // marks the streaming exchange(s) as errored, sets the conversation to
+        // `Error` (with a message), and renders the failure inline. We then cancel
+        // the underlying request so it stops streaming; the cancellation does not
+        // overwrite the status because `mark_request_cancelled` ignores the
+        // `AgentExitedShell` reason.
+        let stream_ids = self
+            .in_flight_response_streams
+            .stream_ids_for_conversation(conversation_id, ctx);
+        let had_in_flight_stream = !stream_ids.is_empty();
+        for stream_id in &stream_ids {
+            history_model.update(ctx, |history_model, ctx| {
+                history_model.mark_response_stream_completed_with_error(
+                    RenderableAIError::AgentExitedShell,
+                    /* recovery_pending */ false,
+                    stream_id,
+                    conversation_id,
+                    terminal_surface_id,
+                    ctx,
+                );
+            });
+            self.try_cancel_pending_response_stream(
+                stream_id,
+                CancellationReason::AgentExitedShell,
+                ctx,
+            );
+        }
+
+        // Stop any pending or mid-execution actions so a queued action result
+        // can't subsequently move the conversation back to Success/Cancelled.
+        self.action_model.update(ctx, |action_model, ctx| {
+            action_model.cancel_all_pending_actions(
+                conversation_id,
+                Some(CancellationReason::AgentExitedShell),
+                ctx,
+            );
+        });
+
+        // If there was no in-flight stream to attach the error to (e.g. the agent
+        // ran `exit` and no follow-up request was in flight), set the terminal
+        // `Error` status directly with the shell-exit message.
+        if !had_in_flight_stream {
+            history_model.update(ctx, |history_model, ctx| {
+                history_model.update_conversation_status_with_error_message(
+                    terminal_surface_id,
+                    conversation_id,
+                    ConversationStatus::Error,
+                    Some(RenderableAIError::AgentExitedShell.to_string()),
+                    ctx,
+                );
+            });
         }
     }
 

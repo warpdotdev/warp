@@ -108,6 +108,13 @@ pub enum CancellationReason {
     /// finishes or once the user hands control back. The stream is cancelled only to
     /// stop the CLI subagent monitoring loop, not to end the conversation.
     CLISubagentUserTakeover,
+
+    /// An agent-issued command caused the shell process to exit (e.g. it ran
+    /// `exit`, or ran a failing command after enabling `set -e`). The in-flight
+    /// stream/actions are cancelled to stop work, but the conversation is
+    /// finalized as a terminal `Error` (with a shell-exit message) by the
+    /// controller rather than reported as a user cancellation.
+    AgentExitedShell,
 }
 
 impl Display for CancellationReason {
@@ -124,6 +131,9 @@ impl Display for CancellationReason {
             }
             CancellationReason::CLISubagentUserTakeover => {
                 write!(f, "CLI subagent user takeover")
+            }
+            CancellationReason::AgentExitedShell => {
+                write!(f, "agent command exited the shell")
             }
         }
     }
@@ -158,6 +168,14 @@ impl CancellationReason {
     /// and the ambient agent task should not be reported as cancelled.
     pub fn is_cli_subagent_user_takeover(&self) -> bool {
         matches!(self, CancellationReason::CLISubagentUserTakeover)
+    }
+
+    /// Returns true when the stream was cancelled because an agent-issued command
+    /// caused the shell process to exit. The conversation is finalized as a
+    /// terminal `Error` by the controller, so status-setting paths must not
+    /// overwrite it with `Cancelled`.
+    pub fn is_agent_exited_shell(&self) -> bool {
+        matches!(self, CancellationReason::AgentExitedShell)
     }
 
     /// Returns true when the stream cancellation should NOT transition the
@@ -676,11 +694,18 @@ pub enum RenderableAIError {
         /// blocked due to fraud, plan restriction). Maps the task to FAILED state instead of ERROR.
         is_user_error: bool,
     },
+    /// An agent-issued command caused the shell process to exit, so the run
+    /// cannot continue. Surfaced as a terminal failure (FAILED) rather than a
+    /// user cancellation.
+    AgentExitedShell,
 }
 
 impl RenderableAIError {
     const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
         "Warp lost connection while receiving the agent response. This is usually temporary.";
+    /// User-facing message shown when an agent-issued command exits the shell.
+    pub const AGENT_EXITED_SHELL_MESSAGE: &'static str =
+        "The shell exited while the agent was running a command, so the run could not continue.";
     /// Creates a transient network error. `kind` is the structured cause (including the raw API
     /// error where one exists), preserved so user reports can disambiguate the different causes
     /// behind the shared user-facing copy.
@@ -838,6 +863,7 @@ impl Display for RenderableAIError {
                 )
             }
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
+            Self::AgentExitedShell => write!(f, "{}", Self::AGENT_EXITED_SHELL_MESSAGE),
         }
     }
 }

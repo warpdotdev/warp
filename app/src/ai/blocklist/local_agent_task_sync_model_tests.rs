@@ -162,6 +162,16 @@ fn transient_network_error_is_error_with_internal_and_debug_details() {
     );
 }
 
+#[test]
+fn agent_exited_shell_is_failed_with_invalid_request() {
+    assert_update(
+        classify_renderable_error(&RenderableAIError::AgentExitedShell),
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::InvalidRequest),
+        Some("shell exited"),
+    );
+}
+
 // --- map_conversation_status ---
 
 /// A yielded conversation must report `IN_PROGRESS` to the task service
@@ -302,6 +312,59 @@ fn map_conversation_status_error_without_exchange_error_is_generic() {
         None,
         Some("Agent encountered an error"),
     );
+}
+
+/// A shell-exit failure surfaced on the last exchange classifies as FAILED with
+/// the shell-exit message — the run must not report "Cancelled by user".
+#[test]
+fn map_conversation_status_error_classifies_agent_exited_shell() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.append_root_exchange_for_test(error_exchange(RenderableAIError::AgentExitedShell));
+    conversation.set_status_for_test(ConversationStatus::Error);
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::InvalidRequest),
+        Some("shell exited"),
+    );
+}
+
+/// When the terminal `Error` status carries a conversation-level message but no
+/// structured exchange error (the out-of-band fallback path), the mapping
+/// surfaces that message instead of the generic note.
+#[test]
+fn map_conversation_status_error_surfaces_status_error_message() {
+    App::test((), |mut app| async move {
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let conversation = AIConversation::new(false, false);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+        history_model.update(&mut app, |model, ctx| {
+            let conv = model
+                .conversation_mut(&conversation_id)
+                .expect("conversation was just restored");
+            conv.update_status_with_error_message(
+                ConversationStatus::Error,
+                Some(RenderableAIError::AGENT_EXITED_SHELL_MESSAGE.to_string()),
+                terminal_view_id,
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |model, _| {
+            let conv = model.conversation(&conversation_id).unwrap();
+            assert_update(
+                map_conversation_status(conv),
+                AgentTaskState::Error,
+                None,
+                Some("shell exited"),
+            );
+        });
+    });
 }
 
 // --- map_cli_session_status ---

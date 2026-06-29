@@ -395,7 +395,10 @@ fn map_conversation_status(
                         None
                     }
                 });
-            task_update_for_conversation_error(renderable_error)
+            task_update_for_conversation_error(
+                renderable_error,
+                conversation.status_error_message(),
+            )
         }
         ConversationStatus::Cancelled => (
             AgentTaskState::Cancelled,
@@ -415,12 +418,18 @@ fn map_conversation_status(
 /// `will_attempt_resume` rendering hint is deliberately ignored.
 fn task_update_for_conversation_error(
     error: Option<&RenderableAIError>,
+    status_error_message: Option<&str>,
 ) -> (AgentTaskState, Option<TaskStatusUpdate>) {
     match error {
         Some(error) => classify_renderable_error(error),
+        // No structured error on the last exchange (e.g. the status was set
+        // directly out-of-band). Surface the conversation-level message when
+        // present so the run reports why it failed instead of a generic note.
         None => (
             AgentTaskState::Error,
-            Some(TaskStatusUpdate::message("Agent encountered an error")),
+            Some(TaskStatusUpdate::message(
+                status_error_message.unwrap_or("Agent encountered an error"),
+            )),
         ),
     }
 }
@@ -507,6 +516,13 @@ pub(crate) fn classify_renderable_error(
                 )
             }
         }
+        RenderableAIError::AgentExitedShell => (
+            AgentTaskState::Failed,
+            Some(TaskStatusUpdate::with_error_code(
+                error.to_string(),
+                PlatformErrorCode::InvalidRequest,
+            )),
+        ),
     }
 }
 
