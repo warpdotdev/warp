@@ -10,9 +10,8 @@
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiSize,
+    TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
 };
-use crate::geometry::vector::Vector2F;
 use crate::{AppContext, Event};
 
 /// Logical rows scrolled per wheel notch.
@@ -91,7 +90,7 @@ impl<E: TuiScrollableElement> TuiElement for TuiScrollable<E> {
         match event {
             Event::ScrollWheel {
                 position, delta, ..
-            } if contains(area, *position) => {
+            } if area.contains_point(*position) => {
                 let scrolled = self.child.scroll_by_rows(
                     -((delta.y() as isize) * WHEEL_STEP),
                     usize::from(area.height),
@@ -104,13 +103,4 @@ impl<E: TuiScrollableElement> TuiElement for TuiScrollable<E> {
             _ => false,
         }
     }
-}
-
-fn contains(area: TuiRect, position: Vector2F) -> bool {
-    let x = position.x();
-    let y = position.y();
-    x >= f32::from(area.x)
-        && x < f32::from(area.right())
-        && y >= f32::from(area.y)
-        && y < f32::from(area.bottom())
 }

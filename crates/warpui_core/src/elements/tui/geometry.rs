@@ -12,6 +12,8 @@
 
 pub use ratatui::layout::{Rect as TuiRect, Size as TuiSize};
 
+use crate::geometry::vector::Vector2F;
+
 /// A layout constraint: an element handed a `TuiConstraint` must return a
 /// [`TuiSize`] with `min.width <= width <= max.width` and
 /// `min.height <= height <= max.height`. Containers shrink their children by
@@ -88,6 +90,9 @@ pub trait TuiRectExt: Sized {
 
     /// Splits off the left `width` columns, returning `(left, remainder)`.
     fn split_left(self, width: u16) -> (Self, Self);
+
+    /// Returns whether `position` is inside the rect's half-open cell bounds.
+    fn contains_point(self, position: Vector2F) -> bool;
 }
 
 impl TuiRectExt for TuiRect {
@@ -123,6 +128,15 @@ impl TuiRectExt for TuiRect {
             self.height,
         );
         (left, remainder)
+    }
+
+    fn contains_point(self, position: Vector2F) -> bool {
+        let x = position.x();
+        let y = position.y();
+        x >= f32::from(self.x)
+            && x < f32::from(self.right())
+            && y >= f32::from(self.y)
+            && y < f32::from(self.bottom())
     }
 }
 
