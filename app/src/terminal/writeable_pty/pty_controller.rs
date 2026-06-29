@@ -536,6 +536,12 @@ impl<T: EventLoopSender> PtyController<T> {
                 }
             }
 
+            // Hold a sleep-prevention assertion for the duration of the command. Distinct from
+            // `start_command_execution` because that path is also reachable from non-command
+            // writes (e.g. EOT in `write_end_of_transmission_char`) that have no matching
+            // `command_finished` — see issue #9056.
+            model.on_command_started();
+
             // Ensure that the `TerminalModel` doesn't interpret any of the PTY output from the
             // following commands as in-band command output. If the in-band command output is not
             // currently being received by the `TerminalModel`, this is a no-op.

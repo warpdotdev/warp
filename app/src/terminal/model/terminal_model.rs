@@ -522,11 +522,11 @@ pub struct TerminalModel {
     registered_session_ids: HashSet<SessionId>,
 
     /// Held while a foreground command is executing in this terminal. Acquired in
-    /// `start_command_execution` and dropped in `command_finished`, which keeps the
-    /// system awake for the lifetime of every command without needing a long-running
-    /// threshold (short commands acquire and release within milliseconds and never
-    /// block sleep in practice). Mirrors the Agent Mode pattern in
-    /// `warp_multi_agent_client`. See issue #9056.
+    /// `on_command_started` (called from the PTY controller on real command writes only,
+    /// not from EOT / non-command writes) and dropped in the `command_finished` ANSI
+    /// handler. Short commands acquire and release within milliseconds and never block
+    /// sleep in practice; long-running commands hold for their full lifetime. Mirrors
+    /// the Agent Mode pattern in `warp_multi_agent_client`. See issue #9056.
     running_command_sleep_guard: Option<prevent_sleep::Guard>,
 }
 
@@ -1647,8 +1647,16 @@ impl TerminalModel {
     /// the user's behalf, we consider the active block started.
     pub fn start_command_execution(&mut self) {
         self.block_list.start_active_block();
-        // Keep the system awake for the duration of the command. Replaces any
-        // previous guard (start without a matching finish would otherwise stack).
+    }
+
+    /// Called by the PTY controller after a real command write (User / AI / SharedSession /
+    /// EnvVarCollection) — distinct from `start_command_execution`, which is also fired by
+    /// non-command writes like EOT and which therefore can't be trusted to be paired with a
+    /// matching `command_finished`. Holds a `PreventUserIdleSystemSleep` assertion for the
+    /// duration of the command. RAII (Drop) releases it when `command_finished` clears the
+    /// field. Replaces any prior guard so a missed finish doesn't permanently stack assertions.
+    /// See issue #9056.
+    pub fn on_command_started(&mut self) {
         self.running_command_sleep_guard =
             Some(prevent_sleep::prevent_sleep("Terminal command in-progress"));
     }
