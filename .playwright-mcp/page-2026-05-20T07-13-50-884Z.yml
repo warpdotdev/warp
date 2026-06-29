@@ -1,0 +1,168 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - link "Skip to content" [ref=e4] [cursor=pointer]:
+      - /url: "#start-of-content"
+    - generic [ref=e7]:
+      - banner "Global Navigation Menu" [ref=e8]:
+        - generic [ref=e9]:
+          - generic [ref=e10]:
+            - button "Open menu" [ref=e12] [cursor=pointer]:
+              - img [ref=e13]
+            - link "Homepage (g then d)" [ref=e15] [cursor=pointer]:
+              - /url: /
+              - img [ref=e16]
+          - generic [ref=e18]:
+            - navigation "Breadcrumbs" [ref=e19]:
+              - list [ref=e20]:
+                - listitem [ref=e21]:
+                  - link "warpdotdev" [ref=e22] [cursor=pointer]:
+                    - /url: /warpdotdev
+                    - generic [ref=e23]: warpdotdev
+                - listitem [ref=e24]:
+                  - link "warp" [ref=e25] [cursor=pointer]:
+                    - /url: /warpdotdev/warp
+                    - generic [ref=e26]: warp
+            - button "Search or jump to…" [ref=e29] [cursor=pointer]:
+              - generic [ref=e30]:
+                - generic:
+                  - img
+                - generic [ref=e31]:
+                  - generic:
+                    - text: Type
+                    - generic: /
+                    - text: to search
+          - generic [ref=e32]:
+            - generic [ref=e33]:
+              - generic [ref=e36]:
+                - link "Chat with Copilot" [ref=e38] [cursor=pointer]:
+                  - /url: /copilot
+                  - img [ref=e39]
+                - button "Open Copilot…" [ref=e43] [cursor=pointer]:
+                  - generic:
+                    - img
+              - button "Create new..." [ref=e45] [cursor=pointer]:
+                - generic [ref=e46]:
+                  - generic:
+                    - img
+                - generic:
+                  - img
+              - generic [ref=e47]:
+                - link "All issues" [ref=e48] [cursor=pointer]:
+                  - /url: /issues
+                  - img [ref=e49]
+                - link "All pull requests" [ref=e52] [cursor=pointer]:
+                  - /url: /pulls
+                  - img [ref=e53]
+                - link "All repositories" [ref=e55] [cursor=pointer]:
+                  - /url: /repos
+                  - img [ref=e56]
+            - link "You have no unread notifications (g then n)" [ref=e58] [cursor=pointer]:
+              - /url: /notifications
+              - img [ref=e59]
+            - button "Open user navigation menu" [ref=e62] [cursor=pointer]:
+              - img "User avatar" [ref=e63]
+        - heading "Repository navigation" [level=2] [ref=e64]
+        - navigation "Repository" [ref=e65]:
+          - list [ref=e66]:
+            - listitem [ref=e67]:
+              - link "Code" [ref=e68] [cursor=pointer]:
+                - /url: /warpdotdev/warp
+                - img [ref=e70]
+                - generic [ref=e72]: Code
+            - listitem [ref=e73]:
+              - link "Issues (3.4k)" [ref=e74] [cursor=pointer]:
+                - /url: /warpdotdev/warp/issues
+                - img [ref=e76]
+                - generic [ref=e79]: Issues
+                - generic [ref=e80]:
+                  - generic [ref=e81]: 3.4k
+                  - generic [ref=e82]: (3.4k)
+            - listitem [ref=e83]:
+              - link "Pull requests (502)" [ref=e84] [cursor=pointer]:
+                - /url: /warpdotdev/warp/pulls
+                - img [ref=e86]
+                - generic [ref=e88]: Pull requests
+                - generic [ref=e89]:
+                  - generic [ref=e90]: "502"
+                  - generic [ref=e91]: (502)
+            - listitem [ref=e92]:
+              - link "Agents" [ref=e93] [cursor=pointer]:
+                - /url: /warpdotdev/warp/agents?author=ErshovDmitry
+                - img [ref=e95]
+                - generic [ref=e98]: Agents
+            - listitem [ref=e99]:
+              - link "Discussions" [ref=e100] [cursor=pointer]:
+                - /url: /warpdotdev/warp/discussions
+                - img [ref=e102]
+                - generic [ref=e104]: Discussions
+            - listitem [ref=e105]:
+              - link "Actions" [ref=e106] [cursor=pointer]:
+                - /url: /warpdotdev/warp/actions
+                - img [ref=e108]
+                - generic [ref=e110]: Actions
+            - listitem [ref=e111]:
+              - link "Projects" [ref=e112] [cursor=pointer]:
+                - /url: /warpdotdev/warp/projects
+                - img [ref=e114]
+                - generic [ref=e116]: Projects
+            - listitem [ref=e117]:
+              - link "Security and quality" [ref=e118] [cursor=pointer]:
+                - /url: /warpdotdev/warp/security
+                - img [ref=e120]
+                - generic [ref=e122]: Security and quality
+            - listitem [ref=e123]:
+              - link "Insights" [ref=e124] [cursor=pointer]:
+                - /url: /warpdotdev/warp/pulse
+                - img [ref=e126]
+                - generic [ref=e128]: Insights
+      - region "Important update" [ref=e130]:
+        - img [ref=e132]
+        - generic [ref=e135]:
+          - heading "Important update" [level=2] [ref=e137]
+          - generic [ref=e139]:
+            - text: On April 24 we'll start using GitHub Copilot interaction data for AI model training unless you opt out.
+            - link "Review this update" [ref=e140] [cursor=pointer]:
+              - /url: https://gh.io/AAzfaht
+            - text: and manage your preferences in your
+            - link "GitHub account settings" [ref=e141] [cursor=pointer]:
+              - /url: https://github.com/settings/copilot/features
+            - text: .
+        - button "Dismiss banner" [ref=e142] [cursor=pointer]:
+          - img [ref=e143]
+  - main [ref=e147]
+  - contentinfo [ref=e150]:
+    - heading "Footer" [level=2] [ref=e151]
+    - generic [ref=e152]:
+      - generic [ref=e153]:
+        - link "GitHub Homepage" [ref=e154] [cursor=pointer]:
+          - /url: https://github.com
+          - img [ref=e155]
+        - generic [ref=e157]: © 2026 GitHub, Inc.
+      - navigation "Footer" [ref=e158]:
+        - heading "Footer navigation" [level=3] [ref=e159]
+        - list "Footer navigation" [ref=e160]:
+          - listitem [ref=e161]:
+            - link "Terms" [ref=e162] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/github-terms/github-terms-of-service
+          - listitem [ref=e163]:
+            - link "Privacy" [ref=e164] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/privacy-policies/github-privacy-statement
+          - listitem [ref=e165]:
+            - link "Security" [ref=e166] [cursor=pointer]:
+              - /url: https://github.com/security
+          - listitem [ref=e167]:
+            - link "Status" [ref=e168] [cursor=pointer]:
+              - /url: https://www.githubstatus.com/
+          - listitem [ref=e169]:
+            - link "Community" [ref=e170] [cursor=pointer]:
+              - /url: https://github.community/
+          - listitem [ref=e171]:
+            - link "Docs" [ref=e172] [cursor=pointer]:
+              - /url: https://docs.github.com/
+          - listitem [ref=e173]:
+            - link "Contact" [ref=e174] [cursor=pointer]:
+              - /url: https://support.github.com?tags=dotcom-footer
+          - listitem [ref=e175]:
+            - button "Manage cookies" [ref=e177] [cursor=pointer]
+          - listitem [ref=e178]:
+            - button "Do not share my personal information" [ref=e180] [cursor=pointer]

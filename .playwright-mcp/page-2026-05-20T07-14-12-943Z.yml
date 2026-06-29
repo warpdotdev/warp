@@ -1,0 +1,751 @@
+- generic [ref=e2]:
+  - generic:
+    - generic:
+      - tooltip "This user is the author of this issue"
+    - generic:
+      - tooltip "This user is a member of the warpdotdev organization."
+  - generic [ref=e3]:
+    - link "Skip to content" [ref=e4] [cursor=pointer]:
+      - /url: "#start-of-content"
+    - generic [ref=e7]:
+      - banner "Global Navigation Menu" [ref=e8]:
+        - generic [ref=e9]:
+          - generic [ref=e10]:
+            - button "Open menu" [ref=e12] [cursor=pointer]:
+              - img [ref=e13]
+            - link "Homepage (g then d)" [ref=e15] [cursor=pointer]:
+              - /url: /
+              - img [ref=e16]
+          - generic [ref=e18]:
+            - navigation "Breadcrumbs" [ref=e19]:
+              - list [ref=e20]:
+                - listitem [ref=e21]:
+                  - link "warpdotdev" [ref=e22] [cursor=pointer]:
+                    - /url: /warpdotdev
+                    - generic [ref=e23]: warpdotdev
+                - listitem [ref=e24]:
+                  - link "warp" [ref=e25] [cursor=pointer]:
+                    - /url: /warpdotdev/warp
+                    - generic [ref=e26]: warp
+            - button "Search or jump to…" [ref=e29] [cursor=pointer]:
+              - generic [ref=e30]:
+                - generic:
+                  - img
+                - generic [ref=e31]:
+                  - generic:
+                    - text: Type
+                    - generic: /
+                    - text: to search
+          - generic [ref=e32]:
+            - generic [ref=e33]:
+              - generic [ref=e36]:
+                - link "Chat with Copilot" [ref=e38] [cursor=pointer]:
+                  - /url: /copilot
+                  - img [ref=e39]
+                - button "Open Copilot…" [ref=e43] [cursor=pointer]:
+                  - generic:
+                    - img
+              - button "Create new..." [ref=e45] [cursor=pointer]:
+                - generic [ref=e46]:
+                  - generic:
+                    - img
+                - generic:
+                  - img
+              - generic [ref=e47]:
+                - link "All issues" [ref=e48] [cursor=pointer]:
+                  - /url: /issues
+                  - img [ref=e49]
+                - link "All pull requests" [ref=e52] [cursor=pointer]:
+                  - /url: /pulls
+                  - img [ref=e53]
+                - link "All repositories" [ref=e55] [cursor=pointer]:
+                  - /url: /repos
+                  - img [ref=e56]
+            - link "You have no unread notifications (g then n)" [ref=e58] [cursor=pointer]:
+              - /url: /notifications
+              - img [ref=e59]
+            - button "Open user navigation menu" [ref=e62] [cursor=pointer]:
+              - img "User avatar" [ref=e63]
+        - heading "Repository navigation" [level=2] [ref=e64]
+        - navigation "Repository" [ref=e65]:
+          - list [ref=e66]:
+            - listitem [ref=e67]:
+              - link "Code" [ref=e68] [cursor=pointer]:
+                - /url: /warpdotdev/warp
+                - img [ref=e70]
+                - generic [ref=e72]: Code
+            - listitem [ref=e73]:
+              - link "Issues (3.4k)" [ref=e74] [cursor=pointer]:
+                - /url: /warpdotdev/warp/issues
+                - img [ref=e76]
+                - generic [ref=e79]: Issues
+                - generic [ref=e80]:
+                  - generic [ref=e81]: 3.4k
+                  - generic [ref=e82]: (3.4k)
+            - listitem [ref=e83]:
+              - link "Pull requests (502)" [ref=e84] [cursor=pointer]:
+                - /url: /warpdotdev/warp/pulls
+                - img [ref=e86]
+                - generic [ref=e88]: Pull requests
+                - generic [ref=e89]:
+                  - generic [ref=e90]: "502"
+                  - generic [ref=e91]: (502)
+            - listitem [ref=e92]:
+              - link "Agents" [ref=e93] [cursor=pointer]:
+                - /url: /warpdotdev/warp/agents?author=ErshovDmitry
+                - img [ref=e95]
+                - generic [ref=e98]: Agents
+            - listitem [ref=e99]:
+              - link "Discussions" [ref=e100] [cursor=pointer]:
+                - /url: /warpdotdev/warp/discussions
+                - img [ref=e102]
+                - generic [ref=e104]: Discussions
+            - listitem [ref=e105]:
+              - link "Actions" [ref=e106] [cursor=pointer]:
+                - /url: /warpdotdev/warp/actions
+                - img [ref=e108]
+                - generic [ref=e110]: Actions
+            - listitem [ref=e111]:
+              - link "Projects" [ref=e112] [cursor=pointer]:
+                - /url: /warpdotdev/warp/projects
+                - img [ref=e114]
+                - generic [ref=e116]: Projects
+            - listitem [ref=e117]:
+              - link "Security and quality" [ref=e118] [cursor=pointer]:
+                - /url: /warpdotdev/warp/security
+                - img [ref=e120]
+                - generic [ref=e122]: Security and quality
+            - listitem [ref=e123]:
+              - link "Insights" [ref=e124] [cursor=pointer]:
+                - /url: /warpdotdev/warp/pulse
+                - img [ref=e126]
+                - generic [ref=e128]: Insights
+      - region "Important update" [ref=e130]:
+        - img [ref=e132]
+        - generic [ref=e135]:
+          - heading "Important update" [level=2] [ref=e137]
+          - generic [ref=e139]:
+            - text: On April 24 we'll start using GitHub Copilot interaction data for AI model training unless you opt out.
+            - link "Review this update" [ref=e140] [cursor=pointer]:
+              - /url: https://gh.io/AAzfaht
+            - text: and manage your preferences in your
+            - link "GitHub account settings" [ref=e141] [cursor=pointer]:
+              - /url: https://github.com/settings/copilot/features
+            - text: .
+        - button "Dismiss banner" [ref=e142] [cursor=pointer]:
+          - img [ref=e143]
+  - main [ref=e148]:
+    - generic [ref=e154]:
+      - region "Header" [ref=e156]:
+        - generic [ref=e157]:
+          - 'heading "Application language switch / i18n Support multiple languages and localizations #1194" [level=1] [ref=e159]'
+          - generic [ref=e161]:
+            - link "New issue" [ref=e163] [cursor=pointer]:
+              - /url: /warpdotdev/warp/issues/new/choose
+              - generic [ref=e165]: New issue
+            - button "Copy link" [ref=e166] [cursor=pointer]:
+              - img [ref=e167]
+      - generic [ref=e173]:
+        - generic [ref=e175]:
+          - img "Issue" [ref=e176]
+          - text: Open
+        - 'link "Open #10990" [ref=e180] [cursor=pointer]':
+          - /url: https://github.com/warpdotdev/warp/pull/10990
+          - img "Open" [ref=e181]
+          - generic [ref=e183]: "#10990"
+      - generic [ref=e185]:
+        - generic [ref=e186]:
+          - generic [ref=e188]:
+            - link "@Quinlivanner's profile" [ref=e189] [cursor=pointer]:
+              - /url: https://github.com/Quinlivanner
+              - img "@Quinlivanner" [ref=e190]
+            - generic [ref=e191]:
+              - heading "Description" [level=2] [ref=e192]
+              - generic [ref=e194]:
+                - generic [ref=e196]:
+                  - generic [ref=e197]:
+                    - link "Quinlivanner" [ref=e199] [cursor=pointer]:
+                      - /url: https://github.com/Quinlivanner
+                    - generic [ref=e200]:
+                      - text: opened
+                      - link "on Apr 26, 2022on Apr 26, 2022" [ref=e201] [cursor=pointer]:
+                        - /url: https://github.com/warpdotdev/warp/issues/1194#issue-1215319490
+                        - generic "Apr 26, 2022, 10:06 AM GMT+7" [ref=e202]: on Apr 26, 2022on Apr 26, 2022
+                  - button "Issue body actions" [ref=e206] [cursor=pointer]:
+                    - img [ref=e207]
+                - generic [ref=e209]:
+                  - generic [ref=e211]:
+                    - heading "Discord username (optional)" [level=3] [ref=e212]
+                    - paragraph [ref=e213]: Quickk#0001
+                    - heading "Describe the solution you'd like?" [level=3] [ref=e214]
+                    - generic [ref=e215]:
+                      - code [ref=e217]: Provide other language options for application and optimize for language localization. (It is the interface language, not the language content support), allowing users to choose their own applicable language in the Setting, such as Chinese, so that users can better experience the product and find problems.
+                      - button "Copy code to clipboard" [ref=e219] [cursor=pointer]:
+                        - img [ref=e220]
+                    - heading "Is your feature request related to a problem? Please describe." [level=3] [ref=e223]
+                    - generic [ref=e224]:
+                      - code [ref=e226]: No, I'm not currently having problems
+                      - button "Copy code to clipboard" [ref=e228] [cursor=pointer]:
+                        - img [ref=e229]
+                    - heading "Additional context" [level=3] [ref=e232]
+                    - paragraph [ref=e233]: "We are tracking different language support in the links below:"
+                    - list [ref=e234]:
+                      - listitem [ref=e235]:
+                        - link "Chinese support" [ref=e236] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/Warp/issues/1823
+                      - listitem [ref=e237]:
+                        - link "Korean support" [ref=e238] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/Warp/issues/3127
+                      - listitem [ref=e239]:
+                        - link "Japanese support" [ref=e240] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/Warp/issues/6581
+                  - toolbar "Reactions" [ref=e242]:
+                    - button "React" [ref=e243] [cursor=pointer]:
+                      - img [ref=e244]
+                    - switch "👍 223 reactions" [ref=e246] [cursor=pointer]:
+                      - generic [ref=e247]:
+                        - generic: 👍
+                        - generic [ref=e248]:
+                          - generic [ref=e249]: React with 👍
+                          - text: "223"
+                    - switch "👎 3 reactions" [ref=e250] [cursor=pointer]:
+                      - generic [ref=e251]:
+                        - generic: 👎
+                        - generic [ref=e252]:
+                          - generic [ref=e253]: React with 👎
+                          - text: "3"
+                    - switch "❤️ 2 reactions" [ref=e254] [cursor=pointer]:
+                      - generic [ref=e255]:
+                        - generic: ❤️
+                        - generic [ref=e256]:
+                          - generic [ref=e257]: React with ❤️
+                          - text: "2"
+                    - switch "👀 6 reactions" [ref=e258] [cursor=pointer]:
+                      - generic [ref=e259]:
+                        - generic: 👀
+                        - generic [ref=e260]:
+                          - generic [ref=e261]: React with 👀
+                          - text: "6"
+          - generic [ref=e263]:
+            - generic [ref=e264]:
+              - heading "Activity" [level=2] [ref=e265]
+              - link [ref=e266] [cursor=pointer]:
+                - /url: /warpdotdev/warp/issues/1194?timeline_page=1
+                - text: Next
+              - generic [ref=e267]:
+                - region "Events" [ref=e268]:
+                  - generic [ref=e275]:
+                    - img [ref=e279]
+                    - generic [ref=e281]:
+                      - generic [ref=e283]:
+                        - link "elviskahoro" [ref=e285] [cursor=pointer]:
+                          - /url: /elviskahoro
+                          - generic [ref=e286]: elviskahoro
+                        - text: mentioned this
+                        - link "on Jul 9, 2022on Jul 9, 2022" [ref=e287] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/warp/issues/1194#event-1199167149
+                          - generic "Jul 9, 2022, 3:50 AM GMT+7" [ref=e288]: on Jul 9, 2022on Jul 9, 2022
+                      - region "Issues mentioned" [ref=e291]:
+                        - list [ref=e292]:
+                          - listitem [ref=e293]:
+                            - generic [ref=e294]:
+                              - img "Completed" [ref=e295]
+                              - 'link "Will you consider the Chinese version? #1132" [ref=e298] [cursor=pointer]':
+                                - /url: https://github.com/warpdotdev/warp/issues/1132
+                                - text: Will you consider the Chinese version?
+                                - generic [ref=e299]: "#1132"
+                  - generic [ref=e303]:
+                    - img [ref=e307]
+                    - generic [ref=e309]:
+                      - generic [ref=e311]:
+                        - link "dannyneira" [ref=e313] [cursor=pointer]:
+                          - /url: /dannyneira
+                          - generic [ref=e314]: dannyneira
+                        - text: mentioned this
+                        - link "on Sep 10, 2022on Sep 10, 2022" [ref=e315] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/warp/issues/1194#event-1213033965
+                          - generic "Sep 10, 2022, 2:12 AM GMT+7" [ref=e316]: on Sep 10, 2022on Sep 10, 2022
+                      - region "Issues mentioned" [ref=e319]:
+                        - list [ref=e320]:
+                          - listitem [ref=e321]:
+                            - generic [ref=e322]:
+                              - img "Not planned" [ref=e323]
+                              - 'link "Support for Chinese language #1823" [ref=e325] [cursor=pointer]':
+                                - /url: https://github.com/warpdotdev/warp/issues/1823
+                                - text: Support for Chinese language
+                                - generic [ref=e326]: "#1823"
+                - generic [ref=e327]:
+                  - link "@77321660's profile" [ref=e328] [cursor=pointer]:
+                    - /url: https://github.com/77321660
+                    - img "77321660" [ref=e329]
+                  - generic [ref=e336]:
+                    - generic [ref=e338]:
+                      - heading "77321660 commented on Oct 17, 2022 on Oct 17, 2022" [level=3] [ref=e339]:
+                        - text: 77321660 commented
+                        - generic "Oct 17, 2022, 12:56 PM GMT+7" [ref=e340]: on Oct 17, 2022 on Oct 17, 2022
+                      - generic [ref=e341]:
+                        - link "77321660" [ref=e343] [cursor=pointer]:
+                          - /url: /77321660
+                        - link "on Oct 17, 2022on Oct 17, 2022" [ref=e346] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/warp/issues/1194#issuecomment-1280326947
+                          - generic "Oct 17, 2022, 12:56 PM GMT+7" [ref=e347]: on Oct 17, 2022on Oct 17, 2022
+                      - button "Actions for 77321660's comment, 12:56 PM on October 17, 2022" [ref=e351] [cursor=pointer]:
+                        - img [ref=e352]
+                    - generic [ref=e354]:
+                      - paragraph [ref=e357]: "+1"
+                      - toolbar "Reactions" [ref=e358]:
+                        - button "React" [ref=e359] [cursor=pointer]:
+                          - img [ref=e360]
+                - generic [ref=e362]:
+                  - link "@mingzaily's profile" [ref=e363] [cursor=pointer]:
+                    - /url: https://github.com/mingzaily
+                    - img "mingzaily" [ref=e364]
+                  - generic [ref=e371]:
+                    - generic [ref=e373]:
+                      - heading "mingzaily commented on Nov 11, 2022 on Nov 11, 2022" [level=3] [ref=e374]:
+                        - text: mingzaily commented
+                        - generic "Nov 11, 2022, 3:31 PM GMT+7" [ref=e375]: on Nov 11, 2022 on Nov 11, 2022
+                      - generic [ref=e376]:
+                        - link "mingzaily" [ref=e378] [cursor=pointer]:
+                          - /url: /mingzaily
+                        - link "on Nov 11, 2022on Nov 11, 2022" [ref=e381] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/warp/issues/1194#issuecomment-1311388252
+                          - generic "Nov 11, 2022, 3:31 PM GMT+7" [ref=e382]: on Nov 11, 2022on Nov 11, 2022
+                      - button "Actions for mingzaily's comment, 3:31 PM on November 11, 2022" [ref=e386] [cursor=pointer]:
+                        - img [ref=e387]
+                    - generic [ref=e389]:
+                      - paragraph [ref=e392]: "+1"
+                      - toolbar "Reactions" [ref=e393]:
+                        - button "React" [ref=e394] [cursor=pointer]:
+                          - img [ref=e395]
+                - generic [ref=e397]:
+                  - link "@MacAndTea's profile" [ref=e398] [cursor=pointer]:
+                    - /url: https://github.com/MacAndTea
+                    - img "MacAndTea" [ref=e399]
+                  - generic [ref=e406]:
+                    - generic [ref=e408]:
+                      - heading "MacAndTea commented on Nov 23, 2022 on Nov 23, 2022" [level=3] [ref=e409]:
+                        - text: MacAndTea commented
+                        - generic "Nov 23, 2022, 2:57 PM GMT+7" [ref=e410]: on Nov 23, 2022 on Nov 23, 2022
+                      - generic [ref=e411]:
+                        - link "MacAndTea" [ref=e413] [cursor=pointer]:
+                          - /url: /MacAndTea
+                        - link "on Nov 23, 2022on Nov 23, 2022" [ref=e416] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/warp/issues/1194#issuecomment-1324672708
+                          - generic "Nov 23, 2022, 2:57 PM GMT+7" [ref=e417]: on Nov 23, 2022on Nov 23, 2022
+                      - button "Actions for MacAndTea's comment, 2:57 PM on November 23, 2022" [ref=e421] [cursor=pointer]:
+                        - img [ref=e422]
+                    - generic [ref=e424]:
+                      - paragraph [ref=e427]: "+1"
+                      - toolbar "Reactions" [ref=e428]:
+                        - button "React" [ref=e429] [cursor=pointer]:
+                          - img [ref=e430]
+                - generic [ref=e432]:
+                  - link "@fby0394's profile" [ref=e433] [cursor=pointer]:
+                    - /url: https://github.com/fby0394
+                    - img "fby0394" [ref=e434]
+                  - generic [ref=e441]:
+                    - generic [ref=e443]:
+                      - heading "fby0394 commented on Dec 2, 2022 on Dec 2, 2022" [level=3] [ref=e444]:
+                        - text: fby0394 commented
+                        - generic "Dec 2, 2022, 9:20 AM GMT+7" [ref=e445]: on Dec 2, 2022 on Dec 2, 2022
+                      - generic [ref=e446]:
+                        - link "fby0394" [ref=e448] [cursor=pointer]:
+                          - /url: /fby0394
+                        - link "on Dec 2, 2022on Dec 2, 2022" [ref=e451] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/warp/issues/1194#issuecomment-1334681180
+                          - generic "Dec 2, 2022, 9:20 AM GMT+7" [ref=e452]: on Dec 2, 2022on Dec 2, 2022
+                      - button "Actions for fby0394's comment, 9:20 AM on December 2, 2022" [ref=e456] [cursor=pointer]:
+                        - img [ref=e457]
+                    - generic [ref=e459]:
+                      - paragraph [ref=e462]: Will there be a Chinese version in the future?
+                      - toolbar "Reactions" [ref=e463]:
+                        - button "React" [ref=e464] [cursor=pointer]:
+                          - img [ref=e465]
+                        - switch "❤️ 5 reactions" [ref=e467] [cursor=pointer]:
+                          - generic [ref=e468]:
+                            - generic: ❤️
+                            - generic [ref=e469]:
+                              - generic [ref=e470]: React with ❤️
+                              - text: "5"
+                - generic [ref=e471]:
+                  - link "@Quinlivanner's profile" [ref=e472] [cursor=pointer]:
+                    - /url: https://github.com/Quinlivanner
+                    - img "Quinlivanner" [ref=e473]
+                  - generic [ref=e480]:
+                    - generic [ref=e482]:
+                      - heading "Quinlivanner commented on Dec 2, 2022 on Dec 2, 2022" [level=3] [ref=e483]:
+                        - text: Quinlivanner commented
+                        - generic "Dec 2, 2022, 1:40 PM GMT+7" [ref=e484]: on Dec 2, 2022 on Dec 2, 2022
+                      - generic [ref=e485]:
+                        - link "Quinlivanner" [ref=e487] [cursor=pointer]:
+                          - /url: /Quinlivanner
+                        - link "on Dec 2, 2022on Dec 2, 2022" [ref=e490] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/warp/issues/1194#issuecomment-1334823738
+                          - generic "Dec 2, 2022, 1:40 PM GMT+7" [ref=e491]: on Dec 2, 2022on Dec 2, 2022
+                      - generic [ref=e492]:
+                        - button "Last edited by Quinlivanner" [ref=e495] [cursor=pointer]:
+                          - generic [ref=e498]: Last edited by Quinlivanner
+                          - generic:
+                            - img
+                        - generic [ref=e499]:
+                          - generic "This user is the author of this issue" [ref=e501]: Author
+                          - button "Actions for Quinlivanner's comment, 1:40 PM on December 2, 2022" [ref=e503] [cursor=pointer]:
+                            - img [ref=e504]
+                    - generic [ref=e506]:
+                      - generic [ref=e508]:
+                        - blockquote [ref=e509]:
+                          - paragraph [ref=e510]: Will there be a Chinese version in the future?
+                        - paragraph [ref=e511]: Tbh i think yes if have enough check
+                      - toolbar "Reactions" [ref=e512]:
+                        - button "React" [ref=e513] [cursor=pointer]:
+                          - img [ref=e514]
+                        - switch "👍 2 reactions" [ref=e516] [cursor=pointer]:
+                          - generic [ref=e517]:
+                            - generic: 👍
+                            - generic [ref=e518]:
+                              - generic [ref=e519]: React with 👍
+                              - text: "2"
+                - generic [ref=e520]:
+                  - link "@ujjboy's profile" [ref=e521] [cursor=pointer]:
+                    - /url: https://github.com/ujjboy
+                    - img "ujjboy" [ref=e522]
+                  - generic [ref=e529]:
+                    - generic [ref=e531]:
+                      - heading "ujjboy commented on Dec 16, 2022 on Dec 16, 2022" [level=3] [ref=e532]:
+                        - text: ujjboy commented
+                        - generic "Dec 16, 2022, 2:47 PM GMT+7" [ref=e533]: on Dec 16, 2022 on Dec 16, 2022
+                      - generic [ref=e534]:
+                        - link "ujjboy" [ref=e536] [cursor=pointer]:
+                          - /url: /ujjboy
+                        - link "on Dec 16, 2022on Dec 16, 2022" [ref=e539] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/warp/issues/1194#issuecomment-1354341409
+                          - generic "Dec 16, 2022, 2:47 PM GMT+7" [ref=e540]: on Dec 16, 2022on Dec 16, 2022
+                      - button "Actions for ujjboy's comment, 2:47 PM on December 16, 2022" [ref=e544] [cursor=pointer]:
+                        - img [ref=e545]
+                    - generic [ref=e547]:
+                      - paragraph [ref=e550]: "+1"
+                      - toolbar "Reactions" [ref=e551]:
+                        - button "React" [ref=e552] [cursor=pointer]:
+                          - img [ref=e553]
+                        - switch "👍 2 reactions" [ref=e555] [cursor=pointer]:
+                          - generic [ref=e556]:
+                            - generic: 👍
+                            - generic [ref=e557]:
+                              - generic [ref=e558]: React with 👍
+                              - text: "2"
+                - region "Events" [ref=e559]:
+                  - generic [ref=e566]:
+                    - img [ref=e570]
+                    - generic [ref=e574]:
+                      - link "warpdotdev-devx" [ref=e576] [cursor=pointer]:
+                        - /url: /apps/warpdotdev-devx
+                        - generic [ref=e577]: warpdotdev-devx
+                      - text: added
+                      - link "Feature" [ref=e579] [cursor=pointer]:
+                        - /url: /warpdotdev/warp/issues?q=state%3Aopen%20label%3A%22Feature%22
+                        - generic [ref=e581]: Feature
+                      - link "on Jan 10, 2023on Jan 10, 2023" [ref=e583] [cursor=pointer]:
+                        - /url: https://github.com/warpdotdev/warp/issues/1194#event-8186658613
+                        - generic "Jan 10, 2023, 6:02 AM GMT+7" [ref=e584]: on Jan 10, 2023on Jan 10, 2023
+                  - generic [ref=e591]:
+                    - img [ref=e595]
+                    - generic [ref=e597]:
+                      - generic [ref=e599]:
+                        - link "dannyneira" [ref=e601] [cursor=pointer]:
+                          - /url: /dannyneira
+                          - generic [ref=e602]: dannyneira
+                        - text: mentioned this in 2 issues
+                        - link "on Mar 24, 2023on Mar 24, 2023" [ref=e603] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/warp/issues/1194#event-1274189649
+                          - generic "Mar 24, 2023, 11:24 PM GMT+7" [ref=e604]: on Mar 24, 2023on Mar 24, 2023
+                      - region "Issues mentioned" [ref=e607]:
+                        - list [ref=e608]:
+                          - listitem [ref=e609]:
+                            - generic [ref=e610]:
+                              - img "Not planned" [ref=e611]
+                              - 'link "什么时候可以出ui的中文版本 / Release Chinese version of Warp UI #2789" [ref=e613] [cursor=pointer]':
+                                - /url: https://github.com/warpdotdev/warp/issues/2789
+                                - text: 什么时候可以出ui的中文版本 / Release Chinese version of Warp UI
+                                - generic [ref=e614]: "#2789"
+                          - listitem [ref=e615]:
+                            - generic [ref=e616]:
+                              - img "Not planned" [ref=e617]
+                              - 'link "When will warp support Chinese? #2829" [ref=e619] [cursor=pointer]':
+                                - /url: https://github.com/warpdotdev/warp/issues/2829
+                                - text: When will warp support Chinese?
+                                - generic [ref=e620]: "#2829"
+                - generic [ref=e621]:
+                  - link "@dannyneira's profile" [ref=e622] [cursor=pointer]:
+                    - /url: https://github.com/dannyneira
+                    - img "dannyneira" [ref=e623]
+                  - generic [ref=e630]:
+                    - generic [ref=e632]:
+                      - heading "dannyneira commented on Mar 24, 2023 on Mar 24, 2023" [level=3] [ref=e633]:
+                        - text: dannyneira commented
+                        - generic "Mar 24, 2023, 11:24 PM GMT+7" [ref=e634]: on Mar 24, 2023 on Mar 24, 2023
+                      - generic [ref=e635]:
+                        - link "dannyneira" [ref=e637] [cursor=pointer]:
+                          - /url: /dannyneira
+                        - link "on Mar 24, 2023on Mar 24, 2023" [ref=e640] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/warp/issues/1194#issuecomment-1483079449
+                          - generic "Mar 24, 2023, 11:24 PM GMT+7" [ref=e641]: on Mar 24, 2023on Mar 24, 2023
+                      - generic [ref=e643]:
+                        - generic "This user is a member of the warpdotdev organization." [ref=e645]: Member
+                        - button "Actions for dannyneira's comment, 11:24 PM on March 24, 2023" [ref=e647] [cursor=pointer]:
+                          - img [ref=e648]
+                    - generic [ref=e650]:
+                      - paragraph [ref=e653]: Two more users have expressed interest in Chinese UI support.
+                      - toolbar "Reactions" [ref=e654]:
+                        - button "React" [ref=e655] [cursor=pointer]:
+                          - img [ref=e656]
+                        - switch "👍 1 reaction" [ref=e658] [cursor=pointer]:
+                          - generic [ref=e659]:
+                            - generic: 👍
+                            - generic [ref=e660]:
+                              - generic [ref=e661]: React with 👍
+                              - text: "1"
+                - generic [ref=e662]:
+                  - link "@wenhongquan's profile" [ref=e663] [cursor=pointer]:
+                    - /url: https://github.com/wenhongquan
+                    - img "wenhongquan" [ref=e664]
+                  - generic [ref=e671]:
+                    - generic [ref=e673]:
+                      - heading "wenhongquan commented on Mar 31, 2023 on Mar 31, 2023" [level=3] [ref=e674]:
+                        - text: wenhongquan commented
+                        - generic "Mar 31, 2023, 2:45 PM GMT+7" [ref=e675]: on Mar 31, 2023 on Mar 31, 2023
+                      - generic [ref=e676]:
+                        - link "wenhongquan" [ref=e678] [cursor=pointer]:
+                          - /url: /wenhongquan
+                        - link "on Mar 31, 2023on Mar 31, 2023" [ref=e681] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/warp/issues/1194#issuecomment-1491459742
+                          - generic "Mar 31, 2023, 2:45 PM GMT+7" [ref=e682]: on Mar 31, 2023on Mar 31, 2023
+                      - button "Actions for wenhongquan's comment, 2:45 PM on March 31, 2023" [ref=e686] [cursor=pointer]:
+                        - img [ref=e687]
+                    - generic [ref=e689]:
+                      - paragraph [ref=e692]: "+1"
+                      - toolbar "Reactions" [ref=e693]:
+                        - button "React" [ref=e694] [cursor=pointer]:
+                          - img [ref=e695]
+                - generic [ref=e697]:
+                  - link "@tree-white's profile" [ref=e698] [cursor=pointer]:
+                    - /url: https://github.com/tree-white
+                    - img "tree-white" [ref=e699]
+                  - generic [ref=e706]:
+                    - generic [ref=e708]:
+                      - heading "tree-white commented on Apr 12, 2023 on Apr 12, 2023" [level=3] [ref=e709]:
+                        - text: tree-white commented
+                        - generic "Apr 12, 2023, 7:19 AM GMT+7" [ref=e710]: on Apr 12, 2023 on Apr 12, 2023
+                      - generic [ref=e711]:
+                        - link "tree-white" [ref=e713] [cursor=pointer]:
+                          - /url: /tree-white
+                        - link "on Apr 12, 2023on Apr 12, 2023" [ref=e716] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/warp/issues/1194#issuecomment-1504319611
+                          - generic "Apr 12, 2023, 7:19 AM GMT+7" [ref=e717]: on Apr 12, 2023on Apr 12, 2023
+                      - button "Actions for tree-white's comment, 7:19 AM on April 12, 2023" [ref=e721] [cursor=pointer]:
+                        - img [ref=e722]
+                    - generic [ref=e724]:
+                      - paragraph [ref=e727]: +1 ！！！
+                      - toolbar "Reactions" [ref=e728]:
+                        - button "React" [ref=e729] [cursor=pointer]:
+                          - img [ref=e730]
+                - generic [ref=e732]:
+                  - link "@suhengli's profile" [ref=e733] [cursor=pointer]:
+                    - /url: https://github.com/suhengli
+                    - img "suhengli" [ref=e734]
+                  - generic [ref=e741]:
+                    - generic [ref=e743]:
+                      - heading "suhengli commented on Apr 14, 2023 on Apr 14, 2023" [level=3] [ref=e744]:
+                        - text: suhengli commented
+                        - generic "Apr 14, 2023, 9:52 AM GMT+7" [ref=e745]: on Apr 14, 2023 on Apr 14, 2023
+                      - generic [ref=e746]:
+                        - link "suhengli" [ref=e748] [cursor=pointer]:
+                          - /url: /suhengli
+                        - link "on Apr 14, 2023on Apr 14, 2023" [ref=e751] [cursor=pointer]:
+                          - /url: https://github.com/warpdotdev/warp/issues/1194#issuecomment-1507856622
+                          - generic "Apr 14, 2023, 9:52 AM GMT+7" [ref=e752]: on Apr 14, 2023on Apr 14, 2023
+                      - button "Actions for suhengli's comment, 9:52 AM on April 14, 2023" [ref=e756] [cursor=pointer]:
+                        - img [ref=e757]
+                    - generic [ref=e759]:
+                      - paragraph [ref=e762]: "+1"
+                      - toolbar "Reactions" [ref=e763]:
+                        - button "React" [ref=e764] [cursor=pointer]:
+                          - img [ref=e765]
+                - generic [ref=e769]:
+                  - generic [ref=e774]:
+                    - generic [ref=e775]:
+                      - heading "207 remaining items" [level=3] [ref=e777]:
+                        - text: "207"
+                        - generic [ref=e778]: remaining items
+                      - button "Load more" [ref=e780] [cursor=pointer]:
+                        - generic [ref=e783]: Load more
+                    - button "Load more actions" [ref=e785] [cursor=pointer]:
+                      - img [ref=e786]
+                  - generic [ref=e789]:
+                    - img [ref=e790]
+                    - generic [ref=e793]: Loading
+            - generic [ref=e795]:
+              - link "@ErshovDmitry's profile" [ref=e796] [cursor=pointer]:
+                - /url: /ErshovDmitry
+                - img "ErshovDmitry" [ref=e797]
+              - heading "Add a comment" [level=2] [ref=e798]
+              - group "new Comment" [ref=e801]:
+                - generic [ref=e802] [cursor=pointer]: new Comment
+                - generic [ref=e803]:
+                  - generic [ref=e804]: "Markdown input: edit mode selected."
+                  - generic [ref=e805]:
+                    - generic [ref=e806]:
+                      - navigation "View mode" [ref=e810]:
+                        - tablist [ref=e811]:
+                          - tab "Write" [selected] [ref=e812] [cursor=pointer]
+                          - tab "Preview" [ref=e813] [cursor=pointer]
+                      - generic [ref=e814]:
+                        - toolbar "Formatting tools" [ref=e816]:
+                          - button "Heading" [ref=e817] [cursor=pointer]:
+                            - img [ref=e818]
+                          - button "Bold" [ref=e820] [cursor=pointer]:
+                            - img [ref=e821]
+                          - button "Italic" [ref=e823] [cursor=pointer]:
+                            - img [ref=e824]
+                          - button "Quote" [ref=e826] [cursor=pointer]:
+                            - img [ref=e827]
+                          - button "Code" [ref=e829] [cursor=pointer]:
+                            - img [ref=e830]
+                          - button "Link" [ref=e832] [cursor=pointer]:
+                            - img [ref=e833]
+                          - generic [ref=e835]:
+                            - button "Unordered list" [ref=e837] [cursor=pointer]:
+                              - img [ref=e838]
+                            - button "Numbered list" [ref=e840] [cursor=pointer]:
+                              - img [ref=e841]
+                            - button "Task list" [ref=e843] [cursor=pointer]:
+                              - img [ref=e844]
+                          - generic [ref=e846]:
+                            - button "Mention" [ref=e848] [cursor=pointer]:
+                              - img [ref=e849]
+                            - button "Reference" [ref=e851] [cursor=pointer]:
+                              - img [ref=e852]
+                        - button "Saved replies" [ref=e854] [cursor=pointer]:
+                          - img [ref=e855]
+                    - textbox "Add a comment" [ref=e860]:
+                      - /placeholder: Use Markdown to format your comment
+                    - status
+                  - generic [ref=e861]:
+                    - button "Paste, drop, or click to add files" [ref=e864] [cursor=pointer]:
+                      - generic [ref=e865]:
+                        - generic:
+                          - img
+                        - generic [ref=e867]: Paste, drop, or click to add files
+                    - generic [ref=e868]:
+                      - generic [ref=e869]:
+                        - tooltip "You do not have permissions to close this issue" [ref=e871]:
+                          - button "Close issue" [disabled] [ref=e872]:
+                            - generic [ref=e873]:
+                              - generic:
+                                - img
+                              - generic [ref=e874]: Close issue
+                        - button "More options" [disabled] [ref=e876]:
+                          - img [ref=e877]
+                      - tooltip "Comment can not be empty" [ref=e879]:
+                        - button "Comment" [disabled] [ref=e880]:
+                          - generic [ref=e882]: Comment
+        - generic [ref=e884]:
+          - heading "Metadata" [level=2] [ref=e885]
+          - generic [ref=e887]:
+            - generic [ref=e889]:
+              - generic [ref=e890]:
+                - heading "Assignees" [level=3]
+              - generic [ref=e891]: No one assigned
+            - generic [ref=e892]:
+              - generic [ref=e894]:
+                - heading "Labels" [level=3]
+              - generic [ref=e896]:
+                - link "area:ui-framework Core Warp UI framework, rendering, layout, and windowing infrastructure." [ref=e897] [cursor=pointer]:
+                  - /url: https://github.com/warpdotdev/warp/issues?q=state%3Aopen%20label%3A%22area%3Aui-framework%22
+                  - generic [ref=e899]: area:ui-framework
+                  - generic [ref=e900]: Core Warp UI framework, rendering, layout, and windowing infrastructure.
+                - link "enhancement New feature or request." [ref=e901] [cursor=pointer]:
+                  - /url: https://github.com/warpdotdev/warp/issues?q=state%3Aopen%20label%3A%22enhancement%22
+                  - generic [ref=e903]: enhancement
+                  - generic [ref=e904]: New feature or request.
+                - link "ready-to-spec The issue is ready for a product and technical spec." [ref=e905] [cursor=pointer]:
+                  - /url: https://github.com/warpdotdev/warp/issues?q=state%3Aopen%20label%3A%22ready-to-spec%22
+                  - generic [ref=e907]: ready-to-spec
+                  - generic [ref=e908]: The issue is ready for a product and technical spec.
+                - link "triaged Issue has received an initial automated triage pass." [ref=e909] [cursor=pointer]:
+                  - /url: https://github.com/warpdotdev/warp/issues?q=state%3Aopen%20label%3A%22triaged%22
+                  - generic [ref=e911]: triaged
+                  - generic [ref=e912]: Issue has received an initial automated triage pass.
+            - generic [ref=e914]:
+              - generic [ref=e915]:
+                - heading "Type" [level=3]
+              - generic [ref=e916]: No type
+            - generic [ref=e918]:
+              - generic [ref=e919]:
+                - heading "Projects" [level=3]
+              - generic [ref=e920]: No projects
+            - generic [ref=e922]:
+              - generic [ref=e923]:
+                - heading "Milestone" [level=3]
+              - generic [ref=e924]: No milestone
+            - generic [ref=e926]:
+              - generic [ref=e927]:
+                - heading "Relationships" [level=3]
+              - generic [ref=e928]: None yet
+            - generic [ref=e930]:
+              - generic [ref=e931]:
+                - heading "Development" [level=3]
+              - generic [ref=e932]: No branches or pull requests
+            - generic [ref=e933]:
+              - generic [ref=e935]:
+                - heading "Notifications" [level=3]
+              - generic [ref=e937]:
+                - button "Subscribe" [ref=e938] [cursor=pointer]:
+                  - generic [ref=e939]:
+                    - generic:
+                      - img
+                    - generic [ref=e940]: Subscribe
+                - paragraph [ref=e941]: You're not receiving notifications from this thread.
+            - heading "Issue actions" [level=2] [ref=e942]
+            - list [ref=e943]:
+              - listitem [ref=e944]:
+                - button "Give feedback" [ref=e945] [cursor=pointer]:
+                  - generic:
+                    - img
+                  - generic [ref=e947]: Give feedback
+  - contentinfo [ref=e948]:
+    - heading "Footer" [level=2] [ref=e949]
+    - generic [ref=e950]:
+      - generic [ref=e951]:
+        - link "GitHub Homepage" [ref=e952] [cursor=pointer]:
+          - /url: https://github.com
+          - img [ref=e953]
+        - generic [ref=e955]: © 2026 GitHub, Inc.
+      - navigation "Footer" [ref=e956]:
+        - heading "Footer navigation" [level=3] [ref=e957]
+        - list "Footer navigation" [ref=e958]:
+          - listitem [ref=e959]:
+            - link "Terms" [ref=e960] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/github-terms/github-terms-of-service
+          - listitem [ref=e961]:
+            - link "Privacy" [ref=e962] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/privacy-policies/github-privacy-statement
+          - listitem [ref=e963]:
+            - link "Security" [ref=e964] [cursor=pointer]:
+              - /url: https://github.com/security
+          - listitem [ref=e965]:
+            - link "Status" [ref=e966] [cursor=pointer]:
+              - /url: https://www.githubstatus.com/
+          - listitem [ref=e967]:
+            - link "Community" [ref=e968] [cursor=pointer]:
+              - /url: https://github.community/
+          - listitem [ref=e969]:
+            - link "Docs" [ref=e970] [cursor=pointer]:
+              - /url: https://docs.github.com/
+          - listitem [ref=e971]:
+            - link "Contact" [ref=e972] [cursor=pointer]:
+              - /url: https://support.github.com?tags=dotcom-footer
+          - listitem [ref=e973]:
+            - button "Manage cookies" [ref=e975] [cursor=pointer]
+          - listitem [ref=e976]:
+            - button "Do not share my personal information" [ref=e978] [cursor=pointer]

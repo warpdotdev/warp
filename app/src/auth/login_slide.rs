@@ -967,7 +967,6 @@ LoginPurpose::WarpAgent | LoginPurpose::ThirdParty => (
                 &[],
                 "Sign in",
             ),
-            ),
         };
 
         // Close button with ESC keyboard-shortcut badge.
