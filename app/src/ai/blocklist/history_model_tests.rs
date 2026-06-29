@@ -976,7 +976,7 @@ fn test_ai_queries_for_terminal_view_up_arrow_history() {
 
         // Clear the blocklist
         history_model.update(&mut app, |history_model, ctx| {
-            history_model.clear_conversations_in_terminal_view(terminal_view_id, ctx);
+            history_model.clear_conversations_for_terminal_surface(terminal_view_id, ctx);
         });
 
         // Test state after clearing - should remain the same
@@ -1472,8 +1472,8 @@ fn test_transcript_viewer_terminal_view_is_not_marked_historical() {
         });
 
         history_model.update(&mut app, |history_model, _| {
-            history_model.mark_terminal_view_as_conversation_transcript_viewer(terminal_view_id);
-            history_model.mark_conversations_historical_for_terminal_view(terminal_view_id);
+            history_model.mark_terminal_surface_as_conversation_transcript_viewer(terminal_view_id);
+            history_model.mark_conversations_historical_for_terminal_surface(terminal_view_id);
         });
 
         let historical_count = history_model.read(&app, |history_model, _| {
@@ -1813,7 +1813,7 @@ fn test_all_cleared_conversations_includes_terminal_view_id() {
         });
 
         history_model.update(&mut app, |history_model, ctx| {
-            history_model.clear_conversations_in_terminal_view(terminal_view_id, ctx);
+            history_model.clear_conversations_for_terminal_surface(terminal_view_id, ctx);
         });
 
         let has_cleared = history_model.read(&app, |history_model, _| {
@@ -2964,7 +2964,7 @@ fn test_find_by_token_after_insert_forked_conversation_from_tasks() {
 }
 
 #[test]
-fn test_find_by_token_after_mark_conversations_historical_for_terminal_view() {
+fn test_find_by_token_after_mark_conversations_historical_for_terminal_surface() {
     use crate::ai::agent::conversation::AIConversation;
 
     App::test((), |mut app| async move {
@@ -3020,7 +3020,7 @@ fn test_find_by_token_after_mark_conversations_historical_for_terminal_view() {
         });
 
         history_model.update(&mut app, |model, _| {
-            model.mark_conversations_historical_for_terminal_view(terminal_view_id);
+            model.mark_conversations_historical_for_terminal_surface(terminal_view_id);
         });
 
         // Token still resolves via the metadata-side index entry.
@@ -3384,7 +3384,7 @@ fn test_fork_then_bind_handoff_token_updates_cached_metadata_and_emits_refresh_e
             events.iter().any(|event| matches!(
                 event,
                 BlocklistAIHistoryEvent::UpdatedConversationMetadata {
-                    terminal_view_id: Some(id),
+                    terminal_surface_id: Some(id),
                     conversation_id,
                 } if *id == fork_terminal_view_id && *conversation_id == forked_id
             )),
@@ -3394,7 +3394,7 @@ fn test_fork_then_bind_handoff_token_updates_cached_metadata_and_emits_refresh_e
             events.iter().any(|event| matches!(
                 event,
                 BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
-                    terminal_view_id: id,
+                    terminal_surface_id: id,
                     conversation_id,
                 } if *id == fork_terminal_view_id && *conversation_id == forked_id
             )),

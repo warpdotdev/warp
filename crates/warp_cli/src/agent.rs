@@ -502,6 +502,12 @@ pub struct RunCloudArgs {
     /// The environment to run this ambient agent in.
     #[command(flatten)]
     pub environment: EnvironmentCreateArgs,
+
+    /// Runner to use for this agent's compute (docker image, instance size,
+    /// setup commands), identified by ID. Overrides the environment's default runner.
+    #[arg(long = "runner", value_name = "ID")]
+    pub runner: Option<String>,
+
     /// Open the agent's session in Warp once it's available.
     #[arg(long = "open")]
     pub open: bool,

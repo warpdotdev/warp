@@ -19,7 +19,10 @@ use crate::ai::agent::{
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::llms::LLMId;
 use crate::server::server_api::ai::{AIClient, MockAIClient, TaskStatusUpdate};
-use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+};
+use crate::terminal::CLIAgent;
 
 /// Helper to assert a (state, Option<TaskStatusUpdate>) tuple.
 fn assert_update(
@@ -389,6 +392,68 @@ fn register_cli_agent_sessions_model(app: &mut App) {
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
 }
 
+/// A pane-scoped CLI session can end during setup without ending the driver run,
+/// while explicit driver cleanup prevents later status updates.
+#[test]
+fn cli_task_mapping_survives_cli_session_end() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let cli_sessions_model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let succeeded_updates = Arc::new(AtomicUsize::new(0));
+        let succeeded_updates_for_mock = succeeded_updates.clone();
+        let mut mock = MockAIClient::new();
+        mock.expect_update_agent_task()
+            .returning(move |_, task_state, _, _, _| {
+                if task_state == Some(AgentTaskState::Succeeded) {
+                    succeeded_updates_for_mock.fetch_add(1, Ordering::SeqCst);
+                }
+                Ok(())
+            });
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let model = app.add_singleton_model(|ctx| {
+            LocalAgentTaskSyncModel::new_with_ai_client_for_test(ai_client, ctx)
+        });
+        let terminal_view_id = warpui::EntityId::new();
+
+        model.update(&mut app, |model, ctx| {
+            model.register_cli_session(terminal_view_id, fixed_task_id(), ctx);
+        });
+        cli_sessions_model.update(&mut app, |_, ctx| {
+            ctx.emit(CLIAgentSessionsModelEvent::Ended {
+                terminal_view_id,
+                agent: CLIAgent::Claude,
+            });
+        });
+        cli_sessions_model.update(&mut app, |_, ctx| {
+            ctx.emit(CLIAgentSessionsModelEvent::StatusChanged {
+                terminal_view_id,
+                agent: CLIAgent::Claude,
+                status: CLIAgentSessionStatus::Success,
+                session_context: Box::default(),
+            });
+        });
+        model.update(&mut app, |model, _| {
+            model.unregister_cli_session(terminal_view_id);
+        });
+        cli_sessions_model.update(&mut app, |_, ctx| {
+            ctx.emit(CLIAgentSessionsModelEvent::StatusChanged {
+                terminal_view_id,
+                agent: CLIAgent::Claude,
+                status: CLIAgentSessionStatus::Success,
+                session_context: Box::default(),
+            });
+        });
+
+        pump_spawned_tasks().await;
+
+        assert_eq!(
+            succeeded_updates.load(Ordering::SeqCst),
+            1,
+            "the accepted success must drain, but a status emitted after unregister must be ignored"
+        );
+    });
+}
+
 #[test]
 fn shared_session_link_fires_update_agent_task_with_session_id() {
     App::test((), |mut app| async move {
@@ -639,7 +704,7 @@ fn conversation_server_token_assigned_fires_update_with_conversation_id() {
         history_model.update(&mut app, |_, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
             });
         });
 
@@ -668,7 +733,7 @@ fn conversation_server_token_assigned_skips_viewer_conversations() {
         history_model.update(&mut app, |_, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
             });
         });
 
@@ -702,7 +767,7 @@ fn conversation_server_token_assigned_skips_remote_child_conversations() {
         history_model.update(&mut app, |_, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
             });
         });
 
@@ -734,7 +799,7 @@ fn conversation_server_token_assigned_skips_without_task_id() {
         history_model.update(&mut app, |_, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
             });
         });
 

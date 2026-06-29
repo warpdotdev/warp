@@ -132,6 +132,17 @@ pub struct ResponseStream {
 }
 
 impl ResponseStream {
+    /// Emits a synthetic successful response event through the normal controller subscription.
+    #[cfg(test)]
+    pub fn emit_response_event_for_test(
+        &mut self,
+        event: warp_multi_agent_api::ResponseEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Ok(
+            event,
+        ))));
+    }
     #[cfg(test)]
     pub fn new_for_test(id: ResponseStreamId) -> Self {
         let (cancellation_tx, _rx) = oneshot::channel();

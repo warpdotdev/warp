@@ -269,7 +269,7 @@ impl Input {
                         .is_some_and(|argument| argument.is_empty())
                     && self.suggestions_mode_model.as_ref(ctx).is_closed()
                 {
-                    self.open_completion_suggestions(CompletionsTrigger::Keybinding, ctx);
+                    self.open_completion_suggestions(CompletionsTrigger::SlashCommandAutoOpen, ctx);
                 }
             }
             SlashCommandEntryState::SkillCommand(detected_skill) => {
@@ -984,11 +984,8 @@ impl Input {
                     return true;
                 };
 
-                let destination = if trigger.is_cmd_or_ctrl_enter() {
-                    ForkedConversationDestination::NewTab
-                } else {
-                    ForkedConversationDestination::SplitPane
-                };
+                let destination =
+                    ForkedConversationDestination::for_fork_trigger(trigger.is_cmd_or_ctrl_enter());
 
                 // Move any pending attachments out of the source input so they travel with the
                 // initial prompt into the forked pane and no longer linger on the original input.
@@ -1033,11 +1030,8 @@ impl Input {
                     return true;
                 }
 
-                let destination = if trigger.is_cmd_or_ctrl_enter() {
-                    ForkedConversationDestination::NewTab
-                } else {
-                    ForkedConversationDestination::SplitPane
-                };
+                let destination =
+                    ForkedConversationDestination::for_fork_trigger(trigger.is_cmd_or_ctrl_enter());
 
                 send_telemetry_from_ctx!(
                     AgentManagementTelemetryEvent::SlashCommandContinueLocally,
@@ -1075,11 +1069,8 @@ impl Input {
                     return true;
                 };
 
-                let destination = if trigger.is_cmd_or_ctrl_enter() {
-                    ForkedConversationDestination::SplitPane
-                } else {
-                    ForkedConversationDestination::CurrentPane
-                };
+                let destination =
+                    ForkedConversationDestination::for_fork_trigger(trigger.is_cmd_or_ctrl_enter());
 
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
@@ -1163,9 +1154,7 @@ impl Input {
                 self.open_repos_menu(ctx);
             }
             command_that_just_sends_ai_request_with_prefix
-                if command.name == commands::COMPACT.name
-                    || command.name == commands::PLAN.name
-                    || command.name == commands::ORCHESTRATE.name =>
+                if slash_command_is_submitted_as_prompt(command) =>
             {
                 // These slash commands just send AI requests with the slash command text as a
                 // prefix, and special handling is done downstream as an implementation detail
@@ -1394,6 +1383,22 @@ impl Input {
             context_model.take_pending_attachments(ctx)
         })
     }
+}
+
+/// Whether executing the static slash `command` submits its text to the conversation as an AI
+/// prompt (handled downstream like a normal user query) rather than performing an immediate
+/// local action.
+///
+/// This is the single source of truth for the "reiterated as a prompt vs handled immediately"
+/// distinction: only `/compact`, `/plan`, and `/orchestrate` are sent as prompts (mirroring the
+/// `command_that_just_sends_ai_request_with_prefix` arm in [`Input::execute_slash_command`]).
+/// Every other slash command emits an immediate action (forking, switching model, opening a
+/// menu, etc.), so callers gating prompt queuing or shared-session forwarding should treat those
+/// as "run now".
+pub(crate) fn slash_command_is_submitted_as_prompt(command: &StaticCommand) -> bool {
+    command.name == commands::COMPACT.name
+        || command.name == commands::PLAN.name
+        || command.name == commands::ORCHESTRATE.name
 }
 
 /// Returns true when the conversation with `conversation_id` is associated with an Oz

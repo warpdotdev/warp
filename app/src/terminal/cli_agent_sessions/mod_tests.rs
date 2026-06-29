@@ -620,6 +620,34 @@ fn prompt_submit_clears_permission_scoped_state() {
 }
 
 #[test]
+fn tool_complete_clears_permission_scoped_state() {
+    // GH-11082: answering an AskUserQuestion emits only ToolComplete (the
+    // plugin sends no PermissionReplied for it), so the Blocked -> InProgress
+    // transition here must also clear the stale summary. Otherwise the tab
+    // title keeps showing "Wants to run AskUserQuestion: ..." until the next
+    // prompt or Stop.
+    let mut session = blocked_claude_session_with_permission_state();
+
+    let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::ToolComplete,
+        session_id: Some("abc".to_owned()),
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    session.apply_event(&event);
+
+    assert_eq!(session.session_context.summary, None);
+    assert_eq!(session.session_context.tool_name, None);
+    assert_eq!(session.session_context.tool_input_preview, None);
+    assert!(matches!(session.status, CLIAgentSessionStatus::InProgress));
+}
+
+#[test]
 fn permission_request_still_populates_summary_and_tool_fields() {
     // Sanity: clearing permission-scoped state on Stop/Reply/Submit must not
     // also break the PermissionRequest path that initially populates them.

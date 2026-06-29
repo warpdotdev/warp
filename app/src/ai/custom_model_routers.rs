@@ -21,8 +21,17 @@ use warp_multi_agent_api as api;
 
 use super::llms::{LLMContextWindow, LLMId, LLMInfo, LLMProvider, LLMUsageMetadata};
 
+/// The shared `config_key` namespace prefix for all custom model routers.
+/// Both local (YAML-authored) and cloud/team (server-synced) routers live under
+/// this prefix: local routers use `custom-router:local:` and cloud/team routers
+/// use `custom-router:cloud:`. Use [`is_custom_router_id`] to match either.
+pub const CUSTOM_ROUTER_PREFIX: &str = "custom-router:";
+
 /// The `config_key` prefix for local (YAML-authored) custom model routers.
 pub const LOCAL_CUSTOM_ROUTER_PREFIX: &str = "custom-router:local:";
+
+/// The `config_key` prefix for cloud/team (server-synced) custom model routers.
+pub const CLOUD_CUSTOM_ROUTER_PREFIX: &str = "custom-router:cloud:";
 
 /// The routing strategy for a custom model router.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,14 +93,21 @@ impl CustomModelRouter {
     /// picker [`LLMInfo`] inline so callers never need to call a separate
     /// `to_llm_info()` step.
     ///
-    /// `source_path` is the file the router was loaded from; when provided it
-    /// appears in the description so the user knows where to edit the config.
+    /// `source_path` is the file the router was loaded from. It serves two
+    /// purposes: it appears in the description so the user knows where to edit
+    /// the config, and its file name (without extension) is the router's stable
+    /// identity. Deriving the `config_key`/[`LLMId`] from the file name (rather
+    /// than the display `name`) lets a user rename a router without breaking
+    /// persisted selections (execution profiles, terminal overrides) that
+    /// reference it. Path-less parses (e.g. tests) fall back to the display
+    /// `name`, which reproduces the legacy id.
     pub fn new_local(
         name: String,
         routing: CustomModelRouting,
         source_path: Option<&Path>,
     ) -> Self {
-        let config_key = format!("{LOCAL_CUSTOM_ROUTER_PREFIX}{name}");
+        let id = local_id_from_path(source_path, &name);
+        let config_key = format!("{LOCAL_CUSTOM_ROUTER_PREFIX}{id}");
         let routing_kind = match &routing {
             CustomModelRouting::Complexity(_) => "Routes by task complexity",
             CustomModelRouting::Prompt(_) => "Routes by prompt content",
@@ -227,6 +243,19 @@ impl CustomModelRouter {
     }
 }
 
+/// Derives a local router's stable id from its source file name (without
+/// extension). The file name is the router's durable identity, so changing the
+/// display name never changes the `config_key`. Falls back to `fallback` (the
+/// display name) when no path is available, preserving the legacy name-based id
+/// for path-less parses.
+fn local_id_from_path(source_path: Option<&Path>, fallback: &str) -> String {
+    source_path
+        .and_then(|path| path.file_stem())
+        .and_then(|stem| stem.to_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| fallback.to_owned())
+}
+
 /// Validates a single routing target id: non-empty and concrete.
 fn validate_target(model_id: &str) -> Result<(), String> {
     let trimmed = model_id.trim();
@@ -252,15 +281,117 @@ pub fn is_auto_target(model_id: &str) -> bool {
         || is_custom_router_id(id)
 }
 
-/// Returns whether an id is the `config_key`/`LLMId` of a local custom model router.
+/// Returns whether an id is the `config_key`/`LLMId` of any custom model
+/// router, local (`custom-router:local:`) or cloud/team (`custom-router:cloud:`).
+/// Use this for picker behavior shared by all routers: the Dataflow icon,
+/// top-of-picker ordering, and the routing sidecar instead of model specs.
 pub fn is_custom_router_id(id: &str) -> bool {
+    id.starts_with(CUSTOM_ROUTER_PREFIX)
+}
+
+/// Returns whether an id is the `config_key` of a *local* (YAML-authored)
+/// custom model router specifically. Use this only for logic scoped to local
+/// file-backed routers (e.g. reconciling a stale local selection after its file
+/// is deleted); prefer [`is_custom_router_id`] for behavior shared by all
+/// routers, including cloud/team ones.
+pub fn is_local_custom_router_id(id: &str) -> bool {
     id.starts_with(LOCAL_CUSTOM_ROUTER_PREFIX)
 }
 
-/// Returns whether an id is the `config_key` of a local custom model router.
-/// Alias for [`is_custom_router_id`]; prefer that in new call sites.
-pub fn is_local_custom_router_id(id: &str) -> bool {
-    is_custom_router_id(id)
+/// Returns whether an id is the `config_key` of a *cloud/team* (server-synced)
+/// custom model router specifically. Used to gate cloud routers behind the same
+/// feature flag as local routers so the whole feature is controlled by one flag.
+pub fn is_cloud_custom_router_id(id: &str) -> bool {
+    id.starts_with(CLOUD_CUSTOM_ROUTER_PREFIX)
+}
+
+// ── Serialization back to YAML ───────────────────────────────────────────────
+
+/// A serialisable mirror of [`YamlCustomModelRouter`] used when writing a
+/// router back to disk via [`CustomModelRouter::to_yaml_string`].
+#[derive(Serialize)]
+struct YamlOutputRouter<'a> {
+    name: &'a str,
+    #[serde(rename = "type")]
+    model_type: &'static str,
+    default: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    routing: Option<serde_yaml::Value>,
+}
+
+/// A serialisable mirror of [`YamlComplexityRouting`] used by
+/// [`CustomModelRouter::to_yaml_string`].
+#[derive(Serialize)]
+struct YamlOutputComplexityRouting<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    easy: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    medium: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hard: Option<&'a str>,
+}
+
+/// A serialisable mirror of [`YamlPromptRule`] used by
+/// [`CustomModelRouter::to_yaml_string`].
+#[derive(Serialize)]
+struct YamlOutputPromptRule<'a> {
+    description: &'a str,
+    model: &'a str,
+}
+
+impl CustomModelRouter {
+    /// Serialises this router back to the YAML file format understood by
+    /// [`parse_model_config_yaml`]. The output is suitable for writing to a
+    /// `custom_model_routers/*.yaml` file.
+    pub fn to_yaml_string(&self) -> Result<String, serde_yaml::Error> {
+        let name = self.info.display_name.as_str();
+        match &self.routing {
+            CustomModelRouting::Complexity(c) => {
+                // Only emit a `routing:` block when at least one optional
+                // bucket is set; omit it entirely otherwise so the file stays
+                // as simple as possible.
+                let routing = if c.easy.is_some() || c.medium.is_some() || c.hard.is_some() {
+                    let complexity = YamlOutputComplexityRouting {
+                        easy: c.easy.as_deref(),
+                        medium: c.medium.as_deref(),
+                        hard: c.hard.as_deref(),
+                    };
+                    Some(serde_yaml::to_value(complexity)?)
+                } else {
+                    None
+                };
+                let out = YamlOutputRouter {
+                    name,
+                    model_type: "complexity",
+                    default: &c.default,
+                    routing,
+                };
+                serde_yaml::to_string(&out)
+            }
+            CustomModelRouting::Prompt(p) => {
+                let rules: Vec<YamlOutputPromptRule<'_>> = p
+                    .rules
+                    .iter()
+                    .map(|r| YamlOutputPromptRule {
+                        description: &r.description,
+                        model: &r.model,
+                    })
+                    .collect();
+                let routing = if rules.is_empty() {
+                    None
+                } else {
+                    Some(serde_yaml::to_value(&rules)?)
+                };
+                let out = YamlOutputRouter {
+                    name,
+                    model_type: "prompt",
+                    default: &p.default_model,
+                    routing,
+                };
+                serde_yaml::to_string(&out)
+            }
+        }
+    }
 }
 
 /// Describes a `custom_model_routers/` YAML file that failed to parse or validate.

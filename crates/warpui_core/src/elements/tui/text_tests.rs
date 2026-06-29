@@ -1,11 +1,22 @@
 use ratatui::style::{Color, Modifier, Style};
 
 use super::TuiText;
-use crate::elements::tui::{TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiRect, TuiSize};
+use crate::elements::tui::{
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiRect, TuiSize,
+};
+use crate::{App, EntityIdMap};
 
 fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
-    element.render(TuiRect::new(0, 0, size.width, size.height), &mut buffer);
+    let mut rendered_views = EntityIdMap::default();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    element.render(
+        TuiRect::new(0, 0, size.width, size.height),
+        &mut buffer,
+        &mut ctx,
+    );
     buffer.to_lines()
 }
 
@@ -20,11 +31,23 @@ fn renders_a_single_short_line() {
 
 #[test]
 fn layout_reports_content_width_and_row_count() {
-    let mut text = TuiText::new("hello world foo");
-    let size = text.layout(TuiConstraint::loose(TuiSize::new(11, 10)));
-    // "hello world" packs onto row 1 (11 cols), "foo" wraps to row 2.
-    assert_eq!(size, TuiSize::new(11, 2));
-    assert_eq!(text.desired_height(11), 2);
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let mut text = TuiText::new("hello world foo");
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let size = text.layout(
+                TuiConstraint::loose(TuiSize::new(11, 10)),
+                &mut ctx,
+                app_ctx,
+            );
+            // "hello world" packs onto row 1 (11 cols), "foo" wraps to row 2.
+            assert_eq!(size, TuiSize::new(11, 2));
+            assert_eq!(text.desired_height(11), 2);
+        });
+    });
 }
 
 #[test]
@@ -75,7 +98,11 @@ fn applies_its_style_to_painted_cells() {
     let text = TuiText::new("a").with_style(style);
 
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 1, 1));
-    text.render(TuiRect::new(0, 0, 1, 1), &mut buffer);
+    let mut rendered_views = EntityIdMap::default();
+    let mut ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    text.render(TuiRect::new(0, 0, 1, 1), &mut buffer, &mut ctx);
 
     let cell = &buffer[(0, 0)];
     assert_eq!(cell.symbol(), "a");

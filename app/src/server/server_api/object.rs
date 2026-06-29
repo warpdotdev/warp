@@ -832,6 +832,11 @@ impl ObjectClient for ServerApi {
                                     gso,
                                 );
                             }
+                            // GSO formats unknown to this client build (e.g. the
+                            // server-only `JsonRunner`) are skipped so syncing of
+                            // known objects still succeeds instead of failing to
+                            // decode the whole response.
+                            warp_graphql::generic_string_object::GenericStringObjectFormat::Unknown => {}
                         }
                     }
                 }

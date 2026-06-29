@@ -1272,7 +1272,7 @@ impl AIBlock {
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
                 if event
-                    .terminal_view_id()
+                    .terminal_surface_id()
                     .is_none_or(|id| id == me.terminal_view_id)
                 {
                     match event {

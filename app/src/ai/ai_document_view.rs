@@ -262,21 +262,26 @@ impl AIDocumentView {
                 use crate::ai::blocklist::BlocklistAIHistoryEvent;
                 match event {
                     BlocklistAIHistoryEvent::UpdatedConversationStatus {
-                        terminal_view_id, ..
+                        terminal_surface_id,
+                        ..
                     } => {
                         // Check if this is our terminal view
                         if let Some(tv) = &me.original_terminal_view {
-                            if tv.id() == *terminal_view_id {
+                            if tv.id() == *terminal_surface_id {
                                 me.update_header_buttons(ctx);
                             }
                         }
                     }
                     BlocklistAIHistoryEvent::RestoredConversations {
-                        terminal_view_id,
+                        terminal_surface_id,
                         conversation_ids,
                     } => {
                         // Try to populate terminal view if conversations were restored
-                        me.maybe_populate_terminal_view(*terminal_view_id, conversation_ids, ctx);
+                        me.maybe_populate_terminal_view(
+                            *terminal_surface_id,
+                            conversation_ids,
+                            ctx,
+                        );
                     }
                     BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
                         conversation_id: cid,

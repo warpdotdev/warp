@@ -4,7 +4,7 @@ use onboarding::components::feature_optout_dialog::{
     render_feature_optout_dialog, FeatureOptOutDialog,
 };
 use onboarding::slides::{layout, slide_content};
-use onboarding::{OnboardingIntention, AI_FEATURES, WARP_DRIVE_FEATURES};
+use onboarding::{OnboardingIntention, WARP_DRIVE_FEATURES};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
@@ -152,10 +152,11 @@ enum LoginSlideOverlay {
     SkipDialog,
 }
 
-/// Why the login slide is being shown, which drives its copy. The Warp-agent
-/// and Terminal+Drive paths require an account (server-side inference / cloud
-/// sync), so skipping is framed as losing that feature; the third-party path
-/// only encourages an account, so it gets softer, skip-friendly wording.
+/// Why the login slide is being shown, which drives its copy. All three paths
+/// need an account: Terminal+Drive for cloud sync, and the Warp-agent and
+/// third-party paths because Warp's AI features run on a Warp account. Skipping
+/// therefore defers sign-in and leaves the gated features off until the user
+/// creates an account.
 enum LoginPurpose {
     WarpAgent,
     WarpDrive,
@@ -169,13 +170,17 @@ enum LoginPurpose {
 const AUTH_TOKEN_INPUT_BORDER_RADIUS: Radius = Radius::Pixels(4.);
 
 pub struct LoginSlideView {
-    /// Whether AI will be enabled once onboarding is applied. Used to hide the
-    /// cloud-conversation-storage toggle in the privacy settings step when the
-    /// user has disabled Warp Agent during onboarding (or is on the terminal
-    /// intention path, which disables AI). The actual `AISettings` value may
-    /// not have been written yet at this point, since onboarding settings are
-    /// applied after login.
+    /// Whether this path wants AI (agent intent) vs. not (terminal intention).
+    /// Used to gate the cloud-conversation-storage toggle and AI wording in the
+    /// privacy settings step. This reflects intent, not the final state: AI runs
+    /// on a Warp account, so skipping login leaves it off even when this is true.
+    /// The actual `AISettings` value is written when settings are applied.
     ai_enabled: bool,
+    /// Whether the user chose third-party (BYO) agents during onboarding. Drives
+    /// the agent-path login copy ("Create an account" for third-party vs. "Get
+    /// started with AI" for Warp Agent); it does not affect whether AI is
+    /// enabled, which depends on the user creating an account.
+    uses_third_party_agents: bool,
     /// Onboarding intention selected by the user, used to render Drive-focused
     /// copy on the Terminal+Drive path. On the login slide, `intention ==
     /// OnboardingIntention::Terminal` is equivalent to "Terminal+Drive":
@@ -276,6 +281,7 @@ impl LoginSlideView {
 
     pub fn new(
         ai_enabled: bool,
+        uses_third_party_agents: bool,
         theme_name: &str,
         use_vertical_tabs: bool,
         intention: OnboardingIntention,
@@ -325,6 +331,7 @@ impl LoginSlideView {
 
         Self {
             ai_enabled,
+            uses_third_party_agents,
             intention,
             theme_visual_path: resolve_visual_path(intention, theme_name, use_vertical_tabs),
             step: match source {
@@ -509,10 +516,10 @@ impl LoginSlideView {
         match self.intention {
             OnboardingIntention::Terminal => LoginPurpose::WarpDrive,
             OnboardingIntention::AgentDrivenDevelopment => {
-                if self.ai_enabled {
-                    LoginPurpose::WarpAgent
-                } else {
+                if self.uses_third_party_agents {
                     LoginPurpose::ThirdParty
+                } else {
+                    LoginPurpose::WarpAgent
                 }
             }
         }
@@ -653,7 +660,7 @@ impl LoginSlideView {
         let cmd_enter = Keystroke::parse("cmdorctrl-enter").unwrap_or_default();
         let skip_label = match self.login_purpose() {
             LoginPurpose::WarpDrive => "Disable Warp Drive",
-            LoginPurpose::WarpAgent => "Disable AI features",
+            LoginPurpose::WarpAgent => "Skip for now",
             LoginPurpose::ThirdParty => "Skip for now",
         };
         let skip_button = self.skip_button.render(
@@ -954,17 +961,11 @@ impl LoginSlideView {
                 WARP_DRIVE_FEATURES,
                 "Enable Warp Drive",
             ),
-            LoginPurpose::WarpAgent => (
-                "Are you sure you want to disable AI features?",
-                "Warp is better with AI. By continuing, you won't have access to any of the following features:",
-                AI_FEATURES,
-                "Enable AI features",
-            ),
-            LoginPurpose::ThirdParty => (
-                "Are you sure you want to skip login?",
-                "Warp is better with an account. By continuing, you won't have access to any of the following features:",
-                AI_FEATURES,
-                "Create an account",
+            LoginPurpose::WarpAgent | LoginPurpose::ThirdParty => (
+                "Continue without signing in?",
+                "Without an account, you won't have access to Warp's AI features. Sign in anytime to unlock agents and other AI features.",
+                &[],
+                "Sign in",
             ),
         };
 

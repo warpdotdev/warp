@@ -75,7 +75,7 @@ use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::phenomenon::PhenomenonStyle;
-use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::{AnsiColors, Fill};
 use warp_core::ui::Icon;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_editor::editor::NavigationKey;
@@ -96,7 +96,7 @@ use warpui::elements::{
     Highlight, Hoverable, Icon as WarpUiIcon, Image, MainAxisAlignment, MainAxisSize,
     MouseInBehavior, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect,
-    SavePosition, Shrinkable, Stack, Text,
+    SavePosition, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::{vec2f, Vector2F};
@@ -119,8 +119,8 @@ use warpui::{
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
     htab_group_position_id, pane_summary_kind, render_detail_sidecar, render_settings_popup,
-    render_summary_pane_kind_icons, vtab_group_position_id, SummaryPaneKind, SummaryPaneKindIcons,
-    VerticalTabsPanelState, VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
+    render_summary_pane_kind_icons, show_before_indicator, vtab_group_position_id, SummaryPaneKind,
+    SummaryPaneKindIcons, VerticalTabsPanelState, VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use super::action::AutoCloudHandoffTrigger;
@@ -289,7 +289,7 @@ use crate::pane_group::pane::ActionOrigin;
 use crate::pane_group::FilePane;
 use crate::pane_group::{
     self, AIFactPane, AnyPaneContent, ChildAgentOrigin, CodeDiffPane, CodePane, CodeReviewPanelArg,
-    Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
+    CustomRouterEditorPane, Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
     ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions, PaneGroup, PaneId, PanesLayout,
     TabBarHoverIndex, TerminalPaneId,
 };
@@ -353,9 +353,10 @@ use crate::settings_view::{flags, SettingsSection, SettingsView, SettingsViewEve
 #[cfg(all(target_os = "windows", feature = "local_tty"))]
 use crate::shell_indicator::ShellIndicatorType;
 use crate::tab::{
-    tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
-    TabBarState, TabComponent, TabData, TabTelemetryAction, MOVE_TO_GROUP_LABEL,
-    TAB_BAR_BORDER_HEIGHT, TAB_PIN_INDICATOR_ICON_SIZE,
+    color_picker_menu_items, tab_position_id, uses_vertical_tabs, ColorPickerTarget,
+    NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor, TabBarState, TabComponent, TabData,
+    TabTelemetryAction, COMPACT_TAB_WIDTH_THRESHOLD, MOVE_TO_GROUP_LABEL, TAB_BAR_BORDER_HEIGHT,
+    TAB_INDICATOR_HEIGHT, TAB_PIN_INDICATOR_ICON_SIZE,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
@@ -456,7 +457,9 @@ use crate::util::file::external_editor::EditorSettings;
 use crate::util::links;
 use crate::util::openable_file_type::FileTarget;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{resolve_file_target_with_editor_choice, EditorLayout};
+use crate::util::openable_file_type::{
+    resolve_file_target_to_open_in_warp, resolve_file_target_with_editor_choice, EditorLayout,
+};
 use crate::util::traffic_lights::{traffic_light_data, TrafficLightMouseStates, TrafficLightSide};
 use crate::util::truncation::truncate_from_end;
 #[cfg(target_family = "wasm")]
@@ -3594,7 +3597,7 @@ impl Workspace {
             );
 
             if is_relevant_update
-                && event.terminal_view_id().is_some_and(|event_id| {
+                && event.terminal_surface_id().is_some_and(|event_id| {
                     focused_terminal_view_id.is_some_and(|id| id == event_id)
                 })
             {
@@ -3639,12 +3642,12 @@ impl Workspace {
                 | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
                 | BlocklistAIHistoryEvent::SetActiveConversation { .. }
                 | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
-                | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+                | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
                 | BlocklistAIHistoryEvent::SplitConversation { .. }
                 | BlocklistAIHistoryEvent::RestoredConversations { .. }
                 | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
                 | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
-        ) && event.terminal_view_id().is_some_and(|terminal_view_id| {
+        ) && event.terminal_surface_id().is_some_and(|terminal_view_id| {
             self.workspace_contains_terminal_view(terminal_view_id, ctx)
         })
     }
@@ -5150,6 +5153,18 @@ impl Workspace {
         self.tabs.get(index).and_then(|tab| tab.color())
     }
 
+    /// Returns the effective render color for a tab. A tab in a group is fully
+    /// colored by that group: the group's color applies, and a group with no
+    /// color (the default for a fresh group) renders the member with no color,
+    /// ignoring the tab's own selected/directory color. Ungrouped tabs use their
+    /// own color.
+    fn effective_tab_color(&self, tab: &TabData) -> Option<AnsiColorIdentifier> {
+        if let Some(group) = tab.group_id.and_then(|gid| self.tab_groups.get(&gid)) {
+            return group.color.resolve(None);
+        }
+        tab.color()
+    }
+
     /// Finds the pane containing a terminal viewing the given ambient agent conversation,
     /// returning None if the ambient conversation is not open in any tab.
     fn find_pane_with_ambient_agent_conversation(
@@ -5532,6 +5547,48 @@ impl Workspace {
             SelectedTabColor::Color(color)
         };
         self.set_tab_color(index, next, ctx);
+    }
+
+    /// Sets a tab group's color. The group fully owns its members' color, so:
+    /// - `Color(c)` — every member renders with `c`.
+    /// - `Cleared` / `Unset` — every member renders with no color (a fresh group
+    ///   is `Unset`; the picker sets `Cleared` when you toggle the current color
+    ///   off). A member's own tab/directory color is ignored while it's grouped.
+    fn set_tab_group_color(
+        &mut self,
+        group_id: TabGroupId,
+        color: SelectedTabColor,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(group) = self.tab_groups.get_mut(&group_id) else {
+            return;
+        };
+        if group.color == color {
+            return;
+        }
+        group.color = color;
+        ctx.dispatch_global_action("workspace:save_app", ());
+        ctx.notify();
+    }
+
+    /// Toggles the color for a tab group: applies `color` if not already set to it,
+    /// otherwise clears it.
+    fn toggle_tab_group_color(
+        &mut self,
+        group_id: TabGroupId,
+        color: AnsiColorIdentifier,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let current = self
+            .tab_groups
+            .get(&group_id)
+            .and_then(|g| g.color.resolve(None));
+        let next = if current == Some(color) {
+            SelectedTabColor::Cleared
+        } else {
+            SelectedTabColor::Color(color)
+        };
+        self.set_tab_group_color(group_id, next, ctx);
     }
 
     /// Syncs the tab color for the given tab based on the active terminal's CWD.
@@ -7529,6 +7586,21 @@ impl Workspace {
         ctx.notify();
     }
 
+    /// True when `tab_index` is in a tab group and is the only tab in that
+    /// group. Used to gate "New group with tab" in the per-tab menu: creating a
+    /// new group from a tab that is already the sole member of its group is a
+    /// no-op, while pulling a tab out of a multi-tab group into its own is not.
+    fn tab_is_only_member_of_its_group(&self, tab_index: usize) -> bool {
+        let Some(group_id) = self.tabs.get(tab_index).and_then(|tab| tab.group_id) else {
+            return false;
+        };
+        self.tabs
+            .iter()
+            .filter(|tab| tab.group_id == Some(group_id))
+            .count()
+            == 1
+    }
+
     pub fn toggle_tab_right_click_menu(
         &mut self,
         tab_index: usize,
@@ -7544,12 +7616,14 @@ impl Workspace {
 
         let can_move_left = self.can_move_tab(tab_index, TabMovement::Left);
         let can_move_right = self.can_move_tab(tab_index, TabMovement::Right);
+        let is_only_member_of_group = self.tab_is_only_member_of_its_group(tab_index);
         let menu_items = {
             let tab = &self.tabs[tab_index];
             tab.menu_items(
                 tab_index,
                 self.tabs.len(),
                 &self.tab_groups,
+                is_only_member_of_group,
                 can_move_left,
                 can_move_right,
                 ctx,
@@ -7579,7 +7653,9 @@ impl Workspace {
             return;
         }
 
-        let menu_items = self.tab_group_menu_items(group_id, uses_vertical_tabs(ctx));
+        let terminal_colors = Appearance::as_ref(ctx).theme().terminal_colors().normal;
+        let menu_items =
+            self.tab_group_menu_items(group_id, uses_vertical_tabs(ctx), terminal_colors);
         ctx.update_view(&self.tab_right_click_menu, |context_menu, view_ctx| {
             context_menu.set_items(menu_items, view_ctx);
         });
@@ -7627,11 +7703,13 @@ impl Workspace {
         };
         let can_move_left = self.can_move_tab(tab_index, TabMovement::Left);
         let can_move_right = self.can_move_tab(tab_index, TabMovement::Right);
+        let is_only_member_of_group = self.tab_is_only_member_of_its_group(tab_index);
         let tab = &self.tabs[tab_index];
         let menu_items = tab.menu_items_with_pane_name_target(
             tab_index,
             self.tabs.len(),
             &self.tab_groups,
+            is_only_member_of_group,
             can_move_left,
             can_move_right,
             Some(pane_name_target),
@@ -7842,8 +7920,6 @@ impl Workspace {
                     return false;
                 }
                 self.trigger_agent_onboarding(ctx);
-            } else {
-                self.trigger_legacy_onboarding(ctx);
             }
 
             // Add telemetry banner for new users BEFORE the agentic onboarding blocks.
@@ -7862,13 +7938,6 @@ impl Workspace {
         }
 
         false
-    }
-
-    fn trigger_legacy_onboarding(&self, ctx: &mut ViewContext<Self>) {
-        self.dispatch_onboarding(
-            TerminalAction::OnboardingFlow(OnboardingVersion::Legacy),
-            ctx,
-        );
     }
 
     fn trigger_agent_onboarding(&self, ctx: &mut ViewContext<Self>) {
@@ -8653,6 +8722,23 @@ impl Workspace {
         });
     }
 
+    /// Opens a custom model router editor pane in a right-split.
+    ///
+    /// Pass `existing = None` to create a new router or `existing = Some(router)` to edit one.
+    pub fn open_custom_router_editor_pane(
+        &mut self,
+        direction: Option<Direction>,
+        existing: Option<crate::ai::custom_model_routers::CustomModelRouter>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let pane = CustomRouterEditorPane::new(existing, ctx);
+        let direction = direction.unwrap_or(Direction::Right);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            pane_group
+                .add_pane_with_direction(direction, pane, true /* focus_new_pane */, ctx);
+        });
+    }
+
     /// Open the Environment Management pane in a split pane (default direction is right).
     pub fn open_environment_management_pane(
         &mut self,
@@ -8708,7 +8794,6 @@ impl Workspace {
             .ok()
             .map(|path| path.to_string_lossy().into_owned())
         {
-            let command = format!("{exec} {}", warp_cli::dump_debug_info_flag());
             // Get the active session for this tab if it exists.
             let mut active_session_handle = self
                 .active_tab_pane_group()
@@ -8734,6 +8819,11 @@ impl Workspace {
                 });
             if let Some(terminal_view_handle) = active_session_handle {
                 terminal_view_handle.update(ctx, |terminal_view, ctx| {
+                    let command = format!(
+                        "{} {}",
+                        terminal_view.shell_family(ctx).shell_escape(&exec),
+                        warp_cli::dump_debug_info_flag()
+                    );
                     terminal_view.set_pending_command(&command, ctx);
                 });
             }
@@ -8771,7 +8861,7 @@ impl Workspace {
     fn install_oz(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(async { cli_install::install_oz() }, |view, result, ctx| {
             let command_name = ChannelState::channel().cli_command_name();
-            let message = format!("Successfully installed the Oz CLI! You can now run '{command_name}' from the command line.");
+            let message = format!("Installed the Oz CLI globally. You can now run '{command_name}' from any terminal outside of Warp.");
             let toast = DismissibleToast::success(message).with_link(
                 ToastLink::new("Learn more".to_string())
                     .with_href("https://docs.warp.dev/reference/cli".to_string()),
@@ -8787,7 +8877,8 @@ impl Workspace {
             async { cli_install::uninstall_oz() },
             |view, result, ctx| {
                 let toast = DismissibleToast::success(
-                    "Successfully uninstalled the Oz command.".to_string(),
+                    "Removed the global Oz CLI installation — it still works inside Warp."
+                        .to_string(),
                 );
                 view.handle_cli_command_result(
                     result,
@@ -8806,7 +8897,7 @@ impl Workspace {
             async { cli_install::install_warpctrl() },
             |view, result, ctx| {
                 let command_name = ChannelState::channel().warpctrl_command_name();
-                let message = format!("Successfully installed the Warp Control CLI! You can now run '{command_name}' from the command line.");
+                let message = format!("Installed the Warp Control CLI globally. You can now run '{command_name}' from any terminal outside of Warp.");
                 let toast = DismissibleToast::success(message);
                 view.handle_cli_command_result(
                     result,
@@ -8825,7 +8916,8 @@ impl Workspace {
             async { cli_install::uninstall_warpctrl() },
             |view, result, ctx| {
                 let toast = DismissibleToast::success(
-                    "Successfully uninstalled the Warp Control command.".to_string(),
+                    "Removed the global Warp Control CLI installation — it still works inside Warp."
+                        .to_string(),
                 );
                 view.handle_cli_command_result(
                     result,
@@ -9636,6 +9728,7 @@ impl Workspace {
         &self,
         group_id: TabGroupId,
         is_vertical: bool,
+        terminal_colors: AnsiColors,
     ) -> Vec<MenuItem<WorkspaceAction>> {
         let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
             return vec![];
@@ -9729,6 +9822,20 @@ impl Workspace {
             vec![]
         };
 
+        // Color picker: same dot-based selector as individual tabs.
+        let color_section = {
+            // Resolve the group's currently selected color for highlighting the active dot.
+            let effective_color = self
+                .tab_groups
+                .get(&group_id)
+                .and_then(|g| g.color.resolve(None));
+            color_picker_menu_items(
+                effective_color,
+                terminal_colors,
+                ColorPickerTarget::Group { group_id },
+            )
+        };
+
         let mut menu_items = vec![];
         for section_items in [
             pin_section,
@@ -9745,6 +9852,7 @@ impl Workspace {
                 .with_on_select_action(WorkspaceAction::RenameTabGroup(group_id))
                 .into_item()],
             close_section,
+            color_section,
         ] {
             if section_items.is_empty() {
                 continue;
@@ -12889,7 +12997,7 @@ impl Workspace {
             let history_model = BlocklistAIHistoryModel::as_ref(ctx);
             history_model.conversation(&conversation_id).is_some()
                 && history_model
-                    .all_live_conversations_for_terminal_view(terminal_view_id)
+                    .all_live_conversations_for_terminal_surface(terminal_view_id)
                     .any(|conversation| conversation.id() == conversation_id)
         };
         if already_exists_in_active_pane {
@@ -13258,7 +13366,7 @@ impl Workspace {
             .all_live_conversations()
             .into_iter()
             .find(|(_, convo)| convo.id() == conversation_id)
-            .map(|(terminal_view_id, _)| terminal_view_id);
+            .map(|(terminal_surface_id, _)| terminal_surface_id);
 
         // An empty prompt should not be provided as a query for the new forked conversation.
         let initial_prompt = initial_prompt.and_then(|prompt| {
@@ -14727,6 +14835,9 @@ impl Workspace {
                     ctx
                 );
             }
+            SettingsViewEvent::OpenCustomRouterEditor(router) => {
+                self.open_custom_router_editor_pane(None, router.clone(), ctx);
+            }
             SettingsViewEvent::OpenExecutionProfileEditor(profile_id) => {
                 self.open_execution_profile_editor_pane(None, *profile_id, ctx);
             }
@@ -14749,6 +14860,12 @@ impl Workspace {
                 }
                 #[cfg(not(feature = "local_fs"))]
                 let _ = rule_paths;
+            }
+            SettingsViewEvent::OpenCustomRouterFile(path) => {
+                #[cfg(feature = "local_fs")]
+                self.open_custom_router_file(path, ctx);
+                #[cfg(not(feature = "local_fs"))]
+                let _ = path;
             }
         }
     }
@@ -16255,7 +16372,10 @@ impl Workspace {
             pane_group::Event::DroppedOnTabBar { origin, pane_id } => {
                 if let Some(hovered_tab_index) = self.hovered_tab_index {
                     match hovered_tab_index {
-                        TabBarHoverIndex::BeforeTab(workspace_tab_index) => {
+                        TabBarHoverIndex::BeforeTab {
+                            index: workspace_tab_index,
+                            group,
+                        } => {
                             // If an editor tab is dropped into a new position in the workspace tab group,
                             // create a new pane and insert it into the group.
                             let pane = if let ActionOrigin::EditorTab(editor_tab_index) = origin {
@@ -16274,11 +16394,19 @@ impl Workspace {
                             };
 
                             if let Some(pane) = pane {
-                                // TODO(johnturcoo) inherit the tab group on pane drop.
+                                // `index`/`group` are already resolved by
+                                // `refine_hovered_tab_index` (group inheritance +
+                                // pinned clamping for vertical tabs), so use them
+                                // as-is. Grouping off => never inherit a group.
+                                let inherited_group = if FeatureFlag::GroupedTabs.is_enabled() {
+                                    group
+                                } else {
+                                    None
+                                };
                                 self.add_tab_from_existing_pane(
                                     pane,
                                     workspace_tab_index,
-                                    None,
+                                    inherited_group,
                                     ctx,
                                 );
 
@@ -16487,8 +16615,12 @@ impl Workspace {
                     });
                 }
             }
-            pane_group::Event::UpdateHoveredTabIndex { tab_hover_index } => {
-                self.hovered_tab_index = Some(*tab_hover_index);
+            pane_group::Event::UpdateHoveredTabIndex {
+                tab_hover_index,
+                drag_position,
+            } => {
+                self.hovered_tab_index =
+                    Some(self.refine_hovered_tab_index(*tab_hover_index, *drag_position, ctx));
                 ctx.notify();
             }
             pane_group::Event::ClearHoveredTabIndex => self.hovered_tab_index = None,
@@ -17459,6 +17591,28 @@ impl Workspace {
             let tail_command = tail_command_for_shell(shell_family, log_path);
             terminal.set_pending_command(&tail_command, ctx);
         });
+    }
+
+    /// Opens a custom model router's YAML config file in Warp's own editor.
+    ///
+    /// Unlike most "open file" flows, this always uses the Warp code editor
+    /// rather than honoring the user's external/system editor preference, since
+    /// the button is specifically for editing the router config inside Warp.
+    #[cfg(feature = "local_fs")]
+    fn open_custom_router_file(&mut self, path: &Path, ctx: &mut ViewContext<Self>) {
+        let settings = EditorSettings::as_ref(ctx);
+        let target = resolve_file_target_to_open_in_warp(path, settings, None);
+        self.open_file_with_target(
+            path.to_path_buf(),
+            target,
+            None,
+            CodeSource::Link {
+                path: path.to_path_buf(),
+                range_start: None,
+                range_end: None,
+            },
+            ctx,
+        );
     }
 
     fn run_tab_config_skill(&mut self, path: &Path, ctx: &mut ViewContext<Self>) {
@@ -19456,7 +19610,7 @@ impl Workspace {
             .as_ref()
             .is_some_and(|hovered_index| match hovered_index {
                 TabBarHoverIndex::OverTab(idx) => *idx == tab_index,
-                TabBarHoverIndex::BeforeTab(_) => false,
+                TabBarHoverIndex::BeforeTab { .. } => false,
             });
 
         TabComponent::new(
@@ -19472,6 +19626,18 @@ impl Workspace {
         .build()
         .finish()
     }
+
+    /// Flex weight of the spacer on each side of an expanded group's members.
+    /// Flex (not fixed px) keeps it a separate slot, so members stay the same
+    /// width as ungrouped tabs and the group shrinks proportionally.
+    /// Approximately equal to 8px when tabs are 150px wide.
+    /// A tab group is now as follows:
+    /// [Header (spacer)(tab1)(tab2)...(spacer)]
+    const GROUP_EDGE_SPACER_FLEX: f32 = 0.06;
+
+    /// Upper bound on each edge spacer's rendered width, proportional to
+    /// tab's max width (tabs have flex 1 and max width of 200).
+    const GROUP_EDGE_SPACER_MAX_WIDTH: f32 = Self::GROUP_EDGE_SPACER_FLEX * 200.0;
 
     /// Renders a contiguous run of grouped tabs as one tab-bar slot: header
     /// + (when expanded) member tabs.
@@ -19489,6 +19655,11 @@ impl Workspace {
         let theme = appearance.theme();
         let is_collapsed = group.collapsed;
 
+        let group_color: Option<ColorU> = group
+            .color
+            .resolve(None)
+            .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into());
+
         let mouse_states = self
             .horizontal_tab_group_mouse_states
             .borrow_mut()
@@ -19501,16 +19672,38 @@ impl Workspace {
             && member_range.contains(&self.active_tab_index);
 
         let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-        row.add_child(self.render_horizontal_tab_group_header(
-            group,
-            &mouse_states,
-            is_collapsed,
-            any_member_active,
-            appearance,
-            ctx,
-        ));
+        // Header fills one slot like a member tab capped at the same 200px as a tab.
+        row.add_child(
+            Shrinkable::new(
+                1.0,
+                ConstrainedBox::new(self.render_horizontal_tab_group_header(
+                    group,
+                    &mouse_states,
+                    is_collapsed,
+                    any_member_active,
+                    is_first_in_bar,
+                    group_color,
+                    appearance,
+                    ctx,
+                ))
+                .with_max_width(200.)
+                .finish(),
+            )
+            .finish(),
+        );
 
         if !is_collapsed {
+            // Edge spacer before the first member (own flex slot, doesn't
+            // shrink tabs).
+            row.add_child(
+                Shrinkable::new(
+                    Self::GROUP_EDGE_SPACER_FLEX,
+                    ConstrainedBox::new(Empty::new().finish())
+                        .with_max_width(Self::GROUP_EDGE_SPACER_MAX_WIDTH)
+                        .finish(),
+                )
+                .finish(),
+            );
             let close_button_position = if FeatureFlag::TabCloseButtonOnLeft.is_enabled() {
                 TabSettings::as_ref(ctx).close_button_position
             } else {
@@ -19521,21 +19714,38 @@ impl Workspace {
             // instead, dragging the whole group rather than orphaning it.
             let is_sole_member = group_has_single_member(&self.tabs, group.id);
             for idx in member_range {
+                // Insertion divider before this member when a pane drop lands
+                // here (into the group at `idx`).
+                if show_before_indicator(self.hovered_tab_index, idx, Some(group.id)) {
+                    row.add_child(self.render_tab_hover_indicator(appearance));
+                }
                 let tab = &self.tabs[idx];
+                let effective_color = self.effective_tab_color(tab);
+                // Highlight the member when a drag is hovering directly over it.
+                let is_drag_target = self.hovered_tab_index == Some(TabBarHoverIndex::OverTab(idx));
                 let member = TabComponent::new(
                     idx,
                     tab_bar_state,
                     tab,
                     self.tab_rename_editor.clone(),
                     close_button_position,
-                    false,
+                    is_drag_target,
                     ctx,
                 )
+                .with_effective_color(effective_color)
                 .for_grouped_member(is_sole_member)
                 .with_multi_tab_selection(self.is_tab_in_multi_tab_selection(idx))
                 .build()
                 .finish();
                 row.add_child(member);
+            }
+            // Divider after the last member (into the group's last slot).
+            if show_before_indicator(
+                self.hovered_tab_index,
+                first_index + run_len,
+                Some(group.id),
+            ) {
+                row.add_child(self.render_tab_hover_indicator(appearance));
             }
         }
 
@@ -19545,19 +19755,80 @@ impl Workspace {
             row.add_child(render_horizontal_group_pin_indicator(appearance));
         }
 
-        // Additional padding on expanded groups,
-        // allowing tabs to be dropped into the last position of the group.
-        const EXPANDED_GROUP_TRAILING_PADDING: f32 = 8.;
-        let mut container = Container::new(row.finish()).with_border(
-            Border::all(1.)
-                // Left border only on the first slot to avoid double borders.
-                .with_sides(false, is_first_in_bar, false, true)
-                .with_border_fill(internal_colors::fg_overlay_1(theme)),
-        );
         if !is_collapsed {
-            container = container.with_padding_right(EXPANDED_GROUP_TRAILING_PADDING);
+            // Matching edge spacer after the last member. The trailing divider
+            // lives inside this spacer's own flex slot (drawn at its right edge,
+            // which is the group's far edge), so it doesn't steal width from the
+            // members the way a border on the group container would. Same loose
+            // flex cap as the leading spacer so the group shrink-wraps instead
+            // of this spacer ballooning out toward the bar's trailing edge.
+            row.add_child(
+                Shrinkable::new(
+                    Self::GROUP_EDGE_SPACER_FLEX,
+                    ConstrainedBox::new(
+                        Container::new(Empty::new().finish())
+                            .with_border(
+                                Border::all(1.)
+                                    .with_sides(false, false, false, true)
+                                    .with_border_fill(internal_colors::fg_overlay_1(
+                                        appearance.theme(),
+                                    )),
+                            )
+                            .finish(),
+                    )
+                    .with_max_width(Self::GROUP_EDGE_SPACER_MAX_WIDTH)
+                    .finish(),
+                )
+                .finish(),
+            );
+        }
+
+        // Collapsed groups draw their divider on the header instead. When the
+        // group is colored, back the whole container with the group color at the
+        // same idle opacity a member tab uses, so the member tabs blend into the
+        // container and the group reads as one colored block.
+        let mut container = Container::new(row.finish());
+        if let Some(color) = group_color {
+            container = container.with_background(coloru_with_opacity(color, 20));
         }
         let container = container.finish();
+        // While dragging, back the floating chip with an opaque color so it
+        // doesn't render translucently like the resting group background.
+        let container: Box<dyn Element> = if group.draggable_state.is_dragging() {
+            Container::new(container)
+                .with_background_color(theme.background().into_solid_bias_top_color())
+                .finish()
+        } else {
+            container
+        };
+
+        // While a pane is being dragged, the whole group is a drop target.
+        // Members also carry their own, smaller targets, so the framework's
+        // smallest-area hit-test lets a member win wherever they overlap; this
+        // group target effectively just covers the header and the flex spacers
+        // on either side of the members.
+        //
+        // `tab_bar_location` is the input to the shared drag hit-testing, not a
+        // fixed landing slot. `TabIndex(first)` makes the resolver hit-test
+        // the first member's geometry against the cursor, then lets the
+        // workspace (which can see the group's rect) decide whether the drop is
+        // before the group or into it, and at which slot. A collapsed group has
+        // no visible members to drop between, so it uses `AfterTabIndex(first)`,
+        // which resolves straight to "before the group" with no hit-testing.
+        //
+        // (A drop over the trailing spacer resolves toward the group's front via
+        // `first`; in practice the last member's smaller target wins there, so
+        // it's a harmless fallback.)
+        let container = if vertical_tabs::any_workspace_pane_being_dragged(self, ctx) {
+            let tab_bar_location = if is_collapsed {
+                TabBarLocation::AfterTabIndex(first_index)
+            } else {
+                TabBarLocation::TabIndex(first_index)
+            };
+            DropTarget::new(container, TabBarDropTargetData { tab_bar_location }).finish()
+        } else {
+            container
+        };
 
         let group_id = group.id;
         let group_draggable_state = group.draggable_state.clone();
@@ -19583,25 +19854,29 @@ impl Workspace {
         let positioned_container =
             SavePosition::new(positioned_container, &htab_group_position_id(group_id)).finish();
 
-        // Flex = header + one per member so the group shrinks proportionally
-        // with sibling tabs. A collapsed group renders only its header, so it
-        // should claim a single slot's worth of flex.
+        // Flex = header + one per member + a spacer each side, so every tab is
+        // one slot wide. A collapsed group claims one slot; the flex it gives up
+        // is re-added to the bar's trailing spacer (see render_tab_bar_contents)
+        // so total flex stays constant and the header doesn't move.
         let group_flex = if is_collapsed {
             1.0
         } else {
-            1.0 + run_len as f32
+            1.0 + run_len as f32 + 2.0 * Self::GROUP_EDGE_SPACER_FLEX
         };
         Shrinkable::new(group_flex, positioned_container).finish()
     }
 
     /// Header (icon collage + name) for a horizontal tab group. Click
     /// toggles collapse; double-click renames; right-click opens the menu.
+    #[allow(clippy::too_many_arguments)]
     fn render_horizontal_tab_group_header(
         &self,
         group: &TabGroup,
         mouse_states: &HorizontalTabGroupMouseStates,
         is_collapsed: bool,
         any_member_active: bool,
+        is_first_in_bar: bool,
+        group_color: Option<ColorU>,
         appearance: &Appearance,
         ctx: &AppContext,
     ) -> Box<dyn Element> {
@@ -19615,8 +19890,6 @@ impl Workspace {
         let header_selected = is_collapsed && any_member_active;
 
         let member_kinds = self.compute_group_member_kinds(group.id, ctx);
-        let icon_circle =
-            render_group_member_icon_collage(&member_kinds, GROUP_ICON_COLLAGE_SIZE, appearance);
 
         let is_being_renamed = self
             .current_workspace_state
@@ -19634,46 +19907,102 @@ impl Workspace {
                 .name
                 .clone()
                 .unwrap_or_else(|| "New Group".to_string());
-            // Cap width so long names ellipsize and the tab bar's unbounded
-            // measurement stays finite.
-            ConstrainedBox::new(
-                Text::new_inline(title, font_family, 12.)
-                    .with_clip(ClipConfig::ellipsis())
-                    .with_color(main_text_color.into())
-                    .finish(),
-            )
-            .with_max_width(150.)
-            .finish()
+            // No inner cap: the name fills the header slot and fades like a tab
+            // title; the header's outer `ConstrainedBox` bounds the width and
+            // keeps the tab bar's unbounded measurement finite.
+            Text::new_inline(title, font_family, 12.)
+                .with_clip(ClipConfig::end())
+                .with_color(main_text_color.into())
+                .finish()
         };
 
-        let mut row = Flex::row()
+        // Full header: collage + name, with the horizontal padding inside it so
+        // the size switch below measures the full slot width, like a tab.
+        let mut full_row = Flex::row()
+            // Fill the slot and center the icon + title.
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::Center)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.)
-            .with_child(icon_circle)
-            .with_child(name_element);
+            .with_child(render_group_member_icon_collage(
+                &member_kinds,
+                GROUP_ICON_COLLAGE_SIZE,
+                appearance,
+            ))
+            .with_child(Shrinkable::new(1.0, name_element).finish());
         // Collapsed + pinned: pin indicator to the right of the name, where an
         // ungrouped tab would show its close button. Expanded groups show the
         // pin after their last member instead.
         if FeatureFlag::PinnedTabs.is_enabled() && group.pinned && is_collapsed {
-            row.add_child(render_horizontal_group_pin_indicator(appearance));
+            full_row.add_child(render_horizontal_group_pin_indicator(appearance));
         }
-        let row = row.finish();
+        let full_content = Container::new(full_row.finish())
+            .with_padding_left(8.)
+            .with_padding_right(if is_collapsed { 8. } else { 9. })
+            .finish();
+
+        // Compact header (narrow slot): just the collage at the tab's compact
+        // icon size, centered and clipped, like a tab dropping its title.
+        let compact_content = Clipped::new(
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::Center)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(render_group_member_icon_collage(
+                    &member_kinds,
+                    TAB_INDICATOR_HEIGHT,
+                    appearance,
+                ))
+                .finish(),
+        )
+        .finish();
+
+        // Go compact at the same width as a tab, so headers and tabs shrink in step.
+        let content = SizeConstraintSwitch::new(
+            full_content,
+            vec![(
+                SizeConstraintCondition::WidthLessThan(COMPACT_TAB_WIDTH_THRESHOLD),
+                compact_content,
+            )],
+        )
+        .finish();
 
         let header_active_bg = internal_colors::fg_overlay_2(theme);
         let header_hover_bg = internal_colors::fg_overlay_1(theme);
+        let header_border_fill = internal_colors::fg_overlay_1(theme);
         let mut header = Hoverable::new(mouse_states.header.clone(), move |state| {
-            let bg: ElementFill = if header_selected {
+            let hovered = state.is_hovered();
+            // Tint the header with the group's color on hover/active (40/60), and
+            // stay transparent at idle so the colored group container shows
+            // through. Fall back to the neutral overlay when the group has no
+            // color.
+            let bg: ElementFill = if let Some(color) = group_color {
+                if header_selected {
+                    coloru_with_opacity(color, 60).into()
+                } else if hovered {
+                    coloru_with_opacity(color, 40).into()
+                } else {
+                    ElementFill::None
+                }
+            } else if header_selected {
                 header_active_bg.into()
-            } else if state.is_hovered() {
+            } else if hovered {
                 header_hover_bg.into()
             } else {
                 ElementFill::None
             };
 
-            Container::new(row)
-                .with_horizontal_padding(8.)
+            // Tab-style border: left edge if first, right edge only when
+            // collapsed (the divider). Expanded swaps that right border for
+            // padding so the title doesn't shift on collapse/expand.
+            Container::new(content)
                 .with_vertical_padding(6.)
                 .with_background(bg)
+                .with_border(
+                    Border::all(1.)
+                        .with_sides(false, is_first_in_bar, false, is_collapsed)
+                        .with_border_fill(header_border_fill),
+                )
                 .finish()
         })
         .with_cursor(Cursor::PointingHand)
@@ -19769,6 +20098,7 @@ impl Workspace {
             // outer `SavePosition`, `Draggable`, and `DropTarget` wrappers
             // so the chip overlay doesn't pollute the target window's
             // position cache (see `TabComponent::for_drag_ghost`).
+            let effective_color = self.effective_tab_color(tab);
             TabComponent::new(
                 tab_index,
                 tab_bar_state,
@@ -19778,6 +20108,8 @@ impl Workspace {
                 false,
                 ctx,
             )
+            // Show the tab groups color on this tab while it is dragging and part of a group.
+            .with_effective_color(effective_color)
             .for_drag_ghost()
             .build()
             .finish()
@@ -20399,26 +20731,16 @@ impl Workspace {
                     || is_any_group_dragging,
                 hover_fixed_width,
             };
-            // Collapse the detached-placeholder slot to 0 width while it
-            // exists in this (source) window. After a put-back handoff the
-            // placeholder has been removed and the real tab re-inserted at a
-            // different index, so `source_placeholder_tab_index()` returns
-            // `None` and nothing is hidden — otherwise the stale
-            // `source_tab_index` would collapse an unrelated tab (e.g. the
-            // first tab shifting into that slot after a leftward put-back).
-            let transferred_tab_index = if drag_model.is_active()
-                && drag_model.source_window_id() == Some(self.window_id)
-            {
-                let has_dedicated_preview = drag_model.has_dedicated_preview_window();
-                let has_handoff = drag_model.handed_off_target().is_some();
-                if has_dedicated_preview || has_handoff {
-                    drag_model.source_placeholder_tab_index()
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            // The detached-placeholder slot in this (source) window is
+            // collapsed to zero width only while the dragged tab is actually
+            // away (floating in the preview, or ghosted / handed off to
+            // another window). While the cursor is back over this window's own
+            // tab bar the placeholder is reordered in place like an in-window
+            // drag and must stay full width, otherwise the drop zone vanishes
+            // and the slot oscillates ("fuzzy shake"). See
+            // `CrossWindowTabDrag::collapsed_source_placeholder_index`.
+            let transferred_tab_index =
+                drag_model.collapsed_source_placeholder_index(self.window_id);
             // Ghost state for cross-window drag hovering over this tab bar.
             let ghost = drag_model.ghost_state_for_window(self.window_id);
 
@@ -20448,6 +20770,11 @@ impl Workspace {
                         first_index,
                         run_len,
                     } => {
+                        // Ungrouped insertion just before the group; a drop into
+                        // the group highlights the group itself instead.
+                        if show_before_indicator(self.hovered_tab_index, *first_index, None) {
+                            tab_bar.add_child(self.render_tab_hover_indicator(appearance));
+                        }
                         // Filtered above; the group must exist in `tab_groups`.
                         let group = self.tab_groups[group_id].clone();
                         tab_bar.add_child(self.render_horizontal_tab_group(
@@ -20463,14 +20790,9 @@ impl Workspace {
                     TabBarSlot::Single { index } => {
                         let i = *index;
                         let is_transferred = transferred_tab_index == Some(i);
-                        if !is_transferred
-                            && self
-                                .hovered_tab_index
-                                .as_ref()
-                                .is_some_and(|hovered_index| match hovered_index {
-                                    TabBarHoverIndex::BeforeTab(idx) => i == *idx,
-                                    TabBarHoverIndex::OverTab(_) => false,
-                                })
+                        // Single tabs are ungrouped, so their before-indicator
+                        // only matches an ungrouped insertion.
+                        if !is_transferred && show_before_indicator(self.hovered_tab_index, i, None)
                         {
                             tab_bar.add_child(self.render_tab_hover_indicator(appearance));
                         }
@@ -20497,14 +20819,7 @@ impl Workspace {
                 .is_some_and(|g| g.insertion_index == self.tabs.len())
             {
                 tab_bar.add_child(self.render_ghost_tab_slot(appearance, ctx));
-            } else if self
-                .hovered_tab_index
-                .as_ref()
-                .is_some_and(|hovered_index| match hovered_index {
-                    TabBarHoverIndex::BeforeTab(idx) => self.tabs.len() == *idx,
-                    TabBarHoverIndex::OverTab(_) => false,
-                })
-            {
+            } else if show_before_indicator(self.hovered_tab_index, self.tabs.len(), None) {
                 tab_bar.add_child(self.render_tab_hover_indicator(appearance));
             }
 
@@ -20513,7 +20828,8 @@ impl Workspace {
             }
         }
 
-        // Placeholder to make sure the flex row expands across the entire width of the app.
+        // Trailing spacer fills only the leftover width. When groups are collapsed
+        // the freed flex is distributed accross the remaining flex items in the tab bar.
         tab_bar.add_child(Shrinkable::new(0.5, Empty::new().finish()).finish());
 
         self.add_configurable_right_side_tab_bar_controls(
@@ -23277,7 +23593,20 @@ impl TypedActionView for Workspace {
                 );
             }
             SetActiveTabName(name) => self.set_active_tab_name(name, ctx),
-            SetActiveTabColor(color) => self.set_tab_color(self.active_tab_index, *color, ctx),
+            SetActiveTabColor(color) => {
+                // When the active tab is in a group, redirect to the group's color.
+                // The tab color selection menu is hidden when a tab is part of a group
+                // this handles the case where a tab color is set via a slash command.
+                let active_group_id = self
+                    .tabs
+                    .get(self.active_tab_index)
+                    .and_then(|t| t.group_id);
+                if let Some(group_id) = active_group_id {
+                    self.set_tab_group_color(group_id, *color, ctx);
+                } else {
+                    self.set_tab_color(self.active_tab_index, *color, ctx);
+                }
+            }
             ToggleTabRightClickMenu { tab_index, anchor } => {
                 self.toggle_tab_right_click_menu(*tab_index, *anchor, ctx)
             }
@@ -23315,10 +23644,16 @@ impl TypedActionView for Workspace {
             ToggleTabMultiSelection { locator } => self.toggle_tab_multi_selection(*locator, ctx),
             ClearTabMultiSelection => self.clear_tab_multi_selection(ctx),
             NewTabGroupFromSelectedTabs => self.new_tab_group_from_selected_tabs(ctx),
+            NewTabGroupFromActiveOrSelectedTabs => {
+                self.new_tab_group_from_active_or_selected_tabs(ctx)
+            }
             MoveSelectedTabsToGroup { group_id } => {
                 self.move_selected_tabs_to_group(*group_id, ctx)
             }
             RemoveSelectedTabsFromGroup => self.remove_selected_tabs_from_group(ctx),
+            RemoveActiveOrSelectedTabsFromGroup => {
+                self.remove_active_or_selected_tabs_from_group(ctx)
+            }
             ToggleTabGroupRightClickMenu { group_id, anchor } => {
                 self.toggle_tab_group_right_click_menu(*group_id, *anchor, ctx)
             }
@@ -23331,8 +23666,28 @@ impl TypedActionView for Workspace {
             CloseTabsBelowGroup(group_id) => self.close_tabs_below_group(*group_id, ctx),
             PinTab(tab_index) => self.pin_tab(*tab_index, ctx),
             UnpinTab(tab_index) => self.unpin_tab(*tab_index, ctx),
+            PinActiveTab => self.pin_tab(self.active_tab_index, ctx),
+            UnpinActiveTab => self.unpin_tab(self.active_tab_index, ctx),
             PinTabGroup(group_id) => self.pin_tab_group(*group_id, ctx),
             UnpinTabGroup(group_id) => self.unpin_tab_group(*group_id, ctx),
+            PinActiveTabGroup => {
+                if let Some(group_id) = self
+                    .tabs
+                    .get(self.active_tab_index)
+                    .and_then(|tab| tab.group_id)
+                {
+                    self.pin_tab_group(group_id, ctx);
+                }
+            }
+            UnpinActiveTabGroup => {
+                if let Some(group_id) = self
+                    .tabs
+                    .get(self.active_tab_index)
+                    .and_then(|tab| tab.group_id)
+                {
+                    self.unpin_tab_group(group_id, ctx);
+                }
+            }
             AddDefaultTab => {
                 let effective_mode = AISettings::as_ref(ctx).default_session_mode(ctx);
                 match effective_mode {
@@ -23711,6 +24066,9 @@ impl TypedActionView for Workspace {
             SetA11yVerbosityLevel(verbosity) => self.set_a11y_verbosity(*verbosity, ctx),
             ToggleNotifications => self.toggle_notifications(ctx),
             ToggleTabColor { color, tab_index } => self.toggle_tab_color(*tab_index, *color, ctx),
+            ToggleTabGroupColor { color, group_id } => {
+                self.toggle_tab_group_color(*group_id, *color, ctx)
+            }
             DispatchToSettingsTab(action) => {
                 let window_id = ctx.window_id();
                 ctx.dispatch_typed_action_for_view(window_id, self.settings_pane.id(), action)
@@ -25605,6 +25963,43 @@ impl View for Workspace {
                 }
             }
         };
+
+        // Surface the active tab's group/pin state to the keymap so the
+        // tab-grouping/pinning bindings can gate themselves to the contexts
+        // where they're actually meaningful (e.g. "Unpin tab" only when the
+        // active tab is pinned, "Pin tab group" only when the active tab is
+        // grouped, etc.).
+        if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
+            if let Some(group_id) = active_tab.group_id {
+                context.set.insert("Workspace_ActiveTabInGroup");
+                if self
+                    .tab_groups
+                    .get(&group_id)
+                    .is_some_and(|group| group.pinned)
+                {
+                    context.set.insert("Workspace_ActiveTabGroupPinned");
+                }
+            }
+            if active_tab.pinned {
+                context.set.insert("Workspace_ActiveTabPinned");
+            }
+        }
+
+        // "Remove from group" is valid when there's an unambiguous target: a
+        // 2+ multi-selection that shares one group, or—failing that—an active
+        // tab that's in a group. Mirrors the multi-tab right-click menu, which
+        // only offers "Remove from group" for a single-group selection.
+        let selected = self.selected_tab_indices();
+        let removable_from_group = if selected.len() >= 2 {
+            self.selection_shared_group().is_some()
+        } else {
+            self.tabs
+                .get(self.active_tab_index)
+                .is_some_and(|tab| tab.group_id.is_some())
+        };
+        if removable_from_group {
+            context.set.insert("Workspace_ActiveOrSelectedTabsInGroup");
+        }
 
         if WarpDriveSettings::is_warp_drive_enabled(app) {
             context.set.insert(flags::ENABLE_WARP_DRIVE);
@@ -27743,16 +28138,17 @@ impl Workspace {
         let groups_enabled = FeatureFlag::GroupedTabs.is_enabled();
 
         if groups_enabled {
-            // Reassign membership when the dragged tab's midpoint enters a
-            // different expanded group. Collapsed groups are handled by the
-            // safety-net hop below so we don't drop into it.
+            // Reassign membership when the dragged tab enters a different
+            // expanded group. Collapsed groups are handled by the safety-net
+            // hop below so we don't drop into it.
             let midpoint_drag = if use_vertical_tabs {
                 (position.min_y() + position.max_y()) / 2.
             } else {
                 (position.min_x() + position.max_x()) / 2.
             };
-            let hovered_group = self.target_group_at_axis(midpoint_drag, use_vertical_tabs, ctx);
             let source_group = self.tabs[current_index].group_id;
+            let hovered_group =
+                self.target_group_at_axis(midpoint_drag, source_group, use_vertical_tabs, ctx);
             let expanded_target =
                 hovered_group.filter(|gid| !self.tab_groups.get(gid).is_some_and(|g| g.collapsed));
             // A pinned tab keeps its individual pin while dragging over a
@@ -27798,9 +28194,15 @@ impl Workspace {
                 // Hop into the target group's contiguous block so the group
                 // stays one rendered container. Vertical tab rendering only
                 // groups consecutive tabs, so leaving `current_index` outside
-                // the block would split the group across the panel.
+                // the block would split the group across the panel. Land at the
+                // near edge: the front when entering from above/left, the end
+                // when entering from below/right.
                 if let Some((first, last)) = target_group_range {
-                    let insert_at = if current_index < first { first } else { last };
+                    let insert_at = if current_index < first {
+                        first - 1
+                    } else {
+                        last + 1
+                    };
                     if insert_at != current_index {
                         self.hop_tab_to_index(current_index, insert_at, ctx);
                     }
@@ -28010,17 +28412,113 @@ impl Workspace {
         current_index
     }
 
-    /// Returns the group whose saved container rect contains `cursor` along
-    /// the active axis, if any. A small edge margin at each end of the rect
-    /// is treated as "between groups" so the cursor can land in the
-    /// ungrouped zone between adjacent groups. `is_vertical` picks the
-    /// layout-correct `SavePosition` id and the axis to test along.
-    fn target_group_at_axis(
+    /// Resolves the tab group a `BeforeTab` insertion lands in, using the drag
+    /// cursor, for whichever tab bar is active. The header computes the bare
+    /// before/over/after from the hovered row's geometry; this fills in the
+    /// group from the workspace's own tab-group geometry (which the header can't
+    /// see) and clamps ungrouped insertions out of the pinned region. `OverTab`
+    /// is returned unchanged.
+    fn refine_hovered_tab_index(
         &self,
-        cursor: f32,
+        hovered: TabBarHoverIndex,
+        drag_position: RectF,
+        ctx: &mut ViewContext<Self>,
+    ) -> TabBarHoverIndex {
+        let TabBarHoverIndex::BeforeTab { index, .. } = hovered else {
+            return hovered;
+        };
+        // Resolve the group along whichever axis the active tab bar uses, then
+        // clamp ungrouped insertions out of the pinned region below.
+        let is_vertical = uses_vertical_tabs(ctx);
+        let group = if FeatureFlag::GroupedTabs.is_enabled() {
+            self.insertion_group(index, drag_position.center(), is_vertical, ctx)
+        } else {
+            None
+        };
+        // An ungrouped insertion can't land in the pinned region, so clamp it to
+        // the first unpinned slot so the indicator stays in sync with where the
+        // pane lands. A drop into a group inherits that group's pinned status.
+        let index = if FeatureFlag::PinnedTabs.is_enabled() && group.is_none() {
+            self.clamp_to_unpinned_region(&self.tabs, index)
+        } else {
+            index
+        };
+        TabBarHoverIndex::BeforeTab { index, group }
+    }
+
+    /// Returns the expanded tab group a `BeforeTab` insertion at `index` should
+    /// join, based on the drag cursor against the group's saved container rect
+    /// along the active axis (Y for the vertical panel, X for the horizontal
+    /// bar). Collapsed groups are excluded (you can't drop into one). "Before
+    /// the group" is only the leading half of the header; the in-group zone runs
+    /// to the group's trailing edge so the last slot is easy to hit.
+    fn insertion_group(
+        &self,
+        index: usize,
+        cursor: Vector2F,
         is_vertical: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Option<TabGroupId> {
+        for (group_id, group) in &self.tab_groups {
+            if group.collapsed {
+                continue;
+            }
+            let Some((first, last)) = group_member_index_range(&self.tabs, *group_id) else {
+                continue;
+            };
+            // The insertion index must fall within this group's slots to join.
+            if index < first || index > last + 1 {
+                continue;
+            }
+            let position_id = if is_vertical {
+                vtab_group_position_id(*group_id)
+            } else {
+                htab_group_position_id(*group_id)
+            };
+            let Some(group_rect) = ctx.element_position_by_id(position_id) else {
+                continue;
+            };
+            // Project the group rect and cursor onto the active axis.
+            let (group_start, group_end, cursor_pos) = if is_vertical {
+                (group_rect.min_y(), group_rect.max_y(), cursor.y())
+            } else {
+                (group_rect.min_x(), group_rect.max_x(), cursor.x())
+            };
+            // "Before the group" is the leading half of the header (before the
+            // first member's leading edge); everything past that, to the group's
+            // trailing edge, joins the group.
+            let in_group_start = ctx
+                .element_position_by_id(tab_position_id(first))
+                .map(|first_rect| {
+                    let first_start = if is_vertical {
+                        first_rect.min_y()
+                    } else {
+                        first_rect.min_x()
+                    };
+                    (group_start + first_start) / 2.
+                })
+                .unwrap_or(group_start);
+            if cursor_pos >= in_group_start && cursor_pos <= group_end {
+                return Some(*group_id);
+            }
+        }
+        None
+    }
+
+    /// Returns the group the dragged tab is over along the active axis so it can
+    /// join it, or `None`. Vertical tabs inset both ends of the group rect by a
+    /// fixed margin (`LEADING_EDGE_MARGIN` / `TRAILING_EDGE_MARGIN`). Horizontal
+    /// tabs use the position of a dynamic spacer, since tab groups resize dynamically.
+    fn target_group_at_axis(
+        &self,
+        cursor: f32,
+        source_group: Option<TabGroupId>,
+        is_vertical: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<TabGroupId> {
+        const LEADING_EDGE_MARGIN: f32 = 4.0;
+        const TRAILING_EDGE_MARGIN: f32 = 8.0;
+        // Fallback margin for a collapsed horizontal group (no members/spacer).
         const EDGE_MARGIN: f32 = 6.0;
         self.tab_groups.keys().copied().find(|group_id| {
             let id = if is_vertical {
@@ -28028,14 +28526,53 @@ impl Workspace {
             } else {
                 htab_group_position_id(*group_id)
             };
-            ctx.element_position_by_id(id).is_some_and(|rect| {
-                let (min, max) = if is_vertical {
-                    (rect.min_y(), rect.max_y())
-                } else {
-                    (rect.min_x(), rect.max_x())
-                };
-                min + EDGE_MARGIN <= cursor && cursor <= max - EDGE_MARGIN
-            })
+            let Some(rect) = ctx.element_position_by_id(id) else {
+                return false;
+            };
+
+            // Vertical tabs: fixed margin at each end of the group rect.
+            if is_vertical {
+                return rect.min_y() + LEADING_EDGE_MARGIN <= cursor
+                    && cursor <= rect.max_y() - TRAILING_EDGE_MARGIN;
+            }
+
+            // An expanded group has a flex spacer on each side of its members
+            // ([header][spacer][members][spacer]); the spacer is used to determine
+            // whether the dragging tab should land at the first/last position of the
+            // group, or just outside the group. The spacer is flex, so we fetch the
+            // the element position below to use it for our bounds calculations.
+            let collapsed = self
+                .tab_groups
+                .get(group_id)
+                .is_some_and(|group| group.collapsed);
+            // The edge of the last member is the right bound of the flex spacer.
+            let last_member_max_x = if collapsed {
+                None
+            } else {
+                group_member_index_range(&self.tabs, *group_id)
+                    .and_then(|(_, last)| ctx.element_position_by_id(tab_position_id(last)))
+                    .map(|last_rect| last_rect.max_x())
+            };
+
+            // Leading: start the accept zone a full spacer in from the header
+            // edge so joining a group from the left is deliberate. This makes
+            // dropping between groups easy.
+            let leading_inset = last_member_max_x
+                .map(|last_max_x| rect.max_x() - last_max_x)
+                .unwrap_or(EDGE_MARGIN);
+
+            // Trailing resolves two opposite needs. Your own group releases at
+            // its inner edge, so the trailing spacer is cushion before the cursor
+            // reaches the next tab (leaving doesn't instantly swap). Any other
+            // group accepts out to its outer edge, so dropping into its last slot
+            // stays easy.
+            let trailing = if Some(*group_id) == source_group {
+                last_member_max_x.unwrap_or(rect.max_x())
+            } else {
+                rect.max_x()
+            };
+
+            rect.min_x() + leading_inset <= cursor && cursor <= trailing
         })
     }
 
@@ -28071,13 +28608,40 @@ impl Workspace {
         ctx.element_position_by_id(tab_position_id(neighbor_index))
     }
 
+    /// Threshold rect for a group-drag swap against the neighbor at
+    /// `neighbor_index`. When that neighbor belongs to a group, the dragged
+    /// block hops past the whole neighbor group (see `move_group_block`), so
+    /// the swap must trigger on the whole group's rect rather than the single
+    /// adjacent member. Comparing against the near member instead causes flickering.
+    /// Falls back to the per-member rect when the group rect is missing.
+    fn group_swap_threshold_rect(
+        &self,
+        neighbor_index: usize,
+        is_vertical: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<RectF> {
+        if let Some(group_id) = self.tabs.get(neighbor_index).and_then(|t| t.group_id) {
+            let id = if is_vertical {
+                vtab_group_position_id(group_id)
+            } else {
+                htab_group_position_id(group_id)
+            };
+            if let Some(rect) = ctx.element_position_by_id(id) {
+                return Some(rect);
+            }
+        }
+        self.neighbor_drag_rect(neighbor_index, is_vertical, ctx)
+    }
+
     /// Swaps the group's entire member block with its preceding/following
-    /// neighbor when the drag midpoint crosses the appropriate threshold on
-    /// the active axis. Per-axis thresholds match the per-tab swap logic:
-    /// vertical compares against the neighbor's midpoint (mirrors
-    /// `calculate_updated_tab_index_vertical`); horizontal compares against
-    /// the neighbor's leading/trailing edge (mirrors
-    /// `calculate_updated_tab_index`).
+    /// neighbor when the dragged group's center crosses a per-axis threshold.
+    ///
+    /// Vertical compares against the neighbor's midpoint. Horizontal compares
+    /// against the neighbor's near edge (matching per-tab dragging) except when
+    /// the neighbor is itself a group, where it uses the group's midpoint.
+    ///
+    /// Comparing against the group's midpoint prevents oscilation when the
+    /// neighbouring group is larger than the group being dragged.
     pub(crate) fn on_group_drag(
         &mut self,
         group_id: TabGroupId,
@@ -28097,24 +28661,23 @@ impl Workspace {
         } else {
             (position.min_x() + position.max_x()) / 2.
         };
-        // Threshold for swapping toward the start of the bar (compared
-        // against the previous neighbor's rect). Vertical uses the
-        // neighbor's midpoint; horizontal uses its trailing edge so the
-        // swap fires as soon as the drag midpoint crosses into the
-        // neighbor, matching the per-tab horizontal swap rule.
-        let swap_before_threshold = |rect: RectF| -> f32 {
+        // Horizontal swaps fire as soon as the dragged group's center reaches
+        // the neighbor's near edge (matching per-tab dragging), except when the
+        // neighbor is itself a group. Vertical always uses the midpoint.
+        let swap_before_threshold = |rect: RectF, neighbor_is_group: bool| -> f32 {
             if is_vertical {
                 (rect.min_y() + rect.max_y()) / 2.
+            } else if neighbor_is_group {
+                (rect.min_x() + rect.max_x()) / 2.
             } else {
                 rect.max_x()
             }
         };
-        // Threshold for swapping toward the end of the bar (compared
-        // against the next neighbor's rect). Vertical uses the neighbor's
-        // midpoint; horizontal uses its leading edge.
-        let swap_after_threshold = |rect: RectF| -> f32 {
+        let swap_after_threshold = |rect: RectF, neighbor_is_group: bool| -> f32 {
             if is_vertical {
                 (rect.min_y() + rect.max_y()) / 2.
+            } else if neighbor_is_group {
+                (rect.min_x() + rect.max_x()) / 2.
             } else {
                 rect.min_x()
             }
@@ -28125,8 +28688,9 @@ impl Workspace {
         // states do not match.
         if first > 0 && self.is_tab_effectively_pinned(&self.tabs[first - 1]) == group_pinned {
             let before_index = first - 1;
-            if let Some(rect) = self.neighbor_drag_rect(before_index, is_vertical, ctx) {
-                if midpoint_drag < swap_before_threshold(rect) {
+            let neighbor_is_group = self.tabs[before_index].group_id.is_some();
+            if let Some(rect) = self.group_swap_threshold_rect(before_index, is_vertical, ctx) {
+                if midpoint_drag < swap_before_threshold(rect, neighbor_is_group) {
                     let target = if let Some(other_gid) = self.tabs[before_index].group_id {
                         group_member_index_range(&self.tabs, other_gid)
                             .map(|(f, _)| f)
@@ -28149,8 +28713,9 @@ impl Workspace {
             && self.is_tab_effectively_pinned(&self.tabs[last + 1]) == group_pinned
         {
             let after_index = last + 1;
-            if let Some(rect) = self.neighbor_drag_rect(after_index, is_vertical, ctx) {
-                if midpoint_drag > swap_after_threshold(rect) {
+            let neighbor_is_group = self.tabs[after_index].group_id.is_some();
+            if let Some(rect) = self.group_swap_threshold_rect(after_index, is_vertical, ctx) {
+                if midpoint_drag > swap_after_threshold(rect, neighbor_is_group) {
                     let after_block_last = if let Some(other_gid) = self.tabs[after_index].group_id
                     {
                         group_member_index_range(&self.tabs, other_gid)

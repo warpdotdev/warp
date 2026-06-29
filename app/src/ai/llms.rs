@@ -129,6 +129,17 @@ impl LLMProvider {
             LLMProvider::Unknown => None,
         }
     }
+
+    /// Human-readable provider name for user-facing copy.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            LLMProvider::OpenAI => "OpenAI",
+            LLMProvider::Anthropic => "Anthropic",
+            LLMProvider::Google => "Google",
+            LLMProvider::Xai => "xAI",
+            LLMProvider::Unknown => "this provider",
+        }
+    }
 }
 
 /// The host where an LLM can be routed to.
@@ -680,12 +691,12 @@ impl LLMPreferences {
         if let Some(terminal_view_id) = terminal_view_id {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override {
-                if let Some(llm_info) = self
-                    .models_by_feature
-                    .agent_mode
-                    .info_for_id(llm_id)
-                    .or_else(|| self.custom_llm_info_for_id_if_enabled(llm_id, app))
-                    .or_else(|| self.custom_router_llm_info_for_id_if_enabled(llm_id))
+                if let Some(llm_info) = Self::server_info_for_id_router_gated(
+                    &self.models_by_feature.agent_mode,
+                    llm_id,
+                )
+                .or_else(|| self.custom_llm_info_for_id_if_enabled(llm_id, app))
+                .or_else(|| self.custom_router_llm_info_for_id_if_enabled(llm_id))
                 {
                     return llm_info;
                 }
@@ -699,9 +710,7 @@ impl LLMPreferences {
             .base_model
             .clone()
             .and_then(|id| {
-                self.models_by_feature
-                    .agent_mode
-                    .info_for_id(&id)
+                Self::server_info_for_id_router_gated(&self.models_by_feature.agent_mode, &id)
                     .or_else(|| self.custom_llm_info_for_id_if_enabled(&id, app))
                     .or_else(|| self.custom_router_llm_info_for_id_if_enabled(&id))
             })
@@ -729,13 +738,29 @@ impl LLMPreferences {
             .coding_model
             .clone()
             .and_then(|id| {
-                self.models_by_feature
-                    .coding
-                    .info_for_id(&id)
+                Self::server_info_for_id_router_gated(&self.models_by_feature.coding, &id)
                     .or_else(|| self.custom_llm_info_for_id_if_enabled(&id, app))
                     .or_else(|| self.custom_router_llm_info_for_id_if_enabled(&id))
             })
             .unwrap_or_else(|| self.models_by_feature.coding.default_llm_info())
+    }
+
+    /// Resolves `id` against a server-provided model list, but hides cloud/team
+    /// custom routers when the custom-router feature flag is off. Mirrors the
+    /// gating applied to local routers (see
+    /// [`Self::custom_router_llm_info_for_id_if_enabled`]) so the whole
+    /// custom-router feature is controlled by a single client flag.
+    fn server_info_for_id_router_gated<'a>(
+        available: &'a AvailableLLMs,
+        id: &LLMId,
+    ) -> Option<&'a LLMInfo> {
+        let info = available.info_for_id(id)?;
+        if !FeatureFlag::CustomModelRouters.is_enabled()
+            && custom_model_routers::is_cloud_custom_router_id(info.id.as_str())
+        {
+            return None;
+        }
+        Some(info)
     }
 
     /// Returns the set of LLMs available for Agent Mode use.
@@ -744,11 +769,17 @@ impl LLMPreferences {
         app: &AppContext,
     ) -> impl Iterator<Item = &LLMInfo> {
         // Don't show admin-disabled models in the dropdown
+        let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
         self.models_by_feature
             .agent_mode
             .choices
             .iter()
             .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
+            // Gate cloud/team routers behind the same flag as local routers so
+            // the entire custom-router feature is controlled by one flag.
+            .filter(move |llm| {
+                routers_enabled || !custom_model_routers::is_cloud_custom_router_id(llm.id.as_str())
+            })
             .chain(self.custom_llm_choices(app))
             .chain(self.custom_router_choices())
     }
@@ -756,11 +787,16 @@ impl LLMPreferences {
     /// Returns the set of LLMs available for coding.
     pub fn get_coding_llm_choices(&self, app: &AppContext) -> impl Iterator<Item = &LLMInfo> {
         // Don't show admin-disabled models in the dropdown
+        let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
         self.models_by_feature
             .coding
             .choices
             .iter()
             .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
+            // Gate cloud/team routers behind the same flag as local routers.
+            .filter(move |llm| {
+                routers_enabled || !custom_model_routers::is_cloud_custom_router_id(llm.id.as_str())
+            })
             .chain(self.custom_llm_choices(app))
             .chain(self.custom_router_choices())
     }

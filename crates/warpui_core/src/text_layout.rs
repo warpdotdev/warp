@@ -793,6 +793,61 @@ impl TextFrame {
         }
     }
 
+    /// Like [`Self::mock`], but lays out a single line of `text` with real glyph and caret
+    /// positions: each glyph is `advance` pixels wide and starts at `x = index * advance`.
+    /// This makes geometry helpers (e.g. `x_for_index`) and caret hit-testing usable in tests,
+    /// which the zero-position [`Self::mock`] cannot support. Only supports a single line.
+    ///
+    /// We can't mark this as cfg(test) because warp crate tests need it too.
+    pub fn mock_with_positions(text: &str, advance: f32) -> Self {
+        assert!(
+            !text.contains('\n'),
+            "mock_with_positions only supports a single line"
+        );
+        let char_count = text.chars().count();
+        let glyphs: Vec<_> = text
+            .chars()
+            .enumerate()
+            .map(|(index, _)| Glyph {
+                id: Default::default(),
+                position_along_baseline: vec2f(index as f32 * advance, 0.0),
+                index,
+                width: advance,
+            })
+            .collect();
+        let caret_positions = (0..char_count)
+            .map(|index| CaretPosition {
+                position_in_line: index as f32 * advance,
+                start_offset: index,
+                last_offset: index,
+            })
+            .collect();
+        let width = char_count as f32 * advance;
+        let line = Line {
+            width,
+            trailing_whitespace_width: 0.0,
+            runs: vec![Run {
+                font_id: FontId(0),
+                glyphs,
+                styles: TextStyle::new(),
+                width,
+            }],
+            font_size: DEFAULT_FONT_SIZE,
+            line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
+            baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+            ascent: DEFAULT_FONT_SIZE * DEFAULT_TOP_BOTTOM_RATIO,
+            descent: DEFAULT_FONT_SIZE * (1. - DEFAULT_TOP_BOTTOM_RATIO),
+            clip_config: None,
+            caret_positions,
+            chars_with_missing_glyphs: vec![],
+        };
+        TextFrame {
+            lines: vec1![line],
+            max_width: width,
+            alignment: Default::default(),
+        }
+    }
+
     pub fn lines(&self) -> &Vec<Line> {
         self.lines.as_ref()
     }
@@ -1134,13 +1189,24 @@ impl Line {
         self.last_index() + 1
     }
 
+    /// Paints a run's background fill and border box, clamped horizontally to the
+    /// span of glyphs that are actually drawn (`visible_left`..`visible_right`, in
+    /// scene/paint coordinates). This must run BEFORE the run's glyphs and underline
+    /// are drawn so that text decorations (notably the hyperlink underline, which is a
+    /// filled rect in the same layer as the background) render on top of the
+    /// background instead of being covered by it.
+    ///
+    /// Callers must only invoke this for a run that has at least one visible glyph
+    /// (i.e. `visible_right > visible_left`); a fully truncated/clipped-away run paints
+    /// no background at all.
     #[allow(clippy::too_many_arguments)]
-    fn paint_run_decorations(
+    fn paint_run_background(
         &self,
-        glyph_color: ColorU,
         run: &Run,
         origin: Vector2F,
         visible_bounds: RectF,
+        visible_left: f32,
+        visible_right: f32,
         font_cache: &FontCache,
         scene: &mut Scene,
         baseline_position_fn: &ComputeBaselinePositionFn,
@@ -1169,27 +1235,26 @@ impl Line {
                     })
                     .unwrap_or(self.line_height_ratio);
 
-                // Compute the origin of where the first glyph was rendered. The position reported
-                // by the glyph is along it's baseline, so we need to offset it by the baseline
-                // offset to get back to the top of the glyph.
-                // We also need to shift the position horizontally to account for kerning when bordering
-                // is turned on.
-                let rect_origin = origin + first_glyph.position_along_baseline
-                    - vec2f(
-                        2. * block_padding,
-                        (baseline_position_fn)(ComputeBaselinePositionArgs {
-                            font_cache,
-                            font_size: self.font_size,
-                            line_height_ratio,
-                            baseline_ratio: self.baseline_ratio,
-                            ascent: self.ascent,
-                            descent: self.descent,
-                        }) + 2. * block_padding,
-                    );
+                // The position reported by the glyph is along its baseline, so we offset
+                // it by the baseline offset to get back to the top of the glyph. The
+                // horizontal extent is taken from the actually-drawn glyph span
+                // (`visible_left`/`visible_right`) rather than the full run width, so a
+                // partially-truncated run does not paint a background past its visible
+                // glyphs (or behind an ellipsis). The extra `block_padding` shift
+                // accounts for kerning when bordering is turned on.
+                let rect_top = origin.y() + first_glyph.position_along_baseline.y()
+                    - ((baseline_position_fn)(ComputeBaselinePositionArgs {
+                        font_cache,
+                        font_size: self.font_size,
+                        line_height_ratio,
+                        baseline_ratio: self.baseline_ratio,
+                        ascent: self.ascent,
+                        descent: self.descent,
+                    }) + 2. * block_padding);
                 let text_rect = RectF::new(
-                    rect_origin,
+                    vec2f(visible_left - 2. * block_padding, rect_top),
                     vec2f(
-                        run.width + 2. * block_padding,
+                        (visible_right - visible_left) + 2. * block_padding,
                         font_cache.line_height(self.font_size, line_height_ratio)
                             + 2. * block_padding,
                     ),
@@ -1217,7 +1282,16 @@ impl Line {
                 }
             }
         }
+    }
 
+    fn paint_run_decorations(
+        &self,
+        glyph_color: ColorU,
+        run: &Run,
+        origin: Vector2F,
+        visible_bounds: RectF,
+        scene: &mut Scene,
+    ) {
         if let Some((error_underline_color, first_glyph)) =
             run.styles.error_underline_color.zip(run.glyphs.first())
         {
@@ -1436,6 +1510,62 @@ impl Line {
                 glyph_color = foreground_color;
             }
 
+            // Paint the run's background/border BEFORE its glyphs and underline (the
+            // hyperlink underline is a filled rect in the same layer as the background,
+            // so painting the background afterward would cover and hide the underline on
+            // backgrounded runs such as an inline-code link). Only backgrounded/bordered
+            // runs need this, so the extra glyph walk to compute the visible span is
+            // skipped entirely for normal text runs (the common hot path).
+            if run.styles.border.is_some() || run.styles.background_color.is_some() {
+                // Determine the horizontal span of this run's glyphs that will actually
+                // be drawn, so the background can be clamped to it. This mirrors the
+                // truncation/stop conditions in the glyph-drawing loop below (the
+                // ellipsis cutoff and the `remaining_width <= 0` stop) without mutating
+                // `remaining_width` or drawing anything; keep the two in sync.
+                let mut visible_left = f32::INFINITY;
+                let mut visible_right = f32::NEG_INFINITY;
+                let mut sim_remaining_width = remaining_width;
+                let sim_glyph_iter = if is_start_clipping {
+                    itertools::Either::Left(run.glyphs.iter().rev())
+                } else {
+                    itertools::Either::Right(run.glyphs.iter())
+                };
+                for glyph in sim_glyph_iter {
+                    if clip_style == ClipStyle::Ellipsis
+                        && ellipsis_width > 0.
+                        && sim_remaining_width < glyph.width
+                    {
+                        break;
+                    }
+                    if sim_remaining_width <= 0. {
+                        break;
+                    }
+                    sim_remaining_width -= glyph.width;
+                    let glyph_x = if is_start_clipping {
+                        line_origin.x() + sim_remaining_width + start_ellipsis_offset
+                    } else {
+                        line_origin.x() + glyph.position_along_baseline.x()
+                    };
+                    visible_left = visible_left.min(glyph_x);
+                    visible_right = visible_right.max(glyph_x + glyph.width);
+                }
+
+                // Skip the background entirely when no glyphs are visible so a fully
+                // truncated run paints no background.
+                if visible_right > visible_left {
+                    self.paint_run_background(
+                        run,
+                        line_origin,
+                        bounds,
+                        visible_left,
+                        visible_right,
+                        font_cache,
+                        scene,
+                        baseline_position_fn,
+                    );
+                }
+            }
+
             let glyph_iter = if is_start_clipping {
                 itertools::Either::Left(run.glyphs.iter().rev())
             } else {
@@ -1522,15 +1652,7 @@ impl Line {
                 }
             }
 
-            self.paint_run_decorations(
-                glyph_color,
-                run,
-                line_origin,
-                bounds,
-                font_cache,
-                scene,
-                baseline_position_fn,
-            );
+            self.paint_run_decorations(glyph_color, run, line_origin, bounds, scene);
 
             if should_stop_after_run {
                 break;

@@ -1623,6 +1623,11 @@ impl BlockList {
         &self.agent_view_state
     }
 
+    /// Returns the selected conversation cached in the terminal render snapshot.
+    pub fn active_conversation_id(&self) -> Option<AIConversationId> {
+        self.agent_view_state.active_conversation_id()
+    }
+
     /// Sets the agent view state for this blocklist.
     ///
     /// With `FeatureFlag::AgentView` enabled, if the state is active, only blocks corresponding to

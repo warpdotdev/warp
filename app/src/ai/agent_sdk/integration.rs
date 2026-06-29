@@ -103,6 +103,8 @@ impl IntegrationCommandRunner {
                 crate::ai::ambient_agents::AgentConfigSnapshot {
                     name: None,
                     environment_id: args.environment.environment.clone(),
+                    // TODO(REMOTE-1936): support a runner for integrations.
+                    runner_id: None,
                     model_id: args.model.model.clone(),
                     base_prompt: args.prompt.clone(),
                     mcp_servers: cli_mcp_servers,
@@ -415,6 +417,8 @@ impl IntegrationCommandRunner {
                 crate::ai::ambient_agents::AgentConfigSnapshot {
                     name: None,
                     environment_id: args.environment.environment.clone(),
+                    // TODO(REMOTE-1936): support a runner for integrations.
+                    runner_id: None,
                     model_id: args.model.model.clone(),
                     base_prompt: args.prompt.clone(),
                     mcp_servers: cli_mcp_servers,

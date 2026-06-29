@@ -7,6 +7,7 @@ publish.workspace = true
 license.workspace = true
 
 [features]
+agent_mode_evals = ["dep:rand"]
 integration_tests = ["warp_server_auth/integration_tests"]
 skip_login = ["warp_server_auth/skip_login"]
 test-util = ["cloud_object_client/test-util", "cloud_objects/test-util", "dep:mockall"]
@@ -41,6 +42,7 @@ parking_lot.workspace = true
 pathfinder_geometry.workspace = true
 reqwest.workspace = true
 reqwest-eventsource.workspace = true
+rand = { workspace = true, optional = true }
 schemars = { version = "1", features = ["uuid1"] }
 serde.workspace = true
 serde_json.workspace = true

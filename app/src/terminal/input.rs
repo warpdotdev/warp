@@ -290,8 +290,8 @@ use crate::terminal::input::rewind::{RewindMenuEvent, RewindMenuView};
 use crate::terminal::input::skills::{InlineSkillSelectorEvent, InlineSkillSelectorView};
 use crate::terminal::input::slash_command_model::{SlashCommandEntryState, SlashCommandModel};
 use crate::terminal::input::slash_commands::{
-    CloudModeV2SlashCommandView, InlineSlashCommandView, SlashCommandDataSource,
-    SlashCommandTrigger,
+    slash_command_is_submitted_as_prompt, CloudModeV2SlashCommandView, InlineSlashCommandView,
+    SlashCommandDataSource, SlashCommandTrigger,
 };
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
@@ -2084,6 +2084,8 @@ pub fn init(app: &mut AppContext) {
 pub enum CompletionsTrigger {
     Keybinding,
     AsYouType,
+    /// Completions opened automatically by a slash command.
+    SlashCommandAutoOpen,
 }
 
 /// Represents whether the input editor should render the subshell flag.
@@ -3185,7 +3187,7 @@ impl Input {
                     BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
                         | BlocklistAIHistoryEvent::SetActiveConversation { .. }
                         | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
-                        | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+                        | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
                         | BlocklistAIHistoryEvent::StartedNewConversation { .. }
                         | BlocklistAIHistoryEvent::SplitConversation { .. }
                         | BlocklistAIHistoryEvent::AppendedExchange { .. }
@@ -3197,7 +3199,7 @@ impl Input {
                 if !affects_hint {
                     return;
                 }
-                if event.terminal_view_id() != Some(terminal_view_id) {
+                if event.terminal_surface_id() != Some(terminal_view_id) {
                     return;
                 }
                 me.set_zero_state_hint_text(ctx);
@@ -3399,6 +3401,7 @@ impl Input {
         let inline_model_selector_view = ctx.add_view(|ctx| {
             InlineModelSelectorView::new(
                 terminal_view_id,
+                ambient_agent_view_model.clone(),
                 suggestions_mode_model.clone(),
                 agent_view_controller.clone(),
                 &buffer_model,
@@ -5131,11 +5134,7 @@ impl Input {
                     return;
                 };
 
-                let destination = if *cmd_enter {
-                    ForkedConversationDestination::SplitPane
-                } else {
-                    ForkedConversationDestination::CurrentPane
-                };
+                let destination = ForkedConversationDestination::for_fork_trigger(*cmd_enter);
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
                     fork_from_exchange: Some(ForkFromExchange {
@@ -7365,22 +7364,52 @@ impl Input {
         shared_session_input_state.pending_command_execution_request = None;
     }
 
-    /// This clears the loading state and input buffer for both the sharer and viewer
-    /// once an agent request is in flight or cancelled.
-    pub fn unfreeze_and_clear_agent_input(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Restores the frozen/loading visual state of the agent input for both the sharer
+    /// and viewer without touching the CRDT buffer contents.
+    ///
+    /// Does NOT clear or reinitialize the buffer. Buffer clearing for agent prompts is
+    /// handled by the sharer emitting CRDT delete operations via `system_clear_buffer`
+    /// (triggered when `BlocklistAIControllerEvent::SentRequest` fires). Viewers receive
+    /// those delete ops through `InputUpdated` and apply them via the normal CRDT path.
+    ///
+    /// For viewers, this exits the ephemeral loading state created by
+    /// `freeze_input_in_loading_state`. When `is_shared_session_viewer_prompt_inflight` is true,
+    /// we optimistically clear the buffer using a display-only empty ephemeral
+    /// so the viewer sees an empty buffer immediately before crdt operations for actually clearing
+    /// the real buffer are received from the sharer.
+    ///
+    /// The display-only ephemeral is safe for CRDT: when the viewer next makes an edit
+    /// (materializing the ephemeral), its empty content is **discarded** — no delete ops
+    /// are generated for the regular buffer's contents. The edit proceeds directly on
+    /// the regular buffer (which the sharer's delete ops will have cleared by then).
+    pub fn unfreeze_agent_input(
+        &mut self,
+        is_shared_session_viewer_prompt_inflight: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if matches!(
             self.model.lock().shared_session_status(),
             SharedSessionStatus::ActiveViewer { .. } | SharedSessionStatus::ActiveSharer
         ) {
             self.editor.update(ctx, |editor, ctx| {
-                // Reinitialize the buffer to properly clear it
-                editor.reinitialize_buffer(None, ctx);
-
                 if let SharedSessionStatus::ActiveViewer { role } =
                     self.model.lock().shared_session_status()
                 {
                     // reinstate role for viewers
                     editor.set_interaction_state(role.into(), ctx);
+                    // Exit the ephemeral loading state so the regular CRDT buffer is
+                    // accessible. The sharer's delete ops (arriving via InputUpdated)
+                    // will clear the regular buffer.
+                    editor.exit_ephemeral_loading_state(ctx);
+                    if is_shared_session_viewer_prompt_inflight {
+                        // Create a display-only empty ephemeral for immediate visual
+                        // feedback. This is an optimistic clear for UI purposes, without
+                        // affecting the real buffer synced by crdt operations.
+                        // Unlike a regular ephemeral, materializing this one
+                        // discards its content instead of restoring it to the regular
+                        // buffer, so no spurious CRDT delete ops are generated.
+                        editor.show_display_only_empty_buffer(ctx);
+                    }
                 }
 
                 let appearance: &Appearance = Appearance::as_ref(ctx);
@@ -11363,7 +11392,7 @@ impl Input {
         if self
             .ai_context_model
             .as_ref(ctx)
-            .is_targeting_existing_conversation()
+            .is_targeting_existing_conversation(ctx)
         {
             self.ai_context_model.update(ctx, |ai_context_model, ctx| {
                 ai_context_model.set_pending_query_state_for_new_conversation(
@@ -11864,7 +11893,9 @@ impl Input {
             && !buffer_text.contains('\n');
 
         let fallback_strategy = match completions_trigger {
-            CompletionsTrigger::Keybinding if !use_native_shell_completions => {
+            CompletionsTrigger::Keybinding | CompletionsTrigger::SlashCommandAutoOpen
+                if !use_native_shell_completions =>
+            {
                 CompletionsFallbackStrategy::FilePaths
             }
             _ => CompletionsFallbackStrategy::None,
@@ -13899,6 +13930,13 @@ impl Input {
                     // handler show the error toast.
                     None => return false,
                 }
+            } else if !slash_command_is_submitted_as_prompt(&detected.command) {
+                // Action-emitting slash commands (e.g. `/fork`) execute immediately and must not
+                // be captured by prompt queuing — they emit an action rather than reiterating
+                // input into the conversation. Bypass the queue and let the slash-command
+                // executor handle them now; commands that submit a prompt to the conversation
+                // instead fall through to be queued (see `slash_command_is_submitted_as_prompt`).
+                return false;
             } else {
                 prompt
             }
@@ -14176,12 +14214,19 @@ impl Input {
             return true;
         }
 
-        // Fork slash commands should be run locally instead of being sent to the sharer
-        // (as the viewer running the slash command wants to fork on their local machine).
-        if prompt.starts_with(commands::FORK_AND_COMPACT.name)
-            || prompt.starts_with(commands::FORK.name)
+        // Slash commands that run as an immediate local action (e.g. /fork) should execute on
+        // the viewer's own machine instead of being forwarded to the sharer. Centralized with
+        // the prompt-queue gate via `slash_command_is_submitted_as_prompt`: only the
+        // prompt-submitting commands (/compact, /plan, /orchestrate) are forwarded as prompts;
+        // every other slash command runs locally.
+        if let SlashCommandEntryState::SlashCommand(detected) = self
+            .slash_command_model
+            .as_ref(ctx)
+            .detect_command(&prompt, ctx)
         {
-            return false;
+            if !slash_command_is_submitted_as_prompt(&detected.command) {
+                return false;
+            }
         }
 
         // Freeze the editor and put it in a loading state
@@ -14429,7 +14474,7 @@ impl Input {
                         // Prepare request failed (e.g. attachment limit exceeded).
                         // Keep pending attachments so the user can retry, unfreeze input,
                         // and show an error toast.
-                        input.unfreeze_and_clear_agent_input(ctx);
+                        input.unfreeze_agent_input(false, ctx);
                         let window_id = ctx.window_id();
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(
@@ -16002,7 +16047,7 @@ impl View for Input {
         }
 
         if BlocklistAIHistoryModel::as_ref(app)
-            .all_live_conversations_for_terminal_view(self.terminal_view_id)
+            .all_live_conversations_for_terminal_surface(self.terminal_view_id)
             .any(|conversation| conversation.initial_user_query().is_some())
         {
             ctx.set.insert("ActiveAIConversationHasHistory");
@@ -16252,7 +16297,7 @@ fn maybe_render_ai_input_indicators(
 
     let all_icons = if ai_context_model
         .as_ref(app)
-        .is_targeting_existing_conversation()
+        .is_targeting_existing_conversation(app)
     {
         let reply_icon = render_ai_follow_up_icon(ai_follow_up_icon_mouse_state, app);
         Flex::row()
