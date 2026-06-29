@@ -19770,7 +19770,7 @@ impl Workspace {
                             .with_border(
                                 Border::all(1.)
                                     .with_sides(false, false, false, true)
-                                    .with_border_fill(internal_colors::fg_overlay_1(
+                                    .with_border_fill(internal_colors::fg_overlay_3(
                                         appearance.theme(),
                                     )),
                             )
@@ -19969,7 +19969,11 @@ impl Workspace {
 
         let header_active_bg = internal_colors::fg_overlay_2(theme);
         let header_hover_bg = internal_colors::fg_overlay_1(theme);
-        let header_border_fill = internal_colors::fg_overlay_1(theme);
+        let header_border_fill = if header_selected {
+            internal_colors::fg_overlay_4(theme)
+        } else {
+            internal_colors::fg_overlay_3(theme)
+        };
         let mut header = Hoverable::new(mouse_states.header.clone(), move |state| {
             let hovered = state.is_hovered();
             // Tint the header with the group's color on hover/active (40/60), and
