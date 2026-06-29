@@ -399,7 +399,6 @@ impl CodeEditorModel {
         ) -> ModelHandle<RenderState>,
     ) -> Self {
         ctx.subscribe_to_model(&content, |me, _, event, ctx| {
-        ctx.subscribe_to_model(&content, |me, _, event, ctx| {
             me.handle_content_model_event(event, ctx);
         });
 
@@ -422,7 +421,7 @@ impl CodeEditorModel {
         let hidden_lines =
             ctx.add_model(|_| HiddenLinesModel::new(content.clone(), selection_model.clone()));
 
-let render_state = build_render_state(&hidden_lines, ctx);
+        let render_state = build_render_state(&hidden_lines, ctx);
         ctx.subscribe_to_model(&render_state, |me, _, event, ctx| {
             me.handle_render_state_model_event(event, ctx);
         });

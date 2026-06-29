@@ -1,0 +1,1457 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - link "Skip to content" [ref=e4] [cursor=pointer]:
+      - /url: "#start-of-content"
+    - banner "Global Navigation Menu" [ref=e8]:
+      - generic [ref=e9]:
+        - generic [ref=e10]:
+          - button "Open menu" [ref=e12] [cursor=pointer]:
+            - img [ref=e13]
+          - link "Homepage (g then d)" [ref=e15] [cursor=pointer]:
+            - /url: /
+            - img [ref=e16]
+        - generic [ref=e18]:
+          - navigation "Breadcrumbs" [ref=e19]:
+            - list [ref=e20]:
+              - listitem [ref=e21]:
+                - link "warpdotdev" [ref=e22] [cursor=pointer]:
+                  - /url: /warpdotdev
+                  - generic [ref=e23]: warpdotdev
+              - listitem [ref=e24]:
+                - link "warp" [ref=e25] [cursor=pointer]:
+                  - /url: /warpdotdev/warp
+                  - generic [ref=e26]: warp
+          - button "Search or jump to…" [ref=e29] [cursor=pointer]:
+            - generic [ref=e30]:
+              - generic:
+                - img
+              - generic [ref=e31]:
+                - generic:
+                  - text: Type
+                  - generic: /
+                  - text: to search
+        - generic [ref=e32]:
+          - generic [ref=e33]:
+            - generic [ref=e36]:
+              - link "Chat with Copilot" [ref=e38] [cursor=pointer]:
+                - /url: /copilot
+                - img [ref=e39]
+              - button "Open Copilot…" [ref=e43] [cursor=pointer]:
+                - generic:
+                  - img
+            - button "Create new..." [ref=e45] [cursor=pointer]:
+              - generic [ref=e46]:
+                - generic:
+                  - img
+              - generic:
+                - img
+            - generic [ref=e47]:
+              - link "All issues" [ref=e48] [cursor=pointer]:
+                - /url: /issues
+                - img [ref=e49]
+              - link "All pull requests" [ref=e52] [cursor=pointer]:
+                - /url: /pulls
+                - img [ref=e53]
+              - link "All repositories" [ref=e55] [cursor=pointer]:
+                - /url: /repos
+                - img [ref=e56]
+          - button "Open user navigation menu" [ref=e59] [cursor=pointer]:
+            - img "User avatar" [ref=e60]
+      - heading "Repository navigation" [level=2] [ref=e61]
+      - navigation "Repository" [ref=e62]:
+        - list [ref=e63]:
+          - listitem [ref=e64]:
+            - link "Code" [ref=e65] [cursor=pointer]:
+              - /url: /warpdotdev/warp
+              - img [ref=e67]
+              - generic [ref=e69]: Code
+          - listitem [ref=e70]:
+            - link "Issues (3.4k)" [ref=e71] [cursor=pointer]:
+              - /url: /warpdotdev/warp/issues
+              - img [ref=e73]
+              - generic [ref=e76]: Issues
+              - generic [ref=e77]:
+                - generic [ref=e78]: 3.4k
+                - generic [ref=e79]: (3.4k)
+          - listitem [ref=e80]:
+            - link "Pull requests (492)" [ref=e81] [cursor=pointer]:
+              - /url: /warpdotdev/warp/pulls
+              - img [ref=e83]
+              - generic [ref=e85]: Pull requests
+              - generic [ref=e86]:
+                - generic [ref=e87]: "492"
+                - generic [ref=e88]: (492)
+          - listitem [ref=e89]:
+            - link "Agents" [ref=e90] [cursor=pointer]:
+              - /url: /warpdotdev/warp/agents?author=ErshovDmitry
+              - img [ref=e92]
+              - generic [ref=e95]: Agents
+          - listitem [ref=e96]:
+            - link "Discussions" [ref=e97] [cursor=pointer]:
+              - /url: /warpdotdev/warp/discussions
+              - img [ref=e99]
+              - generic [ref=e101]: Discussions
+          - listitem [ref=e102]:
+            - link "Actions" [ref=e103] [cursor=pointer]:
+              - /url: /warpdotdev/warp/actions
+              - img [ref=e105]
+              - generic [ref=e107]: Actions
+          - listitem [ref=e108]:
+            - link "Projects" [ref=e109] [cursor=pointer]:
+              - /url: /warpdotdev/warp/projects
+              - img [ref=e111]
+              - generic [ref=e113]: Projects
+          - listitem [ref=e114]:
+            - link "Security and quality" [ref=e115] [cursor=pointer]:
+              - /url: /warpdotdev/warp/security
+              - img [ref=e117]
+              - generic [ref=e119]: Security and quality
+          - listitem [ref=e120]:
+            - link "Insights" [ref=e121] [cursor=pointer]:
+              - /url: /warpdotdev/warp/pulse
+              - img [ref=e123]
+              - generic [ref=e125]: Insights
+  - main [ref=e129]:
+    - generic [ref=e136]:
+      - generic [ref=e139]:
+        - 'heading "I18n #11382 Edit title" [level=1] [ref=e141]':
+          - text: I18n
+          - generic [ref=e142]:
+            - generic [ref=e143]: "#11382"
+            - button "Edit title" [ref=e144] [cursor=pointer]:
+              - img [ref=e145]
+        - generic [ref=e148]:
+          - generic [ref=e149]:
+            - button "View status View status" [disabled] [ref=e150]:
+              - generic [ref=e151]:
+                - generic:
+                  - generic:
+                    - img
+                    - generic: Loading
+            - generic [ref=e153]: Loading merge status
+          - button "Code" [ref=e154] [cursor=pointer]:
+            - generic [ref=e155]:
+              - generic [ref=e156]: Code
+              - generic:
+                - img
+        - generic [ref=e158]:
+          - generic [ref=e160]:
+            - img "Pull request" [ref=e161]
+            - text: Open
+          - generic [ref=e164]:
+            - link "ErshovDmitry" [ref=e165] [cursor=pointer]:
+              - /url: /ErshovDmitry
+            - text: wants to merge 23 commits into
+            - generic [ref=e166]:
+              - link "warpdotdev:master" [ref=e167] [cursor=pointer]:
+                - /url: /warpdotdev/warp/tree/master
+              - generic [ref=e168]: from
+              - generic [ref=e169]:
+                - link "ErshovDmitry:i18n" [ref=e170] [cursor=pointer]:
+                  - /url: /ErshovDmitry/warp-i18n/tree/i18n
+                - button "Copy head branch name to clipboard" [ref=e171] [cursor=pointer]:
+                  - img [ref=e172]
+        - generic [ref=e175]:
+          - generic [ref=e177]:
+            - generic [ref=e178]: +7 720
+            - generic [ref=e179]: "-2 605"
+            - generic [ref=e180]: "Lines changed: 7720 additions & 2605 deletions"
+          - navigation "Pull request navigation tabs" [ref=e189]:
+            - tablist [ref=e190]:
+              - tab "Conversation (13)" [selected] [ref=e191] [cursor=pointer]:
+                - img [ref=e192]
+                - text: Conversation
+                - generic [ref=e194]: "13"
+                - generic [ref=e195]: (13)
+              - tab "Commits (23)" [ref=e196] [cursor=pointer]:
+                - img [ref=e197]
+                - text: Commits
+                - generic [ref=e199]: "23"
+                - generic [ref=e200]: (23)
+              - tab "Checks (0)" [ref=e201] [cursor=pointer]:
+                - img [ref=e202]
+                - text: Checks
+                - generic [ref=e204]: "0"
+                - generic [ref=e205]: (0)
+              - tab "Files changed (76)" [ref=e206] [cursor=pointer]:
+                - img [ref=e207]
+                - text: Files changed
+                - generic [ref=e209]: "76"
+                - generic [ref=e210]: (76)
+      - generic [ref=e215]:
+        - generic [ref=e217]:
+          - heading "Conversation" [level=2] [ref=e218]
+          - generic [ref=e219]:
+            - generic [ref=e220]:
+              - generic [ref=e222]:
+                - link "@ErshovDmitry" [ref=e223] [cursor=pointer]:
+                  - /url: /ErshovDmitry
+                  - img "@ErshovDmitry" [ref=e224]
+                - generic [ref=e226]:
+                  - generic [ref=e227]:
+                    - group [ref=e230]:
+                      - button "Show options" [ref=e231] [cursor=pointer]:
+                        - img "Show options" [ref=e234]
+                    - heading "ErshovDmitry commented May 20, 202615 hours ago" [level=3] [ref=e236]:
+                      - generic [ref=e237]:
+                        - strong [ref=e238]:
+                          - link "ErshovDmitry" [ref=e239] [cursor=pointer]:
+                            - /url: /ErshovDmitry
+                        - text: commented
+                        - link "May 20, 202615 hours ago" [ref=e240] [cursor=pointer]:
+                          - /url: "#issue-4483039846"
+                  - generic [ref=e244]:
+                    - paragraph [ref=e245]: Hello! My name is Dmitry.
+                    - paragraph [ref=e246]: I've been using Warp and love it. I wanted to add i18n support so the terminal could speak Russian (and other languages in the future). I'm not a developer myself — this was built with DeepSeek AI, but I reviewed everything personally.
+                    - paragraph [ref=e247]: I'd much rather this live in the official repo than a fork. If the team is interested in i18n, I'm happy to help however I can — and I'll gladly delete my fork once upstreamed.
+                    - paragraph [ref=e248]:
+                      - text: Cheers,
+                      - text: Dmitry
+                    - separator [ref=e249]
+                    - heading "What" [level=2] [ref=e250]
+                    - paragraph [ref=e251]: Adds i18n (internationalization) support to Warp.
+                    - heading "Changes" [level=2] [ref=e252]
+                    - 'heading "New crate: warp_i18n" [level=3] [ref=e253]':
+                      - text: "New crate:"
+                      - code [ref=e254]: warp_i18n
+                    - list [ref=e255]:
+                      - listitem [ref=e256]:
+                        - code [ref=e257]: t!()
+                        - text: macro for translating UI strings
+                      - listitem [ref=e258]:
+                        - code [ref=e259]: current_locale()
+                        - text: /
+                        - code [ref=e260]: set_current_locale()
+                        - text: for runtime language switching
+                      - listitem [ref=e261]:
+                        - code [ref=e262]: init_from_json()
+                        - text: for WASM compatibility
+                      - listitem [ref=e263]: Build script for compile-time key validation
+                      - listitem [ref=e264]: 21 tests
+                    - heading "Feature flag" [level=3] [ref=e265]
+                    - list [ref=e266]:
+                      - listitem [ref=e267]:
+                        - code [ref=e268]: FeatureFlag::I18n
+                        - text: in
+                        - code [ref=e269]: DOGFOOD_FLAGS
+                    - heading "Settings" [level=3] [ref=e270]
+                    - list [ref=e271]:
+                      - listitem [ref=e272]:
+                        - code [ref=e273]: Locale
+                        - text: enum (En, Ru)
+                      - listitem [ref=e274]: Language dropdown in Settings → Appearance
+                      - listitem [ref=e275]: Auto-detect system locale on first run
+                    - heading "Migrated UI" [level=3] [ref=e276]
+                    - list [ref=e277]:
+                      - listitem [ref=e278]: 10 top-level menu labels
+                      - listitem [ref=e279]: 14 settings section names
+                      - listitem [ref=e280]: 11 settings category labels
+                    - heading "Locales" [level=3] [ref=e281]
+                    - list [ref=e282]:
+                      - listitem [ref=e283]:
+                        - code [ref=e284]: en.json
+                        - text: — 51 keys (mandatory fallback)
+                      - listitem [ref=e285]:
+                        - code [ref=e286]: ru.json
+                        - text: — 51 keys (Russian translation)
+                    - paragraph [ref=e287]:
+                      - emphasis [ref=e288]:
+                        - text: Built with DeepSeek AI — human-reviewed, all tests pass (
+                        - code [ref=e289]: cargo check --workspace
+                        - text: ","
+                        - code [ref=e290]: cargo test -p warp_i18n
+                        - text: ).
+                  - group [ref=e294]:
+                    - generic "Add or remove reactions" [ref=e295] [cursor=pointer]:
+                      - img [ref=e296]
+              - generic [ref=e298]:
+                - generic [ref=e300]:
+                  - link "@cla-bot" [ref=e302] [cursor=pointer]:
+                    - /url: /apps/cla-bot
+                    - img "@cla-bot" [ref=e303]
+                  - generic [ref=e305]:
+                    - generic [ref=e306]:
+                      - group [ref=e309]:
+                        - button "Show options" [ref=e310] [cursor=pointer]:
+                          - img "Show options" [ref=e313]
+                      - heading "cla-bot Bot commented May 20, 202615 hours ago" [level=3] [ref=e315]:
+                        - generic [ref=e316]:
+                          - strong [ref=e317]:
+                            - link "cla-bot" [ref=e318] [cursor=pointer]:
+                              - /url: /apps/cla-bot
+                            - generic [ref=e319]: Bot
+                          - text: commented
+                          - link "May 20, 202615 hours ago" [ref=e320] [cursor=pointer]:
+                            - /url: "#issuecomment-4494411354"
+                    - generic [ref=e321]:
+                      - table [ref=e323]:
+                        - rowgroup [ref=e324]:
+                          - 'row "Thank you for your pull request and welcome to our community. We could not parse the GitHub identity of the following contributors: Dmitry. This is most likely caused by a git client misconfiguration; please make sure to: check if your git client is configured with an email to sign commits git config --list | grep email If not, set it up using git config --global user.email email@example.com Make sure that the git commit email is configured in your GitHub account settings, see https://github.com/settings/emails" [ref=e325]':
+                            - 'cell "Thank you for your pull request and welcome to our community. We could not parse the GitHub identity of the following contributors: Dmitry. This is most likely caused by a git client misconfiguration; please make sure to: check if your git client is configured with an email to sign commits git config --list | grep email If not, set it up using git config --global user.email email@example.com Make sure that the git commit email is configured in your GitHub account settings, see https://github.com/settings/emails" [ref=e326]':
+                              - paragraph [ref=e327]:
+                                - text: "Thank you for your pull request and welcome to our community. We could not parse the GitHub identity of the following contributors:"
+                                - strong [ref=e328]: Dmitry
+                                - text: .
+                                - text: "This is most likely caused by a git client misconfiguration; please make sure to:"
+                              - list [ref=e329]:
+                                - listitem [ref=e330]:
+                                  - text: check if your git client is configured with an email to sign commits
+                                  - code [ref=e331]: git config --list | grep email
+                                - listitem [ref=e332]:
+                                  - text: If not, set it up using
+                                  - code [ref=e333]: git config --global user.email email@example.com
+                                - listitem [ref=e334]:
+                                  - text: Make sure that the git commit email is configured in your GitHub account settings, see
+                                  - link "https://github.com/settings/emails" [ref=e335] [cursor=pointer]:
+                                    - /url: https://github.com/settings/emails
+                      - group [ref=e340]:
+                        - generic "Add or remove reactions" [ref=e341] [cursor=pointer]:
+                          - img [ref=e342]
+                - generic [ref=e345]:
+                  - link "@oz-for-oss" [ref=e347] [cursor=pointer]:
+                    - /url: /apps/oz-for-oss
+                    - img "@oz-for-oss" [ref=e348]
+                  - generic [ref=e350]:
+                    - generic [ref=e351]:
+                      - generic [ref=e352]:
+                        - group [ref=e354]:
+                          - button "Show options" [ref=e355] [cursor=pointer]:
+                            - img "Show options" [ref=e358]
+                        - generic "This user has previously committed to the warp repository." [ref=e361]:
+                          - generic [ref=e362]: Contributor
+                      - heading "oz-for-oss Bot commented May 20, 202615 hours ago" [level=3] [ref=e363]:
+                        - generic [ref=e364]:
+                          - strong [ref=e365]:
+                            - link "oz-for-oss" [ref=e366] [cursor=pointer]:
+                              - /url: /apps/oz-for-oss
+                            - generic [ref=e367]: Bot
+                          - text: commented
+                          - link "May 20, 202615 hours ago" [ref=e368] [cursor=pointer]:
+                            - /url: "#issuecomment-4494411637"
+                    - generic [ref=e369]:
+                      - table [ref=e371]:
+                        - rowgroup [ref=e372]:
+                          - 'row "@ErshovDmitry This PR is not linked to an issue that is marked with ready-to-implement. Issue-state enforcement details: Associated same-repo issues checked: none Required readiness label: ready-to-implement To continue, link this PR to a same-repo issue such as Closes #123 in the PR description, and make sure that issue has ready-to-implement. Powered by Oz" [ref=e373]':
+                            - 'cell "@ErshovDmitry This PR is not linked to an issue that is marked with ready-to-implement. Issue-state enforcement details: Associated same-repo issues checked: none Required readiness label: ready-to-implement To continue, link this PR to a same-repo issue such as Closes #123 in the PR description, and make sure that issue has ready-to-implement. Powered by Oz" [ref=e374]':
+                              - paragraph [ref=e375]:
+                                - link "@ErshovDmitry" [ref=e376] [cursor=pointer]:
+                                  - /url: https://github.com/ErshovDmitry
+                              - paragraph [ref=e377]:
+                                - text: This PR is not linked to an issue that is marked with
+                                - code [ref=e378]: ready-to-implement
+                                - text: .
+                              - paragraph [ref=e379]: "Issue-state enforcement details:"
+                              - list [ref=e380]:
+                                - listitem [ref=e381]:
+                                  - paragraph [ref=e382]: "Associated same-repo issues checked: none"
+                                - listitem [ref=e383]:
+                                  - paragraph [ref=e384]:
+                                    - text: "Required readiness label:"
+                                    - code [ref=e385]: ready-to-implement
+                              - paragraph [ref=e386]:
+                                - text: To continue, link this PR to a same-repo issue such as
+                                - code [ref=e387]: "Closes #123"
+                                - text: in the PR description, and make sure that issue has
+                                - code [ref=e388]: ready-to-implement
+                                - text: .
+                              - paragraph [ref=e389]:
+                                - emphasis [ref=e390]:
+                                  - text: Powered by
+                                  - link "Oz" [ref=e391] [cursor=pointer]:
+                                    - /url: https://oz.warp.dev
+                      - group [ref=e396]:
+                        - generic "Add or remove reactions" [ref=e397] [cursor=pointer]:
+                          - img [ref=e398]
+                - generic [ref=e401]:
+                  - img [ref=e403]
+                  - generic [ref=e405]:
+                    - link "@github-actions" [ref=e406] [cursor=pointer]:
+                      - /url: /apps/github-actions
+                      - img "@github-actions" [ref=e407]
+                    - link "github-actions" [ref=e408] [cursor=pointer]:
+                      - /url: /apps/github-actions
+                    - generic [ref=e409]: Bot
+                    - text: added the
+                    - link "external-contributor" [ref=e410] [cursor=pointer]:
+                      - /url: /warpdotdev/warp/issues?q=state%3Aopen%20label%3Aexternal-contributor
+                    - text: label
+                    - link "May 20, 202615 hours ago" [ref=e411] [cursor=pointer]:
+                      - /url: "#event-25738319166"
+                - generic [ref=e414]:
+                  - generic [ref=e415]:
+                    - link "oz-for-oss[bot]" [ref=e416] [cursor=pointer]:
+                      - /url: /apps/oz-for-oss
+                      - img "oz-for-oss[bot]" [ref=e417]
+                    - img [ref=e419]
+                    - generic [ref=e421]:
+                      - generic [ref=e422]:
+                        - strong [ref=e423]:
+                          - link "oz-for-oss" [ref=e424] [cursor=pointer]:
+                            - /url: /apps/oz-for-oss
+                          - generic [ref=e425]: Bot
+                        - text: requested changes
+                        - link "May 20, 202615 hours ago" [ref=e427] [cursor=pointer]:
+                          - /url: "#pullrequestreview-4325084051"
+                      - link "View reviewed changes" [ref=e429] [cursor=pointer]:
+                        - /url: /warpdotdev/warp/pull/11382/changes
+                        - generic [ref=e431]: View reviewed changes
+                  - generic [ref=e434]:
+                    - generic [ref=e435]:
+                      - generic [ref=e436]:
+                        - group [ref=e438]:
+                          - button "Show options" [ref=e439] [cursor=pointer]:
+                            - img "Show options" [ref=e442]
+                        - generic "This user has previously committed to the warp repository." [ref=e445]:
+                          - generic [ref=e446]: Contributor
+                      - heading "oz-for-oss Bot left a comment" [level=3] [ref=e447]:
+                        - generic [ref=e448]:
+                          - strong [ref=e449]:
+                            - link "oz-for-oss" [ref=e450] [cursor=pointer]:
+                              - /url: /apps/oz-for-oss
+                            - generic [ref=e451]: Bot
+                          - text: left a comment
+                    - generic [ref=e454]:
+                      - paragraph [ref=e455]:
+                        - link "@ErshovDmitry" [ref=e456] [cursor=pointer]:
+                          - /url: https://github.com/ErshovDmitry
+                      - paragraph [ref=e457]:
+                        - text: This PR is not linked to an issue that is marked with
+                        - code [ref=e458]: ready-to-implement
+                        - text: .
+                      - paragraph [ref=e459]: "Issue-state enforcement details:"
+                      - list [ref=e460]:
+                        - listitem [ref=e461]:
+                          - paragraph [ref=e462]: "Associated same-repo issues checked: none"
+                        - listitem [ref=e463]:
+                          - paragraph [ref=e464]:
+                            - text: "Required readiness label:"
+                            - code [ref=e465]: ready-to-implement
+                      - paragraph [ref=e466]:
+                        - text: To continue, link this PR to a same-repo issue such as
+                        - code [ref=e467]: "Closes #123"
+                        - text: in the PR description, and make sure that issue has
+                        - code [ref=e468]: ready-to-implement
+                        - text: .
+                      - paragraph [ref=e469]:
+                        - emphasis [ref=e470]:
+                          - text: Powered by
+                          - link "Oz" [ref=e471] [cursor=pointer]:
+                            - /url: https://oz.warp.dev
+                    - group [ref=e475]:
+                      - generic "Add or remove reactions" [ref=e476] [cursor=pointer]:
+                        - img [ref=e477]
+                - generic [ref=e480]:
+                  - link "@ErshovDmitry" [ref=e482] [cursor=pointer]:
+                    - /url: /ErshovDmitry
+                    - img "@ErshovDmitry" [ref=e483]
+                  - generic [ref=e485]:
+                    - generic [ref=e486]:
+                      - generic [ref=e487]:
+                        - group [ref=e489]:
+                          - button "Show options" [ref=e490] [cursor=pointer]:
+                            - img "Show options" [ref=e493]
+                        - generic "You are the author of this pull request." [ref=e496]:
+                          - generic [ref=e497]: Author
+                      - heading "ErshovDmitry commented May 20, 202615 hours ago" [level=3] [ref=e498]:
+                        - generic [ref=e499]:
+                          - strong [ref=e500]:
+                            - link "ErshovDmitry" [ref=e501] [cursor=pointer]:
+                              - /url: /ErshovDmitry
+                          - text: commented
+                          - link "May 20, 202615 hours ago" [ref=e502] [cursor=pointer]:
+                            - /url: "#issuecomment-4494430862"
+                    - generic [ref=e503]:
+                      - table [ref=e505]:
+                        - rowgroup [ref=e506]:
+                          - 'row "Oh wow — I just noticed there are already several i18n PRs open (#10630, #10990, #9458, #9922). I should have checked first before opening mine. My apologies for the noise!" [ref=e507]':
+                            - 'cell "Oh wow — I just noticed there are already several i18n PRs open (#10630, #10990, #9458, #9922). I should have checked first before opening mine. My apologies for the noise!" [ref=e508]':
+                              - paragraph [ref=e509]:
+                                - text: Oh wow — I just noticed there are already several i18n PRs open (
+                                - link "#10630" [ref=e510] [cursor=pointer]:
+                                  - /url: https://github.com/warpdotdev/warp/pull/10630
+                                - text: ","
+                                - link "#10990" [ref=e511] [cursor=pointer]:
+                                  - /url: https://github.com/warpdotdev/warp/pull/10990
+                                - text: ","
+                                - link "#9458" [ref=e512] [cursor=pointer]:
+                                  - /url: https://github.com/warpdotdev/warp/pull/9458
+                                - text: ","
+                                - link "#9922" [ref=e513] [cursor=pointer]:
+                                  - /url: https://github.com/warpdotdev/warp/pull/9922
+                                - text: ). I should have checked first before opening mine. My apologies for the noise!
+                              - blockquote [ref=e514]:
+                                - paragraph [ref=e515]:
+                                  - text: That said, I see none of them include Russian yet. If the team settles on one i18n approach (looks like
+                                  - link "#10630" [ref=e516] [cursor=pointer]:
+                                    - /url: https://github.com/warpdotdev/warp/pull/10630
+                                  - text: /
+                                  - link "#10990" [ref=e517] [cursor=pointer]:
+                                    - /url: https://github.com/warpdotdev/warp/pull/10990
+                                  - text: is the leading one?), I'd be happy to contribute Russian translations to that effort instead.
+                                - paragraph [ref=e518]: I'll close this PR if it's just adding clutter — just let me know.
+                                - paragraph [ref=e519]:
+                                  - text: Cheers,
+                                  - text: Dmitry
+                      - group [ref=e524]:
+                        - generic "Add or remove reactions" [ref=e525] [cursor=pointer]:
+                          - img [ref=e526]
+                - generic [ref=e529]:
+                  - link "@cla-bot" [ref=e531] [cursor=pointer]:
+                    - /url: /apps/cla-bot
+                    - img "@cla-bot" [ref=e532]
+                  - generic [ref=e534]:
+                    - generic [ref=e535]:
+                      - group [ref=e538]:
+                        - button "Show options" [ref=e539] [cursor=pointer]:
+                          - img "Show options" [ref=e542]
+                      - heading "cla-bot Bot commented May 20, 202613 hours ago" [level=3] [ref=e544]:
+                        - generic [ref=e545]:
+                          - strong [ref=e546]:
+                            - link "cla-bot" [ref=e547] [cursor=pointer]:
+                              - /url: /apps/cla-bot
+                            - generic [ref=e548]: Bot
+                          - text: commented
+                          - link "May 20, 202613 hours ago" [ref=e549] [cursor=pointer]:
+                            - /url: "#issuecomment-4494962896"
+                    - generic [ref=e550]:
+                      - table [ref=e552]:
+                        - rowgroup [ref=e553]:
+                          - 'row "Thank you for your pull request and welcome to our community. We could not parse the GitHub identity of the following contributors: Dmitry. This is most likely caused by a git client misconfiguration; please make sure to: check if your git client is configured with an email to sign commits git config --list | grep email If not, set it up using git config --global user.email email@example.com Make sure that the git commit email is configured in your GitHub account settings, see https://github.com/settings/emails" [ref=e554]':
+                            - 'cell "Thank you for your pull request and welcome to our community. We could not parse the GitHub identity of the following contributors: Dmitry. This is most likely caused by a git client misconfiguration; please make sure to: check if your git client is configured with an email to sign commits git config --list | grep email If not, set it up using git config --global user.email email@example.com Make sure that the git commit email is configured in your GitHub account settings, see https://github.com/settings/emails" [ref=e555]':
+                              - paragraph [ref=e556]:
+                                - text: "Thank you for your pull request and welcome to our community. We could not parse the GitHub identity of the following contributors:"
+                                - strong [ref=e557]: Dmitry
+                                - text: .
+                                - text: "This is most likely caused by a git client misconfiguration; please make sure to:"
+                              - list [ref=e558]:
+                                - listitem [ref=e559]:
+                                  - text: check if your git client is configured with an email to sign commits
+                                  - code [ref=e560]: git config --list | grep email
+                                - listitem [ref=e561]:
+                                  - text: If not, set it up using
+                                  - code [ref=e562]: git config --global user.email email@example.com
+                                - listitem [ref=e563]:
+                                  - text: Make sure that the git commit email is configured in your GitHub account settings, see
+                                  - link "https://github.com/settings/emails" [ref=e564] [cursor=pointer]:
+                                    - /url: https://github.com/settings/emails
+                      - group [ref=e569]:
+                        - generic "Add or remove reactions" [ref=e570] [cursor=pointer]:
+                          - img [ref=e571]
+                - group [ref=e573]:
+                  - generic "2 similar comments" [ref=e574] [cursor=pointer]:
+                    - generic [ref=e576]: 2 similar comments
+                - generic [ref=e578]:
+                  - link "@ErshovDmitry" [ref=e580] [cursor=pointer]:
+                    - /url: /ErshovDmitry
+                    - img "@ErshovDmitry" [ref=e581]
+                  - generic [ref=e583]:
+                    - generic [ref=e584]:
+                      - generic [ref=e585]:
+                        - group [ref=e587]:
+                          - button "Show options" [ref=e588] [cursor=pointer]:
+                            - img "Show options" [ref=e591]
+                        - generic "You are the author of this pull request." [ref=e594]:
+                          - generic [ref=e595]: Author
+                      - heading "ErshovDmitry commented May 20, 202612 hours ago" [level=3] [ref=e596]:
+                        - generic [ref=e597]:
+                          - strong [ref=e598]:
+                            - link "ErshovDmitry" [ref=e599] [cursor=pointer]:
+                              - /url: /ErshovDmitry
+                          - text: commented
+                          - link "May 20, 202612 hours ago" [ref=e600] [cursor=pointer]:
+                            - /url: "#issuecomment-4495523677"
+                    - generic [ref=e601]:
+                      - table [ref=e603]:
+                        - rowgroup [ref=e604]:
+                          - 'row "Update:** I''ve rewritten this PR to match @ZacharyZcR''s YAML approach from #10630 / #10990:" [ref=e605]':
+                            - 'cell "Update:** I''ve rewritten this PR to match @ZacharyZcR''s YAML approach from #10630 / #10990:" [ref=e606]':
+                              - paragraph [ref=e607]:
+                                - text: Update:** I've rewritten this PR to match
+                                - link "@ZacharyZcR" [ref=e608] [cursor=pointer]:
+                                  - /url: https://github.com/ZacharyZcR
+                                - text: "'s YAML approach from"
+                                - link "#10630" [ref=e609] [cursor=pointer]:
+                                  - /url: https://github.com/warpdotdev/warp/pull/10630
+                                - text: /
+                                - link "#10990" [ref=e610] [cursor=pointer]:
+                                  - /url: https://github.com/warpdotdev/warp/pull/10990
+                                - text: ":"
+                              - blockquote [ref=e611]:
+                                - list [ref=e612]:
+                                  - listitem [ref=e613]:
+                                    - code [ref=e614]: crates/i18n/
+                                    - text: with
+                                    - code [ref=e615]: t!()
+                                    - text: /
+                                    - code [ref=e616]: t_required!()
+                                    - text: macros and
+                                    - code [ref=e617]: TranslationLookup
+                                  - listitem [ref=e618]:
+                                    - code [ref=e619]: "resources/bundled/locales/{en,ru}.yml"
+                                    - text: (247 keys each, YAML)
+                                  - listitem [ref=e620]:
+                                    - code [ref=e621]: WARP_LANG
+                                    - text: env var → system locale →
+                                    - code [ref=e622]: en
+                                    - text: fallback
+                                  - listitem [ref=e623]:
+                                    - text: No feature flag, no settings UI — same design as
+                                    - generic [ref=e624]:
+                                      - img [ref=e625]
+                                      - 'link "Add i18n framework with Simplified Chinese (zh-CN) support #10630" [ref=e627] [cursor=pointer]':
+                                        - /url: https://github.com/warpdotdev/warp/pull/10630
+                                - paragraph [ref=e628]:
+                                  - text: The Russian
+                                  - code [ref=e629]: ru.yml
+                                  - text: should be a drop-in addition to the framework once it's approved. Happy to rebase onto whichever PR lands first.
+                                - paragraph [ref=e630]: Dmitry
+                      - group [ref=e635]:
+                        - generic "Add or remove reactions" [ref=e636] [cursor=pointer]:
+                          - img [ref=e637]
+                - generic [ref=e640]:
+                  - link "@ErshovDmitry" [ref=e642] [cursor=pointer]:
+                    - /url: /ErshovDmitry
+                    - img "@ErshovDmitry" [ref=e643]
+                  - generic [ref=e645]:
+                    - generic [ref=e646]:
+                      - generic [ref=e647]:
+                        - group [ref=e649]:
+                          - button "Show options" [ref=e650] [cursor=pointer]:
+                            - img "Show options" [ref=e653]
+                        - generic "You are the author of this pull request." [ref=e656]:
+                          - generic [ref=e657]: Author
+                      - heading "ErshovDmitry commented May 20, 202612 hours ago" [level=3] [ref=e658]:
+                        - generic [ref=e659]:
+                          - strong [ref=e660]:
+                            - link "ErshovDmitry" [ref=e661] [cursor=pointer]:
+                              - /url: /ErshovDmitry
+                          - text: commented
+                          - link "May 20, 202612 hours ago" [ref=e662] [cursor=pointer]:
+                            - /url: "#issuecomment-4495572049"
+                    - generic [ref=e663]:
+                      - table [ref=e665]:
+                        - rowgroup [ref=e666]:
+                          - row "@cla-bot check" [ref=e667]:
+                            - cell "@cla-bot check" [ref=e668]:
+                              - paragraph [ref=e669]:
+                                - link "@cla-bot" [ref=e670] [cursor=pointer]:
+                                  - /url: https://github.com/cla-bot
+                                - text: check
+                      - group [ref=e675]:
+                        - generic "Add or remove reactions" [ref=e676] [cursor=pointer]:
+                          - img [ref=e677]
+                - generic [ref=e680]:
+                  - img [ref=e682]
+                  - generic [ref=e684]:
+                    - link "@cla-bot" [ref=e685] [cursor=pointer]:
+                      - /url: /apps/cla-bot
+                      - img "@cla-bot" [ref=e686]
+                    - link "cla-bot" [ref=e687] [cursor=pointer]:
+                      - /url: /apps/cla-bot
+                    - generic [ref=e688]: Bot
+                    - text: added the
+                    - link "cla-signed" [ref=e689] [cursor=pointer]:
+                      - /url: /warpdotdev/warp/issues?q=state%3Aopen%20label%3Acla-signed
+                    - text: label
+                    - link "May 20, 202612 hours ago" [ref=e690] [cursor=pointer]:
+                      - /url: "#event-25743817179"
+                - generic [ref=e692]:
+                  - link "@cla-bot" [ref=e694] [cursor=pointer]:
+                    - /url: /apps/cla-bot
+                    - img "@cla-bot" [ref=e695]
+                  - generic [ref=e697]:
+                    - generic [ref=e698]:
+                      - group [ref=e701]:
+                        - button "Show options" [ref=e702] [cursor=pointer]:
+                          - img "Show options" [ref=e705]
+                      - heading "cla-bot Bot commented May 20, 202612 hours ago" [level=3] [ref=e707]:
+                        - generic [ref=e708]:
+                          - strong [ref=e709]:
+                            - link "cla-bot" [ref=e710] [cursor=pointer]:
+                              - /url: /apps/cla-bot
+                            - generic [ref=e711]: Bot
+                          - text: commented
+                          - link "May 20, 202612 hours ago" [ref=e712] [cursor=pointer]:
+                            - /url: "#issuecomment-4495573189"
+                    - generic [ref=e713]:
+                      - table [ref=e715]:
+                        - rowgroup [ref=e716]:
+                          - row "The cla-bot has been summoned, and re-checked this pull request!" [ref=e717]:
+                            - cell "The cla-bot has been summoned, and re-checked this pull request!" [ref=e718]:
+                              - paragraph [ref=e719]: The cla-bot has been summoned, and re-checked this pull request!
+                      - group [ref=e724]:
+                        - generic "Add or remove reactions" [ref=e725] [cursor=pointer]:
+                          - img [ref=e726]
+                - generic [ref=e729]:
+                  - link "@ErshovDmitry" [ref=e731] [cursor=pointer]:
+                    - /url: /ErshovDmitry
+                    - img "@ErshovDmitry" [ref=e732]
+                  - generic [ref=e734]:
+                    - generic [ref=e735]:
+                      - generic [ref=e736]:
+                        - group [ref=e738]:
+                          - button "Show options" [ref=e739] [cursor=pointer]:
+                            - img "Show options" [ref=e742]
+                        - generic "You are the author of this pull request." [ref=e745]:
+                          - generic [ref=e746]: Author
+                      - heading "ErshovDmitry commented May 20, 202612 hours ago" [level=3] [ref=e747]:
+                        - generic [ref=e748]:
+                          - strong [ref=e749]:
+                            - link "ErshovDmitry" [ref=e750] [cursor=pointer]:
+                              - /url: /ErshovDmitry
+                          - text: commented
+                          - link "May 20, 202612 hours ago" [ref=e751] [cursor=pointer]:
+                            - /url: "#issuecomment-4495607261"
+                    - generic [ref=e752]:
+                      - table [ref=e754]:
+                        - rowgroup [ref=e755]:
+                          - 'row "@oss-maintainers This PR now follows the same YAML-based approach as #10630 / #10990 by @ZacharyZcR — matching crates/i18n/ API, resources/bundled/locales/{en,ru}.yml, t!() / t_required!() macros, and WARP_LANG env var detection. It''s blocked by the issue-state enforcement check (needs a ready-to-implement issue). Could a maintainer please add ready-to-implement to #1194, or let me know if I should create a separate tracking issue? Russian ru.yml (247 keys) is ready to drop into whichever i18n PR lands first. Happy to rebase. Cheers, Dmitry" [ref=e756]':
+                            - 'cell "@oss-maintainers This PR now follows the same YAML-based approach as #10630 / #10990 by @ZacharyZcR — matching crates/i18n/ API, resources/bundled/locales/{en,ru}.yml, t!() / t_required!() macros, and WARP_LANG env var detection. It''s blocked by the issue-state enforcement check (needs a ready-to-implement issue). Could a maintainer please add ready-to-implement to #1194, or let me know if I should create a separate tracking issue? Russian ru.yml (247 keys) is ready to drop into whichever i18n PR lands first. Happy to rebase. Cheers, Dmitry" [ref=e757]':
+                              - paragraph [ref=e758]:
+                                - link "@oss-maintainers" [ref=e759] [cursor=pointer]:
+                                  - /url: https://github.com/oss-maintainers
+                                - text: This PR now follows the same YAML-based approach as
+                                - link "#10630" [ref=e760] [cursor=pointer]:
+                                  - /url: https://github.com/warpdotdev/warp/pull/10630
+                                - text: /
+                                - link "#10990" [ref=e761] [cursor=pointer]:
+                                  - /url: https://github.com/warpdotdev/warp/pull/10990
+                                - text: by
+                                - link "@ZacharyZcR" [ref=e762] [cursor=pointer]:
+                                  - /url: https://github.com/ZacharyZcR
+                                - text: — matching
+                                - code [ref=e763]: crates/i18n/
+                                - text: API,
+                                - code [ref=e764]: "resources/bundled/locales/{en,ru}.yml"
+                                - text: ","
+                                - code [ref=e765]: t!()
+                                - text: /
+                                - code [ref=e766]: t_required!()
+                                - text: macros, and
+                                - code [ref=e767]: WARP_LANG
+                                - text: env var detection.
+                              - paragraph [ref=e768]:
+                                - text: It's blocked by the issue-state enforcement check (needs a
+                                - code [ref=e769]: ready-to-implement
+                                - text: issue). Could a maintainer please add
+                                - code [ref=e770]: ready-to-implement
+                                - text: to
+                                - link "#1194" [ref=e771] [cursor=pointer]:
+                                  - /url: https://github.com/warpdotdev/warp/issues/1194
+                                - text: ", or let me know if I should create a separate tracking issue?"
+                              - paragraph [ref=e772]:
+                                - text: Russian
+                                - code [ref=e773]: ru.yml
+                                - text: (247 keys) is ready to drop into whichever i18n PR lands first. Happy to rebase.
+                              - paragraph [ref=e774]:
+                                - text: Cheers,
+                                - text: Dmitry
+                      - group [ref=e779]:
+                        - generic "Add or remove reactions" [ref=e780] [cursor=pointer]:
+                          - img [ref=e781]
+                - generic [ref=e784]:
+                  - img [ref=e786]
+                  - generic [ref=e788]:
+                    - link "@ErshovDmitry" [ref=e789] [cursor=pointer]:
+                      - /url: /ErshovDmitry
+                      - img "@ErshovDmitry" [ref=e790]
+                    - link "ErshovDmitry" [ref=e791] [cursor=pointer]:
+                      - /url: /ErshovDmitry
+                    - link "force-pushed" [ref=e792] [cursor=pointer]:
+                      - /url: /warpdotdev/warp/compare/219659155d8415b5773506f3306f6339e1300b60..d67453f73b0087f3a931fd06e958ab9cebb3be0c
+                    - text: the
+                    - generic [ref=e794]: i18n
+                    - text: branch from
+                    - link "2196591" [ref=e795] [cursor=pointer]:
+                      - /url: /warpdotdev/warp/commit/219659155d8415b5773506f3306f6339e1300b60
+                      - code [ref=e796]: "2196591"
+                    - text: to
+                    - link "d67453f" [ref=e797] [cursor=pointer]:
+                      - /url: /warpdotdev/warp/commit/d67453f73b0087f3a931fd06e958ab9cebb3be0c
+                      - code [ref=e798]: d67453f
+                    - link "Compare" [ref=e799] [cursor=pointer]:
+                      - /url: /warpdotdev/warp/compare/219659155d8415b5773506f3306f6339e1300b60..d67453f73b0087f3a931fd06e958ab9cebb3be0c
+                      - generic [ref=e801]: Compare
+                    - link "May 20, 2026 14:3612 hours ago" [ref=e802] [cursor=pointer]:
+                      - /url: "#event-25744804343"
+                - generic [ref=e804]:
+                  - link "@ZacharyZcR" [ref=e806] [cursor=pointer]:
+                    - /url: /ZacharyZcR
+                    - img "@ZacharyZcR" [ref=e807]
+                  - generic [ref=e809]:
+                    - generic [ref=e810]:
+                      - group [ref=e813]:
+                        - button "Show options" [ref=e814] [cursor=pointer]:
+                          - img "Show options" [ref=e817]
+                      - heading "ZacharyZcR commented May 20, 20264 hours ago" [level=3] [ref=e819]:
+                        - generic [ref=e820]:
+                          - strong [ref=e821]:
+                            - link "ZacharyZcR" [ref=e822] [cursor=pointer]:
+                              - /url: /ZacharyZcR
+                          - text: commented
+                          - link "May 20, 20264 hours ago" [ref=e823] [cursor=pointer]:
+                            - /url: "#issuecomment-4499865827"
+                    - generic [ref=e824]:
+                      - table [ref=e826]:
+                        - rowgroup [ref=e827]:
+                          - row "Hello! Maybe we can collaborate on a project! You can reach out to the Warp Slack channel." [ref=e828]:
+                            - cell "Hello! Maybe we can collaborate on a project! You can reach out to the Warp Slack channel." [ref=e829]:
+                              - paragraph [ref=e830]: Hello! Maybe we can collaborate on a project! You can reach out to the Warp Slack channel.
+                      - group [ref=e835]:
+                        - generic "Add or remove reactions" [ref=e836] [cursor=pointer]:
+                          - img [ref=e837]
+                - generic [ref=e840]:
+                  - link "@ErshovDmitry" [ref=e842] [cursor=pointer]:
+                    - /url: /ErshovDmitry
+                    - img "@ErshovDmitry" [ref=e843]
+                  - generic [ref=e845]:
+                    - generic [ref=e846]:
+                      - generic [ref=e847]:
+                        - group [ref=e849]:
+                          - button "Show options" [ref=e850] [cursor=pointer]:
+                            - img "Show options" [ref=e853]
+                        - generic "You are the author of this pull request." [ref=e856]:
+                          - generic [ref=e857]: Author
+                      - heading "ErshovDmitry commented May 21, 202624 minutes ago" [level=3] [ref=e858]:
+                        - generic [ref=e859]:
+                          - strong [ref=e860]:
+                            - link "ErshovDmitry" [ref=e861] [cursor=pointer]:
+                              - /url: /ErshovDmitry
+                          - text: commented
+                          - link "May 21, 202624 minutes ago" [ref=e862] [cursor=pointer]:
+                            - /url: "#issuecomment-4501859680"
+                    - generic [ref=e863]:
+                      - table [ref=e865]:
+                        - rowgroup [ref=e866]:
+                          - 'row "@ZacharyZcR Thanks for reaching out! Happy to collaborate. We''ve matched your YAML approach — crates/i18n/, t!()/t_required!() macros, resources/bundled/locales/{en,ru}.yml (1080 keys, full Russian translation). Our ru.yml should be a drop-in addition. We have some merge conflicts with master to fix first (3 files). Will resolve those and update the PR. How can we help with #10630? Happy to contribute Russian translations in your format, or collaborate however makes sense. Cheers, Dmitry" [ref=e867]':
+                            - 'cell "@ZacharyZcR Thanks for reaching out! Happy to collaborate. We''ve matched your YAML approach — crates/i18n/, t!()/t_required!() macros, resources/bundled/locales/{en,ru}.yml (1080 keys, full Russian translation). Our ru.yml should be a drop-in addition. We have some merge conflicts with master to fix first (3 files). Will resolve those and update the PR. How can we help with #10630? Happy to contribute Russian translations in your format, or collaborate however makes sense. Cheers, Dmitry" [ref=e868]':
+                              - paragraph [ref=e869]:
+                                - link "@ZacharyZcR" [ref=e870] [cursor=pointer]:
+                                  - /url: https://github.com/ZacharyZcR
+                                - text: Thanks for reaching out! Happy to collaborate. We've matched your YAML approach —
+                                - code [ref=e871]: crates/i18n/
+                                - text: ","
+                                - code [ref=e872]: t!()
+                                - text: /
+                                - code [ref=e873]: t_required!()
+                                - text: macros,
+                                - code [ref=e874]: "resources/bundled/locales/{en,ru}.yml"
+                                - text: (1080 keys, full Russian translation). Our
+                                - code [ref=e875]: ru.yml
+                                - text: should be a drop-in addition.
+                              - paragraph [ref=e876]: We have some merge conflicts with master to fix first (3 files). Will resolve those and update the PR.
+                              - paragraph [ref=e877]:
+                                - text: How can we help with
+                                - link "#10630" [ref=e878] [cursor=pointer]:
+                                  - /url: https://github.com/warpdotdev/warp/pull/10630
+                                - text: "? Happy to contribute Russian translations in your format, or collaborate however makes sense."
+                              - paragraph [ref=e879]:
+                                - text: Cheers,
+                                - text: Dmitry
+                      - generic [ref=e882]:
+                        - group [ref=e884]:
+                          - generic "Add or remove reactions" [ref=e885] [cursor=pointer]:
+                            - img [ref=e886]
+                        - button "react with thumbs up" [ref=e890] [cursor=pointer]:
+                          - img "+1" [ref=e892]
+                          - generic [ref=e893]: "1"
+                - generic [ref=e895]:
+                  - generic [ref=e896]:
+                    - img [ref=e898]
+                    - generic [ref=e900]:
+                      - link "ErshovDmitry" [ref=e901] [cursor=pointer]:
+                        - /url: /ErshovDmitry
+                      - text: added 14 commits
+                      - link "May 21, 2026 02:2423 minutes ago" [ref=e902] [cursor=pointer]:
+                        - /url: "#commits-pushed-cc72586"
+                  - generic [ref=e903]:
+                    - generic [ref=e904]:
+                      - img [ref=e906]
+                      - generic [ref=e911]:
+                        - link "@ErshovDmitry" [ref=e914] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e915]
+                        - code [ref=e917]:
+                          - 'link "feat: add warp_i18n crate with t!() macro and en/ru locales" [ref=e918] [cursor=pointer]':
+                            - /url: /warpdotdev/warp/pull/11382/commits/cc7258688a9c182530aa60188303f6fd1831df6f
+                        - code [ref=e922]:
+                          - link "cc72586" [ref=e923] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/cc7258688a9c182530aa60188303f6fd1831df6f
+                    - generic [ref=e924]:
+                      - img [ref=e926]
+                      - generic [ref=e931]:
+                        - link "@ErshovDmitry" [ref=e934] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e935]
+                        - generic [ref=e936]:
+                          - code [ref=e937]:
+                            - 'link "feat: i18n Phase 2 — FeatureFlag, Locale setting, app_menus migration…" [ref=e938] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/23dcd5b5858770e308c01ad9f80dc13502530104
+                          - button "Commit message body" [ref=e940] [cursor=pointer]: …
+                        - code [ref=e944]:
+                          - link "23dcd5b" [ref=e945] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/23dcd5b5858770e308c01ad9f80dc13502530104
+                    - generic [ref=e946]:
+                      - img [ref=e948]
+                      - generic [ref=e953]:
+                        - link "@ErshovDmitry" [ref=e956] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e957]
+                        - generic [ref=e958]:
+                          - code [ref=e959]:
+                            - 'link "fix: wire warp_i18n::init() at startup, sync LocaleSettings with i18n…" [ref=e960] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/6fa17bbb49f5ca60f4e751a578c15c308c45dc55
+                          - button "Commit message body" [ref=e962] [cursor=pointer]: …
+                        - code [ref=e966]:
+                          - link "6fa17bb" [ref=e967] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/6fa17bbb49f5ca60f4e751a578c15c308c45dc55
+                    - generic [ref=e968]:
+                      - img [ref=e970]
+                      - generic [ref=e975]:
+                        - link "@ErshovDmitry" [ref=e978] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e979]
+                        - code [ref=e981]:
+                          - 'link "docs: add English translation of the fork note in README" [ref=e982] [cursor=pointer]':
+                            - /url: /warpdotdev/warp/pull/11382/commits/5cff42bde0a32c052ffe3b0fd22e7d63efd51183
+                        - code [ref=e986]:
+                          - link "5cff42b" [ref=e987] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/5cff42bde0a32c052ffe3b0fd22e7d63efd51183
+                    - generic [ref=e988]:
+                      - img [ref=e990]
+                      - generic [ref=e995]:
+                        - link "@ErshovDmitry" [ref=e998] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e999]
+                        - generic [ref=e1000]:
+                          - code [ref=e1001]:
+                            - 'link "feat: i18n Phase 3 — build script key validation, WASM support, setti…" [ref=e1002] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/fc1700a5204082985e0e8a75a90fbe601a4d6cd7
+                          - button "Commit message body" [ref=e1004] [cursor=pointer]: …
+                        - code [ref=e1008]:
+                          - link "fc1700a" [ref=e1009] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/fc1700a5204082985e0e8a75a90fbe601a4d6cd7
+                    - generic [ref=e1010]:
+                      - img [ref=e1012]
+                      - generic [ref=e1017]:
+                        - link "@ErshovDmitry" [ref=e1020] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1021]
+                        - generic [ref=e1022]:
+                          - code [ref=e1023]:
+                            - 'link "refactor: migrate to ZacharyZcR-compatible YAML i18n with Russian locale" [ref=e1024] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/df42122abb1c0ba4f71797a10c26ef4d2a71db02
+                          - button "Commit message body" [ref=e1026] [cursor=pointer]: …
+                        - code [ref=e1030]:
+                          - link "df42122" [ref=e1031] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/df42122abb1c0ba4f71797a10c26ef4d2a71db02
+                    - generic [ref=e1032]:
+                      - img [ref=e1034]
+                      - generic [ref=e1039]:
+                        - link "@ErshovDmitry" [ref=e1042] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1043]
+                        - code [ref=e1045]:
+                          - 'link "fix: init_locale before menu bar, cleanup dead code, harden set_locale" [ref=e1046] [cursor=pointer]':
+                            - /url: /warpdotdev/warp/pull/11382/commits/f95105b31dd57f302814ec38275811f0059853a1
+                        - code [ref=e1050]:
+                          - link "f95105b" [ref=e1051] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/f95105b31dd57f302814ec38275811f0059853a1
+                    - generic [ref=e1052]:
+                      - img [ref=e1054]
+                      - generic [ref=e1059]:
+                        - link "@ErshovDmitry" [ref=e1062] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1063]
+                        - generic [ref=e1064]:
+                          - code [ref=e1065]:
+                            - 'link "fix(i18n): Round 2 review — internationalize all hardcoded menu strings" [ref=e1066] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/496ee12ac18b69a27f3bc42c6e09c061ab058d53
+                          - button "Commit message body" [ref=e1068] [cursor=pointer]: …
+                        - code [ref=e1072]:
+                          - link "496ee12" [ref=e1073] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/496ee12ac18b69a27f3bc42c6e09c061ab058d53
+                    - generic [ref=e1074]:
+                      - img [ref=e1076]
+                      - generic [ref=e1081]:
+                        - link "@ErshovDmitry" [ref=e1084] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1085]
+                        - code [ref=e1087]:
+                          - 'link "chore: add .playwright-mcp to .gitignore" [ref=e1088] [cursor=pointer]':
+                            - /url: /warpdotdev/warp/pull/11382/commits/a6f1e9adbe6950c53bdddb004d4c04ac573c5506
+                        - code [ref=e1092]:
+                          - link "a6f1e9a" [ref=e1093] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/a6f1e9adbe6950c53bdddb004d4c04ac573c5506
+                    - generic [ref=e1094]:
+                      - img [ref=e1096]
+                      - generic [ref=e1101]:
+                        - link "@ErshovDmitry" [ref=e1104] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1105]
+                        - generic [ref=e1106]:
+                          - code [ref=e1107]:
+                            - 'link "i18n(keybindings,features): replace hardcoded English strings with me…" [ref=e1108] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/1e2bb80aaaf8769c52c42a41c180fe09747ca932
+                          - button "Commit message body" [ref=e1110] [cursor=pointer]: …
+                        - code [ref=e1114]:
+                          - link "1e2bb80" [ref=e1115] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/1e2bb80aaaf8769c52c42a41c180fe09747ca932
+                    - generic [ref=e1116]:
+                      - img [ref=e1118]
+                      - generic [ref=e1123]:
+                        - link "@ErshovDmitry" [ref=e1126] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1127]
+                        - generic [ref=e1128]:
+                          - code [ref=e1129]:
+                            - 'link "i18n(billing,workspace): internationalize billing page and workspace …" [ref=e1130] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/8157eee00d0bf3311e38e5c4fdbfdeafb31a0b8a
+                          - button "Commit message body" [ref=e1132] [cursor=pointer]: …
+                        - code [ref=e1136]:
+                          - link "8157eee" [ref=e1137] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/8157eee00d0bf3311e38e5c4fdbfdeafb31a0b8a
+                    - generic [ref=e1138]:
+                      - img [ref=e1140]
+                      - generic [ref=e1145]:
+                        - link "@ErshovDmitry" [ref=e1148] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1149]
+                        - generic [ref=e1150]:
+                          - code [ref=e1151]:
+                            - 'link "i18n(ai_page): internationalize AI settings page strings" [ref=e1152] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/5fa638bab706c58727184a97ad6403704c475da1
+                          - button "Commit message body" [ref=e1154] [cursor=pointer]: …
+                        - code [ref=e1158]:
+                          - link "5fa638b" [ref=e1159] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/5fa638bab706c58727184a97ad6403704c475da1
+                    - generic [ref=e1160]:
+                      - img [ref=e1162]
+                      - generic [ref=e1167]:
+                        - link "@ErshovDmitry" [ref=e1170] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1171]
+                        - generic [ref=e1172]:
+                          - code [ref=e1173]:
+                            - 'link "i18n(workspace,code): internationalize workspace bindings and code se…" [ref=e1174] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/38589381df3792f835084ed75c8f9aa81ecdca57
+                          - button "Commit message body" [ref=e1176] [cursor=pointer]: …
+                        - code [ref=e1180]:
+                          - link "3858938" [ref=e1181] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/38589381df3792f835084ed75c8f9aa81ecdca57
+                    - generic [ref=e1182]:
+                      - img [ref=e1184]
+                      - generic [ref=e1189]:
+                        - link "@ErshovDmitry" [ref=e1192] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1193]
+                        - generic [ref=e1194]:
+                          - code [ref=e1195]:
+                            - 'link "i18n(settings): internationalize privacy, teams, environments, drive,…" [ref=e1196] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/93843bdef27125e8c2df8226dfb915057d519cf6
+                          - button "Commit message body" [ref=e1198] [cursor=pointer]: …
+                        - code [ref=e1202]:
+                          - link "93843bd" [ref=e1203] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/93843bdef27125e8c2df8226dfb915057d519cf6
+                - generic [ref=e1205]:
+                  - generic [ref=e1206]:
+                    - img [ref=e1208]
+                    - generic [ref=e1210]:
+                      - link "ErshovDmitry" [ref=e1211] [cursor=pointer]:
+                        - /url: /ErshovDmitry
+                      - text: added 7 commits
+                      - link "May 21, 2026 02:2522 minutes ago" [ref=e1212] [cursor=pointer]:
+                        - /url: "#commits-pushed-b532730"
+                  - generic [ref=e1213]:
+                    - generic [ref=e1214]:
+                      - img [ref=e1216]
+                      - generic [ref=e1221]:
+                        - link "@ErshovDmitry" [ref=e1224] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1225]
+                        - generic [ref=e1226]:
+                          - code [ref=e1227]:
+                            - 'link "i18n: internationalize code_review_view and notebooks editor view" [ref=e1228] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/b532730e0acf4cf7f9737c707b8abfcdf3a27cbd
+                          - button "Commit message body" [ref=e1230] [cursor=pointer]: …
+                        - code [ref=e1234]:
+                          - link "b532730" [ref=e1235] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/b532730e0acf4cf7f9737c707b8abfcdf3a27cbd
+                    - generic [ref=e1236]:
+                      - img [ref=e1238]
+                      - generic [ref=e1243]:
+                        - link "@ErshovDmitry" [ref=e1246] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1247]
+                        - generic [ref=e1248]:
+                          - code [ref=e1249]:
+                            - 'link "i18n: internationalize terminal/input.rs and ai/agent_management/view.rs" [ref=e1250] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/aba6fba8bf5226ddf10ac7dbefa6e591022dd125
+                          - button "Commit message body" [ref=e1252] [cursor=pointer]: …
+                        - code [ref=e1256]:
+                          - link "aba6fba" [ref=e1257] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/aba6fba8bf5226ddf10ac7dbefa6e591022dd125
+                    - generic [ref=e1258]:
+                      - img [ref=e1260]
+                      - generic [ref=e1265]:
+                        - link "@ErshovDmitry" [ref=e1268] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1269]
+                        - generic [ref=e1270]:
+                          - code [ref=e1271]:
+                            - 'link "i18n(dialogs): internationalize common buttons, toasts, placeholders" [ref=e1272] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/0eaad2ac3308b84c1600fefd76e6676d86295a94
+                          - button "Commit message body" [ref=e1274] [cursor=pointer]: …
+                        - code [ref=e1278]:
+                          - link "0eaad2a" [ref=e1279] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/0eaad2ac3308b84c1600fefd76e6676d86295a94
+                    - generic [ref=e1280]:
+                      - img [ref=e1282]
+                      - generic [ref=e1287]:
+                        - link "@ErshovDmitry" [ref=e1290] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1291]
+                        - code [ref=e1293]:
+                          - 'link "fix(i18n): add missing settings.code_page Russian translations" [ref=e1294] [cursor=pointer]':
+                            - /url: /warpdotdev/warp/pull/11382/commits/54d0f169cd7802582894cc213f3d416e1af5c0ce
+                        - code [ref=e1298]:
+                          - link "54d0f16" [ref=e1299] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/54d0f169cd7802582894cc213f3d416e1af5c0ce
+                    - generic [ref=e1300]:
+                      - img [ref=e1302]
+                      - generic [ref=e1307]:
+                        - link "@ErshovDmitry" [ref=e1310] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1311]
+                        - generic [ref=e1312]:
+                          - code [ref=e1313]:
+                            - 'link "i18n(workspace): internationalize remaining workspace/view.rs strings" [ref=e1314] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/87d6cfbd2451107eafb31be5fc40d718f25e6f7d
+                          - button "Commit message body" [ref=e1316] [cursor=pointer]: …
+                        - code [ref=e1320]:
+                          - link "87d6cfb" [ref=e1321] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/87d6cfbd2451107eafb31be5fc40d718f25e6f7d
+                    - generic [ref=e1322]:
+                      - img [ref=e1324]
+                      - generic [ref=e1329]:
+                        - link "@ErshovDmitry" [ref=e1332] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1333]
+                        - generic [ref=e1334]:
+                          - code [ref=e1335]:
+                            - 'link "i18n(terminal): internationalize terminal view notifications, buttons…" [ref=e1336] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/5f91dece2050c5e00fe63aca8990dc4424bb6639
+                          - button "Commit message body" [ref=e1338] [cursor=pointer]: …
+                        - code [ref=e1342]:
+                          - link "5f91dec" [ref=e1343] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/5f91dece2050c5e00fe63aca8990dc4424bb6639
+                    - generic [ref=e1344]:
+                      - img [ref=e1346]
+                      - generic [ref=e1351]:
+                        - link "@ErshovDmitry" [ref=e1354] [cursor=pointer]:
+                          - /url: /ErshovDmitry
+                          - img "@ErshovDmitry" [ref=e1355]
+                        - generic [ref=e1356]:
+                          - code [ref=e1357]:
+                            - 'link "fix: remove stale LocaleSettings import, merge duplicate notebook YAM…" [ref=e1358] [cursor=pointer]':
+                              - /url: /warpdotdev/warp/pull/11382/commits/1a45d42a209d971c289b173445d867b65e52351c
+                          - button "Commit message body" [ref=e1360] [cursor=pointer]: …
+                        - code [ref=e1364]:
+                          - link "1a45d42" [ref=e1365] [cursor=pointer]:
+                            - /url: /warpdotdev/warp/pull/11382/commits/1a45d42a209d971c289b173445d867b65e52351c
+                - generic [ref=e1367]:
+                  - link "@ZacharyZcR" [ref=e1369] [cursor=pointer]:
+                    - /url: /ZacharyZcR
+                    - img "@ZacharyZcR" [ref=e1370]
+                  - generic [ref=e1372]:
+                    - generic [ref=e1373]:
+                      - group [ref=e1376]:
+                        - button "Show options" [ref=e1377] [cursor=pointer]:
+                          - img "Show options" [ref=e1380]
+                      - heading "ZacharyZcR commented May 21, 202616 minutes ago" [level=3] [ref=e1382]:
+                        - generic [ref=e1383]:
+                          - strong [ref=e1384]:
+                            - link "ZacharyZcR" [ref=e1385] [cursor=pointer]:
+                              - /url: /ZacharyZcR
+                          - text: commented
+                          - link "May 21, 202616 minutes ago" [ref=e1386] [cursor=pointer]:
+                            - /url: "#issuecomment-4501916575"
+                    - generic [ref=e1387]:
+                      - table [ref=e1389]:
+                        - rowgroup [ref=e1390]:
+                          - row "Thank you very much! Perhaps we could reach out to Warp’s Slack channel together and let them decide how to proceed with development. Also, your PR needs to be linked to an issue with a specific tag; you can take a look at my PR and issue." [ref=e1391]:
+                            - cell "Thank you very much! Perhaps we could reach out to Warp’s Slack channel together and let them decide how to proceed with development. Also, your PR needs to be linked to an issue with a specific tag; you can take a look at my PR and issue." [ref=e1392]:
+                              - blockquote [ref=e1393]:
+                                - paragraph [ref=e1394]:
+                                  - link "@ZacharyZcR" [ref=e1395] [cursor=pointer]:
+                                    - /url: https://github.com/ZacharyZcR
+                                  - text: Thanks for reaching out! Happy to collaborate. We've matched your YAML approach —
+                                  - code [ref=e1396]: crates/i18n/
+                                  - text: ","
+                                  - code [ref=e1397]: t!()
+                                  - text: /
+                                  - code [ref=e1398]: t_required!()
+                                  - text: macros,
+                                  - code [ref=e1399]: "resources/bundled/locales/{en,ru}.yml"
+                                  - text: (1080 keys, full Russian translation). Our
+                                  - code [ref=e1400]: ru.yml
+                                  - text: should be a drop-in addition.
+                                - paragraph [ref=e1401]: We have some merge conflicts with master to fix first (3 files). Will resolve those and update the PR.
+                                - paragraph [ref=e1402]:
+                                  - text: How can we help with
+                                  - link "#10630" [ref=e1403] [cursor=pointer]:
+                                    - /url: https://github.com/warpdotdev/warp/pull/10630
+                                  - text: "? Happy to contribute Russian translations in your format, or collaborate however makes sense."
+                                - paragraph [ref=e1404]: Cheers, Dmitry
+                              - paragraph [ref=e1405]: Thank you very much! Perhaps we could reach out to Warp’s Slack channel together and let them decide how to proceed with development. Also, your PR needs to be linked to an issue with a specific tag; you can take a look at my PR and issue.
+                      - group [ref=e1410]:
+                        - generic "Add or remove reactions" [ref=e1411] [cursor=pointer]:
+                          - img [ref=e1412]
+                - generic [ref=e1417]:
+                  - img [ref=e1419]
+                  - generic [ref=e1424]:
+                    - link "@ErshovDmitry" [ref=e1427] [cursor=pointer]:
+                      - /url: /ErshovDmitry
+                      - img "@ErshovDmitry" [ref=e1428]
+                    - code [ref=e1430]:
+                      - 'link "fix: resolve compilation errors after rebase onto master" [ref=e1431] [cursor=pointer]':
+                        - /url: /warpdotdev/warp/pull/11382/commits/e62f4aad25c793bb7e3d109807f26512fc6142d3
+                    - group [ref=e1435]:
+                      - generic "1 / 1 checks OK" [ref=e1436] [cursor=pointer]:
+                        - img "1 / 1 checks OK" [ref=e1437]
+                    - code [ref=e1440]:
+                      - link "e62f4aa" [ref=e1441] [cursor=pointer]:
+                        - /url: /warpdotdev/warp/pull/11382/commits/e62f4aad25c793bb7e3d109807f26512fc6142d3
+                - generic [ref=e1443]:
+                  - img [ref=e1445]
+                  - generic [ref=e1447]:
+                    - link "@ErshovDmitry" [ref=e1448] [cursor=pointer]:
+                      - /url: /ErshovDmitry
+                      - img "@ErshovDmitry" [ref=e1449]
+                    - link "ErshovDmitry" [ref=e1450] [cursor=pointer]:
+                      - /url: /ErshovDmitry
+                    - link "force-pushed" [ref=e1451] [cursor=pointer]:
+                      - /url: /warpdotdev/warp/compare/a83b91ca0f7faecce47ed52c323c36647f7bfe2b..e62f4aad25c793bb7e3d109807f26512fc6142d3
+                    - text: the
+                    - generic [ref=e1453]: i18n
+                    - text: branch from
+                    - link "a83b91c" [ref=e1454] [cursor=pointer]:
+                      - /url: /warpdotdev/warp/commit/a83b91ca0f7faecce47ed52c323c36647f7bfe2b
+                      - code [ref=e1455]: a83b91c
+                    - text: to
+                    - link "e62f4aa" [ref=e1456] [cursor=pointer]:
+                      - /url: /warpdotdev/warp/commit/e62f4aad25c793bb7e3d109807f26512fc6142d3
+                      - code [ref=e1457]: e62f4aa
+                    - link "Compare" [ref=e1458] [cursor=pointer]:
+                      - /url: /warpdotdev/warp/compare/a83b91ca0f7faecce47ed52c323c36647f7bfe2b..e62f4aad25c793bb7e3d109807f26512fc6142d3
+                      - generic [ref=e1460]: Compare
+                    - link "May 21, 2026 02:443 minutes ago" [ref=e1461] [cursor=pointer]:
+                      - /url: "#event-25774475980"
+                - generic [ref=e1465]:
+                  - img [ref=e1467]
+                  - generic [ref=e1472]:
+                    - link "@ErshovDmitry" [ref=e1475] [cursor=pointer]:
+                      - /url: /ErshovDmitry
+                      - img "@ErshovDmitry" [ref=e1476]
+                    - code [ref=e1478]:
+                      - 'link "chore: suppress dead_code warnings from handoff stubs" [ref=e1479] [cursor=pointer]':
+                        - /url: /warpdotdev/warp/pull/11382/commits/f05a60079a0f77037aa4edde53fa7fd641da2336
+                    - group [ref=e1483]:
+                      - generic "1 / 1 checks OK" [ref=e1484] [cursor=pointer]:
+                        - img "1 / 1 checks OK" [ref=e1485]
+                    - code [ref=e1488]:
+                      - link "f05a600" [ref=e1489] [cursor=pointer]:
+                        - /url: /warpdotdev/warp/pull/11382/commits/f05a60079a0f77037aa4edde53fa7fd641da2336
+            - generic [ref=e1493]:
+              - img [ref=e1494]
+              - generic [ref=e1497]: Loading
+            - generic [ref=e1500]:
+              - link "@ErshovDmitry" [ref=e1502] [cursor=pointer]:
+                - /url: /ErshovDmitry
+                - img "@ErshovDmitry" [ref=e1503]
+              - form "Add a comment" [ref=e1505]:
+                - group [ref=e1506]:
+                  - heading "Add a comment" [level=4] [ref=e1509]
+                  - generic [ref=e1510]: Comment
+                  - generic [ref=e1511]:
+                    - generic [ref=e1512]:
+                      - tablist "Add a comment" [ref=e1513]:
+                        - tab "Write" [selected] [ref=e1514] [cursor=pointer]
+                        - tab "Preview" [ref=e1515] [cursor=pointer]
+                      - toolbar [ref=e1516]:
+                        - generic [ref=e1517]:
+                          - button "Heading" [ref=e1519] [cursor=pointer]:
+                            - img
+                          - button "Bold" [ref=e1521] [cursor=pointer]:
+                            - img
+                          - button "Italic" [ref=e1523] [cursor=pointer]:
+                            - img
+                          - button "Quote" [ref=e1525] [cursor=pointer]:
+                            - img
+                          - button "Code" [ref=e1527] [cursor=pointer]:
+                            - img
+                          - button "Link" [ref=e1529] [cursor=pointer]:
+                            - img
+                          - separator [ref=e1530]
+                          - button "Numbered list" [ref=e1532] [cursor=pointer]:
+                            - img
+                          - button "Unordered list" [ref=e1534] [cursor=pointer]:
+                            - img
+                          - button "Task list" [ref=e1536] [cursor=pointer]:
+                            - img
+                          - separator [ref=e1537]
+                          - button "Attach files" [ref=e1539] [cursor=pointer]:
+                            - img
+                          - button "Mention" [ref=e1541] [cursor=pointer]:
+                            - img
+                          - button "Reference" [ref=e1543] [cursor=pointer]:
+                            - img
+                          - button "Saved replies" [ref=e1545] [cursor=pointer]:
+                            - img
+                          - button "Slash commands" [ref=e1547] [cursor=pointer]:
+                            - img
+                    - tabpanel "Write" [ref=e1548]:
+                      - generic [ref=e1552]:
+                        - textbox "Comment" [ref=e1553]:
+                          - /placeholder: " "
+                        - paragraph: Add your comment here...
+                      - generic [ref=e1554]:
+                        - link "Markdown is supported" [ref=e1556] [cursor=pointer]:
+                          - /url: https://docs.github.com/github/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax
+                          - generic [ref=e1557]:
+                            - generic:
+                              - img
+                            - generic [ref=e1558]: Markdown is supported
+                        - button "Paste, drop, or click to add files" [ref=e1559] [cursor=pointer]:
+                          - generic [ref=e1560]:
+                            - generic:
+                              - img
+                            - generic [ref=e1561]: Paste, drop, or click to add files
+                - generic [ref=e1564]:
+                  - button "Close pull request" [ref=e1566] [cursor=pointer]:
+                    - img [ref=e1567]
+                    - text: Close pull request
+                  - button "Comment" [disabled] [ref=e1570]
+              - generic [ref=e1571]:
+                - img [ref=e1572]
+                - generic [ref=e1574]:
+                  - text: Remember, contributions to this repository should follow its
+                  - link "contributing guidelines" [ref=e1575] [cursor=pointer]:
+                    - /url: /warpdotdev/warp/blob/3d940d78a78d9d18301e435c2b53607236044a08/CONTRIBUTING.md
+                  - text: ","
+                  - link "security policy" [ref=e1576] [cursor=pointer]:
+                    - /url: /warpdotdev/warp/blob/3d940d78a78d9d18301e435c2b53607236044a08/SECURITY.md
+                  - text: ", and"
+                  - link "code of conduct" [ref=e1577] [cursor=pointer]:
+                    - /url: /warpdotdev/warp/blob/3d940d78a78d9d18301e435c2b53607236044a08/CODE_OF_CONDUCT.md
+                  - text: .
+              - generic [ref=e1578]:
+                - img [ref=e1579]
+                - strong [ref=e1581]: ProTip!
+                - text: Add comments to specific lines under
+                - link "Files changed" [ref=e1582] [cursor=pointer]:
+                  - /url: /warpdotdev/warp/pull/11382/files
+                - text: .
+        - generic [ref=e1586]:
+          - form "Select reviewers" [ref=e1588]:
+            - heading "Reviewers" [level=3] [ref=e1589]
+            - generic [ref=e1590]:
+              - paragraph [ref=e1591]:
+                - generic [ref=e1592]:
+                  - link "@oz-for-oss" [ref=e1593] [cursor=pointer]:
+                    - /url: /apps/oz-for-oss
+                    - img "@oz-for-oss" [ref=e1594]
+                  - link "oz-for-oss[bot]" [ref=e1595] [cursor=pointer]:
+                    - /url: /apps/oz-for-oss
+                - link "oz-for-oss[bot] requested changes" [ref=e1596] [cursor=pointer]:
+                  - /url: /warpdotdev/warp/pull/11382/changes/BASE..169dfa663dd4c533eb32daf850f25d6b9c123521
+                  - img [ref=e1598]
+              - paragraph [ref=e1600]: Requested changes must be addressed to merge this pull request.
+            - generic [ref=e1601]:
+              - generic [ref=e1602]: Still in progress?
+              - group [ref=e1603]:
+                - button "Convert to draft" [ref=e1604] [cursor=pointer]
+          - form "Select assignees" [ref=e1606]:
+            - heading "Assignees" [level=3] [ref=e1607]
+            - text: No one assigned
+          - generic [ref=e1608]:
+            - heading "Labels" [level=3] [ref=e1609]
+            - generic [ref=e1610]:
+              - link "cla-signed" [ref=e1611] [cursor=pointer]:
+                - /url: /warpdotdev/warp/issues?q=state%3Aopen%20label%3Acla-signed
+                - generic [ref=e1612]: cla-signed
+              - link "external-contributor" [ref=e1613] [cursor=pointer]:
+                - /url: /warpdotdev/warp/issues?q=state%3Aopen%20label%3Aexternal-contributor
+                - generic [ref=e1614]: external-contributor
+          - form "Select projects" [ref=e1616]:
+            - heading "Projects" [level=3] [ref=e1617]
+            - text: None yet
+          - form "Select milestones" [ref=e1619]:
+            - heading "Milestone" [level=3] [ref=e1620]
+            - text: No milestone
+          - form "Link issues" [ref=e1626]:
+            - heading "Development" [level=3] [ref=e1627]
+            - paragraph [ref=e1628]: Successfully merging this pull request may close these issues.
+            - paragraph [ref=e1630]: None yet
+          - generic [ref=e1632]:
+            - button "Notifications Customize" [ref=e1635] [cursor=pointer]:
+              - generic [ref=e1636]:
+                - generic [ref=e1637]: Notifications
+                - generic [ref=e1638]: Customize
+            - button "Unsubscribe" [ref=e1640] [cursor=pointer]:
+              - generic [ref=e1641]:
+                - generic:
+                  - img
+                - generic [ref=e1642]: Unsubscribe
+            - paragraph [ref=e1643]: You’re receiving notifications because you were mentioned.
+          - generic [ref=e1645]:
+            - heading "2 participants" [level=3] [ref=e1646]
+            - generic [ref=e1647]:
+              - link "@ErshovDmitry" [ref=e1648] [cursor=pointer]:
+                - /url: /ErshovDmitry
+                - img "@ErshovDmitry" [ref=e1649]
+              - link "@ZacharyZcR" [ref=e1650] [cursor=pointer]:
+                - /url: /ZacharyZcR
+                - img "@ZacharyZcR" [ref=e1651]
+          - generic [ref=e1654]:
+            - generic [ref=e1655]:
+              - checkbox "Allow edits by maintainers" [checked] [ref=e1656]
+              - text: Allow edits by maintainers
+            - button "Learn more about allowing maintainer edits" [ref=e1657] [cursor=pointer]:
+              - img [ref=e1660]
+  - contentinfo [ref=e1663]:
+    - heading "Footer" [level=2] [ref=e1664]
+    - generic [ref=e1665]:
+      - generic [ref=e1666]:
+        - link "GitHub Homepage" [ref=e1667] [cursor=pointer]:
+          - /url: https://github.com
+          - img [ref=e1668]
+        - generic [ref=e1670]: © 2026 GitHub, Inc.
+      - navigation "Footer" [ref=e1671]:
+        - heading "Footer navigation" [level=3] [ref=e1672]
+        - list "Footer navigation" [ref=e1673]:
+          - listitem [ref=e1674]:
+            - link "Terms" [ref=e1675] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/github-terms/github-terms-of-service
+          - listitem [ref=e1676]:
+            - link "Privacy" [ref=e1677] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/privacy-policies/github-privacy-statement
+          - listitem [ref=e1678]:
+            - link "Security" [ref=e1679] [cursor=pointer]:
+              - /url: https://github.com/security
+          - listitem [ref=e1680]:
+            - link "Status" [ref=e1681] [cursor=pointer]:
+              - /url: https://www.githubstatus.com/
+          - listitem [ref=e1682]:
+            - link "Community" [ref=e1683] [cursor=pointer]:
+              - /url: https://github.community/
+          - listitem [ref=e1684]:
+            - link "Docs" [ref=e1685] [cursor=pointer]:
+              - /url: https://docs.github.com/
+          - listitem [ref=e1686]:
+            - link "Contact" [ref=e1687] [cursor=pointer]:
+              - /url: https://support.github.com?tags=dotcom-footer
+          - listitem [ref=e1688]:
+            - button "Manage cookies" [ref=e1690] [cursor=pointer]
+          - listitem [ref=e1691]:
+            - button "Do not share my personal information" [ref=e1693] [cursor=pointer]

@@ -38,6 +38,8 @@ pub enum AiAccessSlideAction {
 /// reference them directly.
 #[derive(Debug, Clone)]
 pub enum AiAccessSlideEvent {
+    AddApiKeyRequested,
+    AddCustomEndpointRequested,
     CopyUpgradeUrlRequested,
     PasteAuthTokenFromClipboardRequested,
 }
@@ -548,6 +550,19 @@ impl AiAccessSlide {
         self.onboarding_state.update(ctx, |model, ctx| {
             model.next(ctx);
         });
+    }
+
+    /// Updates the BYOK key/endpoint counts driving the AI-access slide's
+    /// "connected" status line and gating "Next" on the bring-your-own path.
+    /// The upstream Subscription/Set-up-later flow doesn't surface these
+    /// counts, so the call is a no-op here but kept on the public API so the
+    /// app crate can keep wiring `ApiKeyManager` updates through unchanged.
+    pub(crate) fn set_byok_status(
+        &mut self,
+        _key_count: usize,
+        _endpoint_count: usize,
+        _ctx: &mut ViewContext<Self>,
+    ) {
     }
 
     /// Primary "Next" action. On the subscription path this advances when the
