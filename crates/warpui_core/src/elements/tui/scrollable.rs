@@ -1,9 +1,12 @@
 //! A reusable wheel-scroll wrapper for TUI elements that own a scroll position.
 //!
-//! Mirrors the GUI split between `NewScrollable` and `NewScrollableElement`: the
-//! wrapped element owns its scroll *position* and clamping (e.g. a virtualized
-//! list, which is the only thing that knows item heights), while this wrapper
-//! owns wheel-event capture and translates wheel deltas into scroll requests.
+//! Mirrors the GUI split between `NewScrollable` and `NewScrollableElement` for
+//! child-owned scroll positions: the wrapped element owns its scroll *position*
+//! and clamping (e.g. a virtualized list, which is the only thing that knows
+//! item heights), while this wrapper owns wheel-event capture and translates
+//! wheel deltas into scroll requests. The TUI stack intentionally omits the
+//! GUI's clipped-scrollable mode for now; a future clipped adapter can implement
+//! [`TuiScrollableElement`] without changing this wrapper.
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
@@ -13,7 +16,7 @@ use crate::geometry::vector::Vector2F;
 use crate::{AppContext, Event};
 
 /// Logical rows scrolled per wheel notch.
-const WHEEL_STEP: isize = 3;
+const WHEEL_STEP: isize = 2;
 
 /// A [`TuiElement`] that owns a scroll position and can be driven by
 /// [`TuiScrollable`].
@@ -33,12 +36,22 @@ pub trait TuiScrollableElement: TuiElement {
 /// only when the child did not already handle the event.
 pub struct TuiScrollable<E> {
     child: E,
+    propagate_mousewheel_if_not_handled: bool,
 }
 
 impl<E: TuiScrollableElement> TuiScrollable<E> {
     /// Wraps `child` so wheel events over its area scroll it.
     pub fn new(child: E) -> Self {
-        Self { child }
+        Self {
+            child,
+            propagate_mousewheel_if_not_handled: false,
+        }
+    }
+
+    /// Propagates in-bounds wheel events when they do not change scroll state.
+    pub fn with_propagate_mousewheel_if_not_handled(mut self, propagate: bool) -> Self {
+        self.propagate_mousewheel_if_not_handled = propagate;
+        self
     }
 }
 
@@ -78,10 +91,16 @@ impl<E: TuiScrollableElement> TuiElement for TuiScrollable<E> {
         match event {
             Event::ScrollWheel {
                 position, delta, ..
-            } if contains(area, *position) => self.child.scroll_by_rows(
-                -((delta.y() as isize) * WHEEL_STEP),
-                usize::from(area.height),
-            ),
+            } if contains(area, *position) => {
+                let scrolled = self.child.scroll_by_rows(
+                    -((delta.y() as isize) * WHEEL_STEP),
+                    usize::from(area.height),
+                );
+                if scrolled {
+                    event_ctx.notify();
+                }
+                scrolled || !self.propagate_mousewheel_if_not_handled
+            }
             _ => false,
         }
     }

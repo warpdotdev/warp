@@ -60,6 +60,16 @@ impl TuiEventContext {
         });
     }
 
+    /// Notifies the framework that the current event origin view is dirty.
+    pub fn notify(&mut self) {
+        let origin_view_id = self
+            .origin_view_id
+            .expect("view notifications can only be queued while processing a rendered TUI view");
+        self.updates.push(Box::new(move |app| {
+            app.update(|ctx| ctx.notify_tui_view(origin_view_id))
+        }));
+    }
+
     pub(crate) fn take_updates(&mut self) -> Vec<TuiAppUpdate> {
         std::mem::take(&mut self.updates)
     }

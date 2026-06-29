@@ -13,7 +13,7 @@ use crate::elements::tui::{
 };
 use crate::event::ModifiersState;
 use crate::geometry::vector::Vector2F;
-use crate::{App, Event};
+use crate::{App, EntityId, Event};
 
 #[derive(Clone)]
 struct FakeItem {
@@ -178,8 +178,18 @@ fn render_viewport(app: &App, viewport: &mut impl TuiElement, size: TuiSize) -> 
 
 /// Dispatches a wheel event against the viewport's last layout. Positive
 /// `delta_y` scrolls toward the top; negative scrolls toward the bottom
-/// (matching the crossterm → warp wheel mapping). Returns whether it scrolled.
+/// (matching the crossterm → warp wheel mapping). Returns whether the event was
+/// handled.
 fn wheel(app: &App, viewport: &mut impl TuiElement, size: TuiSize, delta_y: f32) -> bool {
+    wheel_with_update_count(app, viewport, size, delta_y).0
+}
+
+fn wheel_with_update_count(
+    app: &App,
+    viewport: &mut impl TuiElement,
+    size: TuiSize,
+    delta_y: f32,
+) -> (bool, usize) {
     app.read(|app_ctx| {
         let mut rendered_views = HashMap::new();
         let mut ctx = TuiLayoutContext {
@@ -187,13 +197,15 @@ fn wheel(app: &App, viewport: &mut impl TuiElement, size: TuiSize, delta_y: f32)
         };
         let area = TuiRect::new(0, 0, size.width, size.height);
         let mut event_ctx = TuiEventContext::default();
+        event_ctx.set_origin_view(Some(EntityId::new()));
         let event = Event::ScrollWheel {
             position: Vector2F::new(0.0, 0.0),
             delta: Vector2F::new(0.0, delta_y),
             precise: false,
             modifiers: ModifiersState::default(),
         };
-        viewport.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx)
+        let handled = viewport.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx);
+        (handled, event_ctx.take_updates().len())
     })
 }
 
@@ -220,8 +232,8 @@ fn scrolling_up_clamps_to_the_top_without_snapping_to_bottom() {
         assert!(!handle.is_following_bottom());
         assert_eq!(&lines[0][..3], "1:0");
         assert_eq!(&lines[1][..3], "1:1");
-        // A further up-scroll at the top is a no-op.
-        assert!(!wheel(&app, &mut viewport, size, 1.0));
+        // A further up-scroll at the top is a no-op, but is consumed by default.
+        assert!(wheel(&app, &mut viewport, size, 1.0));
     });
 }
 
@@ -253,8 +265,8 @@ fn scrolling_down_pins_to_bottom_without_overscrolling() {
         assert!(handle.is_following_bottom());
         assert_eq!(&lines[0][..3], "4:2");
         assert_eq!(&lines[3][..3], "5:2");
-        // A further down-scroll at the bottom is a no-op.
-        assert!(!wheel(&app, &mut viewport, size, -1.0));
+        // A further down-scroll at the bottom is a no-op, but is consumed by default.
+        assert!(wheel(&app, &mut viewport, size, -1.0));
     });
 }
 
@@ -271,9 +283,54 @@ fn scrolling_is_a_noop_when_all_content_fits() {
         let size = TuiSize::new(8, 4);
 
         render_viewport(&app, &mut viewport, size);
-        assert!(!wheel(&app, &mut viewport, size, -1.0));
+        assert!(wheel(&app, &mut viewport, size, -1.0));
         render_viewport(&app, &mut viewport, size);
-        assert!(!wheel(&app, &mut viewport, size, 1.0));
+        assert!(wheel(&app, &mut viewport, size, 1.0));
+        assert!(handle.is_following_bottom());
+    });
+}
+
+#[test]
+fn scrolling_queues_a_view_update_when_scroll_state_changes() {
+    App::test((), |app| async move {
+        let index = FakeIndex::new((1..=5).map(|id| fake_item(id, 3)).collect());
+        let handle = TuiViewportHandle::new();
+        let mut viewport =
+            TuiScrollable::new(TuiViewportedList::new(handle, index, |request, _| {
+                slice_element(request)
+            }));
+        let size = TuiSize::new(8, 4);
+
+        render_viewport(&app, &mut viewport, size);
+        assert_eq!(
+            wheel_with_update_count(&app, &mut viewport, size, 1.0),
+            (true, 1),
+        );
+    });
+}
+
+#[test]
+fn propagating_scrollable_returns_unhandled_when_scroll_state_does_not_change() {
+    App::test((), |app| async move {
+        let index = FakeIndex::new(vec![fake_item(1, 1), fake_item(2, 1)]);
+        let handle = TuiViewportHandle::new();
+        let mut viewport = TuiScrollable::new(TuiViewportedList::new(
+            handle.clone(),
+            index,
+            |request, _| slice_element(request),
+        ))
+        .with_propagate_mousewheel_if_not_handled(true);
+        let size = TuiSize::new(8, 4);
+
+        render_viewport(&app, &mut viewport, size);
+        assert_eq!(
+            wheel_with_update_count(&app, &mut viewport, size, -1.0),
+            (false, 0),
+        );
+        assert_eq!(
+            wheel_with_update_count(&app, &mut viewport, size, 1.0),
+            (false, 0),
+        );
         assert!(handle.is_following_bottom());
     });
 }
