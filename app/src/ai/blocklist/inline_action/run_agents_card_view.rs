@@ -1331,10 +1331,6 @@ fn render_agents_section(state: &RunAgentsEditState, app: &AppContext) -> Box<dy
     .with_color(blended_colors::text_disabled(theme, theme.background()))
     .finish();
 
-    // Use a wrapping row so the agent pills flow onto additional lines
-    // instead of overflowing the card width when there are many agents
-    // or long agent names. `run_spacing` adds vertical gaps between the
-    // wrapped lines, matching the horizontal pill spacing.
     let pills_row = Wrap::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(4.)
