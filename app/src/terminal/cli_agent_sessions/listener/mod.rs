@@ -46,13 +46,14 @@ pub fn is_agent_supported(agent: &CLIAgent) -> bool {
             | CLIAgent::Auggie
             | CLIAgent::Droid
             | CLIAgent::Pi
+            | CLIAgent::Omp
     )
 }
 
 /// Creates the appropriate handler for the given CLI agent.
 fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
     match agent {
-        // Auggie and Pi are supported via community-maintained plugins
+        // Auggie, Pi, and Omp are supported via community-maintained plugins
         // (https://github.com/augmentmoogi/auggie-warp,
         // https://github.com/badlogic/pi-mono), which emit the same
         // structured OSC 777 events as the first-party Claude/OpenCode/Gemini
@@ -64,7 +65,8 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         | CLIAgent::Gemini
         | CLIAgent::Auggie
         | CLIAgent::Droid
-        | CLIAgent::Pi => Some(Box::new(DefaultSessionListener)),
+        | CLIAgent::Pi
+        | CLIAgent::Omp => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex => Some(Box::new(CodexSessionHandler)),
         CLIAgent::Hermes
         | CLIAgent::Amp

@@ -481,6 +481,7 @@ pub enum CLIAgentType {
     Hermes,
     Vibe,
     Antigravity,
+    Omp,
     Unknown,
 }
 
