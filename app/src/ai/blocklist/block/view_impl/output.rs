@@ -217,6 +217,9 @@ pub(crate) struct Props<'a> {
     /// produced real output — otherwise the footer renders awkwardly above the still-
     /// pending optimistic user prompt.
     pub(super) is_cloud_agent_pre_first_exchange: bool,
+    /// Whether the containing AI block is hovered. Non-latest response footers are only shown
+    /// while hovered so older turns stay visually quiet until the user points at them.
+    pub(super) is_block_hovered: bool,
 }
 
 pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
@@ -273,19 +276,24 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 // Passive code diffs footer, after acceptance, is different from the usual footer.
                 let requires_special_footer =
                     request_type.is_passive_code_diff() && props.has_accepted_edits;
+                let is_in_latest_visible_turn = props.model.is_in_latest_visible_turn(app);
+                let is_last_visible_exchange_in_turn =
+                    props.model.is_last_visible_exchange_in_current_turn(app);
+                let should_show_response_footer = is_last_visible_exchange_in_turn
+                    && (is_in_latest_visible_turn
+                        || props.is_block_hovered
+                        || requires_special_footer);
 
-                let mut should_render_footer =
-                    (props.model.is_latest_visible_exchange_in_root_task(app)
-                        || requires_special_footer)
-                        && !has_expanded_last_requested_command
-                        && !is_output_for_static_prompt_suggestions
-                        && !is_conversation_in_progress
-                        && request_type.is_active()
-                        && !props.is_cloud_agent_pre_first_exchange
-                        && !status
-                            .error()
-                            .map(|e| e.is_invalid_api_key())
-                            .unwrap_or_default();
+                let mut should_render_footer = should_show_response_footer
+                    && !has_expanded_last_requested_command
+                    && !is_output_for_static_prompt_suggestions
+                    && !is_conversation_in_progress
+                    && request_type.is_active()
+                    && !props.is_cloud_agent_pre_first_exchange
+                    && !status
+                        .error()
+                        .map(|e| e.is_invalid_api_key())
+                        .unwrap_or_default();
 
                 let mut has_rendered_first_text_section = false;
 

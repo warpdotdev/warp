@@ -389,6 +389,8 @@ pub(super) struct AIBlockStateHandles {
     /// Only applies to text selections made at the `AIBlock` level. Child views of the `AIBlock`
     /// are responsible for managing their own text selection states.
     selection_handle: SelectionHandle,
+    /// Mouse state handle for the entire AI block, used for block-level hover affordances.
+    block_hover_handle: MouseStateHandle,
 
     /// Mouse state handle for interacting with the attached blocks.
     attached_blocks_chip_state_handle: MouseStateHandle,

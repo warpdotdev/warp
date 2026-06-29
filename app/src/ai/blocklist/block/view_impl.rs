@@ -1059,6 +1059,12 @@ impl View for AIBlock {
             app,
         );
         drop(terminal_model);
+        let is_block_hovered = self
+            .state_handles
+            .block_hover_handle
+            .lock()
+            .map(|state| state.is_hovered())
+            .unwrap_or(false);
 
         contents.add_child(output::render(
             output::Props {
@@ -1128,6 +1134,7 @@ impl View for AIBlock {
                     && self.has_imported_comments_in_current_thread(app),
                 ask_user_question_view: self.ask_user_question_view.as_ref(),
                 is_cloud_agent_pre_first_exchange,
+                is_block_hovered,
             },
             app,
         ));
@@ -1245,7 +1252,12 @@ impl View for AIBlock {
         // TODO(Simon): Bottom padding should be 24px on the final block when the input isn't visible.
         // It isn't sufficient to do an `is_streaming()` check because inline actions waiting for user
         // review (i.e. "OK if I run this command?") are technically completed blocks.
-        selectable.finish()
+        let selectable = selectable.finish();
+        Hoverable::new(self.state_handles.block_hover_handle.clone(), move |_| {
+            selectable
+        })
+        .with_propagate_drag()
+        .finish()
     }
 
     fn on_focus(&mut self, focus_ctx: &warpui::FocusContext, ctx: &mut ViewContext<Self>) {
