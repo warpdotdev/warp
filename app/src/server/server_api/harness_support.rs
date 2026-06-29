@@ -253,7 +253,7 @@ impl ServerApi {
 
         let url = format!("{}/api/v1/{}", crate::ChannelState::server_root_url(), path);
 
-        let mut request = self.client.get(&url);
+        let mut request = self.base_client.http_client().get(&url);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -290,7 +290,7 @@ impl ServerApi {
 
         let url = format!("{}/api/v1/{}", crate::ChannelState::server_root_url(), path);
 
-        let mut request = self.client.post(&url).json(body);
+        let mut request = self.base_client.http_client().post(&url).json(body);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -480,7 +480,7 @@ impl HarnessSupportClient for ServerApi {
     }
 
     fn http_client(&self) -> &http_client::Client {
-        &self.client
+        self.base_client.http_client()
     }
 }
 

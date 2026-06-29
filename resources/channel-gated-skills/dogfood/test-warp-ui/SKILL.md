@@ -33,6 +33,15 @@ Authenticating this way starts the app directly without interactive login prompt
 
 Initial builds may take several minutes; subsequent incremental builds are faster.
 
+### Verify the launch is authenticated
+
+After launching, confirm both of the following before testing:
+
+- Warp is **authenticated** — it opens straight to the terminal, NOT the logged-out onboarding/sign-in screen.
+- The `cargo run` stderr/terminal output does **not** contain the substring `provided but IGNORED`.
+
+If that warning appears (or the app is logged out), the wrong binary/channel was launched — stop and relaunch with `cargo run --bin warp`.
+
 ## Testing Workflow
 
 ### 1. Hardcode or Mock Data (When Needed)

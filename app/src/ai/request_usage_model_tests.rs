@@ -45,9 +45,18 @@ fn add_request_usage_model_for_anonymous_users(app: &mut App) -> ModelHandle<AIR
     app.add_singleton_model(|_| AuthStateProvider::new_anonymous_for_test());
     add_request_usage_model_without_auth(app)
 }
+fn register_user_preferences_for_tests(app: &mut App) {
+    if app
+        .models_of_type::<settings::PrivatePreferences>()
+        .is_empty()
+    {
+        app.update(crate::settings::init_and_register_user_preferences);
+    }
+}
 
 fn add_request_usage_model_without_auth(app: &mut App) -> ModelHandle<AIRequestUsageModel> {
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    register_user_preferences_for_tests(app);
     app.update(|ctx| {
         warpui_extras::secure_storage::register_noop("test", ctx);
         ctx.add_singleton_model(ApiKeyManager::new);
@@ -303,6 +312,45 @@ fn test_buy_credits_banner_shows_when_non_ambient_bonus_credits_are_depleted() {
                 model.compute_buy_addon_credits_banner_display_state(ctx),
                 BuyCreditsBannerDisplayState::OutOfCredits,
             );
+        });
+    });
+}
+
+#[test]
+fn test_ambient_credits_banner_dismissal_is_persisted() {
+    App::test((), |mut app| async move {
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            assert!(!model.is_ambient_credits_banner_dismissed());
+            model.dismiss_ambient_credits_banner(ctx);
+            assert!(model.is_ambient_credits_banner_dismissed());
+        });
+
+        app.update(|ctx| {
+            let stored_value = ctx
+                .private_user_preferences()
+                .read_value(AMBIENT_CREDITS_BANNER_DISMISSED_KEY)
+                .unwrap();
+            assert_eq!(stored_value, Some("true".to_owned()));
+        });
+    });
+}
+
+#[test]
+fn test_ambient_credits_banner_dismissal_loads_from_preferences() {
+    App::test((), |mut app| async move {
+        register_user_preferences_for_tests(&mut app);
+        app.update(|ctx| {
+            ctx.private_user_preferences()
+                .write_value(AMBIENT_CREDITS_BANNER_DISMISSED_KEY, "true".to_owned())
+                .unwrap();
+        });
+
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, _ctx| {
+            assert!(model.is_ambient_credits_banner_dismissed());
         });
     });
 }

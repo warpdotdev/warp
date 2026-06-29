@@ -1361,6 +1361,109 @@ impl From<&stream_finished::ToolUsageMetadata> for ToolUsageMetadata {
     }
 }
 
+/// The kind of a context-window segment, mirroring the proto
+/// `ContextWindowSegmentType` enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextWindowSegmentType {
+    #[default]
+    Unknown,
+    SystemPrompt,
+    ToolDefinitions,
+    ConversationHistory,
+    LatestInput,
+    Images,
+    Other,
+}
+
+impl ContextWindowSegmentType {
+    /// Snake-case identifier used for display-name lookup.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ContextWindowSegmentType::Unknown => "unknown",
+            ContextWindowSegmentType::SystemPrompt => "system_prompt",
+            ContextWindowSegmentType::ToolDefinitions => "tool_definitions",
+            ContextWindowSegmentType::ConversationHistory => "conversation_history",
+            ContextWindowSegmentType::LatestInput => "latest_input",
+            ContextWindowSegmentType::Images => "images",
+            ContextWindowSegmentType::Other => "other",
+        }
+    }
+}
+
+impl From<i32> for ContextWindowSegmentType {
+    fn from(value: i32) -> Self {
+        match stream_finished::ContextWindowSegmentType::try_from(value) {
+            Ok(stream_finished::ContextWindowSegmentType::SystemPrompt) => Self::SystemPrompt,
+            Ok(stream_finished::ContextWindowSegmentType::ToolDefinitions) => Self::ToolDefinitions,
+            Ok(stream_finished::ContextWindowSegmentType::ConversationHistory) => {
+                Self::ConversationHistory
+            }
+            Ok(stream_finished::ContextWindowSegmentType::LatestInput) => Self::LatestInput,
+            Ok(stream_finished::ContextWindowSegmentType::Images) => Self::Images,
+            Ok(stream_finished::ContextWindowSegmentType::Other) => Self::Other,
+            // Unknown (0) and any unrecognized value map to Unknown.
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl From<ContextWindowSegmentType> for i32 {
+    fn from(value: ContextWindowSegmentType) -> Self {
+        match value {
+            ContextWindowSegmentType::Unknown => {
+                stream_finished::ContextWindowSegmentType::Unknown as i32
+            }
+            ContextWindowSegmentType::SystemPrompt => {
+                stream_finished::ContextWindowSegmentType::SystemPrompt as i32
+            }
+            ContextWindowSegmentType::ToolDefinitions => {
+                stream_finished::ContextWindowSegmentType::ToolDefinitions as i32
+            }
+            ContextWindowSegmentType::ConversationHistory => {
+                stream_finished::ContextWindowSegmentType::ConversationHistory as i32
+            }
+            ContextWindowSegmentType::LatestInput => {
+                stream_finished::ContextWindowSegmentType::LatestInput as i32
+            }
+            ContextWindowSegmentType::Images => {
+                stream_finished::ContextWindowSegmentType::Images as i32
+            }
+            ContextWindowSegmentType::Other => {
+                stream_finished::ContextWindowSegmentType::Other as i32
+            }
+        }
+    }
+}
+
+/// A single portion of the context window, described by its kind and an
+/// estimated token count. Segment token counts add up to the token total
+/// represented by `context_window_usage`.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ContextWindowSegment {
+    pub segment_type: ContextWindowSegmentType,
+    /// Estimated number of tokens this segment occupies in the context window.
+    pub token_count: u32,
+}
+
+impl From<&stream_finished::ContextWindowSegment> for ContextWindowSegment {
+    fn from(segment: &stream_finished::ContextWindowSegment) -> Self {
+        Self {
+            segment_type: segment.segment_type.into(),
+            token_count: segment.token_count,
+        }
+    }
+}
+
+impl From<&ContextWindowSegment> for stream_finished::ContextWindowSegment {
+    fn from(segment: &ContextWindowSegment) -> Self {
+        Self {
+            segment_type: segment.segment_type.into(),
+            token_count: segment.token_count,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ConversationUsageMetadata {
     pub was_summarized: bool,
@@ -1374,6 +1477,8 @@ pub struct ConversationUsageMetadata {
     pub token_usage: Vec<ModelTokenUsage>,
     #[serde(default)]
     pub tool_usage_metadata: ToolUsageMetadata,
+    #[serde(default)]
+    pub context_window_segments: Vec<ContextWindowSegment>,
 }
 
 impl ConversationUsageMetadata {

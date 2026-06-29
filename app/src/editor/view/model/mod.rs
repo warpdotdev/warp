@@ -347,6 +347,14 @@ struct BufferAndDisplayMaps {
     /// A buffer and display map dedicated for ephemeral edits (see [`UpdateBufferOption::IsEphemeral`]).
     /// If [`Some`], then the ephemeral buffer is active.
     ephemeral: Option<(ModelHandle<Buffer>, ModelHandle<DisplayMap>)>,
+
+    /// When `true`, the active ephemeral buffer is "display-only": it exists purely for
+    /// visual feedback and its content must NOT be applied to the regular buffer when the
+    /// ephemeral is exited (materialized). On materialization the ephemeral is simply
+    /// discarded and the edit proceeds directly on the regular buffer without any
+    /// content-restoration step. This avoids generating spurious CRDT delete operations
+    /// that would corrupt the shared collaborative state.
+    ephemeral_is_display_only: bool,
 }
 
 impl BufferAndDisplayMaps {
@@ -371,9 +379,11 @@ impl BufferAndDisplayMaps {
     /// Deactivates any ephemeral state.
     fn deactivate_ephemeral_state(&mut self) {
         self.ephemeral.take();
+        self.ephemeral_is_display_only = false;
     }
 
-    /// Activates a new ephemeral state.
+    /// Activates a new regular ephemeral state whose content will be applied
+    /// to the regular buffer when the ephemeral is exited (materialized).
     fn activate_new_ephemeral_state(&mut self, ctx: &mut ModelContext<EditorModel>) {
         let tab_size = self.regular.1.as_ref(ctx).tab_size();
         let ephemeral_buffer = ctx.add_model(|_| Buffer::new(""));
@@ -388,6 +398,15 @@ impl BufferAndDisplayMaps {
             EditorModel::handle_display_map_event,
         );
         self.ephemeral = Some((ephemeral_buffer, ephemeral_display_map));
+        self.ephemeral_is_display_only = false;
+    }
+
+    /// Activates a display-only ephemeral state. When this ephemeral is materialized
+    /// (exited by a non-ephemeral edit), its content is discarded rather than applied
+    /// to the regular buffer, preventing spurious CRDT operations.
+    fn activate_display_only_ephemeral_state(&mut self, ctx: &mut ModelContext<EditorModel>) {
+        self.activate_new_ephemeral_state(ctx);
+        self.ephemeral_is_display_only = true;
     }
 }
 
@@ -538,6 +557,7 @@ impl EditorModel {
             buffer_and_display_map: BufferAndDisplayMaps {
                 regular,
                 ephemeral: None,
+                ephemeral_is_display_only: false,
             },
             vim_visual_tails: vec![],
             consecutive_autocomplete_insertion_edits_counter: 0,
@@ -601,6 +621,31 @@ impl EditorModel {
         });
 
         self.buffer_and_display_map.deactivate_ephemeral_state();
+    }
+
+    /// Exits an ephemeral loading state (created by `set_buffer_text_ignoring_undo`)
+    /// without touching the CRDT buffer or generating any `UpdatePeers` operations.
+    /// After this call the editor displays the regular collaborative buffer, allowing
+    /// any pending remote delete operations to become visible.
+    pub fn exit_ephemeral_loading_state(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.is_ephemeral() {
+            self.buffer_and_display_map.deactivate_ephemeral_state();
+            ctx.notify();
+        }
+    }
+
+    /// Shows an empty buffer as a display-only ephemeral overlay for immediate visual
+    /// feedback, without touching the regular CRDT buffer or emitting `UpdatePeers` ops.
+    ///
+    /// When the viewer next makes an edit (materializing the ephemeral), the empty content
+    /// is **discarded** rather than applied to the regular buffer — so no spurious CRDT
+    /// delete ops are generated for whatever is currently in the regular buffer (e.g.
+    /// another viewer's concurrent edits). The edit instead proceeds directly on the
+    /// regular buffer as-is.
+    pub fn show_display_only_empty_buffer(&mut self, ctx: &mut ModelContext<Self>) {
+        self.buffer_and_display_map
+            .activate_display_only_ephemeral_state(ctx);
+        ctx.notify();
     }
 
     fn refresh_batch_version(&mut self, ctx: &mut ModelContext<Self>) {
@@ -682,11 +727,20 @@ impl EditorModel {
                 .activate_new_ephemeral_state(ctx);
             Some(snapshot)
         } else if can_edit && self.is_ephemeral() && edit.update_buffer.is_some() {
-            // We're materializing an ephemeral edit, so snapshot the ephemeral buffer
-            // so that we can apply it to the regular buffer.
-            let snapshot = self.as_snapshot(ctx);
-            self.buffer_and_display_map.deactivate_ephemeral_state();
-            Some(snapshot)
+            if self.buffer_and_display_map.ephemeral_is_display_only {
+                // Display-only ephemeral: discard the ephemeral content entirely and
+                // proceed directly on the regular buffer. Do NOT snapshot-and-restore,
+                // which would generate spurious CRDT delete ops for whatever the regular
+                // buffer currently contains (e.g. another viewer's concurrent edits).
+                self.buffer_and_display_map.deactivate_ephemeral_state();
+                None
+            } else {
+                // Regular ephemeral (history picker, model selector, etc.): snapshot the
+                // ephemeral buffer so its content can be applied to the regular buffer.
+                let snapshot = self.as_snapshot(ctx);
+                self.buffer_and_display_map.deactivate_ephemeral_state();
+                Some(snapshot)
+            }
         } else {
             None
         };
@@ -771,7 +825,17 @@ impl EditorModel {
                 if let Err(e) = buffer.apply_ops(operations, ctx) {
                     log::warn!("Failed to apply remote edits to buffer: {e}");
                 }
-            })
+            });
+
+        // If a display-only empty ephemeral is showing (optimistic clear after sending
+        // an agent prompt), exit it now that a real CRDT update has arrived. This makes
+        // the actual collaborative buffer state immediately visible to the viewer, whether
+        // that's an empty buffer from the sharer's delete ops or another participant's
+        // concurrent edits.
+        if self.buffer_and_display_map.ephemeral_is_display_only {
+            self.buffer_and_display_map.deactivate_ephemeral_state();
+            ctx.notify();
+        }
     }
 
     pub fn interaction_state(&self) -> InteractionState {

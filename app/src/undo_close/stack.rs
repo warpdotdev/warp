@@ -129,7 +129,8 @@ impl ClosedItem {
 
             for terminal_view_id in terminal_view_ids {
                 history_model.update(ctx, |history_model, _| {
-                    history_model.mark_conversations_historical_for_terminal_view(terminal_view_id);
+                    history_model
+                        .mark_conversations_historical_for_terminal_surface(terminal_view_id);
                 });
             }
         }

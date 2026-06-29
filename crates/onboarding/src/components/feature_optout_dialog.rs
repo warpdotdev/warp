@@ -50,42 +50,48 @@ pub fn render_feature_optout_dialog(
         .with_line_height_ratio(1.2)
         .finish();
 
-    let feature_row_color: ColorU = theme.foreground().into();
-    let feature_x_fill = Fill::Solid(theme.ansi_fg_red());
-    let mut feature_list = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-    for &item in dialog.features {
-        let icon_el = ConstrainedBox::new(Icon::X.to_warpui_icon(feature_x_fill).finish())
-            .with_width(16.)
-            .with_height(16.)
-            .finish();
-        let text_el = FormattedTextElement::from_str(item, appearance.ui_font_family(), 14.)
-            .with_color(feature_row_color)
-            .with_weight(Weight::Normal)
-            .with_alignment(TextAlignment::Left)
-            .with_line_height_ratio(1.0)
-            .finish();
-        let row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(icon_el)
-            .with_child(Container::new(text_el).with_margin_left(4.).finish())
-            .finish();
-        feature_list = feature_list.with_child(
-            Container::new(row)
-                .with_padding_top(4.)
-                .with_padding_bottom(4.)
+    let mut body_section = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_child(body_text);
+
+    // The list is optional: callers that only want a warning (e.g. the no-AI
+    // onboarding modal) pass an empty slice, in which case we skip it entirely.
+    if !dialog.features.is_empty() {
+        let feature_row_color: ColorU = theme.foreground().into();
+        let feature_x_fill = Fill::Solid(theme.ansi_fg_red());
+        let mut feature_list =
+            Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        for &item in dialog.features {
+            let icon_el = ConstrainedBox::new(Icon::X.to_warpui_icon(feature_x_fill).finish())
+                .with_width(16.)
+                .with_height(16.)
+                .finish();
+            let text_el = FormattedTextElement::from_str(item, appearance.ui_font_family(), 14.)
+                .with_color(feature_row_color)
+                .with_weight(Weight::Normal)
+                .with_alignment(TextAlignment::Left)
+                .with_line_height_ratio(1.0)
+                .finish();
+            let row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(icon_el)
+                .with_child(Container::new(text_el).with_margin_left(4.).finish())
+                .finish();
+            feature_list = feature_list.with_child(
+                Container::new(row)
+                    .with_padding_top(4.)
+                    .with_padding_bottom(4.)
+                    .finish(),
+            );
+        }
+        body_section = body_section.with_child(
+            Container::new(feature_list.finish())
+                .with_margin_top(12.)
                 .finish(),
         );
     }
 
-    let body_section = Flex::column()
-        .with_cross_axis_alignment(CrossAxisAlignment::Start)
-        .with_child(body_text)
-        .with_child(
-            Container::new(feature_list.finish())
-                .with_margin_top(12.)
-                .finish(),
-        )
-        .finish();
+    let body_section = body_section.finish();
 
     let footer = Container::new(
         Flex::row()

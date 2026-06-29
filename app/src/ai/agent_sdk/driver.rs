@@ -158,7 +158,6 @@ const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
 /// Timeout for individual harness auth preflight commands.
 const PREFLIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
-const SETUP_FAILED_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Maximum time to wait for an automatic error resume before propagating the error.
 /// If no follow-up status arrives within this window, the driver terminates with the
 /// original error so the CLI does not hang indefinitely.
@@ -852,7 +851,6 @@ impl AgentDriver {
         let foreground_for_error = foreground.clone();
         let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
         let task_id = self.task_id;
-        let idle_on_complete = self.idle_on_complete;
 
         ctx.spawn(
             async move {
@@ -875,6 +873,12 @@ impl AgentDriver {
                 }
                 let result = Self::run_internal(task, foreground.clone()).await;
 
+                // Stop accepting CLI session status updates now that the run
+                // is done. Already accepted task updates remain queued until
+                // delivery finishes.
+                let _ = foreground
+                    .spawn(|me, ctx| me.unregister_cli_agent_task_sync(ctx))
+                    .await;
                 // Unregister the driver consumer now that the run is done.
                 // The streamer will tear down the SSE if no other consumer
                 // remains and the conversation isn't a child.
@@ -929,16 +933,6 @@ impl AgentDriver {
                             );
                         })
                         .await;
-
-                    // Keep the session alive after environment setup failures so
-                    // the viewer can connect, receive scrollback, and see the error.
-                    if let Some(idle_timeout) = idle_on_complete {
-                        let timeout = idle_timeout.min(SETUP_FAILED_IDLE_TIMEOUT);
-                        log::info!(
-                            "Environment setup failed; keeping session alive for {timeout:?}"
-                        );
-                        warpui::r#async::Timer::after(timeout).await;
-                    }
                 }
             }
 
@@ -2315,10 +2309,15 @@ impl AgentDriver {
                 conversation_status.into_result()
             }
             HarnessKind::ThirdParty(harness) => {
+                let harness_setup_events = setup_events.clone();
                 let (harness_exit_rx, runner) = setup_events
                     .record_result(SetupStep::ThirdPartyHarnessPreparation, async {
-                        let harness_exit_rx =
-                            Self::setup_harness(harness.as_ref(), &foreground).await?;
+                        let harness_exit_rx = Self::setup_harness(
+                            harness.as_ref(),
+                            &foreground,
+                            &harness_setup_events,
+                        )
+                        .await?;
                         let runner = Self::prepare_harness(
                             &task.prompt,
                             &task.mcp_specs,
@@ -2454,6 +2453,7 @@ impl AgentDriver {
     async fn setup_harness(
         harness: &dyn ThirdPartyHarness,
         foreground: &ModelSpawner<Self>,
+        events: &SetupClientEventReporter,
     ) -> Result<oneshot::Receiver<()>, AgentDriverError> {
         let (exit_tx, exit_rx) = oneshot::channel();
         let harness_exit = IdleTimeoutSender::new(exit_tx);
@@ -2465,13 +2465,14 @@ impl AgentDriver {
             .await?;
 
         // Install plugins before running the harness command.
-        Self::setup_harness_plugins(harness).await?;
+        Self::setup_harness_plugins(harness, events).await?;
 
         Ok(exit_rx)
     }
 
     async fn setup_harness_plugins(
         harness: &dyn ThirdPartyHarness,
+        events: &SetupClientEventReporter,
     ) -> Result<(), AgentDriverError> {
         let harness_name = harness.cli_agent().command_prefix();
         let requires_platform_plugin = harness.requires_verified_platform_plugin();
@@ -2485,20 +2486,41 @@ impl AgentDriver {
             return Ok(());
         };
 
-        Self::setup_notification_plugin(manager.as_ref()).await;
-        Self::setup_platform_plugin(harness_name, manager.as_ref(), requires_platform_plugin).await
+        Self::setup_notification_plugin(manager.as_ref(), events).await;
+        Self::setup_platform_plugin(
+            harness_name,
+            manager.as_ref(),
+            requires_platform_plugin,
+            events,
+        )
+        .await
     }
 
-    async fn setup_notification_plugin(manager: &dyn CliAgentPluginManager) {
+    async fn setup_notification_plugin(
+        manager: &dyn CliAgentPluginManager,
+        events: &SetupClientEventReporter,
+    ) {
         if !manager.can_auto_install() {
             return;
         }
         if manager.needs_update() {
-            if let Err(e) = manager.update().await {
+            if let Err(e) = events
+                .record_result(
+                    SetupStep::ThirdPartyHarnessPreparationNotificationPluginUpdate,
+                    manager.update(),
+                )
+                .await
+            {
                 log::warn!("Plugin update failed (continuing): {e}");
             }
         } else if !manager.is_installed() {
-            if let Err(e) = manager.install().await {
+            if let Err(e) = events
+                .record_result(
+                    SetupStep::ThirdPartyHarnessPreparationNotificationPluginInstall,
+                    manager.install(),
+                )
+                .await
+            {
                 log::warn!("Plugin installation failed (continuing): {e}");
             }
         }
@@ -2508,9 +2530,16 @@ impl AgentDriver {
         harness_name: &str,
         manager: &dyn CliAgentPluginManager,
         required: bool,
+        events: &SetupClientEventReporter,
     ) -> Result<(), AgentDriverError> {
         if manager.platform_plugin_needs_update() {
-            if let Err(e) = manager.update_platform_plugin().await {
+            if let Err(e) = events
+                .record_result(
+                    SetupStep::ThirdPartyHarnessPreparationPlatformPluginUpdate,
+                    manager.update_platform_plugin(),
+                )
+                .await
+            {
                 if required {
                     return Err(Self::required_platform_plugin_error(
                         harness_name,
@@ -2520,7 +2549,13 @@ impl AgentDriver {
                 log::warn!("Platform plugin update failed (continuing): {e}");
             }
         } else if !manager.is_platform_plugin_installed() {
-            if let Err(e) = manager.install_platform_plugin().await {
+            if let Err(e) = events
+                .record_result(
+                    SetupStep::ThirdPartyHarnessPreparationPlatformPluginInstall,
+                    manager.install_platform_plugin(),
+                )
+                .await
+            {
                 if required {
                     return Err(Self::required_platform_plugin_error(
                         harness_name,
@@ -2951,7 +2986,7 @@ impl AgentDriver {
         let mut written_conversation_id = false;
 
         ctx.subscribe_to_model(&history_model_handle, move |me, _, event, ctx| {
-            if event.terminal_view_id().is_some_and(|id| id != terminal_id) {
+if event.terminal_surface_id().is_some_and(|id| id != terminal_id) {
                 return;
             }
 
@@ -3062,7 +3097,7 @@ impl AgentDriver {
 
                 }
 
-                BlocklistAIHistoryEvent::UpdatedConversationStatus { terminal_view_id: conversation_terminal_id, conversation_id, .. } => {
+                BlocklistAIHistoryEvent::UpdatedConversationStatus { terminal_surface_id: conversation_terminal_id, conversation_id, .. } => {
                     if *conversation_terminal_id != terminal_id {
                         return;
                     }
@@ -3181,7 +3216,7 @@ impl AgentDriver {
                 }
                 BlocklistAIHistoryEvent::StartedNewConversation { .. }
                 | BlocklistAIHistoryEvent::ReassignedExchange { .. }
-                | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+                | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
                 | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
                 | BlocklistAIHistoryEvent::SplitConversation { .. }
                 | BlocklistAIHistoryEvent::RemoveConversation { .. }
@@ -3194,7 +3229,7 @@ impl AgentDriver {
                 | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
                 | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
                 | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
-                | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
+                | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces { .. }
                 | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
                 | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
                 | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
@@ -3425,6 +3460,14 @@ impl AgentDriver {
                 | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
                 | CLIAgentSessionsModelEvent::Ended { .. } => {}
             });
+    }
+
+    /// Removes the task mapping registered for CLI agent session status updates.
+    fn unregister_cli_agent_task_sync(&self, ctx: &mut ModelContext<Self>) {
+        let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+        LocalAgentTaskSyncModel::handle(ctx).update(ctx, |model, _| {
+            model.unregister_cli_session(terminal_view_id);
+        });
     }
 
     /// Handle events re-emitted by the `TerminalDriver`.

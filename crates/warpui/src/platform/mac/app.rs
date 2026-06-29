@@ -14,7 +14,9 @@ use warpui_core::assets::AssetProvider;
 use warpui_core::integration::TestDriver;
 use warpui_core::keymap::{Keystroke, Trigger};
 use warpui_core::modals::{AlertDialog, ModalId};
-use warpui_core::platform::app::{AppCallbackDispatcher, ApproveTerminateResult};
+use warpui_core::platform::app::{
+    AppCallbackDispatcher, ApproveTerminateResult, TerminationRequestSource,
+};
 use warpui_core::platform::menu::{Menu, MenuBar};
 use warpui_core::platform::{self, FilePickerCallback, SaveFilePickerCallback};
 use warpui_core::{AppContext, Event};
@@ -319,10 +321,18 @@ pub(crate) extern "C-unwind" fn warp_app_internet_reachability_changed(
 
 /// Returns whether or not we can proceed with termination.
 #[no_mangle]
-pub(crate) extern "C-unwind" fn warp_app_should_terminate_app(this: &mut Object) -> BOOL {
+pub(crate) extern "C-unwind" fn warp_app_should_terminate_app(
+    this: &mut Object,
+    system_initiated: BOOL,
+) -> BOOL {
     let app = unsafe { get_app(this) };
 
-    match app.callbacks.should_terminate_app() {
+    let source = if system_initiated != NO {
+        TerminationRequestSource::System
+    } else {
+        TerminationRequestSource::User
+    };
+    match app.callbacks.should_terminate_app(source) {
         ApproveTerminateResult::Terminate => YES,
         ApproveTerminateResult::Cancel => NO,
     }

@@ -7,6 +7,7 @@ pub use header::PaneHeaderAction::CustomAction as PaneHeaderCustomAction;
 pub use header_content::{
     HeaderContent, HeaderRenderContext, StandardHeader, StandardHeaderOptions,
 };
+use pathfinder_geometry::rect::RectF;
 use warpui::elements::{
     Border, Container, DropTarget, DropTargetData, Flex, MainAxisSize, ParentElement, SavePosition,
     Shrinkable,
@@ -55,6 +56,7 @@ pub enum PaneViewEvent {
         origin: ActionOrigin,
         tab_hover_index: TabBarHoverIndex,
         hidden_pane_preview_direction: Direction,
+        drag_position: RectF,
     },
     PaneDraggedOutsideTabBarOrPaneGroup,
     PaneDragEnded,
@@ -314,6 +316,7 @@ impl<P: BackingView> PaneView<P> {
                 origin,
                 tab_hover_index,
                 hidden_pane_preview_direction,
+                drag_position,
             } => {
                 // Adds a neutral background to the pane if it's being dragged over the workspace tab group.
                 if matches!(origin, ActionOrigin::Pane) {
@@ -324,6 +327,7 @@ impl<P: BackingView> PaneView<P> {
                     origin: *origin,
                     tab_hover_index: *tab_hover_index,
                     hidden_pane_preview_direction: *hidden_pane_preview_direction,
+                    drag_position: *drag_position,
                 });
                 ctx.notify();
             }

@@ -55,13 +55,35 @@ use crate::workspace::{
 use crate::BlocklistAIHistoryModel;
 
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
-const TAB_INDICATOR_HEIGHT: f32 = 14.0;
+pub(crate) const TAB_INDICATOR_HEIGHT: f32 = 14.0;
 
 /// Stable identifier for the tab right-click menu's "Move to group" submenu
 /// parent. Used as a save-position anchor in `workspace/view.rs`
 /// (NOT as a user-facing label — display text comes from
 /// `crate::menu_label("workspace.tab_grouping.move_to_group", ...)`).
 pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
+
+/// Decides which tab-group context-menu entries apply to a tab, based on its
+/// group membership, whether it is the sole member of that group, and whether
+/// any *other* groups exist.
+///
+/// Returns `(show_new_group, show_move_to_group, show_remove_from_group)`:
+/// - `New group with tab` everywhere except when the tab is the **only** member
+///   of its group. Pulling a tab into a brand-new group of its own is useful for
+///   an ungrouped tab or a tab that shares a group with siblings (à la Chrome),
+///   but is a no-op when the tab is already alone in its group.
+/// - `Move to group` when at least one group other than the tab's own exists.
+/// - `Remove from group` only when the tab **is** in a group.
+fn tab_group_menu_entry_flags(
+    group_id: Option<TabGroupId>,
+    tab_groups: &HashMap<TabGroupId, TabGroup>,
+    is_only_member_of_group: bool,
+) -> (bool, bool, bool) {
+    let in_group = group_id.is_some();
+    let has_other_groups = tab_groups.keys().any(|gid| Some(*gid) != group_id);
+    let show_new_group = !(in_group && is_only_member_of_group);
+    (show_new_group, has_other_groups, in_group)
+}
 
 /// True when the user has opted into vertical tabs and the feature flag is on.
 /// Exposed so binding-description overrides in `workspace/mod.rs` and context-
@@ -80,7 +102,7 @@ pub(crate) const TAB_PIN_INDICATOR_ICON_SIZE: f32 = 16.0;
 const TAB_INDICATOR_SYNCED_COLOR: u32 = 0x4A93FFFF;
 
 // Width threshold (in px) below which we render an icon-only tab
-const COMPACT_TAB_WIDTH_THRESHOLD: f32 = 42.0;
+pub(crate) const COMPACT_TAB_WIDTH_THRESHOLD: f32 = 42.0;
 // Horizontal inset for the tab close button
 const TAB_CLOSE_BUTTON_HORIZONTAL_INSET: f32 = 2.0;
 
@@ -192,11 +214,13 @@ impl TabData {
     }
 
     /// Returns the menu items for the context menu on right mouse click.
+    #[allow(clippy::too_many_arguments)]
     pub fn menu_items(
         &self,
         index: usize,
         tabs_len: usize,
         tab_groups: &HashMap<TabGroupId, TabGroup>,
+        is_only_member_of_group: bool,
         can_move_left: bool,
         can_move_right: bool,
         ctx: &AppContext,
@@ -205,6 +229,7 @@ impl TabData {
             index,
             tabs_len,
             tab_groups,
+            is_only_member_of_group,
             can_move_left,
             can_move_right,
             None,
@@ -218,6 +243,7 @@ impl TabData {
         index: usize,
         tabs_len: usize,
         tab_groups: &HashMap<TabGroupId, TabGroup>,
+        is_only_member_of_group: bool,
         can_move_left: bool,
         can_move_right: bool,
         pane_name_target: Option<PaneNameMenuTarget>,
@@ -229,7 +255,7 @@ impl TabData {
 
         for section_items in [
             self.pin_menu_items(index),
-            self.tab_group_menu_items(index, tab_groups),
+            self.tab_group_menu_items(index, tab_groups, is_only_member_of_group),
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, can_move_left, can_move_right, pane_name_target, ctx),
@@ -237,6 +263,11 @@ impl TabData {
             Self::save_config_menu_items(index),
             self.color_option_menu_items(index, terminal_colors),
         ] {
+            // Skip empty sections so we don't emit a trailing separator (e.g.
+            // when a grouped tab hides the color picker).
+            if section_items.is_empty() {
+                continue;
+            }
             if menu_items
                 .last()
                 .is_some_and(|item| !matches!(item, MenuItem::Separator))
@@ -583,8 +614,8 @@ impl TabData {
     }
 
     /// Returns the tab-group entries for the top-level right-click menu:
-    /// `New group with tab` (always available when the FF is on),
-    /// `Move to group` (when at least one other group exists), and
+    /// `New group with tab` (hidden only when the tab is the sole member of its
+    /// group), `Move to group` (when at least one other group exists), and
     /// `Remove from group` (only when the tab is currently in a group).
     ///
     /// The `Move to group` item is a submenu parent — selecting/hovering it
@@ -594,15 +625,22 @@ impl TabData {
         &self,
         index: usize,
         tab_groups: &HashMap<TabGroupId, TabGroup>,
+        is_only_member_of_group: bool,
     ) -> Vec<MenuItem<WorkspaceAction>> {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return vec![];
         }
-        let mut menu_items = vec![MenuItemFields::new("New group with tab")
-            .with_on_select_action(WorkspaceAction::NewTabGroupFromTab(index))
-            .into_item()];
-        let has_other_groups = tab_groups.keys().any(|gid| Some(*gid) != self.group_id);
-        if has_other_groups {
+        let (show_new_group, show_move_to_group, show_remove_from_group) =
+            tab_group_menu_entry_flags(self.group_id, tab_groups, is_only_member_of_group);
+        let mut menu_items = vec![];
+        if show_new_group {
+            menu_items.push(
+                MenuItemFields::new("New group with tab")
+                    .with_on_select_action(WorkspaceAction::NewTabGroupFromTab(index))
+                    .into_item(),
+            );
+        }
+        if show_move_to_group {
             menu_items.push(
                 MenuItemFields::new_submenu(crate::menu_label(
                     "workspace.tab_grouping.move_to_group",
@@ -611,7 +649,7 @@ impl TabData {
                 .into_item(),
             );
         }
-        if self.group_id.is_some() {
+        if show_remove_from_group {
             menu_items.push(
                 MenuItemFields::new(crate::menu_label(
                     "workspace.tab_grouping.remove_from_group",
@@ -629,88 +667,19 @@ impl TabData {
         index: usize,
         terminal_colors: AnsiColors,
     ) -> Vec<MenuItem<WorkspaceAction>> {
+        // Tabs inside a group have their color controlled by the group.
+        if self.group_id.is_some() {
+            return vec![];
+        }
         if FeatureFlag::DirectoryTabColors.is_enabled() {
-            self.dot_color_option_menu_items(index, terminal_colors)
+            color_picker_menu_items(
+                self.color(),
+                terminal_colors,
+                ColorPickerTarget::Tab { tab_index: index },
+            )
         } else {
             self.legacy_color_option_menu_items(index, terminal_colors)
         }
-    }
-
-    /// New dot-based color picker: default (no-color) + color options.
-    /// Rendered as a single custom menu item with individually clickable dots.
-    fn dot_color_option_menu_items(
-        &self,
-        index: usize,
-        terminal_colors: AnsiColors,
-    ) -> Vec<MenuItem<WorkspaceAction>> {
-        let effective_color = self.color();
-        let mouse_states: Vec<MouseStateHandle> = (0..TAB_COLOR_OPTIONS.len() + 1)
-            .map(|_| MouseStateHandle::default())
-            .collect();
-
-        vec![MenuItem::Item(
-            MenuItemFields::new_with_custom_label(
-                Arc::new(move |_is_selected, _is_hovered, appearance, _app| {
-                    let theme = appearance.theme();
-                    let ring_color: ColorU = theme.accent().into();
-
-                    let mut row = Flex::row()
-                        .with_main_axis_alignment(MainAxisAlignment::SpaceEvenly)
-                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                        .with_main_axis_size(MainAxisSize::Max);
-
-                    for (ansi_id, mouse_state) in std::iter::once(None)
-                        .chain(TAB_COLOR_OPTIONS.iter().copied().map(Some))
-                        .zip(mouse_states.iter().cloned())
-                    {
-                        let is_selected = match ansi_id {
-                            None => effective_color.is_none(),
-                            Some(id) => effective_color == Some(id),
-                        };
-                        let dot_color: ColorU = match ansi_id {
-                            None => ColorU::transparent_black(),
-                            Some(id) => id.to_ansi_color(&terminal_colors).into(),
-                        };
-                        let tooltip = match ansi_id {
-                            None => "Default (no color)".to_string(),
-                            Some(id) => id.to_string(),
-                        };
-
-                        let dot = render_color_dot(
-                            mouse_state,
-                            dot_color,
-                            is_selected,
-                            ring_color,
-                            ansi_id.is_none(),
-                            theme.foreground(),
-                            tooltip,
-                            appearance,
-                        )
-                        .on_click(move |ctx, _, _| {
-                            if let Some(color) = ansi_id {
-                                ctx.dispatch_typed_action(WorkspaceAction::ToggleTabColor {
-                                    color,
-                                    tab_index: index,
-                                });
-                            } else if let Some(color) = effective_color {
-                                ctx.dispatch_typed_action(WorkspaceAction::ToggleTabColor {
-                                    color,
-                                    tab_index: index,
-                                });
-                            }
-                            ctx.dispatch_typed_action(MenuAction::Close(true));
-                        });
-
-                        row.add_child(dot.finish());
-                    }
-
-                    row.finish()
-                }),
-                None,
-            )
-            .no_highlight_on_hover()
-            .with_no_interaction_on_hover(),
-        )]
     }
 
     /// Legacy icon-based color picker with toggle behavior.
@@ -742,6 +711,101 @@ impl TabData {
                 .collect(),
         }]
     }
+}
+
+/// Identifies what a color-picker selection recolors: a single tab or a whole
+/// tab group. Used by [`color_picker_menu_items`] to choose the toggle action
+/// dispatched when a dot is clicked.
+#[derive(Clone, Copy)]
+pub(crate) enum ColorPickerTarget {
+    Tab { tab_index: usize },
+    Group { group_id: TabGroupId },
+}
+
+impl ColorPickerTarget {
+    fn toggle_action(self, color: AnsiColorIdentifier) -> WorkspaceAction {
+        match self {
+            ColorPickerTarget::Tab { tab_index } => {
+                WorkspaceAction::ToggleTabColor { color, tab_index }
+            }
+            ColorPickerTarget::Group { group_id } => {
+                WorkspaceAction::ToggleTabGroupColor { color, group_id }
+            }
+        }
+    }
+}
+
+/// Builds the shared dot-based color picker menu section (a single custom row)
+/// used by both the per-tab and per-group color selectors. The leading dot clears
+/// the color; the rest are the `TAB_COLOR_OPTIONS`. `current_color` drives the
+/// selected-dot ring and the clear dot's toggle-off; `target` selects which toggle
+/// action is dispatched on click, either tab or group color selection.
+pub(crate) fn color_picker_menu_items(
+    current_color: Option<AnsiColorIdentifier>,
+    terminal_colors: AnsiColors,
+    target: ColorPickerTarget,
+) -> Vec<MenuItem<WorkspaceAction>> {
+    let mouse_states: Vec<MouseStateHandle> = (0..TAB_COLOR_OPTIONS.len() + 1)
+        .map(|_| MouseStateHandle::default())
+        .collect();
+
+    vec![MenuItem::Item(
+        MenuItemFields::new_with_custom_label(
+            Arc::new(move |_is_selected, _is_hovered, appearance, _app| {
+                let theme = appearance.theme();
+                let ring_color: ColorU = theme.accent().into();
+
+                let mut row = Flex::row()
+                    .with_main_axis_alignment(MainAxisAlignment::SpaceEvenly)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_size(MainAxisSize::Max);
+
+                for (ansi_id, mouse_state) in std::iter::once(None)
+                    .chain(TAB_COLOR_OPTIONS.iter().copied().map(Some))
+                    .zip(mouse_states.iter().cloned())
+                {
+                    let is_selected = match ansi_id {
+                        None => current_color.is_none(),
+                        Some(id) => current_color == Some(id),
+                    };
+                    let dot_color: ColorU = match ansi_id {
+                        None => ColorU::transparent_black(),
+                        Some(id) => id.to_ansi_color(&terminal_colors).into(),
+                    };
+                    let tooltip = match ansi_id {
+                        None => "Default (no color)".to_string(),
+                        Some(id) => id.to_string(),
+                    };
+
+                    let dot = render_color_dot(
+                        mouse_state,
+                        dot_color,
+                        is_selected,
+                        ring_color,
+                        ansi_id.is_none(),
+                        theme.foreground(),
+                        tooltip,
+                        appearance,
+                    )
+                    .on_click(move |ctx, _, _| {
+                        if let Some(color) = ansi_id {
+                            ctx.dispatch_typed_action(target.toggle_action(color));
+                        } else if let Some(color) = current_color {
+                            ctx.dispatch_typed_action(target.toggle_action(color));
+                        }
+                        ctx.dispatch_typed_action(MenuAction::Close(true));
+                    });
+
+                    row.add_child(dot.finish());
+                }
+
+                row.finish()
+            }),
+            None,
+        )
+        .no_highlight_on_hover()
+        .with_no_interaction_on_hover(),
+    )]
 }
 
 /// Stores the state of the tab bar—info related to the entire list of tabs rather than any one
@@ -1015,6 +1079,13 @@ impl<'a> TabComponent<'a> {
         self
     }
 
+    /// Overrides the effective color used to build tab styles. Used when the
+    /// tab's color should be driven by its group rather than its own data.
+    pub fn with_effective_color(mut self, color: Option<AnsiColorIdentifier>) -> Self {
+        self.styles = TabStyles::default(self.appearance, color);
+        self
+    }
+
     /// Marks this tab as part of a multi-tab selection (count > 1). When set,
     /// the tab renders with the in-selection highlight and right-clicks
     /// dispatch the multi-tab selection menu instead of the single-tab menu.
@@ -1206,15 +1277,16 @@ impl<'a> TabComponent<'a> {
                         .set_border_width(0.),
                 )
                 .with_style(UiComponentStyles {
-                    margin: Some(Coords::default().top(
-                        if FeatureFlag::NewTabStyling.is_enabled() {
-                            // With the larger tabs in the new ui, we need to give the editor some extra top margin
-                            // to make it appear centered
-                            8.
-                        } else {
-                            3.
-                        },
-                    )),
+                    margin: Some(Coords::default().top(if self.grouped_member {
+                        // Reduce the top margin for grouped tabs to make it appear centered.
+                        2.
+                    } else if FeatureFlag::NewTabStyling.is_enabled() {
+                        // With the larger tabs in the new ui, we need to give the editor some extra top margin
+                        // to make it appear centered
+                        8.
+                    } else {
+                        3.
+                    })),
                     ..Default::default()
                 })
                 .build()
@@ -1494,21 +1566,37 @@ impl<'a> TabComponent<'a> {
         let (background_color, border_fill) = if FeatureFlag::NewTabStyling.is_enabled() {
             // If there is a custom tab background, we overlay it with varying opacities.
             let bg = if let Some(custom_background) = self.styles.background {
-                let base_opacity = if is_active || is_in_multi_tab_selection {
+                let base_opacity = if is_active || (is_in_multi_tab_selection && is_hovered) {
                     60
                 } else if is_hovered {
                     40
+                } else if is_in_multi_tab_selection {
+                    // A saturated color reads louder than the neutral multi-select
+                    // overlay regular tabs use, so keep multi-selection to just a
+                    // tiny bump above the resting color rather than the hover tier.
+                    25
+                } else if self.grouped_member {
+                    // Member of a colored group: the group container paints the
+                    // idle color behind this tab, so stay transparent at rest.
+                    // Painting the color again here would double-tint and make
+                    // the member look a shade lighter than the container.
+                    0
                 } else {
                     20
                 };
-                let opacity = (base_opacity as f32 * self.background_opacity as f32 / 100.) as u8;
-                match custom_background {
-                    ThemeFill::Solid(color) => coloru_with_opacity(color, opacity).into(),
-                    ThemeFill::VerticalGradient(gradient) => {
-                        coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
-                    }
-                    ThemeFill::HorizontalGradient(gradient) => {
-                        coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
+                if base_opacity == 0 {
+                    Fill::None
+                } else {
+                    let opacity =
+                        (base_opacity as f32 * self.background_opacity as f32 / 100.) as u8;
+                    match custom_background {
+                        ThemeFill::Solid(color) => coloru_with_opacity(color, opacity).into(),
+                        ThemeFill::VerticalGradient(gradient) => {
+                            coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
+                        }
+                        ThemeFill::HorizontalGradient(gradient) => {
+                            coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
+                        }
                     }
                 }
             } else if is_active {
@@ -1538,13 +1626,20 @@ impl<'a> TabComponent<'a> {
             };
 
             let bg = if let Some(custom_background) = self.styles.background {
-                match custom_background {
-                    ThemeFill::Solid(color) => coloru_with_opacity(color, tab_opacity).into(),
-                    ThemeFill::VerticalGradient(gradient) => {
-                        coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
-                    }
-                    ThemeFill::HorizontalGradient(gradient) => {
-                        coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
+                if self.grouped_member && !is_active && !is_hovered {
+                    // Member of a colored group: the group container paints the
+                    // idle color behind this tab, so stay transparent at rest to
+                    // avoid double-tinting.
+                    Fill::None
+                } else {
+                    match custom_background {
+                        ThemeFill::Solid(color) => coloru_with_opacity(color, tab_opacity).into(),
+                        ThemeFill::VerticalGradient(gradient) => {
+                            coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
+                        }
+                        ThemeFill::HorizontalGradient(gradient) => {
+                            coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
+                        }
                     }
                 }
             } else {
@@ -1719,17 +1814,29 @@ impl<'a> TabComponent<'a> {
         )
         .finish();
 
-        // Grouped member: inset rounded highlight, no side dividers, no
-        // drop target (members can't be dragged currently).
+        // Grouped member: inset rounded highlight, no side dividers. It still
+        // gets its own drop target so a dragged pane can land at this member's
+        // slot (and the member highlights while hovered).
         if self.grouped_member {
             let highlight = Container::new(stack)
                 .with_background(background_color)
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.0)))
                 .finish();
-            return Container::new(highlight)
+            let member = Container::new(highlight)
                 .with_vertical_padding(3.)
                 .with_horizontal_padding(3.)
                 .finish();
+            return if self.for_drag_ghost {
+                member
+            } else {
+                DropTarget::new(
+                    member,
+                    TabBarDropTargetData {
+                        tab_bar_location: TabBarLocation::TabIndex(self.tab_index),
+                    },
+                )
+                .finish()
+            };
         }
 
         let mut tab = Container::new(stack)
@@ -2060,3 +2167,7 @@ impl UiComponent for TabComponent<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tab_tests.rs"]
+mod tests;

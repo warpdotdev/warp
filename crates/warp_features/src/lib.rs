@@ -512,6 +512,10 @@ pub enum FeatureFlag {
     /// Enables v2 of the context window usage UI.
     ContextWindowUsageV2,
 
+    /// Dev-only: enables the expandable per-segment context window usage
+    /// breakdown in the conversation usage card.
+    ContextWindowUsageBreakdown,
+
     /// Enables global search
     GlobalSearch,
 
@@ -880,9 +884,18 @@ pub enum FeatureFlag {
     /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
+
+    /// Gates the custom model router feature, which allows users to define
+    /// their own model routers.
+    CustomModelRouters,
+
     /// Shows a warning in the agent view when the active conversation's
     /// provider-side prompt cache has expired.
     PromptCacheExpiryWarning,
+
+    /// Enables the `--runner` flag on `run-cloud`, which overrides an agent's
+    /// compute (docker image, instance shape, setup commands) by runner ID.
+    CloudRunners,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -940,7 +953,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::EditableMarkdownMermaid,
     FeatureFlag::CodeReviewScrollPreservation,
     FeatureFlag::RememberFastForwardState,
-    FeatureFlag::CodexPlugin,
     FeatureFlag::GeminiNotifications,
     FeatureFlag::LocalDockerSandbox,
     #[cfg(not(windows))]
@@ -951,6 +963,8 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WarpControlCli,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::PinnedTabs,
+    FeatureFlag::ContextWindowUsageBreakdown,
+    FeatureFlag::CloudRunners,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
@@ -959,6 +973,8 @@ pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     #[cfg(target_os = "macos")]
     FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    FeatureFlag::DragTabsToWindows,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
@@ -974,8 +990,6 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    FeatureFlag::DragTabsToWindows,
 ];
 
 /// Flags that we want to allow to switch at runtime (assuming RuntimeFeatureFlags is set)

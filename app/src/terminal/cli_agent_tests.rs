@@ -264,6 +264,7 @@ fn test_detect_known_agents() {
                 ("agent", CLIAgent::CursorCli),
                 ("goose", CLIAgent::Goose),
                 ("vibe", CLIAgent::Vibe),
+                ("agy", CLIAgent::Antigravity),
             ] {
                 assert_eq!(
                     CLIAgent::detect(command, None, None, ctx),
