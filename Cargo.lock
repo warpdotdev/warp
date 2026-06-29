@@ -15845,7 +15845,6 @@ dependencies = [
  "command",
  "log",
  "num-traits",
- "parking_lot",
  "pathfinder_geometry",
  "string-offset",
  "vec1",

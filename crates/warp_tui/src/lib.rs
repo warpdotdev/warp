@@ -2,25 +2,29 @@
 //!
 //! This crate contains:
 //! - [`input`] — the editor-backed TUI input view (`TuiEditorModel` + `TuiInputView`).
-//! - Conversation streaming modules (`conversation_model`, `conversation_selection`, `prompt_stream`).
+//! - [`root_view`] — [`RootTuiView`], the root view mounted by the `warp-tui`
+//!   binary (a single bordered input box docked at the bottom).
+//! - [`session`] — [`run`], the binary entry point that boots the headless app
+//!   and starts the TUI draw + input driver.
+//! - Conversation-streaming modules (`conversation_model`, `conversation_selection`,
+//!   `prompt_stream`) — retained but not yet wired into [`run`]; they back the
+//!   upcoming transcript view.
 //! - Binary entry points under `src/bin/`.
 
-use anyhow::Result;
-
 pub mod input;
+pub mod root_view;
+pub mod session;
+mod ui;
 
-mod args;
+// Retained for the upcoming transcript-view integration. They are not wired into
+// `run()` yet (the entry point renders the input box), so they are intentionally
+// dead code for now.
+#[allow(dead_code)]
 mod conversation_model;
+#[allow(dead_code)]
 mod conversation_selection;
+#[allow(dead_code)]
 mod prompt_stream;
 
-use args::TuiArgs;
-
-/// Runs the TUI frontend or dispatches a Warp worker invocation.
-pub fn run() -> Result<()> {
-    if let Some(result) = warp::run_tui_worker_if_requested() {
-        return result;
-    }
-    let args = TuiArgs::from_env()?;
-    warp::run_tui(move |ctx| prompt_stream::start(args, ctx))
-}
+pub use root_view::RootTuiView;
+pub use session::run;

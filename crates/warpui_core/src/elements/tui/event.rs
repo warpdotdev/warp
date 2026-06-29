@@ -10,7 +10,7 @@
 //! [`TuiElement`](super::TuiElement) contract; the crossterm → warp event
 //! conversion lives with the runtime.
 
-use crate::{Action, App, EntityId};
+use crate::{Action, AppContext, EntityId};
 
 /// Whether an element that handled an event wants its ancestors to keep seeing
 /// it. Returned by event-aware elements during dispatch.
@@ -29,7 +29,7 @@ pub struct TuiEventDispatchResult {
     pub handled: bool,
 }
 
-type TuiAppUpdate = Box<dyn FnOnce(&mut App)>;
+type TuiAppUpdate = Box<dyn FnOnce(&mut AppContext)>;
 
 #[derive(Default)]
 pub struct TuiEventContext {

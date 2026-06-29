@@ -104,6 +104,34 @@ fn clamps_total_height_to_the_constraint_and_clips_overflow() {
 }
 
 #[test]
+fn flex_child_fills_leftover_and_docks_fixed_child_at_bottom() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            // A flex spacer on top fills the leftover height, pushing the fixed
+            // single-row child to the bottom of the 4-row area.
+            let mut column = TuiColumn::new()
+                .flex_child(TuiColumn::new())
+                .child(TuiText::new("IN"));
+
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let size = column.layout(TuiConstraint::loose(TuiSize::new(2, 4)), &mut ctx, app_ctx);
+            // With a flex child present, the column fills the offered height.
+            assert_eq!(size, TuiSize::new(2, 4));
+
+            // The flex spacer occupies the top three rows; the fixed input row
+            // lands on the last row.
+            assert_eq!(
+                render_to_lines(&column, TuiSize::new(2, 4)),
+                vec!["  ", "  ", "  ", "IN"],
+            );
+        });
+    });
+}
+
+#[test]
 fn present_recurses_into_children() {
     let root = EntityId::from_usize(1);
     let embedded = EntityId::from_usize(2);

@@ -122,7 +122,14 @@ impl TuiElement for TuiContainer {
     }
 
     fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
-        self.child.cursor_position(area.inset(self.inset()), ctx)
+        // `cursor_position` is reported relative to `area`'s origin, but the
+        // child is laid out inside the inset rect and reports relative to that
+        // inset origin. Add the inset back so the cursor lands inside the
+        // border/padding instead of at the frame's top-left corner.
+        let inset = self.inset();
+        self.child
+            .cursor_position(area.inset(inset), ctx)
+            .map(|(cx, cy)| (cx.saturating_add(inset), cy.saturating_add(inset)))
     }
 
     fn dispatch_event(

@@ -21,7 +21,6 @@ use warpui::{
     TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use super::args::TuiArgs;
 use super::conversation_model::{TuiConversationModel, TuiConversationModelEvent};
 use super::conversation_selection::TuiConversationSelection;
 
@@ -371,16 +370,10 @@ impl Entity for PromptStreamSession {
 }
 
 impl SingletonEntity for PromptStreamSession {}
-/// Starts prompt streaming when the TUI frontend received a prompt.
-pub(super) fn start(args: TuiArgs, ctx: &mut AppContext) -> bool {
-    let Some(prompt) = args.prompt else {
-        return false;
-    };
-    start_prompt_stream(prompt, args.server_conversation_token, ctx);
-    true
-}
 
-/// Builds a manager-backed terminal session and submits the prompt.
+/// Builds a manager-backed terminal session and submits the prompt. This is the
+/// reusable entry the upcoming transcript view will call with a prompt from the
+/// input box (the CLI-args entry was dropped along with `TuiArgs`).
 fn start_prompt_stream(
     prompt: String,
     server_conversation_token: Option<ServerConversationToken>,
