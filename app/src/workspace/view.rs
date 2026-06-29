@@ -80,7 +80,7 @@ use warp_core::ui::Icon;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_editor::editor::NavigationKey;
 use warp_server_client::auth::AuthEvent;
-use warp_util::path::{user_friendly_path, LineAndColumnArg};
+use warp_util::path::{user_friendly_path, LineAndColumnArg, ShellFamily};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use warp_util::standardized_path::StandardizedPath;
 use warpui::accessibility::{
@@ -8794,7 +8794,6 @@ impl Workspace {
             .ok()
             .map(|path| path.to_string_lossy().into_owned())
         {
-            let command = format!("{exec} {}", warp_cli::dump_debug_info_flag());
             // Get the active session for this tab if it exists.
             let mut active_session_handle = self
                 .active_tab_pane_group()
@@ -8820,6 +8819,11 @@ impl Workspace {
                 });
             if let Some(terminal_view_handle) = active_session_handle {
                 terminal_view_handle.update(ctx, |terminal_view, ctx| {
+                    // Escape the executable path against the active session's shell so a
+                    // path containing spaces (e.g. an app renamed to "Warp Beta.app") or
+                    // other shell metacharacters is run as a single argument instead of
+                    // being split apart by the shell.
+                    let command = dump_debug_info_command(&exec, terminal_view.shell_family(ctx));
                     terminal_view.set_pending_command(&command, ctx);
                 });
             }
@@ -28729,6 +28733,19 @@ impl Workspace {
 
 fn should_reserve_traffic_light_space_in_tab_bar(side: TrafficLightSide) -> bool {
     side == TrafficLightSide::Right
+}
+
+/// Builds the command that runs the Warp executable with the
+/// [`warp_cli::Command::DumpDebugInfo`] subcommand. The executable path is
+/// shell-escaped for `shell_family` so a path containing spaces or other shell
+/// metacharacters is passed as a single argument instead of being split apart by
+/// the shell.
+fn dump_debug_info_command(exec: &str, shell_family: ShellFamily) -> String {
+    format!(
+        "{} {}",
+        shell_family.shell_escape(exec),
+        warp_cli::dump_debug_info_flag()
+    )
 }
 
 /// Total width/height of the collage area in the group header.
