@@ -1121,9 +1121,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                         .cloned()
                         .chain(memory_citations)
                         .collect();
-                    if let Some(references) =
-                        render_references_footer(&all_citations, props, app)
-                    {
+                    if let Some(references) = render_references_footer(&all_citations, props, app) {
                         output_items.add_child(references);
                     }
                 }

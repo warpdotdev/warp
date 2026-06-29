@@ -72,7 +72,6 @@ pub enum AgentToolbarItemKind {
 
     // Agent view only – "Hand off to cloud" chip.
     HandoffToCloud,
-
 }
 
 impl AgentToolbarItemKind {

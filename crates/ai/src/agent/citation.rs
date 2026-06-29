@@ -6,9 +6,15 @@ use warp_multi_agent_api as api;
 /// A citation listed in an AI response.
 #[derive(Debug, Clone)]
 pub enum AIAgentCitation {
-    WarpDriveObject { uid: String },
-    WarpDocumentation { path: String },
-    WebPage { url: String },
+    WarpDriveObject {
+        uid: String,
+    },
+    WarpDocumentation {
+        path: String,
+    },
+    WebPage {
+        url: String,
+    },
     /// A memory from an attached memory store. `content` is the raw memory
     /// text shown as a preview in the chip; `Hash`/`Eq` use only the IDs.
     AgentMemory {
@@ -25,8 +31,16 @@ impl PartialEq for AIAgentCitation {
             (Self::WarpDocumentation { path: a }, Self::WarpDocumentation { path: b }) => a == b,
             (Self::WebPage { url: a }, Self::WebPage { url: b }) => a == b,
             (
-                Self::AgentMemory { memory_store_id: s1, memory_id: i1, .. },
-                Self::AgentMemory { memory_store_id: s2, memory_id: i2, .. },
+                Self::AgentMemory {
+                    memory_store_id: s1,
+                    memory_id: i1,
+                    ..
+                },
+                Self::AgentMemory {
+                    memory_store_id: s2,
+                    memory_id: i2,
+                    ..
+                },
             ) => s1 == s2 && i1 == i2,
             _ => false,
         }
@@ -50,7 +64,11 @@ impl Hash for AIAgentCitation {
                 2u8.hash(state);
                 url.hash(state);
             }
-            Self::AgentMemory { memory_store_id, memory_id, .. } => {
+            Self::AgentMemory {
+                memory_store_id,
+                memory_id,
+                ..
+            } => {
                 3u8.hash(state);
                 memory_store_id.hash(state);
                 memory_id.hash(state);
@@ -71,7 +89,11 @@ impl Display for AIAgentCitation {
             AIAgentCitation::WebPage { url } => {
                 write!(f, "Web Page: {url}")
             }
-            AIAgentCitation::AgentMemory { memory_store_id, memory_id, .. } => {
+            AIAgentCitation::AgentMemory {
+                memory_store_id,
+                memory_id,
+                ..
+            } => {
                 write!(f, "Agent Memory: {memory_store_id}/{memory_id}")
             }
         }

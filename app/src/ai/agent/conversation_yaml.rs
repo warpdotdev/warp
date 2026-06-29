@@ -1102,8 +1102,7 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
         | ToolCallResultType::InitProject(_)
         | ToolCallResultType::TransferShellCommandControlToUser(_)
         | ToolCallResultType::SuggestCreatePlan(_)
-        | ToolCallResultType::SuggestPlan(_)
-        | ToolCallResultType::WaitForEvents(_) => {
+        | ToolCallResultType::SuggestPlan(_) => {
             out.push_str("status: completed\n");
         }
     }
