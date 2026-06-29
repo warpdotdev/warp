@@ -741,10 +741,6 @@ pub struct AppContext {
 }
 
 impl AppContext {
-    /// Returns a weak handle to the owning application.
-    pub(crate) fn weak_app(&self) -> rc::Weak<RefCell<Self>> {
-        self.weak_self.clone()
-    }
     pub(crate) fn new(
         platform_delegate: Box<dyn platform::Delegate>,
         window_manager: Box<dyn platform::WindowManager>,

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
@@ -8,7 +7,7 @@ use warp::tui_export::{
 use warpui::event::ModifiersState;
 use warpui::geometry::vector::Vector2F;
 use warpui::platform::WindowStyle;
-use warpui::{AddWindowOptions, App, EntityId, Event, TuiView};
+use warpui::{AddWindowOptions, App, EntityId, EntityIdMap, Event, TuiView};
 use warpui_core::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext, TuiRect,
     TuiSize,
@@ -157,7 +156,7 @@ fn transcript_view_scrolls_only_with_the_mouse_wheel() {
 /// Lays out and renders a retained TUI element.
 fn render_element(app: &App, element: &mut dyn TuiElement, area: TuiRect) -> Vec<String> {
     app.read(|app| {
-        let mut rendered_views = HashMap::new();
+        let mut rendered_views = EntityIdMap::default();
         let mut ctx = TuiLayoutContext {
             rendered_views: &mut rendered_views,
         };
@@ -190,7 +189,7 @@ fn dispatch_scroll(app: &App, element: &mut dyn TuiElement, area: TuiRect, delta
 /// Dispatches an event to a retained TUI element.
 fn dispatch_event(app: &App, element: &mut dyn TuiElement, area: TuiRect, event: &Event) -> bool {
     app.read(|app| {
-        let mut rendered_views = HashMap::new();
+        let mut rendered_views = EntityIdMap::default();
         let mut layout_ctx = TuiLayoutContext {
             rendered_views: &mut rendered_views,
         };

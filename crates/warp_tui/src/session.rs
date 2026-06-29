@@ -1,31 +1,29 @@
 //! The headless `warp-tui` front-end's session bootstrap.
 //!
-//! [`run`] boots the real (headless) Warp app via [`warp::run_tui`], which runs
-//! the full `initialize_app` (so auth state, `Appearance`, settings, etc.
-//! exist) and then runs the mount built here. The mount calls [`init`] with
-//! [`RootTuiView`]: it creates the TUI window and starts the non-blocking
-//! [`spawn_tui_driver`] draw + input loop, keeping the returned
-//! [`TuiDriverHandle`] alive in a [`TuiSession`] singleton for the app's
-//! lifetime. `Ctrl-C` quits (handled by the driver).
-//!
-//! Living in `warp_tui` (rather than `warp`) keeps all of the TUI front-end —
-//! the root view, the window/driver bootstrap, and the session that owns the
-//! driver handle — in one crate, so `warp` stays unaware of the concrete UI and
-//! never has to depend on `warp_tui`.
+//! [`run`] boots the real headless Warp app via [`warp::run_tui`]. Once shared
+//! initialization is done, the mount built here starts the transcript-capable
+//! TUI session and keeps both the TUI driver and terminal manager alive for the
+//! app's lifetime.
+
+use std::collections::HashMap;
+use std::ffi::OsString;
 
 use anyhow::Result;
+use pathfinder_geometry::vector::Vector2F;
+use warp::tui_export::{
+    BannerState, IsSharedSessionCreator, LocalTtyTerminalManager, TerminalManagerTrait,
+    TerminalSurfaceResult,
+};
 use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};
-use warpui_core::{
-    AddWindowOptions, AppContext, Entity, SingletonEntity, TuiView, TypedActionView, ViewContext,
-};
+use warpui_core::{AddWindowOptions, AppContext, Entity, ModelHandle, SingletonEntity, ViewHandle};
 
 use crate::RootTuiView;
 
-/// Holds the live TUI session for the app's lifetime; dropping it on app
-/// teardown restores the terminal.
+/// Holds the live TUI session for the app's lifetime.
 struct TuiSession {
-    _handle: TuiDriverHandle,
+    _driver: TuiDriverHandle,
+    _manager: ModelHandle<Box<dyn TerminalManagerTrait>>,
 }
 
 impl Entity for TuiSession {
@@ -34,11 +32,7 @@ impl Entity for TuiSession {
 
 impl SingletonEntity for TuiSession {}
 
-/// Boots the headless Warp app and renders [`RootTuiView`] to the terminal.
-///
-/// The mount closure (which builds the root view and starts the driver) is
-/// constructed here and handed to [`warp::run_tui`], so `warp` itself never has
-/// to depend on `warp_tui`. Called by the `warp-tui` binaries.
+/// Boots the headless Warp app and mounts the transcript-capable TUI session.
 pub fn run() -> Result<()> {
     // If this process was re-exec'd as a Warp worker (e.g. the terminal
     // server), dispatch that instead of starting another TUI — otherwise the
@@ -46,40 +40,50 @@ pub fn run() -> Result<()> {
     if let Some(result) = warp::run_tui_worker_if_requested() {
         return result;
     }
-    warp::run_tui(Box::new(|ctx| init(ctx, RootTuiView::new)))
+    warp::run_tui(Box::new(init))
 }
 
-/// Creates the TUI root window from `build_root` and starts the headless draw +
-/// input driver. Registered as a singleton so the session lives for the app's
-/// lifetime. Invoked from `run_internal` (via [`run`]) once the headless app is
-/// initialized.
-fn init<R, F>(ctx: &mut AppContext, build_root: F)
-where
-    R: TuiView + TypedActionView,
-    F: FnOnce(&mut ViewContext<R>) -> R,
-{
-    let (window_id, root) = ctx.add_tui_window(
-        AddWindowOptions {
-            window_style: WindowStyle::NotStealFocus,
-            ..Default::default()
+/// Creates the transcript root surface and starts the headless draw + input
+/// driver. Registered as a singleton so the session lives for the app lifetime.
+fn init(ctx: &mut AppContext) {
+    let banner = ctx.add_model(|_| BannerState::default());
+    let manager = LocalTtyTerminalManager::<RootTuiView>::create_tui_model(
+        std::env::current_dir().ok(),
+        HashMap::<OsString, OsString>::from_iter(std::env::vars_os()),
+        IsSharedSessionCreator::No,
+        None,
+        banner,
+        Vector2F::new(120., 24.),
+        None,
+        None,
+        ctx,
+        |surface_init, ctx| {
+            let (_, surface) = ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |ctx| RootTuiView::new(surface_init, ctx),
+            );
+            TerminalSurfaceResult {
+                surface,
+                post_wire: |_manager: &mut LocalTtyTerminalManager<RootTuiView>,
+                            _surface: &ViewHandle<RootTuiView>,
+                            _ctx: &mut AppContext| {},
+            }
         },
-        build_root,
     );
-
-    match spawn_tui_driver(ctx, window_id, root) {
-        Ok(handle) => {
-            ctx.add_singleton_model(|_| TuiSession { _handle: handle });
+    let window_id = manager.surface.window_id(ctx);
+    match spawn_tui_driver(ctx, window_id, manager.surface) {
+        Ok(driver) => {
+            ctx.add_singleton_model(|_| TuiSession {
+                _driver: driver,
+                _manager: manager.manager,
+            });
         }
         Err(error) => {
-            log::error!("failed to start the TUI driver: {error}");
-            // The alternate screen was never entered (entering it is what
-            // failed), so also print to stderr — otherwise the process exits
-            // with the reason buried in the log file.
-            eprintln!(
-                "warp-tui: could not start the terminal UI: {error}\n\
-                 Run it directly in an interactive terminal (a real TTY), not piped or backgrounded."
-            );
-            ctx.terminate_app(TerminationMode::ForceTerminate, None);
+            log::error!("failed to start transcript TUI: {error}");
+            ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error.into())));
         }
     }
 }
