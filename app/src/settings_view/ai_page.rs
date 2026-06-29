@@ -9100,9 +9100,7 @@ impl SettingsWidget for CustomModelRoutersWidget {
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                build_sub_header(appearance, "Custom Routers", Some(header_color)).finish(),
-            )
+            .with_child(build_sub_header(appearance, "Custom Routers", Some(header_color)).finish())
             .with_child({
                 #[cfg(feature = "local_fs")]
                 {
