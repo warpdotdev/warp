@@ -26,7 +26,7 @@ const WHEEL_STEP: isize = 2;
 pub trait TuiScrollableElement: TuiElement {
     /// Scrolls by `rows` (negative scrolls toward the top) within a viewport of
     /// `viewport_height` rows. Returns whether the scroll position changed.
-    fn scroll_by_rows(&self, rows: isize, viewport_height: usize) -> bool;
+    fn scroll_by_rows(&mut self, rows: isize, viewport_height: usize) -> bool;
 }
 
 /// Wraps a [`TuiScrollableElement`], capturing wheel events over the child's

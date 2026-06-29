@@ -18,51 +18,53 @@ pub struct TuiViewportAnchor<ItemId> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum TuiViewportScrollState<ItemId> {
-    FollowBottom,
+pub enum TuiViewportPosition<ItemId> {
+    End,
     Anchored(TuiViewportAnchor<ItemId>),
 }
 
-/// Persistent scroll state for a [`TuiViewportedList`].
+/// Shared storage for a caller-owned viewport position.
 #[derive(Clone)]
-pub struct TuiViewportHandle<ItemId>(Rc<RefCell<TuiViewportScrollState<ItemId>>>);
+pub struct TuiViewportHandle<ItemId>(Rc<RefCell<TuiViewportPosition<ItemId>>>);
 
 impl<ItemId> Default for TuiViewportHandle<ItemId> {
     fn default() -> Self {
-        Self(Rc::new(RefCell::new(TuiViewportScrollState::FollowBottom)))
+        Self(Rc::new(RefCell::new(TuiViewportPosition::End)))
     }
 }
 
 impl<ItemId: Clone> TuiViewportHandle<ItemId> {
-    /// Creates viewport state that initially follows the end of the index.
+    /// Creates viewport position storage initially set to the index end.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Pins the viewport to the end of the index.
-    pub fn follow_bottom(&self) {
-        *self.0.borrow_mut() = TuiViewportScrollState::FollowBottom;
+    /// Returns the current caller-owned viewport position.
+    pub fn position(&self) -> TuiViewportPosition<ItemId> {
+        self.0.borrow().clone()
+    }
+
+    /// Stores a new caller-owned viewport position.
+    pub fn set_position(&self, position: TuiViewportPosition<ItemId>) {
+        *self.0.borrow_mut() = position;
+    }
+
+    /// Requests rendering from the end of the ordered index.
+    pub fn scroll_to_end(&self) {
+        self.set_position(TuiViewportPosition::End);
     }
 
     /// Anchors the viewport to `item_id` at `row_offset`.
     pub fn scroll_to_item(&self, item_id: ItemId, row_offset: usize) {
-        *self.0.borrow_mut() = TuiViewportScrollState::Anchored(TuiViewportAnchor {
+        self.set_position(TuiViewportPosition::Anchored(TuiViewportAnchor {
             item_id,
             row_offset,
-        });
+        }));
     }
 
-    /// Returns whether the viewport is following the end of the index.
-    pub fn is_following_bottom(&self) -> bool {
-        matches!(*self.0.borrow(), TuiViewportScrollState::FollowBottom)
-    }
-
-    fn state(&self) -> TuiViewportScrollState<ItemId> {
-        self.0.borrow().clone()
-    }
-
-    fn set_state(&self, state: TuiViewportScrollState<ItemId>) {
-        *self.0.borrow_mut() = state;
+    /// Returns whether the requested viewport position is the index end.
+    pub fn is_at_end(&self) -> bool {
+        matches!(*self.0.borrow(), TuiViewportPosition::End)
     }
 }
 
@@ -141,34 +143,38 @@ struct VisibleElement<ItemId> {
 }
 
 /// A variable-height viewport that delegates ordered storage and item rendering.
-pub struct TuiViewportedList<Index, RenderItem>
+pub struct TuiViewportedList<Index, RenderItem, OnPositionChange>
 where
     Index: TuiViewportIndex,
 {
     index: Index,
     render_item: RenderItem,
-    handle: TuiViewportHandle<Index::ItemId>,
+    on_position_change: OnPositionChange,
+    position: TuiViewportPosition<Index::ItemId>,
     visible_elements: Vec<VisibleElement<Index::ItemId>>,
     first_anchor: Option<TuiViewportAnchor<Index::ItemId>>,
     last_width: Option<u16>,
     size: TuiSize,
 }
 
-impl<Index, RenderItem> TuiViewportedList<Index, RenderItem>
+impl<Index, RenderItem, OnPositionChange> TuiViewportedList<Index, RenderItem, OnPositionChange>
 where
     Index: TuiViewportIndex,
     RenderItem: Fn(ViewportRenderRequest<Index::Item>, &AppContext) -> RenderedViewportItem,
+    OnPositionChange: FnMut(TuiViewportPosition<Index::ItemId>),
 {
     /// Creates a generalized viewport over `index` with an injected item renderer.
     pub fn new(
-        handle: TuiViewportHandle<Index::ItemId>,
+        position: TuiViewportPosition<Index::ItemId>,
         index: Index,
         render_item: RenderItem,
+        on_position_change: OnPositionChange,
     ) -> Self {
         Self {
             index,
             render_item,
-            handle,
+            on_position_change,
+            position,
             visible_elements: Vec::new(),
             first_anchor: None,
             last_width: None,
@@ -177,30 +183,36 @@ where
     }
 
     fn collect_visible(
-        &self,
+        &mut self,
         viewport_height: usize,
     ) -> Vec<CollectedItem<Index::ItemId, Index::Item>> {
-        let state = self.handle.state();
-        let collected = match &state {
-            TuiViewportScrollState::FollowBottom => self
+        let collected = match &self.position {
+            TuiViewportPosition::End => self
                 .index
                 .with_cursor(TuiViewportIndexPosition::End, |cursor| {
                     collect_from_bottom(cursor, viewport_height)
                 }),
-            TuiViewportScrollState::Anchored(anchor) => self
+            TuiViewportPosition::Anchored(anchor) => self
                 .index
                 .with_cursor(TuiViewportIndexPosition::Item(&anchor.item_id), |cursor| {
                     collect_from_anchor(cursor, anchor.row_offset, viewport_height)
                 }),
         };
-        if collected.is_empty() && matches!(state, TuiViewportScrollState::Anchored(_)) {
-            self.handle.follow_bottom();
+        if collected.is_empty() && matches!(self.position, TuiViewportPosition::Anchored(_)) {
+            self.set_position(TuiViewportPosition::End);
             self.index
                 .with_cursor(TuiViewportIndexPosition::End, |cursor| {
                     collect_from_bottom(cursor, viewport_height)
                 })
         } else {
             collected
+        }
+    }
+
+    fn set_position(&mut self, position: TuiViewportPosition<Index::ItemId>) {
+        if self.position != position {
+            self.position = position.clone();
+            (self.on_position_change)(position);
         }
     }
 
@@ -299,16 +311,16 @@ where
     /// both ends. `viewport_height` is needed for the bottom clamp: once a
     /// screenful or less remains below the new top, the viewport pins to the
     /// end instead of scrolling content off the bottom into blank space.
-    fn scroll_by(&self, rows: isize, viewport_height: usize) -> bool {
+    fn scroll_by(&mut self, rows: isize, viewport_height: usize) -> bool {
         if rows == 0 || viewport_height == 0 {
             return false;
         }
-        // Resolve the current top anchor. `FollowBottom` only yields a top
-        // anchor for upward scrolls; downward is already pinned to the end.
-        let current = match self.handle.state() {
-            TuiViewportScrollState::FollowBottom if rows < 0 => self.first_anchor.clone(),
-            TuiViewportScrollState::FollowBottom => return false,
-            TuiViewportScrollState::Anchored(anchor) => Some(anchor),
+        // Resolve the current top anchor. `End` only yields a top anchor for
+        // upward scrolls; downward is already pinned to the index end.
+        let current = match self.position.clone() {
+            TuiViewportPosition::End if rows < 0 => self.first_anchor.clone(),
+            TuiViewportPosition::End => return false,
+            TuiViewportPosition::Anchored(anchor) => Some(anchor),
         };
         let Some(current) = current else {
             return false;
@@ -333,22 +345,24 @@ where
             |cursor| rows_below_exceed(cursor, candidate.row_offset, viewport_height),
         );
         let next = if fills_viewport {
-            TuiViewportScrollState::Anchored(candidate)
+            TuiViewportPosition::Anchored(candidate)
         } else {
-            TuiViewportScrollState::FollowBottom
+            TuiViewportPosition::End
         };
-        if self.handle.state() == next {
+        if self.position == next {
             return false;
         }
-        self.handle.set_state(next);
+        self.set_position(next);
         true
     }
 }
 
-impl<Index, RenderItem> TuiElement for TuiViewportedList<Index, RenderItem>
+impl<Index, RenderItem, OnPositionChange> TuiElement
+    for TuiViewportedList<Index, RenderItem, OnPositionChange>
 where
     Index: TuiViewportIndex,
     RenderItem: Fn(ViewportRenderRequest<Index::Item>, &AppContext) -> RenderedViewportItem,
+    OnPositionChange: FnMut(TuiViewportPosition<Index::ItemId>),
 {
     fn layout(
         &mut self,
@@ -426,12 +440,14 @@ where
     }
 }
 
-impl<Index, RenderItem> TuiScrollableElement for TuiViewportedList<Index, RenderItem>
+impl<Index, RenderItem, OnPositionChange> TuiScrollableElement
+    for TuiViewportedList<Index, RenderItem, OnPositionChange>
 where
     Index: TuiViewportIndex,
     RenderItem: Fn(ViewportRenderRequest<Index::Item>, &AppContext) -> RenderedViewportItem,
+    OnPositionChange: FnMut(TuiViewportPosition<Index::ItemId>),
 {
-    fn scroll_by_rows(&self, rows: isize, viewport_height: usize) -> bool {
+    fn scroll_by_rows(&mut self, rows: isize, viewport_height: usize) -> bool {
         self.scroll_by(rows, viewport_height)
     }
 }
@@ -555,7 +571,7 @@ fn walk_anchor<ItemId: Clone + Eq, Item>(
             }
             None => {
                 // No later item: stop at the last row of the last item. The
-                // caller's bottom clamp turns this into `FollowBottom`.
+                // caller's bottom clamp turns this into `End`.
                 anchor.row_offset = item.height.saturating_sub(1);
                 break;
             }

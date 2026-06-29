@@ -11,9 +11,9 @@
 //! all of it can be eyeballed in isolation (no `TerminalModel`/AI dependency):
 //! - **`TuiViewportIndex` / `TuiViewportCursor`** — the in-memory index seeks
 //!   (`Start`/`End`/`Item`) and walks forward/backward to collect visible items.
-//! - **`TuiViewportedList` + `TuiViewportHandle`** — starts following the bottom;
-//!   wheel-scrolling up anchors it; scrolling back to the end restores
-//!   follow-bottom. Removing the anchored item snaps back to follow-bottom.
+//! - **`TuiViewportedList` + caller-owned `TuiViewportHandle`** — starts at the
+//!   index end; wheel-scrolling up anchors it; scrolling back to the end
+//!   restores the end position. Removing the anchored item snaps back to end.
 //! - **`TuiScrollable` + wheel conversion + mouse capture** — the mouse wheel
 //!   over the list scrolls it (the only path that exercises wheel→`ScrollWheel`
 //!   conversion and the alternate-screen mouse capture end to end).
@@ -226,16 +226,19 @@ impl TuiView for ViewportDemoView {
         let bold = TuiStyle::default().add_modifier(Modifier::BOLD);
         let dim = TuiStyle::default().add_modifier(Modifier::DIM);
 
-        let following = self.viewport.is_following_bottom();
+        let at_end = self.viewport.is_at_end();
         let item_count = self.items.borrow().len();
 
         let index = DemoIndex {
             items: self.items.clone(),
         };
+        let viewport_position = self.viewport.position();
+        let viewport_for_scroll = self.viewport.clone();
         let list = TuiScrollable::new(TuiViewportedList::new(
-            self.viewport.clone(),
+            viewport_position,
             index,
             render_item,
+            move |position| viewport_for_scroll.set_position(position),
         ));
 
         let quit_for_q = self.quit.clone();
@@ -256,8 +259,8 @@ impl TuiView for ViewportDemoView {
                     .with_child(Box::new(
                         TuiText::new(format!(
                             "{item_count} blocks · {}",
-                            if following {
-                                "following bottom"
+                            if at_end {
+                                "at end"
                             } else {
                                 "anchored (scrolled)"
                             }

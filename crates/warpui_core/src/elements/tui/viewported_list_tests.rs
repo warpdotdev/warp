@@ -5,7 +5,8 @@ use std::rc::Rc;
 
 use super::{
     RenderedViewportItem, TuiViewportCursor, TuiViewportHandle, TuiViewportIndex,
-    TuiViewportIndexItem, TuiViewportIndexPosition, TuiViewportedList, ViewportRenderRequest,
+    TuiViewportIndexItem, TuiViewportIndexPosition, TuiViewportPosition, TuiViewportedList,
+    ViewportRenderRequest,
 };
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext, TuiRect,
@@ -13,7 +14,7 @@ use crate::elements::tui::{
 };
 use crate::event::ModifiersState;
 use crate::geometry::vector::Vector2F;
-use crate::{App, EntityId, Event};
+use crate::{App, AppContext, EntityId, Event};
 
 #[derive(Clone)]
 struct FakeItem {
@@ -31,7 +32,7 @@ fn width_change_remeasures_view_measured_items() {
         let index = FakeIndex::new(vec![item]);
         let updates = index.height_updates.clone();
         let mut viewport =
-            TuiViewportedList::new(TuiViewportHandle::new(), index, move |request, _| {
+            viewport_with_handle(TuiViewportHandle::new(), index, move |request, _| {
                 RenderedViewportItem {
                     element: Box::new(TuiText::new("row")),
                     measured_full_height: Some(usize::from(request.width / 4).max(1)),
@@ -46,17 +47,17 @@ fn width_change_remeasures_view_measured_items() {
 }
 
 #[test]
-fn missing_anchor_falls_back_to_follow_bottom() {
+fn missing_anchor_falls_back_to_end() {
     App::test((), |app| async move {
         let index = FakeIndex::new(vec![fake_item(1, 1), fake_item(2, 1)]);
         let handle = TuiViewportHandle::new();
         handle.scroll_to_item(99, 0);
         let mut viewport =
-            TuiViewportedList::new(handle.clone(), index, |request, _| slice_element(request));
+            viewport_with_handle(handle.clone(), index, |request, _| slice_element(request));
 
         let lines = render_viewport(&app, &mut viewport, TuiSize::new(8, 1));
 
-        assert!(handle.is_following_bottom());
+        assert!(handle.is_at_end());
         assert_eq!(&lines[0][..3], "2:0");
     });
 }
@@ -162,6 +163,20 @@ fn slice_element(request: ViewportRenderRequest<FakeItem>) -> RenderedViewportIt
     }
 }
 
+fn viewport_with_handle<RenderItem>(
+    handle: TuiViewportHandle<usize>,
+    index: FakeIndex,
+    render_item: RenderItem,
+) -> TuiViewportedList<FakeIndex, RenderItem, impl FnMut(TuiViewportPosition<usize>)>
+where
+    RenderItem: Fn(ViewportRenderRequest<FakeItem>, &AppContext) -> RenderedViewportItem,
+{
+    let position = handle.position();
+    TuiViewportedList::new(position, index, render_item, move |position| {
+        handle.set_position(position)
+    })
+}
+
 fn render_viewport(app: &App, viewport: &mut impl TuiElement, size: TuiSize) -> Vec<String> {
     app.read(|app_ctx| {
         let mut rendered_views = HashMap::new();
@@ -214,11 +229,10 @@ fn scrolling_up_clamps_to_the_top_without_snapping_to_bottom() {
     App::test((), |app| async move {
         let index = FakeIndex::new((1..=5).map(|id| fake_item(id, 3)).collect());
         let handle = TuiViewportHandle::new();
-        let mut viewport = TuiScrollable::new(TuiViewportedList::new(
-            handle.clone(),
-            index,
-            |request, _| slice_element(request),
-        ));
+        let mut viewport =
+            TuiScrollable::new(viewport_with_handle(handle.clone(), index, |request, _| {
+                slice_element(request)
+            }));
         let size = TuiSize::new(8, 4);
 
         render_viewport(&app, &mut viewport, size);
@@ -229,7 +243,7 @@ fn scrolling_up_clamps_to_the_top_without_snapping_to_bottom() {
         }
         let lines = render_viewport(&app, &mut viewport, size);
 
-        assert!(!handle.is_following_bottom());
+        assert!(!handle.is_at_end());
         assert_eq!(&lines[0][..3], "1:0");
         assert_eq!(&lines[1][..3], "1:1");
         // A further up-scroll at the top is a no-op, but is consumed by default.
@@ -242,11 +256,10 @@ fn scrolling_down_pins_to_bottom_without_overscrolling() {
     App::test((), |app| async move {
         let index = FakeIndex::new((1..=5).map(|id| fake_item(id, 3)).collect());
         let handle = TuiViewportHandle::new();
-        let mut viewport = TuiScrollable::new(TuiViewportedList::new(
-            handle.clone(),
-            index,
-            |request, _| slice_element(request),
-        ));
+        let mut viewport =
+            TuiScrollable::new(viewport_with_handle(handle.clone(), index, |request, _| {
+                slice_element(request)
+            }));
         let size = TuiSize::new(8, 4);
 
         // Scroll up to the top, then back down past the end.
@@ -262,7 +275,7 @@ fn scrolling_down_pins_to_bottom_without_overscrolling() {
         let lines = render_viewport(&app, &mut viewport, size);
 
         // Pinned to the end: the last four rows, no blank rows below.
-        assert!(handle.is_following_bottom());
+        assert!(handle.is_at_end());
         assert_eq!(&lines[0][..3], "4:2");
         assert_eq!(&lines[3][..3], "5:2");
         // A further down-scroll at the bottom is a no-op, but is consumed by default.
@@ -275,18 +288,17 @@ fn scrolling_is_a_noop_when_all_content_fits() {
     App::test((), |app| async move {
         let index = FakeIndex::new(vec![fake_item(1, 1), fake_item(2, 1)]);
         let handle = TuiViewportHandle::new();
-        let mut viewport = TuiScrollable::new(TuiViewportedList::new(
-            handle.clone(),
-            index,
-            |request, _| slice_element(request),
-        ));
+        let mut viewport =
+            TuiScrollable::new(viewport_with_handle(handle.clone(), index, |request, _| {
+                slice_element(request)
+            }));
         let size = TuiSize::new(8, 4);
 
         render_viewport(&app, &mut viewport, size);
         assert!(wheel(&app, &mut viewport, size, -1.0));
         render_viewport(&app, &mut viewport, size);
         assert!(wheel(&app, &mut viewport, size, 1.0));
-        assert!(handle.is_following_bottom());
+        assert!(handle.is_at_end());
     });
 }
 
@@ -295,10 +307,9 @@ fn scrolling_queues_a_view_update_when_scroll_state_changes() {
     App::test((), |app| async move {
         let index = FakeIndex::new((1..=5).map(|id| fake_item(id, 3)).collect());
         let handle = TuiViewportHandle::new();
-        let mut viewport =
-            TuiScrollable::new(TuiViewportedList::new(handle, index, |request, _| {
-                slice_element(request)
-            }));
+        let mut viewport = TuiScrollable::new(viewport_with_handle(handle, index, |request, _| {
+            slice_element(request)
+        }));
         let size = TuiSize::new(8, 4);
 
         render_viewport(&app, &mut viewport, size);
@@ -331,18 +342,18 @@ fn propagating_scrollable_returns_unhandled_when_scroll_state_does_not_change() 
             wheel_with_update_count(&app, &mut viewport, size, 1.0),
             (false, 0),
         );
-        assert!(handle.is_following_bottom());
+        assert!(handle.is_at_end());
     });
 }
 
 #[test]
-fn follow_bottom_renders_only_the_visible_item_rows() {
+fn end_position_renders_only_the_visible_item_rows() {
     App::test((), |app| async move {
         let index = FakeIndex::new(vec![fake_item(1, 3), fake_item(2, 3), fake_item(3, 3)]);
         let requests = Rc::new(RefCell::new(Vec::<(usize, Range<usize>)>::new()));
         let requests_for_render = requests.clone();
         let mut viewport =
-            TuiViewportedList::new(TuiViewportHandle::new(), index, move |request, _| {
+            viewport_with_handle(TuiViewportHandle::new(), index, move |request, _| {
                 requests_for_render
                     .borrow_mut()
                     .push((request.item.id, request.visible_rows.clone()));
@@ -366,7 +377,7 @@ fn anchored_viewport_starts_at_the_requested_item_row() {
         handle.scroll_to_item(1, 1);
         let requests = Rc::new(RefCell::new(Vec::<(usize, Range<usize>)>::new()));
         let requests_for_render = requests.clone();
-        let mut viewport = TuiViewportedList::new(handle, index, move |request, _| {
+        let mut viewport = viewport_with_handle(handle, index, move |request, _| {
             requests_for_render
                 .borrow_mut()
                 .push((request.item.id, request.visible_rows.clone()));
@@ -385,7 +396,7 @@ fn traversal_scope_ends_before_item_rendering() {
         let index = FakeIndex::new(vec![fake_item(1, 1)]);
         let cursor_open = index.cursor_open.clone();
         let mut viewport =
-            TuiViewportedList::new(TuiViewportHandle::new(), index, move |request, _| {
+            viewport_with_handle(TuiViewportHandle::new(), index, move |request, _| {
                 assert!(!cursor_open.get(), "cursor scope must end before rendering");
                 slice_element(request)
             });
@@ -405,7 +416,7 @@ fn measured_height_updates_stabilize_in_the_same_layout() {
         let requests = Rc::new(RefCell::new(Vec::<Range<usize>>::new()));
         let requests_for_render = requests.clone();
         let mut viewport =
-            TuiViewportedList::new(TuiViewportHandle::new(), index, move |request, _| {
+            viewport_with_handle(TuiViewportHandle::new(), index, move |request, _| {
                 requests_for_render
                     .borrow_mut()
                     .push(request.visible_rows.clone());

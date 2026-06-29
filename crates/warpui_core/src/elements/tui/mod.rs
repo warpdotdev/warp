@@ -51,7 +51,8 @@ pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use text::TuiText;
 pub use viewported_list::{
     RenderedViewportItem, TuiViewportCursor, TuiViewportHandle, TuiViewportIndex,
-    TuiViewportIndexItem, TuiViewportIndexPosition, TuiViewportedList, ViewportRenderRequest,
+    TuiViewportIndexItem, TuiViewportIndexPosition, TuiViewportPosition, TuiViewportedList,
+    ViewportRenderRequest,
 };
 
 /// Carries the pre-rendered per-view element map through the layout pass,
