@@ -24,8 +24,8 @@ use super::persistence::{PersistedAIInput, PersistedAIInputType};
 use super::RequestInput;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
-    is_child_agent, AIConversation, AIConversationId, ConversationStatus,
-    ServerAIConversationMetadata, UpdateConversationError,
+    AIConversation, AIConversationId, ConversationStatus, ServerAIConversationMetadata,
+    UpdateConversationError,
 };
 use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
 use crate::ai::agent::task::TaskId;
@@ -97,7 +97,7 @@ pub struct AIConversationMetadata {
     /// Local conversation ID of the parent that spawned this child, if any.
     /// Mirrors [`AIConversation::parent_conversation_id`]; stored here so
     /// child-agent status can be determined from metadata alone, without
-    /// loading the full conversation. See [`is_child_agent`].
+    /// loading the full conversation. See [`Self::is_child_agent_conversation`].
     pub parent_conversation_id: Option<AIConversationId>,
 
     /// Server-side parent agent identifier (the parent's run_id), if any.
@@ -196,7 +196,7 @@ impl AIConversationMetadata {
     /// Uses the same predicate as [`AIConversation::is_child_agent_conversation`]
     /// so the loaded and unloaded representations agree.
     pub fn is_child_agent_conversation(&self) -> bool {
-        is_child_agent(self.parent_conversation_id, self.parent_agent_id.as_deref())
+        self.parent_conversation_id.is_some() || self.parent_agent_id.is_some()
     }
 }
 
