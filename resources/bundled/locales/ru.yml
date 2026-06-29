@@ -340,6 +340,25 @@ ru:
     save_new_launch_configuration: "Сохранить новую конфигурацию запуска"
     copy_access_token: "Копировать токен доступа в буфер"
     view_privacy_policy: "Посмотреть политику конфиденциальности (внешняя ссылка)"
+    switch_to_first_tab: "Переключиться на 1-ю вкладку"
+    switch_to_second_tab: "Переключиться на 2-ю вкладку"
+    switch_to_third_tab: "Переключиться на 3-ю вкладку"
+    switch_to_fourth_tab: "Переключиться на 4-ю вкладку"
+    switch_to_fifth_tab: "Переключиться на 5-ю вкладку"
+    switch_to_sixth_tab: "Переключиться на 6-ю вкладку"
+    switch_to_seventh_tab: "Переключиться на 7-ю вкладку"
+    switch_to_eighth_tab: "Переключиться на 8-ю вкладку"
+    toggle_hidden_files_in_project_explorer: "Показать/скрыть скрытые файлы в обозревателе проекта"
+    move_tab_up: "переместить вкладку вверх"
+    move_tab_down: "переместить вкладку вниз"
+    close_tabs_below: "закрыть вкладки ниже"
+    create_new_tab_group: "Создать новую группу вкладок"
+    create_tab_group_from_active: "Создать группу из активной или выбранных вкладок"
+    remove_active_from_group: "Удалить активную или выбранные вкладки из группы"
+    pin_current_tab: "Закрепить текущую вкладку"
+    unpin_current_tab: "Открепить текущую вкладку"
+    pin_current_tab_group: "Закрепить текущую группу вкладок"
+    unpin_current_tab_group: "Открепить текущую группу вкладок"
 
   # ── Группа вкладок ──
   workspace.tab_group:
@@ -985,20 +1004,22 @@ ru:
   # ── Onboarding ──
   onboarding:
     ai_access:
-      choose_how: "Выберите способ доступа к AI"
-      subtitle: "Экономьте с регулярным планом или используйте свой ключ или эндпоинт."
+      choose_how: "Получите доступ к ИИ"
+      subtitle: "Экономьте с регулярным планом или изучите возможности ИИ Warp, прежде чем оформлять подписку."
       subscription: "Подписка"
       best_value: "Лучшая цена"
       subscription_description: "От $18 / мес, доступно с месячной или годовой подпиской. Включает базовые кредиты, фронтир-модели, облачных агентов, коллаборацию и многое другое."
-      choose_plan: "Выбрать план"
-      byok_label: "Использовать свой ключ или эндпоинт"
-      byok_description: "Используйте свой API-ключ или OpenAI-совместимый эндпоинт с Warp бесплатно."
-      add_key: "+ Добавить ключ"
-      add_custom_endpoint: "+ Добавить свой эндпоинт"
       back: "Назад"
       no_ai: "Мне не нужен AI"
       next: "Далее"
-      requires_subscription: "Warp Agent требует подписку или ваш собственный инференс"
+      set_up_later_label: "Настроить позже"
+      set_up_later_description: "Изучите встроенные возможности ИИ Warp, прежде чем оформлять подписку, или используйте собственный инференс."
+      auth_prompt_bar:
+        browser_not_launched_prefix: "Если браузер не открылся, "
+        copy_url_link: "скопируйте URL"
+        open_manually: " и откройте страницу вручную. "
+        paste_token_link: "Нажмите здесь"
+        paste_token_suffix: ", чтобы вставить токен из браузера."
     ai_setup:
       feature_harness: "Лучший харнесс для терминальных задач и агентного кодинга"
       feature_models: "Фронтир-модели от OpenAI, Anthropic и Google"
@@ -1014,6 +1035,12 @@ ru:
       back: "Назад"
       no_ai: "Мне не нужен AI"
       next: "Далее"
+    agent:
+      skip: "Пропустить"
+      no_ai_dialog_title: "Вы уверены, что не хотите ИИ?"
+      no_ai_dialog_body: "Без ИИ вы по-прежнему получите терминальный опыт Warp, но лишитесь агентных возможностей, например автоматического исправления ошибок терминала."
+      give_me_ai_features: "Дайте мне функции ИИ"
+      plan_activated_toast: "План успешно активирован!"
 
   # ── Настройки AI ──
   settings.ai:
@@ -1062,7 +1089,6 @@ ru:
     unlimited: "Безлимитно"
 
     add_profile: "Добавить профиль"
-    add_custom_endpoint: "Добавить свой endpoint"
     edit_custom_endpoint: "Изменить свой endpoint"
     edit: "Изменить"
     add_custom_model: "+ Добавить свою модель"
@@ -1214,7 +1240,6 @@ ru:
     custom_inference: "Свой inference"
     custom_endpoints: "Свои endpoint'ы"
     api_keys: "API-ключи"
-    byok_description: "Используйте свои API-ключи от провайдеров моделей для Агента Warp. Вы также можете добавить свои endpoint'ы для использования сторонних моделей. Пользовательские endpoint'ы должны поддерживать OpenAI-совместимый Chat Completions API. API-ключи хранятся локально и никогда не синхронизируются с облаком. При использовании авто-моделей или моделей от провайдеров, для которых вы не предоставили API-ключи, будут расходоваться кредиты Warp."
 
     aws_bedrock: "AWS Bedrock"
     use_aws_bedrock_credentials: "Использовать учётные данные AWS Bedrock"
@@ -1224,6 +1249,74 @@ ru:
     aws_profile: "Профиль AWS"
     automatically_run_login_command: "Автоматически выполнять команду входа"
     auto_login_description: "При включении команда входа будет выполняться автоматически при истечении учётных данных AWS Bedrock."
+    default_model_modal:
+      api_key_description: "Вы добавили свой API-ключ {provider_name}, но ваша модель по умолчанию сейчас — {current_default}, которая не будет работать без кредитов Warp. Изменить модель по умолчанию?"
+      custom_endpoint_description: "Вы добавили кастомный эндпоинт «{endpoint_name}», но ваша модель по умолчанию сейчас — {current_default}, которая не будет работать без кредитов Warp. Изменить модель по умолчанию?"
+
+  # ── Кастомный маршрутизатор моделей ──
+  settings.custom_router:
+    editor:
+      header: "Редактор маршрутизатора"
+      new_router_title: "Новый маршрутизатор"
+      name_placeholder: "Мой маршрутизатор"
+      name_placeholder_personalized: "Маршрутизатор {first_name}"
+      type_complexity: "Сложность"
+      type_rules: "Правила"
+      add_rule: "+ Добавить правило"
+      name_required: "Необходимо указать имя маршрутизатора."
+      complexity_field_default: "По умолчанию"
+      complexity_field_easy: "Лёгкая"
+      complexity_field_medium: "Средняя"
+      complexity_field_hard: "Сложная"
+      model_required: "Необходимо выбрать модель для «{field}»."
+      prompt_default_required: "Необходимо выбрать модель по умолчанию."
+      at_least_one_rule_required: "Необходимо указать хотя бы одно правило с описанием и моделью."
+      validation_error: "Ошибка проверки: {err}"
+      serialization_error: "Ошибка сериализации: {err}"
+      write_error: "Ошибка записи: {err}"
+      models_section: "Модели"
+      default_dropdown: "По умолчанию (обязательно)"
+      easy_dropdown: "Лёгкая (обязательно)"
+      medium_dropdown: "Средняя (обязательно)"
+      hard_dropdown: "Сложная (обязательно)"
+      default_model_section: "Модель по умолчанию"
+      rules_section: "Правила"
+      rules_help_1: "Правила — это пользовательские подсказки, описывающие, когда использовать конкретную модель. Warp интеллектуально сопоставляет ваши задачи с этими правилами."
+      rules_help_2: "Правила сопоставляются сверху вниз — правила выше в списке имеют приоритет над правилами ниже."
+      router_name_section: "Имя маршрутизатора"
+      router_type_section: "Тип маршрутизатора"
+      complexity_based_label: "На основе сложности"
+      complexity_routing_explanation: " — маршрутизация выбирает модель на основе классификации сложности задачи в Warp."
+      rule_based_label: "На основе правил"
+      rule_routing_explanation: " — маршрутизация выбирает модель на основе пользовательских подсказок."
+      rule_placeholder: "Опишите, когда использовать эту модель…"
+      rule_label: "Правило"
+      model_label: "Модель"
+    view:
+      open_file: "Открыть файл"
+      complexity_based_routing: "Маршрутизация по сложности"
+      prompt_based_routing: "Маршрутизация по промпту"
+      label_default: "По умолчанию:"
+      label_easy: "Лёгкие:"
+      label_medium: "Средние:"
+      label_hard: "Сложные:"
+      rules_count_one: "1 правило"
+      rules_count_other: "{n} правил"
+    routes:
+      complexity_requires_default: "complexity routing requires a non-empty `default` model"
+      prompt_requires_default: "prompt routing requires a non-empty `default` model"
+      default_error: "`default`: {e}"
+      complexity_bucket_error: "complexity bucket `{bucket}`: {e}"
+      prompt_rule_description_empty: "prompt rule {index}: `description` is empty"
+      prompt_rule_error: "prompt rule {index}: {e}"
+      target_empty: "target model id is empty"
+      target_is_auto: "target `{trimmed}` is an auto model; custom model routers must route to concrete models"
+
+  # ── Модальные окна настроек ──
+  settings.modals:
+    set_default_model:
+      not_now: "Не сейчас"
+      change_default_model: "Изменить модель по умолчанию"
 
   # ── Настройки биллинга ──
   settings.billing:

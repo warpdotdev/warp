@@ -2194,11 +2194,19 @@ impl AISettingsPageView {
         }
         let provider_name = provider.display_name();
         let current_default = Self::active_base_model_display_name(ctx);
-        let description = format!(
-            "You added your own {provider_name} API key, but your default model is currently set \
-             to {current_default}, which won't work without Warp credits. Would you like to change \
-             your default model?"
-        );
+        let description = i18n::interpolate(
+            crate::menu_label(
+                "settings.ai.default_model_modal.api_key_description",
+                "You added your own {provider_name} API key, but your default model is currently set \
+                 to {current_default}, which won't work without Warp credits. Would you like to change \
+                 your default model?",
+            ),
+            &[
+                ("provider_name", provider_name.to_string()),
+                ("current_default", current_default),
+            ],
+        )
+        .into_owned();
         self.show_set_default_model_modal(description, choices, ctx);
     }
 
@@ -2240,12 +2248,19 @@ impl AISettingsPageView {
             return;
         }
         let current_default = Self::active_base_model_display_name(ctx);
-        let description = format!(
-            "You added the \"{}\" custom endpoint, but your default model is currently set to \
-             {current_default}, which won't work without Warp credits. Would you like to change \
-             your default model?",
-            endpoint.name
-        );
+        let description = i18n::interpolate(
+            crate::menu_label(
+                "settings.ai.default_model_modal.custom_endpoint_description",
+                "You added the \"{endpoint_name}\" custom endpoint, but your default model is currently set to \
+                 {current_default}, which won't work without Warp credits. Would you like to change \
+                 your default model?",
+            ),
+            &[
+                ("endpoint_name", endpoint.name.clone()),
+                ("current_default", current_default),
+            ],
+        )
+        .into_owned();
         self.show_set_default_model_modal(description, choices, ctx);
     }
 

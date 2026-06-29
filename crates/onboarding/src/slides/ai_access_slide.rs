@@ -107,7 +107,7 @@ impl AiAccessSlide {
 
         let title = appearance
             .ui_builder()
-            .paragraph("Get AI access")
+            .paragraph(crate::menu_label("onboarding.ai_access.choose_how", "Get AI access"))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -117,7 +117,10 @@ impl AiAccessSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Save with a recurring plan, or explore Warp's AI before committing.",
+            crate::menu_label(
+                "onboarding.ai_access.subtitle",
+                "Save with a recurring plan, or explore Warp's AI before committing.",
+            ),
             appearance.ui_font_family(),
             16.,
         )
@@ -217,7 +220,7 @@ impl AiAccessSlide {
 
         let label = appearance
             .ui_builder()
-            .paragraph("Subscription")
+            .paragraph(crate::menu_label("onboarding.ai_access.subscription", "Subscription"))
             .with_style(UiComponentStyles {
                 font_size: Some(16.),
                 font_weight: Some(Weight::Semibold),
@@ -231,7 +234,7 @@ impl AiAccessSlide {
             let green = theme.ansi_fg_green();
             let badge_text = appearance
                 .ui_builder()
-                .paragraph("Best value")
+                .paragraph(crate::menu_label("onboarding.ai_access.best_value", "Best value"))
                 .with_style(UiComponentStyles {
                     font_size: Some(12.),
                     font_weight: Some(Weight::Normal),
@@ -257,8 +260,10 @@ impl AiAccessSlide {
             .finish();
 
         let description = FormattedTextElement::from_str(
-            "Starting at $18 / mo, available with monthly or annual plans. Includes base credits, \
-             frontier models, cloud agents, collaboration, and more.",
+            crate::menu_label(
+                "onboarding.ai_access.subscription_description",
+                "Starting at $18 / mo, available with monthly or annual plans. Includes base credits, frontier models, cloud agents, collaboration, and more.",
+            ),
             appearance.ui_font_family(),
             14.,
         )
@@ -300,7 +305,7 @@ impl AiAccessSlide {
 
         let label = appearance
             .ui_builder()
-            .paragraph("Set up later")
+            .paragraph(crate::menu_label("onboarding.ai_access.set_up_later_label", "Set up later"))
             .with_style(UiComponentStyles {
                 font_size: Some(16.),
                 font_weight: Some(Weight::Semibold),
@@ -311,8 +316,10 @@ impl AiAccessSlide {
             .finish();
 
         let description = FormattedTextElement::from_str(
-            "Explore Warp's built-in AI features before committing to a plan, or bring your own \
-             inference.",
+            crate::menu_label(
+                "onboarding.ai_access.set_up_later_description",
+                "Explore Warp's built-in AI features before committing to a plan, or bring your own inference.",
+            ),
             appearance.ui_font_family(),
             14.,
         )
@@ -342,7 +349,9 @@ impl AiAccessSlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(
+                    crate::menu_label("onboarding.ai_access.back", "Back").into(),
+                ),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -357,7 +366,9 @@ impl AiAccessSlide {
         let next_button = self.next_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Next".into()),
+                content: button::Content::Label(
+                    crate::menu_label("onboarding.ai_access.next", "Next").into(),
+                ),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(enter),
@@ -420,7 +431,11 @@ impl AiAccessSlide {
 
         let copy_url_link = ui_builder
             .link(
-                "copy the URL".into(),
+                crate::menu_label(
+                    "onboarding.ai_access.auth_prompt_bar.copy_url_link",
+                    "copy the URL",
+                )
+                .into(),
                 None,
                 Some(Box::new(|ctx| {
                     ctx.dispatch_typed_action(AiAccessSlideAction::CopyUpgradeUrlClicked);
@@ -434,7 +449,11 @@ impl AiAccessSlide {
 
         let paste_token_link = ui_builder
             .link(
-                "Click here".into(),
+                crate::menu_label(
+                    "onboarding.ai_access.auth_prompt_bar.paste_token_link",
+                    "Click here",
+                )
+                .into(),
                 None,
                 Some(Box::new(|ctx| {
                     ctx.dispatch_typed_action(
@@ -454,7 +473,10 @@ impl AiAccessSlide {
             .with_child(
                 Container::new(
                     ui_builder
-                        .span("If your browser hasn't launched, ")
+                        .span(crate::menu_label(
+                        "onboarding.ai_access.auth_prompt_bar.browser_not_launched_prefix",
+                        "If your browser hasn't launched, ",
+                    ))
                         .with_style(text_styles)
                         .build()
                         .finish(),
@@ -465,7 +487,10 @@ impl AiAccessSlide {
             .with_child(copy_url_link)
             .with_child(
                 ui_builder
-                    .span(" and open the page manually. ")
+                    .span(crate::menu_label(
+                        "onboarding.ai_access.auth_prompt_bar.open_manually",
+                        " and open the page manually. ",
+                    ))
                     .with_style(text_styles)
                     .build()
                     .finish(),
@@ -473,7 +498,10 @@ impl AiAccessSlide {
             .with_child(paste_token_link)
             .with_child(
                 ui_builder
-                    .span(" to paste your token from the browser.")
+                    .span(crate::menu_label(
+                        "onboarding.ai_access.auth_prompt_bar.paste_token_suffix",
+                        " to paste your token from the browser.",
+                    ))
                     .with_style(text_styles)
                     .build()
                     .finish(),

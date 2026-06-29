@@ -340,6 +340,25 @@ en:
     save_new_launch_configuration: "Save new launch configuration"
     copy_access_token: "Copy access token to clipboard"
     view_privacy_policy: "View privacy policy (opens external link)"
+    switch_to_first_tab: "Switch to 1st tab"
+    switch_to_second_tab: "Switch to 2nd tab"
+    switch_to_third_tab: "Switch to 3rd tab"
+    switch_to_fourth_tab: "Switch to 4th tab"
+    switch_to_fifth_tab: "Switch to 5th tab"
+    switch_to_sixth_tab: "Switch to 6th tab"
+    switch_to_seventh_tab: "Switch to 7th tab"
+    switch_to_eighth_tab: "Switch to 8th tab"
+    toggle_hidden_files_in_project_explorer: "Toggle hidden files in Project Explorer"
+    move_tab_up: "move tab up"
+    move_tab_down: "move tab down"
+    close_tabs_below: "close tabs below"
+    create_new_tab_group: "Create new tab group"
+    create_tab_group_from_active: "Create tab group from active or selected tab(s)"
+    remove_active_from_group: "Remove active or selected tab(s) from group"
+    pin_current_tab: "Pin current tab"
+    unpin_current_tab: "Unpin current tab"
+    pin_current_tab_group: "Pin current tab group"
+    unpin_current_tab_group: "Unpin current tab group"
 
   # ── Workspace Tab Group ──
   workspace.tab_group:
@@ -985,20 +1004,22 @@ en:
   # ── Onboarding ──
   onboarding:
     ai_access:
-      choose_how: "Choose how to access AI"
-      subtitle: "Save with a recurring plan, or use your own key or endpoint."
+      choose_how: "Get AI access"
+      subtitle: "Save with a recurring plan, or explore Warp's AI before committing."
       subscription: "Subscription"
       best_value: "Best value"
       subscription_description: "Starting at $18 / mo, available with monthly or annual plans. Includes base credits, frontier models, cloud agents, collaboration, and more."
-      choose_plan: "Choose plan"
-      byok_label: "Use my own key or endpoint"
-      byok_description: "Use your own API key or OpenAI-compatible endpoint with Warp for free."
-      add_key: "+ Add key"
-      add_custom_endpoint: "+ Add custom endpoint"
       back: "Back"
       no_ai: "I don't want AI"
       next: "Next"
-      requires_subscription: "Warp Agent requires a subscription or inference supplied by you"
+      set_up_later_label: "Set up later"
+      set_up_later_description: "Explore Warp's built-in AI features before committing to a plan, or bring your own inference."
+      auth_prompt_bar:
+        browser_not_launched_prefix: "If your browser hasn't launched, "
+        copy_url_link: "copy the URL"
+        open_manually: " and open the page manually. "
+        paste_token_link: "Click here"
+        paste_token_suffix: " to paste your token from the browser."
     ai_setup:
       feature_harness: "Best harness for terminal tasks and agentic coding"
       feature_models: "Frontier models from OpenAI, Anthropic, and Google"
@@ -1014,6 +1035,12 @@ en:
       back: "Back"
       no_ai: "I don't want AI"
       next: "Next"
+    agent:
+      skip: "Skip"
+      no_ai_dialog_title: "Are you sure you don't want AI?"
+      no_ai_dialog_body: "Without AI, you'll still get Warp's terminal experience, but you'll miss our agentic features like automatic fixes for terminal errors."
+      give_me_ai_features: "Give me AI features"
+      plan_activated_toast: "Plan successfully activated!"
 
   # ── AI Settings ──
   settings.ai:
@@ -1062,7 +1089,6 @@ en:
     unlimited: "Unlimited"
 
     add_profile: "Add Profile"
-    add_custom_endpoint: "Add custom endpoint"
     edit_custom_endpoint: "Edit custom endpoint"
     edit: "Edit"
     add_custom_model: "+ Add custom model"
@@ -1214,7 +1240,6 @@ en:
     custom_inference: "Custom inference"
     custom_endpoints: "Custom endpoints"
     api_keys: "API Keys"
-    byok_description: "Use your own API keys from model providers for Warp Agent. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored locally and are never synced to the cloud. Using auto models or models from providers you have not provided API keys for will consume Warp credits."
 
     aws_bedrock: "AWS Bedrock"
     use_aws_bedrock_credentials: "Use AWS Bedrock credentials"
@@ -1224,6 +1249,74 @@ en:
     aws_profile: "AWS Profile"
     automatically_run_login_command: "Automatically run login command"
     auto_login_description: "When enabled, the login command will run automatically when AWS Bedrock credentials expire."
+    default_model_modal:
+      api_key_description: "You added your own {provider_name} API key, but your default model is currently set to {current_default}, which won't work without Warp credits. Would you like to change your default model?"
+      custom_endpoint_description: "You added the \"{endpoint_name}\" custom endpoint, but your default model is currently set to {current_default}, which won't work without Warp credits. Would you like to change your default model?"
+
+  # ── Custom Model Router ──
+  settings.custom_router:
+    editor:
+      header: "Router Editor"
+      new_router_title: "New Router"
+      name_placeholder: "My custom router"
+      name_placeholder_personalized: "{first_name}'s custom router"
+      type_complexity: "Complexity"
+      type_rules: "Rules"
+      add_rule: "+ Add rule"
+      name_required: "Router name is required."
+      complexity_field_default: "Default"
+      complexity_field_easy: "Easy"
+      complexity_field_medium: "Medium"
+      complexity_field_hard: "Hard"
+      model_required: "{field} model is required."
+      prompt_default_required: "A default model is required."
+      at_least_one_rule_required: "At least one rule with a description and model is required."
+      validation_error: "Validation: {err}"
+      serialization_error: "Serialization: {err}"
+      write_error: "Write error: {err}"
+      models_section: "Models"
+      default_dropdown: "Default (required)"
+      easy_dropdown: "Easy (required)"
+      medium_dropdown: "Medium (required)"
+      hard_dropdown: "Hard (required)"
+      default_model_section: "Default model"
+      rules_section: "Rules"
+      rules_help_1: "Rules are custom prompts that describe when to use a specific model. Warp intelligently matches your tasks against these rules."
+      rules_help_2: "Rules are matched top to bottom — rules higher in the list take precedence over those below."
+      router_name_section: "Router name"
+      router_type_section: "Router type"
+      complexity_based_label: "Complexity-based"
+      complexity_routing_explanation: " routing chooses a model based on Warp's classification of the task's difficulty."
+      rule_based_label: "Rule-based"
+      rule_routing_explanation: " routing chooses a model based on custom prompts."
+      rule_placeholder: "Describe when to use this model…"
+      rule_label: "Rule"
+      model_label: "Model"
+    view:
+      open_file: "Open file"
+      complexity_based_routing: "Complexity-based routing"
+      prompt_based_routing: "Prompt-based routing"
+      label_default: "Default:"
+      label_easy: "Easy:"
+      label_medium: "Medium:"
+      label_hard: "Hard:"
+      rules_count_one: "1 rule"
+      rules_count_other: "{n} rules"
+    routes:
+      complexity_requires_default: "complexity routing requires a non-empty `default` model"
+      prompt_requires_default: "prompt routing requires a non-empty `default` model"
+      default_error: "`default`: {e}"
+      complexity_bucket_error: "complexity bucket `{bucket}`: {e}"
+      prompt_rule_description_empty: "prompt rule {index}: `description` is empty"
+      prompt_rule_error: "prompt rule {index}: {e}"
+      target_empty: "target model id is empty"
+      target_is_auto: "target `{trimmed}` is an auto model; custom model routers must route to concrete models"
+
+  # ── Settings Modals ──
+  settings.modals:
+    set_default_model:
+      not_now: "Not now"
+      change_default_model: "Change default model"
 
   # ── Billing Settings ──
   settings.billing:
