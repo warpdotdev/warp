@@ -45,22 +45,87 @@ configure_musl_toolchain() {
     musl_strip="$(command -v strip)"
   fi
 
-  local musl_cross_root="${WARP_MUSL_CROSS_ROOT:-/tmp/warp-musl-cross}"
+  local default_musl_cross_root
+  if [[ -z "${WARP_MUSL_CROSS_ROOT:-}" && "${GITHUB_ACTIONS:-}" == "true" && -n "${RUNNER_TEMP:-}" ]]; then
+    default_musl_cross_root="$RUNNER_TEMP/warp-musl-cross"
+  elif [[ -n "${HOME:-}" ]]; then
+    default_musl_cross_root="${XDG_CACHE_HOME:-$HOME/.cache}/warp-musl-cross"
+  else
+    default_musl_cross_root="${TMPDIR:-/tmp}/warp-musl-cross-${UID:-$(id -u)}"
+  fi
+
+  local musl_cross_root="${WARP_MUSL_CROSS_ROOT:-$default_musl_cross_root}"
   local install_root="$musl_cross_root/$musl_cross_tag"
   local toolchain_dir="$install_root/$target"
   local toolchain_bin="$toolchain_dir/bin"
+  local verified_marker="$toolchain_dir/.warp-musl-cross-verified"
+  local verified_marker_contents="$musl_cross_tag $target $musl_cross_sha256"
 
-  if [[ -z "$musl_cc" \
-    && -x "$toolchain_bin/$target-gcc" \
-    && -x "$toolchain_bin/$target-g++" \
-    && -x "$toolchain_bin/$target-strip" ]]; then
-    case ":$PATH:" in
-      *":$toolchain_bin:"*) ;;
-      *) export PATH="$toolchain_bin:$PATH" ;;
-    esac
-    musl_cc="$(command -v "$target-gcc")"
-    musl_cxx="$(command -v "$target-g++")"
-    musl_strip="$(command -v "$target-strip")"
+  ensure_private_cache_dir() {
+    local dir="$1"
+
+    if [[ -L "$dir" ]]; then
+      echo "Error: musl toolchain cache directory '$dir' must not be a symlink." >&2
+      return 1
+    fi
+    if [[ -e "$dir" && ! -d "$dir" ]]; then
+      echo "Error: musl toolchain cache path '$dir' exists but is not a directory." >&2
+      return 1
+    fi
+
+    mkdir -p "$dir" || return 1
+    chmod 700 "$dir" || return 1
+    if [[ ! -O "$dir" ]]; then
+      echo "Error: musl toolchain cache directory '$dir' must be owned by the current user." >&2
+      return 1
+    fi
+
+    local mode
+    if mode="$(stat -c '%a' "$dir" 2>/dev/null)"; then
+      :
+    elif mode="$(stat -f '%Lp' "$dir" 2>/dev/null)"; then
+      :
+    else
+      echo "Error: could not determine permissions for musl toolchain cache directory '$dir'." >&2
+      return 1
+    fi
+    if (( (8#$mode & 0022) != 0 )); then
+      echo "Error: musl toolchain cache directory '$dir' must not be writable by group or others." >&2
+      return 1
+    fi
+  }
+
+  cached_toolchain_is_verified() {
+    [[ -r "$verified_marker" ]] && [[ "$(cat "$verified_marker")" == "$verified_marker_contents" ]]
+  }
+
+  if [[ -z "$musl_cc" ]]; then
+    ensure_private_cache_dir "$musl_cross_root" || return 1
+    ensure_private_cache_dir "$install_root" || return 1
+  fi
+
+  if [[ -z "$musl_cc" && -L "$toolchain_dir" ]]; then
+    echo "Error: cached musl toolchain path '$toolchain_dir' must not be a symlink." >&2
+    return 1
+  fi
+
+  if [[ -z "$musl_cc" ]]; then
+    if [[ -d "$toolchain_dir" ]] && ! cached_toolchain_is_verified; then
+      echo "Ignoring unverified cached musl toolchain at '$toolchain_dir'." >&2
+    fi
+
+    if cached_toolchain_is_verified \
+      && [[ -x "$toolchain_bin/$target-gcc" ]] \
+      && [[ -x "$toolchain_bin/$target-g++" ]] \
+      && [[ -x "$toolchain_bin/$target-strip" ]]; then
+      case ":$PATH:" in
+        *":$toolchain_bin:"*) ;;
+        *) export PATH="$toolchain_bin:$PATH" ;;
+      esac
+      musl_cc="$(command -v "$target-gcc")"
+      musl_cxx="$(command -v "$target-g++")"
+      musl_strip="$(command -v "$target-strip")"
+    fi
   fi
 
   if [[ -z "$musl_cc" ]]; then
@@ -94,7 +159,8 @@ configure_musl_toolchain() {
       }
       trap cleanup_download EXIT
 
-      mkdir -p "$musl_cross_root" || exit 1
+      ensure_private_cache_dir "$musl_cross_root" || exit 1
+      ensure_private_cache_dir "$install_root" || exit 1
       download_dir="$(mktemp -d "$musl_cross_root/.download-$target.XXXXXX")" || exit 1
 
       echo "Downloading the $target C and C++ toolchain to $toolchain_dir"
@@ -108,11 +174,13 @@ configure_musl_toolchain() {
         exit 1
       fi
 
-      chmod u+w "$download_dir/$target" || exit 1
-      mkdir -p "$install_root" || exit 1
+      chmod -R u+w,go-w "$download_dir/$target" || exit 1
+      printf '%s\n' "$verified_marker_contents" > "$download_dir/$target/.warp-musl-cross-verified" || exit 1
       if [[ -x "$toolchain_bin/$target-gcc" \
         && -x "$toolchain_bin/$target-g++" \
-        && -x "$toolchain_bin/$target-strip" ]]; then
+        && -x "$toolchain_bin/$target-strip" \
+        && -r "$verified_marker" \
+        && "$(cat "$verified_marker")" == "$verified_marker_contents" ]]; then
         exit 0
       fi
       if [[ -e "$toolchain_dir" ]]; then
