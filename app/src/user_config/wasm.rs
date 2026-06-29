@@ -10,11 +10,8 @@ use crate::workflows::workflow::Workflow;
 impl super::WarpConfig {
     pub fn new(_ctx: &mut ModelContext<Self>) -> Self {
         Self {
-            launch_configs: Default::default(),
-            tab_configs: Default::default(),
-            tab_config_errors: Default::default(),
             theme_config: WarpThemeConfig::new(),
-            local_user_workflows: Default::default(),
+            ..Default::default()
         }
     }
 }

@@ -1419,21 +1419,6 @@ define_settings_group!(AISettings, settings: [
         private: true,
     }
 
-    // This is not a user-visible setting - it tracks whether the FTU model picker callout
-    // has been shown to the user. We set this to `true` as soon as the callout is first
-    // displayed (not when it's dismissed), so it never re-appears.
-    //
-    // Note: this setting was originally named "dismissed" but we now use it to mean "shown".
-    // We kept the same setting key so that users who already dismissed the callout on an
-    // older client don't see it again.
-    ftu_model_callout_dismissed: FtuModelCalloutDismissed {
-        type: bool,
-        default: false,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        private: true,
-    }
-
     // Whether the ambient agent trial widget has been dismissed by the user.
     //
     // Not a user-visible setting - we model it as a setting so we can track state.

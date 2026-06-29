@@ -72,6 +72,7 @@ impl FreeTierLimitHitModal {
                     ctx.emit(FreeTierLimitHitModalEvent::MaybeOpen);
                 }
                 AIRequestUsageModelEvent::RequestBonusRefunded { .. } => {}
+                AIRequestUsageModelEvent::AmbientCreditsBannerDismissed => {}
             },
         );
 

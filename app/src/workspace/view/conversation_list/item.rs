@@ -169,7 +169,10 @@ pub fn render_static_item(props: StaticItemProps<'_>, app: &AppContext) -> Box<d
         },
         Some(MouseInBehavior {
             fire_on_synthetic_events: false,
-            fire_when_covered: true,
+            // `fire_when_covered: false` makes hover ignore the row when it's
+            // covered by an overlay (e.g. a modal), so the selection/tooltip
+            // don't leak through — matching how clicks are already blocked.
+            fire_when_covered: false,
         }),
     )
     .finish()
@@ -428,7 +431,10 @@ pub fn render_item(props: ItemProps<'_>, app: &AppContext) -> Box<dyn Element> {
             },
             Some(MouseInBehavior {
                 fire_on_synthetic_events: false,
-                fire_when_covered: true,
+                // `fire_when_covered: false` makes hover ignore the row when
+                // it's covered by an overlay (e.g. a modal), so the
+                // selection/tooltip don't leak through — matching clicks.
+                fire_when_covered: false,
             }),
         )
         .finish();

@@ -83,6 +83,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ArtifactCommand,
         #[cfg(feature = "cloud_environments")]
         FeatureFlag::CloudEnvironments,
+        #[cfg(feature = "cloud_runners")]
+        FeatureFlag::CloudRunners,
         #[cfg(all(feature = "simulate_github_unauthed", debug_assertions))]
         FeatureFlag::SimulateGithubUnauthed,
         #[cfg(feature = "session_sharing_acls")]
@@ -311,6 +313,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ForkFromCommand,
         #[cfg(feature = "context_window_usage_v2")]
         FeatureFlag::ContextWindowUsageV2,
+        #[cfg(feature = "context_window_usage_breakdown")]
+        FeatureFlag::ContextWindowUsageBreakdown,
         #[cfg(feature = "global_search")]
         FeatureFlag::GlobalSearch,
         #[cfg(feature = "embedded_code_review_comments")]
@@ -495,6 +499,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::RemoteCodeReview,
         #[cfg(feature = "custom_inference_endpoints")]
         FeatureFlag::CustomInferenceEndpoints,
+        #[cfg(feature = "custom_model_routers")]
+        FeatureFlag::CustomModelRouters,
         #[cfg(feature = "supergrok")]
         FeatureFlag::SuperGrok,
         #[cfg(feature = "gemini_enterprise")]

@@ -53,7 +53,6 @@ use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::server_api::{AIApiError, DeserializationError};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shell::ShellType;
-use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
 use crate::TelemetryEvent;
 
 /// A server supplied ID for a specific AI generated output.
@@ -2441,16 +2440,12 @@ pub enum StaticQueryType {
     Code,
     Deploy,
     SomethingElse,
-    CustomOnboardingRequest,
     EvaluationSuite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(clippy::enum_variant_names)]
 pub enum EntrypointType {
-    Onboarding {
-        chip_type: OnboardingChipType,
-    },
     PromptSuggestion {
         is_static: bool,
         is_coding: bool,

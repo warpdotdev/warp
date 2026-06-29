@@ -916,6 +916,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
             branch_name: "main".to_string(),
             diff_stats: None,
             pull_request_label: None,
+            pull_request_url: None,
         },
         VerticalTabsSummaryBranchEntry {
             repo_path: repo_a.clone(),
@@ -926,6 +927,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
                 lines_removed: 3,
             }),
             pull_request_label: Some("#123".to_string()),
+            pull_request_url: Some("https://github.com/acme/repo-a/pull/123".to_string()),
         },
         VerticalTabsSummaryBranchEntry {
             repo_path: repo_b.clone(),
@@ -936,6 +938,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
                 lines_removed: 6,
             }),
             pull_request_label: Some("#456".to_string()),
+            pull_request_url: Some("https://github.com/acme/repo-b/pull/456".to_string()),
         },
     ];
 
@@ -951,6 +954,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
                     lines_removed: 3,
                 }),
                 pull_request_label: Some("#123".to_string()),
+                pull_request_url: Some("https://github.com/acme/repo-a/pull/123".to_string()),
             },
             VerticalTabsSummaryBranchEntry {
                 repo_path: repo_b,
@@ -961,6 +965,7 @@ fn coalesce_summary_branch_entries_groups_by_repo_and_branch() {
                     lines_removed: 6,
                 }),
                 pull_request_label: Some("#456".to_string()),
+                pull_request_url: Some("https://github.com/acme/repo-b/pull/456".to_string()),
             },
         ]
     );
@@ -1109,24 +1114,28 @@ fn summary_search_fragments_include_hidden_overflow_values() {
                     lines_removed: 3,
                 }),
                 pull_request_label: Some("#123".to_string()),
+                pull_request_url: Some("https://github.com/acme/repo-a/pull/123".to_string()),
             },
             VerticalTabsSummaryBranchEntry {
                 repo_path: PathBuf::from("/tmp/repo-b"),
                 branch_name: "feature/hidden".to_string(),
                 diff_stats: None,
                 pull_request_label: None,
+                pull_request_url: None,
             },
             VerticalTabsSummaryBranchEntry {
                 repo_path: PathBuf::from("/tmp/repo-c"),
                 branch_name: "cleanup".to_string(),
                 diff_stats: None,
                 pull_request_label: None,
+                pull_request_url: None,
             },
             VerticalTabsSummaryBranchEntry {
                 repo_path: PathBuf::from("/tmp/repo-d"),
                 branch_name: "hidden-branch".to_string(),
                 diff_stats: None,
                 pull_request_label: Some("#789".to_string()),
+                pull_request_url: Some("https://github.com/acme/repo-d/pull/789".to_string()),
             },
         ],
         has_unread_activity: false,

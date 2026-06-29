@@ -78,12 +78,9 @@ impl PaneGroup {
             .terminal_view_from_pane_id(terminal_pane_id, ctx)
             .and_then(|terminal_view| {
                 let terminal_view = terminal_view.as_ref(ctx);
-                let agent_view_state = terminal_view
-                    .agent_view_controller()
-                    .as_ref(ctx)
-                    .agent_view_state();
-                if agent_view_state.is_fullscreen() {
-                    agent_view_state.active_conversation_id()
+                let controller = terminal_view.agent_view_controller().as_ref(ctx);
+                if controller.is_fullscreen() {
+                    controller.agent_view_state().active_conversation_id()
                 } else {
                     None
                 }

@@ -397,6 +397,9 @@ impl BlockList {
         selection_type: SelectionType,
         side: Side,
     ) {
+        // A new point-based selection supersedes any rich content (AI) block
+        // selection (single-selection semantics).
+        self.rich_content_selections.clear();
         let mut selection = BlockListSelection::new(point, selection_type, side);
         if let Some(smart_select_override) = &self.smart_select_override {
             let (override_start, override_end) = smart_select_override.unfold_range();
@@ -862,8 +865,49 @@ impl BlockList {
 
     pub fn clear_selection(&mut self) {
         self.selection = None;
+        self.rich_content_selections.clear();
         self.event_proxy
             .send_terminal_event(TerminalEvent::TextSelectionChanged);
+    }
+
+    /// Records that the given rich content (AI) block view currently has an
+    /// active text selection. Rich content blocks manage their own selection
+    /// state, so the block list can't derive this from its point-based
+    /// [`selection`](Self::selection); tracking it explicitly lets copy/insert
+    /// paths find the selected text via
+    /// [`rich_content_blocks_in_selection`](Self::rich_content_blocks_in_selection).
+    pub fn set_rich_content_selection(&mut self, view_id: EntityId) {
+        if self.selection.is_some() {
+            // A point-based selection is active. If it already spans this rich
+            // content block (e.g. a selection dragged from a command block
+            // *through* this AI block), that point selection remains the source
+            // of truth and already accounts for the AI block's text via its row
+            // range — don't override it, or we'd drop the command-block portion.
+            if self.rich_content_blocks_in_selection().contains(&view_id) {
+                return;
+            }
+            // Otherwise the point selection doesn't involve this block (e.g. a
+            // stale command-block selection elsewhere); a fresh rich content
+            // selection supersedes it (single-selection semantics).
+            self.selection = None;
+        }
+        self.rich_content_selections = vec![view_id];
+        self.event_proxy
+            .send_terminal_event(TerminalEvent::TextSelectionChanged);
+    }
+
+    /// Clears the tracked text selection for the given rich content (AI) block
+    /// view, if present.
+    pub fn clear_rich_content_selection(&mut self, view_id: EntityId) {
+        if let Some(position) = self
+            .rich_content_selections
+            .iter()
+            .position(|id| *id == view_id)
+        {
+            self.rich_content_selections.remove(position);
+            self.event_proxy
+                .send_terminal_event(TerminalEvent::TextSelectionChanged);
+        }
     }
 
     pub fn set_smart_select_override(
@@ -1213,7 +1257,11 @@ impl BlockList {
     /// text selection.
     fn rich_content_blocks_in_selection(&self) -> Vec<EntityId> {
         let Some(original_selection) = self.selection.as_ref() else {
-            return vec![];
+            // Without a point-based selection, a selection may still be active
+            // inside a rich content (AI) block, which manages its own selection
+            // state. Fall back to the explicitly tracked rich content blocks so
+            // their selected text can still be copied.
+            return self.rich_content_selections.clone();
         };
         let mut top_row = original_selection.head.point.row;
         let mut bottom_row = original_selection.tail.point.row;
