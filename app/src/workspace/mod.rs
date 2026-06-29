@@ -509,7 +509,7 @@ pub fn init(app: &mut AppContext) {
         .with_linux_or_windows_key_binding("ctrl-alt-shift-T"),
         EditableBinding::new(
             "workspace:activate_first_tab",
-            "Switch to 1st tab",
+            crate::menu_label("workspace.binding.switch_to_first_tab", "Switch to 1st tab"),
             WorkspaceAction::ActivateTabByNumber(1),
         )
         .with_context_predicate(id!("Workspace"))
@@ -517,7 +517,7 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("cmdorctrl-1"),
         EditableBinding::new(
             "workspace:activate_second_tab",
-            "Switch to 2nd tab",
+            crate::menu_label("workspace.binding.switch_to_second_tab", "Switch to 2nd tab"),
             WorkspaceAction::ActivateTabByNumber(2),
         )
         .with_context_predicate(id!("Workspace"))
@@ -525,7 +525,7 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("cmdorctrl-2"),
         EditableBinding::new(
             "workspace:activate_third_tab",
-            "Switch to 3rd tab",
+            crate::menu_label("workspace.binding.switch_to_third_tab", "Switch to 3rd tab"),
             WorkspaceAction::ActivateTabByNumber(3),
         )
         .with_context_predicate(id!("Workspace"))
@@ -533,7 +533,7 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("cmdorctrl-3"),
         EditableBinding::new(
             "workspace:activate_fourth_tab",
-            "Switch to 4th tab",
+            crate::menu_label("workspace.binding.switch_to_fourth_tab", "Switch to 4th tab"),
             WorkspaceAction::ActivateTabByNumber(4),
         )
         .with_context_predicate(id!("Workspace"))
@@ -541,7 +541,7 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("cmdorctrl-4"),
         EditableBinding::new(
             "workspace:activate_fifth_tab",
-            "Switch to 5th tab",
+            crate::menu_label("workspace.binding.switch_to_fifth_tab", "Switch to 5th tab"),
             WorkspaceAction::ActivateTabByNumber(5),
         )
         .with_context_predicate(id!("Workspace"))
@@ -549,7 +549,7 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("cmdorctrl-5"),
         EditableBinding::new(
             "workspace:activate_sixth_tab",
-            "Switch to 6th tab",
+            crate::menu_label("workspace.binding.switch_to_sixth_tab", "Switch to 6th tab"),
             WorkspaceAction::ActivateTabByNumber(6),
         )
         .with_context_predicate(id!("Workspace"))
@@ -557,7 +557,7 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("cmdorctrl-6"),
         EditableBinding::new(
             "workspace:activate_seventh_tab",
-            "Switch to 7th tab",
+            crate::menu_label("workspace.binding.switch_to_seventh_tab", "Switch to 7th tab"),
             WorkspaceAction::ActivateTabByNumber(7),
         )
         .with_context_predicate(id!("Workspace"))
@@ -565,7 +565,7 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("cmdorctrl-7"),
         EditableBinding::new(
             "workspace:activate_eighth_tab",
-            "Switch to 8th tab",
+            crate::menu_label("workspace.binding.switch_to_eighth_tab", "Switch to 8th tab"),
             WorkspaceAction::ActivateTabByNumber(8),
         )
         .with_context_predicate(id!("Workspace"))
@@ -785,7 +785,10 @@ pub fn init(app: &mut AppContext) {
         .with_custom_action(CustomAction::ToggleGlobalSearch),
         EditableBinding::new(
             "file_tree:toggle_hidden_files",
-            BindingDescription::new("Toggle hidden files in Project Explorer"),
+            BindingDescription::new(crate::menu_label(
+                "workspace.binding.toggle_hidden_files_in_project_explorer",
+                "Toggle hidden files in Project Explorer",
+            )),
             WorkspaceAction::ToggleHiddenFiles,
         )
         .with_group(bindings::BindingGroup::Navigation.as_str())
@@ -861,7 +864,7 @@ pub fn init(app: &mut AppContext) {
         EditableBinding::new(
             "workspace:move_tab_left",
             BindingDescription::new(crate::menu_label("workspace.binding.move_tab_left", "Move tab left"))
-                .with_dynamic_override(|ctx| uses_vertical_tabs(ctx).then(|| "move tab up".into())),
+                .with_dynamic_override(|ctx| uses_vertical_tabs(ctx).then(|| crate::menu_label("workspace.binding.move_tab_up", "move tab up").to_string())),
             WorkspaceAction::MoveActiveTabLeft,
         )
         .with_group(bindings::BindingGroup::Navigation.as_str())
@@ -875,7 +878,7 @@ pub fn init(app: &mut AppContext) {
         EditableBinding::new(
             "workspace:move_tab_right",
             BindingDescription::new(crate::menu_label("workspace.binding.move_tab_right", "Move tab right")).with_dynamic_override(|ctx| {
-                uses_vertical_tabs(ctx).then(|| "move tab down".into())
+                uses_vertical_tabs(ctx).then(|| crate::menu_label("workspace.binding.move_tab_down", "move tab down").to_string())
             }),
             WorkspaceAction::MoveActiveTabRight,
         )
@@ -960,7 +963,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "workspace:new_tab_group",
-            "Create new tab group",
+            crate::menu_label("workspace.binding.create_new_tab_group", "Create new tab group"),
             // Reuse the new-session dropdown's action, not a dedicated variant.
             WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
         )
@@ -969,7 +972,10 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging")),
         EditableBinding::new(
             "workspace:new_tab_group_from_active_or_selected_tabs",
-            "Create tab group from active or selected tab(s)",
+            crate::menu_label(
+                "workspace.binding.create_tab_group_from_active",
+                "Create tab group from active or selected tab(s)",
+            ),
             WorkspaceAction::NewTabGroupFromActiveOrSelectedTabs,
         )
         .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
@@ -981,7 +987,10 @@ pub fn init(app: &mut AppContext) {
         // offered, matching the multi-tab right-click menu.
         EditableBinding::new(
             "workspace:remove_active_or_selected_tabs_from_group",
-            "Remove active or selected tab(s) from group",
+            crate::menu_label(
+                "workspace.binding.remove_active_from_group",
+                "Remove active or selected tab(s) from group",
+            ),
             WorkspaceAction::RemoveActiveOrSelectedTabsFromGroup,
         )
         .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
@@ -999,7 +1008,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "workspace:pin_active_tab",
-            "Pin current tab",
+            crate::menu_label("workspace.binding.pin_current_tab", "Pin current tab"),
             WorkspaceAction::PinActiveTab,
         )
         .with_enabled(|| FeatureFlag::PinnedTabs.is_enabled())
@@ -1009,7 +1018,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "workspace:unpin_active_tab",
-            "Unpin current tab",
+            crate::menu_label("workspace.binding.unpin_current_tab", "Unpin current tab"),
             WorkspaceAction::UnpinActiveTab,
         )
         .with_enabled(|| FeatureFlag::PinnedTabs.is_enabled())
@@ -1019,7 +1028,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "workspace:pin_active_tab_group",
-            "Pin current tab group",
+            crate::menu_label("workspace.binding.pin_current_tab_group", "Pin current tab group"),
             WorkspaceAction::PinActiveTabGroup,
         )
         .with_enabled(|| {
@@ -1034,7 +1043,10 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "workspace:unpin_active_tab_group",
-            "Unpin current tab group",
+            crate::menu_label(
+                "workspace.binding.unpin_current_tab_group",
+                "Unpin current tab group",
+            ),
             WorkspaceAction::UnpinActiveTabGroup,
         )
         .with_enabled(|| {
@@ -1090,7 +1102,7 @@ pub fn init(app: &mut AppContext) {
         EditableBinding::new(
             "workspace:close_tabs_right_active_tab",
             BindingDescription::new(crate::menu_label("workspace.binding.close_tabs_to_the_right", "Close tabs to the right")).with_dynamic_override(|ctx| {
-                uses_vertical_tabs(ctx).then(|| "close tabs below".into())
+                uses_vertical_tabs(ctx).then(|| crate::menu_label("workspace.binding.close_tabs_below", "close tabs below").to_string())
             }),
             WorkspaceAction::CloseTabsRightActiveTab,
         )
