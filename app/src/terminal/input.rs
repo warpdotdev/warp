@@ -7740,19 +7740,33 @@ impl Input {
         should_show_more_info_view: bool,
         ctx: &mut ViewContext<Input>,
     ) {
-        let input_type = if workflow_type.as_workflow().is_agent_mode_workflow() {
-            InputType::AI
-        } else {
-            InputType::Shell
-        };
-
-        // Set input type based on whether or not this is a shell or AI workflow.
+        let is_agent_mode_workflow = workflow_type.as_workflow().is_agent_mode_workflow();
+        // Agent Mode saved prompts are never terminal commands. When AgentView is enabled, anchor
+        // the input to AI mode and suppress NLD for the lifetime of the composed prompt so neither
+        // the inserted template nor the argument the user fills in can be reclassified back to
+        // Shell and accidentally run in the terminal. The anchor is cleared on submit, manual mode
+        // toggle, or when the buffer is cleared. The legacy (AgentView-off) path keeps the original
+        // preserve-lock behavior.
+        let anchor_agent_prompt = is_agent_mode_workflow && FeatureFlag::AgentView.is_enabled();
         self.ai_input_model.update(ctx, |input_model, ctx| {
-            input_model.set_input_type(
-                input_type,
-                Some(InputTypeAutoDetectionSource::WorkflowInsertion),
-                ctx,
-            );
+            if anchor_agent_prompt {
+                input_model.set_agent_prompt_ai_anchor(ctx);
+            } else {
+                // Clear any stale anchor from a previous insertion before setting the mode for
+                // this workflow (e.g. selecting a shell workflow after an agent prompt).
+                input_model.clear_agent_prompt_ai_anchor();
+                let input_type = if is_agent_mode_workflow {
+                    InputType::AI
+                } else {
+                    InputType::Shell
+                };
+                // Set input type based on whether or not this is a shell or AI workflow.
+                input_model.set_input_type(
+                    input_type,
+                    Some(InputTypeAutoDetectionSource::WorkflowInsertion),
+                    ctx,
+                );
+            }
         });
 
         // As the first step, clear the existing buffer so that selecting a workflow
@@ -9890,6 +9904,17 @@ impl Input {
                     ctx.emit(Event::InputEmptyStateChanged {
                         is_empty: is_editor_empty,
                         reason: InputEmptyStateChangeReason::Edited,
+                    });
+                }
+
+                // If the user cleared the buffer while an Agent Mode prompt was anchored to AI
+                // mode, they've abandoned the composed prompt — drop the anchor and return the
+                // input to its natural Shell resting state so the next command is classified
+                // normally. Gated on user edits so the system buffer-clear during prompt insertion
+                // doesn't immediately undo the anchor.
+                if is_editor_empty && edit_origin.is_user() {
+                    self.ai_input_model.update(ctx, |ai_input_model, ctx| {
+                        ai_input_model.handle_agent_prompt_buffer_cleared(ctx);
                     });
                 }
 
@@ -14617,6 +14642,9 @@ impl Input {
             });
         } else {
             self.ai_input_model.update(ctx, |ai_input_model, ctx| {
+                // An explicit toggle to AI supersedes any Agent Mode prompt anchor (the lock now
+                // governs the mode directly).
+                ai_input_model.clear_agent_prompt_ai_anchor();
                 let new_config = InputConfig {
                     input_type: InputType::AI,
                     is_locked: true,
@@ -14648,6 +14676,8 @@ impl Input {
 
         let is_input_buffer_empty = self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
         self.ai_input_model.update(ctx, |ai_input_model, ctx| {
+            // An explicit toggle to Shell overrides any Agent Mode prompt anchor.
+            ai_input_model.clear_agent_prompt_ai_anchor();
             let new_config = InputConfig {
                 input_type: InputType::Shell,
                 is_locked: true,

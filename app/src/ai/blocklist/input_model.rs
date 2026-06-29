@@ -208,6 +208,13 @@ pub struct BlocklistAIInputModel {
     /// if a persistent lock is in place and a buffer is submitted.
     was_lock_set_with_empty_buffer: bool,
 
+    /// When set, the input has been explicitly anchored to AI mode because the user inserted an
+    /// Agent Mode saved prompt / workflow. Agent Mode prompts are never terminal commands, so
+    /// while the anchor is active natural-language detection is fully suppressed and the composed
+    /// prompt (plus any argument the user fills in) cannot be reclassified back to Shell and
+    /// accidentally run in the terminal. Cleared on submit, manual mode toggle, or buffer clear.
+    agent_prompt_ai_anchor: bool,
+
     agent_view_controller: ModelHandle<AgentViewController>,
 
     /// Handle to the per-pane context model. Used to read pending image / file attachments
@@ -320,6 +327,13 @@ impl BlocklistAIInputModel {
                     origin,
                     ..
                 } => {
+                    // Entering the agent view means the composed prompt (and buffer) is being
+                    // handed off to the agent, so any Agent Mode prompt anchor has served its
+                    // purpose. Clear it here because the terminal submit path (`submit_ai_query`)
+                    // enters the agent view and returns before `handle_input_buffer_submitted`
+                    // runs — without this the anchor could keep suppressing NLD after the prompt
+                    // was sent.
+                    me.agent_prompt_ai_anchor = false;
                     if display_mode.is_inline() {
                         me.set_input_config_internal(
                             InputConfig {
@@ -378,6 +392,8 @@ impl BlocklistAIInputModel {
                     is_exit_before_new_entrance,
                     ..
                 } => {
+                    // Returning to the terminal must not carry over a stale prompt anchor.
+                    me.agent_prompt_ai_anchor = false;
                     if !is_exit_before_new_entrance {
                         // When truly exiting agent view, use the terminal-specific NLD setting
                         // since the user is returning to terminal mode.
@@ -415,6 +431,7 @@ impl BlocklistAIInputModel {
             last_ai_autodetection_source: initial_decision_source,
             last_explicit_input_type_set_at: None,
             was_lock_set_with_empty_buffer: false,
+            agent_prompt_ai_anchor: false,
             autodetect_abort_handle: None,
             model,
         }
@@ -612,6 +629,13 @@ impl BlocklistAIInputModel {
             return false;
         }
 
+        // While an Agent Mode prompt anchor is active (the user just inserted a saved prompt /
+        // workflow), never let the classifier run. Agent Mode prompts are never terminal commands,
+        // so the input must stay in AI mode until the prompt is submitted or the buffer is cleared.
+        if self.agent_prompt_ai_anchor {
+            return false;
+        }
+
         let ai_settings = AISettings::as_ref(app);
         if FeatureFlag::AgentView.is_enabled() {
             if self.agent_view_controller.as_ref(app).is_fullscreen() {
@@ -633,6 +657,9 @@ impl BlocklistAIInputModel {
     }
 
     pub fn enable_autodetection(&mut self, input_type: InputType, ctx: &mut ModelContext<Self>) {
+        // Re-enabling autodetection is an explicit decision to let NLD run again, so drop any
+        // Agent Mode prompt anchor that was suppressing it.
+        self.agent_prompt_ai_anchor = false;
         self.set_input_config_internal(
             InputConfig {
                 input_type,
@@ -646,8 +673,66 @@ impl BlocklistAIInputModel {
         self.last_explicit_input_type_set_at = None;
     }
 
+    /// Anchors the terminal input to AI mode because the user inserted an Agent Mode saved
+    /// prompt / workflow. While the anchor is active, natural-language detection is fully
+    /// suppressed (see [`Self::is_autodetection_enabled_for_current_context`]) so the composed
+    /// prompt cannot be reclassified back to Shell and accidentally executed in the terminal. The
+    /// anchor is cleared when the prompt is submitted, the mode is manually toggled, or the buffer
+    /// is cleared.
+    pub fn set_agent_prompt_ai_anchor(&mut self, ctx: &mut ModelContext<Self>) {
+        self.agent_prompt_ai_anchor = true;
+        self.temporarily_disable_autodetection();
+        // AI + unlocked passes the AgentView terminal-mode guard in `set_input_config_internal`
+        // (which only blocks a *locked* AI mode); the anchor itself is what keeps NLD from running.
+        self.set_input_config_internal(
+            InputConfig {
+                input_type: InputType::AI,
+                is_locked: false,
+            },
+            Some(InputTypeAutoDetectionSource::WorkflowInsertion),
+            ctx,
+        );
+        self.abort_in_progress_detection();
+    }
+
+    /// Clears the Agent Mode prompt anchor (see [`Self::set_agent_prompt_ai_anchor`]) without
+    /// otherwise mutating the input config. Returns whether an anchor was active.
+    pub fn clear_agent_prompt_ai_anchor(&mut self) -> bool {
+        let was_anchored = self.agent_prompt_ai_anchor;
+        self.agent_prompt_ai_anchor = false;
+        was_anchored
+    }
+
+    /// Whether an Agent Mode prompt anchor is currently active.
+    pub fn has_agent_prompt_ai_anchor(&self) -> bool {
+        self.agent_prompt_ai_anchor
+    }
+
+    /// Handles the input buffer being cleared by the user while an Agent Mode prompt anchor was
+    /// active (i.e. the user abandoned the composed prompt). Clears the anchor and returns the
+    /// input to its natural Shell resting state so the next thing typed is classified normally.
+    pub fn handle_agent_prompt_buffer_cleared(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.agent_prompt_ai_anchor {
+            return;
+        }
+        self.agent_prompt_ai_anchor = false;
+        let is_autodetection_enabled = self.is_autodetection_enabled_for_current_context(ctx);
+        self.set_input_config(
+            InputConfig {
+                input_type: InputType::Shell,
+                is_locked: !is_autodetection_enabled,
+            },
+            // The buffer was just cleared.
+            true,
+            None,
+            ctx,
+        );
+    }
+
     /// Handles the input buffer being submitted.
     pub fn handle_input_buffer_submitted(&mut self, ctx: &mut ModelContext<Self>) {
+        // Submitting consumes the composed prompt, so any Agent Mode prompt anchor is done.
+        self.agent_prompt_ai_anchor = false;
         // If the agent is still in control of a long-running command, keep the input locked to AI mode.
         let is_agent_in_control_or_tagged_in = self
             .model
