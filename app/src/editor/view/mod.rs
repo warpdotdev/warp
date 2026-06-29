@@ -294,16 +294,12 @@ pub fn init(ctx: &mut AppContext) {
             EditorAction::Right,
             id!("EditorView") & !id!("IMEOpen"),
         ),
-        FixedBinding::new(
-            "home",
-            EditorAction::Home,
-            id!("EditorView") & !id!("IMEOpen"),
-        ),
-        FixedBinding::new(
-            "end",
-            EditorAction::End,
-            id!("EditorView") & !id!("IMEOpen"),
-        ),
+        // NOTE: physical `home`/`end` keys are bound via the editable
+        // `editor_view:home`/`editor_view:end` bindings below (linux/windows
+        // map them to the visual-line action; macOS maps them to document
+        // start/end). We intentionally do not register cross-platform
+        // `home`/`end` FixedBindings here, as they would conflict with the
+        // macOS document-navigation bindings.
         FixedBinding::new(
             "shift-up",
             EditorAction::SelectUp,
@@ -652,11 +648,11 @@ pub fn init(ctx: &mut AppContext) {
         .with_mac_key_binding("ctrl-e"),
         // Match the behavior of both VSCode and Intellij by using `cmd-left/right` on Mac and
         // `home/end` on Windows and Linux. See https://www.jetbrains.com/help/idea/reference-keymap-win-default.html#caret_navigation.
-        EditableBinding::new("editor_view:home", "Home", EditorAction::Home)
+        EditableBinding::new("editor_view:home", "Home", EditorAction::VisualLineStart)
             .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
             .with_mac_key_binding("cmd-left")
             .with_linux_or_windows_key_binding("home"),
-        EditableBinding::new("editor_view:end", "End", EditorAction::End)
+        EditableBinding::new("editor_view:end", "End", EditorAction::VisualLineEnd)
             .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
             .with_mac_key_binding("cmd-right")
             .with_linux_or_windows_key_binding("end"),
@@ -736,6 +732,24 @@ pub fn init(ctx: &mut AppContext) {
         )
         .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
         .with_key_binding("meta-shift->"),
+        // On macOS, the physical Home/End keys jump to the start/end of the
+        // document (matching the macOS convention), distinct from `cmd-left`/
+        // `cmd-right` which move to the visual-line start/end. On Linux/Windows
+        // the Home/End keys remain bound to the visual-line action above.
+        EditableBinding::new(
+            "editor_view:move_to_buffer_start",
+            "Move to the start of the buffer",
+            EditorAction::MoveToBufferStart,
+        )
+        .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
+        .with_mac_key_binding("home"),
+        EditableBinding::new(
+            "editor_view:move_to_buffer_end",
+            "Move to the end of the buffer",
+            EditorAction::MoveToBufferEnd,
+        )
+        .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
+        .with_mac_key_binding("end"),
         // Buffer modifications
         EditableBinding::new(
             "editor_view:backspace",
@@ -1015,8 +1029,8 @@ pub enum EditorAction {
     Down,
     Left,
     Right,
-    Home,
-    End,
+    VisualLineStart,
+    VisualLineEnd,
     PageUp,
     PageDown,
     CmdUp,
@@ -5729,7 +5743,13 @@ impl EditorView {
         });
     }
 
-    pub fn cursor_home(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Moves each cursor to the start of the current visual (soft-wrapped) row,
+    /// toggling between the row's first non-whitespace character and the very
+    /// start of the row (classic "smart home" behavior, applied per visual row).
+    ///
+    /// When the soft-wrap layout has not been laid out yet, this falls back to
+    /// the logical-line start (column 0 / first non-whitespace toggle).
+    pub fn move_to_visual_line_start(&mut self, ctx: &mut ViewContext<Self>) {
         self.change_selections(ctx, |editor_model, ctx| {
             let map = editor_model.display_map(ctx);
             let buffer = editor_model.buffer(ctx);
@@ -5737,25 +5757,52 @@ impl EditorView {
             let mut new_selections = editor_model.selections(ctx).clone();
             for selection in new_selections.iter_mut() {
                 let start = selection.start().to_display_point(map, ctx).unwrap();
-                let string_start = buffer
-                    .chars_at(
-                        DisplayPoint::new(start.row(), 0)
-                            .to_buffer_point(map, Bias::Left, ctx)
-                            .unwrap(),
-                    )
-                    .unwrap()
-                    .take_while(|c| c.is_whitespace())
-                    .count();
-                let cursor_start = {
-                    if string_start == start.column() as usize {
-                        0
-                    } else {
-                        string_start
+                let cursor_start = match map
+                    .soft_wrapped_row_bounds(start, selection.clamp_direction)
+                {
+                    // The caret is on a laid-out visual row: anchor at the row's
+                    // first column, toggling to the first non-whitespace char
+                    // within that row.
+                    Some(bounds) => {
+                        let leading_whitespace = buffer
+                            .chars_at(
+                                DisplayPoint::new(start.row(), bounds.start)
+                                    .to_buffer_point(map, Bias::Left, ctx)
+                                    .unwrap(),
+                            )
+                            .unwrap()
+                            .take((bounds.end - bounds.start) as usize)
+                            .take_while(|c| c.is_whitespace())
+                            .count() as u32;
+                        let first_non_whitespace = bounds.start + leading_whitespace;
+                        if first_non_whitespace == start.column() {
+                            bounds.start
+                        } else {
+                            first_non_whitespace
+                        }
+                    }
+                    // No soft-wrap layout available: fall back to logical-line
+                    // start behavior.
+                    None => {
+                        let string_start = buffer
+                            .chars_at(
+                                DisplayPoint::new(start.row(), 0)
+                                    .to_buffer_point(map, Bias::Left, ctx)
+                                    .unwrap(),
+                            )
+                            .unwrap()
+                            .take_while(|c| c.is_whitespace())
+                            .count() as u32;
+                        if string_start == start.column() {
+                            0
+                        } else {
+                            string_start
+                        }
                     }
                 };
                 let cursor = map
                     .anchor_before(
-                        DisplayPoint::new(start.row(), cursor_start as u32),
+                        DisplayPoint::new(start.row(), cursor_start),
                         Bias::Left,
                         ctx,
                     )
@@ -5767,6 +5814,9 @@ impl EditorView {
                 });
                 selection.goal_start_column = None;
                 selection.goal_end_column = None;
+                // The caret now sits at the start of a visual row; clamp downward
+                // so subsequent vertical movement treats it as the row's start.
+                selection.clamp_direction = ClampDirection::Down;
             }
             editor_model.change_selections(new_selections, ctx);
         });
@@ -5973,7 +6023,11 @@ impl EditorView {
         );
     }
 
-    pub fn cursor_end(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Moves each cursor to the end of the current visual (soft-wrapped) row.
+    ///
+    /// When the soft-wrap layout has not been laid out yet, this falls back to
+    /// the logical-line end.
+    pub fn move_to_visual_line_end(&mut self, ctx: &mut ViewContext<Self>) {
         if self.single_cursor_at_autosuggestion_beginning(ctx) {
             self.insert_full_autosuggestion(ctx);
         } else {
@@ -5985,14 +6039,19 @@ impl EditorView {
                         .end()
                         .to_display_point(map, ctx)
                         .expect("Should be able to get end point of selection.");
+                    // Use the end of the current visual (soft-wrapped) row,
+                    // falling back to the logical line end when the soft-wrap
+                    // layout isn't available.
+                    let cursor_column = map
+                        .soft_wrapped_row_bounds(end, selection.clamp_direction)
+                        .map(|bounds| bounds.end)
+                        .unwrap_or_else(|| {
+                            map.line_len(end.row(), ctx)
+                                .expect("Should be able to get length of line at selection end.")
+                        });
                     let cursor = map
                         .anchor_before(
-                            DisplayPoint::new(
-                                end.row(),
-                                map.line_len(end.row(), ctx).expect(
-                                    "Should be able to get length of line at selection end.",
-                                ),
-                            ),
+                            DisplayPoint::new(end.row(), cursor_column),
                             Bias::Right,
                             ctx,
                         )
@@ -6000,6 +6059,9 @@ impl EditorView {
                     selection.set_selection(Selection::single_cursor(cursor));
                     selection.goal_start_column = None;
                     selection.goal_end_column = None;
+                    // The caret now sits at the end of a visual row; clamp upward
+                    // so subsequent vertical movement treats it as the row's end.
+                    selection.clamp_direction = ClampDirection::Up;
                 }
                 editor_model.change_selections(new_selections, ctx);
             });
@@ -8415,8 +8477,8 @@ impl TypedActionView for EditorView {
             | EditorAction::MoveToBufferEnd
             | EditorAction::Left
             | EditorAction::Right
-            | EditorAction::Home
-            | EditorAction::End
+            | EditorAction::VisualLineStart
+            | EditorAction::VisualLineEnd
             | EditorAction::MoveForwardOneWord
             | EditorAction::MoveBackwardOneWord
             | EditorAction::MoveForwardOneSubword
@@ -8485,8 +8547,8 @@ impl TypedActionView for EditorView {
             Down => self.down(ctx),
             Left => self.move_left(/* stop at line start */ false, ctx),
             Right => self.right(ctx),
-            Home => self.cursor_home(ctx),
-            End => self.cursor_end(ctx),
+            VisualLineStart => self.move_to_visual_line_start(ctx),
+            VisualLineEnd => self.move_to_visual_line_end(ctx),
             PageUp => self.page_up(ctx),
             PageDown => self.page_down(ctx),
             CmdUp => self.cmd_up(ctx),

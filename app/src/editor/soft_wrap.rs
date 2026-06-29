@@ -158,6 +158,27 @@ impl FrameLayouts {
         ))
     }
 
+    /// Returns the `[start, end)` display columns of the visual (soft-wrapped)
+    /// row that `point` lies on. The columns are in `DisplayPoint` column
+    /// coordinates (i.e. the same coordinate space as `DisplayPoint::column`).
+    /// Returns `None` if the point is outside the bounds of the laid out text.
+    pub fn soft_wrapped_row_bounds(
+        &self,
+        point: DisplayPoint,
+        clamp_direction: ClampDirection,
+    ) -> Option<std::ops::Range<u32>> {
+        let soft_wrap_point = self.to_soft_wrap_point(point, clamp_direction)?;
+        let line = self.get_line(soft_wrap_point.row() as usize)?;
+        // If the row has no glyphs we can't derive column bounds from the layout
+        // (this happens for un-laid-out / fontless frames). Return `None` so the
+        // caller falls back to logical-line behavior.
+        let start = line.first_glyph()?.index as u32;
+        let end = line
+            .last_glyph()
+            .map_or(start, |glyph| glyph.index as u32 + 1);
+        Some(start..end)
+    }
+
     /// Given a `SoftWrapPoint`, converts the row number to a value irrespective
     /// of soft-wrapping.
     pub fn to_display_point(&self, point: SoftWrapPoint) -> DisplayPointAndClampDirection {

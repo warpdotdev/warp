@@ -45,6 +45,39 @@ fn test_displayed_lines_end_line_greater_than_iterator_size() {
 }
 
 #[test]
+fn test_soft_wrapped_row_bounds() {
+    // A single logical line that soft-wraps onto three visual rows of four
+    // characters each. `TextFrame::mock` produces one frame whose lines carry
+    // continuous glyph indices: row 0 -> 0..=3, row 1 -> 4..=7, row 2 -> 8..=11.
+    let frame_layouts = FrameLayouts {
+        frames: vec![Arc::new(text_layout::TextFrame::mock("aaaa\nbbbb\ncccc"))],
+        start_line: 0,
+        end_line: 3,
+    };
+
+    // A point in the middle of the first visual row -> [0, 4).
+    assert_eq!(
+        frame_layouts.soft_wrapped_row_bounds(DisplayPoint::new(0, 2), ClampDirection::Down),
+        Some(0..4)
+    );
+    // A point in the middle of the second visual row -> [4, 8).
+    assert_eq!(
+        frame_layouts.soft_wrapped_row_bounds(DisplayPoint::new(0, 5), ClampDirection::Down),
+        Some(4..8)
+    );
+    // A point in the middle of the third (last) visual row -> [8, 12).
+    assert_eq!(
+        frame_layouts.soft_wrapped_row_bounds(DisplayPoint::new(0, 10), ClampDirection::Down),
+        Some(8..12)
+    );
+    // A point outside the laid-out text -> None.
+    assert_eq!(
+        frame_layouts.soft_wrapped_row_bounds(DisplayPoint::new(5, 0), ClampDirection::Down),
+        None
+    );
+}
+
+#[test]
 fn test_soft_wrapped_frame_displayed_lines() {
     let frame_layouts = FrameLayouts {
         frames: vec![
