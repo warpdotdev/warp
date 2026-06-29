@@ -885,6 +885,33 @@ impl BlocklistAIActionExecutor {
         }
     }
 
+    /// Abandons a pending async action without sending its result to the server.
+    ///
+    /// Unlike `cancel_running_async_action`, this does NOT emit `FinishedAction`. The caller is
+    /// responsible for ensuring the server will synthesize a cancel for the corresponding tool
+    /// call (e.g. via a `UserQuery` that causes `cancelledResultsForIncompleteToolCallsInLastResponse`
+    /// to run on the server side).
+    ///
+    /// The underlying `action_result_future` continues running and resolves internally, but the
+    /// spawn closure discards its result because the action was already removed from
+    /// `async_executing_actions`.
+    ///
+    /// Note: `cancel_execution` is intentionally NOT called here because this method may be
+    /// invoked while `terminal_model` is locked (in the controller), and `cancel_execution`
+    /// would attempt to lock `terminal_model` again, causing a deadlock. The underlying
+    /// shell-command future resolves naturally and its result is silently discarded.
+    pub fn abandon_running_async_action(&mut self, action_id: &AIAgentActionId) {
+        if let Some(running) = self.async_executing_actions.remove(action_id) {
+            let action_kind = AIAgentActionTypeDiscriminants::from(&running.action.action);
+            log::info!(
+                "Abandoning running async action (no result sent) of type {action_kind:?} action_id={action_id:?}",
+            );
+            // No cancel_execution (to avoid terminal_model deadlock) and no FinishedAction:
+            // the server synthesizes the cancel from the UserQuery input.
+            let _ = running;
+        }
+    }
+
     pub fn cancel_all_running_async_actions_for_conversation(
         &mut self,
         conversation_id: AIConversationId,

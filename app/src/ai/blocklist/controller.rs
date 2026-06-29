@@ -1193,6 +1193,27 @@ impl BlocklistAIController {
                 None
             };
 
+            // If this is an agent-requested command whose action_result_future is still pending
+            // (the snapshot has not yet fired), abandon the action without sending its result and
+            // proceed as a plain UserQuery. The server synthesizes the cancel via
+            // cancelledResultsForIncompleteToolCallsInLastResponse.
+            //
+            // This prevents the race where CliAgentUserQuery triggers both an auto-cancel of
+            // run_shell_command AND a CLI subagent spawn, which later produces duplicate
+            // tool_result blocks for the same tool_use ID (causing provider 400 errors).
+            let running_command_opt = if let Some(ref rc) = running_command_opt {
+                if let Some(action_id) = rc.requested_command_id.clone() {
+                    let abandoned = self.action_model.update(ctx, |model, ctx| {
+                        model.abandon_shell_command_action(conversation_id, &action_id, ctx)
+                    });
+                    if abandoned { None } else { running_command_opt }
+                } else {
+                    running_command_opt
+                }
+            } else {
+                running_command_opt
+            };
+
             let (task_id, running_command) = if let Some(running_command) = running_command_opt {
                 let history_model = BlocklistAIHistoryModel::handle(ctx);
                 match history_model.update(ctx, |history_model, ctx| {

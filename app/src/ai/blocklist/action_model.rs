@@ -1054,6 +1054,39 @@ impl BlocklistAIActionModel {
         }
     }
 
+    /// Abandons a running shell command action without sending its result to the server.
+    ///
+    /// Used when the user sends a query while an agent-requested `run_shell_command` is still
+    /// pending (the `action_result_future` / snapshot has not yet fired). The action is removed
+    /// from tracking so its eventual result is silently discarded. The caller sends a plain
+    /// `UserQuery` instead, which causes the server to synthesize the cancel.
+    ///
+    /// Returns `true` if the action was found and abandoned, `false` if not found (already resolved).
+    pub fn abandon_shell_command_action(
+        &mut self,
+        conversation_id: AIConversationId,
+        action_id: &AIAgentActionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        if !self
+            .running_actions
+            .get(&conversation_id)
+            .is_some_and(|r| r.contains(action_id))
+        {
+            return false;
+        }
+        self.executor.update(ctx, |executor, _| {
+            executor.abandon_running_async_action(action_id);
+        });
+        if let Some(running) = self.running_actions.get_mut(&conversation_id) {
+            running.remove_action(action_id);
+            if running.is_empty() {
+                self.running_actions.remove(&conversation_id);
+            }
+        }
+        true
+    }
+
     /// Cancels any in-flight WaitForEvents action for the given conversation.
     pub fn cancel_wait_for_events_for_conversation(
         &mut self,
