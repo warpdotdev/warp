@@ -3597,7 +3597,7 @@ impl Workspace {
             );
 
             if is_relevant_update
-                && event.terminal_view_id().is_some_and(|event_id| {
+                && event.terminal_surface_id().is_some_and(|event_id| {
                     focused_terminal_view_id.is_some_and(|id| id == event_id)
                 })
             {
@@ -3642,12 +3642,12 @@ impl Workspace {
                 | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
                 | BlocklistAIHistoryEvent::SetActiveConversation { .. }
                 | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
-                | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+                | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
                 | BlocklistAIHistoryEvent::SplitConversation { .. }
                 | BlocklistAIHistoryEvent::RestoredConversations { .. }
                 | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
                 | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
-        ) && event.terminal_view_id().is_some_and(|terminal_view_id| {
+        ) && event.terminal_surface_id().is_some_and(|terminal_view_id| {
             self.workspace_contains_terminal_view(terminal_view_id, ctx)
         })
     }
@@ -12974,7 +12974,7 @@ impl Workspace {
             let history_model = BlocklistAIHistoryModel::as_ref(ctx);
             history_model.conversation(&conversation_id).is_some()
                 && history_model
-                    .all_live_conversations_for_terminal_view(terminal_view_id)
+                    .all_live_conversations_for_terminal_surface(terminal_view_id)
                     .any(|conversation| conversation.id() == conversation_id)
         };
         if already_exists_in_active_pane {
@@ -13343,7 +13343,7 @@ impl Workspace {
             .all_live_conversations()
             .into_iter()
             .find(|(_, convo)| convo.id() == conversation_id)
-            .map(|(terminal_view_id, _)| terminal_view_id);
+            .map(|(terminal_surface_id, _)| terminal_surface_id);
 
         // An empty prompt should not be provided as a query for the new forked conversation.
         let initial_prompt = initial_prompt.and_then(|prompt| {

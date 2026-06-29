@@ -899,8 +899,8 @@ fn delete_conversation_clears_in_flight_command() {
 }
 
 #[test]
-fn clear_conversations_in_terminal_view_drops_every_listed_conversation() {
-    // ClearedConversationsInTerminalView with multiple ids must drop each listed conversation's queue.
+fn clear_conversations_for_terminal_surface_drops_every_listed_conversation() {
+    // ClearedConversationsForTerminalSurface with multiple ids must drop each listed conversation's queue.
     with_model(|mut app, model, _events| {
         let history = BlocklistAIHistoryModel::handle(&app);
         let terminal_view_id = warpui::EntityId::new();
@@ -914,7 +914,7 @@ fn clear_conversations_in_terminal_view_drops_every_listed_conversation() {
         append_user(&model, &mut app, conv_b, "b1");
 
         history.update(&mut app, |h, ctx| {
-            h.clear_conversations_in_terminal_view(terminal_view_id, ctx)
+            h.clear_conversations_for_terminal_surface(terminal_view_id, ctx)
         });
 
         model.read(&app, |m, _| {

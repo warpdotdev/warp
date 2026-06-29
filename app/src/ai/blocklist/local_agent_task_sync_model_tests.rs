@@ -639,7 +639,7 @@ fn conversation_server_token_assigned_fires_update_with_conversation_id() {
         history_model.update(&mut app, |_, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
             });
         });
 
@@ -668,7 +668,7 @@ fn conversation_server_token_assigned_skips_viewer_conversations() {
         history_model.update(&mut app, |_, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
             });
         });
 
@@ -702,7 +702,7 @@ fn conversation_server_token_assigned_skips_remote_child_conversations() {
         history_model.update(&mut app, |_, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
             });
         });
 
@@ -734,7 +734,7 @@ fn conversation_server_token_assigned_skips_without_task_id() {
         history_model.update(&mut app, |_, ctx| {
             ctx.emit(BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id: terminal_view_id,
             });
         });
 

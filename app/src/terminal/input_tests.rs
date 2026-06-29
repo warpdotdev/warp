@@ -1673,6 +1673,9 @@ fn simulate_agent_requested_lrc(
     terminal: &ViewHandle<TerminalView>,
 ) -> AIConversationId {
     let conversation_id = seed_in_progress_conversation(app, terminal);
+    // Mirror production: the conversation is selected (agent view entered) before the agent
+    // requests the command. Selecting after the LRC is active would be rejected.
+    select_conversation(app, terminal, conversation_id);
 
     terminal.update(app, |view, _ctx| {
         let mut model = view.model.lock();
@@ -1699,6 +1702,8 @@ fn simulate_user_tagged_agent_controlled_lrc(
     terminal: &ViewHandle<TerminalView>,
 ) -> AIConversationId {
     let conversation_id = seed_in_progress_conversation(app, terminal);
+    // Mirror production: the conversation is selected before the command becomes long-running.
+    select_conversation(app, terminal, conversation_id);
     terminal.update(app, |view, _ctx| {
         let mut model = view.model.lock();
         model.simulate_long_running_block("sleep 10", "running");
@@ -1714,9 +1719,10 @@ fn simulate_user_tagged_agent_controlled_lrc(
     conversation_id
 }
 
-/// Selects `conversation_id` for the input via the pending-query state. AgentView must be
-/// disabled so `selected_conversation_id` resolves from this state directly.
-fn select_conversation_via_pending_query_state(
+/// Selects `conversation_id` for the input so `selected_conversation_id` resolves to it.
+/// Routes through the context model, which enters agent view for the conversation. The
+/// conversation must already exist in history and no long-running command may be active.
+fn select_conversation(
     app: &mut App,
     terminal: &ViewHandle<TerminalView>,
     conversation_id: AIConversationId,
@@ -1745,7 +1751,6 @@ fn prompt_submission_auto_queues_during_agent_requested_lrc() {
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let conversation_id = simulate_agent_requested_lrc(&mut app, &terminal);
-        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
         let input = terminal.read(&app, |view, _| view.input().clone());
 
         input.update(&mut app, |input, ctx| {
@@ -1777,7 +1782,6 @@ fn prompt_submission_during_lrc_with_non_lrc_queue_head_uses_generic_origin() {
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let conversation_id = simulate_agent_requested_lrc(&mut app, &terminal);
-        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
         QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
             model.append(
                 conversation_id,
@@ -1832,7 +1836,6 @@ fn prompt_submission_during_lrc_with_lrc_queue_head_uses_lrc_origin() {
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let conversation_id = simulate_agent_requested_lrc(&mut app, &terminal);
-        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
         QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
             model.append(
                 conversation_id,
@@ -1887,7 +1890,6 @@ fn prompt_submission_does_not_auto_queue_for_user_tagged_lrc() {
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let conversation_id = simulate_user_tagged_agent_controlled_lrc(&mut app, &terminal);
-        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
         let input = terminal.read(&app, |view, _| view.input().clone());
 
         input.update(&mut app, |input, ctx| {
@@ -1912,7 +1914,6 @@ fn prompt_submission_is_not_queued_during_lrc_when_set_to_send_immediately() {
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let conversation_id = simulate_agent_requested_lrc(&mut app, &terminal);
-        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
                 .long_running_command_submission_mode
@@ -1944,7 +1945,6 @@ fn prompt_submission_during_lrc_with_queue_default_uses_generic_origin() {
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let conversation_id = simulate_agent_requested_lrc(&mut app, &terminal);
-        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
                 .default_prompt_submission_mode
@@ -2030,8 +2030,7 @@ fn ghost_text_shows_queue_hint_during_agent_requested_lrc() {
         initialize_app(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
-        let conversation_id = simulate_agent_requested_lrc(&mut app, &terminal);
-        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        simulate_agent_requested_lrc(&mut app, &terminal);
         let input = terminal.read(&app, |view, _| view.input().clone());
 
         let hint = input.update(&mut app, |input, ctx| {
@@ -2049,8 +2048,7 @@ fn ghost_text_shows_queue_hint_during_agent_requested_lrc() {
 fn shell_submission_queues_as_command_row_when_gated_under_v2() {
     // A shell-mode submission while a queued command is already in flight is captured as a
     // command row (not executed and not interrupting the queue), carries no attachments, and
-    // clears the editor. AgentView is disabled so `selected_conversation_id` resolves from the
-    // pending-query state we set directly.
+    // clears the editor.
     App::test((), |mut app| async move {
         let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_slash_command = FeatureFlag::QueueSlashCommand.override_enabled(true);
@@ -2060,20 +2058,11 @@ fn shell_submission_queues_as_command_row_when_gated_under_v2() {
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |view, _| view.input().clone());
 
-        // Select a conversation (pending-query state), turn on auto-queue, and mark a command as
-        // in flight so the gate keeps queueing while the agent is idle.
-        let conversation_id = AIConversationId::new();
-        terminal.update(&mut app, |view, ctx| {
-            view.ai_context_model().update(ctx, |context_model, ctx| {
-                context_model.set_pending_query_state_for_existing_conversation(
-                    conversation_id,
-                    AgentViewEntryOrigin::Input {
-                        was_prompt_autodetected: false,
-                    },
-                    ctx,
-                );
-            });
-        });
+        // Select a conversation, turn on auto-queue, and mark a command as in flight so the gate
+        // keeps queueing while the agent is idle.
+        let terminal_view_id = terminal.read(&app, |view, _| view.id());
+        let conversation_id = seed_active_conversation(&mut app, terminal_view_id);
+        select_conversation(&mut app, &terminal, conversation_id);
         QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
             model.toggle_queue_next_prompt(conversation_id, ctx);
             model.arm_command_in_flight(conversation_id);
@@ -2111,18 +2100,9 @@ fn shell_submission_is_not_queued_when_v2_disabled() {
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |view, _| view.input().clone());
 
-        let conversation_id = AIConversationId::new();
-        terminal.update(&mut app, |view, ctx| {
-            view.ai_context_model().update(ctx, |context_model, ctx| {
-                context_model.set_pending_query_state_for_existing_conversation(
-                    conversation_id,
-                    AgentViewEntryOrigin::Input {
-                        was_prompt_autodetected: false,
-                    },
-                    ctx,
-                );
-            });
-        });
+        let terminal_view_id = terminal.read(&app, |view, _| view.id());
+        let conversation_id = seed_active_conversation(&mut app, terminal_view_id);
+        select_conversation(&mut app, &terminal, conversation_id);
         QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
             model.toggle_queue_next_prompt(conversation_id, ctx);
             model.arm_command_in_flight(conversation_id);
@@ -2152,7 +2132,7 @@ fn slash_fork_bypasses_prompt_queue_while_in_progress() {
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let conversation_id = seed_in_progress_conversation(&mut app, &terminal);
-        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        select_conversation(&mut app, &terminal, conversation_id);
         QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
             model.toggle_queue_next_prompt(conversation_id, ctx);
         });
@@ -2187,7 +2167,7 @@ fn slash_compact_still_queues_while_in_progress() {
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let conversation_id = seed_in_progress_conversation(&mut app, &terminal);
-        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        select_conversation(&mut app, &terminal, conversation_id);
         QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
             model.toggle_queue_next_prompt(conversation_id, ctx);
         });

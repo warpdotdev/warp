@@ -829,7 +829,7 @@ impl AgentInputFooter {
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
                 if event
-                    .terminal_view_id()
+                    .terminal_surface_id()
                     .is_some_and(|id| id != me.terminal_view_id)
                 {
                     return;
@@ -839,9 +839,9 @@ impl AgentInputFooter {
                     BlocklistAIHistoryEvent::StartedNewConversation { .. }
                     | BlocklistAIHistoryEvent::SetActiveConversation { .. }
                     | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
-                    | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
-                    | BlocklistAIHistoryEvent::RemoveConversation { .. } => {
-                        me.sync_long_context_warning_from_conversation(ctx);
+                    | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
+                    | BlocklistAIHistoryEvent::RemoveConversation { .. }
+                    | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. } => {
                         me.sync_fast_forward_button(ctx);
                         me.update_context_window_button(ctx);
                         me.model_selector.update(ctx, |_, ctx| ctx.notify());

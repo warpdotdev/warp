@@ -20,7 +20,7 @@ use crate::terminal::{ShellLaunchData, SizeUpdate};
 /// without knowing the concrete UI implementation. It only contains actions
 /// meaningful to the PTY/session boundary: process control, byte writes,
 /// resizing, command execution, and native shell completions.
-pub(crate) enum PtyIntent {
+pub enum PtyIntent {
     CtrlD,
     ShutdownPty,
     WriteBytes(Cow<'static, [u8]>),
@@ -37,7 +37,7 @@ pub(crate) enum PtyIntent {
 }
 
 /// Event types that can be projected into an [`Option<PtyIntent>`].
-pub(crate) trait PtyIntentEvent {
+pub trait PtyIntentEvent {
     /// Projects this event into a PTY/session intent, or `None` if it is not a
     /// PTY-driving event.
     fn pty_intent(&self) -> Option<PtyIntent>;
@@ -46,7 +46,7 @@ pub(crate) trait PtyIntentEvent {
 /// A terminal frontend surface driven by `TerminalManager`.
 ///
 /// Each surface defines how its own event type collapses into a PTY/session intent.
-pub(crate) trait TerminalSurface: View + 'static
+pub trait TerminalSurface: View + 'static
 where
     <Self as Entity>::Event: PtyIntentEvent,
 {

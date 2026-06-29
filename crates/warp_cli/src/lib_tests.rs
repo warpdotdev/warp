@@ -12,6 +12,16 @@ use crate::schedule::ScheduleSubcommand;
 use crate::secret::{CodexMethod, CreateProvider, SecretCommand};
 use crate::task::{MessageCommand, TaskCommand};
 
+#[test]
+fn identifies_worker_subcommands() {
+    assert!(is_worker_invocation("minidump-server"));
+    #[cfg(unix)]
+    assert!(is_worker_invocation(&terminal_server_subcommand()));
+    #[cfg(feature = "plugin_host")]
+    assert!(is_worker_invocation("--plugin-host"));
+    assert!(!is_worker_invocation("--prompt"));
+}
+
 fn set_env_var(name: &str, value: &str) -> Option<OsString> {
     let previous = std::env::var_os(name);
     // Safety: tests that mutate process environment are marked `serial` so we
