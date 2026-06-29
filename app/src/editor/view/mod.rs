@@ -7508,6 +7508,13 @@ impl EditorView {
         event: &EditorModelEvent,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Whether this change is confined to this editor's own rendered content
+        // (e.g. typing into the prompt) and so can request a partial,
+        // region-only repaint instead of re-rasterizing the whole window. Any
+        // other view that changes this frame issues its own `notify()`, which
+        // forces a full repaint; and the renderer falls back to full if this
+        // editor's bounds change (a layout change). Both keep this safe.
+        let mut region_only = false;
         match event {
             EditorModelEvent::Edited { edit_origin } => {
                 // Update the autosuggestion state after an edit.
@@ -7515,6 +7522,7 @@ impl EditorView {
                 self.vim_maybe_enforce_cursor_line_cap(ctx);
                 self.accept_autosuggestion_keybinding_view
                     .update(ctx, |view, ctx| view.close_menu(ctx));
+                region_only = true;
                 ctx.emit(Event::Edited(*edit_origin))
             }
             EditorModelEvent::BufferReplaced => ctx.emit(Event::BufferReplaced),
@@ -7545,7 +7553,11 @@ impl EditorView {
             self.reset_cursor_blink_timer(ctx);
         }
         *self.autoscroll_requested.lock() = true;
-        ctx.notify();
+        if region_only {
+            ctx.notify_region();
+        } else {
+            ctx.notify();
+        }
     }
 
     /// When in Vim mode, specifically normal mode, the block cursor cannot go past the last

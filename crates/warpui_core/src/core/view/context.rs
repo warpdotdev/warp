@@ -472,6 +472,23 @@ impl<'a, T: Entity> ViewContext<'a, T> {
             });
     }
 
+    /// Like [`Self::notify`], but signals that the *only* thing that changed is a
+    /// bounded region of this view (e.g. the prompt input line while typing). If
+    /// this is the sole invalidation in a frame, the renderer repaints just the
+    /// scene's `damage_rects` instead of re-rasterizing the whole window. If any
+    /// normal `notify()` also occurs in the same frame, the frame falls back to a
+    /// full repaint. Callers must record the changed region via
+    /// [`crate::Scene::record_damage_rect`] during paint, and should only use
+    /// this when the edit does not change the view's layout (height/line count).
+    pub fn notify_region(&mut self) {
+        self.app
+            .pending_effects
+            .push_back(Effect::ViewRegionNotification {
+                window_id: self.window_id,
+                view_id: self.view_id,
+            });
+    }
+
     /// Requests permissions to send desktop notifications. The `on_completion callback` can be invoked to
     /// propagate the outcome of the request (accepted/denied/other) back to the app.
     ///

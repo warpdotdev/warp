@@ -1828,6 +1828,12 @@ impl Element for EditorElement {
                 rect: bounds,
                 origin: Point::from_vec2f(origin, ctx.scene.z_index()),
             });
+            // Record this editor's bounds so a text-edit-only frame (see
+            // ViewContext::notify_region / SceneDamage::Partial, e.g. typing into
+            // the prompt) can repaint just this region instead of the whole
+            // window. The renderer falls back to a full repaint if these bounds
+            // change between frames (a layout change that moves sibling content).
+            ctx.scene.record_damage_rect(bounds);
             let view_snapshot = &self.view_snapshot;
             let cursor_height =
                 Self::cursor_height(view_snapshot.font_size, view_snapshot.line_height_ratio);

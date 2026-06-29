@@ -2896,21 +2896,12 @@ impl AppContext {
                 break;
             }
 
-            // A frame can be a partial cursor-only repaint only when the very
-            // first iteration's sole signal is a cursor blink. Any later
-            // iteration (e.g. a synthetic MouseMoved that actually changed
-            // something), a full notification, an explicit redraw request, or a
-            // structural change forces a full repaint.
-            let damage = if iter == 1
-                && invalidation.cursor_damage
-                && !invalidation.full_repaint_requested
-                && !invalidation.redraw_requested
-                && invalidation.removed.is_empty()
-            {
-                SceneDamage::CursorOnly
-            } else {
-                SceneDamage::Full
-            };
+            // A frame can be a partial repaint only when the very first
+            // iteration's sole signal is a cursor blink or a bounded region edit.
+            // Any later iteration (e.g. a synthetic MouseMoved that actually
+            // changed something), a full notification, an explicit redraw
+            // request, or a structural change forces a full repaint.
+            let damage = scene_damage_for(&invalidation, iter == 1);
 
             {
                 let mut presenter = presenter.borrow_mut();
@@ -3454,6 +3445,9 @@ impl AppContext {
                     }
                     Effect::ViewCursorNotification { window_id, view_id } => {
                         self.notify_view_observers_cursor(window_id, view_id)
+                    }
+                    Effect::ViewRegionNotification { window_id, view_id } => {
+                        self.notify_view_observers_region(window_id, view_id)
                     }
                     Effect::Focus { window_id, view_id } => {
                         self.focus(window_id, view_id);
@@ -4095,6 +4089,16 @@ impl AppContext {
         let invalidation = self.window_invalidations.entry(window_id).or_default();
         invalidation.updated.insert(view_id);
         invalidation.cursor_damage = true;
+    }
+
+    /// Records a region-only invalidation (e.g. typing into the prompt): the view
+    /// is still re-rendered, but unless a full repaint is also requested this
+    /// frame, the renderer may repaint just the scene's `damage_rects` (see
+    /// [`Scene::damage`] / [`SceneDamage::Partial`]).
+    fn notify_view_observers_region(&mut self, window_id: WindowId, view_id: EntityId) {
+        let invalidation = self.window_invalidations.entry(window_id).or_default();
+        invalidation.updated.insert(view_id);
+        invalidation.region_damage = true;
     }
 
     fn focus(&mut self, window_id: WindowId, focused_id: EntityId) {
@@ -4926,5 +4930,92 @@ impl AppContext {
                 );
             }
         }
+    }
+}
+
+/// Decides how much of a window to repaint for a given invalidation, on a given
+/// scene-build iteration. A partial repaint is only allowed on the first
+/// iteration when nothing forces a full repaint (no normal `notify()`, no redraw
+/// request, no removed views), and the sole signal is a bounded region edit
+/// ([`SceneDamage::Partial`], e.g. typing) or a cursor blink
+/// ([`SceneDamage::CursorOnly`]). Region damage takes precedence over cursor
+/// damage because the damaged region encloses the cursor.
+fn scene_damage_for(invalidation: &WindowInvalidation, is_first_iteration: bool) -> SceneDamage {
+    let partial_eligible = is_first_iteration
+        && !invalidation.full_repaint_requested
+        && !invalidation.redraw_requested
+        && invalidation.removed.is_empty();
+    if partial_eligible && invalidation.region_damage {
+        SceneDamage::Partial
+    } else if partial_eligible && invalidation.cursor_damage {
+        SceneDamage::CursorOnly
+    } else {
+        SceneDamage::Full
+    }
+}
+
+#[cfg(test)]
+mod scene_damage_tests {
+    use super::*;
+
+    #[test]
+    fn region_only_first_iteration_is_partial() {
+        let mut inv = WindowInvalidation::default();
+        inv.region_damage = true;
+        assert_eq!(scene_damage_for(&inv, true), SceneDamage::Partial);
+    }
+
+    #[test]
+    fn cursor_only_first_iteration_is_cursor_only() {
+        let mut inv = WindowInvalidation::default();
+        inv.cursor_damage = true;
+        assert_eq!(scene_damage_for(&inv, true), SceneDamage::CursorOnly);
+    }
+
+    #[test]
+    fn region_damage_takes_precedence_over_cursor() {
+        let mut inv = WindowInvalidation::default();
+        inv.region_damage = true;
+        inv.cursor_damage = true;
+        assert_eq!(scene_damage_for(&inv, true), SceneDamage::Partial);
+    }
+
+    #[test]
+    fn full_repaint_request_forces_full() {
+        let mut inv = WindowInvalidation::default();
+        inv.region_damage = true;
+        inv.full_repaint_requested = true;
+        assert_eq!(scene_damage_for(&inv, true), SceneDamage::Full);
+    }
+
+    #[test]
+    fn redraw_request_forces_full() {
+        let mut inv = WindowInvalidation::default();
+        inv.region_damage = true;
+        inv.redraw_requested = true;
+        assert_eq!(scene_damage_for(&inv, true), SceneDamage::Full);
+    }
+
+    #[test]
+    fn removed_views_force_full() {
+        let mut inv = WindowInvalidation::default();
+        inv.region_damage = true;
+        inv.removed.insert(EntityId::from_usize(1));
+        assert_eq!(scene_damage_for(&inv, true), SceneDamage::Full);
+    }
+
+    #[test]
+    fn later_iteration_forces_full() {
+        let mut inv = WindowInvalidation::default();
+        inv.region_damage = true;
+        assert_eq!(scene_damage_for(&inv, false), SceneDamage::Full);
+    }
+
+    #[test]
+    fn no_damage_signal_is_full() {
+        assert_eq!(
+            scene_damage_for(&WindowInvalidation::default(), true),
+            SceneDamage::Full
+        );
     }
 }

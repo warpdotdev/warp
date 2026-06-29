@@ -207,6 +207,11 @@ pub struct WindowInvalidation {
     /// [`crate::ViewContext::notify_cursor_only`]). On its own this enables a
     /// partial cursor repaint; combined with `full_repaint_requested` it does not.
     pub cursor_damage: bool,
+    /// Set when a region-only notification occurred this frame (see
+    /// [`crate::ViewContext::notify_region`]), e.g. typing into the prompt. On
+    /// its own this enables a partial repaint of the scene's `damage_rects`;
+    /// combined with `full_repaint_requested` it does not.
+    pub region_damage: bool,
 }
 
 pub enum Effect {
@@ -225,6 +230,13 @@ pub enum Effect {
     /// changed is the text cursor (e.g. a 500ms blink toggle), which lets the
     /// renderer repaint just the cursor region instead of the whole window.
     ViewCursorNotification {
+        window_id: WindowId,
+        view_id: EntityId,
+    },
+    /// Like [`Effect::ViewNotification`], but signals that only a bounded region
+    /// changed (e.g. the prompt input line while typing), which lets the
+    /// renderer repaint just that region instead of the whole window.
+    ViewRegionNotification {
         window_id: WindowId,
         view_id: EntityId,
     },

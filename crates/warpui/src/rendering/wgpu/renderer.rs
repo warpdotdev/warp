@@ -36,6 +36,10 @@ pub struct Renderer {
     /// current frame's cursor rects to form the damage region for a cursor-only
     /// repaint (so the region the cursor just vacated is also repainted).
     prev_cursor_rects: Vec<RectF>,
+    /// Device-space partial-damage rects from the previous frame. Unioned with
+    /// the current frame's damage rects to form the damage region for a
+    /// [`SceneDamage::Partial`] repaint (e.g. typing into the prompt).
+    prev_damage_rects: Vec<RectF>,
 }
 
 impl Renderer {
@@ -72,6 +76,7 @@ impl Renderer {
             offscreen_valid: false,
             offscreen_size: None,
             prev_cursor_rects: Vec::new(),
+            prev_damage_rects: Vec::new(),
         }
     }
 
@@ -118,24 +123,44 @@ impl Renderer {
         let surface_height = surface_texture.texture.height();
         let surface_size = Vector2F::new(surface_width as f32, surface_height as f32);
 
-        // Cursor rects painted this frame, converted to device space.
+        // Cursor and partial-damage rects painted this frame, in device space.
         let scale = scene.scale_factor();
         let cur_cursor_rects: Vec<RectF> =
             scene.cursor_rects().iter().map(|r| *r * scale).collect();
+        let cur_damage_rects: Vec<RectF> =
+            scene.damage_rects().iter().map(|r| *r * scale).collect();
 
         let offscreen = resources.offscreen_target(surface_width, surface_height);
         let size_unchanged = self.offscreen_size == Some((surface_width, surface_height));
 
-        // A cursor-only frame may repaint just the damage region (the union of the
-        // previous and current cursor rects), but only if we have a valid prior
-        // full render of the offscreen target at this exact size to Load onto.
-        let damage_rect = if matches!(scene.damage(), SceneDamage::CursorOnly)
-            && self.offscreen_valid
-            && size_unchanged
-            && offscreen.is_some()
-        {
-            union_bounds(self.prev_cursor_rects.iter().chain(cur_cursor_rects.iter()))
-                .map(|rect| expand_and_clamp(rect, surface_size, 4.0))
+        // A partial frame (cursor blink or a bounded region edit such as typing)
+        // may repaint just the damage region: the union of the previous and
+        // current rects of the relevant kind (so the area just vacated is also
+        // repainted). This is only safe with a valid prior full render of the
+        // offscreen target at this exact size to Load onto.
+        let partial_eligible = self.offscreen_valid && size_unchanged && offscreen.is_some();
+        let damage_rect = if partial_eligible {
+            match scene.damage() {
+                SceneDamage::CursorOnly => {
+                    union_bounds(self.prev_cursor_rects.iter().chain(cur_cursor_rects.iter()))
+                }
+                SceneDamage::Partial => {
+                    // A region repaint is only safe if the damaged element kept
+                    // the same bounds. If its extent changed (e.g. the prompt
+                    // grew a line), sibling content was re-laid-out outside the
+                    // damage rect, so the Load would show stale pixels -- fall
+                    // back to a full repaint for this frame.
+                    match (
+                        union_bounds(self.prev_damage_rects.iter()),
+                        union_bounds(cur_damage_rects.iter()),
+                    ) {
+                        (Some(prev), Some(cur)) if rects_approx_eq(prev, cur) => Some(cur),
+                        _ => None,
+                    }
+                }
+                SceneDamage::Full => None,
+            }
+            .map(|rect| expand_and_clamp(rect, surface_size, 4.0))
         } else {
             None
         };
@@ -219,6 +244,7 @@ impl Renderer {
             self.offscreen_size = None;
         }
         self.prev_cursor_rects = cur_cursor_rects;
+        self.prev_damage_rects = cur_damage_rects;
 
         if let Some(callback) = capture_callback {
             if let Err(err) =
@@ -267,6 +293,17 @@ fn union_bounds<'a>(rects: impl Iterator<Item = &'a RectF>) -> Option<RectF> {
         vec2f(min_x, min_y),
         vec2f(max_x - min_x, max_y - min_y),
     ))
+}
+
+/// Whether two rects are equal within half a device pixel, used to detect that a
+/// partially-damaged element kept the same bounds between frames (so scissoring
+/// to it is safe). A change means the layout shifted and we must repaint fully.
+fn rects_approx_eq(a: RectF, b: RectF) -> bool {
+    const EPS: f32 = 0.5;
+    (a.min_x() - b.min_x()).abs() < EPS
+        && (a.min_y() - b.min_y()).abs() < EPS
+        && (a.max_x() - b.max_x()).abs() < EPS
+        && (a.max_y() - b.max_y()).abs() < EPS
 }
 
 /// Expands `rect` by `pad` device pixels on each side and clamps it to the

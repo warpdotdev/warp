@@ -25,6 +25,10 @@ pub struct Scene {
     /// frame. The renderer uses these to compute a small damage region so a
     /// cursor blink can repaint just the cursor instead of the whole window.
     cursor_rects: Vec<RectF>,
+    /// Window-space (logical, pre-scale) bounds of regions that changed this
+    /// frame when the damage is [`SceneDamage::Partial`] (e.g. the prompt input
+    /// line while typing). The renderer repaints just the union of these.
+    damage_rects: Vec<RectF>,
     /// What changed since the previous frame. Defaults to [`SceneDamage::Full`]
     /// (repaint everything); set to [`SceneDamage::CursorOnly`] when the only
     /// invalidation was a cursor blink so the renderer can do a partial repaint.
@@ -44,6 +48,10 @@ pub enum SceneDamage {
     /// Only the text cursor(s) changed (e.g. a 500ms blink toggle); the renderer
     /// may repaint just the union of the scene's `cursor_rects`.
     CursorOnly,
+    /// Only a bounded region changed (e.g. the prompt input line while typing);
+    /// the renderer may repaint just the union of the scene's `damage_rects`
+    /// instead of re-rasterizing the whole window.
+    Partial,
 }
 
 #[derive(Clone, Default)]
@@ -412,6 +420,7 @@ impl Scene {
             layers: vec1![Layer::default()],
             overlay_layers: Vec::new(),
             cursor_rects: Vec::new(),
+            damage_rects: Vec::new(),
             damage: SceneDamage::Full,
             #[cfg(debug_assertions)]
             panic_location: None,
@@ -719,6 +728,18 @@ impl Scene {
     /// Window-space (logical) bounds of all text cursors painted this frame.
     pub fn cursor_rects(&self) -> &[RectF] {
         &self.cursor_rects
+    }
+
+    /// Records the window-space (logical) bounds of a region that changed this
+    /// frame, used to compute a damage region for a [`SceneDamage::Partial`]
+    /// repaint (e.g. the prompt input line while typing).
+    pub fn record_damage_rect(&mut self, rect: RectF) {
+        self.damage_rects.push(rect);
+    }
+
+    /// Window-space (logical) bounds of all partial-damage regions this frame.
+    pub fn damage_rects(&self) -> &[RectF] {
+        &self.damage_rects
     }
 
     /// Sets how much of the window changed this frame (see [`SceneDamage`]).
