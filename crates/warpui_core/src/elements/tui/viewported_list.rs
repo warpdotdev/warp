@@ -10,8 +10,6 @@ use super::{
 };
 use crate::{AppContext, Event};
 
-const MAX_STABILIZATION_PASSES: usize = 4;
-
 /// A stable item-relative scroll anchor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TuiViewportAnchor<ItemId> {
@@ -217,50 +215,32 @@ where
         let viewport_height = usize::from(constraint.max.height);
         let width = constraint.max.width;
         let width_changed = self.last_width.replace(width) != Some(width);
+        let collected = self.collect_visible(viewport_height);
+        let (rendered, height_updates) =
+            self.render_collected(collected, width, width_changed, app);
 
-        for pass in 0..MAX_STABILIZATION_PASSES {
-            let collected = self.collect_visible(viewport_height);
-            self.first_anchor = collected.first().map(|item| TuiViewportAnchor {
-                item_id: item.id.clone(),
-                row_offset: item.visible_rows.start,
-            });
-
-            let mut rendered = Vec::with_capacity(collected.len());
-            let mut height_updates = Vec::new();
-            for item in collected {
-                let visible_height = item.visible_rows.len().min(usize::from(u16::MAX)) as u16;
-                let result = (self.render_item)(
-                    ViewportRenderRequest {
-                        item: item.item,
-                        visible_rows: item.visible_rows,
-                        width,
-                    },
-                    app,
-                );
-                if item.needs_measurement || width_changed {
-                    if let Some(height) = result.measured_full_height {
-                        if height != item.indexed_height {
-                            height_updates.push((item.id.clone(), height));
-                        }
-                    }
-                }
-                rendered.push(VisibleElement {
-                    _item_id: item.id,
-                    element: result.element,
-                    height: visible_height,
-                });
-            }
-
-            if !height_updates.is_empty() {
-                self.index.update_heights(&height_updates);
-                if pass + 1 < MAX_STABILIZATION_PASSES {
-                    continue;
-                }
-                log::warn!("TUI viewport item heights did not stabilize during layout");
-            }
-
+        if height_updates.is_empty() {
             self.visible_elements = rendered;
-            break;
+        } else {
+            // The GUI terminal block list uses a fixed measure/apply/final-pass
+            // shape for dynamic rich content heights: measure visible dynamic
+            // content, write updated heights into the model-owned sum tree, then
+            // rebuild the viewport once for the frame's final visible range.
+            // TUI item height feedback similarly arrives after scoped index
+            // traversal, so one recollect is the equivalent of the GUI's final
+            // viewport pass without an arbitrary stabilization loop.
+            self.index.update_heights(&height_updates);
+            let collected = self.collect_visible(viewport_height);
+            let (rendered, remaining_updates) =
+                self.render_collected(collected, width, width_changed, app);
+            if !remaining_updates.is_empty() {
+                log::warn!(
+                    "TUI viewport item heights changed during the final layout pass; \
+                     the next invalidation will apply the updated visible range"
+                );
+                self.index.update_heights(&remaining_updates);
+            }
+            self.visible_elements = rendered;
         }
 
         for visible in &mut self.visible_elements {
@@ -270,6 +250,49 @@ where
                 app,
             );
         }
+    }
+
+    fn render_collected(
+        &mut self,
+        collected: Vec<CollectedItem<Index::ItemId, Index::Item>>,
+        width: u16,
+        width_changed: bool,
+        app: &AppContext,
+    ) -> (
+        Vec<VisibleElement<Index::ItemId>>,
+        Vec<(Index::ItemId, usize)>,
+    ) {
+        self.first_anchor = collected.first().map(|item| TuiViewportAnchor {
+            item_id: item.id.clone(),
+            row_offset: item.visible_rows.start,
+        });
+
+        let mut rendered = Vec::with_capacity(collected.len());
+        let mut height_updates = Vec::new();
+        for item in collected {
+            let visible_height = item.visible_rows.len().min(usize::from(u16::MAX)) as u16;
+            let result = (self.render_item)(
+                ViewportRenderRequest {
+                    item: item.item,
+                    visible_rows: item.visible_rows,
+                    width,
+                },
+                app,
+            );
+            if item.needs_measurement || width_changed {
+                if let Some(height) = result.measured_full_height {
+                    if height != item.indexed_height {
+                        height_updates.push((item.id.clone(), height));
+                    }
+                }
+            }
+            rendered.push(VisibleElement {
+                _item_id: item.id,
+                element: result.element,
+                height: visible_height,
+            });
+        }
+        (rendered, height_updates)
     }
 
     /// Scrolls the viewport by `rows` (negative = toward the top), clamping at
