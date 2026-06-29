@@ -26,7 +26,7 @@ fn renders_from_the_requested_logical_row() {
 }
 
 #[test]
-fn layout_reports_the_visible_size_after_the_offset() {
+fn layout_preserves_child_width_and_reports_height_after_the_offset() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
             let mut clipped =
@@ -38,7 +38,7 @@ fn layout_reports_the_visible_size_after_the_offset() {
 
             let size = clipped.layout(TuiConstraint::loose(TuiSize::new(3, 10)), &mut ctx, app_ctx);
 
-            assert_eq!(size, TuiSize::new(3, 2));
+            assert_eq!(size, TuiSize::new(1, 2));
         });
     });
 }
