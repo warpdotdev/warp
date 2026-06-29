@@ -4,8 +4,8 @@
 
 use pathfinder_geometry::vector::Vector2F;
 use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
-    MouseEventKind,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
+    MouseEvent, MouseEventKind,
 };
 
 use crate::event::{KeyEventDetails, ModifiersState};
@@ -27,31 +27,83 @@ pub fn crossterm_event_to_warp_event(event: CrosstermEvent) -> Option<Event> {
     }
 }
 
-/// Converts TUI mouse-wheel input into cell-coordinate scroll events.
+/// Converts TUI mouse input into cell-coordinate mouse events.
 fn mouse_event_to_warp_event(event: MouseEvent) -> Option<Event> {
-    let delta = match event.kind {
-        MouseEventKind::ScrollUp => Vector2F::new(0.0, 1.0),
-        MouseEventKind::ScrollDown => Vector2F::new(0.0, -1.0),
-        MouseEventKind::ScrollLeft => Vector2F::new(1.0, 0.0),
-        MouseEventKind::ScrollRight => Vector2F::new(-1.0, 0.0),
-        MouseEventKind::Down(_)
-        | MouseEventKind::Up(_)
-        | MouseEventKind::Drag(_)
-        | MouseEventKind::Moved => return None,
-    };
-    Some(Event::ScrollWheel {
-        position: Vector2F::new(f32::from(event.column), f32::from(event.row)),
+    let position = Vector2F::new(f32::from(event.column), f32::from(event.row));
+    let modifiers = modifiers_state(event.modifiers);
+    let cmd = modifiers.cmd;
+    let shift = modifiers.shift;
+
+    match event.kind {
+        MouseEventKind::ScrollUp => {
+            Some(scroll_wheel(position, Vector2F::new(0.0, 1.0), modifiers))
+        }
+        MouseEventKind::ScrollDown => {
+            Some(scroll_wheel(position, Vector2F::new(0.0, -1.0), modifiers))
+        }
+        MouseEventKind::ScrollLeft => {
+            Some(scroll_wheel(position, Vector2F::new(1.0, 0.0), modifiers))
+        }
+        MouseEventKind::ScrollRight => {
+            Some(scroll_wheel(position, Vector2F::new(-1.0, 0.0), modifiers))
+        }
+        MouseEventKind::Down(MouseButton::Left) => Some(Event::LeftMouseDown {
+            position,
+            modifiers,
+            click_count: 1,
+            is_first_mouse: false,
+        }),
+        MouseEventKind::Down(MouseButton::Middle) => Some(Event::MiddleMouseDown {
+            position,
+            cmd,
+            shift,
+            click_count: 1,
+        }),
+        MouseEventKind::Down(MouseButton::Right) => Some(Event::RightMouseDown {
+            position,
+            cmd,
+            shift,
+            click_count: 1,
+        }),
+        MouseEventKind::Up(MouseButton::Left) => Some(Event::LeftMouseUp {
+            position,
+            modifiers,
+        }),
+        MouseEventKind::Drag(MouseButton::Left) => Some(Event::LeftMouseDragged {
+            position,
+            modifiers,
+        }),
+        MouseEventKind::Moved => Some(Event::MouseMoved {
+            position,
+            cmd,
+            shift,
+            is_synthetic: false,
+        }),
+        // The shared Event vocabulary has no right/middle mouse-up or drag variants yet.
+        MouseEventKind::Up(MouseButton::Middle | MouseButton::Right)
+        | MouseEventKind::Drag(MouseButton::Middle | MouseButton::Right) => None,
+    }
+}
+
+fn scroll_wheel(position: Vector2F, delta: Vector2F, modifiers: ModifiersState) -> Event {
+    Event::ScrollWheel {
+        position,
         delta,
         precise: false,
-        modifiers: ModifiersState {
-            alt: event.modifiers.contains(KeyModifiers::ALT),
-            cmd: event.modifiers.contains(KeyModifiers::SUPER),
-            shift: event.modifiers.contains(KeyModifiers::SHIFT),
-            ctrl: event.modifiers.contains(KeyModifiers::CONTROL),
-            func: false,
-        },
-    })
+        modifiers,
+    }
 }
+
+fn modifiers_state(modifiers: KeyModifiers) -> ModifiersState {
+    ModifiersState {
+        alt: modifiers.contains(KeyModifiers::ALT),
+        cmd: modifiers.contains(KeyModifiers::SUPER),
+        shift: modifiers.contains(KeyModifiers::SHIFT),
+        ctrl: modifiers.contains(KeyModifiers::CONTROL),
+        func: false,
+    }
+}
+
 fn key_event_to_warp_event(event: KeyEvent) -> Option<Event> {
     // Only key presses map to a warp `KeyDown`; repeats/releases are ignored so
     // dispatch matches the GUI's press-driven keystroke model.
