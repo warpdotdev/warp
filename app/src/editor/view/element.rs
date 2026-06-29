@@ -853,6 +853,10 @@ impl EditorElement {
                 .draw_rect_with_hit_recording(cursor_rect)
                 .with_background(cursor.color)
                 .with_corner_radius(CornerRadius::with_all(cursor_corner_radius));
+            // Record the cursor bounds so the renderer can compute a small damage
+            // region and repaint just the cursor on a blink instead of the whole
+            // window (see SceneDamage::CursorOnly).
+            ctx.scene.record_cursor_rect(cursor_rect);
 
             // Draw cursor avatars for remote selections
             if !is_local {
@@ -1824,6 +1828,12 @@ impl Element for EditorElement {
                 rect: bounds,
                 origin: Point::from_vec2f(origin, ctx.scene.z_index()),
             });
+            // Record this editor's bounds so a text-edit-only frame (see
+            // ViewContext::notify_region / SceneDamage::Partial, e.g. typing into
+            // the prompt) can repaint just this region instead of the whole
+            // window. The renderer falls back to a full repaint if these bounds
+            // change between frames (a layout change that moves sibling content).
+            ctx.scene.record_damage_rect(bounds);
             let view_snapshot = &self.view_snapshot;
             let cursor_height =
                 Self::cursor_height(view_snapshot.font_size, view_snapshot.line_height_ratio);

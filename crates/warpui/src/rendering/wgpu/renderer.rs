@@ -5,7 +5,8 @@ mod rect;
 mod util;
 
 use frame::Frame;
-use pathfinder_geometry::vector::Vector2F;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 use util::with_error_scope;
 use warpui_core::platform::CapturedFrame;
 use wgpu::wgc::device::DeviceError;
@@ -15,6 +16,7 @@ pub use super::resources::{GetSurfaceTextureError, SurfaceConfigureError};
 use crate::r#async::block_on;
 use crate::rendering::wgpu::Resources;
 use crate::rendering::{GlyphConfig, GlyphRasterBoundsFn, RasterizeGlyphFn};
+use crate::scene::SceneDamage;
 use crate::Scene;
 
 const ENCODER_DESCRIPTOR: wgpu::CommandEncoderDescriptor = wgpu::CommandEncoderDescriptor {
@@ -25,6 +27,19 @@ pub struct Renderer {
     rect_pipeline: rect::Pipeline,
     glyph_pipeline: glyph::Pipeline,
     image_pipeline: image::Pipeline,
+    /// Whether the offscreen target currently holds a valid full render at
+    /// `offscreen_size`. Only then can a cursor-only frame `Load`+scissor onto it.
+    offscreen_valid: bool,
+    /// Surface size (device px) the offscreen target was last fully rendered at.
+    offscreen_size: Option<(u32, u32)>,
+    /// Device-space cursor rects from the previous frame. Unioned with the
+    /// current frame's cursor rects to form the damage region for a cursor-only
+    /// repaint (so the region the cursor just vacated is also repainted).
+    prev_cursor_rects: Vec<RectF>,
+    /// Device-space partial-damage rects from the previous frame. Unioned with
+    /// the current frame's damage rects to form the damage region for a
+    /// [`SceneDamage::Partial`] repaint (e.g. typing into the prompt).
+    prev_damage_rects: Vec<RectF>,
 }
 
 impl Renderer {
@@ -58,6 +73,10 @@ impl Renderer {
             rect_pipeline,
             glyph_pipeline,
             image_pipeline,
+            offscreen_valid: false,
+            offscreen_size: None,
+            prev_cursor_rects: Vec::new(),
+            prev_damage_rects: Vec::new(),
         }
     }
 
@@ -100,12 +119,139 @@ impl Renderer {
         };
 
         let surface_texture = resources.get_surface_texture()?;
+        let surface_width = surface_texture.texture.width();
+        let surface_height = surface_texture.texture.height();
+        let surface_size = Vector2F::new(surface_width as f32, surface_height as f32);
+
+        // Cursor and partial-damage rects painted this frame, in device space.
+        let scale = scene.scale_factor();
+        let cur_cursor_rects: Vec<RectF> =
+            scene.cursor_rects().iter().map(|r| *r * scale).collect();
+        let cur_damage_rects: Vec<RectF> =
+            scene.damage_rects().iter().map(|r| *r * scale).collect();
+
+        let offscreen = resources.offscreen_target(surface_width, surface_height);
+        let size_unchanged = self.offscreen_size == Some((surface_width, surface_height));
+
+        // A partial frame (cursor blink or a bounded region edit such as typing)
+        // may repaint just the damage region: the union of the previous and
+        // current rects of the relevant kind (so the area just vacated is also
+        // repainted). This is only safe with a valid prior full render of the
+        // offscreen target at this exact size to Load onto.
+        let partial_eligible = self.offscreen_valid && size_unchanged && offscreen.is_some();
+        let damage_rect = if partial_eligible {
+            match scene.damage() {
+                SceneDamage::CursorOnly => {
+                    union_bounds(self.prev_cursor_rects.iter().chain(cur_cursor_rects.iter()))
+                }
+                SceneDamage::Partial => {
+                    // Damage the union of the previous and current frame's
+                    // changed-view bounds, so a view that moved repaints both its
+                    // old and new position. Fall back to a full repaint only on a
+                    // VERTICAL shift: the input growing/shrinking a line can
+                    // re-lay-out sibling content (e.g. scrollback) that didn't
+                    // itself re-render, which a partial frame would leave stale.
+                    // Horizontal reflow (autosuggestion width, chips) within a
+                    // stable vertical band is safe to damage partially.
+                    match (
+                        union_bounds(self.prev_damage_rects.iter()),
+                        union_bounds(cur_damage_rects.iter()),
+                    ) {
+                        (Some(prev), Some(cur)) if vertical_extent_stable(prev, cur) => {
+                            union_bounds(
+                                self.prev_damage_rects.iter().chain(cur_damage_rects.iter()),
+                            )
+                        }
+                        _ => None,
+                    }
+                }
+                SceneDamage::Full => None,
+            }
+            .map(|rect| expand_and_clamp(rect, surface_size, 4.0))
+        } else {
+            None
+        };
+        let do_partial = damage_rect.is_some();
+        let load_op = if do_partial {
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+        };
 
         let mut encoder = device.create_command_encoder(&ENCODER_DESCRIPTOR);
         let (_, error) = with_error_scope(device, || {
-            frame.draw(resources, &mut encoder, &surface_texture);
+            match &offscreen {
+                Some((offscreen_texture, offscreen_view)) => {
+                    // Render into the persistent offscreen target (full `Clear`, or
+                    // `Load`+scissor for a partial cursor repaint), then copy the
+                    // whole offscreen into the swapchain image. The copy is a cheap
+                    // GPU blit; the win is that a partial frame only re-rasterizes
+                    // the small damage region instead of the entire window.
+                    frame.draw(
+                        resources,
+                        &mut encoder,
+                        offscreen_view,
+                        surface_size,
+                        load_op,
+                        damage_rect,
+                    );
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: offscreen_texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &surface_texture.texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: surface_width,
+                            height: surface_height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+                None => {
+                    // Surface can't be a copy destination; render straight to it.
+                    let view = surface_texture
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor {
+                            format: Some(surface_texture.texture.format()),
+                            ..Default::default()
+                        });
+                    frame.draw(
+                        resources,
+                        &mut encoder,
+                        &view,
+                        surface_size,
+                        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        None,
+                    );
+                }
+            }
+
             queue.submit(Some(encoder.finish()));
         });
+
+        // Update offscreen/cursor bookkeeping for the next frame.
+        if offscreen.is_some() {
+            if !do_partial {
+                // A full render populated the offscreen target; it's now valid to
+                // Load onto for a subsequent partial cursor repaint.
+                self.offscreen_valid = true;
+                self.offscreen_size = Some((surface_width, surface_height));
+            }
+            // A partial frame Loaded onto the existing offscreen, so it stays valid.
+        } else {
+            self.offscreen_valid = false;
+            self.offscreen_size = None;
+        }
+        self.prev_cursor_rects = cur_cursor_rects;
+        self.prev_damage_rects = cur_damage_rects;
 
         if let Some(callback) = capture_callback {
             if let Err(err) =
@@ -134,6 +280,47 @@ impl Renderer {
             }
         }
     }
+}
+
+/// Bounding box of an iterator of rects, or `None` if the iterator is empty.
+fn union_bounds<'a>(rects: impl Iterator<Item = &'a RectF>) -> Option<RectF> {
+    let mut rects = rects;
+    let first = rects.next()?;
+    let mut min_x = first.min_x();
+    let mut min_y = first.min_y();
+    let mut max_x = first.max_x();
+    let mut max_y = first.max_y();
+    for rect in rects {
+        min_x = min_x.min(rect.min_x());
+        min_y = min_y.min(rect.min_y());
+        max_x = max_x.max(rect.max_x());
+        max_y = max_y.max(rect.max_y());
+    }
+    Some(RectF::new(
+        vec2f(min_x, min_y),
+        vec2f(max_x - min_x, max_y - min_y),
+    ))
+}
+
+/// Whether two damage regions occupy the same vertical band (within a few device
+/// pixels). A vertical change means content was re-laid-out and sibling views may
+/// have moved without re-rendering, so the frame must repaint fully. Horizontal
+/// changes (e.g. autosuggestion ghost-text width) stay within the input band and
+/// are safe to damage partially.
+fn vertical_extent_stable(a: RectF, b: RectF) -> bool {
+    const V_EPS: f32 = 8.0; // less than one line height
+    (a.min_y() - b.min_y()).abs() < V_EPS && (a.max_y() - b.max_y()).abs() < V_EPS
+}
+
+/// Expands `rect` by `pad` device pixels on each side and clamps it to the
+/// `[0, size]` window bounds. The padding absorbs anti-aliasing / rounding so a
+/// partial repaint fully covers the cursor.
+fn expand_and_clamp(rect: RectF, size: Vector2F, pad: f32) -> RectF {
+    let x0 = (rect.min_x() - pad).max(0.0);
+    let y0 = (rect.min_y() - pad).max(0.0);
+    let x1 = (rect.max_x() + pad).min(size.x());
+    let y1 = (rect.max_y() + pad).min(size.y());
+    RectF::new(vec2f(x0, y0), vec2f((x1 - x0).max(0.0), (y1 - y0).max(0.0)))
 }
 
 /// Errors that can occur while rendering a scene.

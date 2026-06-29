@@ -21,9 +21,37 @@ pub struct Scene {
     active_layer_index_stack: Vec1<ZIndex>,
     layers: Vec1<Layer>,
     overlay_layers: Vec<Layer>,
+    /// Window-space (logical, pre-scale) bounds of any text cursors painted this
+    /// frame. The renderer uses these to compute a small damage region so a
+    /// cursor blink can repaint just the cursor instead of the whole window.
+    cursor_rects: Vec<RectF>,
+    /// Window-space (logical, pre-scale) bounds of regions that changed this
+    /// frame when the damage is [`SceneDamage::Partial`] (e.g. the prompt input
+    /// line while typing). The renderer repaints just the union of these.
+    damage_rects: Vec<RectF>,
+    /// What changed since the previous frame. Defaults to [`SceneDamage::Full`]
+    /// (repaint everything); set to [`SceneDamage::CursorOnly`] when the only
+    /// invalidation was a cursor blink so the renderer can do a partial repaint.
+    damage: SceneDamage,
     #[cfg(debug_assertions)]
     /// Custom panic location, set with [`Scene::set_location_for_panic_logging`]
     panic_location: Option<&'static std::panic::Location<'static>>,
+}
+
+/// Describes how much of the window changed in a frame, so the renderer can
+/// limit GPU re-rasterization to a damaged region when possible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SceneDamage {
+    /// The whole window may have changed; repaint everything (the safe default).
+    #[default]
+    Full,
+    /// Only the text cursor(s) changed (e.g. a 500ms blink toggle); the renderer
+    /// may repaint just the union of the scene's `cursor_rects`.
+    CursorOnly,
+    /// Only a bounded region changed (e.g. the prompt input line while typing);
+    /// the renderer may repaint just the union of the scene's `damage_rects`
+    /// instead of re-rasterizing the whole window.
+    Partial,
 }
 
 #[derive(Clone, Default)]
@@ -391,6 +419,9 @@ impl Scene {
             active_layer_index_stack: vec1![ZIndex::Normal(0)],
             layers: vec1![Layer::default()],
             overlay_layers: Vec::new(),
+            cursor_rects: Vec::new(),
+            damage_rects: Vec::new(),
+            damage: SceneDamage::Full,
             #[cfg(debug_assertions)]
             panic_location: None,
         }
@@ -686,6 +717,39 @@ impl Scene {
 
     pub fn rendering_config(&self) -> &rendering::Config {
         &self.rendering_config
+    }
+
+    /// Records the window-space (logical) bounds of a text cursor painted this
+    /// frame, used to compute a damage region for cheap cursor-blink repaints.
+    pub fn record_cursor_rect(&mut self, rect: RectF) {
+        self.cursor_rects.push(rect);
+    }
+
+    /// Window-space (logical) bounds of all text cursors painted this frame.
+    pub fn cursor_rects(&self) -> &[RectF] {
+        &self.cursor_rects
+    }
+
+    /// Records the window-space (logical) bounds of a region that changed this
+    /// frame, used to compute a damage region for a [`SceneDamage::Partial`]
+    /// repaint (e.g. the prompt input line while typing).
+    pub fn record_damage_rect(&mut self, rect: RectF) {
+        self.damage_rects.push(rect);
+    }
+
+    /// Window-space (logical) bounds of all partial-damage regions this frame.
+    pub fn damage_rects(&self) -> &[RectF] {
+        &self.damage_rects
+    }
+
+    /// Sets how much of the window changed this frame (see [`SceneDamage`]).
+    pub fn set_damage(&mut self, damage: SceneDamage) {
+        self.damage = damage;
+    }
+
+    /// How much of the window changed this frame (see [`SceneDamage`]).
+    pub fn damage(&self) -> SceneDamage {
+        self.damage
     }
 }
 

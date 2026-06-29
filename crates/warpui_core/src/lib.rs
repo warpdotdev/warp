@@ -49,7 +49,7 @@ pub use pathfinder_geometry as geometry;
 pub use presenter::{
     AfterLayoutContext, EventContext, LayoutContext, PaintContext, Presenter, SizeConstraint,
 };
-pub use scene::{ClipBounds, Scene};
+pub use scene::{ClipBounds, Scene, SceneDamage};
 pub use zoom::ZoomFactor;
 
 pub use crate::core::*;
