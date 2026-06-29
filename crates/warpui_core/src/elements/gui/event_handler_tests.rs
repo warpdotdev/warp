@@ -1,7 +1,8 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use pathfinder_geometry::vector::vec2f;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 
 use super::*;
 use crate::elements::{
@@ -618,4 +619,196 @@ fn test_event_propagation() {
             assert_eq!(1, *view.mouse_downs.get(&ElementIdentifier::Base).unwrap());
         });
     })
+}
+
+fn select_entire_probe_text(
+    _content: &str,
+    _click_offset: string_offset::ByteOffset,
+) -> Option<std::ops::Range<string_offset::ByteOffset>> {
+    Some(string_offset::ByteOffset::zero()..string_offset::ByteOffset::from(1))
+}
+
+/// Records the arguments forwarded to each `SelectableElement` method so the
+/// test can assert that `EventHandler` forwards selection to its child.
+#[derive(Clone, Default)]
+struct SelectableProbeState {
+    get_selection_args: Rc<RefCell<Vec<(Vector2F, Vector2F, IsRect)>>>,
+    expand_selection_args: Rc<RefCell<Vec<(Vector2F, SelectionDirection, SelectionType)>>>,
+    semantic_order_args: Rc<RefCell<Vec<(Vector2F, Vector2F)>>>,
+    smart_select_args: Rc<RefCell<Vec<Vector2F>>>,
+    clickable_bounds_args: Rc<RefCell<Vec<Option<Selection>>>>,
+}
+
+struct SelectableProbeElement {
+    state: SelectableProbeState,
+    size: Vector2F,
+}
+
+impl SelectableProbeElement {
+    fn new(state: SelectableProbeState) -> Self {
+        Self {
+            state,
+            size: vec2f(400.0, 120.0),
+        }
+    }
+}
+
+impl Element for SelectableProbeElement {
+    fn layout(
+        &mut self,
+        _constraint: SizeConstraint,
+        _ctx: &mut LayoutContext,
+        _app: &AppContext,
+    ) -> Vector2F {
+        self.size
+    }
+
+    fn after_layout(&mut self, _ctx: &mut AfterLayoutContext, _app: &AppContext) {}
+
+    fn paint(&mut self, _origin: Vector2F, _ctx: &mut PaintContext, _app: &AppContext) {}
+
+    fn size(&self) -> Option<Vector2F> {
+        Some(self.size)
+    }
+
+    fn origin(&self) -> Option<Point> {
+        Some(Point::new(0.0, 0.0, ZIndex::new(0)))
+    }
+
+    fn dispatch_event(
+        &mut self,
+        _event: &DispatchedEvent,
+        _ctx: &mut EventContext,
+        _app: &AppContext,
+    ) -> bool {
+        false
+    }
+
+    fn as_selectable_element(&self) -> Option<&dyn SelectableElement> {
+        Some(self)
+    }
+}
+
+impl SelectableElement for SelectableProbeElement {
+    fn get_selection(
+        &self,
+        selection_start: Vector2F,
+        selection_end: Vector2F,
+        is_rect: IsRect,
+    ) -> Option<Vec<SelectionFragment>> {
+        self.state
+            .get_selection_args
+            .borrow_mut()
+            .push((selection_start, selection_end, is_rect));
+        Some(vec![SelectionFragment {
+            text: "probe".to_string(),
+            origin: Point::new(0.0, 0.0, ZIndex::new(0)),
+        }])
+    }
+
+    fn expand_selection(
+        &self,
+        absolute_point: Vector2F,
+        direction: SelectionDirection,
+        unit: SelectionType,
+        _word_boundaries_policy: &WordBoundariesPolicy,
+    ) -> Option<Vector2F> {
+        self.state
+            .expand_selection_args
+            .borrow_mut()
+            .push((absolute_point, direction, unit));
+        Some(absolute_point + vec2f(5.0, 0.0))
+    }
+
+    fn is_point_semantically_before(
+        &self,
+        absolute_point: Vector2F,
+        absolute_point_other: Vector2F,
+    ) -> Option<bool> {
+        self.state
+            .semantic_order_args
+            .borrow_mut()
+            .push((absolute_point, absolute_point_other));
+        Some(absolute_point.x() < absolute_point_other.x())
+    }
+
+    fn smart_select(
+        &self,
+        absolute_point: Vector2F,
+        _smart_select_fn: crate::elements::SmartSelectFn,
+    ) -> Option<(Vector2F, Vector2F)> {
+        self.state
+            .smart_select_args
+            .borrow_mut()
+            .push(absolute_point);
+        Some((absolute_point, absolute_point + vec2f(12.0, 0.0)))
+    }
+
+    fn calculate_clickable_bounds(
+        &self,
+        current_selection: Option<Selection>,
+    ) -> Vec<pathfinder_geometry::rect::RectF> {
+        self.state
+            .clickable_bounds_args
+            .borrow_mut()
+            .push(current_selection);
+        Vec::new()
+    }
+}
+
+/// Regression test for subagent/collapsible output text being unselectable:
+/// `EventHandler` must forward the `SelectableElement` chain to its child so a
+/// `SelectableArea` can select content wrapped in an `EventHandler`. Before the
+/// fix, `EventHandler::as_selectable_element` returned `None`, severing the
+/// chain.
+#[test]
+fn event_handler_forwards_selectable_element_to_child() {
+    let probe = SelectableProbeState::default();
+    let event_handler = EventHandler::new(Box::new(SelectableProbeElement::new(probe.clone())))
+        .on_scroll_wheel(|_, _, _, _| DispatchEventResult::PropagateToParent);
+
+    let selectable = event_handler
+        .as_selectable_element()
+        .expect("EventHandler should expose its child as selectable");
+
+    let start = vec2f(10.0, 20.0);
+    let end = vec2f(120.0, 20.0);
+
+    let fragments = selectable
+        .get_selection(start, end, IsRect::False)
+        .expect("selection should be forwarded to the child");
+    assert_eq!(fragments[0].text, "probe");
+    assert_eq!(
+        probe.get_selection_args.borrow().as_slice(),
+        &[(start, end, IsRect::False)]
+    );
+
+    let expanded = selectable
+        .expand_selection(
+            start,
+            SelectionDirection::Forward,
+            SelectionType::Semantic,
+            &WordBoundariesPolicy::Default,
+        )
+        .expect("expand_selection should be forwarded to the child");
+    assert_eq!(expanded, start + vec2f(5.0, 0.0));
+
+    let smart = selectable
+        .smart_select(start, select_entire_probe_text)
+        .expect("smart_select should be forwarded to the child");
+    assert_eq!(smart, (start, start + vec2f(12.0, 0.0)));
+    assert_eq!(probe.smart_select_args.borrow().as_slice(), &[start]);
+}
+
+/// An `EventHandler` wrapping a non-selectable child must not pretend to have a
+/// selection.
+#[test]
+fn event_handler_returns_no_selection_for_non_selectable_child() {
+    let event_handler = EventHandler::new(Rect::new().finish());
+    let selectable = event_handler
+        .as_selectable_element()
+        .expect("EventHandler always exposes itself as selectable");
+    assert!(selectable
+        .get_selection(vec2f(0.0, 0.0), vec2f(10.0, 0.0), IsRect::False)
+        .is_none());
 }

@@ -1,14 +1,18 @@
 use std::cell::RefCell;
 
+use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 
 use super::{
     AfterLayoutContext, AppContext, DispatchEventResult, Element, Event, EventContext,
-    LayoutContext, PaintContext, Point, SizeConstraint, ZIndex,
+    LayoutContext, PaintContext, Point, SelectableElement, Selection, SelectionFragment,
+    SizeConstraint, ZIndex,
 };
 use crate::event::{DispatchedEvent, EventDiscriminants, KeyState, ModifiersState};
 use crate::keymap::Keystroke;
 use crate::platform::keyboard::KeyCode;
+use crate::text::word_boundaries::WordBoundariesPolicy;
+use crate::text::{IsRect, SelectionDirection, SelectionType};
 
 type Handler = Box<dyn FnMut(&mut EventContext, &AppContext, Vector2F) -> DispatchEventResult>;
 type KeyHandler = Box<dyn FnMut(&mut EventContext, &AppContext, &Keystroke) -> DispatchEventResult>;
@@ -363,6 +367,70 @@ impl Element for EventHandler {
 
     fn origin(&self) -> Option<Point> {
         self.child.origin()
+    }
+
+    fn as_selectable_element(&self) -> Option<&dyn SelectableElement> {
+        Some(self as &dyn SelectableElement)
+    }
+}
+
+impl SelectableElement for EventHandler {
+    fn get_selection(
+        &self,
+        selection_start: Vector2F,
+        selection_end: Vector2F,
+        is_rect: IsRect,
+    ) -> Option<Vec<SelectionFragment>> {
+        self.child
+            .as_selectable_element()
+            .and_then(|selectable_child| {
+                selectable_child.get_selection(selection_start, selection_end, is_rect)
+            })
+    }
+
+    fn expand_selection(
+        &self,
+        point: Vector2F,
+        direction: SelectionDirection,
+        unit: SelectionType,
+        word_boundaries_policy: &WordBoundariesPolicy,
+    ) -> Option<Vector2F> {
+        self.child
+            .as_selectable_element()
+            .and_then(|selectable_child| {
+                selectable_child.expand_selection(point, direction, unit, word_boundaries_policy)
+            })
+    }
+
+    fn is_point_semantically_before(
+        &self,
+        absolute_point: Vector2F,
+        absolute_point_other: Vector2F,
+    ) -> Option<bool> {
+        self.child
+            .as_selectable_element()
+            .and_then(|selectable_child| {
+                selectable_child.is_point_semantically_before(absolute_point, absolute_point_other)
+            })
+    }
+
+    fn smart_select(
+        &self,
+        absolute_point: Vector2F,
+        smart_select_fn: crate::elements::SmartSelectFn,
+    ) -> Option<(Vector2F, Vector2F)> {
+        self.child
+            .as_selectable_element()
+            .and_then(|selectable_child| {
+                selectable_child.smart_select(absolute_point, smart_select_fn)
+            })
+    }
+
+    fn calculate_clickable_bounds(&self, current_selection: Option<Selection>) -> Vec<RectF> {
+        self.child
+            .as_selectable_element()
+            .map(|selectable_child| selectable_child.calculate_clickable_bounds(current_selection))
+            .unwrap_or_default()
     }
 }
 
