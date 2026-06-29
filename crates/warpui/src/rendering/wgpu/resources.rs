@@ -499,6 +499,17 @@ fn is_intel_uhd_620_adapter_on_windows_with_vulkan_backend(
             || adapter_info.name.contains("Intel(R) HD Graphics 620"))
 }
 
+/// Returns true if this is an Intel UHD Graphics 770 integrated GPU on Windows, using either the
+/// DX12 or Vulkan backend.
+///
+/// TODO link public reports of bugs with this driver.
+fn is_intel_uhd_770_adapter_on_windows(adapter_info: &wgpu::AdapterInfo) -> bool {
+    cfg!(windows)
+        && matches!(adapter_info.backend, Backend::Dx12 | Backend::Vulkan)
+        && adapter_info.device_type == DeviceType::IntegratedGpu
+        && adapter_info.name.contains("Intel(R) UHD Graphics 770")
+}
+
 /// Returns whether the given adapter is known to have a rendering offset bug on Windows.
 ///
 /// Certain Intel integrated GPU drivers using the GL backend render the scene at an offset from
@@ -736,6 +747,11 @@ fn adapter_stability_sort_func(
 
     if is_intel_uhd_620_adapter_on_windows_with_vulkan_backend(&adapter_info) {
         log::warn!("Deprioritizing Vulkan-backed Intel UHD 620 adapter");
+        return AdapterSupport::SupportedWithIssues;
+    }
+
+    if is_intel_uhd_770_adapter_on_windows(&adapter_info) {
+        log::warn!("Deprioritizing Intel UHD 770 integrated GPU on Windows");
         return AdapterSupport::SupportedWithIssues;
     }
 
