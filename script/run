@@ -15,10 +15,11 @@ set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 cd "${REPO_ROOT}"
+source "$REPO_ROOT/script/cargo_bundle_features.sh"
 
 OS_TYPE="$(uname -s)"
 
-FEATURES="gui"
+EXTRA_FEATURES=""
 INSTALL_COMMON_SKILLS=1
 FORCE_COMMON_SKILLS=0
 COMMON_SKILLS_TARGET="${WARP_COMMON_SKILLS_INSTALL_TARGET:-}"
@@ -51,7 +52,11 @@ while (( "$#" )); do
       ;;
     --features)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
-        FEATURES="$FEATURES,$2"
+        if [[ -z "$EXTRA_FEATURES" ]]; then
+          EXTRA_FEATURES="$2"
+        else
+          EXTRA_FEATURES="$EXTRA_FEATURES,$2"
+        fi
         shift 2
       else
         echo "Error: Argument for $1 is missing" >&2
@@ -121,6 +126,13 @@ if [[ "$INSTALL_COMMON_SKILLS" -eq 1 ]]; then
     fi
   fi
 fi
+
+CARGO_FEATURE_PROFILE="run.${WARP_CHANNEL}"
+FEATURES="$(resolve_cargo_bundle_features "$REPO_ROOT" "$CARGO_FEATURE_PROFILE")"
+if [[ -n "$EXTRA_FEATURES" ]]; then
+  FEATURES="$FEATURES,$EXTRA_FEATURES"
+fi
+echo "Using Cargo build profile $CARGO_FEATURE_PROFILE with features: $FEATURES"
 
 # These cargo features were removed and replaced by environment variables read
 # by warp-channel-config. Intercept them here so that existing --features
