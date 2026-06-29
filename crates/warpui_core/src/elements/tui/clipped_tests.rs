@@ -1,13 +1,11 @@
-use std::collections::HashMap;
-
 use super::TuiClipped;
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiRect, TuiSize, TuiText,
 };
-use crate::{App, AppContext};
+use crate::{App, AppContext, EntityIdMap};
 
 fn render_to_lines(element: &mut dyn TuiElement, size: TuiSize) -> Vec<String> {
-    let mut rendered_views = HashMap::new();
+    let mut rendered_views = EntityIdMap::default();
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
     };
@@ -33,7 +31,7 @@ fn layout_reports_the_visible_size_after_the_offset() {
         app.read(|app_ctx| {
             let mut clipped =
                 TuiClipped::new(TuiText::new("a\nb\nc").truncate()).with_vertical_offset(1);
-            let mut rendered_views = HashMap::new();
+            let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
             };
@@ -69,7 +67,7 @@ impl TuiElement for CursorElement {
 #[test]
 fn cursor_position_is_shifted_into_the_visible_window() {
     let clipped = TuiClipped::new(CursorElement { cursor: (0, 2) }).with_vertical_offset(1);
-    let mut rendered_views = HashMap::new();
+    let mut rendered_views = EntityIdMap::default();
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
     };
@@ -83,7 +81,7 @@ fn cursor_position_is_shifted_into_the_visible_window() {
 #[test]
 fn cursor_position_above_the_visible_window_is_hidden() {
     let clipped = TuiClipped::new(CursorElement { cursor: (0, 0) }).with_vertical_offset(1);
-    let mut rendered_views = HashMap::new();
+    let mut rendered_views = EntityIdMap::default();
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
     };

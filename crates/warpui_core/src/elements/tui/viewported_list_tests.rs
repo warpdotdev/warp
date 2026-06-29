@@ -1,5 +1,4 @@
 use std::cell::{Cell, Ref, RefCell};
-use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -14,7 +13,7 @@ use crate::elements::tui::{
 };
 use crate::event::ModifiersState;
 use crate::geometry::vector::Vector2F;
-use crate::{App, AppContext, EntityId, Event};
+use crate::{App, AppContext, EntityId, EntityIdMap, Event};
 
 #[derive(Clone)]
 struct FakeItem {
@@ -179,7 +178,7 @@ where
 
 fn render_viewport(app: &App, viewport: &mut impl TuiElement, size: TuiSize) -> Vec<String> {
     app.read(|app_ctx| {
-        let mut rendered_views = HashMap::new();
+        let mut rendered_views = EntityIdMap::default();
         let mut ctx = TuiLayoutContext {
             rendered_views: &mut rendered_views,
         };
@@ -206,7 +205,7 @@ fn wheel_with_notify_count(
     delta_y: f32,
 ) -> (bool, usize) {
     app.read(|app_ctx| {
-        let mut rendered_views = HashMap::new();
+        let mut rendered_views = EntityIdMap::default();
         let mut ctx = TuiLayoutContext {
             rendered_views: &mut rendered_views,
         };
