@@ -520,6 +520,14 @@ pub struct TerminalModel {
     /// bootstrap init scripts. Used to validate DCS hook integrity: hooks
     /// carrying an unrecognized session_id are rejected.
     registered_session_ids: HashSet<SessionId>,
+
+    /// Held while a foreground command is executing in this terminal. Acquired in
+    /// `start_command_execution` and dropped in `command_finished`, which keeps the
+    /// system awake for the lifetime of every command without needing a long-running
+    /// threshold (short commands acquire and release within milliseconds and never
+    /// block sleep in practice). Mirrors the Agent Mode pattern in
+    /// `warp_multi_agent_client`. See issue #9056.
+    running_command_sleep_guard: Option<prevent_sleep::Guard>,
 }
 
 #[derive(Clone, Debug)]
@@ -1089,6 +1097,7 @@ impl TerminalModel {
             // Start mid-way through the u32 range to avoid collisions
             next_kitty_image_id: 2147483647,
             registered_session_ids: HashSet::new(),
+            running_command_sleep_guard: None,
         }
     }
 
@@ -1638,6 +1647,10 @@ impl TerminalModel {
     /// the user's behalf, we consider the active block started.
     pub fn start_command_execution(&mut self) {
         self.block_list.start_active_block();
+        // Keep the system awake for the duration of the command. Replaces any
+        // previous guard (start without a matching finish would otherwise stack).
+        self.running_command_sleep_guard =
+            Some(prevent_sleep::prevent_sleep("Terminal command in-progress"));
     }
 
     pub fn start_command_execution_from_env_var_collection(
@@ -2694,6 +2707,12 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn command_finished(&mut self, data: CommandFinishedValue) {
+        // Release the sleep guard acquired in `start_command_execution`. Done
+        // before the rest of the handler so the system is free to idle as soon
+        // as the command is observed finished, even if downstream work below
+        // takes a moment.
+        self.running_command_sleep_guard = None;
+
         // If we ssh from a doesn't-understand-bracketed-paste shell into one
         // that enables it, then get disconnected, we'll be stuck in a state
         // of bracketed paste being enabled, but the local shell doesn't know

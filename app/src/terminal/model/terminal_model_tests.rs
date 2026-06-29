@@ -1194,3 +1194,50 @@ fn cloud_mode_setup_phase_ended_does_not_emit_when_not_sharing() {
     let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert!(events.is_empty());
 }
+
+// Regression coverage for issue #9056: the terminal must keep the system awake while
+// a foreground command is running, and release the assertion as soon as the shell
+// reports the command finished.
+#[test]
+fn prevent_sleep_guard_is_acquired_on_start_and_released_on_finish() {
+    let mut terminal: TerminalModel = TerminalModel::mock(None, None);
+    // `mock`/`new_for_test` calls `command_finished` to land in a quiescent state,
+    // so the guard should be clear before we begin.
+    assert!(terminal.running_command_sleep_guard.is_none());
+
+    terminal.start_command_execution();
+    assert!(
+        terminal.running_command_sleep_guard.is_some(),
+        "start_command_execution must take a sleep-prevention assertion"
+    );
+
+    terminal.command_finished(CommandFinishedValue {
+        exit_code: ExitCode::from(0),
+        next_block_id: BlockId::new(),
+        session_id: None,
+    });
+    assert!(
+        terminal.running_command_sleep_guard.is_none(),
+        "command_finished must release the sleep-prevention assertion"
+    );
+}
+
+#[test]
+fn prevent_sleep_guard_is_reset_when_start_called_twice() {
+    // Defensive: if the shell ever signals start without an intervening finish, the
+    // previous guard is replaced rather than leaked. Drop runs on the replaced value.
+    let mut terminal: TerminalModel = TerminalModel::mock(None, None);
+
+    terminal.start_command_execution();
+    assert!(terminal.running_command_sleep_guard.is_some());
+
+    terminal.start_command_execution();
+    assert!(terminal.running_command_sleep_guard.is_some());
+
+    terminal.command_finished(CommandFinishedValue {
+        exit_code: ExitCode::from(0),
+        next_block_id: BlockId::new(),
+        session_id: None,
+    });
+    assert!(terminal.running_command_sleep_guard.is_none());
+}
