@@ -43,9 +43,13 @@
   (task_list_marker_unchecked)
 ] @function
 
-; Block quotes and thematic breaks.
+; Block quotes and thematic breaks. The grammar only tags the first `>` of a quote as a
+; block_quote_marker; every continuation line's `>` is a block_continuation, so capture both to
+; color the marker on every line. (Non-quote block_continuations are whitespace, so coloring
+; them has no visible effect.)
 [
   (block_quote_marker)
+  (block_continuation)
   (thematic_break)
 ] @comment
 
