@@ -84,7 +84,7 @@ impl AmbientAgentEntryBlock {
 impl AmbientAgentEntryBlock {
     fn handle_ambient_agent_view_model_event(
         &mut self,
-            _: ModelHandle<AmbientAgentViewModel>,
+        _: ModelHandle<AmbientAgentViewModel>,
         event: &AmbientAgentViewModelEvent,
         ctx: &mut ViewContext<Self>,
     ) {

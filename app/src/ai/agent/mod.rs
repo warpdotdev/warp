@@ -101,7 +101,7 @@ pub enum CancellationReason {
 
     /// The long-running command completed while the agent was still streaming a response started via inline agent view.
     /// This should be treated as a successful completion, not a cancellation.
-    /// Note this is only used for inline agent view (user starting an agent to monitor an already running command), 
+    /// Note this is only used for inline agent view (user starting an agent to monitor an already running command),
     /// not when CLI subagent monitors a requested command.
     CommandFinishedDuringInlineAgentView,
 
@@ -132,10 +132,12 @@ pub enum CancellationOutcome {
     Succeeded,
     /// Finalize the conversation as a user cancellation (`Cancelled`).
     Cancelled,
-    /// The conversation is finalized as a terminal `Error` by a dedicated path
-    /// (e.g. shell-exit handling). The cancellation machinery must only avoid
-    /// stamping `Cancelled`; it must not otherwise change the status.
-    Errored,
+    /// Terminal, but a dedicated path (not the cancellation machinery) writes the
+    /// status — the cancellation is only a stop signal and must not stamp a status.
+    /// Currently used for shell exit, which is finalized as `Error` by
+    /// `fail_conversation_due_to_shell_exit`. Unlike `KeepInProgress`, the
+    /// conversation is ending; only the status write is suppressed.
+    FinalizedExternally,
 }
 
 impl Display for CancellationReason {
@@ -201,7 +203,7 @@ impl CancellationReason {
             | CancellationReason::Reverted => CancellationOutcome::Succeeded,
             // The shell died under the agent; a dedicated path finalizes this as a
             // terminal `Error`, so the cancellation machinery must not stamp a status.
-            CancellationReason::AgentExitedShell => CancellationOutcome::Errored,
+            CancellationReason::AgentExitedShell => CancellationOutcome::FinalizedExternally,
             CancellationReason::ManuallyCancelled
             | CancellationReason::AutomaticCloudHandoff
             | CancellationReason::UserCommandExecuted

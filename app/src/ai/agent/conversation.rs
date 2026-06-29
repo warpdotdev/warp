@@ -2186,7 +2186,7 @@ impl AIConversation {
             CancellationOutcome::Cancelled => {
                 self.update_status(ConversationStatus::Cancelled, terminal_surface_id, ctx);
             }
-            CancellationOutcome::KeepInProgress | CancellationOutcome::Errored => {}
+            CancellationOutcome::KeepInProgress | CancellationOutcome::FinalizedExternally => {}
         }
         Ok(())
     }

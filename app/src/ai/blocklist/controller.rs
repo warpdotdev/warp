@@ -443,12 +443,14 @@ impl BlocklistAIController {
             else {
                 return;
             };
-            // The single source of truth for how this cancellation finalizes the
-            // conversation. `Errored` (e.g. shell exit) is finalized as `Error` by a
-            // dedicated path, so we must not trigger a follow-up or stamp a status here.
+            // `FinalizedExternally` (e.g. shell exit) means the conversation status and message
+            // is set elsewhere through a dedicated path, so we must not trigger a follow-up or update conversation status here.
             let cancellation_outcome =
                 cancellation_reason.map(|reason| reason.conversation_outcome());
-            if matches!(cancellation_outcome, Some(CancellationOutcome::Errored)) {
+            if matches!(
+                cancellation_outcome,
+                Some(CancellationOutcome::FinalizedExternally)
+            ) {
                 return;
             }
             let action_model = me.action_model.as_ref(ctx);
@@ -535,10 +537,6 @@ impl BlocklistAIController {
                         || treat_as_success
                     {
                         ConversationStatus::Success
-                    } else if matches!(
-                        cancellation_outcome,
-                        Some(CancellationOutcome::Errored)) {
-                        ConversationStatus::Error
                     } else {
                         // This is an imperfect heuristic that practically speaking should have no effect.
                         //
