@@ -244,7 +244,10 @@ impl EventLoop {
                 }
             };
             match message {
-                api::Message::SpawnShellRequest { mut options } => {
+                api::Message::SpawnShellRequest {
+                    request_id,
+                    mut options,
+                } => {
                     // No need to close all open file descriptors when spawning a pty from
                     // the terminal server, as it spawns ptys cleanly.
                     options.close_fds = false;
@@ -268,6 +271,7 @@ impl EventLoop {
                     if let Err(err) = protocol::send_message(
                         RECV_SOCKET_FILENO,
                         api::Message::SpawnShellResponse {
+                            request_id,
                             spawn_result: result.into(),
                         },
                         leader_fd,
@@ -285,7 +289,7 @@ impl EventLoop {
                         }
                     }
                 }
-                api::Message::KillChildRequest { pid } => {
+                api::Message::KillChildRequest { request_id, pid } => {
                     let result = match self.children.remove(&pid) {
                         Some(mut child) => child.kill().and_then(|_| child.wait()),
                         None => {
@@ -296,7 +300,10 @@ impl EventLoop {
                     let error_msg = result.err().map(|err| err.to_string());
                     if let Err(err) = protocol::send_message(
                         RECV_SOCKET_FILENO,
-                        api::Message::KillChildResponse { error_msg },
+                        api::Message::KillChildResponse {
+                            request_id,
+                            error_msg,
+                        },
                         Option::<RawFd>::None,
                     ) {
                         log::error!("Encountered unexpected error sending message to host process: {err:#}.");

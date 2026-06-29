@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::terminal::local_tty::{PtyOptions, PtySpawnResult};
 
+pub(super) type RequestId = u64;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) enum Result<T> {
     Ok(T),
@@ -31,19 +33,26 @@ impl<T> From<anyhow::Result<T>> for Result<T> {
 pub(super) enum Message {
     /// A message sent from client -> server requesting that the server spawns
     /// a new pty using the provided options.
-    SpawnShellRequest { options: PtyOptions },
+    SpawnShellRequest {
+        request_id: RequestId,
+        options: PtyOptions,
+    },
     /// The response for a `SpawnShellRequest`, with the result of the spawn
     /// operation.  Should only be sent from server -> client.
     SpawnShellResponse {
+        request_id: RequestId,
         spawn_result: Result<PtySpawnResult>,
     },
     /// A message sent from client -> server requesting that the server kill the
     /// child process with the provided process ID.
-    KillChildRequest { pid: u32 },
+    KillChildRequest { request_id: RequestId, pid: u32 },
     /// The response for a `KillChildRequest`, returning the string message from
     /// an error that occurred during the operation, if any.  Should only be
     /// sent from server -> client.
-    KillChildResponse { error_msg: Option<String> },
+    KillChildResponse {
+        request_id: RequestId,
+        error_msg: Option<String>,
+    },
     /// A message sent from server -> client requesting that a log message be
     /// written to the host application's log.  This has no matching response
     /// message - these requests are fire-and-forget from the server to the
