@@ -9,10 +9,10 @@
 //! [`TuiScrollableElement`] without changing this wrapper.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
 };
-use crate::{AppContext, Event};
+use crate::AppContext;
 
 /// Logical rows scrolled per wheel notch.
 const WHEEL_STEP: isize = 2;
@@ -33,16 +33,16 @@ pub trait TuiScrollableElement: TuiElement {
 /// area and translating them into scroll requests. Layout, render, cursor, and
 /// inner event dispatch are transparent — only the wheel is intercepted, and
 /// only when the child did not already handle the event.
-pub struct TuiScrollable<E> {
-    child: E,
+pub struct TuiScrollable {
+    child: Box<dyn TuiScrollableElement>,
     propagate_mousewheel_if_not_handled: bool,
 }
 
-impl<E: TuiScrollableElement> TuiScrollable<E> {
+impl TuiScrollable {
     /// Wraps `child` so wheel events over its area scroll it.
-    pub fn new(child: E) -> Self {
+    pub fn new(child: impl TuiScrollableElement + 'static) -> Self {
         Self {
-            child,
+            child: Box::new(child),
             propagate_mousewheel_if_not_handled: false,
         }
     }
@@ -54,7 +54,7 @@ impl<E: TuiScrollableElement> TuiScrollable<E> {
     }
 }
 
-impl<E: TuiScrollableElement> TuiElement for TuiScrollable<E> {
+impl TuiElement for TuiScrollable {
     fn layout(
         &mut self,
         constraint: TuiConstraint,
@@ -78,7 +78,7 @@ impl<E: TuiScrollableElement> TuiElement for TuiScrollable<E> {
 
     fn dispatch_event(
         &mut self,
-        event: &Event,
+        event: &TuiEvent,
         area: TuiRect,
         event_ctx: &mut TuiEventContext,
         ctx: &mut TuiLayoutContext,
@@ -88,13 +88,12 @@ impl<E: TuiScrollableElement> TuiElement for TuiScrollable<E> {
             return true;
         }
         match event {
-            Event::ScrollWheel {
+            TuiEvent::ScrollWheel {
                 position, delta, ..
             } if area.contains_point(*position) => {
-                let scrolled = self.child.scroll_by_rows(
-                    -((delta.y() as isize) * WHEEL_STEP),
-                    usize::from(area.height),
-                );
+                let scrolled = self
+                    .child
+                    .scroll_by_rows(-(delta.1 * WHEEL_STEP), usize::from(area.height));
                 if scrolled {
                     event_ctx.notify();
                 }

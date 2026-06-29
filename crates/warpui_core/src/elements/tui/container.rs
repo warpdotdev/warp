@@ -20,10 +20,10 @@
 use ratatui::style::Color;
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPresentationContext, TuiRect, TuiRectExt, TuiSize, TuiStyle,
 };
-use crate::{AppContext, Event};
+use crate::AppContext;
 
 pub struct TuiContainer {
     child: Box<dyn TuiElement>,
@@ -134,7 +134,7 @@ impl TuiElement for TuiContainer {
 
     fn dispatch_event(
         &mut self,
-        event: &Event,
+        event: &TuiEvent,
         area: TuiRect,
         event_ctx: &mut TuiEventContext,
         ctx: &mut TuiLayoutContext,

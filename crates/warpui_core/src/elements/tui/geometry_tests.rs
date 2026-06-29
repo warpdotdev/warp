@@ -1,5 +1,4 @@
 use super::*;
-use crate::geometry::vector::Vector2F;
 
 #[test]
 fn constraint_clamps_each_axis_independently() {
@@ -62,10 +61,10 @@ fn right_and_bottom_saturate() {
 fn contains_point_uses_half_open_cell_bounds() {
     let rect = TuiRect::new(2, 3, 4, 5);
 
-    assert!(rect.contains_point(Vector2F::new(2.0, 3.0)));
-    assert!(rect.contains_point(Vector2F::new(5.999, 7.999)));
-    assert!(!rect.contains_point(Vector2F::new(6.0, 7.0)));
-    assert!(!rect.contains_point(Vector2F::new(5.0, 8.0)));
-    assert!(!rect.contains_point(Vector2F::new(1.999, 3.0)));
-    assert!(!rect.contains_point(Vector2F::new(2.0, 2.999)));
+    assert!(rect.contains_point((2, 3)));
+    assert!(rect.contains_point((5, 7)));
+    assert!(!rect.contains_point((6, 7)));
+    assert!(!rect.contains_point((5, 8)));
+    assert!(!rect.contains_point((1, 3)));
+    assert!(!rect.contains_point((2, 2)));
 }

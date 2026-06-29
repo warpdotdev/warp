@@ -3,13 +3,12 @@ use std::rc::Rc;
 
 use super::TuiClipped;
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext, TuiRect,
-    TuiSize, TuiText,
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiRect, TuiSize, TuiText,
 };
 use crate::event::{KeyEventDetails, ModifiersState};
-use crate::geometry::vector::Vector2F;
 use crate::keymap::Keystroke;
-use crate::{App, AppContext, EntityIdMap, Event};
+use crate::{App, AppContext, EntityIdMap};
 
 fn render_to_lines(element: &mut dyn TuiElement, size: TuiSize) -> Vec<String> {
     let mut rendered_views = EntityIdMap::default();
@@ -24,7 +23,7 @@ fn render_to_lines(element: &mut dyn TuiElement, size: TuiSize) -> Vec<String> {
 
 #[test]
 fn renders_from_the_requested_logical_row() {
-    let mut clipped = TuiClipped::new(TuiText::new("a\nb\nc").truncate()).with_vertical_offset(1);
+    let mut clipped = TuiClipped::new(TuiText::new("a\nb\nc").truncate()).with_skip_top_rows(1);
 
     assert_eq!(
         render_to_lines(&mut clipped, TuiSize::new(3, 2)),
@@ -33,11 +32,11 @@ fn renders_from_the_requested_logical_row() {
 }
 
 #[test]
-fn layout_preserves_child_width_and_reports_height_after_the_offset() {
+fn layout_preserves_child_width_and_reports_height_after_skipping_top_rows() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
             let mut clipped =
-                TuiClipped::new(TuiText::new("a\nb\nc").truncate()).with_vertical_offset(1);
+                TuiClipped::new(TuiText::new("a\nb\nc").truncate()).with_skip_top_rows(1);
             let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
@@ -73,7 +72,7 @@ impl TuiElement for CursorElement {
 
 #[test]
 fn cursor_position_is_shifted_into_the_visible_window() {
-    let clipped = TuiClipped::new(CursorElement { cursor: (0, 2) }).with_vertical_offset(1);
+    let clipped = TuiClipped::new(CursorElement { cursor: (0, 2) }).with_skip_top_rows(1);
     let mut rendered_views = EntityIdMap::default();
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -87,7 +86,7 @@ fn cursor_position_is_shifted_into_the_visible_window() {
 
 #[test]
 fn cursor_position_above_the_visible_window_is_hidden() {
-    let clipped = TuiClipped::new(CursorElement { cursor: (0, 0) }).with_vertical_offset(1);
+    let clipped = TuiClipped::new(CursorElement { cursor: (0, 0) }).with_skip_top_rows(1);
     let mut rendered_views = EntityIdMap::default();
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -113,7 +112,7 @@ impl TuiElement for DispatchRecorder {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        // Claim 3 rows so an offset of 1 leaves a 2-row visible window.
+        // Claim 3 rows so skipping 1 top row leaves a 2-row visible window.
         constraint.clamp(TuiSize::new(1, 3))
     }
 
@@ -121,7 +120,7 @@ impl TuiElement for DispatchRecorder {
 
     fn dispatch_event(
         &mut self,
-        _event: &Event,
+        _event: &TuiEvent,
         area: TuiRect,
         _event_ctx: &mut TuiEventContext,
         _ctx: &mut TuiLayoutContext,
@@ -132,9 +131,9 @@ impl TuiElement for DispatchRecorder {
     }
 }
 
-fn left_mouse_down(x: f32, y: f32) -> Event {
-    Event::LeftMouseDown {
-        position: Vector2F::new(x, y),
+fn left_mouse_down(x: u16, y: u16) -> TuiEvent {
+    TuiEvent::LeftMouseDown {
+        position: (x, y),
         modifiers: ModifiersState::default(),
         click_count: 1,
         is_first_mouse: false,
@@ -150,7 +149,7 @@ fn dispatch_translates_mouse_event_to_full_logical_area() {
                 seen_area: seen_area.clone(),
                 handle: true,
             })
-            .with_vertical_offset(1);
+            .with_skip_top_rows(1);
             let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
@@ -158,7 +157,7 @@ fn dispatch_translates_mouse_event_to_full_logical_area() {
             let mut event_ctx = TuiEventContext::default();
             // Visible slot (0, 1, 3, 2); the child's logical row 1 maps to y=1.
             let area = TuiRect::new(0, 1, 3, 2);
-            let event = left_mouse_down(0.0, 1.0);
+            let event = left_mouse_down(0, 1);
             let handled = clipped.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx);
             assert!(handled);
             // Child sees its full logical area: y = 1 - 1 = 0, height = 2 + 1 = 3.
@@ -176,7 +175,7 @@ fn dispatch_filters_mouse_events_outside_visible_window() {
                 seen_area: seen_area.clone(),
                 handle: true,
             })
-            .with_vertical_offset(1);
+            .with_skip_top_rows(1);
             let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
@@ -184,7 +183,7 @@ fn dispatch_filters_mouse_events_outside_visible_window() {
             let mut event_ctx = TuiEventContext::default();
             let area = TuiRect::new(0, 1, 3, 2);
             // Click at y=0, above the visible window [1, 3).
-            let event = left_mouse_down(0.0, 0.0);
+            let event = left_mouse_down(0, 0);
             let handled = clipped.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx);
             assert!(!handled);
             assert!(
@@ -204,7 +203,7 @@ fn dispatch_forwards_non_positional_events_without_filtering() {
                 seen_area: seen_area.clone(),
                 handle: true,
             })
-            .with_vertical_offset(1);
+            .with_skip_top_rows(1);
             let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
@@ -213,7 +212,7 @@ fn dispatch_forwards_non_positional_events_without_filtering() {
             let area = TuiRect::new(0, 1, 3, 2);
             // A key event carries no position, so it bypasses the window filter
             // and still reaches the child with its full logical area.
-            let event = Event::KeyDown {
+            let event = TuiEvent::KeyDown {
                 keystroke: Keystroke {
                     key: "a".to_owned(),
                     ..Default::default()

@@ -6,12 +6,11 @@ use super::{
     TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
 };
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext, TuiRect,
-    TuiScrollable, TuiSize, TuiText,
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiRect, TuiScrollable, TuiSize, TuiText,
 };
 use crate::event::ModifiersState;
-use crate::geometry::vector::Vector2F;
-use crate::{App, AppContext, EntityId, EntityIdMap, Event};
+use crate::{App, AppContext, EntityId, EntityIdMap};
 
 #[derive(Clone)]
 struct FakeItem {
@@ -108,14 +107,14 @@ fn wheel_with_notify_count(
         let area = TuiRect::new(0, 0, size.width, size.height);
         let mut event_ctx = TuiEventContext::default();
         event_ctx.set_origin_view(Some(EntityId::new()));
-        let event = Event::ScrollWheel {
-            position: Vector2F::new(0.0, 0.0),
-            delta: Vector2F::new(0.0, delta_y),
+        let event = TuiEvent::ScrollWheel {
+            position: (0, 0),
+            delta: (0, delta_y as isize),
             precise: false,
             modifiers: ModifiersState::default(),
         };
         let handled = viewport.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx);
-        (handled, event_ctx.take_notified().len())
+        (handled, event_ctx.take_app_updates().len())
     })
 }
 
@@ -391,7 +390,7 @@ impl TuiElement for DispatchRecorder {
 
     fn dispatch_event(
         &mut self,
-        _event: &Event,
+        _event: &TuiEvent,
         _area: TuiRect,
         _event_ctx: &mut TuiEventContext,
         _ctx: &mut TuiLayoutContext,
@@ -421,8 +420,8 @@ fn dispatch_filters_mouse_events_outside_visible_window() {
             let mut event_ctx = TuiEventContext::default();
             viewport.layout(TuiConstraint::tight(TuiSize::new(3, 2)), &mut ctx, app_ctx);
 
-            let event = Event::LeftMouseDown {
-                position: Vector2F::new(0.0, 2.0),
+            let event = TuiEvent::LeftMouseDown {
+                position: (0, 2),
                 modifiers: ModifiersState::default(),
                 click_count: 1,
                 is_first_mouse: false,

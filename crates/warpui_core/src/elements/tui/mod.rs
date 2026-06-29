@@ -21,7 +21,7 @@
 //!   [`add_child`](TuiParentElement::add_child) /
 //!   [`add_children`](TuiParentElement::add_children).
 
-use crate::{AppContext, EntityId, EntityIdMap, Event};
+use crate::{AppContext, EntityId, EntityIdMap};
 
 mod buffer;
 mod child_view;
@@ -43,9 +43,11 @@ pub use clipped::TuiClipped;
 pub use column::TuiColumn;
 pub use constrained_box::TuiConstrainedBox;
 pub use container::TuiContainer;
-pub use event::{TuiDispatchEventResult, TuiEventContext, TuiEventDispatchResult};
+pub use event::{
+    TuiDispatchEventResult, TuiEvent, TuiEventContext, TuiEventDispatchResult, TuiScrollDelta,
+};
 pub use event_handler::TuiEventHandler;
-pub use geometry::{TuiConstraint, TuiRect, TuiRectExt, TuiSize};
+pub use geometry::{TuiConstraint, TuiPoint, TuiRect, TuiRectExt, TuiSize};
 pub use parent::TuiParentElement;
 pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use text::TuiText;
@@ -137,7 +139,7 @@ pub trait TuiElement {
     fn present(&mut self, _ctx: &mut TuiPresentationContext<'_>) {}
 
     /// Offers `event` to this element within `area`, returning `true` if it was
-    /// handled. `event_ctx` collects view notifications and typed actions;
+    /// handled. `event_ctx` collects app updates and typed actions;
     /// `ctx` carries the presenter's pre-rendered view map so [`TuiChildView`]
     /// can look up and dispatch into its child; `app` provides read access to
     /// the shared core during dispatch.
@@ -145,7 +147,7 @@ pub trait TuiElement {
     /// [`TuiChildView`]: crate::elements::tui::TuiChildView
     fn dispatch_event(
         &mut self,
-        _event: &Event,
+        _event: &TuiEvent,
         _area: TuiRect,
         _event_ctx: &mut TuiEventContext,
         _ctx: &mut TuiLayoutContext,

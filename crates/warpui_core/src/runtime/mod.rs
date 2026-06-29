@@ -12,7 +12,7 @@
 //! alternate screen (restored on drop) and subscribes to the window's
 //! invalidation signal; [`run_until`](TuiRuntime::run_until) then repeatedly
 //! redraws when dirty and polls crossterm for input, converting each event with
-//! [`crossterm_event_to_warp_event`] and dispatching it — first through the
+//! [`crossterm_event_to_tui_event`] and dispatching it — first through the
 //! shared keymap (the focused view's responder chain, exactly like the GUI
 //! window event path), then through the rendered element tree.
 //!
@@ -34,17 +34,17 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 
-use crate::elements::tui::{TuiEventContext, TuiLayoutContext, TuiRect, TuiSize};
+use crate::elements::tui::{TuiEvent, TuiEventContext, TuiLayoutContext, TuiRect, TuiSize};
 use crate::platform::TerminationMode;
 use crate::presenter::tui::TuiPresenter;
 use crate::r#async::block_on;
 use crate::r#async::executor::ForegroundTask;
-use crate::{App, AppContext, Event, TuiView, ViewHandle, WindowId};
+use crate::{App, AppContext, TuiView, ViewHandle, WindowId};
 
 mod event_conversion;
 mod renderer;
 
-pub use event_conversion::crossterm_event_to_warp_event;
+pub use event_conversion::crossterm_event_to_tui_event;
 pub use renderer::TuiFrameRenderer;
 
 /// The host terminal the runtime draws to and reads input from. Abstracted so
@@ -107,17 +107,12 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
     /// whether it was handled. Uses the last rendered element tree cached by the
     /// presenter (the same tree that was painted), with a `TuiLayoutContext` so
     /// `TuiChildView` can resolve its child from `rendered_views`.
-    fn dispatch_event(&mut self, ctx: &mut AppContext, event: &Event) -> bool {
+    fn dispatch_event(&mut self, ctx: &mut AppContext, event: &TuiEvent) -> bool {
         // Keymap pass (GUI parity): offer a keystroke to the focused view's
         // responder chain first, exactly like the GUI window event path.
-        if let Event::KeyDown {
-            keystroke,
-            is_composing,
-            ..
-        } = event
-        {
+        if let Some((keystroke, is_composing)) = event.key_down() {
             let responder_chain = ctx.get_responder_chain(self.window_id);
-            match ctx.dispatch_keystroke(self.window_id, &responder_chain, keystroke, *is_composing)
+            match ctx.dispatch_keystroke(self.window_id, &responder_chain, keystroke, is_composing)
             {
                 Ok(true) => return true,
                 Ok(false) => {}
@@ -140,9 +135,9 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         };
         let handled = element.dispatch_event(event, area, &mut event_ctx, &mut layout_ctx, ctx);
 
-        let notified = event_ctx.take_notified();
-        if !notified.is_empty() {
-            ctx.notify_tui_event_views(self.window_id, notified);
+        let app_updates = event_ctx.take_app_updates();
+        for view_id in app_updates {
+            ctx.notify_view_observers(self.window_id, view_id);
         }
 
         for action in event_ctx.take_typed_actions().into_iter().rev() {
@@ -263,9 +258,9 @@ where
         match event {
             CrosstermEvent::Resize(_, _) => self.dirty.set(true),
             event => {
-                if let Some(warp_event) = crossterm_event_to_warp_event(event) {
+                if let Some(tui_event) = crossterm_event_to_tui_event(event) {
                     let screen = &mut self.screen;
-                    let handled = app.update(|ctx| screen.dispatch_event(ctx, &warp_event));
+                    let handled = app.update(|ctx| screen.dispatch_event(ctx, &tui_event));
                     if handled {
                         self.dirty.set(true);
                     }
@@ -447,8 +442,8 @@ pub fn spawn_tui_driver<T: TuiView>(
                 match event {
                     CrosstermEvent::Resize(_, _) => ctx.invalidate_all_views(),
                     event => {
-                        if let Some(warp_event) = crossterm_event_to_warp_event(event) {
-                            screen.borrow_mut().dispatch_event(ctx, &warp_event);
+                        if let Some(tui_event) = crossterm_event_to_tui_event(event) {
+                            screen.borrow_mut().dispatch_event(ctx, &tui_event);
                         }
                     }
                 }

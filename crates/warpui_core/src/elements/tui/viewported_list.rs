@@ -8,10 +8,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiRectExt, TuiScrollableElement, TuiSize,
+    TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
+    TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSize,
 };
-use crate::{AppContext, Event};
+use crate::AppContext;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TuiViewportPosition {
@@ -82,10 +82,9 @@ pub trait TuiViewportedElement {
 }
 
 struct VisibleElement {
-    vertical_offset: u16,
     viewport_y: u16,
     height: u16,
-    element: Box<dyn TuiElement>,
+    element: TuiClipped,
 }
 
 /// A variable-height viewport that delegates content slicing to its source.
@@ -201,13 +200,12 @@ where
             }
 
             let viewport_y = visible_top.saturating_sub(scroll_top);
-            let vertical_offset = visible_top.saturating_sub(item_top);
+            let skip_top_rows = visible_top.saturating_sub(item_top);
             let height = visible_bottom.saturating_sub(visible_top);
             let viewport_y = viewport_y.min(usize::from(u16::MAX)) as u16;
-            let vertical_offset = vertical_offset.min(usize::from(u16::MAX)) as u16;
             let height = height.min(usize::from(u16::MAX)) as u16;
+            let element = TuiClipped::from_boxed(element).with_skip_top_rows(skip_top_rows);
             self.visible_elements.push(VisibleElement {
-                vertical_offset,
                 viewport_y,
                 height,
                 element,
@@ -271,13 +269,7 @@ where
             }
             let height = visible.height.min(area.bottom() - slot_y);
             let slot = TuiRect::new(area.x, slot_y, area.width, height);
-            render_child_window(
-                &*visible.element,
-                visible.vertical_offset,
-                slot,
-                buffer,
-                ctx,
-            );
+            visible.element.render(slot, buffer, ctx);
         }
     }
 
@@ -289,9 +281,7 @@ where
             }
             let height = visible.height.min(area.bottom() - slot_y);
             let slot = TuiRect::new(area.x, slot_y, area.width, height);
-            let child_area = child_area_for_window(slot, visible.vertical_offset);
-            let (x, y) = visible.element.cursor_position(child_area, ctx)?;
-            let y = y.checked_sub(visible.vertical_offset)?;
+            let (x, y) = visible.element.cursor_position(slot, ctx)?;
             if y < height {
                 return Some((x, slot_y.saturating_sub(area.y).saturating_add(y)));
             }
@@ -307,7 +297,7 @@ where
 
     fn dispatch_event(
         &mut self,
-        event: &Event,
+        event: &TuiEvent,
         area: TuiRect,
         event_ctx: &mut TuiEventContext,
         ctx: &mut TuiLayoutContext,
@@ -320,15 +310,9 @@ where
             }
             let height = visible.height.min(area.bottom() - slot_y);
             let slot = TuiRect::new(area.x, slot_y, area.width, height);
-            if let Some(position) = event.position() {
-                if !slot.contains_point(position) {
-                    continue;
-                }
-            }
-            let child_area = child_area_for_window(slot, visible.vertical_offset);
             if visible
                 .element
-                .dispatch_event(event, child_area, event_ctx, ctx, app)
+                .dispatch_event(event, slot, event_ctx, ctx, app)
             {
                 return true;
             }
@@ -348,43 +332,6 @@ where
 
 fn max_scroll_top(content_height: usize, viewport_height: usize) -> usize {
     content_height.saturating_sub(viewport_height)
-}
-
-fn child_area_for_window(area: TuiRect, vertical_offset: u16) -> TuiRect {
-    TuiRect::new(
-        area.x,
-        area.y.saturating_sub(vertical_offset),
-        area.width,
-        area.height.saturating_add(vertical_offset),
-    )
-}
-
-fn render_child_window(
-    child: &dyn TuiElement,
-    vertical_offset: u16,
-    area: TuiRect,
-    buffer: &mut TuiBuffer,
-    ctx: &mut TuiLayoutContext,
-) {
-    if area.is_empty() {
-        return;
-    }
-
-    let child_height = area.height.saturating_add(vertical_offset);
-    let child_area = TuiRect::new(0, 0, area.width, child_height);
-    let mut child_buffer = TuiBuffer::empty(child_area);
-    child.render(child_area, &mut child_buffer, ctx);
-
-    for y in 0..area.height {
-        let source_y = y.saturating_add(vertical_offset);
-        for x in 0..area.width {
-            if let Some(cell) =
-                buffer.cell_mut((area.x.saturating_add(x), area.y.saturating_add(y)))
-            {
-                *cell = child_buffer[(x, source_y)].clone();
-            }
-        }
-    }
 }
 
 #[cfg(test)]

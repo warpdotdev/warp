@@ -17,12 +17,12 @@
 //! ancestors can react.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPresentationContext, TuiRect, TuiSize,
 };
-use crate::{AppContext, Event};
+use crate::AppContext;
 
-type KeyCallback = Box<dyn FnMut(&Event, &mut TuiEventContext, &AppContext)>;
+type KeyCallback = Box<dyn FnMut(&TuiEvent, &mut TuiEventContext, &AppContext)>;
 
 struct KeyBinding {
     key: String,
@@ -47,7 +47,7 @@ impl TuiEventHandler {
     pub fn on_key(
         mut self,
         key: impl Into<String>,
-        callback: impl FnMut(&Event, &mut TuiEventContext, &AppContext) + 'static,
+        callback: impl FnMut(&TuiEvent, &mut TuiEventContext, &AppContext) + 'static,
     ) -> Self {
         self.bindings.push(KeyBinding {
             key: key.into(),
@@ -81,7 +81,7 @@ impl TuiElement for TuiEventHandler {
 
     fn dispatch_event(
         &mut self,
-        event: &Event,
+        event: &TuiEvent,
         area: TuiRect,
         event_ctx: &mut TuiEventContext,
         ctx: &mut TuiLayoutContext,
@@ -91,7 +91,7 @@ impl TuiElement for TuiEventHandler {
             return true;
         }
 
-        if let Event::KeyDown { keystroke, .. } = event {
+        if let TuiEvent::KeyDown { keystroke, .. } = event {
             for binding in &mut self.bindings {
                 if binding.key == keystroke.key {
                     (binding.callback)(event, event_ctx, app);

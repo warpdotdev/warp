@@ -1,10 +1,9 @@
 //! TUI event-dispatch types.
 //!
-//! The TUI runtime (`crate::runtime`) converts raw crossterm events into the
-//! shared [`Event`](crate::Event) vocabulary (so element/view dispatch is
-//! identical to the GUI), then walks the rendered element tree handing each
-//! element the event plus a [`TuiEventContext`] it can use to queue view
-//! notifications and typed actions back into the shared core.
+//! The TUI runtime (`crate::runtime`) converts raw crossterm events into
+//! [`TuiEvent`]s, then walks the rendered element tree handing each element the
+//! event plus a [`TuiEventContext`] it can use to queue app updates and typed
+//! actions back into the shared core.
 //!
 //! This module holds the dispatch-side types that are part of the
 //! [`TuiElement`](super::TuiElement) contract; the crossterm → warp event
@@ -12,7 +11,90 @@
 
 use std::collections::HashSet;
 
+use super::TuiPoint;
+use crate::event::{KeyEventDetails, ModifiersState};
+use crate::keymap::Keystroke;
 use crate::{Action, EntityId};
+
+/// A terminal scroll delta `(columns, rows)`.
+pub type TuiScrollDelta = (isize, isize);
+
+/// Input events dispatched through TUI elements.
+#[derive(Clone, Debug)]
+pub enum TuiEvent {
+    KeyDown {
+        keystroke: Keystroke,
+        chars: String,
+        details: KeyEventDetails,
+        is_composing: bool,
+    },
+    ScrollWheel {
+        position: TuiPoint,
+        delta: TuiScrollDelta,
+        precise: bool,
+        modifiers: ModifiersState,
+    },
+    LeftMouseDown {
+        position: TuiPoint,
+        modifiers: ModifiersState,
+        click_count: u32,
+        is_first_mouse: bool,
+    },
+    LeftMouseUp {
+        position: TuiPoint,
+        modifiers: ModifiersState,
+    },
+    LeftMouseDragged {
+        position: TuiPoint,
+        modifiers: ModifiersState,
+    },
+    MiddleMouseDown {
+        position: TuiPoint,
+        cmd: bool,
+        shift: bool,
+        click_count: u32,
+    },
+    RightMouseDown {
+        position: TuiPoint,
+        cmd: bool,
+        shift: bool,
+        click_count: u32,
+    },
+    MouseMoved {
+        position: TuiPoint,
+        cmd: bool,
+        shift: bool,
+        is_synthetic: bool,
+    },
+}
+
+impl TuiEvent {
+    /// Returns the terminal-cell position carried by pointer-like events.
+    pub fn position(&self) -> Option<TuiPoint> {
+        match self {
+            Self::ScrollWheel { position, .. }
+            | Self::LeftMouseDown { position, .. }
+            | Self::LeftMouseUp { position, .. }
+            | Self::LeftMouseDragged { position, .. }
+            | Self::MiddleMouseDown { position, .. }
+            | Self::RightMouseDown { position, .. }
+            | Self::MouseMoved { position, .. } => Some(*position),
+            Self::KeyDown { .. } => None,
+        }
+    }
+
+    /// Returns the keymap data carried by key-down events.
+    pub(crate) fn key_down(&self) -> Option<(&Keystroke, bool)> {
+        match self {
+            Self::KeyDown {
+                keystroke,
+                is_composing,
+                ..
+            } => Some((keystroke, *is_composing)),
+            _ => None,
+        }
+    }
+}
 
 /// Whether an element that handled an event wants its ancestors to keep seeing
 /// it. Returned by event-aware elements during dispatch.
@@ -33,7 +115,7 @@ pub struct TuiEventDispatchResult {
 
 #[derive(Default)]
 pub struct TuiEventContext {
-    notified: HashSet<EntityId>,
+    app_updates: HashSet<EntityId>,
     typed_actions: Vec<TuiDispatchedAction>,
     origin_view_id: Option<EntityId>,
 }
@@ -60,16 +142,16 @@ impl TuiEventContext {
         });
     }
 
-    /// Notifies the framework that the current event origin view is dirty.
+    /// Queues an app update for the current event origin.
     pub fn notify(&mut self) {
         let origin_view_id = self
             .origin_view_id
-            .expect("view notifications can only be queued while processing a rendered TUI view");
-        self.notified.insert(origin_view_id);
+            .expect("app updates can only be queued while processing a rendered TUI view");
+        self.app_updates.insert(origin_view_id);
     }
 
-    pub(crate) fn take_notified(&mut self) -> HashSet<EntityId> {
-        std::mem::take(&mut self.notified)
+    pub(crate) fn take_app_updates(&mut self) -> HashSet<EntityId> {
+        std::mem::take(&mut self.app_updates)
     }
 
     pub(crate) fn take_typed_actions(&mut self) -> Vec<TuiDispatchedAction> {

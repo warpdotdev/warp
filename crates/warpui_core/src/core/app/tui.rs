@@ -10,17 +10,6 @@ use super::{
 use crate::{EntityId, WindowId};
 
 impl AppContext {
-    /// Marks TUI views notified during event dispatch as dirty.
-    pub(crate) fn notify_tui_event_views(
-        &mut self,
-        window_id: WindowId,
-        view_ids: impl IntoIterator<Item = EntityId>,
-    ) {
-        for view_id in view_ids {
-            self.notify_view_observers(window_id, view_id);
-        }
-    }
-
     /// Adds a TUI view to the given window.
     pub fn add_tui_view<T, F>(&mut self, window_id: WindowId, build_view: F) -> ViewHandle<T>
     where

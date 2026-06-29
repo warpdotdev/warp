@@ -3,13 +3,13 @@ use std::rc::Rc;
 
 use super::TuiColumn;
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEventContext,
+    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
     TuiEventHandler, TuiLayoutContext, TuiParentElement, TuiPresentationContext, TuiRect, TuiSize,
     TuiText,
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
-use crate::{App, EntityId, EntityIdMap, Event};
+use crate::{App, EntityId, EntityIdMap};
 
 fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
@@ -155,8 +155,8 @@ fn present_recurses_into_children() {
     assert_eq!(parent_by_child.get(&embedded), Some(&root));
 }
 
-fn key_event(key: &str) -> Event {
-    Event::KeyDown {
+fn key_event(key: &str) -> TuiEvent {
+    TuiEvent::KeyDown {
         keystroke: Keystroke {
             key: key.to_owned(),
             ..Default::default()
