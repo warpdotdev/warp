@@ -1,6 +1,5 @@
 use core::fmt;
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -9,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::view::AnyTuiView;
 use crate::core::view::AnyViewHandle;
 use crate::core::{AnyView, BlurContext, FocusContext};
-use crate::{keymap, AccessibilityData, AppContext, CursorInfo, EntityId};
+use crate::{keymap, AccessibilityData, AppContext, CursorInfo, EntityId, EntityIdMap};
 
 /// A unique identifier for a window.
 ///
@@ -43,7 +42,7 @@ impl fmt::Display for WindowId {
 #[derive(Default)]
 pub(super) struct Window {
     /// The set of views owned by this window, keyed by view ID.
-    pub views: HashMap<EntityId, StoredView>,
+    pub views: EntityIdMap<StoredView>,
 
     /// A handle to the window's root view (top of the view hierarchy), if any.
     pub root_view: Option<AnyViewHandle>,

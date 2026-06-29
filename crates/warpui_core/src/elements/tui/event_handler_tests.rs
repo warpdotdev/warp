@@ -1,5 +1,4 @@
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::TuiEventHandler;
@@ -8,7 +7,7 @@ use crate::elements::tui::{
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
-use crate::{App, EntityId, Event};
+use crate::{App, EntityId, EntityIdMap, Event};
 
 fn key_event(key: &str) -> Event {
     Event::KeyDown {
@@ -35,7 +34,7 @@ fn invokes_callback_on_matching_key_and_reports_handled() {
 
             let area = TuiRect::new(0, 0, 4, 1);
             let mut event_ctx = TuiEventContext::default();
-            let mut rendered_views = HashMap::new();
+            let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
             };
@@ -76,7 +75,7 @@ fn child_consumes_the_event_before_the_wrapper() {
             });
 
             let mut event_ctx = TuiEventContext::default();
-            let mut rendered_views = HashMap::new();
+            let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
             };
@@ -99,10 +98,10 @@ fn child_consumes_the_event_before_the_wrapper() {
 fn present_recurses_into_the_wrapped_child() {
     let root = EntityId::from_usize(1);
     let embedded = EntityId::from_usize(2);
-    let mut parent_by_child = HashMap::new();
+    let mut parent_by_child = EntityIdMap::default();
 
     {
-        let mut rendered_views = HashMap::new();
+        let mut rendered_views = EntityIdMap::default();
         let mut ctx = TuiPresentationContext::new(root, &mut rendered_views, &mut parent_by_child);
         let child_node = TuiChildView::from_rendered(embedded, Box::new(()), ctx.rendered_views);
         let mut handler = TuiEventHandler::new(child_node);

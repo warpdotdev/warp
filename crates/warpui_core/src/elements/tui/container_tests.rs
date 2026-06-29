@@ -1,5 +1,4 @@
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use ratatui::style::Color;
@@ -11,11 +10,11 @@ use crate::elements::tui::{
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
-use crate::{App, EntityId, Event};
+use crate::{App, EntityId, EntityIdMap, Event};
 
 fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
-    let mut rendered_views = HashMap::new();
+    let mut rendered_views = EntityIdMap::default();
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
     };
@@ -54,7 +53,7 @@ fn border_and_padding_compose() {
                 .with_padding(1);
 
             // Child inset by 2 (border + padding) on each side: 1x1 child -> 5x5 total.
-            let mut rendered_views = HashMap::new();
+            let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
             };
@@ -80,7 +79,7 @@ fn background_fills_the_padding_area() {
         .with_background(Color::Blue);
 
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 3, 3));
-    let mut rendered_views = HashMap::new();
+    let mut rendered_views = EntityIdMap::default();
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
     };
@@ -96,10 +95,10 @@ fn background_fills_the_padding_area() {
 fn present_recurses_into_the_child() {
     let root = EntityId::from_usize(1);
     let embedded = EntityId::from_usize(2);
-    let mut parent_by_child = HashMap::new();
+    let mut parent_by_child = EntityIdMap::default();
 
     {
-        let mut rendered_views = HashMap::new();
+        let mut rendered_views = EntityIdMap::default();
         let mut ctx = TuiPresentationContext::new(root, &mut rendered_views, &mut parent_by_child);
         let child_node = TuiChildView::from_rendered(embedded, Box::new(()), ctx.rendered_views);
         let mut container = TuiContainer::new(child_node).with_border();
@@ -132,7 +131,7 @@ fn dispatch_event_forwards_to_the_child_inside_the_inset() {
                 is_composing: false,
             };
             let mut event_ctx = TuiEventContext::default();
-            let mut rendered_views = HashMap::new();
+            let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
             };

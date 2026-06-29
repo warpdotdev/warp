@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use pathfinder_geometry::vector::vec2f;
@@ -10,7 +10,8 @@ use crate::elements::{
 };
 use crate::platform::WindowStyle;
 use crate::{
-    App, AppContext, Entity, EntityId, Presenter, TypedActionView, ViewContext, WindowInvalidation,
+    App, AppContext, Entity, EntityId, EntityIdSet, Presenter, TypedActionView, ViewContext,
+    WindowInvalidation,
 };
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
@@ -160,7 +161,7 @@ fn test_layered_click_handling() {
 
         let mut presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -243,7 +244,7 @@ fn test_default_mouse_in_behavior() {
 
         let mut presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -331,7 +332,7 @@ fn test_mouse_in_behavior_dont_fire_on_synthetic_events() {
 
         let mut presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -392,7 +393,7 @@ fn test_mouse_in_behavior_dont_fire_when_covered() {
 
         let mut presenter = Presenter::new(window_id);
 
-        let mut updated = HashSet::new();
+        let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
         let invalidation = WindowInvalidation {
             updated,
@@ -545,7 +546,7 @@ fn invalidate_and_rebuild_scene(
     root_view_id: EntityId,
     ctx: &mut AppContext,
 ) {
-    let mut updated = HashSet::new();
+    let mut updated = EntityIdSet::default();
     updated.insert(root_view_id);
     let invalidation = WindowInvalidation {
         updated,

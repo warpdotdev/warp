@@ -1,16 +1,14 @@
-use std::collections::HashMap;
-
 use ratatui::style::{Color, Modifier, Style};
 
 use super::TuiText;
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiRect, TuiSize,
 };
-use crate::App;
+use crate::{App, EntityIdMap};
 
 fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
-    let mut rendered_views = HashMap::new();
+    let mut rendered_views = EntityIdMap::default();
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
     };
@@ -36,7 +34,7 @@ fn layout_reports_content_width_and_row_count() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
             let mut text = TuiText::new("hello world foo");
-            let mut rendered_views = HashMap::new();
+            let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
             };
@@ -100,7 +98,7 @@ fn applies_its_style_to_painted_cells() {
     let text = TuiText::new("a").with_style(style);
 
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 1, 1));
-    let mut rendered_views = HashMap::new();
+    let mut rendered_views = EntityIdMap::default();
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
     };

@@ -7586,6 +7586,21 @@ impl Workspace {
         ctx.notify();
     }
 
+    /// True when `tab_index` is in a tab group and is the only tab in that
+    /// group. Used to gate "New group with tab" in the per-tab menu: creating a
+    /// new group from a tab that is already the sole member of its group is a
+    /// no-op, while pulling a tab out of a multi-tab group into its own is not.
+    fn tab_is_only_member_of_its_group(&self, tab_index: usize) -> bool {
+        let Some(group_id) = self.tabs.get(tab_index).and_then(|tab| tab.group_id) else {
+            return false;
+        };
+        self.tabs
+            .iter()
+            .filter(|tab| tab.group_id == Some(group_id))
+            .count()
+            == 1
+    }
+
     pub fn toggle_tab_right_click_menu(
         &mut self,
         tab_index: usize,
@@ -7601,12 +7616,14 @@ impl Workspace {
 
         let can_move_left = self.can_move_tab(tab_index, TabMovement::Left);
         let can_move_right = self.can_move_tab(tab_index, TabMovement::Right);
+        let is_only_member_of_group = self.tab_is_only_member_of_its_group(tab_index);
         let menu_items = {
             let tab = &self.tabs[tab_index];
             tab.menu_items(
                 tab_index,
                 self.tabs.len(),
                 &self.tab_groups,
+                is_only_member_of_group,
                 can_move_left,
                 can_move_right,
                 ctx,
@@ -7686,11 +7703,13 @@ impl Workspace {
         };
         let can_move_left = self.can_move_tab(tab_index, TabMovement::Left);
         let can_move_right = self.can_move_tab(tab_index, TabMovement::Right);
+        let is_only_member_of_group = self.tab_is_only_member_of_its_group(tab_index);
         let tab = &self.tabs[tab_index];
         let menu_items = tab.menu_items_with_pane_name_target(
             tab_index,
             self.tabs.len(),
             &self.tab_groups,
+            is_only_member_of_group,
             can_move_left,
             can_move_right,
             Some(pane_name_target),
