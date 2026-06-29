@@ -836,20 +836,15 @@ impl MessageProvider<AgentMessageArgs<'_>> for ForkSlashCommandMessageProducer {
             }
         };
 
-        // All fork-style commands (`/fork`, `/fork-from`, `/fork-and-compact`, and
-        // `/continue-locally`) share the same destination semantics: Enter opens a new pane and
-        // Cmd/Ctrl+Enter opens a new tab (see `ForkedConversationDestination::for_fork_trigger`).
-        let primary_label = " new pane";
-        let secondary_label = " new tab";
-
+        // All fork-style commands open a new pane on Enter and a new tab on Cmd/Ctrl+Enter.
         Some(Message::new(vec![
             MessageItem::keystroke(Keystroke {
                 key: "enter".to_owned(),
                 ..Default::default()
             }),
-            MessageItem::text(primary_label),
+            MessageItem::text(" new pane"),
             MessageItem::keystroke(modifier_keystroke),
-            MessageItem::text(secondary_label),
+            MessageItem::text(" new tab"),
         ]))
     }
 }

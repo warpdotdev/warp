@@ -120,14 +120,6 @@ impl SlashCommandTrigger {
             }
         )
     }
-
-    /// Destination for fork-style slash commands (`/fork`, `/fork-and-compact`,
-    /// `/continue-locally`): Enter opens a new split pane, Cmd/Ctrl+Enter opens a new tab.
-    /// Delegates to the shared `ForkedConversationDestination::for_fork_trigger` mapping so
-    /// every fork entry point (including `/fork-from`'s query-picker) stays identical.
-    fn fork_destination(&self) -> ForkedConversationDestination {
-        ForkedConversationDestination::for_fork_trigger(self.is_cmd_or_ctrl_enter())
-    }
 }
 
 #[cfg(feature = "local_fs")]
@@ -992,7 +984,8 @@ impl Input {
                     return true;
                 };
 
-                let destination = trigger.fork_destination();
+                let destination =
+                    ForkedConversationDestination::for_fork_trigger(trigger.is_cmd_or_ctrl_enter());
 
                 // Move any pending attachments out of the source input so they travel with the
                 // initial prompt into the forked pane and no longer linger on the original input.
@@ -1037,7 +1030,8 @@ impl Input {
                     return true;
                 }
 
-                let destination = trigger.fork_destination();
+                let destination =
+                    ForkedConversationDestination::for_fork_trigger(trigger.is_cmd_or_ctrl_enter());
 
                 send_telemetry_from_ctx!(
                     AgentManagementTelemetryEvent::SlashCommandContinueLocally,
@@ -1075,8 +1069,8 @@ impl Input {
                     return true;
                 };
 
-                // Use the same Enter/Cmd-Enter pane behavior as `/fork`.
-                let destination = trigger.fork_destination();
+                let destination =
+                    ForkedConversationDestination::for_fork_trigger(trigger.is_cmd_or_ctrl_enter());
 
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,

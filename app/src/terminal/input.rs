@@ -5134,8 +5134,6 @@ impl Input {
                     return;
                 };
 
-                // `/fork-from` shares the same Enter / Cmd-Enter semantics as the other
-                // fork-style commands: Enter opens a new pane, Cmd/Ctrl+Enter opens a new tab.
                 let destination = ForkedConversationDestination::for_fork_trigger(*cmd_enter);
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,

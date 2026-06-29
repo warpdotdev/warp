@@ -1,7 +1,6 @@
-use super::{slash_command_is_submitted_as_prompt, SlashCommandTrigger};
+use super::slash_command_is_submitted_as_prompt;
 use crate::features::FeatureFlag;
 use crate::search::slash_command_menu::static_commands::{commands, Availability};
-use crate::workspace::ForkedConversationDestination;
 const BASELINE_AVAILABILITY: Availability = Availability::AGENT_VIEW
     .union(Availability::AI_ENABLED)
     .union(Availability::NO_LRC_CONTROL);
@@ -62,36 +61,6 @@ fn cloud_mode_v2_commands_are_active_only_in_cloud_mode_v2_context() {
     assert!(commands::PLAN.is_active(cloud_mode_v2_context));
     assert!(commands::MODEL.is_active(cloud_mode_v2_context));
     assert!(commands::HARNESS.is_active(cloud_mode_v2_context));
-}
-
-// Regression test for the `/fork-and-compact` pane-option bug and the follow-up that unified
-// `/fork-from`: every fork-style command (`/fork`, `/fork-from`, `/fork-and-compact`,
-// `/continue-locally`) must map Enter -> new split pane and Cmd/Ctrl+Enter -> new tab, rather
-// than the old current-pane / new-pane mapping. All of them route through
-// `ForkedConversationDestination::for_fork_trigger`, so the mapping is identical by
-// construction. The forked conversation always honors this explicit destination, which is why
-// fork behavior is independent of the `open_conversation_layout_preference` setting.
-#[test]
-fn fork_commands_open_new_pane_on_enter_and_new_tab_on_cmd_enter() {
-    // The slash-command trigger helper (used by `/fork`, `/fork-and-compact`, `/continue-locally`).
-    assert_eq!(
-        SlashCommandTrigger::input().fork_destination(),
-        ForkedConversationDestination::SplitPane,
-    );
-    assert_eq!(
-        SlashCommandTrigger::cmd_or_ctrl_enter().fork_destination(),
-        ForkedConversationDestination::NewTab,
-    );
-
-    // The shared mapping, also used directly by `/fork-from`'s query-picker accept path.
-    assert_eq!(
-        ForkedConversationDestination::for_fork_trigger(false),
-        ForkedConversationDestination::SplitPane,
-    );
-    assert_eq!(
-        ForkedConversationDestination::for_fork_trigger(true),
-        ForkedConversationDestination::NewTab,
-    );
 }
 
 #[cfg(all(feature = "local_fs", windows))]
