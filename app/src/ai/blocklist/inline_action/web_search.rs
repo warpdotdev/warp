@@ -32,8 +32,7 @@ impl WebSearchView {
     }
 
     pub fn set_status(&mut self, status: &WebSearchStatus) {
-        // The proto error status carries no query, so preserve the query from a prior
-        // Searching/Success state to keep the failed header informative in live sessions.
+        // The proto error status carries no query; preserve the prior one for the header.
         self.status = match status {
             WebSearchStatus::Error { query } if query.is_empty() => WebSearchStatus::Error {
                 query: self.current_query(),

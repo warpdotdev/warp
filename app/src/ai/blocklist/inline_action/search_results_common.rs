@@ -113,10 +113,8 @@ pub fn render_results_body_container(body: Box<dyn Element>, app: &AppContext) -
         .finish()
 }
 
-/// Renders a non-collapsible single-line header (status icon + title) used to
-/// represent a transient or terminal status — e.g. loading, cancelled, or error.
-/// The icon conveys the status; pass the appropriate one (e.g. `yellow_running_icon`,
-/// `cancelled_icon`, `failed_icon`).
+/// Renders a single-line status header (icon + title) for a loading, cancelled, or
+/// error state; the caller-supplied icon conveys the status.
 pub fn render_status_header(
     text: String,
     icon: warpui::elements::Icon,
