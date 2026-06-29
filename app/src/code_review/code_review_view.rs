@@ -321,6 +321,8 @@ pub enum CodeReviewAction {
     ToggleFileExpanded(String),
     OpenHeaderMenu,
     SetDiffMode(DiffMode),
+    /// Open (and focus) the branch/diff selector dropdown in the code review header.
+    OpenDiffSelector,
     ToggleFileSidebar,
     FileSelected(usize),
     ToggleMaximize,
@@ -7228,6 +7230,11 @@ impl TypedActionView for CodeReviewView {
             }
             CodeReviewAction::SetDiffMode(mode) => {
                 self.apply_diff_mode(mode.clone(), ctx);
+            }
+            CodeReviewAction::OpenDiffSelector => {
+                self.diff_selector.update(ctx, |selector, ctx| {
+                    selector.open(ctx);
+                });
             }
             CodeReviewAction::ToggleFileSidebar => {
                 if self.file_sidebar_expanded {

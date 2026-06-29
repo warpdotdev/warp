@@ -86,6 +86,17 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("CodeReviewView_NotEditing"))
         .with_key_binding("f")
         .with_enabled(|| crate::features::FeatureFlag::GitOperationsInCodeReview.is_enabled()),
+        // Opens the branch/diff selector dropdown in the code review header.
+        // Registered with no default keystroke (an empty `Trigger`), so it is
+        // user-configurable in keyboard settings but does nothing until the
+        // user assigns a key. The `CodeReviewView` context predicate keeps it
+        // active only while the code review panel is open.
+        EditableBinding::new(
+            "code_review:open_branch_selector",
+            "Open branch selector in code review",
+            CodeReviewAction::OpenDiffSelector,
+        )
+        .with_context_predicate(id!("CodeReviewView")),
     ]);
 
     app.register_fixed_bindings([
@@ -196,3 +207,7 @@ impl SingletonEntity for GlobalCodeReviewModel {}
 impl Entity for GlobalCodeReviewModel {
     type Event = GlobalCodeReviewEvent;
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;
