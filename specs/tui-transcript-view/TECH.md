@@ -75,10 +75,14 @@ Add a TUI transcript view under `crates/warp_tui/src/` that owns the generalized
 - removal, deletion, clear, and transfer events remove the affected TUI agent rich-content entries.
 TUI agent rich-content entries intentionally leave `agent_view_conversation_id` unset. That field encodes GUI Agent View filtering; setting it while the TUI block list remains in `AgentViewState::Inactive` causes the shared `BlockList` height-update path to hide the entry. The TUI transcript keeps its conversation/exchange association in its own registration map while retaining canonical outer ordering in `BlockList`.
 
-The transcript renders `TerminalHistoryIndex` through an injected item-render function:
+The transcript renders `TerminalHistoryIndex` through an injected item-render function and stores viewport position in its view-owned handle:
 ```rust
-TuiViewportedList::new(index, move |request, app| {
-    match request.item {
+let position = self.viewport.position();
+let viewport = self.viewport.clone();
+TuiViewportedList::new(
+    position,
+    index,
+    move |request, app| match request.item {
         TerminalHistoryItem::TerminalBlock { block_id } => {
             render_terminal_block(block_id, request.visible_rows, request.width, app)
         }
@@ -91,8 +95,9 @@ TuiViewportedList::new(index, move |request, app| {
                 app,
             )
         }
-    }
-})
+    },
+    move |position| viewport.set_position(position),
+)
 ```
 
 ### Simple terminal block

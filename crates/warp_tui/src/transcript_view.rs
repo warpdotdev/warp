@@ -49,7 +49,7 @@ impl TuiTranscriptView {
             model,
             agent_blocks: Rc::new(RefCell::new(HashMap::new())),
             dirty_agent_blocks: Rc::new(RefCell::new(HashSet::new())),
-            viewport: TuiViewportHandle::new(),
+            viewport: TuiViewportHandle::at_end(),
         }
     }
 
@@ -244,8 +244,10 @@ impl TuiView for TuiTranscriptView {
             self.dirty_agent_blocks.clone(),
         );
         let model = self.model.clone();
+        let position = self.viewport.position();
+        let viewport = self.viewport.clone();
         Box::new(TuiScrollable::new(TuiViewportedList::new(
-            self.viewport.clone(),
+            position,
             index,
             move |request: ViewportRenderRequest<TerminalHistoryItem>, app| match request.item {
                 TerminalHistoryItem::TerminalBlock { block_id } => {
@@ -256,6 +258,7 @@ impl TuiView for TuiTranscriptView {
                     .as_ref(app)
                     .render_visible_rows(request.visible_rows, request.width, app),
             },
+            move |position| viewport.set_position(position),
         )))
     }
 }

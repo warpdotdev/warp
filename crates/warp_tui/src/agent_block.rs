@@ -6,7 +6,8 @@ use warp::tui_export::{
     AIAgentExchangeId, AIAgentTextSection, AIConversationId, BlocklistAIHistoryModel,
 };
 use warpui_core::elements::tui::{
-    Color, RenderedViewportItem, TuiColumn, TuiElement, TuiParentElement, TuiStyle, TuiText,
+    Color, RenderedViewportItem, TuiClipped, TuiColumn, TuiElement, TuiParentElement, TuiStyle,
+    TuiText,
 };
 use warpui_core::{AppContext, Entity, SingletonEntity, TuiView};
 
@@ -128,7 +129,7 @@ fn push_visible_text(
     let end = text_rows.end.min(visible_rows.end);
     if start < end {
         children.push(Box::new(
-            text.with_vertical_scroll(start.saturating_sub(text_rows.start)),
+            TuiClipped::new(text).with_vertical_offset(start.saturating_sub(text_rows.start)),
         ));
     }
 }

@@ -265,7 +265,9 @@ impl<T: TuiView> AppTuiScreen<T> {
             };
             element.dispatch_event(event, area, &mut event_ctx, &mut layout_ctx, app)
         };
-        let _ = event_ctx.take_updates();
+        for view_id in event_ctx.take_notified() {
+            ctx.notify_view_observers(self.window_id, view_id);
+        }
         for action in event_ctx.take_typed_actions() {
             ctx.dispatch_typed_action_for_view(
                 self.window_id,

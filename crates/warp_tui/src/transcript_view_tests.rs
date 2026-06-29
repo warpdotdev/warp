@@ -129,7 +129,7 @@ fn transcript_view_scrolls_only_with_the_mouse_wheel() {
         let area = TuiRect::new(0, 0, 40, 4);
 
         let bottom = render_element(&app, element.as_mut(), area);
-        assert!(transcript.read(&app, |view, _| view.viewport.is_following_bottom()));
+        assert!(transcript.read(&app, |view, _| view.viewport.is_at_end()));
         let page_up = Event::KeyDown {
             keystroke: Keystroke {
                 key: "pageup".to_owned(),
@@ -145,12 +145,12 @@ fn transcript_view_scrolls_only_with_the_mouse_wheel() {
         assert!(dispatch_scroll(&app, element.as_mut(), area, 1.0));
         let scrolled = render_element(&app, element.as_mut(), area);
         assert_ne!(scrolled, bottom);
-        assert!(!transcript.read(&app, |view, _| view.viewport.is_following_bottom()));
+        assert!(!transcript.read(&app, |view, _| view.viewport.is_at_end()));
         for _ in 0..8 {
             dispatch_scroll(&app, element.as_mut(), area, -1.0);
         }
         assert_eq!(render_element(&app, element.as_mut(), area), bottom);
-        assert!(transcript.read(&app, |view, _| view.viewport.is_following_bottom()));
+        assert!(transcript.read(&app, |view, _| view.viewport.is_at_end()));
     });
 }
 
@@ -195,6 +195,7 @@ fn dispatch_event(app: &App, element: &mut dyn TuiElement, area: TuiRect, event:
             rendered_views: &mut rendered_views,
         };
         let mut event_ctx = TuiEventContext::default();
+        event_ctx.set_origin_view(Some(EntityId::new()));
         element.dispatch_event(event, area, &mut event_ctx, &mut layout_ctx, app)
     })
 }
