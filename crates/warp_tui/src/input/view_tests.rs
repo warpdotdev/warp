@@ -4,11 +4,10 @@
 //! [`TuiInputView`] so they exercise the exact render/layout/cursor path the
 //! presenter uses, not a reimplementation of it.
 
-use std::collections::HashMap;
-
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
 use warp_editor::model::CoreEditorModel;
+use warpui::EntityIdMap;
 use warpui_core::elements::tui::{TuiConstraint, TuiLayoutContext, TuiRect, TuiSize};
 use warpui_core::platform::WindowStyle;
 use warpui_core::{AddWindowOptions, App, AppContext, TuiView, TypedActionView, ViewHandle};
@@ -53,7 +52,7 @@ fn cursor_and_height(
     ctx: &AppContext,
 ) -> (Option<(u16, u16)>, u16) {
     let mut element = view.as_ref(ctx).render(ctx);
-    let mut rendered_views = HashMap::new();
+    let mut rendered_views = EntityIdMap::default();
     let mut lctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
     };
