@@ -552,3 +552,124 @@ fn local_to_cloud_idempotent_when_already_remote() {
         "toggle to Remote when already Remote should not clobber computer_use"
     );
 }
+
+/// Regression test for the orchestrate card's agent chips overflowing the card
+/// width. The agents section must lay its pills out in a wrapping row so that,
+/// at a fixed narrow width, many (or long-named) agents flow onto additional
+/// lines — making the section taller — instead of running off the right edge in
+/// a single non-wrapping row (which would keep the section a constant height
+/// regardless of how many pills it holds).
+mod agents_section_layout_tests {
+    use pathfinder_geometry::vector::vec2f;
+    use warp_core::ui::appearance::Appearance;
+    use warpui::elements::{Align, ConstrainedBox, Element, ParentElement, SavePosition, Stack};
+    use warpui::platform::WindowStyle;
+    use warpui::{App, AppContext, Entity, Presenter, TypedActionView, View, WindowInvalidation};
+
+    use super::super::render_agents_section;
+    use super::*;
+
+    /// Narrow enough that only one long-named agent pill fits per line, forcing
+    /// additional agents to wrap.
+    const NARROW_WIDTH: f32 = 150.;
+    const SECTION_POSITION_ID: &str = "test_run_agents_agents_section";
+
+    fn state_with_agent_names(names: &[&str]) -> RunAgentsEditState {
+        let mut request = make_request("oz", RunAgentsExecutionMode::Local);
+        request.agent_run_configs = names
+            .iter()
+            .map(|name| RunAgentsAgentRunConfig {
+                name: name.to_string(),
+                prompt: "do work".to_string(),
+                title: String::new(),
+            })
+            .collect();
+        RunAgentsEditState::from_request(&request)
+    }
+
+    struct AgentsSectionTestView {
+        state: RunAgentsEditState,
+    }
+
+    impl Entity for AgentsSectionTestView {
+        type Event = ();
+    }
+
+    impl View for AgentsSectionTestView {
+        fn ui_name() -> &'static str {
+            "AgentsSectionTestView"
+        }
+
+        fn render(&self, app: &AppContext) -> Box<dyn Element> {
+            let section = ConstrainedBox::new(
+                SavePosition::new(render_agents_section(&self.state, app), SECTION_POSITION_ID)
+                    .finish(),
+            )
+            .with_width(NARROW_WIDTH)
+            .finish();
+            Stack::new()
+                .with_child(Align::new(section).top_left().finish())
+                .finish()
+        }
+    }
+
+    impl TypedActionView for AgentsSectionTestView {
+        type Action = ();
+    }
+
+    fn measure_section_height(app: &mut App, names: &[&str]) -> f32 {
+        let state = state_with_agent_names(names);
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, move |_| {
+            AgentsSectionTestView { state }
+        });
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("window should have a root view");
+
+        // Build a real scene so the `SavePosition` records the section's
+        // painted rect, then read it back from the presenter's own position
+        // cache. The window is comfortably wider than the section so only the
+        // section's own `NARROW_WIDTH` constraint drives the wrapping.
+        let mut presenter = Presenter::new(window_id);
+        let invalidation = WindowInvalidation {
+            updated: [root_view_id, view.id()].into_iter().collect(),
+            ..Default::default()
+        };
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(vec2f(400., 400.), 1., None, ctx);
+            presenter
+                .position_cache()
+                .get_position(SECTION_POSITION_ID)
+                .expect("agents section should cache a position after rendering a frame")
+                .height()
+        })
+    }
+
+    #[test]
+    fn agent_pills_wrap_onto_multiple_lines_when_they_exceed_card_width() {
+        App::test((), |mut app| async move {
+            app.add_singleton_model(|_| Appearance::mock());
+
+            let single_row_height = measure_section_height(&mut app, &["only-agent"]);
+            let multi_row_height = measure_section_height(
+                &mut app,
+                &[
+                    "feat-exchange-lookahead-prefetch",
+                    "feat-block-focus-mode-toggle",
+                    "feat-imported-completions-cache",
+                    "feat-reduce-subscription-churn",
+                    "feat-precmd-metadata-events",
+                    "feat-restored-blocks-replay",
+                ],
+            );
+
+            assert!(
+                multi_row_height > single_row_height,
+                "expected agent pills to wrap to additional lines, growing the section's \
+                 height (single-row height {single_row_height}, multi-row height \
+                 {multi_row_height})"
+            );
+        });
+    }
+}
