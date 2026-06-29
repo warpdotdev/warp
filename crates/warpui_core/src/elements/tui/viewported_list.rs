@@ -9,7 +9,6 @@ use super::{
     TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSize,
 };
 use crate::{AppContext, Event};
-
 /// A stable item-relative scroll anchor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TuiViewportAnchor<ItemId> {
@@ -114,7 +113,6 @@ pub trait TuiViewportIndex {
     /// Applies view-measured item heights to the backing index.
     fn update_heights(&self, _updates: &[(Self::ItemId, usize)]) {}
 }
-
 /// The request passed to a viewport's injected item renderer.
 pub struct ViewportRenderRequest<Item> {
     pub item: Item,
@@ -127,7 +125,6 @@ pub struct RenderedViewportItem {
     pub element: Box<dyn TuiElement>,
     pub measured_full_height: Option<usize>,
 }
-
 struct CollectedItem<ItemId, Item> {
     id: ItemId,
     item: Item,
@@ -141,6 +138,7 @@ struct VisibleElement<ItemId> {
     element: Box<dyn TuiElement>,
     height: u16,
 }
+
 
 /// A variable-height viewport that delegates ordered storage and item rendering.
 pub struct TuiViewportedList<Index, RenderItem, OnPositionChange>
@@ -190,7 +188,7 @@ where
             TuiViewportPosition::End => self
                 .index
                 .with_cursor(TuiViewportIndexPosition::End, |cursor| {
-                    collect_from_bottom(cursor, viewport_height)
+                    collect_from_end(cursor, viewport_height)
                 }),
             TuiViewportPosition::Anchored(anchor) => self
                 .index
@@ -202,7 +200,7 @@ where
             self.set_position(TuiViewportPosition::End);
             self.index
                 .with_cursor(TuiViewportIndexPosition::End, |cursor| {
-                    collect_from_bottom(cursor, viewport_height)
+                    collect_from_end(cursor, viewport_height)
                 })
         } else {
             collected
@@ -337,7 +335,7 @@ where
             return false;
         };
 
-        // Clamp at the bottom: if a screenful or less remains below the new top,
+        // Clamp at the end: if a screenful or less remains below the new top,
         // pin to the end rather than leaving blank rows below the last item.
         let candidate_item_id = candidate.item_id.clone();
         let fills_viewport = self.index.with_cursor(
@@ -488,7 +486,7 @@ fn collect_from_anchor<ItemId: Clone + Eq, Item>(
     result
 }
 
-fn collect_from_bottom<ItemId: Clone + Eq, Item>(
+fn collect_from_end<ItemId: Clone + Eq, Item>(
     cursor: &mut dyn TuiViewportCursor<ItemId = ItemId, Item = Item>,
     viewport_height: usize,
 ) -> Vec<CollectedItem<ItemId, Item>> {
@@ -571,7 +569,7 @@ fn walk_anchor<ItemId: Clone + Eq, Item>(
             }
             None => {
                 // No later item: stop at the last row of the last item. The
-                // caller's bottom clamp turns this into `End`.
+                // caller's end clamp turns this into `End`.
                 anchor.row_offset = item.height.saturating_sub(1);
                 break;
             }
@@ -582,7 +580,7 @@ fn walk_anchor<ItemId: Clone + Eq, Item>(
 
 /// Returns whether strictly more than `viewport_height` rows lie at or below
 /// the top `row_offset` of the cursor's current item through the end of the
-/// index. When this is false, the top is at or past the bottom-most position
+/// index. When this is false, the top is at or past the end-most position
 /// that still fills the viewport, so the caller pins to the end. Walks at most
 /// a viewport's worth of rows.
 fn rows_below_exceed<ItemId: Clone + Eq, Item>(
