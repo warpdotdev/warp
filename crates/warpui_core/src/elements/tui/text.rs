@@ -30,7 +30,6 @@ pub struct TuiText {
     text: String,
     style: TuiStyle,
     wrap: bool,
-    vertical_scroll: u16,
 }
 
 impl TuiText {
@@ -40,7 +39,6 @@ impl TuiText {
             text: text.into(),
             style: TuiStyle::default(),
             wrap: true,
-            vertical_scroll: 0,
         }
     }
 
@@ -52,12 +50,6 @@ impl TuiText {
     /// Lays each hard line out as a single (clipped) row instead of wrapping.
     pub fn truncate(mut self) -> Self {
         self.wrap = false;
-        self
-    }
-
-    /// Starts rendering at the given logical text row.
-    pub fn with_vertical_scroll(mut self, rows: usize) -> Self {
-        self.vertical_scroll = rows.min(usize::from(u16::MAX)) as u16;
         self
     }
 
@@ -92,9 +84,7 @@ impl TuiElement for TuiText {
             return constraint.clamp(TuiSize::ZERO);
         }
         let paragraph = self.paragraph();
-        let height = u16::try_from(paragraph.line_count(constraint.max.width))
-            .unwrap_or(u16::MAX)
-            .saturating_sub(self.vertical_scroll);
+        let height = u16::try_from(paragraph.line_count(constraint.max.width)).unwrap_or(u16::MAX);
         let content_width = u16::try_from(paragraph.line_width()).unwrap_or(u16::MAX);
         TuiSize::new(
             constraint.constrain_width(content_width),
@@ -106,11 +96,7 @@ impl TuiElement for TuiText {
         if area.is_empty() {
             return;
         }
-        Widget::render(
-            self.paragraph().scroll((self.vertical_scroll, 0)),
-            area,
-            buffer,
-        );
+        Widget::render(self.paragraph(), area, buffer);
     }
 }
 

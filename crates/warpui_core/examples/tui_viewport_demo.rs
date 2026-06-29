@@ -17,8 +17,8 @@
 //! - **`TuiScrollable` + wheel conversion + mouse capture** — the mouse wheel
 //!   over the list scrolls it (the only path that exercises wheel→`ScrollWheel`
 //!   conversion and the alternate-screen mouse capture end to end).
-//! - **`TuiText::with_vertical_scroll`** — a top-clipped block is rendered by
-//!   scrolling its text to the first visible logical row.
+//! - **`TuiClipped`** — a top-clipped block is rendered by offsetting the
+//!   wrapped item element to its first visible logical row.
 //! - **height reconciliation** — view-measured blocks report a width-dependent
 //!   full height; resizing the terminal re-measures and writes the new height
 //!   back into the index.
@@ -29,9 +29,10 @@ use std::cell::{Cell, Ref, RefCell};
 use std::rc::Rc;
 
 use warpui_core::elements::tui::{
-    Modifier, RenderedViewportItem, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement,
-    TuiScrollable, TuiStyle, TuiText, TuiViewportCursor, TuiViewportHandle, TuiViewportIndex,
-    TuiViewportIndexItem, TuiViewportIndexPosition, TuiViewportedList, ViewportRenderRequest,
+    Modifier, RenderedViewportItem, TuiClipped, TuiColumn, TuiElement, TuiEventHandler,
+    TuiParentElement, TuiScrollable, TuiStyle, TuiText, TuiViewportCursor, TuiViewportHandle,
+    TuiViewportIndex, TuiViewportIndexItem, TuiViewportIndexPosition, TuiViewportedList,
+    ViewportRenderRequest,
 };
 use warpui_core::platform::WindowStyle;
 use warpui_core::runtime::TuiRuntime;
@@ -169,16 +170,16 @@ fn render_item(
                 usize::from(TuiText::new(text.clone()).desired_height(request.width));
             RenderedViewportItem {
                 element: Box::new(
-                    TuiText::new(text).with_vertical_scroll(request.visible_rows.start),
+                    TuiClipped::new(TuiText::new(text))
+                        .with_vertical_offset(request.visible_rows.start),
                 ),
                 measured_full_height: Some(measured_full_height),
             }
         }
         None => RenderedViewportItem {
             element: Box::new(
-                TuiText::new(request.item.lines.join("\n"))
-                    .truncate()
-                    .with_vertical_scroll(request.visible_rows.start),
+                TuiClipped::new(TuiText::new(request.item.lines.join("\n")).truncate())
+                    .with_vertical_offset(request.visible_rows.start),
             ),
             measured_full_height: None,
         },

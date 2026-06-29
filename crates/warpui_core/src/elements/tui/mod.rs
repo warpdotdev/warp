@@ -25,6 +25,7 @@ use crate::{AppContext, EntityId, EntityIdMap, Event};
 
 mod buffer;
 mod child_view;
+mod clipped;
 mod column;
 mod constrained_box;
 mod container;
@@ -38,6 +39,7 @@ mod viewported_list;
 
 pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiStyle};
 pub use child_view::TuiChildView;
+pub use clipped::TuiClipped;
 pub use column::TuiColumn;
 pub use constrained_box::TuiConstrainedBox;
 pub use container::TuiContainer;

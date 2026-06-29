@@ -30,15 +30,6 @@ fn renders_a_single_short_line() {
 }
 
 #[test]
-fn vertical_scroll_renders_from_the_requested_logical_row() {
-    let text = TuiText::new("a\nb\nc").truncate().with_vertical_scroll(1);
-    assert_eq!(
-        render_to_lines(&text, TuiSize::new(3, 2)),
-        vec!["b  ", "c  "],
-    );
-}
-
-#[test]
 fn layout_reports_content_width_and_row_count() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
