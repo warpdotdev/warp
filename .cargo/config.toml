@@ -23,9 +23,3 @@ rustflags = ["-C", "link-args=-Wl,-headerpad_max_install_names"]
 
 [target.'cfg(target_family = "wasm")']
 rustflags = ["--cfg=web_sys_unstable_apis"]
-
-[target.x86_64-unknown-linux-musl]
-linker = "musl-gcc"
-
-[target.aarch64-unknown-linux-musl]
-linker = "musl-gcc"
