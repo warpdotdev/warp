@@ -1518,20 +1518,14 @@ impl View for RequestedCommandView {
             content.add_child(Clipped::new(footer).finish());
         }
 
-        let is_blocked = action_status
+        let border_color = if action_status
             .as_ref()
-            .is_some_and(|status| status.is_blocked());
-        let border_color = if is_blocked {
+            .is_some_and(|status| status.is_blocked())
+        {
             theme.accent()
         } else {
             theme.surface_2()
         };
-        // Only draw the outer border when it actually serves a visual purpose: the accent
-        // highlight while awaiting permission (blocked), or outlining an inline command/MCP body
-        // (rendered in the darker terminal-background color). On a finished/collapsed command card
-        // the wrapped content is the same `surface_2` shade as the border, so a border there is
-        // redundant — skip it so the card is a single solid, smooth rounded fill.
-        let needs_border = is_blocked || should_render_editor || should_render_mcp_content;
 
         // If the requested command state is completed and input isn't pinned to the top, we're
         // going to have a regular block directly below this one with the output of the executed
@@ -1564,10 +1558,10 @@ impl View for RequestedCommandView {
                     }))
                 && !is_input_pinned_to_top);
 
-        let mut container = Container::new(content.finish())
+        let container = Container::new(content.finish())
             .with_margin_left(if is_rendered_above_expanded_command_block {
                 0.
-            } else if is_blocked {
+            } else if action_status.is_some_and(|status| status.is_blocked()) {
                 CONTENT_HORIZONTAL_PADDING
             } else {
                 CONTENT_HORIZONTAL_PADDING + icon_size(app) + 16.
@@ -1586,11 +1580,9 @@ impl View for RequestedCommandView {
                 CornerRadius::with_top(Radius::Pixels(8.))
             } else {
                 CornerRadius::with_all(Radius::Pixels(8.))
-            });
-        if needs_border {
-            container = container.with_border(Border::all(1.).with_border_fill(border_color));
-        }
-        let container = container.finish();
+            })
+            .with_border(Border::all(1.).with_border_fill(border_color))
+            .finish();
 
         let mut root_stack = Stack::new();
         root_stack.add_child(container);
