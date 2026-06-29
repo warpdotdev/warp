@@ -13,6 +13,7 @@ fn config(
         mode,
         active_line_number,
         active_cursor_is_visible: true,
+        buffer: None,
     }
 }
 

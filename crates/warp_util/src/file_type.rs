@@ -144,6 +144,28 @@ pub fn is_markdown_file(path: impl AsRef<Path>) -> bool {
     }
 }
 
+/// File extensions whose contents should soft-wrap by default in the editor,
+/// gated behind `FeatureFlag::SoftWrapTextFiles`. Scoped to Markdown and
+/// plain-text files, which are prose-heavy and easier to read when wrapped.
+const SOFT_WRAP_EXTENSIONS: &[&str] = &["md", "markdown", "txt"];
+
+/// Whether a file with the given extension should soft-wrap by default in the
+/// editor. The comparison is case-insensitive.
+pub fn is_soft_wrap_extension(extension: &str) -> bool {
+    SOFT_WRAP_EXTENSIONS
+        .iter()
+        .any(|soft_wrap_ext| extension.eq_ignore_ascii_case(soft_wrap_ext))
+}
+
+/// Whether `path`'s extension marks it as a file that should soft-wrap by
+/// default in the editor (see [`is_soft_wrap_extension`]).
+pub fn is_soft_wrap_file(path: impl AsRef<Path>) -> bool {
+    path.as_ref()
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(is_soft_wrap_extension)
+}
+
 /// Guess whether or not `path` is a Jupyter notebook file based on its `.ipynb` extension.
 pub fn is_jupyter_notebook_file(path: impl AsRef<Path>) -> bool {
     path.as_ref()

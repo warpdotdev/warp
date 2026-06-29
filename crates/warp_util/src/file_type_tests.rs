@@ -104,6 +104,35 @@ fn test_development_extensions() {
 }
 
 #[test]
+fn test_is_soft_wrap_file() {
+    // Markdown and plain-text files soft-wrap.
+    assert!(is_soft_wrap_file("notes.md"));
+    assert!(is_soft_wrap_file("README.markdown"));
+    assert!(is_soft_wrap_file("changes.txt"));
+    assert!(is_soft_wrap_file("/path/to/doc.md"));
+
+    // Case-insensitive.
+    assert!(is_soft_wrap_file("NOTES.MD"));
+    assert!(is_soft_wrap_file("DOC.TXT"));
+
+    // Code and other files do not soft-wrap.
+    assert!(!is_soft_wrap_file("main.rs"));
+    assert!(!is_soft_wrap_file("config.json"));
+    assert!(!is_soft_wrap_file("script.py"));
+    assert!(!is_soft_wrap_file("image.png"));
+
+    // Extensionless files (e.g. README) are intentionally excluded for now.
+    assert!(!is_soft_wrap_file("README"));
+    assert!(!is_soft_wrap_file("LICENSE"));
+
+    // The extension helper matches the same set, case-insensitively.
+    assert!(is_soft_wrap_extension("md"));
+    assert!(is_soft_wrap_extension("Markdown"));
+    assert!(is_soft_wrap_extension("TXT"));
+    assert!(!is_soft_wrap_extension("rs"));
+}
+
+#[test]
 fn test_is_jupyter_notebook_file() {
     assert!(is_jupyter_notebook_file("analysis.ipynb"));
     assert!(is_jupyter_notebook_file("Analysis.IPYNB"));

@@ -27,6 +27,7 @@ use vim::{
     vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
     vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
 };
+use warp_core::features::FeatureFlag;
 use warp_core::platform::SessionPlatform;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::theme::Fill;
@@ -53,6 +54,7 @@ use warp_editor::render::model::{
     UpdateDecorationAfterLayout, WidthSetting,
 };
 use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
+use warp_util::file_type::is_soft_wrap_extension;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::elements::{
     AnchorPair, OffsetPositioning, OffsetType, PositionedElementOffsetBounds, PositioningAxis,
@@ -589,7 +591,20 @@ impl CodeEditorModel {
             RenderEvent::LayoutUpdated => {
                 ctx.emit(CodeEditorModelEvent::LayoutInvalidated);
             }
-            RenderEvent::NeedsResize => {}
+            RenderEvent::NeedsResize => {
+                // The viewport width changed. When soft wrap is enabled
+                // (`WidthSetting::FitViewport`) the content must be re-laid-out so it
+                // re-wraps to the new width. For the default non-wrapping layout
+                // (`InfiniteWidth`) the content width is intrinsic and horizontal
+                // scrolling handles overflow, so a width change needs no relayout.
+                if !self
+                    .render_state
+                    .as_ref(ctx)
+                    .container_scrolls_horizontally()
+                {
+                    self.rebuild_layout_and_refresh_diff(ctx);
+                }
+            }
         }
     }
 
@@ -1148,14 +1163,21 @@ impl CodeEditorModel {
                             &mut line_iterator,
                             appearance,
                         ) {
-                            Some(RenderableDiffHunk::Add { line_decoration }) => {
-                                (Vec::new(), Some(line_decoration), None::<Vec<Decoration>>)
+                            Some(RenderableDiffHunk::Add {
+                                line_range,
+                                overlay,
+                            }) => {
+                                let buffer = self.content.as_ref(ctx);
+                                let decoration =
+                                    Self::line_range_to_decoration(buffer, line_range, overlay);
+                                (Vec::new(), Some(decoration), None::<Vec<Decoration>>)
                             }
                             Some(RenderableDiffHunk::Deletion { removed_lines }) => {
                                 (removed_lines, None, None::<Vec<Decoration>>)
                             }
                             Some(RenderableDiffHunk::Replace {
-                                line_decoration,
+                                line_range,
+                                overlay,
                                 inline_highlights,
                                 mut removed_lines,
                             }) => {
@@ -1163,9 +1185,7 @@ impl CodeEditorModel {
                                 let should_highlight_changes = match focused_diff_index {
                                     Some(focused_index) => diff_index == focused_index,
                                     None => {
-                                        let new_lines = (line_decoration.end
-                                            - line_decoration.start)
-                                            .as_usize();
+                                        let new_lines = line_range.end - line_range.start;
                                         new_lines == 1 && removed_lines.len() == 1
                                     }
                                 };
@@ -1195,7 +1215,12 @@ impl CodeEditorModel {
                                     None
                                 };
 
-                                (removed_lines, Some(line_decoration), highlight_text)
+                                let decoration = {
+                                    let buffer = self.content.as_ref(ctx);
+                                    Self::line_range_to_decoration(buffer, line_range, overlay)
+                                };
+
+                                (removed_lines, Some(decoration), highlight_text)
                             }
                             None => (Vec::new(), None, None::<Vec<Decoration>>),
                         };
@@ -1248,6 +1273,22 @@ impl CodeEditorModel {
         });
     }
 
+    /// Converts a logical (buffer) line range `[start_line, end_line)` into a
+    /// char-offset–anchored [`LineDecoration`]. The decoration spans from the
+    /// first char of `start_line` up to the first char of `end_line`
+    /// (exclusive). Anchoring to char offsets keeps the highlight aligned with
+    /// its text under soft wrap, where one logical line can span several visual
+    /// rows; the painter resolves the offsets through the current layout.
+    fn line_range_to_decoration(
+        buffer: &Buffer,
+        line_range: Range<usize>,
+        overlay: Fill,
+    ) -> LineDecoration {
+        let start = Point::new(line_range.start as u32, 0).to_buffer_char_offset(buffer);
+        let end = Point::new(line_range.end as u32, 0).to_buffer_char_offset(buffer);
+        LineDecoration::new(start, end, overlay)
+    }
+
     /// Returns `true` if the diff navigation was toggled on. Returns `false` if the diff navigation
     /// toggled off.
     pub fn toggle_diff_nav(
@@ -1293,20 +1334,56 @@ impl CodeEditorModel {
         path: &StandardizedPath,
         ctx: &mut ModelContext<Self>,
     ) {
-        let language = language_by_filename(path);
-
-        if let Some(language) = language {
+        if let Some(language) = language_by_filename(path) {
             self.set_language(language, ctx);
         }
+        self.apply_soft_wrap_for_extension(path.extension(), ctx);
     }
 
     /// Set the language of the syntax map based on the local filesystem path.
     pub fn set_language_with_local_path(&mut self, path: &Path, ctx: &mut ModelContext<Self>) {
-        let language = language_by_local_filename(path);
-
-        if let Some(language) = language {
+        if let Some(language) = language_by_local_filename(path) {
             self.set_language(language, ctx);
         }
+        self.apply_soft_wrap_for_extension(path.extension().and_then(|ext| ext.to_str()), ctx);
+    }
+
+    /// Enables or disables soft wrap (visual line wrapping) for this editor.
+    ///
+    /// Soft wrap is purely a layout concern: the buffer text is never modified,
+    /// so no newlines are inserted and saving the file is byte-identical. When
+    /// the setting changes, the existing content is relaid out so the new
+    /// wrapping takes effect immediately.
+    pub fn set_soft_wrap(&mut self, enabled: bool, ctx: &mut ModelContext<Self>) {
+        let setting = if enabled {
+            WidthSetting::FitViewport
+        } else {
+            WidthSetting::InfiniteWidth
+        };
+        let changed = self.render_state.update(ctx, |render_state, _| {
+            render_state.set_width_setting(setting)
+        });
+        if changed {
+            self.rebuild_layout_with_syntax_highlighting(ctx);
+        }
+    }
+
+    /// Applies the default soft-wrap behavior for a file with the given
+    /// extension, gated behind [`FeatureFlag::SoftWrapTextFiles`]. Markdown and
+    /// plain-text files wrap; all other files keep the editor's default
+    /// non-wrapping (horizontally scrollable) layout. Applies to every surface
+    /// that opens a file through the path-aware language setters, including the
+    /// code-review / diff views.
+    fn apply_soft_wrap_for_extension(
+        &mut self,
+        extension: Option<&str>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !FeatureFlag::SoftWrapTextFiles.is_enabled() {
+            return;
+        }
+        let should_wrap = extension.is_some_and(is_soft_wrap_extension);
+        self.set_soft_wrap(should_wrap, ctx);
     }
 
     pub fn set_language_with_name(&mut self, name: &str, ctx: &mut ModelContext<Self>) {
@@ -1745,12 +1822,11 @@ impl CodeEditorModel {
                     .selected_lines(ctx)
                     .into_iter()
                     .map(|line| {
-                        LineDecoration::new(
-                            // TODO(CLD-558)
-                            LineCount::from(line - 1),
-                            LineCount::from(line),
-                            overlay,
-                        )
+                        // TODO(CLD-558): `selected_lines` is 1-based, so the
+                        // highlighted line is `[line - 1, line)`. Anchor to char
+                        // offsets so the highlight tracks the line under wrap.
+                        let buffer = self.content.as_ref(ctx);
+                        Self::line_range_to_decoration(buffer, (line - 1)..line, overlay)
                     })
                     .collect(),
             )

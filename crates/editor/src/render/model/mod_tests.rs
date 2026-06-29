@@ -20,7 +20,7 @@ use super::test_utils::{layout_paragraph, layout_paragraphs};
 use super::{
     BlockItem, BlockLocation, COMMAND_SPACING, CellLayout, DEFAULT_BLOCK_SPACINGS,
     HiddenBlockConfig, ImageBlockConfig, LaidOutTable, ParagraphBlock, RenderState,
-    TableBlockConfig, TableStyle, table_offset_map,
+    TableBlockConfig, TableStyle, WidthSetting, table_offset_map,
 };
 use crate::content::edit::ParsedUrl;
 use crate::content::text::{
@@ -147,6 +147,26 @@ fn test_width() {
             item_count: 1,
         }
     );
+}
+
+#[test]
+fn test_set_width_setting_updates_wrap_mode() {
+    let mut render_state =
+        RenderState::new_for_test(TEST_STYLES.clone(), 10.0.into_pixels(), 10.0.into_pixels());
+
+    // Default is FitViewport (soft wrap on), so the container does not scroll horizontally.
+    assert!(!render_state.container_scrolls_horizontally());
+
+    // Switching to InfiniteWidth disables wrap and reports the change.
+    assert!(render_state.set_width_setting(WidthSetting::InfiniteWidth));
+    assert!(render_state.container_scrolls_horizontally());
+
+    // Re-applying the same setting is a no-op.
+    assert!(!render_state.set_width_setting(WidthSetting::InfiniteWidth));
+
+    // Switching back to FitViewport re-enables wrap and reports the change.
+    assert!(render_state.set_width_setting(WidthSetting::FitViewport));
+    assert!(!render_state.container_scrolls_horizontally());
 }
 
 #[test]

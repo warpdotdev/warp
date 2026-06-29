@@ -16,7 +16,7 @@ use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
 use warp_editor::content::edit::TemporaryBlock;
 use warp_editor::content::version::BufferVersion;
 use warp_editor::multiline::{AnyMultilineString, MultilineStr, MultilineString, LF};
-use warp_editor::render::model::{Decoration, LineCount, LineDecoration};
+use warp_editor::render::model::{Decoration, LineCount};
 use warpui::{Entity, ModelContext};
 
 use super::super::DiffResult;
@@ -203,13 +203,20 @@ pub enum DiffHunkDisplay {
 }
 
 /// A single renderable diff hunk. It contains the information needed to decorate the render model.
+///
+/// Added/changed line ranges are kept as **logical** (buffer) line ranges here;
+/// the consumer ([`CodeEditorModel::refresh_diff_state`]) converts them to the
+/// char-offset–anchored [`LineDecoration`]s used for rendering, since that
+/// conversion needs access to the live buffer.
 #[derive(Debug, Clone)]
 pub enum RenderableDiffHunk {
     Add {
-        line_decoration: LineDecoration,
+        line_range: Range<usize>,
+        overlay: Fill,
     },
     Replace {
-        line_decoration: LineDecoration,
+        line_range: Range<usize>,
+        overlay: Fill,
         inline_highlights: Vec<(usize, Range<usize>)>,
         removed_lines: Vec<TemporaryBlock>,
     },
@@ -339,11 +346,8 @@ impl DiffModel {
                     }
 
                     Some(RenderableDiffHunk::Replace {
-                        line_decoration: LineDecoration {
-                            start: LineCount::from(range.start),
-                            end: LineCount::from(range.end),
-                            overlay: add_overlay_color(appearance).into(),
-                        },
+                        line_range: range.start..range.end,
+                        overlay: add_overlay_color(appearance).into(),
                         inline_highlights: insertion
                             .iter()
                             .map(|inline_change| (range.start, inline_change.clone()))
@@ -352,11 +356,8 @@ impl DiffModel {
                     })
                 }
                 ChangeType::Addition => Some(RenderableDiffHunk::Add {
-                    line_decoration: LineDecoration {
-                        start: LineCount::from(range.start),
-                        end: LineCount::from(range.end),
-                        overlay: add_overlay_color(appearance).into(),
-                    },
+                    line_range: range.start..range.end,
+                    overlay: add_overlay_color(appearance).into(),
                 }),
             }
         }

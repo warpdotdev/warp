@@ -896,6 +896,12 @@ pub enum FeatureFlag {
     /// Enables the `--runner` flag on `run-cloud`, which overrides an agent's
     /// compute (docker image, instance shape, setup commands) by runner ID.
     CloudRunners,
+
+    /// Automatically soft-wraps long lines in the editor's raw/source view for
+    /// Markdown and plain-text files (`.md`, `.markdown`, `.txt`) so prose is
+    /// easier to read without horizontal scrolling. The wrap is visual-only and
+    /// never inserts newlines into the file.
+    SoftWrapTextFiles,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -965,6 +971,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PinnedTabs,
     FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::CloudRunners,
+    FeatureFlag::SoftWrapTextFiles,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

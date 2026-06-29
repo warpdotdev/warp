@@ -8,10 +8,12 @@ use parking_lot::Mutex;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_editor::content::buffer::{Buffer, ToBufferPoint};
 use warp_editor::editor::EditorView;
 use warp_editor::render::element::lens_element::RichTextElementLens;
 use warp_editor::render::element::{RenderableBlock, RichTextElement, VerticalExpansionBehavior};
@@ -352,10 +354,26 @@ pub struct LineNumberConfig {
     pub mode: CodeEditorLineNumberMode,
     pub active_line_number: Option<LineCount>,
     pub active_cursor_is_visible: bool,
+    /// The editor's buffer, used to map a block's char offset to its logical
+    /// (buffer) line. Under soft wrap a logical line spans multiple visual rows,
+    /// so the gutter must number by logical line rather than the soft-wrapped
+    /// row index. `None` falls back to the render model's visual line index.
+    pub buffer: Option<ModelHandle<Buffer>>,
 }
 impl LineNumberConfig {
     pub fn absolute_line_number(&self, line_count: LineCount) -> usize {
         line_count.as_usize() + self.starting_line_number.unwrap_or(1)
+    }
+
+    /// The 0-based logical (buffer) line number for a block starting at `offset`,
+    /// if a buffer is available. Keeps gutter numbers and diff lookups aligned
+    /// with the buffer's logical lines under soft wrap. `to_buffer_point` rows are
+    /// already 0-based, matching the render model's visual line index in the
+    /// no-wrap case, so it is used directly.
+    fn logical_line_count(&self, offset: CharOffset, app: &AppContext) -> Option<LineCount> {
+        let buffer = self.buffer.as_ref()?;
+        let row = offset.to_buffer_point(buffer.as_ref(app)).row;
+        Some(LineCount::from(row as usize))
     }
 
     pub fn display_line_number(&self, line_count: LineCount) -> usize {
@@ -606,7 +624,14 @@ impl<V: EditorView> EditorWrapper<V> {
         let mut removed_hunk_line_number: Option<LineCount> = None;
         let mut removed_hunk_line_index: usize = 0;
         for (block_idx, block) in blocks.iter().enumerate() {
-            let Some(line_count) = model.start_line_index(&**block) else {
+            // Prefer the block's logical (buffer) line so gutter numbers and diff
+            // lookups stay correct under soft wrap, where one logical line spans
+            // multiple visual rows. Falls back to the render model's visual line
+            // index when no buffer is available.
+            let Some(line_count) = line_number_config
+                .logical_line_count(block.viewport_item().block_offset(), app)
+                .or_else(|| model.start_line_index(&**block))
+            else {
                 continue;
             };
 
@@ -816,15 +841,25 @@ impl<V: EditorView> EditorWrapper<V> {
             // If the corresponding line in the editor element has a line decoration, we should apply the decoration
             // in the wrapper as well. This does assume the line could only have a single decoration. I think it's fine
             // given this is a wrapper specific to our code pane implementation.
+            // Line decorations are anchored to buffer char offsets, so match on the
+            // block's starting char offset rather than its (soft-wrap-dependent) line index.
+            let block_offset = block.viewport_item().block_offset();
             let overlay = line_decorations
                 .iter()
-                .filter(|decoration| decoration.start <= line_count && decoration.end > line_count)
+                .filter(|decoration| {
+                    decoration.start <= block_offset && decoration.end > block_offset
+                })
                 .map(|decoration| decoration.overlay)
                 .next();
 
-            let Some(height) = model.first_line_height(&**block) else {
+            let Some(first_line_height) = model.first_line_height(&**block) else {
                 continue;
             };
+            // Size the gutter element (and therefore its diff indicator and hover
+            // target) to the block's full height so the indicator spans every visual
+            // row of a soft-wrapped line, matching the removed-line blocks and VS
+            // Code. The line number itself stays one row tall at the top.
+            let gutter_height = block.viewport_item().content_size.y();
 
             // Check if this line is part of any diff hunk when diff hunks are expanded and hovered
             let is_diff_line = self.diff_hunks_are_expanded() && diff_hunk.is_some();
@@ -886,8 +921,8 @@ impl<V: EditorView> EditorWrapper<V> {
                 should_show_comment_button,
                 is_comment_on_current_line,
                 attached_comment,
-                height,
-                height,
+                first_line_height,
+                first_line_height,
                 &line,
                 overlay,
                 is_diff_line,
@@ -901,7 +936,7 @@ impl<V: EditorView> EditorWrapper<V> {
             };
             elements.push(GutterElement {
                 element,
-                height,
+                height: gutter_height,
                 offset,
                 hovered: range_hovered,
                 // We can skip rendering this removal gutter element if its hunk is expanded since
@@ -1377,7 +1412,6 @@ impl<V: EditorView> Element for EditorWrapper<V> {
         // Added/replaced lines: one rect per LineDecoration range.
         {
             let model = self.model().as_ref(app);
-            let content = model.content();
             let y_adjustment = match &self.editor {
                 InnerEditor::Lens(element) => element
                     .starting_renderable_block_offset()
@@ -1385,9 +1419,19 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                     .into_pixels(),
                 InnerEditor::FullEditor(_) => model.viewport().scroll_top(),
             };
+            // Line decorations are anchored to buffer char offsets, so resolve
+            // their vertical extent through the current layout. This keeps diff
+            // highlights aligned with their text under soft wrap (a logical line
+            // may span several visual rows) and as the editor is resized.
             for decoration in model.decorations().line_decoration_ranges() {
-                let start_y = content.y_offset_at_line(decoration.start);
-                let end_y = content.y_offset_at_line(decoration.end);
+                let Some((start_y, _)) = model.character_vertical_bounds(decoration.start) else {
+                    continue;
+                };
+                let end_y = model
+                    .character_vertical_bounds(decoration.end)
+                    .map(|(top, _)| top)
+                    .unwrap_or_else(|| model.height())
+                    .max(start_y);
                 ctx.scene
                     .draw_rect_without_hit_recording(RectF::new(
                         origin + vec2f(0., (start_y - y_adjustment).as_f32()),
