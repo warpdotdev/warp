@@ -7,32 +7,31 @@
 //! ```
 //!
 //! It drives the real [`TuiRuntime`] against your terminal over a trivial
-//! in-memory index of text blocks, exercising every piece the viewport ships so
+//! in-memory source of text blocks, exercising every piece the viewport ships so
 //! all of it can be eyeballed in isolation (no `TerminalModel`/AI dependency):
-//! - **`TuiViewportIndex` / `TuiViewportCursor`** — the in-memory index seeks
-//!   (`Start`/`End`/`Item`) and walks forward/backward to collect visible items.
-//! - **`TuiViewportedList` + caller-owned `TuiViewportHandle`** — starts at the
-//!   index end; wheel-scrolling up anchors it; scrolling back to the end
-//!   restores the end position. Removing the anchored item snaps back to end.
+//! - **`TuiViewportedElement`** — the in-memory source maps an absolute row
+//!   window to visible elements and content-space origins.
+//! - **`TuiViewportedList` + caller-owned `TuiViewportedListState`** — starts at the
+//!   content end; wheel-scrolling up stores an absolute row offset; scrolling
+//!   back to the end restores the end position.
 //! - **`TuiScrollable` + wheel conversion + mouse capture** — the mouse wheel
 //!   over the list scrolls it (the only path that exercises wheel→`ScrollWheel`
 //!   conversion and the alternate-screen mouse capture end to end).
-//! - **`TuiClipped`** — a top-clipped block is rendered by offsetting the
-//!   wrapped item element to its first visible logical row.
+//! - **internal clipping** — top-clipped blocks are returned as full elements;
+//!   the viewport offsets them to the first visible logical row.
 //! - **height reconciliation** — view-measured blocks report a width-dependent
 //!   full height; resizing the terminal re-measures and writes the new height
-//!   back into the index.
+//!   back into the source.
 //!
 //! Keys: mouse wheel scroll · `x` remove the front block · `q` / `Esc` quit.
 
-use std::cell::{Cell, Ref, RefCell};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use warpui_core::elements::tui::{
-    Modifier, RenderedViewportItem, TuiClipped, TuiColumn, TuiElement, TuiEventHandler,
-    TuiParentElement, TuiScrollable, TuiStyle, TuiText, TuiViewportCursor, TuiViewportHandle,
-    TuiViewportIndex, TuiViewportIndexItem, TuiViewportIndexPosition, TuiViewportedList,
-    ViewportRenderRequest,
+    Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiScrollable, TuiStyle,
+    TuiText, TuiViewportContent, TuiViewportWindow, TuiViewportedElement, TuiViewportedList,
+    TuiViewportedListState, TuiVisibleViewportItem,
 };
 use warpui_core::platform::WindowStyle;
 use warpui_core::runtime::TuiRuntime;
@@ -41,16 +40,15 @@ use warpui_core::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Backing index: a trivial in-memory list of text blocks with interior
-// mutability, mirroring the unit-test `FakeIndex` shape so the demo exercises
-// the same traits the real terminal-history index implements.
+// Backing content: a trivial in-memory list of text blocks with interior
+// mutability, mirroring the unit-test `FakeContent` shape so the demo exercises
+// the same trait the real terminal-history source will implement.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// One block in the demo transcript. Fixed blocks own their rows; view-measured
 /// blocks own a wrapping paragraph whose height depends on the render width.
 #[derive(Clone)]
 struct DemoItem {
-    id: usize,
     lines: Vec<String>,
     measured_text: Option<String>,
     height: usize,
@@ -64,12 +62,11 @@ fn initial_items() -> Vec<DemoItem> {
         .map(|id| {
             if id % 4 == 3 {
                 DemoItem {
-                    id,
                     lines: Vec::new(),
                     measured_text: Some(format!(
                         "block {id} (view-measured): a long wrapping paragraph that reflows to \
                          the available width, so resizing the terminal re-measures its height and \
-                         writes the new height back into the index."
+                         writes the new height back into the content source."
                     )),
                     height: 1,
                     needs_measurement: true,
@@ -77,7 +74,6 @@ fn initial_items() -> Vec<DemoItem> {
             } else {
                 let rows = 3 + (id % 3);
                 DemoItem {
-                    id,
                     lines: (0..rows)
                         .map(|row| format!("block {id} · fixed row {row}"))
                         .collect(),
@@ -90,99 +86,56 @@ fn initial_items() -> Vec<DemoItem> {
         .collect()
 }
 
-/// An ordered-height index over a shared `Vec<DemoItem>`.
-struct DemoIndex {
+/// An absolute-row viewport source over a shared `Vec<DemoItem>`.
+struct DemoViewportContent {
     items: Rc<RefCell<Vec<DemoItem>>>,
+    last_width: Rc<Cell<Option<u16>>>,
 }
 
-/// A scoped cursor borrowing the shared items for one collection pass.
-struct DemoCursor<'a> {
-    items: Ref<'a, Vec<DemoItem>>,
-    position: Option<usize>,
-}
+impl TuiViewportedElement for DemoViewportContent {
+    fn visible_items(&self, window: TuiViewportWindow, _app: &AppContext) -> TuiViewportContent {
+        let width_changed =
+            self.last_width.replace(Some(window.viewport_width)) != Some(window.viewport_width);
 
-impl TuiViewportCursor for DemoCursor<'_> {
-    type ItemId = usize;
-    type Item = DemoItem;
-
-    fn item(&self) -> Option<TuiViewportIndexItem<Self::ItemId, Self::Item>> {
-        let item = self.items.get(self.position?)?.clone();
-        Some(TuiViewportIndexItem {
-            id: item.id,
-            height: item.height,
-            needs_measurement: item.needs_measurement,
-            item,
-        })
-    }
-
-    fn next(&mut self) {
-        self.position = self
-            .position
-            .and_then(|position| (position + 1 < self.items.len()).then_some(position + 1));
-    }
-
-    fn prev(&mut self) {
-        self.position = match self.position {
-            Some(0) | None => None,
-            Some(position) => Some(position - 1),
-        };
-    }
-}
-
-impl TuiViewportIndex for DemoIndex {
-    type ItemId = usize;
-    type Item = DemoItem;
-
-    fn with_cursor<R>(
-        &self,
-        position: TuiViewportIndexPosition<'_, Self::ItemId>,
-        f: impl FnOnce(&mut dyn TuiViewportCursor<ItemId = Self::ItemId, Item = Self::Item>) -> R,
-    ) -> R {
-        let items = self.items.borrow();
-        let position = match position {
-            TuiViewportIndexPosition::Start => (!items.is_empty()).then_some(0),
-            TuiViewportIndexPosition::End => items.len().checked_sub(1),
-            TuiViewportIndexPosition::Item(id) => items.iter().position(|item| item.id == *id),
-        };
-        f(&mut DemoCursor { items, position })
-    }
-
-    fn update_heights(&self, updates: &[(Self::ItemId, usize)]) {
         let mut items = self.items.borrow_mut();
-        for (id, height) in updates {
-            if let Some(item) = items.iter_mut().find(|item| item.id == *id) {
-                item.height = *height;
-                item.needs_measurement = false;
+        for item in items.iter_mut() {
+            if let Some(text) = &item.measured_text {
+                if item.needs_measurement || width_changed {
+                    item.height = usize::from(
+                        TuiText::new(text.clone()).desired_height(window.viewport_width),
+                    );
+                    item.needs_measurement = false;
+                }
             }
+        }
+
+        let viewport_bottom = window.scroll_top.saturating_add(window.viewport_height);
+        let mut origin_y = 0usize;
+        let mut visible_items = Vec::new();
+        for item in items.iter() {
+            let item_top = origin_y;
+            let item_bottom = item_top.saturating_add(item.height);
+            if item_bottom > window.scroll_top && item_top < viewport_bottom {
+                visible_items.push(TuiVisibleViewportItem {
+                    origin_y: item_top,
+                    element: render_item(item),
+                });
+            }
+            origin_y = item_bottom;
+        }
+
+        TuiViewportContent {
+            content_height: origin_y,
+            items: visible_items,
         }
     }
 }
 
-/// Builds the visible element for one block, rendering only its visible logical
-/// rows and reporting a width-dependent full height for view-measured blocks.
-fn render_item(
-    request: ViewportRenderRequest<DemoItem>,
-    _app: &AppContext,
-) -> RenderedViewportItem {
-    match request.item.measured_text {
-        Some(text) => {
-            let measured_full_height =
-                usize::from(TuiText::new(text.clone()).desired_height(request.width));
-            RenderedViewportItem {
-                element: Box::new(
-                    TuiClipped::new(TuiText::new(text))
-                        .with_vertical_offset(request.visible_rows.start),
-                ),
-                measured_full_height: Some(measured_full_height),
-            }
-        }
-        None => RenderedViewportItem {
-            element: Box::new(
-                TuiClipped::new(TuiText::new(request.item.lines.join("\n")).truncate())
-                    .with_vertical_offset(request.visible_rows.start),
-            ),
-            measured_full_height: None,
-        },
+/// Builds the full element for one block; the viewport owns partial clipping.
+fn render_item(item: &DemoItem) -> Box<dyn TuiElement> {
+    match &item.measured_text {
+        Some(text) => Box::new(TuiText::new(text.clone())),
+        None => Box::new(TuiText::new(item.lines.join("\n")).truncate()),
     }
 }
 
@@ -199,7 +152,8 @@ enum DemoAction {
 
 struct ViewportDemoView {
     items: Rc<RefCell<Vec<DemoItem>>>,
-    viewport: TuiViewportHandle<usize>,
+    last_width: Rc<Cell<Option<u16>>>,
+    viewport: TuiViewportedListState,
     quit: Rc<Cell<bool>>,
 }
 
@@ -207,7 +161,8 @@ impl ViewportDemoView {
     fn new(quit: Rc<Cell<bool>>) -> Self {
         Self {
             items: Rc::new(RefCell::new(initial_items())),
-            viewport: TuiViewportHandle::at_end(),
+            last_width: Rc::new(Cell::new(None)),
+            viewport: TuiViewportedListState::at_end(),
             quit,
         }
     }
@@ -229,17 +184,11 @@ impl TuiView for ViewportDemoView {
         let at_end = self.viewport.is_at_end();
         let item_count = self.items.borrow().len();
 
-        let index = DemoIndex {
+        let content = DemoViewportContent {
             items: self.items.clone(),
+            last_width: self.last_width.clone(),
         };
-        let viewport_position = self.viewport.position();
-        let viewport_for_scroll = self.viewport.clone();
-        let list = TuiScrollable::new(TuiViewportedList::new(
-            viewport_position,
-            index,
-            render_item,
-            move |position| viewport_for_scroll.set_position(position),
-        ));
+        let list = TuiScrollable::new(TuiViewportedList::new(self.viewport.clone(), content));
 
         let quit_for_q = self.quit.clone();
         let quit_for_esc = self.quit.clone();
@@ -262,7 +211,7 @@ impl TuiView for ViewportDemoView {
                             if at_end {
                                 "at end"
                             } else {
-                                "anchored (scrolled)"
+                                "absolute row offset"
                             }
                         ))
                         .with_style(dim)
