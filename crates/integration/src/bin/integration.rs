@@ -456,6 +456,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_code_editor_line_numbers_default_to_absolute);
     register_test!(test_code_editor_relative_line_numbers_follow_cursor);
 
+    // AI document tests
+    register_test!(test_copy_ai_document_as_markdown_from_overflow_menu);
+
     // Keyboard protocol tests
     register_test!(test_keyboard_protocol_disabled_shift_enter);
     register_test!(test_keyboard_protocol_enabled_shift_enter);
