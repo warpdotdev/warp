@@ -48,8 +48,8 @@ use crate::ai::agent::icons::{
 use crate::ai::agent::linearization::compute_task_depths;
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
-    AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, CancellationReason,
-    MessageToAIAgentOutputMessageError, SummarizationType,
+    AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, CancellationOutcome,
+    CancellationReason, MessageToAIAgentOutputMessageError, SummarizationType,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
@@ -2171,16 +2171,22 @@ impl AIConversation {
 
         self.write_updated_conversation_state(ctx);
 
-        // Don't mark the conversation as Cancelled if we're just cancelling to send a follow-up
-        // on the same conversation (it will be immediately set back to InProgress), or if the
-        // user manually took over the long-running command (the conversation remains in progress
-        // and will resume once the command finishes or control is handed back).
-        //
-        // A shell-exit failure is finalized as `Error` (with a message) by
-        // `BlocklistAIController::fail_conversation_due_to_shell_exit`, so don't
-        // overwrite that terminal status with `Cancelled` here.
-        if !reason.should_preserve_in_progress_status() && !reason.is_agent_exited_shell() {
-            self.update_status(ConversationStatus::Cancelled, terminal_surface_id, ctx);
+        // Finalize the conversation status from the single source of truth for
+        // this cancellation reason:
+        // * `KeepInProgress` leaves the status untouched — a follow-up request or a
+        //   resumed long-running command will continue the conversation.
+        // * `Succeeded` (e.g. an optimistic long-running-command completion or a
+        //   revert) is a successful completion, not a cancellation.
+        // * `Errored` (e.g. shell exit) is finalized as `Error` by a dedicated
+        //   path, so we must not stamp a status here.
+        match reason.conversation_outcome() {
+            CancellationOutcome::Succeeded => {
+                self.update_status(ConversationStatus::Success, terminal_surface_id, ctx);
+            }
+            CancellationOutcome::Cancelled => {
+                self.update_status(ConversationStatus::Cancelled, terminal_surface_id, ctx);
+            }
+            CancellationOutcome::KeepInProgress | CancellationOutcome::Errored => {}
         }
         Ok(())
     }

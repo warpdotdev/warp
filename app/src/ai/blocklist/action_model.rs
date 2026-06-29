@@ -50,7 +50,8 @@ use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentActionTypeDiscriminants, AIAgentExchange, AIAgentInput,
-    CancellationReason, CreateDocumentsResult, EditDocumentsResult, RequestCommandOutputResult,
+    CancellationOutcome, CancellationReason, CreateDocumentsResult, EditDocumentsResult,
+    RequestCommandOutputResult,
 };
 use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
@@ -1290,8 +1291,14 @@ impl BlocklistAIActionModel {
             .get(&conversation_id)
             .is_none_or(|actions| actions.is_empty())
         {
-            if !cancellation_reason.is_some_and(|r| r.should_preserve_in_progress_status()) {
+            if !cancellation_reason.is_some_and(|r| {
+                matches!(
+                    r.conversation_outcome(),
+                    CancellationOutcome::KeepInProgress
+                )
+            }) {
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    // Treat action result as authoritative for determining status.
                     let status = if self
                         .finished_action_results
                         .get(&conversation_id)

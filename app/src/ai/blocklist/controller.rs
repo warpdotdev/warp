@@ -45,8 +45,8 @@ use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     extract_user_query_mode, AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment,
     AIAgentContext, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers,
-    CancellationReason, DocumentContentAttachmentSource, EntrypointType, FileContext,
-    FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
+    CancellationOutcome, CancellationReason, DocumentContentAttachmentSource, EntrypointType,
+    FileContext, FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
     PassiveSuggestionTriggerType, RenderableAIError, RequestCost, RequestMetadata, RunningCommand,
     StaticQueryType, TransientNetworkErrorKind, UserQueryMode,
 };
@@ -443,10 +443,12 @@ impl BlocklistAIController {
             else {
                 return;
             };
-            // Shell-exit failures are finalized as `Error` (with a message) by
-            // `fail_conversation_due_to_shell_exit`; don't trigger a follow-up or
-            // overwrite the terminal status here.
-            if cancellation_reason.is_some_and(|reason| reason.is_agent_exited_shell()) {
+            // The single source of truth for how this cancellation finalizes the
+            // conversation. `Errored` (e.g. shell exit) is finalized as `Error` by a
+            // dedicated path, so we must not trigger a follow-up or stamp a status here.
+            let cancellation_outcome =
+                cancellation_reason.map(|reason| reason.conversation_outcome());
+            if matches!(cancellation_outcome, Some(CancellationOutcome::Errored)) {
                 return;
             }
             let action_model = me.action_model.as_ref(ctx);
@@ -485,18 +487,22 @@ impl BlocklistAIController {
                 });
             let has_manual_follow_up = me.pending_passive_follow_ups.contains(conversation_id);
 
-            let is_lrc_command_completed =
-                cancellation_reason.is_some_and(|reason| reason.is_lrc_command_completed());
-            let should_preserve_in_progress_status = cancellation_reason
-                .is_some_and(|reason| reason.should_preserve_in_progress_status());
+            // A `Succeeded` cancellation (e.g. an optimistic long-running-command
+            // completion or a revert) is itself the terminal result, so it neither
+            // triggers a follow-up nor counts as a cancellation.
+            let treat_as_success =
+                matches!(cancellation_outcome, Some(CancellationOutcome::Succeeded));
             let should_trigger_follow_up_request = (!is_passive_code_diff
-                && !is_lrc_command_completed
+                && !treat_as_success
                 && finished_action_results
                     .iter()
                     .any(|result| result.result.should_trigger_request_upon_completion()))
                 || has_manual_follow_up;
             if !should_trigger_follow_up_request {
-                if should_preserve_in_progress_status {
+                if matches!(
+                    cancellation_outcome,
+                    Some(CancellationOutcome::KeepInProgress)
+                ) {
                     return;
                 }
                 // We also check if there's an in-flight req, because it's possible that this
@@ -526,7 +532,7 @@ impl BlocklistAIController {
                     let updated_conversation_status = if finished_action_results
                         .iter()
                         .all(|result| result.result.is_successful())
-                        || is_lrc_command_completed
+                        || treat_as_success
                     {
                         ConversationStatus::Success
                     } else {
@@ -2600,7 +2606,10 @@ impl BlocklistAIController {
             //
             // TODO(REMOTE-1950): Track the parked auto-resume as a first-class cancelable so its
             // cancellation flows through the same `AfterStreamFinished` path, dropping this special case.
-            if !reason.should_preserve_in_progress_status() {
+            if matches!(
+                reason.conversation_outcome(),
+                CancellationOutcome::Cancelled
+            ) {
                 let history_model = BlocklistAIHistoryModel::handle(ctx);
                 let is_recovering = history_model
                     .as_ref(ctx)
@@ -2986,10 +2995,12 @@ impl BlocklistAIController {
                     // the conversation's InProgress status, such as follow-ups and CLI subagent user
                     // takeover, because those do not end the conversation.
                     if FeatureFlag::AgentSharedSessions.is_enabled()
-                        && !stream_cancellation
-                            .reason
-                            .should_preserve_in_progress_status()
+                        && !matches!(
+                            stream_cancellation.reason.conversation_outcome(),
+                            CancellationOutcome::KeepInProgress
+                        )
                     {
+                        // For any terminal status (not just canceled), we need to inform viewers the stream has stopped.
                         self.send_cancellation_to_viewers(ctx);
                     }
 
@@ -3004,9 +3015,10 @@ impl BlocklistAIController {
                     });
 
                     if !was_passive_request
-                        && !stream_cancellation
-                            .reason
-                            .should_preserve_in_progress_status()
+                        && matches!(
+                            stream_cancellation.reason.conversation_outcome(),
+                            CancellationOutcome::Cancelled
+                        )
                     {
                         self.set_input_mode_for_cancellation(ctx);
                     }

@@ -117,6 +117,25 @@ pub enum CancellationReason {
     AgentExitedShell,
 }
 
+/// How a [`CancellationReason`] maps to the conversation's resulting status.
+/// This is the single source of truth consumed by the stream- and
+/// action-cancellation machinery; see [`CancellationReason::conversation_outcome`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CancellationOutcome {
+    /// Leave the conversation `InProgress`; it will continue on its own (a
+    /// follow-up request or a resumed long-running command) without further user
+    /// input.
+    KeepInProgress,
+    /// Finalize the conversation as a successful completion (`Success`).
+    Succeeded,
+    /// Finalize the conversation as a user cancellation (`Cancelled`).
+    Cancelled,
+    /// The conversation is finalized as a terminal `Error` by a dedicated path
+    /// (e.g. shell-exit handling). The cancellation machinery must only avoid
+    /// stamping `Cancelled`; it must not otherwise change the status.
+    Errored,
+}
+
 impl Display for CancellationReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -159,29 +178,35 @@ impl CancellationReason {
         matches!(self, CancellationReason::Reverted)
     }
 
-    pub fn is_lrc_command_completed(&self) -> bool {
-        matches!(self, CancellationReason::OptimisticCLISubagentCompletion)
-    }
-
-    /// Returns true when the stream was cancelled because the user took manual
-    /// control of the long-running command. The conversation remains in progress
-    /// and the ambient agent task should not be reported as cancelled.
-    pub fn is_cli_subagent_user_takeover(&self) -> bool {
-        matches!(self, CancellationReason::CLISubagentUserTakeover)
-    }
-
-    /// Returns true when the stream was cancelled because an agent-issued command
-    /// caused the shell process to exit. The conversation is finalized as a
-    /// terminal `Error` by the controller, so status-setting paths must not
-    /// overwrite it with `Cancelled`.
-    pub fn is_agent_exited_shell(&self) -> bool {
-        matches!(self, CancellationReason::AgentExitedShell)
-    }
-
-    /// Returns true when the stream cancellation should NOT transition the
-    /// conversation status away from InProgress.
-    pub fn should_preserve_in_progress_status(&self) -> bool {
-        self.is_follow_up_for_same_conversation() || self.is_cli_subagent_user_takeover()
+    /// The single source of truth for how a cancellation reason maps to the
+    /// conversation's resulting status. Every site that finalizes a cancelled
+    /// stream or action consults this instead of re-deriving the disposition,
+    /// so the reason -> status mapping lives in one exhaustive place.
+    pub fn conversation_outcome(&self) -> CancellationOutcome {
+        match self {
+            // The conversation continues without further user input (a follow-up
+            // request or a resumed long-running command drives it forward), so
+            // its status must stay InProgress.
+            CancellationReason::FollowUpSubmitted {
+                is_for_same_conversation: true,
+            }
+            | CancellationReason::CLISubagentUserTakeover => CancellationOutcome::KeepInProgress,
+            // A long-running command finishing (optimistically) or a revert are
+            // successful completions rather than cancellations.
+            CancellationReason::OptimisticCLISubagentCompletion | CancellationReason::Reverted => {
+                CancellationOutcome::Succeeded
+            }
+            // The shell died under the agent; a dedicated path finalizes this as a
+            // terminal `Error`, so the cancellation machinery must not stamp a status.
+            CancellationReason::AgentExitedShell => CancellationOutcome::Errored,
+            CancellationReason::ManuallyCancelled
+            | CancellationReason::AutomaticCloudHandoff
+            | CancellationReason::UserCommandExecuted
+            | CancellationReason::Deleted
+            | CancellationReason::FollowUpSubmitted {
+                is_for_same_conversation: false,
+            } => CancellationOutcome::Cancelled,
+        }
     }
 }
 
