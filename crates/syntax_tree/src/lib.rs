@@ -51,7 +51,7 @@ struct HighlightCache {
 struct HighlightCacheKey {
     version: BufferVersion,
     ranges: RangeSet<CharOffset>,
-    language: Option<arborium::tree_sitter::Language>,
+    language_id: Option<arborium::tree_sitter::Language>,
 }
 
 impl HighlightCacheKey {
@@ -60,42 +60,16 @@ impl HighlightCacheKey {
         &self,
         version: BufferVersion,
         ranges: &RangeSet<CharOffset>,
-        language: &Option<arborium::tree_sitter::Language>,
+        language_id: &Option<arborium::tree_sitter::Language>,
     ) -> bool {
         if self.version != version {
             return false;
         }
-        if &self.language != language {
+        if &self.language_id != language_id {
             return false;
         }
         // RangeSet derives PartialEq, so we can compare directly
         &self.ranges == ranges
-    }
-}
-
-/// Single-entry cache for whole-document language-injection highlights (e.g. Markdown fenced code
-/// blocks). Injections don't depend on the viewport, so caching the whole document lets a scroll
-/// (a new range at the same version) reuse the parse instead of re-highlighting every visible fence.
-struct InjectionCache {
-    key: InjectionCacheKey,
-    highlights: RangeMap<CharOffset, ColorU>,
-}
-
-struct InjectionCacheKey {
-    version: BufferVersion,
-    /// The buffer's own language/grammar (e.g. Markdown), not the embedded fence languages. Part of
-    /// the key so cached injections are dropped if the file's language is reassigned.
-    language: Option<arborium::tree_sitter::Language>,
-}
-
-impl InjectionCacheKey {
-    /// Check if this cache entry matches the given content version and language.
-    fn matches(
-        &self,
-        version: BufferVersion,
-        language: &Option<arborium::tree_sitter::Language>,
-    ) -> bool {
-        self.version == version && &self.language == language
     }
 }
 
@@ -111,8 +85,6 @@ pub struct SyntaxTreeState {
     parsing_handle: Option<AbortHandle>,
     /// Cache for highlight results to avoid recomputing for the same viewport ranges.
     highlight_cache: RefCell<Option<HighlightCache>>,
-    /// Cache of whole-document language-injection highlights, reused across viewport scrolls.
-    injection_cache: RefCell<Option<InjectionCache>>,
 }
 
 impl SyntaxTreeState {
@@ -129,7 +101,6 @@ impl SyntaxTreeState {
             parsing_handle: None,
             language_queries: None,
             highlight_cache: RefCell::new(None),
-            injection_cache: RefCell::new(None),
         }
     }
 
@@ -174,14 +145,14 @@ impl SyntaxTreeState {
         // If no render content version is provided, default the most recent content version.
         let buffer_version = render_content_version.unwrap_or(self.buffer_version);
 
-        let language = self
+        let language_id = self
             .language_queries
             .as_ref()
             .map(|q| q.language.grammar.clone());
 
         // Check cache first
         if let Ok(cache) = Ref::filter_map(self.highlight_cache.borrow(), |c| c.as_ref()) {
-            if cache.key.matches(buffer_version, &ranges, &language) {
+            if cache.key.matches(buffer_version, &ranges, &language_id) {
                 // Return a borrowed reference to the cached highlights
                 return Some(Ref::map(cache, |c| &c.highlights));
             }
@@ -210,40 +181,6 @@ impl SyntaxTreeState {
             }
         }
 
-        // Languages that embed others (e.g. Markdown fenced code blocks) are highlighted by a
-        // separate injection pass. Its results are version-stable, so compute them once for the
-        // whole document per buffer version and reuse them across viewport scrolls — otherwise
-        // each scroll (a new range, same version) would re-parse every visible fence.
-        if let Some(injections_query) = &language_queries.language.injections_query {
-            let cache_valid = self
-                .injection_cache
-                .borrow()
-                .as_ref()
-                .is_some_and(|cache| cache.key.matches(buffer_version, &language));
-            if !cache_valid {
-                let whole_document = CharOffset::from(0)..buffer.as_ref(ctx).len();
-                let injected = queries::highlight_query::injected_highlights(
-                    injections_query,
-                    &self.color_map,
-                    whole_document,
-                    buffer.as_ref(ctx),
-                    tree,
-                );
-                *self.injection_cache.borrow_mut() = Some(InjectionCache {
-                    key: InjectionCacheKey {
-                        version: buffer_version,
-                        language: language.clone(),
-                    },
-                    highlights: injected,
-                });
-            }
-            if let Some(cache) = self.injection_cache.borrow().as_ref() {
-                for (highlight_range, color) in cache.highlights.iter() {
-                    combined_highlights.insert(highlight_range.clone(), *color);
-                }
-            }
-        }
-
         // Once we have rendered content version X, we could discard syntax trees belonging to versions before X.
         if let Some(render_content_version) = render_content_version {
             // First, drop any versions older than the rendered one in a single pass.
@@ -256,7 +193,7 @@ impl SyntaxTreeState {
             key: HighlightCacheKey {
                 version: buffer_version,
                 ranges,
-                language,
+                language_id,
             },
             highlights: combined_highlights,
         });
@@ -337,15 +274,6 @@ impl SyntaxTreeState {
                 *cache = None;
             }
         }
-
-        // The injection cache is keyed by version too, so drop it when its tree is reparsed.
-        let mut injection_cache = self.injection_cache.borrow_mut();
-        if injection_cache
-            .as_ref()
-            .is_some_and(|cached| cached.key.version == version)
-        {
-            *injection_cache = None;
-        }
     }
 
     pub fn set_color_map(&mut self, color_map: ColorMap) {
@@ -355,8 +283,6 @@ impl SyntaxTreeState {
         }
         // Clear highlight cache since colors have changed
         *self.highlight_cache.borrow_mut() = None;
-        // Injected highlights bake in the old colors too, so drop them as well.
-        *self.injection_cache.borrow_mut() = None;
     }
 
     /// Truncates the syntax tree cache to maintain the MAX_SYNTAX_TREES policy.

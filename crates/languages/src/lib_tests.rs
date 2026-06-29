@@ -79,17 +79,6 @@ fn local_command_extension_resolves_to_shell() {
     assert_eq!(language.display_name(), "Shell");
 }
 
-/// Markdown should carry an injection query so the highlighter can color fenced code blocks
-/// in their embedded language (e.g. ```rust).
-#[test]
-fn markdown_has_injection_query() {
-    let language = load_language("markdown").expect("markdown should load");
-    assert!(
-        language.injections_query.is_some(),
-        "markdown should have an injection query for fenced code blocks",
-    );
-}
-
 /// `.md` and `.markdown` should resolve to the Markdown language so the editor applies
 /// syntax highlighting to Markdown source files.
 #[test]

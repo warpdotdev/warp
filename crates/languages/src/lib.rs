@@ -217,9 +217,6 @@ pub struct Language {
     pub bracket_pairs: Vec<(char, char)>,
     /// Query for parsing symbols.
     pub symbols_query: Option<Query>,
-    /// Query for language injections (e.g. embedding other languages in Markdown fenced code
-    /// blocks). `None` when the grammar does not embed other languages.
-    pub injections_query: Option<Query>,
     /// Display name for the language.
     pub display_name: String,
 }
@@ -300,15 +297,6 @@ fn get_arborium_highlight_query(lang: &str) -> Option<&str> {
     }
 }
 
-/// Get the bundled injection query from arborium for languages that embed other languages
-/// (e.g. Markdown fenced code blocks). Returns `None` for languages without injections.
-fn get_arborium_injections_query(lang: &str) -> Option<&str> {
-    match lang {
-        "markdown" => Some(arborium::lang_markdown::INJECTIONS_QUERY),
-        _ => None,
-    }
-}
-
 fn load_language(lang: &str) -> Option<Language> {
     let arborium_name = to_arborium_name(lang);
     let grammar = arborium::get_language(arborium_name)?;
@@ -347,13 +335,6 @@ fn load_language(lang: &str) -> Option<Language> {
     let symbols_query_path = [lang, "identifiers.scm"].join("\\");
     let symbols_query = load_query(&symbols_query_path, &grammar);
 
-    // Some grammars embed other languages (e.g. Markdown fenced code blocks). Load arborium's
-    // injection query so the highlighter can resolve and highlight the embedded language.
-    let injections_query = get_arborium_injections_query(lang).map(|injections_query_str| {
-        Query::new(&grammar, injections_query_str)
-            .expect("arborium injections query should be valid")
-    });
-
     Some(Language {
         highlight_query,
         indents_query,
@@ -362,7 +343,6 @@ fn load_language(lang: &str) -> Option<Language> {
         comment_prefix,
         bracket_pairs,
         symbols_query,
-        injections_query,
         display_name: config.display_name,
     })
 }

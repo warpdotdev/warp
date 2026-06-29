@@ -6,10 +6,9 @@
 ; this query re-targets the same grammar nodes onto the names Warp understands: keyword,
 ; function, string, type, comment, property, and tag.
 ;
-; This is the block-level grammar; fenced code blocks are highlighted in their own language via
-; tree-sitter injection (see `injected_highlights` in crates/syntax_tree). Inline emphasis is
-; still unsupported — it needs the separate Markdown inline grammar, which arborium does not yet
-; package upstream.
+; This is the block-level grammar only. Inline emphasis and language-specific highlighting
+; inside fenced code blocks require tree-sitter injections, which the editor's highlighter
+; does not yet support.
 
 ; Headings — the `#` markers (or setext underlines) and the heading text.
 [
@@ -25,10 +24,11 @@
 (atx_heading (inline) @keyword)
 (setext_heading (paragraph) @keyword)
 
-; Code — indented blocks, the fence delimiters, and the info-string language.
-; Fenced bodies (`code_fence_content`) are intentionally left uncolored here so the injected
-; per-language highlighting shows through with default-colored gaps between tokens.
-(indented_code_block) @string
+; Code — fenced and indented blocks, the fence delimiters, and the info-string language.
+[
+  (indented_code_block)
+  (code_fence_content)
+] @string
 (fenced_code_block_delimiter) @comment
 (info_string (language) @type)
 
