@@ -616,16 +616,16 @@ impl PlatformPageWidget {
         );
         if show_scope_column {
             header_row.add_child(
-                Expanded::new(1., self.render_header_cell(appearance, crate::menu_label("settings.platform.column_scope", "Scope")).finish(),
+                Expanded::new(1., self.render_header_cell(appearance, crate::menu_label("settings.platform.column_scope", "Scope"))).finish(),
             );
         }
         header_row
-            .add_child(Expanded::new(1., self.render_header_cell(appearance, crate::menu_label("settings.platform.column_created", "Created")).finish());
+            .add_child(Expanded::new(1., self.render_header_cell(appearance, crate::menu_label("settings.platform.column_created", "Created"))).finish());
         header_row.add_child(
-            Expanded::new(1., self.render_header_cell(appearance, crate::menu_label("settings.platform.column_last_used", "Last used")).finish(),
+            Expanded::new(1., self.render_header_cell(appearance, crate::menu_label("settings.platform.column_last_used", "Last used"))).finish(),
         );
         header_row.add_child(
-            Expanded::new(1., self.render_header_cell(appearance, crate::menu_label("settings.platform.column_expires_at", "Expires at")).finish(),
+            Expanded::new(1., self.render_header_cell(appearance, crate::menu_label("settings.platform.column_expires_at", "Expires at"))).finish(),
         );
         header_row.add_child(Expanded::new(0.5, self.render_header_cell(appearance, "")).finish());
 
