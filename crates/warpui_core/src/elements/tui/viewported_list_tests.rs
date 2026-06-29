@@ -325,12 +325,11 @@ fn propagating_scrollable_returns_unhandled_when_scroll_state_does_not_change() 
     App::test((), |app| async move {
         let index = FakeIndex::new(vec![fake_item(1, 1), fake_item(2, 1)]);
         let handle = TuiViewportHandle::new();
-        let mut viewport = TuiScrollable::new(TuiViewportedList::new(
-            handle.clone(),
-            index,
-            |request, _| slice_element(request),
-        ))
-        .with_propagate_mousewheel_if_not_handled(true);
+        let mut viewport =
+            TuiScrollable::new(viewport_with_handle(handle.clone(), index, |request, _| {
+                slice_element(request)
+            }))
+            .with_propagate_mousewheel_if_not_handled(true);
         let size = TuiSize::new(8, 4);
 
         render_viewport(&app, &mut viewport, size);

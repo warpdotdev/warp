@@ -138,7 +138,8 @@ struct VisibleElement<ItemId> {
     element: Box<dyn TuiElement>,
     height: u16,
 }
-
+type VisibleElements<ItemId> = Vec<VisibleElement<ItemId>>;
+type HeightUpdates<ItemId> = Vec<(ItemId, usize)>;
 
 /// A variable-height viewport that delegates ordered storage and item rendering.
 pub struct TuiViewportedList<Index, RenderItem, OnPositionChange>
@@ -268,10 +269,7 @@ where
         width: u16,
         width_changed: bool,
         app: &AppContext,
-    ) -> (
-        Vec<VisibleElement<Index::ItemId>>,
-        Vec<(Index::ItemId, usize)>,
-    ) {
+    ) -> (VisibleElements<Index::ItemId>, HeightUpdates<Index::ItemId>) {
         self.first_anchor = collected.first().map(|item| TuiViewportAnchor {
             item_id: item.id.clone(),
             row_offset: item.visible_rows.start,

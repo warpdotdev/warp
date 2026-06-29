@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
-    MouseButton, MouseEventKind,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
+    MouseEvent, MouseEventKind,
 };
 
 use super::crossterm_event_to_warp_event;
@@ -138,7 +138,10 @@ fn mouse_buttons_map_to_shared_mouse_down_events() {
         modifiers,
         click_count,
         is_first_mouse,
-    }) = mouse(MouseEventKind::Down(MouseButton::Left), KeyModifiers::CONTROL)
+    }) = mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        KeyModifiers::CONTROL,
+    )
     else {
         panic!("expected LeftMouseDown");
     };
@@ -169,7 +172,10 @@ fn mouse_buttons_map_to_shared_mouse_down_events() {
         shift,
         click_count,
         ..
-    }) = mouse(MouseEventKind::Down(MouseButton::Right), KeyModifiers::SHIFT)
+    }) = mouse(
+        MouseEventKind::Down(MouseButton::Right),
+        KeyModifiers::SHIFT,
+    )
     else {
         panic!("expected RightMouseDown");
     };
@@ -193,7 +199,10 @@ fn left_mouse_up_and_drag_map_to_shared_mouse_events() {
     let Some(Event::LeftMouseDragged {
         position,
         modifiers,
-    }) = mouse(MouseEventKind::Drag(MouseButton::Left), KeyModifiers::CONTROL)
+    }) = mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        KeyModifiers::CONTROL,
+    )
     else {
         panic!("expected LeftMouseDragged");
     };
@@ -208,7 +217,10 @@ fn mouse_moved_maps_to_shared_mouse_moved_event() {
         cmd,
         shift,
         is_synthetic,
-    }) = mouse(MouseEventKind::Moved, KeyModifiers::SUPER | KeyModifiers::SHIFT)
+    }) = mouse(
+        MouseEventKind::Moved,
+        KeyModifiers::SUPER | KeyModifiers::SHIFT,
+    )
     else {
         panic!("expected MouseMoved");
     };
@@ -221,8 +233,24 @@ fn mouse_moved_maps_to_shared_mouse_moved_event() {
 
 #[test]
 fn unsupported_mouse_up_and_drag_buttons_are_ignored() {
-    assert!(mouse(MouseEventKind::Up(MouseButton::Right), KeyModifiers::empty()).is_none());
-    assert!(mouse(MouseEventKind::Up(MouseButton::Middle), KeyModifiers::empty()).is_none());
-    assert!(mouse(MouseEventKind::Drag(MouseButton::Right), KeyModifiers::empty()).is_none());
-    assert!(mouse(MouseEventKind::Drag(MouseButton::Middle), KeyModifiers::empty()).is_none());
+    assert!(mouse(
+        MouseEventKind::Up(MouseButton::Right),
+        KeyModifiers::empty()
+    )
+    .is_none());
+    assert!(mouse(
+        MouseEventKind::Up(MouseButton::Middle),
+        KeyModifiers::empty()
+    )
+    .is_none());
+    assert!(mouse(
+        MouseEventKind::Drag(MouseButton::Right),
+        KeyModifiers::empty()
+    )
+    .is_none());
+    assert!(mouse(
+        MouseEventKind::Drag(MouseButton::Middle),
+        KeyModifiers::empty()
+    )
+    .is_none());
 }
