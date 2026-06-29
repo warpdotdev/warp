@@ -5,7 +5,7 @@ description = "A local-first terminal"
 edition = "2021"
 autobins = false
 name = "warp"
-version = "0.4.1"
+version = "0.4.2"
 publish.workspace = true
 license.workspace = true
 
