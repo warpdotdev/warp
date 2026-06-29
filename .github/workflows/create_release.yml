@@ -748,7 +748,10 @@ jobs:
       # Namespace's User Bundled Cache persists target/ between jobs on the same profile, which can
       # leave stale packages from a previous channel's build in the linux bundle output dir.
       - name: Clean stale bundle output
-        run: rm -rf target/*/bundle/linux
+        run: |
+          if [[ -d target ]]; then
+            find target -path '*/bundle/linux' -type d -prune -exec rm -rf {} +
+          fi
         shell: bash
 
       - name: Bundle CLI
