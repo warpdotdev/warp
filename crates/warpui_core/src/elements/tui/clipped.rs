@@ -11,7 +11,7 @@
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiSize,
+    TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
 };
 use crate::{AppContext, Event};
 
@@ -100,7 +100,25 @@ impl<E: TuiElement> TuiElement for TuiClipped<E> {
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> bool {
-        self.child.dispatch_event(event, area, event_ctx, ctx, app)
+        // The child was laid out at its full logical height (visible +
+        // offset). Filter mouse events to the visible window, then give the
+        // child its full logical area translated so logical row `offset`
+        // aligns with the visible top: a container child then splits the
+        // correct height, and a click at the visible top hits logical row
+        // `offset`.
+        if let Some(position) = event.position() {
+            if !area.contains_point(position) {
+                return false;
+            }
+        }
+        let child_area = TuiRect::new(
+            area.x,
+            area.y.saturating_sub(self.vertical_offset),
+            area.width,
+            self.child_height(area.height),
+        );
+        self.child
+            .dispatch_event(event, child_area, event_ctx, ctx, app)
     }
 }
 
