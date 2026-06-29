@@ -535,6 +535,10 @@ impl BlocklistAIController {
                         || treat_as_success
                     {
                         ConversationStatus::Success
+                    } else if matches!(
+                        cancellation_outcome,
+                        Some(CancellationOutcome::Errored)) {
+                        ConversationStatus::Error
                     } else {
                         // This is an imperfect heuristic that practically speaking should have no effect.
                         //

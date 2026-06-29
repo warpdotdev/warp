@@ -466,7 +466,7 @@ fn optimistic_cli_subagent_completion_with_in_flight_stream_reports_success() {
                 // streaming, cancelling the in-flight stream optimistically.
                 controller.cancel_conversation_progress(
                     conversation_id,
-                    CancellationReason::OptimisticCLISubagentCompletion,
+                    CancellationReason::CommandFinishedDuringInlineAgentView,
                     ctx,
                 );
             });

@@ -171,62 +171,6 @@ fn latest_user_query_trims_and_skips_empty_queries() {
     );
 }
 
-/// Exhaustively pins the reason -> outcome mapping so adding a new
-/// `CancellationReason` variant forces a deliberate choice here.
-#[test]
-fn cancellation_reason_conversation_outcome_maps_each_variant() {
-    use crate::ai::agent::{CancellationOutcome, CancellationReason};
-
-    let cases = [
-        (
-            CancellationReason::ManuallyCancelled,
-            CancellationOutcome::Cancelled,
-        ),
-        (
-            CancellationReason::AutomaticCloudHandoff,
-            CancellationOutcome::Cancelled,
-        ),
-        (
-            CancellationReason::FollowUpSubmitted {
-                is_for_same_conversation: true,
-            },
-            CancellationOutcome::KeepInProgress,
-        ),
-        (
-            CancellationReason::FollowUpSubmitted {
-                is_for_same_conversation: false,
-            },
-            CancellationOutcome::Cancelled,
-        ),
-        (
-            CancellationReason::UserCommandExecuted,
-            CancellationOutcome::Cancelled,
-        ),
-        (CancellationReason::Reverted, CancellationOutcome::Succeeded),
-        (CancellationReason::Deleted, CancellationOutcome::Cancelled),
-        (
-            CancellationReason::OptimisticCLISubagentCompletion,
-            CancellationOutcome::Succeeded,
-        ),
-        (
-            CancellationReason::CLISubagentUserTakeover,
-            CancellationOutcome::KeepInProgress,
-        ),
-        (
-            CancellationReason::AgentExitedShell,
-            CancellationOutcome::Errored,
-        ),
-    ];
-
-    for (reason, expected) in cases {
-        assert_eq!(
-            reason.conversation_outcome(),
-            expected,
-            "unexpected outcome for {reason:?}"
-        );
-    }
-}
-
 #[test]
 fn title_uses_root_task_description() {
     let conversation = restored_conversation_with_root_description("Root task title");

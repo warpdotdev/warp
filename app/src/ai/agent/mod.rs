@@ -99,9 +99,11 @@ pub enum CancellationReason {
     // The user deleted the conversation while it was in progress.
     Deleted,
 
-    /// The long-running command completed while the agent was still streaming.
+    /// The long-running command completed while the agent was still streaming a response started via inline agent view.
     /// This should be treated as a successful completion, not a cancellation.
-    OptimisticCLISubagentCompletion,
+    /// Note this is only used for inline agent view (user starting an agent to monitor an already running command), 
+    /// not when CLI subagent monitors a requested command.
+    CommandFinishedDuringInlineAgentView,
 
     /// The user manually took control of a long-running command away from the agent.
     /// The agent conversation is still in progress — it will resume after the command
@@ -145,7 +147,7 @@ impl Display for CancellationReason {
             CancellationReason::UserCommandExecuted => write!(f, "user command execution"),
             CancellationReason::Reverted => write!(f, "revert"),
             CancellationReason::Deleted => write!(f, "deleted"),
-            CancellationReason::OptimisticCLISubagentCompletion => {
+            CancellationReason::CommandFinishedDuringInlineAgentView => {
                 write!(f, "LRC command completed")
             }
             CancellationReason::CLISubagentUserTakeover => {
@@ -178,10 +180,12 @@ impl CancellationReason {
         matches!(self, CancellationReason::Reverted)
     }
 
-    /// The single source of truth for how a cancellation reason maps to the
+    /// How a cancellation reason maps to the
     /// conversation's resulting status. Every site that finalizes a cancelled
     /// stream or action consults this instead of re-deriving the disposition,
     /// so the reason -> status mapping lives in one exhaustive place.
+    /// Note that sometimes the action result is treated as authoritative for determining
+    /// conversation status even when there is a cancellation reason (taking priority over this)
     pub fn conversation_outcome(&self) -> CancellationOutcome {
         match self {
             // The conversation continues without further user input (a follow-up
@@ -193,9 +197,8 @@ impl CancellationReason {
             | CancellationReason::CLISubagentUserTakeover => CancellationOutcome::KeepInProgress,
             // A long-running command finishing (optimistically) or a revert are
             // successful completions rather than cancellations.
-            CancellationReason::OptimisticCLISubagentCompletion | CancellationReason::Reverted => {
-                CancellationOutcome::Succeeded
-            }
+            CancellationReason::CommandFinishedDuringInlineAgentView
+            | CancellationReason::Reverted => CancellationOutcome::Succeeded,
             // The shell died under the agent; a dedicated path finalizes this as a
             // terminal `Error`, so the cancellation machinery must not stamp a status.
             CancellationReason::AgentExitedShell => CancellationOutcome::Errored,
