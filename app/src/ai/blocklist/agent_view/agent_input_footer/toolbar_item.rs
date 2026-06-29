@@ -331,7 +331,3 @@ impl From<ContextChipKind> for AgentToolbarItemKind {
         Self::ContextChip(kind)
     }
 }
-
-#[cfg(test)]
-#[path = "toolbar_item_tests.rs"]
-mod tests;
