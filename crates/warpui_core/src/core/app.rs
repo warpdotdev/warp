@@ -4074,7 +4074,7 @@ impl AppContext {
         }
     }
 
-    fn notify_view_observers(&mut self, window_id: WindowId, view_id: EntityId) {
+    pub(crate) fn notify_view_observers(&mut self, window_id: WindowId, view_id: EntityId) {
         self.window_invalidations
             .entry(window_id)
             .or_default()

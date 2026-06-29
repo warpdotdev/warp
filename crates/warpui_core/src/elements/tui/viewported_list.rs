@@ -1,4 +1,11 @@
-//! A generalized, source-driven viewport for ordered variable-height TUI items.
+//! A source-driven viewport for ordered, variable-height TUI items.
+//!
+//! The caller owns the ordered index, item storage, and height cache; this
+//! element only asks that source for a short-lived cursor over the visible row
+//! range, renders those rows, and reports any measured height updates back to
+//! the source. That keeps TUI viewporting usable for transcript-like models
+//! that already maintain stable item ids and terminal-row heights, instead of
+//! forcing them into the GUI list's pixel-oriented storage.
 
 use std::cell::RefCell;
 use std::ops::Range;
@@ -9,6 +16,7 @@ use super::{
     TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSize,
 };
 use crate::{AppContext, Event};
+
 /// A stable item-relative scroll anchor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TuiViewportAnchor<ItemId> {
@@ -26,18 +34,14 @@ pub enum TuiViewportPosition<ItemId> {
 #[derive(Clone)]
 pub struct TuiViewportHandle<ItemId>(Rc<RefCell<TuiViewportPosition<ItemId>>>);
 
-impl<ItemId> Default for TuiViewportHandle<ItemId> {
-    fn default() -> Self {
+impl<ItemId> TuiViewportHandle<ItemId> {
+    /// Creates viewport position storage initially set to the index end.
+    pub fn at_end() -> Self {
         Self(Rc::new(RefCell::new(TuiViewportPosition::End)))
     }
 }
 
 impl<ItemId: Clone> TuiViewportHandle<ItemId> {
-    /// Creates viewport position storage initially set to the index end.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Returns the current caller-owned viewport position.
     pub fn position(&self) -> TuiViewportPosition<ItemId> {
         self.0.borrow().clone()
@@ -113,6 +117,7 @@ pub trait TuiViewportIndex {
     /// Applies view-measured item heights to the backing index.
     fn update_heights(&self, _updates: &[(Self::ItemId, usize)]) {}
 }
+
 /// The request passed to a viewport's injected item renderer.
 pub struct ViewportRenderRequest<Item> {
     pub item: Item,

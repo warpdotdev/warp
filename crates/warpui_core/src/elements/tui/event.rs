@@ -3,14 +3,16 @@
 //! The TUI runtime (`crate::runtime`) converts raw crossterm events into the
 //! shared [`Event`](crate::Event) vocabulary (so element/view dispatch is
 //! identical to the GUI), then walks the rendered element tree handing each
-//! element the event plus a [`TuiEventContext`] it can use to queue app
-//! updates and typed actions back into the shared core.
+//! element the event plus a [`TuiEventContext`] it can use to queue view
+//! notifications and typed actions back into the shared core.
 //!
 //! This module holds the dispatch-side types that are part of the
 //! [`TuiElement`](super::TuiElement) contract; the crossterm → warp event
 //! conversion lives with the runtime.
 
-use crate::{Action, AppContext, EntityId};
+use std::collections::HashSet;
+
+use crate::{Action, EntityId};
 
 /// Whether an element that handled an event wants its ancestors to keep seeing
 /// it. Returned by event-aware elements during dispatch.
@@ -29,11 +31,9 @@ pub struct TuiEventDispatchResult {
     pub handled: bool,
 }
 
-type TuiAppUpdate = Box<dyn FnOnce(&mut AppContext)>;
-
 #[derive(Default)]
 pub struct TuiEventContext {
-    updates: Vec<TuiAppUpdate>,
+    notified: HashSet<EntityId>,
     typed_actions: Vec<TuiDispatchedAction>,
     origin_view_id: Option<EntityId>,
 }
@@ -65,13 +65,11 @@ impl TuiEventContext {
         let origin_view_id = self
             .origin_view_id
             .expect("view notifications can only be queued while processing a rendered TUI view");
-        self.updates.push(Box::new(move |app| {
-            app.update(|ctx| ctx.notify(origin_view_id))
-        }));
+        self.notified.insert(origin_view_id);
     }
 
-    pub(crate) fn take_updates(&mut self) -> Vec<TuiAppUpdate> {
-        std::mem::take(&mut self.updates)
+    pub(crate) fn take_notified(&mut self) -> HashSet<EntityId> {
+        std::mem::take(&mut self.notified)
     }
 
     pub(crate) fn take_typed_actions(&mut self) -> Vec<TuiDispatchedAction> {

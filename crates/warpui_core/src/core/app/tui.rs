@@ -4,22 +4,12 @@
 use anyhow::{anyhow, Result};
 
 use super::{
-    autotracking, AddWindowOptions, AppContext, Effect, StoredView, TypedActionView, ViewContext,
+    autotracking, AddWindowOptions, AppContext, StoredView, TypedActionView, ViewContext,
     ViewHandle, Window,
 };
 use crate::{EntityId, WindowId};
 
 impl AppContext {
-    /// Marks a TUI view dirty so the runtime redraws it on the next frame.
-    pub(crate) fn notify(&mut self, view_id: EntityId) {
-        let Some(window_id) = self.view_to_window.get(&view_id).copied() else {
-            log::warn!("TUI view {view_id:?} not found in view_to_window");
-            return;
-        };
-        self.pending_effects
-            .push_back(Effect::ViewNotification { window_id, view_id });
-    }
-
     /// Adds a TUI view to the given window.
     pub fn add_tui_view<T, F>(&mut self, window_id: WindowId, build_view: F) -> ViewHandle<T>
     where

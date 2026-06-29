@@ -207,7 +207,7 @@ impl ViewportDemoView {
     fn new(quit: Rc<Cell<bool>>) -> Self {
         Self {
             items: Rc::new(RefCell::new(initial_items())),
-            viewport: TuiViewportHandle::new(),
+            viewport: TuiViewportHandle::at_end(),
             quit,
         }
     }

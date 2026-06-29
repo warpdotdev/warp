@@ -138,7 +138,7 @@ pub trait TuiElement {
     fn present(&mut self, _ctx: &mut TuiPresentationContext<'_>) {}
 
     /// Offers `event` to this element within `area`, returning `true` if it was
-    /// handled. `event_ctx` collects deferred app updates and typed actions;
+    /// handled. `event_ctx` collects view notifications and typed actions;
     /// `ctx` carries the presenter's pre-rendered view map so [`TuiChildView`]
     /// can look up and dispatch into its child; `app` provides read access to
     /// the shared core during dispatch.

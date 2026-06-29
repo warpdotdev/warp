@@ -140,10 +140,13 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         };
         let handled = element.dispatch_event(event, area, &mut event_ctx, &mut layout_ctx, ctx);
 
-        for update in event_ctx.take_updates() {
-            update(ctx);
+        let notified = event_ctx.take_notified();
+        if !notified.is_empty() {
+            for view_id in notified {
+                ctx.notify_view_observers(self.window_id, view_id);
+            }
         }
-        for action in event_ctx.take_typed_actions() {
+        for action in event_ctx.take_typed_actions().into_iter().rev() {
             // Dispatch through the shared responder chain (the origin view's
             // ancestors), so an action raised inside an embedded child view
             // bubbles to ancestor handlers.
