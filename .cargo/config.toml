@@ -18,8 +18,6 @@ git-fetch-with-cli = true
 [target.'cfg(all())']
 rustflags = ["-C", "symbol-mangling-version=v0"]
 
-# `-headerpad_max_install_names` is an Apple ld64 linker flag, so it is only
-# applicable on macOS.
 [target.'cfg(target_os = "macos")']
 rustflags = ["-C", "link-args=-Wl,-headerpad_max_install_names"]
 
