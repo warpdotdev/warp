@@ -152,12 +152,14 @@ impl Entry {
         )
     }
     /// Builds the materialized tree and standing results during the same filesystem traversal.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_tree_with_standing_queries(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
         gitignores: &mut Vec<Gitignore>,
         remaining_file_quota: Option<&mut usize>,
         options: BuildTreeOptions<'_>,
+        ancestor_is_ignored: bool,
         standing_results: &mut StandingQueryResults,
         definitions: &StandingQueryDefinitions,
     ) -> Result<Self, BuildTreeError> {
@@ -171,7 +173,7 @@ impl Entry {
             gitignores,
             remaining_file_quota,
             options,
-            false,
+            ancestor_is_ignored,
             Some(&mut standing_queries),
         )
     }

@@ -930,6 +930,7 @@ impl LocalRepoMetadataModel {
                 force_included_paths: &self.force_included_paths,
                 budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
             },
+            false,
             &mut standing_results,
             &self.standing_query_definitions,
         )
@@ -1211,6 +1212,7 @@ impl LocalRepoMetadataModel {
                         force_included_paths,
                         budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
                     },
+                    is_ignored,
                     &mut standing_results,
                     standing_query_definitions,
                 ) {
@@ -1554,6 +1556,7 @@ impl LocalRepoMetadataModel {
                         force_included_paths: &force_included_paths,
                         budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
                     },
+                    false,
                     &mut standing_results,
                     &standing_query_definitions,
                 );
