@@ -845,6 +845,23 @@ impl BlocklistAIContextModel {
         &self,
         ctx: &AppContext,
     ) -> AIConversationAutoexecuteMode {
+        // When AgentView is enabled, the autoexecution toggle applies to the active agent view
+        // conversation -- even when starting a new conversation, the agent view always has a
+        // conversation ID. Read the same target here so callers can tell whether a toggle will
+        // enable or disable Fast Forward.
+        if FeatureFlag::AgentView.is_enabled() {
+            if let Some(conversation_id) = self
+                .agent_view_controller
+                .as_ref(ctx)
+                .agent_view_state()
+                .active_conversation_id()
+            {
+                return BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .map(|conversation| conversation.autoexecute_override())
+                    .unwrap_or_default();
+            }
+        }
         match &self.pending_query_state {
             PendingQueryState::New {
                 autoexecute_override,
