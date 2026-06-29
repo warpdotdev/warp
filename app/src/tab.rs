@@ -600,9 +600,18 @@ impl TabData {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return vec![];
         }
-        let mut menu_items = vec![MenuItemFields::new("New group with tab")
-            .with_on_select_action(WorkspaceAction::NewTabGroupFromTab(index))
-            .into_item()];
+        let mut menu_items: Vec<MenuItem<WorkspaceAction>> = vec![];
+        // Only offer "New group with tab" for an ungrouped tab. On a tab that is
+        // already in a group this created a confusing one-member "New Group" header
+        // (the user reads it as overwriting the current tab). Regrouping a grouped
+        // tab is still reachable via drag / multi-select.
+        if self.group_id.is_none() {
+            menu_items.push(
+                MenuItemFields::new("New group with tab")
+                    .with_on_select_action(WorkspaceAction::NewTabGroupFromTab(index))
+                    .into_item(),
+            );
+        }
         let has_other_groups = tab_groups.keys().any(|gid| Some(*gid) != self.group_id);
         if has_other_groups {
             menu_items.push(MenuItemFields::new_submenu(MOVE_TO_GROUP_LABEL).into_item());
@@ -2122,3 +2131,7 @@ impl UiComponent for TabComponent<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tab_tests.rs"]
+mod tests;
