@@ -10,8 +10,7 @@ use warpui::App;
 use watcher::HomeDirectoryWatcher;
 
 use super::{
-    format_search_in_path, format_upload_artifact_text, parsed_skill_for_common_locations,
-    read_skill_display_text,
+    format_upload_artifact_text, parsed_skill_for_common_locations, read_skill_display_text,
 };
 use crate::ai::agent::UploadArtifactResult;
 use crate::ai::skills::SkillManager;
@@ -76,57 +75,6 @@ fn format_upload_artifact_text_includes_terminal_status() {
     let cancelled_text =
         format_upload_artifact_text(&request, Some(&UploadArtifactResult::Cancelled));
     assert_eq!(cancelled_text, "Upload artifact: reports/daily.txt");
-}
-
-#[test]
-fn format_search_in_path_special_cases_current_directory() {
-    let cwd = "/home/user".to_string();
-    // File glob with no path argument.
-    assert_eq!(
-        format_search_in_path(None, None, Some(&cwd)),
-        "the current directory"
-    );
-    // An explicit "." (grep or file glob) also renders as the current directory.
-    assert_eq!(
-        format_search_in_path(Some("."), None, Some(&cwd)),
-        "the current directory"
-    );
-}
-
-#[test]
-fn format_search_in_path_collapses_doubled_separators() {
-    // Regression for the grep / file-glob tool-call header rendering doubled
-    // file separators on Windows (e.g. `C:\\Users\\...`). The display path is
-    // normalized via `shell_native_absolute_path`, the same path read-file
-    // display uses, which collapses redundant separators so the header matches
-    // the read-file rendering and the path actually searched.
-    //
-    // On non-Windows targets `shell_native_absolute_path` operates in unix mode,
-    // so we exercise the same separator-collapsing behavior with doubled forward
-    // slashes; the Windows-specific backslash case is asserted under
-    // `cfg(windows)` (where it ultimately matters and CI on Windows runs it).
-    #[cfg(not(windows))]
-    {
-        let cwd = "/home/user".to_string();
-        let out = format_search_in_path(Some("crates//repo_metadata///src"), None, Some(&cwd));
-        assert!(
-            !out.contains("//"),
-            "display path should not contain doubled separators: {out}"
-        );
-        assert!(
-            out.ends_with("crates/repo_metadata/src"),
-            "display path should preserve components: {out}"
-        );
-    }
-    #[cfg(windows)]
-    {
-        let cwd = "C:\\Users\\dev".to_string();
-        let out = format_search_in_path(Some("crates\\\\repo_metadata\\\\src"), None, Some(&cwd));
-        assert!(
-            !out.contains("\\\\"),
-            "display path should not contain doubled backslashes: {out}"
-        );
-    }
 }
 
 fn make_skill(name: &str) -> ParsedSkill {

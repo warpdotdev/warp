@@ -2372,29 +2372,6 @@ fn render_suggest_new_conversation(
     )
 }
 
-/// Returns the directory text shown in grep / file-glob tool-call headers
-/// (the "... in <path>" portion).
-///
-/// The path is run through [`shell_native_absolute_path`] — the same
-/// normalization read-file display uses — which collapses doubled or redundant
-/// separators (e.g. the doubled backslashes a Windows tool call can arrive
-/// with, `C:\\Users\\...`). This keeps the header consistent with how read-file
-/// tool calls render the same path and with the path the tool actually
-/// searches. `None` (file glob with no path) and `"."` render as "the current
-/// directory".
-fn format_search_in_path(
-    path: Option<&str>,
-    shell_launch_data: Option<&ShellLaunchData>,
-    current_working_directory: Option<&String>,
-) -> String {
-    match path {
-        None | Some(".") => "the current directory".to_string(),
-        Some(path) => {
-            shell_native_absolute_path(path, shell_launch_data, current_working_directory)
-        }
-    }
-}
-
 /// Creates a FormattedText object with inline code formatting for grep queries
 fn create_formatted_text_for_grep(
     props: Props,
@@ -2414,11 +2391,15 @@ fn create_formatted_text_for_grep(
         .as_ref()
         .is_some_and(|status| status.is_queued());
 
-    let display_path = format_search_in_path(
-        Some(path),
-        props.shell_launch_data,
-        props.current_working_directory,
-    );
+    let display_path = if path == "." {
+        "the current directory".to_string()
+    } else {
+        shell_native_absolute_path(
+            path,
+            props.shell_launch_data,
+            props.current_working_directory,
+        )
+    };
 
     let formatted_text = if queries.len() == 1 {
         let query = queries
@@ -2514,11 +2495,15 @@ fn create_formatted_text_for_file_glob(
         .as_ref()
         .is_some_and(|status| status.is_queued());
 
-    let path = format_search_in_path(
-        path,
-        props.shell_launch_data,
-        props.current_working_directory,
-    );
+    let path = path
+        .map(|path| {
+            shell_native_absolute_path(
+                path,
+                props.shell_launch_data,
+                props.current_working_directory,
+            )
+        })
+        .unwrap_or_else(|| "the current directory".to_string());
 
     let formatted_text = if patterns.len() == 1 {
         let pattern = patterns
