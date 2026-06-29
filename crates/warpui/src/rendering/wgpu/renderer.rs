@@ -145,16 +145,23 @@ impl Renderer {
                     union_bounds(self.prev_cursor_rects.iter().chain(cur_cursor_rects.iter()))
                 }
                 SceneDamage::Partial => {
-                    // A region repaint is only safe if the damaged element kept
-                    // the same bounds. If its extent changed (e.g. the prompt
-                    // grew a line), sibling content was re-laid-out outside the
-                    // damage rect, so the Load would show stale pixels -- fall
-                    // back to a full repaint for this frame.
+                    // Damage the union of the previous and current frame's
+                    // changed-view bounds, so a view that moved repaints both its
+                    // old and new position. Fall back to a full repaint only on a
+                    // VERTICAL shift: the input growing/shrinking a line can
+                    // re-lay-out sibling content (e.g. scrollback) that didn't
+                    // itself re-render, which a partial frame would leave stale.
+                    // Horizontal reflow (autosuggestion width, chips) within a
+                    // stable vertical band is safe to damage partially.
                     match (
                         union_bounds(self.prev_damage_rects.iter()),
                         union_bounds(cur_damage_rects.iter()),
                     ) {
-                        (Some(prev), Some(cur)) if rects_approx_eq(prev, cur) => Some(cur),
+                        (Some(prev), Some(cur)) if vertical_extent_stable(prev, cur) => {
+                            union_bounds(
+                                self.prev_damage_rects.iter().chain(cur_damage_rects.iter()),
+                            )
+                        }
                         _ => None,
                     }
                 }
@@ -295,15 +302,14 @@ fn union_bounds<'a>(rects: impl Iterator<Item = &'a RectF>) -> Option<RectF> {
     ))
 }
 
-/// Whether two rects are equal within half a device pixel, used to detect that a
-/// partially-damaged element kept the same bounds between frames (so scissoring
-/// to it is safe). A change means the layout shifted and we must repaint fully.
-fn rects_approx_eq(a: RectF, b: RectF) -> bool {
-    const EPS: f32 = 0.5;
-    (a.min_x() - b.min_x()).abs() < EPS
-        && (a.min_y() - b.min_y()).abs() < EPS
-        && (a.max_x() - b.max_x()).abs() < EPS
-        && (a.max_y() - b.max_y()).abs() < EPS
+/// Whether two damage regions occupy the same vertical band (within a few device
+/// pixels). A vertical change means content was re-laid-out and sibling views may
+/// have moved without re-rendering, so the frame must repaint fully. Horizontal
+/// changes (e.g. autosuggestion ghost-text width) stay within the input band and
+/// are safe to damage partially.
+fn vertical_extent_stable(a: RectF, b: RectF) -> bool {
+    const V_EPS: f32 = 8.0; // less than one line height
+    (a.min_y() - b.min_y()).abs() < V_EPS && (a.max_y() - b.max_y()).abs() < V_EPS
 }
 
 /// Expands `rect` by `pad` device pixels on each side and clamps it to the

@@ -37,6 +37,11 @@ pub struct Presenter {
     /// Damage to stamp onto the next scene built by [`Self::build_scene`], then
     /// reset to [`SceneDamage::Full`]. Set via [`Self::set_next_scene_damage`].
     pending_damage: SceneDamage,
+    /// Views invalidated this frame (updated minus removed), captured in
+    /// [`Self::invalidate`]. On a [`SceneDamage::Partial`] frame their painted
+    /// bounds become the scene's damage region so the renderer can scissor to
+    /// just the changed views instead of repainting the whole window.
+    partial_damage_views: HashSet<EntityId>,
 }
 
 pub struct LayoutContext<'a> {
@@ -316,6 +321,7 @@ impl Presenter {
             position_cache: PositionCache::default(),
             highlighted_view: None,
             pending_damage: SceneDamage::Full,
+            partial_damage_views: HashSet::new(),
         }
     }
 
@@ -326,6 +332,13 @@ impl Presenter {
     }
 
     pub fn invalidate(&mut self, invalidation: WindowInvalidation, app: &AppContext) {
+        // Remember which views actually changed this frame so a partial repaint
+        // can damage just their bounds (see build_scene).
+        self.partial_damage_views = invalidation
+            .updated
+            .difference(&invalidation.removed)
+            .copied()
+            .collect();
         // Don't try to update views that were also removed
         for &view_id in invalidation.updated.difference(&invalidation.removed) {
             match app.render_view(self.window_id, view_id) {
@@ -377,6 +390,16 @@ impl Presenter {
             max_texture_dimension_2d,
             ctx,
         );
+        // On a partial frame, damage just the bounds of the views that actually
+        // changed this frame. The renderer scissors to the union of these (and
+        // falls back to a full repaint if that union shifts between frames).
+        if self.pending_damage == SceneDamage::Partial {
+            for view_id in &self.partial_damage_views {
+                if let Some(bounds) = self.rendered_views.get(view_id).and_then(|el| el.bounds()) {
+                    scene.record_damage_rect(bounds);
+                }
+            }
+        }
         scene.set_damage(std::mem::take(&mut self.pending_damage));
         // After paint, collect a delayed repaint if it exists and start the timer.
         if let Some(repaint_at) = repaint_at {
