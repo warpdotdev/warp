@@ -1,5 +1,6 @@
 use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
+    MouseEventKind,
 };
 
 use super::crossterm_event_to_warp_event;
@@ -84,4 +85,39 @@ fn pure_modifier_keys_have_no_warp_equivalent() {
 fn resize_and_focus_events_are_ignored() {
     assert!(crossterm_event_to_warp_event(CrosstermEvent::Resize(80, 24)).is_none());
     assert!(crossterm_event_to_warp_event(CrosstermEvent::FocusGained).is_none());
+}
+
+#[test]
+fn vertical_mouse_wheel_maps_to_cell_position_and_scroll_delta() {
+    let Some(Event::ScrollWheel {
+        position,
+        delta,
+        precise,
+        modifiers,
+    }) = crossterm_event_to_warp_event(CrosstermEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 7,
+        row: 3,
+        modifiers: KeyModifiers::SHIFT,
+    }))
+    else {
+        panic!("expected ScrollWheel");
+    };
+
+    assert_eq!(position, crate::geometry::vector::Vector2F::new(7.0, 3.0));
+    assert_eq!(delta, crate::geometry::vector::Vector2F::new(0.0, 1.0));
+    assert!(!precise);
+    assert!(modifiers.shift);
+
+    let Some(Event::ScrollWheel { delta, .. }) =
+        crossterm_event_to_warp_event(CrosstermEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 7,
+            row: 3,
+            modifiers: KeyModifiers::empty(),
+        }))
+    else {
+        panic!("expected ScrollWheel");
+    };
+    assert_eq!(delta, crate::geometry::vector::Vector2F::new(0.0, -1.0));
 }

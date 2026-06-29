@@ -32,7 +32,9 @@ mod event;
 mod event_handler;
 mod geometry;
 mod parent;
+mod scrollable;
 mod text;
+mod viewported_list;
 
 pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiStyle};
 pub use child_view::TuiChildView;
@@ -43,7 +45,12 @@ pub use event::{TuiDispatchEventResult, TuiEventContext, TuiEventDispatchResult}
 pub use event_handler::TuiEventHandler;
 pub use geometry::{TuiConstraint, TuiRect, TuiRectExt, TuiSize};
 pub use parent::TuiParentElement;
+pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use text::TuiText;
+pub use viewported_list::{
+    RenderedViewportItem, TuiViewportCursor, TuiViewportHandle, TuiViewportIndex,
+    TuiViewportIndexItem, TuiViewportIndexPosition, TuiViewportedList, ViewportRenderRequest,
+};
 
 /// Carries the pre-rendered per-view element map through the layout pass,
 /// mirroring the GUI's `LayoutContext`. [`TuiChildView`] uses it to look up

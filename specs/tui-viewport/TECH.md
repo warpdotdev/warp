@@ -1,0 +1,34 @@
+# Generalized TUI viewport element — TECH
+## Context
+This branch adds a generalized, content-agnostic virtualized viewport to WarpUI's TUI element stack, plus an interactive demo harness that exercises it over a trivial in-memory index of text blocks. It is the reusable scrolling/clipping foundation; it knows ordered item identities, logical row heights, scroll state, and visible element trees, but it knows nothing about `TerminalModel`, terminal blocks, or agent exchanges.
+The consumer lands separately: a terminal-backed transcript (`specs/tui-transcript-view/TECH.md`) plugs a `TerminalModel::BlockList` adapter and real agent/terminal block renderers into this viewport. That work is out of scope here.
+WarpUI already has a TUI element/view/presenter stack. [`TuiElement`](../../crates/warpui_core/src/elements/tui/mod.rs) defines the layout/render/present/event/cursor lifecycle; [`TuiColumn`](../../crates/warpui_core/src/elements/tui/column.rs) lays children out top-to-bottom, giving each child a loose constraint of the remaining height. The viewport returns normal visible `TuiElement` trees so this lifecycle stays intact; it never paints raw buffer rows outside the element lifecycle.
+## Proposed changes
+### Generalized viewport element
+Add `crates/warpui_core/src/elements/tui/viewported_list.rs`: a `TuiViewportedList` that delegates ordered storage and item rendering to the caller. It holds a caller-provided ordered-index adapter, an injected item-render function, persistent scroll state, and the `TuiElement` trees retained for the currently visible outer-item slices.
+The ordered-index adapter exposes stable identity, height, efficient seek, and scoped forward/backward traversal over a caller-owned ordered-height structure:
+- `TuiViewportIndex` — `with_cursor(position, f)` opens a scoped cursor and releases all borrowed backing state when `f` returns; `update_heights(updates)` applies view-measured heights back into the backing store.
+- `TuiViewportCursor` — `item()` returns an owned `TuiViewportIndexItem { id, item, height, needs_measurement }`; `next()`/`prev()` move.
+- `TuiViewportIndexPosition::{Start, End, Item(&ItemId)}` selects the cursor's starting position.
+The item-render function receives an owned `ViewportRenderRequest { item, visible_rows: Range<usize>, width: u16 }` plus read-only `AppContext`, and returns a `RenderedViewportItem { element, measured_full_height: Option<usize> }`. It never receives the final `TuiBuffer`. Logical heights, offsets, and intra-item anchors use `usize` rows; conversion to ratatui's `u16` geometry happens only for the bounded visible destination rectangle.
+### Scroll state and height reconciliation
+Viewport scroll state is either `FollowBottom` or `Anchored { item_id, row_offset }`, held in a cloneable `TuiViewportHandle` so it persists across re-renders. The initial state is `FollowBottom`. Scrolling away from the end produces a stable item/row anchor; scrolling back to the end restores `FollowBottom`; an anchored item that shrinks clamps its row offset; an anchored item that no longer exists safely falls back to `FollowBottom`.
+The viewport measures only visible items whose descriptor is dirty (`needs_measurement`) or when the width changed. View-measured items report `measured_full_height`; the viewport batches changed heights, writes them back through `update_heights`, then recomputes its anchor and re-collects within the current layout pass until stable, bounded by a strict pass limit that emits diagnostics on non-convergence. Only currently visible outer-item element trees participate in presentation, render, event dispatch, and cursor resolution.
+### Reusable wheel-scroll wrapper
+Add `crates/warpui_core/src/elements/tui/scrollable.rs`: `TuiScrollable` wraps a `TuiScrollableElement` (implemented by `TuiViewportedList`), capturing wheel events over the child's area and translating them into `scroll_by_rows` calls. Layout, render, cursor, and inner event dispatch are transparent; only the wheel is intercepted, and only when the child did not already handle the event. This mirrors the GUI's `NewScrollable` / `NewScrollableElement` split: the wrapper owns wheel handling, the list owns scroll position and clamping.
+### Vertical text scroll
+Extend [`TuiText`](../../crates/warpui_core/src/elements/tui/text.rs) with `with_vertical_scroll(rows)`, so a render function can render a top-clipped item by starting at its first visible logical row instead of rendering the whole item.
+### Wheel event conversion
+Extend [`crossterm_event_to_warp_event`](../../crates/warpui_core/src/runtime/event_conversion.rs) to map crossterm mouse-wheel input to `Event::ScrollWheel` in cell coordinates. The alternate-screen guard already enables mouse capture, so the existing `TuiRuntime` delivers these events to the element tree without further runtime changes.
+### Demo harness
+Add `crates/warpui_core/examples/tui_viewport_demo.rs` (mirrors `crates/warpui_core/examples/tui_demo.rs`): an in-memory `TuiViewportIndex` of simple multi-row text blocks rendered through `TuiScrollable::new(TuiViewportedList::new(...))`, run via `TuiRuntime::enter` + `run_until`. It deliberately drives every shipped component so all of it is manually testable: cursor seek/traversal, follow-bottom → anchored → return-to-bottom, the remove-anchored-item fallback (`x` removes the front block), wheel scrolling, `with_vertical_scroll` for top-clipped blocks, and width-dependent `measured_full_height` re-measurement on resize.
+## Testing and validation
+Unit tests alongside the new modules use fake ordered indexes and injected render functions (`viewported_list_tests.rs`, `text_tests.rs`, `event_conversion_tests.rs`) and verify: anchor seek/traversal does not scan unrelated items; `FollowBottom`, wheel-anchored scrolling, return-to-bottom, and missing-anchor fallback; the renderer receives only visible items and correct intra-item row ranges; scoped traversal ends before rendering; dirty-height feedback is batched and same-pass stabilization recomputes the visible range; width changes invalidate view-measured heights; only visible element trees participate in rendering, event dispatch, and cursor lookup; non-converging height feedback is bounded.
+Run:
+- `./script/format`
+- `cargo nextest run -p warpui_core -E 'test(tui)'`
+- `cargo build -p warpui_core --example tui_viewport_demo --features tui` and a manual run (overflow the viewport, wheel-scroll, confirm clipping + follow-bottom restore; Esc/Ctrl-C restores the terminal)
+- `cargo clippy -p warpui_core --all-targets -- -D warnings`
+## Outside this branch
+- the terminal-history index over `TerminalModel::BlockList`, the terminal-backed transcript view, and the real agent/terminal block renderers (see `specs/tui-transcript-view/TECH.md`)
+- the production TUI root, invalidation-driven driver, and interactive input hookup

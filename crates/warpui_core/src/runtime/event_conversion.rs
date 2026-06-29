@@ -2,11 +2,13 @@
 //! [`Event`](crate::Event) vocabulary, so TUI element/view dispatch is
 //! identical to the GUI's.
 
+use pathfinder_geometry::vector::Vector2F;
 use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
+    MouseEventKind,
 };
 
-use crate::event::KeyEventDetails;
+use crate::event::{KeyEventDetails, ModifiersState};
 use crate::keymap::Keystroke;
 use crate::Event;
 
@@ -15,10 +17,7 @@ use crate::Event;
 pub fn crossterm_event_to_warp_event(event: CrosstermEvent) -> Option<Event> {
     match event {
         CrosstermEvent::Key(key_event) => key_event_to_warp_event(key_event),
-        // TODO: Mouse events are not converted yet. TUI coordinates are integer
-        // cell (row, column) pairs that need a dedicated representation before
-        // they can be mapped into Warp's float-pixel Event system.
-        CrosstermEvent::Mouse(_) => None,
+        CrosstermEvent::Mouse(mouse_event) => mouse_event_to_warp_event(mouse_event),
         // TODO: FocusGained, FocusLost, and Paste have no Warp equivalents yet.
         // If these are needed in the future, consider adding matching Warp events.
         CrosstermEvent::FocusGained
@@ -28,6 +27,31 @@ pub fn crossterm_event_to_warp_event(event: CrosstermEvent) -> Option<Event> {
     }
 }
 
+/// Converts TUI mouse-wheel input into cell-coordinate scroll events.
+fn mouse_event_to_warp_event(event: MouseEvent) -> Option<Event> {
+    let delta = match event.kind {
+        MouseEventKind::ScrollUp => Vector2F::new(0.0, 1.0),
+        MouseEventKind::ScrollDown => Vector2F::new(0.0, -1.0),
+        MouseEventKind::ScrollLeft => Vector2F::new(1.0, 0.0),
+        MouseEventKind::ScrollRight => Vector2F::new(-1.0, 0.0),
+        MouseEventKind::Down(_)
+        | MouseEventKind::Up(_)
+        | MouseEventKind::Drag(_)
+        | MouseEventKind::Moved => return None,
+    };
+    Some(Event::ScrollWheel {
+        position: Vector2F::new(f32::from(event.column), f32::from(event.row)),
+        delta,
+        precise: false,
+        modifiers: ModifiersState {
+            alt: event.modifiers.contains(KeyModifiers::ALT),
+            cmd: event.modifiers.contains(KeyModifiers::SUPER),
+            shift: event.modifiers.contains(KeyModifiers::SHIFT),
+            ctrl: event.modifiers.contains(KeyModifiers::CONTROL),
+            func: false,
+        },
+    })
+}
 fn key_event_to_warp_event(event: KeyEvent) -> Option<Event> {
     // Only key presses map to a warp `KeyDown`; repeats/releases are ignored so
     // dispatch matches the GUI's press-driven keystroke model.
