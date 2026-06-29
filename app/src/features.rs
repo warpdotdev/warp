@@ -507,6 +507,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::GeminiEnterprise,
         #[cfg(feature = "prompt_cache_expiry_warning")]
         FeatureFlag::PromptCacheExpiryWarning,
+        #[cfg(feature = "right_utility_panel")]
+        FeatureFlag::RightUtilityPanel,
     ]);
 
     flags
