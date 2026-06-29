@@ -458,6 +458,20 @@ impl<'a, T: Entity> ViewContext<'a, T> {
             });
     }
 
+    /// Like [`Self::notify`], but signals that the *only* thing that changed is
+    /// the text cursor (e.g. a 500ms blink toggle). If this is the sole
+    /// invalidation in a frame, the renderer repaints just the cursor region
+    /// instead of re-rasterizing the whole window. If any normal `notify()` also
+    /// occurs in the same frame, the frame falls back to a full repaint.
+    pub fn notify_cursor_only(&mut self) {
+        self.app
+            .pending_effects
+            .push_back(Effect::ViewCursorNotification {
+                window_id: self.window_id,
+                view_id: self.view_id,
+            });
+    }
+
     /// Requests permissions to send desktop notifications. The `on_completion callback` can be invoked to
     /// propagate the outcome of the request (accepted/denied/other) back to the app.
     ///

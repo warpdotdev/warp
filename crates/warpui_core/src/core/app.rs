@@ -59,8 +59,8 @@ use crate::{
     AnyModelHandle, ApplicationBundleInfo, Clipboard, CursorInfo, Effect, Element, Entity,
     EntityId, Event, GetSingletonModelHandle, ModelAsRef, ModelContext, ModelHandle,
     NextNewWindowsHasThisWindowsBoundsUponClose, Presenter, ReadModel, ReadView, Scene,
-    SingletonEntity, SpawnedFuture, TaskId, TypedActionView, UpdateModel, UpdateView, View,
-    ViewAsRef, ViewContext, ViewHandle, WindowId, WindowInvalidation, ZoomFactor,
+    SceneDamage, SingletonEntity, SpawnedFuture, TaskId, TypedActionView, UpdateModel, UpdateView,
+    View, ViewAsRef, ViewContext, ViewHandle, WindowId, WindowInvalidation, ZoomFactor,
 };
 
 #[cfg(feature = "tui")]
@@ -1007,9 +1007,15 @@ impl AppContext {
             .window_invalidations
             .remove(&window_id)
             .unwrap_or_default();
-        invalidations
-            .updated
-            .extend(autotracking::take_invalidations_for_window(window_id));
+        let auto: Vec<_> = autotracking::take_invalidations_for_window(window_id)
+            .into_iter()
+            .collect();
+        if !auto.is_empty() {
+            // Autotracked invalidations are outside the cursor-only fast path, so
+            // force a full repaint to stay correct.
+            invalidations.full_repaint_requested = true;
+        }
+        invalidations.updated.extend(auto);
         invalidations
     }
 
@@ -2890,8 +2896,25 @@ impl AppContext {
                 break;
             }
 
+            // A frame can be a partial cursor-only repaint only when the very
+            // first iteration's sole signal is a cursor blink. Any later
+            // iteration (e.g. a synthetic MouseMoved that actually changed
+            // something), a full notification, an explicit redraw request, or a
+            // structural change forces a full repaint.
+            let damage = if iter == 1
+                && invalidation.cursor_damage
+                && !invalidation.full_repaint_requested
+                && !invalidation.redraw_requested
+                && invalidation.removed.is_empty()
+            {
+                SceneDamage::CursorOnly
+            } else {
+                SceneDamage::Full
+            };
+
             {
                 let mut presenter = presenter.borrow_mut();
+                presenter.set_next_scene_damage(damage);
                 presenter.invalidate(invalidation, self);
 
                 // Skip rendering if a dimension is 0. This must happen after
@@ -3428,6 +3451,9 @@ impl AppContext {
                     Effect::ModelNotification { model_id } => self.notify_model_observers(model_id),
                     Effect::ViewNotification { window_id, view_id } => {
                         self.notify_view_observers(window_id, view_id)
+                    }
+                    Effect::ViewCursorNotification { window_id, view_id } => {
+                        self.notify_view_observers_cursor(window_id, view_id)
                     }
                     Effect::Focus { window_id, view_id } => {
                         self.focus(window_id, view_id);
@@ -4055,11 +4081,20 @@ impl AppContext {
     }
 
     fn notify_view_observers(&mut self, window_id: WindowId, view_id: EntityId) {
-        self.window_invalidations
-            .entry(window_id)
-            .or_default()
-            .updated
-            .insert(view_id);
+        let invalidation = self.window_invalidations.entry(window_id).or_default();
+        invalidation.updated.insert(view_id);
+        // A normal notification can change anything in the view tree, so this
+        // frame must repaint fully (it cannot be a cursor-only partial repaint).
+        invalidation.full_repaint_requested = true;
+    }
+
+    /// Records a cursor-blink-only invalidation: the view is still re-rendered,
+    /// but unless a full repaint is also requested this frame, the renderer may
+    /// repaint just the cursor region (see [`Scene::damage`]).
+    fn notify_view_observers_cursor(&mut self, window_id: WindowId, view_id: EntityId) {
+        let invalidation = self.window_invalidations.entry(window_id).or_default();
+        invalidation.updated.insert(view_id);
+        invalidation.cursor_damage = true;
     }
 
     fn focus(&mut self, window_id: WindowId, focused_id: EntityId) {

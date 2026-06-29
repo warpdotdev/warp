@@ -853,6 +853,10 @@ impl EditorElement {
                 .draw_rect_with_hit_recording(cursor_rect)
                 .with_background(cursor.color)
                 .with_corner_radius(CornerRadius::with_all(cursor_corner_radius));
+            // Record the cursor bounds so the renderer can compute a small damage
+            // region and repaint just the cursor on a blink instead of the whole
+            // window (see SceneDamage::CursorOnly).
+            ctx.scene.record_cursor_rect(cursor_rect);
 
             // Draw cursor avatars for remote selections
             if !is_local {

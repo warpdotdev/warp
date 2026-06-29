@@ -7468,7 +7468,9 @@ impl EditorView {
             )
         {
             self.cursors_visible = !self.cursors_visible;
-            ctx.notify();
+            // Only the cursor changed: let the renderer repaint just the cursor
+            // region instead of re-rasterizing the whole window every 500ms.
+            ctx.notify_cursor_only();
 
             let epoch = self.next_blink_epoch();
             let _ = ctx.spawn(

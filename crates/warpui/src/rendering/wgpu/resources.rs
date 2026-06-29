@@ -68,6 +68,21 @@ pub struct Resources {
     pub supported_backends: Vec<wgpu::Backend>,
     uniforms: uniforms::Uniforms,
     quad: quad::Resources,
+    /// Persistent offscreen color target that the scene is rendered into before
+    /// being copied to the swapchain. Retaining it between frames is what makes
+    /// partial/damage rendering possible (we can keep the previous frame's
+    /// pixels and only re-rasterize a damaged sub-rectangle). `None` until first
+    /// use or when the surface doesn't support `COPY_DST`.
+    offscreen: RefCell<Option<OffscreenTarget>>,
+}
+
+/// A reusable offscreen color texture sized to the current surface.
+struct OffscreenTarget {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
 }
 
 impl Resources {
@@ -133,12 +148,71 @@ impl Resources {
                 supported_backends: supported_backends.into_iter().collect(),
                 uniforms,
                 quad,
+                offscreen: RefCell::new(None),
             })
         })
     }
 
     pub fn uniform_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         self.uniforms.bind_group_layout()
+    }
+
+    /// Returns the persistent offscreen render target (texture + view) sized to
+    /// `width`x`height`, creating or recreating it on size/format changes.
+    ///
+    /// Returns `None` when the surface can't be a copy destination, in which
+    /// case the caller should render directly to the swapchain. The returned
+    /// `Texture`/`TextureView` are cheap (Arc-backed) clones.
+    pub fn offscreen_target(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Option<(wgpu::Texture, wgpu::TextureView)> {
+        let format = {
+            let config = self.surface_config.borrow();
+            if !config.usage.contains(wgpu::TextureUsages::COPY_DST) {
+                return None;
+            }
+            config.format
+        };
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let mut slot = self.offscreen.borrow_mut();
+        let needs_new = match slot.as_ref() {
+            Some(target) => {
+                target.width != width || target.height != height || target.format != format
+            }
+            None => true,
+        };
+        if needs_new {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Offscreen render target"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            *slot = Some(OffscreenTarget {
+                texture,
+                view,
+                width,
+                height,
+                format,
+            });
+        }
+
+        slot.as_ref()
+            .map(|target| (target.texture.clone(), target.view.clone()))
     }
 
     pub fn configure_render_pass<'a>(
@@ -840,6 +914,15 @@ fn create_surface_config(
     #[cfg(feature = "integration_tests")]
     if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
         config.usage |= wgpu::TextureUsages::COPY_SRC;
+    }
+
+    // COPY_DST lets us copy a persistent offscreen render target into the
+    // swapchain image, which is the basis for partial/damage rendering (only
+    // re-rasterizing and copying the changed region, e.g. a blinking cursor,
+    // instead of the whole window). If the surface doesn't support it, we fall
+    // back to rendering directly to the swapchain.
+    if caps.usages.contains(wgpu::TextureUsages::COPY_DST) {
+        config.usage |= wgpu::TextureUsages::COPY_DST;
     }
 
     // Use a non-vsync presentation mode for reduced input delay.  This could
