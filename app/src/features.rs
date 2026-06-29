@@ -421,6 +421,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::OrchestrationViewerStreamer,
         #[cfg(feature = "owner_orchestration_ancestor_streamer")]
         FeatureFlag::OwnerOrchestrationAncestorStreamer,
+        #[cfg(feature = "wait_for_events_parent_registration")]
+        FeatureFlag::WaitForEventsParentRegistration,
         #[cfg(feature = "pending_user_query_indicator")]
         FeatureFlag::PendingUserQueryIndicator,
         #[cfg(feature = "queue_slash_command")]
