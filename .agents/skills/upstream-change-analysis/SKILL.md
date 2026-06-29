@@ -12,6 +12,7 @@ This skill exists because a previous pass produced fake analysis: dependency cla
 ## Hard Line
 
 - Apply XP scope control: do not recommend implementation unless Warper will fail its current local-first purpose without it. "Would be nice", "upstream fixed it", generic safety talk, team convenience, and future-facing compatibility are not enough. A `Port` must stop an unsafe-to-run app, local data corruption, command execution exposure in a retained path, credential/local-file exposure, a crash that breaks normal terminal use, or a current build/release path from failing.
+- Security labels, advisory IDs, scanner output, and upstream private PR subjects do not justify a port. A security port must prove the vulnerable dependency or code path exists in Warper, prove the path is reachable from a retained local workflow, explain the concrete attacker-controlled input or corruption mechanism, and state what user harm occurs without the port. If any of those points cannot be proven from code and primary evidence, the decision is `Skip` or `Defer`.
 - Do not write BS. If a human can ask "did you actually check that?" and the answer is no, the analysis is invalid.
 - Do not write conditional relevance when the repo can answer the condition. Check the code.
 - Do not write generic rationale. "Security", "correctness", "compatibility", "ergonomics", "rendering", and team-efficiency labels are not reasons.
@@ -21,6 +22,18 @@ This skill exists because a previous pass produced fake analysis: dependency cla
 - Do not use upstream VC-product logic as a rationale. New agent surfaces, plugin managers, control planes, queues, telemetry-adjacent plumbing, or "platform" abstractions are rejected unless Warper's own specs require them.
 - Do not launder upstream's reason into Warper's reason. "Why upstream did it" and "why Warper needs it" are separate answers. Upstream can have a real reason that is still useless or harmful for Warper.
 - Do not sanitize make-work. If the evidence says upstream moved code around because a large team needed a project, call it churn. Do not rename it "architecture", "platform maturity", or team enablement.
+
+## Regression Accountability Gate
+
+Before any `Port` or `Port manually` implementation starts, write the retained Warper workflow that can regress. For terminal/session changes, this must include tab creation, split-pane creation, multi-pane launch or tab config creation, cross-tab sequencing, and shell startup directory behavior when the touched code can affect those paths. For persistence changes, include restore, migration, and new-object creation. For security changes, include the exploit or corruption path plus at least one benign retained workflow that must not change.
+
+Any upstream diff touching process spawn, terminal server IPC, pane/session creation, working directories, launch configs, tab configs, restore, persistence, file opening, command execution, shell bootstrap, or dependency resolution must satisfy all of these before implementation:
+
+- Identify the exact state or protocol invariant the port relies on.
+- Add or update a failing local test for that invariant before production code changes.
+- Add a regression test or manual smoke matrix for adjacent user workflows, not only the narrow upstream bug.
+- Prefer a smaller local fix when upstream's patch mixes the needed invariant with unrelated refactors, product surface, or speculative hardening.
+- Stop and reclassify to `Defer` if the required validation cannot be run in the current toolchain and no reviewer can run it before merge.
 
 ## Failure Examples
 
