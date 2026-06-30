@@ -66,7 +66,7 @@ enum TuiBlockListVisibleItem {
 
 The adapter uses the `BlockList` sum tree as the source of truth and currently walks canonical entries from the start of the block list when collecting visible descriptors. It skips unsupported blocklist item kinds in this PR rather than rendering placeholders for them. A future optimization can seek closer to the requested scroll window if large transcripts make this traversal measurable.
 
-`TuiBlockListViewportSource` consumes `BlockList`'s existing dirty rich-content queue, measures dirty registered TUI agent blocks at the current viewport width, and writes the resulting heights back through `BlockList::update_rich_content_heights`. It then collects owned descriptors while holding the terminal-model lock, releases that lock, and only then permits the viewport to invoke the item-render function.
+`TuiBlockListViewportSource` consumes `BlockList`'s existing dirty rich-content queue, measures dirty registered `TuiAgentBlockView`s at the current viewport width through the view-level `desired_height` helper, and writes the resulting heights back through `BlockList::update_rich_content_heights`. It then collects owned descriptors while holding the terminal-model lock, releases that lock, and only then permits the viewport to invoke the item-render function.
 
 `BlockList::take_dirty_rich_content_items` is public so the TUI viewport source can consume pending rich-content height invalidations. The `warp_tui` crate accesses that helper and other app-owned model types only through the narrow `warp::tui_export` boundary.
 
@@ -96,13 +96,13 @@ Add a simple terminal-block renderer under `crates/warp_tui/src/`. It renders on
 The renderer preserves terminal cell glyphs and styles and supports incremental output because terminal block heights and grid contents are already updated by `TerminalModel`.
 
 ### Simple agent block
-Add a simple TUI agent block view keyed by `(AIConversationId, AIAgentExchangeId)`. It reads the current exchange from `BlocklistAIHistoryModel` and extracts logical `TuiAgentBlockSection`s:
+Add a simple `TuiAgentBlockView` keyed by `(AIConversationId, AIAgentExchangeId)`. It reads the current exchange from `BlocklistAIHistoryModel` and extracts logical `TuiAgentBlockSection`s:
 - the exchange's displayable user input
 - concatenated streamed `AIAgentTextSection::PlainText` output
 
-The view builds a normal TUI element tree from those sections. User input is rendered with `TuiContainer` and `TuiText` using a full-width highlighted background and the `≫ ` prompt prefix. Plain-text output is rendered with `TuiText`. Input/output separation and bottom padding are expressed with `TuiContainer` padding in the composed element tree, not with a separate manual height formula.
+The view returns a normal generic TUI element tree from those sections rather than introducing a custom agent-block element. User input is rendered with `TuiContainer` and `TuiText` using a full-width highlighted background and the `≫ ` prompt prefix. Plain-text output is rendered with `TuiText`. Input/output separation and bottom padding are expressed with `TuiContainer` padding in the composed `TuiColumn` tree, not with a separate manual height formula.
 
-The rich-content height adapter measures the same composed element tree at the actual viewport width and writes that height back to `BlockList`. The viewport renders the agent block as a normal child view and clips it through the viewport item boundary. It intentionally omits all non-plain-text agent output rather than inventing placeholder production behavior in this PR.
+The rich-content height adapter measures the same composed element tree at the actual viewport width through `TuiAgentBlockView::desired_height` and writes that height back to `BlockList`. The viewport renders the agent block through the registered view handle and clips the resulting generic element tree through the viewport item boundary. It intentionally omits all non-plain-text agent output rather than inventing placeholder production behavior in this PR.
 ## End-to-end flow
 ```mermaid
 flowchart TD
@@ -135,6 +135,7 @@ The generalized viewport element, scroll/anchor model, height reconciliation, an
 Current focused `warp_tui` crate unit tests cover:
 - agent block rendering of user input and streamed plain-text output
 - agent block width-dependent height measurement through composed TUI layout
+- rich-content height writeback using the agent block view's measured height
 - omission of unsupported agent sections until the TUI renders them intentionally
 - terminal grid snapshot preservation of theme colors, RGB colors, and common style flags
 - terminal block row slicing through the block-list viewport source

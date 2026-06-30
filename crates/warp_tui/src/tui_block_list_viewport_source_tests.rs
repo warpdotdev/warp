@@ -148,7 +148,7 @@ fn tui_agent_rich_content_remeasures_visible_height_when_width_changes() {
         agent_blocks.borrow_mut().insert(
             view_id,
             AgentBlockRegistration {
-                view: agent_block,
+                view: agent_block.clone(),
                 conversation_id: AIConversationId::new(),
                 exchange_id: AIAgentExchangeId::new(),
             },
@@ -165,9 +165,14 @@ fn tui_agent_rich_content_remeasures_visible_height_when_width_changes() {
                 app,
             )
         });
+        let expected_height =
+            app.read(|app| agent_block.as_ref(app).desired_height(80, app) as f64);
 
-        assert_eq!(content.content_height, 1);
-        assert_eq!(rich_content_height(&terminal_model, view_id), Some(1.0));
+        assert_eq!(content.content_height, expected_height as usize);
+        assert_eq!(
+            rich_content_height(&terminal_model, view_id),
+            Some(expected_height)
+        );
     });
 }
 

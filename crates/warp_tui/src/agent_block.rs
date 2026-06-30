@@ -1,14 +1,14 @@
 //! Simple input and streamed plain-text agent blocks for the TUI transcript.
-use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::theme::{AGENT_INPUT_BACKGROUND, AGENT_INPUT_TEXT, AGENT_OUTPUT_TEXT};
 use warp::tui_export::{AIAgentTextSection, AIBlockModel};
 use warpui_core::elements::tui::{
-    Modifier, TuiBuffer, TuiColumn, TuiConstraint, TuiContainer, TuiElement, TuiLayoutContext,
-    TuiParentElement, TuiRect, TuiSize, TuiStyle, TuiText,
+    Modifier, TuiColumn, TuiConstraint, TuiContainer, TuiElement, TuiLayoutContext,
+    TuiParentElement, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::{AppContext, Entity, EntityIdMap, TuiView};
+
+use crate::theme::{AGENT_INPUT_BACKGROUND, AGENT_INPUT_TEXT, AGENT_OUTPUT_TEXT};
 
 const INPUT_PREFIX: &str = "≫ ";
 const INPUT_OUTPUT_GAP_ROWS: u16 = 1;
@@ -19,13 +19,6 @@ const BLOCK_BOTTOM_PADDING_ROWS: u16 = 1;
 enum TuiAgentBlockSection {
     Input(String),
     PlainText(String),
-}
-
-struct TuiAgentBlockElement {
-    sections: Vec<TuiAgentBlockSection>,
-    /// Child tree built during layout and reused during render because TUI child
-    /// elements retain layout state needed for painting.
-    content: RefCell<Option<Box<dyn TuiElement>>>,
 }
 
 /// A simple TUI block backed by one agent exchange.
@@ -47,10 +40,24 @@ impl TuiAgentBlockView {
 
     /// Returns this block's wrapped height at the given width.
     pub(super) fn desired_height(&self, width: u16, app: &AppContext) -> usize {
-        self.element(app).desired_height(width, app)
+        let mut rendered_views = EntityIdMap::default();
+        let mut ctx = TuiLayoutContext {
+            rendered_views: &mut rendered_views,
+        };
+        let mut element = self.render_element(app);
+        usize::from(
+            element
+                .layout(
+                    TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
+                    &mut ctx,
+                    app,
+                )
+                .height,
+        )
     }
 
-    fn element(&self, app: &AppContext) -> TuiAgentBlockElement {
+    /// Extracts this exchange's visible input/output into logical render sections.
+    fn sections(&self, app: &AppContext) -> Vec<TuiAgentBlockSection> {
         let mut sections = Vec::new();
         // Match the GUI block prompt text: displayable input queries separated by newlines.
         let input = self
@@ -79,63 +86,18 @@ impl TuiAgentBlockView {
             }));
         }
 
-        TuiAgentBlockElement::new(sections)
+        sections
     }
-}
-
-/// Lays out and paints the composed TUI element tree for an agent block.
-impl TuiElement for TuiAgentBlockElement {
-    fn layout(
-        &mut self,
-        constraint: TuiConstraint,
-        ctx: &mut TuiLayoutContext,
-        app: &AppContext,
-    ) -> TuiSize {
-        let mut content = self.render_element();
-        let size = content.layout(constraint, ctx, app);
-        *self.content.borrow_mut() = Some(content);
-        size
+    /// Builds this block's generic TUI element tree.
+    fn render_element(&self, app: &AppContext) -> Box<dyn TuiElement> {
+        Self::render_sections(&self.sections(app))
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
-        if let Some(content) = self.content.borrow().as_ref() {
-            content.render(area, buffer, ctx);
-        }
-    }
-}
-
-/// Builds and measures the composed TUI element tree for all sections.
-impl TuiAgentBlockElement {
-    /// Creates an agent block element from logical render sections.
-    fn new(sections: Vec<TuiAgentBlockSection>) -> Self {
-        Self {
-            sections,
-            content: RefCell::new(None),
-        }
-    }
-
-    /// Returns this element's laid-out height at the given width.
-    fn desired_height(&self, width: u16, app: &AppContext) -> usize {
-        let mut rendered_views = EntityIdMap::default();
-        let mut ctx = TuiLayoutContext {
-            rendered_views: &mut rendered_views,
-        };
-        usize::from(
-            self.render_element()
-                .layout(
-                    TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
-                    &mut ctx,
-                    app,
-                )
-                .height,
-        )
-    }
-
-    /// Builds the renderable element tree used by both layout and rendering.
-    fn render_element(&self) -> Box<dyn TuiElement> {
+    /// Builds the generic TUI element tree for logical render sections.
+    fn render_sections(sections: &[TuiAgentBlockSection]) -> Box<dyn TuiElement> {
         let mut column = TuiColumn::new();
         let mut should_gap_before_next = false;
-        for section in &self.sections {
+        for section in sections {
             let top_padding = if should_gap_before_next {
                 INPUT_OUTPUT_GAP_ROWS
             } else {
@@ -145,9 +107,8 @@ impl TuiAgentBlockElement {
             should_gap_before_next = matches!(section, TuiAgentBlockSection::Input(_));
         }
         Box::new(
-            TuiContainer::new(column).with_padding_bottom(
-                u16::from(!self.sections.is_empty()) * BLOCK_BOTTOM_PADDING_ROWS,
-            ),
+            TuiContainer::new(column)
+                .with_padding_bottom(u16::from(!sections.is_empty()) * BLOCK_BOTTOM_PADDING_ROWS),
         )
     }
 }
@@ -195,6 +156,6 @@ impl TuiView for TuiAgentBlockView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        Box::new(self.element(app))
+        self.render_element(app)
     }
 }
