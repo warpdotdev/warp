@@ -1061,6 +1061,10 @@ impl BlocklistAIActionModel {
     /// from tracking so its eventual result is silently discarded. The caller sends a plain
     /// `UserQuery` instead, which causes the server to synthesize the cancel.
     ///
+    /// Also emits `ShellCommandExecutorEvent::CancelExecution` so the PTY process is actually
+    /// killed. This is safe to call even while `terminal_model` is locked because `ctx.emit`
+    /// just queues the event — it is processed asynchronously in the next update cycle.
+    ///
     /// Returns `true` if the action was found and abandoned, `false` if not found (already resolved).
     pub fn abandon_shell_command_action(
         &mut self,
@@ -1075,8 +1079,12 @@ impl BlocklistAIActionModel {
         {
             return false;
         }
-        self.executor.update(ctx, |executor, _| {
+        self.executor.update(ctx, |executor, ctx| {
             executor.abandon_running_async_action(action_id);
+            // Kill the PTY process so the UI and the actual terminal state stay consistent.
+            executor.shell_command_executor().update(ctx, |_, ctx| {
+                ctx.emit(ShellCommandExecutorEvent::CancelExecution);
+            });
         });
         if let Some(running) = self.running_actions.get_mut(&conversation_id) {
             running.remove_action(action_id);
