@@ -84,8 +84,12 @@ fn test_component_can_layout() {
 
 ## Co-author attribution
 
-Include the trailer on every commit message and PR description:
+The canonical Oz attribution — the commit trailer and the agent reply prefix — is defined by the `agent-attribution` skill (`warpdotdev/warp-skills:.agents/skills/agent-attribution`). Treat that skill as the source of truth: if it is resolvable, follow its wording. Install it from that source if it is missing.
+
+For convenience, the trailer it defines is:
 
 ```
 Co-Authored-By: Oz <oz-agent@warp.dev>
 ```
+
+Include this trailer on every commit message and PR description.
