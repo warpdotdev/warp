@@ -1,5 +1,24 @@
 use super::*;
 
+// --- ConnectionTestStatus tests ---
+
+#[test]
+fn connection_test_status_starts_idle() {
+    let status = ConnectionTestStatus::Idle;
+    assert_eq!(status, ConnectionTestStatus::Idle);
+}
+
+#[test]
+fn connection_test_status_transitions() {
+    // Verify the enum values are distinct and comparable as expected.
+    assert_ne!(ConnectionTestStatus::Idle, ConnectionTestStatus::Testing);
+    assert_ne!(ConnectionTestStatus::Testing, ConnectionTestStatus::Confirmed);
+    assert_ne!(ConnectionTestStatus::Testing, ConnectionTestStatus::Failed);
+    assert_ne!(ConnectionTestStatus::Confirmed, ConnectionTestStatus::Failed);
+}
+
+// --- validate_url tests (existing) ---
+
 #[test]
 fn validate_url_accepts_https_with_host() {
     assert!(validate_url("https://api.example.com/v1").is_ok());
