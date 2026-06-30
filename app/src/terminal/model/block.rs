@@ -1238,6 +1238,21 @@ impl Block {
         self.output_grid.disable_reset_grid_checks();
     }
 
+    /// Apply precmd metadata without emitting `Event::BlockMetadataReceived` and without rendering
+    /// the PS1 or rprompt into the block's grids.
+    pub(super) fn set_precmd_metadata(&mut self, data: &PrecmdValue) {
+        self.state = BlockState::BeforeExecution;
+        self.pwd.clone_from(&data.pwd);
+        self.git_branch.clone_from(&data.git_head);
+        self.git_branch_name.clone_from(&data.git_branch);
+        self.virtual_env.clone_from(&data.virtual_env);
+        self.conda_env.clone_from(&data.conda_env);
+        self.node_version.clone_from(&data.node_version);
+        self.session_id = data.session_id.map(Into::into);
+        self.rprompt.clone_from(&data.rprompt);
+        self.precmd_state = PrecmdState::AfterPrecmd;
+    }
+
     /// Method used in tests to finish the BlockGrid containing the command WITHOUT a linefeed in the empty command
     /// case.
     #[cfg(test)]
@@ -3331,22 +3346,12 @@ impl ansi::Handler for Block {
         let is_after_in_band_command = data.was_sent_after_in_band_command();
 
         self.header_grid.precmd(data.clone());
-
-        self.state = BlockState::BeforeExecution;
-        self.pwd = data.pwd;
-        self.git_branch.clone_from(&data.git_head);
-        self.git_branch_name.clone_from(&data.git_branch);
-        self.virtual_env = data.virtual_env;
-        self.conda_env = data.conda_env;
-        self.node_version = data.node_version;
-        self.session_id = data.session_id.map(Into::into);
-        self.rprompt.clone_from(&data.rprompt);
+        self.set_precmd_metadata(&data);
 
         if let Some(rprompt) = data.rprompt {
             self.init_rprompt_grid(&rprompt);
         }
 
-        self.precmd_state = PrecmdState::AfterPrecmd;
         self.event_proxy
             .send_terminal_event(Event::BlockMetadataReceived(BlockMetadataReceivedEvent {
                 block_metadata: self.metadata(),

@@ -32,7 +32,7 @@ use crate::ai::blocklist::history_model::{
 use crate::ai::blocklist::model::AIBlockModelImpl;
 use crate::ai::blocklist::{
     AIBlock, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
-    ClientIdentifiers,
+    ClientIdentifiers, SerializedBlockListItem,
 };
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
@@ -568,15 +568,16 @@ impl TerminalView {
         // need to create blocks itself.
         let serialized_items = restored.ai_conversation.to_serialized_blocklist_items();
         if !serialized_items.is_empty() {
-            let mut model = self.model.lock();
-            let block_list = model.block_list_mut();
-            for item in &serialized_items {
-                match item {
-                    crate::ai::blocklist::SerializedBlockListItem::Command { block } => {
-                        block_list.insert_restored_block(block);
-                    }
-                }
-            }
+            let blocks: Vec<_> = serialized_items
+                .iter()
+                .filter_map(|item| match item {
+                    SerializedBlockListItem::Command { block } => Some(block.as_ref()),
+                })
+                .collect();
+            self.model
+                .lock()
+                .block_list_mut()
+                .bulk_insert_restored_blocks(&blocks);
         }
 
         // Calculate height for AI blocks

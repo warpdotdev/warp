@@ -2744,7 +2744,7 @@ impl BlockList {
     pub fn insert_restored_block(&mut self, block: &SerializedBlock) {
         let did_active_block_receive_precmd = self.active_block().has_received_precmd();
         let mut processor = Processor::new();
-        self.restore_block(block, BootstrapStage::PostBootstrapPrecmd, &mut processor);
+        self.restore_block(block, BootstrapStage::RestoreBlocks, &mut processor);
         // restore_block consumed the previous active block and made the restored
         // block the new active (finished) block. Create a fresh active block so
         // the terminal can continue accepting input.
@@ -2758,6 +2758,41 @@ impl BlockList {
         );
 
         self.active_block_mut().disable_reset_grid_checks();
+    }
+
+    /// Bulk-inserts fully serialized blocks into the block list without firing
+    /// [`Event::BlockMetadataReceived`] for each intermediate block. A single event is fired after
+    /// all blocks have been inserted.
+    pub fn bulk_insert_restored_blocks(&mut self, blocks: &[&SerializedBlock]) {
+        if blocks.is_empty() {
+            return;
+        }
+
+        // Share one Processor across all blocks — more efficient than creating a new one per block
+        // as `insert_restored_block` does.
+        let mut processor = Processor::new();
+
+        for block in blocks {
+            let did_active_block_receive_precmd = self.active_block().has_received_precmd();
+            let precmd_payload = did_active_block_receive_precmd
+                .then(|| self.last_populated_precmd_payload.clone())
+                .flatten();
+
+            self.restore_block(block, BootstrapStage::RestoreBlocks, &mut processor);
+            // Create the placeholder without a precmd_value so `Block::precmd` is not called and
+            // no event is emitted.
+            self.create_new_block(BlockId::new(), self.bootstrap_stage, None, None);
+            if let Some(precmd_value) = precmd_payload {
+                self.active_block_mut().set_precmd_metadata(&precmd_value);
+            }
+            self.active_block_mut().disable_reset_grid_checks();
+        }
+
+        // Fire a single BlockMetadataReceived for the final active block, triggering one
+        // refresh_warp_prompt + git repo detection.
+        if let Some(precmd_value) = self.last_populated_precmd_payload.clone() {
+            delegate_to_block!(self.precmd(precmd_value));
+        }
     }
 
     /// Splice a background block into the blocklist. This is called once the
@@ -2963,7 +2998,6 @@ impl BlockList {
             self.active_block_mut().start_background(None);
         } else {
             self.active_block_mut().start();
-            self.active_block_mut().disable_reset_grid_checks();
         }
 
         if let Some(serialized_ai_metadata) = block.ai_metadata.as_ref().and_then(|ai_metadata| {

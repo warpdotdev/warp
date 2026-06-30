@@ -1120,83 +1120,7 @@ impl AIBlock {
             })
             .unwrap_or((None, None));
 
-        let font_settings_handle = FontSettings::handle(ctx);
-        ctx.subscribe_to_model(&font_settings_handle, |_, _, _, ctx| {
-            ctx.notify();
-        });
-
-        ctx.subscribe_to_model(
-            &AISettings::handle(ctx),
-            move |me, settings_model, event, ctx| match event {
-                AISettingsChangedEvent::AgentModeExecuteReadonlyCommands { .. } => {
-                    if let AutonomySettingSpeedbump::ShouldShowForAutoexecutingReadonlyCommands {
-                        checked,
-                        ..
-                    } = &mut me.autonomy_setting_speedbump
-                    {
-                        *checked = *settings_model
-                            .as_ref(ctx)
-                            .agent_mode_execute_read_only_commands;
-                    } else {
-                        me.autonomy_setting_speedbump = AutonomySettingSpeedbump::None;
-                    }
-                    ctx.notify();
-                }
-                AISettingsChangedEvent::AgentModeCodingPermissions { .. } => {
-                    match &mut me.autonomy_setting_speedbump {
-                        AutonomySettingSpeedbump::ShouldShowForFileAccess { checked, .. } => {
-                            *checked = matches!(
-                                *settings_model.as_ref(ctx).agent_mode_coding_permissions,
-                                AgentModeCodingPermissionsType::AlwaysAllowReading
-                            );
-                        }
-                        AutonomySettingSpeedbump::ShouldShowForCodebaseSearchFileAccess {
-                            selected_option,
-                            ..
-                        } => {
-                            *selected_option =
-                                match *settings_model.as_ref(ctx).agent_mode_coding_permissions {
-                                    AgentModeCodingPermissionsType::AlwaysAllowReading => Some(0),
-                                    AgentModeCodingPermissionsType::AllowReadingSpecificFiles => {
-                                        Some(1)
-                                    }
-                                    AgentModeCodingPermissionsType::AlwaysAskBeforeReading => None,
-                                };
-                        }
-                        _ => {}
-                    }
-                    ctx.notify();
-                }
-                AISettingsChangedEvent::ThinkingDisplayMode { .. }
-                | AISettingsChangedEvent::OrchestrationMessageDisplayMode { .. } => {
-                    ctx.notify();
-                }
-                _ => {}
-            },
-        );
-
-        ctx.subscribe_to_model(
-            &AgentConversationsModel::handle(ctx),
-            |me, _, event, ctx| {
-                me.handle_agent_conversations_model_event(event, ctx);
-            },
-        );
-
-        let safe_mode_settings = SafeModeSettings::handle(ctx);
-        ctx.subscribe_to_model(&safe_mode_settings, |me, _, event, ctx| {
-            me.handle_safe_mode_settings_changed_event(event, ctx)
-        });
-
-        ctx.subscribe_to_model(&AIExecutionProfilesModel::handle(ctx), |me, _, _, ctx| {
-            let terminal_view_id = me.terminal_view_id;
-            if let Some(view) = me.ask_user_question_view.clone() {
-                view.update(ctx, |v, ctx| {
-                    v.refresh_speedbump_dropdown_selection(terminal_view_id, ctx);
-                });
-            }
-        });
-
-        let detected_links_state: DetectedLinksState = Default::default();
+        let detected_links_state = DetectedLinksState::default();
         let secret_redaction_state = SecretRedactionState::default();
 
         ctx.subscribe_to_model(&find_model, |me, _, event, ctx| match event {
@@ -1207,64 +1131,12 @@ impl AIBlock {
             FindEvent::RanFind => ctx.notify(),
         });
 
-        // Input Mode affects styling of AI blocks -- in particular, the spacing and border between
-        // a user query block and a subsequent action (e.g. requested command, suggested code diff)
-        // block.
         ctx.subscribe_to_model(
-            &InputModeSettings::handle(ctx),
-            |_, _, event, ctx| match event {
-                InputModeSettingsChangedEvent::InputModeState { .. } => ctx.notify(),
+            &AgentConversationsModel::handle(ctx),
+            |me, _, event, ctx| {
+                me.handle_agent_conversations_model_event(event, ctx);
             },
         );
-
-        Self::register_action_model_subscription(&action_model, ctx);
-
-        ctx.subscribe_to_model(&active_session, |me, _, event, ctx| match event {
-            ActiveSessionEvent::UpdatedPwd => {
-                me.update_imported_comments_disabled_state(ctx);
-            }
-            ActiveSessionEvent::Bootstrapped => {}
-        });
-
-        ctx.subscribe_to_model(&get_relevant_files_controller, |me, _, event, ctx| {
-            if let GetRelevantFilesControllerEvent::Success { action_id, .. } = event {
-                if me.requested_action_ids.contains(action_id) {
-                    ctx.notify();
-                }
-            }
-        });
-
-        let manage_rules_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Manage rules", NakedTheme)
-                .on_click(|ctx| ctx.dispatch_typed_action(AIBlockAction::OpenAIFactCollection))
-        });
-
-        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, _, event, ctx| {
-            if let AIRequestUsageModelEvent::RequestBonusRefunded {
-                requests_refunded,
-                server_conversation_id,
-                request_id,
-            } = event
-            {
-                let server_conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
-                    .conversation(&me.client_ids.conversation_id)
-                    .and_then(|conversation| conversation.server_conversation_token())
-                    .cloned();
-
-                let server_output_id = me.model.server_output_id(ctx);
-
-                if let (Some(server_conversation_token), Some(server_output_id)) =
-                    (server_conversation_token, server_output_id)
-                {
-                    if request_id.eq(server_output_id.to_string().as_str())
-                        && server_conversation_id.eq(server_conversation_token.as_str())
-                    {
-                        me.request_refunded_count = Some(*requests_refunded);
-                        ctx.notify();
-                    }
-                }
-            }
-        });
 
         // Note: UpdatedStreamingExchange is handled by the dedicated on_updated_output()
         // callback in model_impl.rs, so we don't need to respond to it here.
@@ -1289,80 +1161,222 @@ impl AIBlock {
             },
         );
 
+        let font_settings_handle = FontSettings::handle(ctx);
+        ctx.subscribe_to_model(&font_settings_handle, |_, _, _, ctx| {
+            ctx.notify();
+        });
+
         ctx.subscribe_to_model(
-            cli_subagent_controller,
-            move |me, _, event, ctx| match event {
-                CLISubagentEvent::SpawnedSubagent {
-                    initial_requested_command_action_id: Some(initial_requested_command_action_id),
-                    ..
-                } => {
-                    me.expand_requested_command_view(initial_requested_command_action_id, ctx);
-                }
-                CLISubagentEvent::FinishedSubagent {
-                    initial_requested_command_action_id: Some(initial_requested_command_action_id),
-                    ..
-                } => {
-                    me.collapse_requested_command_view(initial_requested_command_action_id, ctx);
-                }
-                CLISubagentEvent::UpdatedControl {
-                    requested_command_action_id: Some(requested_command_action_id),
-                    ..
-                } => {
-                    if let Some(requested_command_view) =
-                        me.requested_commands.get(requested_command_action_id)
-                    {
-                        requested_command_view
-                            .view
-                            .update(ctx, |_, ctx| ctx.notify());
-                    }
-                }
-                _ => {}
+            &InputModeSettings::handle(ctx),
+            |_, _, event, ctx| match event {
+                InputModeSettingsChangedEvent::InputModeState { .. } => ctx.notify(),
             },
         );
 
-        ctx.subscribe_to_model(model_event_dispatcher, |me, _, event, ctx| {
-            if let ModelEvent::BlockCompleted(block_completed_event) = event {
-                let terminal_model = me.terminal_model.lock();
-                if terminal_model
-                    .block_list()
-                    .block_with_id(&block_completed_event.block_id)
-                    .and_then(|block| block.agent_interaction_metadata())
-                    .is_some_and(|metadata| {
-                        metadata
-                            .requested_command_action_id()
-                            .is_some_and(|id| me.requested_action_ids.contains(id))
-                    })
-                {
-                    ctx.notify();
-                }
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| match event {
+            AISettingsChangedEvent::ThinkingDisplayMode { .. }
+            | AISettingsChangedEvent::OrchestrationMessageDisplayMode { .. } => {
+                ctx.notify();
             }
+            _ => {}
         });
 
-        if FeatureFlag::AgentView.is_enabled() {
-            ctx.subscribe_to_model(&agent_view_controller, |_, _, _, ctx| ctx.notify());
-        }
+        // Subscriptions below are only needed for live (non-restored) blocks.
+        if !model.is_restored() {
+            ctx.subscribe_to_model(
+                &AISettings::handle(ctx),
+                move |me, settings_model, event, ctx| match event {
+                    AISettingsChangedEvent::AgentModeExecuteReadonlyCommands { .. } => {
+                        if let AutonomySettingSpeedbump::ShouldShowForAutoexecutingReadonlyCommands {
+                            checked,
+                            ..
+                        } = &mut me.autonomy_setting_speedbump
+                        {
+                            *checked = *settings_model
+                                .as_ref(ctx)
+                                .agent_mode_execute_read_only_commands;
+                        } else {
+                            me.autonomy_setting_speedbump = AutonomySettingSpeedbump::None;
+                        }
+                        ctx.notify();
+                    }
+                    AISettingsChangedEvent::AgentModeCodingPermissions { .. } => {
+                        match &mut me.autonomy_setting_speedbump {
+                            AutonomySettingSpeedbump::ShouldShowForFileAccess { checked, .. } => {
+                                *checked = matches!(
+                                    *settings_model.as_ref(ctx).agent_mode_coding_permissions,
+                                    AgentModeCodingPermissionsType::AlwaysAllowReading
+                                );
+                            }
+                            AutonomySettingSpeedbump::ShouldShowForCodebaseSearchFileAccess {
+                                selected_option,
+                                ..
+                            } => {
+                                *selected_option = match *settings_model
+                                    .as_ref(ctx)
+                                    .agent_mode_coding_permissions
+                                {
+                                    AgentModeCodingPermissionsType::AlwaysAllowReading => Some(0),
+                                    AgentModeCodingPermissionsType::AllowReadingSpecificFiles => {
+                                        Some(1)
+                                    }
+                                    AgentModeCodingPermissionsType::AlwaysAskBeforeReading => None,
+                                };
+                            }
+                            _ => {}
+                        }
+                        ctx.notify();
+                    }
+                    _ => {}
+                },
+            );
 
-        // Handoff prep emits ambient-agent events before submit, while still composing.
-        // Only the run lifecycle events can change `is_cloud_agent_pre_first_exchange`
-        // for this block's footer.
-        if let Some(ambient_agent_view_model) = ambient_agent_view_model.as_ref() {
-            ctx.subscribe_to_model(ambient_agent_view_model, |_, _, event, ctx| match event {
-                AmbientAgentViewModelEvent::DispatchedAgent
-                | AmbientAgentViewModelEvent::FollowupDispatched
-                | AmbientAgentViewModelEvent::SessionReady { .. }
-                | AmbientAgentViewModelEvent::ExecutionSessionReady { .. }
-                | AmbientAgentViewModelEvent::Failed { .. }
-                | AmbientAgentViewModelEvent::NeedsGithubAuth
-                | AmbientAgentViewModelEvent::Cancelled
-                | AmbientAgentViewModelEvent::HarnessCommandStarted { .. } => ctx.notify(),
-                _ => {}
+            let safe_mode_settings = SafeModeSettings::handle(ctx);
+            ctx.subscribe_to_model(&safe_mode_settings, |me, _, event, ctx| {
+                me.handle_safe_mode_settings_changed_event(event, ctx)
+            });
+
+            ctx.subscribe_to_model(&AIExecutionProfilesModel::handle(ctx), |me, _, _, ctx| {
+                let terminal_view_id = me.terminal_view_id;
+                if let Some(view) = me.ask_user_question_view.clone() {
+                    view.update(ctx, |v, ctx| {
+                        v.refresh_speedbump_dropdown_selection(terminal_view_id, ctx);
+                    });
+                }
+            });
+
+            Self::register_action_model_subscription(&action_model, ctx);
+
+            ctx.subscribe_to_model(&active_session, |me, _, event, ctx| match event {
+                ActiveSessionEvent::UpdatedPwd => {
+                    me.update_imported_comments_disabled_state(ctx);
+                }
+                ActiveSessionEvent::Bootstrapped => {}
+            });
+
+            ctx.subscribe_to_model(&get_relevant_files_controller, |me, _, event, ctx| {
+                if let GetRelevantFilesControllerEvent::Success { action_id, .. } = event {
+                    if me.requested_action_ids.contains(action_id) {
+                        ctx.notify();
+                    }
+                }
+            });
+
+            ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, _, event, ctx| {
+                if let AIRequestUsageModelEvent::RequestBonusRefunded {
+                    requests_refunded,
+                    server_conversation_id,
+                    request_id,
+                } = event
+                {
+                    let server_conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(&me.client_ids.conversation_id)
+                        .and_then(|conversation| conversation.server_conversation_token())
+                        .cloned();
+
+                    let server_output_id = me.model.server_output_id(ctx);
+
+                    if let (Some(server_conversation_token), Some(server_output_id)) =
+                        (server_conversation_token, server_output_id)
+                    {
+                        if request_id.eq(server_output_id.to_string().as_str())
+                            && server_conversation_id.eq(server_conversation_token.as_str())
+                        {
+                            me.request_refunded_count = Some(*requests_refunded);
+                            ctx.notify();
+                        }
+                    }
+                }
+            });
+
+            ctx.subscribe_to_model(
+                cli_subagent_controller,
+                move |me, _, event, ctx| match event {
+                    CLISubagentEvent::SpawnedSubagent {
+                        initial_requested_command_action_id:
+                            Some(initial_requested_command_action_id),
+                        ..
+                    } => {
+                        me.expand_requested_command_view(initial_requested_command_action_id, ctx);
+                    }
+                    CLISubagentEvent::FinishedSubagent {
+                        initial_requested_command_action_id:
+                            Some(initial_requested_command_action_id),
+                        ..
+                    } => {
+                        me.collapse_requested_command_view(
+                            initial_requested_command_action_id,
+                            ctx,
+                        );
+                    }
+                    CLISubagentEvent::UpdatedControl {
+                        requested_command_action_id: Some(requested_command_action_id),
+                        ..
+                    } => {
+                        if let Some(requested_command_view) =
+                            me.requested_commands.get(requested_command_action_id)
+                        {
+                            requested_command_view
+                                .view
+                                .update(ctx, |_, ctx| ctx.notify());
+                        }
+                    }
+                    _ => {}
+                },
+            );
+
+            ctx.subscribe_to_model(model_event_dispatcher, |me, _, event, ctx| {
+                if let ModelEvent::BlockCompleted(block_completed_event) = event {
+                    if me.is_finished() || me.requested_action_ids.is_empty() {
+                        return;
+                    }
+                    let terminal_model = me.terminal_model.lock();
+                    if terminal_model
+                        .block_list()
+                        .block_with_id(&block_completed_event.block_id)
+                        .and_then(|block| block.agent_interaction_metadata())
+                        .is_some_and(|metadata| {
+                            metadata
+                                .requested_command_action_id()
+                                .is_some_and(|id| me.requested_action_ids.contains(id))
+                        })
+                    {
+                        ctx.notify();
+                    }
+                }
+            });
+
+            if FeatureFlag::AgentView.is_enabled() {
+                ctx.subscribe_to_model(&agent_view_controller, |_, _, _, ctx| ctx.notify());
+            }
+
+            // Handoff prep emits ambient-agent events before submit, while still composing.
+            // Only the run lifecycle events can change `is_cloud_agent_pre_first_exchange`
+            // for this block's footer.
+            if let Some(ambient_agent_view_model) = ambient_agent_view_model.as_ref() {
+                ctx.subscribe_to_model(ambient_agent_view_model, |_, _, event, ctx| match event {
+                    AmbientAgentViewModelEvent::DispatchedAgent
+                    | AmbientAgentViewModelEvent::FollowupDispatched
+                    | AmbientAgentViewModelEvent::SessionReady { .. }
+                    | AmbientAgentViewModelEvent::ExecutionSessionReady { .. }
+                    | AmbientAgentViewModelEvent::Failed { .. }
+                    | AmbientAgentViewModelEvent::NeedsGithubAuth
+                    | AmbientAgentViewModelEvent::Cancelled
+                    | AmbientAgentViewModelEvent::HarnessCommandStarted { .. } => ctx.notify(),
+                    _ => {}
+                });
+            }
+
+            ctx.subscribe_to_model(&context_model, |_, _, event, ctx| {
+                if let BlocklistAIContextEvent::UpdatedPendingContext { .. } = event {
+                    ctx.notify();
+                }
             });
         }
 
-        ctx.subscribe_to_model(&context_model, |_, _, event, ctx| {
-            if let BlocklistAIContextEvent::UpdatedPendingContext { .. } = event {
-                ctx.notify();
-            }
+        let manage_rules_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Manage rules", NakedTheme)
+                .on_click(|ctx| ctx.dispatch_typed_action(AIBlockAction::OpenAIFactCollection))
         });
 
         let review_changes_button = ctx.add_typed_action_view(|_| {
@@ -4739,6 +4753,10 @@ impl AIBlock {
 
         if !cards.is_empty() {
             self.has_imported_comments = true;
+            let conversation_id = self.client_ids.conversation_id;
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, _| {
+                model.mark_conversation_has_imported_comments(conversation_id);
+            });
         }
 
         self.imported_comments.insert(
@@ -5738,15 +5756,18 @@ impl AIBlock {
     /// bulk "Open all in code review" button based on whether the current working
     /// directory is still within the imported comments' repository.
     fn update_imported_comments_disabled_state(&mut self, ctx: &mut ViewContext<Self>) {
-        let cwd_location = self.current_working_directory_location(ctx);
-
         if self.has_imported_comments {
+            let cwd_location = self.current_working_directory_location(ctx);
             self.update_own_imported_comments_disabled_state(cwd_location.as_ref(), ctx);
-        } else if self.model.is_latest_visible_exchange_in_root_task(ctx) {
+        } else if BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation_has_imported_comments(&self.client_ids.conversation_id)
+            && self.model.is_latest_visible_exchange_in_root_task(ctx)
+        {
             // The "Open all" button is rendered by the latest visible exchange when the
             // current thread has imported comments but this block does not own them directly.
             // Update that block's button state from its CWD so the button disables when the
             // user navigates outside the imported comments' repository.
+            let cwd_location = self.current_working_directory_location(ctx);
             self.update_open_all_button_disabled_state(cwd_location.as_ref(), ctx);
         } else {
             return;
