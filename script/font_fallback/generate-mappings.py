@@ -74,8 +74,10 @@ def download_fallback_fonts():
         return
 
     os.mkdir(FONT_DOWNLOAD_DIR)
-    command = f"gcloud storage cp 'gs://warp-static-assets/fallback-fonts/**/*Regular*.ttf' '{FONT_DOWNLOAD_DIR}'"
-    return_code = subprocess.call(command, shell=True)
+    command = ["gcloud", "storage", "cp",
+               "gs://warp-static-assets/fallback-fonts/**/*Regular*.ttf",
+               FONT_DOWNLOAD_DIR]
+    return_code = subprocess.call(command)
     if return_code != 0:
         sys.exit("Failed to download fonts from GCP")
 
