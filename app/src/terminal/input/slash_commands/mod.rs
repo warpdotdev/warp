@@ -1096,10 +1096,19 @@ impl Input {
                     return true;
                 };
 
-                ctx.dispatch_typed_action(&WorkspaceAction::SummarizeAIConversation {
+                // A queued `/compact-and` drains while the `TerminalView` is already
+                // mid-update; dispatching synchronously re-enters `terminal_view.update(...)`
+                // via the `SummarizeAIConversation` handler and trips WarpUI's circular update
+                // guard. Defer in that case; direct user invocation stays synchronous.
+                let summarize = WorkspaceAction::SummarizeAIConversation {
                     prompt: None,
                     initial_prompt: argument.cloned(),
-                });
+                };
+                if is_queued_prompt {
+                    ctx.dispatch_typed_action_deferred(summarize);
+                } else {
+                    ctx.dispatch_typed_action(&summarize);
+                }
             }
             queue if command.name == commands::QUEUE.name => {
                 let Some(conversation_id) = self
