@@ -2273,13 +2273,18 @@ impl BlocklistAIController {
     /// flow that handles existing conversations properly.
     fn send_request_input(
         &mut self,
-        request_input: RequestInput,
+        mut request_input: RequestInput,
         query_metadata: Option<RequestMetadata>,
         can_attempt_resume_on_error: bool,
         is_queued_prompt: bool,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
+        // Context carry-forward only applies to user-driven turns; resume/passive/action-result
+        // requests must not resurrect dropped user queries.
+        let request_has_user_query = request_input
+            .all_inputs()
+            .any(|input| input.is_user_query());
         let (
             conversation_id,
             conversation_server_token,
@@ -2287,6 +2292,7 @@ impl BlocklistAIController {
             active_tasks,
             parent_agent_id,
             agent_name,
+            errored_carryover,
         ) = {
             let Some(conversation) = history_model
                 .as_ref(ctx)
@@ -2300,6 +2306,15 @@ impl BlocklistAIController {
 
             let active_tasks = conversation.compute_active_tasks();
 
+            // After a non-recoverable error (e.g. a 403), the user's query is dropped from
+            // durable history. Replay such queries on the next user turn so the agent retains
+            // prior conversation context.
+            let errored_carryover = if request_has_user_query {
+                conversation.unacknowledged_errored_user_inputs()
+            } else {
+                HashMap::new()
+            };
+
             (
                 conversation.id(),
                 conversation.server_conversation_token().cloned(),
@@ -2309,8 +2324,17 @@ impl BlocklistAIController {
                 active_tasks,
                 conversation.parent_agent_id().map(str::to_string),
                 conversation.agent_name().map(str::to_string),
+                errored_carryover,
             )
         };
+
+        // Prepend any user queries dropped by earlier non-recoverable errors ahead of this turn's
+        // input so the server re-seeds them into the freshly created task in order.
+        for (task_id, carried_inputs) in errored_carryover {
+            let entry = request_input.input_messages.entry(task_id).or_default();
+            let existing = std::mem::take(entry);
+            *entry = carried_inputs.into_iter().chain(existing).collect();
+        }
 
         // Cancel any pending auto-resume for this conversation, since the user is sending a new
         // request.

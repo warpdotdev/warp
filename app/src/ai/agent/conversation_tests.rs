@@ -741,3 +741,230 @@ fn restored_conversation_does_not_re_enter_waiting_for_events() {
 
     assert_eq!(conversation.status(), &ConversationStatus::Success);
 }
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use chrono::Local;
+
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentContext, AIAgentExchange, AIAgentInput, AIAgentOutput, AIAgentOutputStatus,
+    FinishedAIAgentOutput, MessageId, RenderableAIError, Shared, UserQueryMode,
+};
+use crate::ai::llms::LLMId;
+
+fn carryover_user_query(query: &str) -> AIAgentInput {
+    AIAgentInput::UserQuery {
+        query: query.to_string(),
+        context: Arc::<[AIAgentContext]>::from(Vec::new()),
+        static_query_type: None,
+        referenced_attachments: HashMap::new(),
+        user_query_mode: UserQueryMode::Normal,
+        running_command: None,
+        intended_agent: None,
+    }
+}
+
+fn finished_error_output(will_attempt_resume: bool) -> AIAgentOutputStatus {
+    AIAgentOutputStatus::Finished {
+        finished_output: FinishedAIAgentOutput::Error {
+            output: None,
+            error: RenderableAIError::Other {
+                error_message: "Request failed with error: 403".to_string(),
+                will_attempt_resume,
+                waiting_for_network: false,
+                is_user_error: true,
+            },
+        },
+    }
+}
+
+fn finished_success_output() -> AIAgentOutputStatus {
+    AIAgentOutputStatus::Finished {
+        finished_output: FinishedAIAgentOutput::Success {
+            output: Shared::new(AIAgentOutput::default()),
+        },
+    }
+}
+
+fn test_exchange(
+    inputs: Vec<AIAgentInput>,
+    output_status: AIAgentOutputStatus,
+    acknowledged: bool,
+) -> AIAgentExchange {
+    AIAgentExchange {
+        id: Default::default(),
+        input: inputs,
+        output_status,
+        added_message_ids: if acknowledged {
+            HashSet::from([MessageId::new("server-message".to_string())])
+        } else {
+            HashSet::new()
+        },
+        start_time: Local::now(),
+        finish_time: None,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from(""),
+        request_cost: None,
+        coding_model_id: LLMId::from(""),
+        cli_agent_model_id: LLMId::from(""),
+        computer_use_model_id: LLMId::from(""),
+        response_initiator: None,
+    }
+}
+
+fn append_root_exchange(conversation: &mut AIConversation, exchange: AIAgentExchange) {
+    let root_id = conversation.get_root_task_id().clone();
+    assert!(
+        conversation.task_store.append_exchange(&root_id, exchange),
+        "root task should exist"
+    );
+}
+
+/// Returns the display text of every user query the conversation would carry
+/// forward onto the root task on the next request.
+fn carried_root_queries(conversation: &AIConversation) -> Vec<String> {
+    let carryover = conversation.unacknowledged_errored_user_inputs();
+    let root_id: TaskId = conversation.get_root_task_id().clone();
+    carryover
+        .get(&root_id)
+        .map(|inputs| {
+            inputs
+                .iter()
+                .filter_map(|input| input.display_query())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A non-recoverable error on the very first turn (e.g. a 403) leaves the user
+/// query out of durable history, so it must be carried forward on the next turn.
+#[test]
+fn carryover_includes_user_query_after_first_turn_error() {
+    let mut conversation = AIConversation::new(false, false);
+    append_root_exchange(
+        &mut conversation,
+        test_exchange(
+            vec![carryover_user_query("write tests")],
+            finished_error_output(/*will_attempt_resume*/ false),
+            /*acknowledged*/ false,
+        ),
+    );
+
+    assert_eq!(
+        carried_root_queries(&conversation),
+        vec!["write tests".to_string()]
+    );
+}
+
+/// Once a later turn is acknowledged by the server, the carried query is part of
+/// durable history and must not be carried (and thus duplicated) again.
+#[test]
+fn carryover_clears_after_a_later_turn_is_acknowledged() {
+    let mut conversation = AIConversation::new(false, false);
+    append_root_exchange(
+        &mut conversation,
+        test_exchange(
+            vec![carryover_user_query("write tests")],
+            finished_error_output(false),
+            false,
+        ),
+    );
+    append_root_exchange(
+        &mut conversation,
+        test_exchange(
+            vec![carryover_user_query("try again")],
+            finished_success_output(),
+            /*acknowledged*/ true,
+        ),
+    );
+
+    assert!(carried_root_queries(&conversation).is_empty());
+}
+
+/// In a conversation with prior acknowledged history, only the unacknowledged
+/// errored turn is carried forward — not the already-durable earlier query.
+#[test]
+fn carryover_only_includes_unacknowledged_errored_turn() {
+    let mut conversation = AIConversation::new(false, false);
+    append_root_exchange(
+        &mut conversation,
+        test_exchange(
+            vec![carryover_user_query("first turn")],
+            finished_success_output(),
+            /*acknowledged*/ true,
+        ),
+    );
+    append_root_exchange(
+        &mut conversation,
+        test_exchange(
+            vec![carryover_user_query("errored turn")],
+            finished_error_output(false),
+            false,
+        ),
+    );
+
+    assert_eq!(
+        carried_root_queries(&conversation),
+        vec!["errored turn".to_string()]
+    );
+}
+
+/// Consecutive errored turns accumulate, preserving submission order.
+#[test]
+fn carryover_accumulates_consecutive_errors_in_order() {
+    let mut conversation = AIConversation::new(false, false);
+    append_root_exchange(
+        &mut conversation,
+        test_exchange(
+            vec![carryover_user_query("first")],
+            finished_error_output(false),
+            false,
+        ),
+    );
+    append_root_exchange(
+        &mut conversation,
+        test_exchange(
+            vec![carryover_user_query("second")],
+            finished_error_output(false),
+            false,
+        ),
+    );
+
+    assert_eq!(
+        carried_root_queries(&conversation),
+        vec!["first".to_string(), "second".to_string()]
+    );
+}
+
+/// Recoverable errors are handled by the auto-resume path, so their queries are
+/// not carried forward (avoiding double-handling / duplicate input).
+#[test]
+fn carryover_excludes_recoverable_errors_pending_resume() {
+    let mut conversation = AIConversation::new(false, false);
+    append_root_exchange(
+        &mut conversation,
+        test_exchange(
+            vec![carryover_user_query("write tests")],
+            finished_error_output(/*will_attempt_resume*/ true),
+            false,
+        ),
+    );
+
+    assert!(carried_root_queries(&conversation).is_empty());
+}
+
+#[test]
+fn errored_without_resume_classifies_terminal_states() {
+    assert!(test_exchange(vec![], finished_error_output(false), false).errored_without_resume());
+    assert!(!test_exchange(vec![], finished_error_output(true), false).errored_without_resume());
+    assert!(!test_exchange(vec![], finished_success_output(), true).errored_without_resume());
+    assert!(!test_exchange(
+        vec![],
+        AIAgentOutputStatus::Streaming { output: None },
+        false
+    )
+    .errored_without_resume());
+}

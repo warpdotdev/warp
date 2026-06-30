@@ -3158,6 +3158,21 @@ impl AIAgentExchange {
             .any(|input| input.display_query().is_some())
     }
 
+    /// True when this exchange finished in an error that will not be automatically resumed.
+    ///
+    /// These are terminal, non-recoverable failures (e.g. a 403 fraud block or other
+    /// user-originating 4xx). Their user query never reaches durable server history, so it must
+    /// be replayed on the next request to preserve conversation context. Recoverable errors are
+    /// excluded because the existing auto-resume path already restores their context.
+    pub fn errored_without_resume(&self) -> bool {
+        matches!(
+            &self.output_status,
+            AIAgentOutputStatus::Finished {
+                finished_output: FinishedAIAgentOutput::Error { error, .. },
+            } if !error.will_attempt_resume()
+        )
+    }
+
     pub fn has_accepted_file_edit(&self) -> bool {
         self.input.iter().any(|input| {
             matches!(

@@ -1224,6 +1224,50 @@ impl AIConversation {
             .collect()
     }
 
+    /// Returns user queries from exchanges that terminated in a non-recoverable error and were
+    /// never acknowledged by the server, keyed by the task they belong to.
+    ///
+    /// When a turn ends in an error that will not be auto-resumed (e.g. an HTTP 403 fraud block),
+    /// the optimistic root task is never upgraded to a server-backed task, so the user's query
+    /// never makes it into durable conversation history. Replaying ("carrying forward") these
+    /// queries on the next user-driven request lets the agent retain conversation context that
+    /// would otherwise be silently dropped.
+    ///
+    /// A query is carried forward only while it is not yet represented in server history: once a
+    /// later exchange in the same task is acknowledged by the server (its `added_message_ids`
+    /// becomes non-empty), the carried queries have already been folded into durable history, so
+    /// they are dropped here to avoid duplicating them on subsequent requests.
+    pub fn unacknowledged_errored_user_inputs(&self) -> HashMap<TaskId, Vec<AIAgentInput>> {
+        let mut carryover = HashMap::new();
+        for task in self.all_tasks() {
+            let mut inputs: Vec<AIAgentInput> = Vec::new();
+            for exchange in task.exchanges() {
+                if !exchange.added_message_ids.is_empty() {
+                    // This exchange was acknowledged by the server, so every preceding input in
+                    // this task (including any errored queries accumulated so far) is now part of
+                    // durable history. Drop what we've collected to avoid sending it twice.
+                    inputs.clear();
+                    continue;
+                }
+
+                if exchange.errored_without_resume() {
+                    inputs.extend(
+                        exchange
+                            .input
+                            .iter()
+                            .filter(|input| input.is_user_query())
+                            .cloned(),
+                    );
+                }
+            }
+
+            if !inputs.is_empty() {
+                carryover.insert(task.id().clone(), inputs);
+            }
+        }
+        carryover
+    }
+
     /// Returns the titles from the CreateDocuments request corresponding to the given action ID (if any).
     /// This is used by shared-session viewers to use the correct document titles from the original CreateDocuments action.
     pub fn get_document_titles_for_action(
