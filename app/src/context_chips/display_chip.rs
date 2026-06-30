@@ -32,6 +32,7 @@ use super::{
     ChipValue, ContextChipKind,
 };
 use crate::ai::blocklist::agent_view::AgentViewController;
+use crate::ai::blocklist::prompt::code_review_comments::CodeReviewCommentsView;
 use crate::ai::blocklist::prompt::plan_and_todo_list::{PlanAndTodoListEvent, PlanAndTodoListView};
 use crate::ai::blocklist::{BlocklistAIContextModel, BlocklistAIInputModel};
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -632,6 +633,9 @@ pub enum DisplayChipKind {
     AgentPlanAndTodoList {
         plan_and_todo_list: ViewHandle<PlanAndTodoListView>,
     },
+    CodeReviewComments {
+        code_review_comments: ViewHandle<CodeReviewCommentsView>,
+    },
     GitBranch {
         menu_open: bool,
         menu: ViewHandle<DisplayChipMenu>,
@@ -659,7 +663,8 @@ impl DisplayChipKind {
             | DisplayChipKind::Subshell
             | DisplayChipKind::VirtualEnvironment
             | DisplayChipKind::CondaEnvironment
-            | DisplayChipKind::AgentPlanAndTodoList { .. } => false,
+            | DisplayChipKind::AgentPlanAndTodoList { .. }
+            | DisplayChipKind::CodeReviewComments { .. } => false,
         }
     }
 }
@@ -860,6 +865,23 @@ impl DisplayChip {
                 });
 
                 DisplayChipKind::AgentPlanAndTodoList { plan_and_todo_list }
+            }
+            ContextChipKind::CodeReviewComments => {
+                let context_model = config.ai_context_model.clone();
+                let view_id = config.terminal_view_id;
+                let code_review_comments = ctx.add_typed_action_view(|ctx| {
+                    CodeReviewCommentsView::new(
+                        context_model,
+                        config.menu_positioning_provider.clone(),
+                        view_id,
+                        is_in_agent_view,
+                        ctx,
+                    )
+                });
+
+                DisplayChipKind::CodeReviewComments {
+                    code_review_comments,
+                }
             }
             ContextChipKind::ShellGitBranch => {
                 // Convert git branch strings to GitBranch items
@@ -1254,6 +1276,7 @@ impl DisplayChip {
             | DisplayChipKind::CondaEnvironment
             | DisplayChipKind::NodeVersion { .. }
             | DisplayChipKind::AgentPlanAndTodoList { .. }
+            | DisplayChipKind::CodeReviewComments { .. }
             | DisplayChipKind::GithubPullRequest => {}
         }
         false
@@ -1355,6 +1378,9 @@ impl DisplayChip {
             DisplayChipKind::AgentPlanAndTodoList { plan_and_todo_list } => {
                 plan_and_todo_list.as_ref(app).should_render(app)
             }
+            DisplayChipKind::CodeReviewComments {
+                code_review_comments,
+            } => code_review_comments.as_ref(app).should_render(app),
             _ => true,
         }
     }
@@ -1979,6 +2005,9 @@ impl DisplayChip {
             DisplayChipKind::AgentPlanAndTodoList { plan_and_todo_list } => {
                 Some(ChildView::new(plan_and_todo_list).finish())
             }
+            DisplayChipKind::CodeReviewComments {
+                code_review_comments,
+            } => Some(ChildView::new(code_review_comments).finish()),
             DisplayChipKind::GitBranch { menu_open, menu } => {
                 Some(self.git_branch_chip(*menu_open, menu, app))
             }
@@ -2101,6 +2130,7 @@ impl TypedActionView for DisplayChip {
                 | DisplayChipKind::VirtualEnvironment
                 | DisplayChipKind::CondaEnvironment
                 | DisplayChipKind::AgentPlanAndTodoList { .. }
+                | DisplayChipKind::CodeReviewComments { .. }
                 | DisplayChipKind::Text
                 | DisplayChipKind::GithubPullRequest
                 | DisplayChipKind::GitBranchStatus { .. }

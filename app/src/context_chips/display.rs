@@ -423,7 +423,10 @@ impl View for PromptDisplay {
         self.display_chips.iter().for_each(|display_chip| {
             let chip = display_chip.as_ref(app);
             // AgentPlanAndTodoList is only shown in the agent input footer
-            if matches!(chip.chip_kind(), ContextChipKind::AgentPlanAndTodoList) {
+            if matches!(
+                chip.chip_kind(),
+                ContextChipKind::AgentPlanAndTodoList | ContextChipKind::CodeReviewComments
+            ) {
                 return;
             }
             if chip.should_render(app) {
