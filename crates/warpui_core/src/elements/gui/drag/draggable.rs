@@ -63,6 +63,14 @@ impl DraggableState {
         }
     }
 
+    /// Returns the actual mouse position while dragging an element.
+    pub fn dragging_mouse_position(&self) -> Option<Vector2F> {
+        match self.read() {
+            DragState::Dragging { mouse_position, .. } => Some(mouse_position),
+            DragState::None | DragState::WaitingToDrag { .. } => None,
+        }
+    }
+
     pub fn adjust_mouse_position(&self, delta: Vector2F) {
         let mut guard = self.inner.lock();
         if let DragState::Dragging { mouse_position, .. } = &mut *guard {

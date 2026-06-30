@@ -369,7 +369,10 @@ pub enum WorkspaceAction {
     StartGroupDrag(TabGroupId),
     DragGroup {
         group_id: TabGroupId,
+        /// The dragged group's painted rect.
         position: RectF,
+        /// The position of the cursor while dragging a group.
+        cursor_position: Vector2F,
     },
     DropGroup,
     /// Toggles the left panel. In Code Mode V1 this toggles Warp Drive.

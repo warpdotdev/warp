@@ -19832,14 +19832,18 @@ impl Workspace {
 
         let group_id = group.id;
         let group_draggable_state = group.draggable_state.clone();
-        let positioned_container = Draggable::new(group_draggable_state, container)
+        let positioned_container = Draggable::new(group_draggable_state.clone(), container)
             .on_drag_start(move |ctx, _, _| {
                 ctx.dispatch_typed_action(WorkspaceAction::StartGroupDrag(group_id));
             })
             .on_drag(move |ctx, _, rect, _| {
+                let cursor_position = group_draggable_state
+                    .dragging_mouse_position()
+                    .unwrap_or_else(|| rect.center());
                 ctx.dispatch_typed_action(WorkspaceAction::DragGroup {
                     group_id,
                     position: rect,
+                    cursor_position,
                 });
             })
             .on_drop(move |ctx, _, _, _| {
@@ -24250,8 +24254,12 @@ impl TypedActionView for Workspace {
                 self.clear_tab_multi_selection(ctx);
                 self.finish_tab_group_rename(ctx);
             }
-            DragGroup { group_id, position } => {
-                self.on_group_drag(*group_id, *position, ctx);
+            DragGroup {
+                group_id,
+                position,
+                cursor_position,
+            } => {
+                self.on_group_drag(*group_id, *position, *cursor_position, ctx);
             }
             DropGroup => {
                 send_telemetry_from_ctx!(TelemetryEvent::DragAndDropTabGroup, ctx);
@@ -28508,7 +28516,8 @@ impl Workspace {
     /// Returns the group the dragged tab is over along the active axis so it can
     /// join it, or `None`. Vertical tabs inset both ends of the group rect by a
     /// fixed margin (`LEADING_EDGE_MARGIN` / `TRAILING_EDGE_MARGIN`). Horizontal
-    /// tabs use the position of a dynamic spacer, since tab groups resize dynamically.
+    /// tabs pivot entering and leaving on the header's midpoint; the trailing
+    /// edge anchors on the trailing spacer, since tab groups resize dynamically.
     fn target_group_at_axis(
         &self,
         cursor: f32,
@@ -28518,8 +28527,6 @@ impl Workspace {
     ) -> Option<TabGroupId> {
         const LEADING_EDGE_MARGIN: f32 = 4.0;
         const TRAILING_EDGE_MARGIN: f32 = 8.0;
-        // Fallback margin for a collapsed horizontal group (no members/spacer).
-        const EDGE_MARGIN: f32 = 6.0;
         self.tab_groups.keys().copied().find(|group_id| {
             let id = if is_vertical {
                 vtab_group_position_id(*group_id)
@@ -28536,30 +28543,27 @@ impl Workspace {
                     && cursor <= rect.max_y() - TRAILING_EDGE_MARGIN;
             }
 
-            // An expanded group has a flex spacer on each side of its members
-            // ([header][spacer][members][spacer]); the spacer is used to determine
-            // whether the dragging tab should land at the first/last position of the
-            // group, or just outside the group. The spacer is flex, so we fetch the
-            // the element position below to use it for our bounds calculations.
+            // An expanded group lays out as [header][spacer][members][spacer].
             let collapsed = self
                 .tab_groups
                 .get(group_id)
                 .is_some_and(|group| group.collapsed);
-            // The edge of the last member is the right bound of the flex spacer.
-            let last_member_max_x = if collapsed {
-                None
-            } else {
-                group_member_index_range(&self.tabs, *group_id)
-                    .and_then(|(_, last)| ctx.element_position_by_id(tab_position_id(last)))
-                    .map(|last_rect| last_rect.max_x())
+            // The last member's rect (expanded only), reused below.
+            let last_member_rect = (!collapsed)
+                .then(|| group_member_index_range(&self.tabs, *group_id))
+                .flatten()
+                .and_then(|(_, last)| ctx.element_position_by_id(tab_position_id(last)));
+            // Last member's right edge = trailing spacer's inner edge.
+            let last_member_max_x = last_member_rect.map(|last_rect| last_rect.max_x());
+            // The header is exactly one tab-slot wide so we can use current tab width
+            // to resolve its midpoint.
+            let header_mid_x = match last_member_rect {
+                Some(member) => rect.min_x() + member.width() / 2.,
+                None => (rect.min_x() + rect.max_x()) / 2.,
             };
 
-            // Leading: start the accept zone a full spacer in from the header
-            // edge so joining a group from the left is deliberate. This makes
-            // dropping between groups easy.
-            let leading_inset = last_member_max_x
-                .map(|last_max_x| rect.max_x() - last_max_x)
-                .unwrap_or(EDGE_MARGIN);
+            // Leading: entering and leaving both pivot on the header's midpoint.
+            let leading = header_mid_x;
 
             // Trailing resolves two opposite needs. Your own group releases at
             // its inner edge, so the trailing spacer is cushion before the cursor
@@ -28572,7 +28576,7 @@ impl Workspace {
                 rect.max_x()
             };
 
-            rect.min_x() + leading_inset <= cursor && cursor <= trailing
+            leading <= cursor && cursor <= trailing
         })
     }
 
@@ -28634,18 +28638,18 @@ impl Workspace {
     }
 
     /// Swaps the group's entire member block with its preceding/following
-    /// neighbor when the dragged group's center crosses a per-axis threshold.
+    /// neighbor when the active anchor crosses the neighbor's swap threshold.
     ///
-    /// Vertical compares against the neighbor's midpoint. Horizontal compares
-    /// against the neighbor's near edge (matching per-tab dragging) except when
-    /// the neighbor is itself a group, where it uses the group's midpoint.
-    ///
-    /// Comparing against the group's midpoint prevents oscilation when the
-    /// neighbouring group is larger than the group being dragged.
+    /// Anchors are asymmetric for an expanded group: swaps toward the start
+    /// (left/up) use `cursor_position`, swaps toward the end (right/down) use the
+    /// group's center. The split also gives swap/un-swap hysteresis that prevents
+    /// constantly swapping back and forth. A collapsed group is one tab wide, so
+    /// both directions use its center instead.
     pub(crate) fn on_group_drag(
         &mut self,
         group_id: TabGroupId,
         position: RectF,
+        cursor_position: Vector2F,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
@@ -28656,14 +28660,26 @@ impl Workspace {
         // prefix and an unpinned group must stay out of it.
         let group_pinned = self.tab_groups.get(&group_id).is_some_and(|g| g.pinned);
         let is_vertical = uses_vertical_tabs(ctx);
-        let midpoint_drag = if is_vertical {
-            (position.min_y() + position.max_y()) / 2.
+        let group_center = position.center();
+        let group_collapsed = self.tab_groups.get(&group_id).is_some_and(|g| g.collapsed);
+        let center_anchor = if is_vertical {
+            group_center.y()
         } else {
-            (position.min_x() + position.max_x()) / 2.
+            group_center.x()
         };
-        // Horizontal swaps fire as soon as the dragged group's center reaches
-        // the neighbor's near edge (matching per-tab dragging), except when the
-        // neighbor is itself a group. Vertical always uses the midpoint.
+        let cursor_anchor = if is_vertical {
+            cursor_position.y()
+        } else {
+            cursor_position.x()
+        };
+        // Expanded: cursor leads toward the start, center toward the end.
+        // Collapsed groups are one tab wide, so both directions use the center.
+        let (start_anchor, end_anchor) = if group_collapsed {
+            (center_anchor, center_anchor)
+        } else {
+            (cursor_anchor, center_anchor)
+        };
+
         let swap_before_threshold = |rect: RectF, neighbor_is_group: bool| -> f32 {
             if is_vertical {
                 (rect.min_y() + rect.max_y()) / 2.
@@ -28690,7 +28706,7 @@ impl Workspace {
             let before_index = first - 1;
             let neighbor_is_group = self.tabs[before_index].group_id.is_some();
             if let Some(rect) = self.group_swap_threshold_rect(before_index, is_vertical, ctx) {
-                if midpoint_drag < swap_before_threshold(rect, neighbor_is_group) {
+                if start_anchor < swap_before_threshold(rect, neighbor_is_group) {
                     let target = if let Some(other_gid) = self.tabs[before_index].group_id {
                         group_member_index_range(&self.tabs, other_gid)
                             .map(|(f, _)| f)
@@ -28715,7 +28731,7 @@ impl Workspace {
             let after_index = last + 1;
             let neighbor_is_group = self.tabs[after_index].group_id.is_some();
             if let Some(rect) = self.group_swap_threshold_rect(after_index, is_vertical, ctx) {
-                if midpoint_drag > swap_after_threshold(rect, neighbor_is_group) {
+                if end_anchor > swap_after_threshold(rect, neighbor_is_group) {
                     let after_block_last = if let Some(other_gid) = self.tabs[after_index].group_id
                     {
                         group_member_index_range(&self.tabs, other_gid)

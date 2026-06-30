@@ -3190,14 +3190,18 @@ fn render_grouped_tab_container(
     let positioned_container: Box<dyn Element> = if skip_group_draggable {
         container
     } else {
-        Draggable::new(group_draggable_state, container)
+        Draggable::new(group_draggable_state.clone(), container)
             .on_drag_start(move |ctx, _, _| {
                 ctx.dispatch_typed_action(WorkspaceAction::StartGroupDrag(group_id));
             })
             .on_drag(move |ctx, _, rect, _| {
+                let cursor_position = group_draggable_state
+                    .dragging_mouse_position()
+                    .unwrap_or_else(|| rect.center());
                 ctx.dispatch_typed_action(WorkspaceAction::DragGroup {
                     group_id,
                     position: rect,
+                    cursor_position,
                 });
             })
             .on_drop(move |ctx, _, _, _| {
