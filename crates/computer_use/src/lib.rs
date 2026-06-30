@@ -8,6 +8,8 @@ mod noop;
 mod screenshot_utils;
 
 use std::borrow::Cow;
+use std::path::PathBuf;
+use std::time::Duration;
 
 use async_trait::async_trait;
 // Clippy doesn't like us pulling in a file as two different modules,
@@ -18,6 +20,7 @@ use noop as imp;
 pub use pathfinder_geometry::vector::Vector2I;
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSecondsWithFrac, serde_as};
+use thiserror::Error;
 
 /// The platform that computer use is running on.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -34,6 +37,48 @@ pub fn is_supported_on_current_platform() -> bool {
     } else {
         imp::is_supported_on_current_platform()
     }
+}
+
+#[derive(Debug, Error)]
+pub enum RecordingError {
+    #[error("Video recording is not supported on this platform.")]
+    UnsupportedPlatform,
+    #[error("Cannot start recording: DISPLAY is not set (X11 required).")]
+    MissingDisplay,
+    #[error("Failed to connect to X11: {0}")]
+    X11Connection(String),
+    #[error("Cannot start recording: invalid display dimensions {width}x{height}.")]
+    InvalidDimensions { width: u32, height: u32 },
+    #[error("Failed to create recording log file: {source}")]
+    CreateLogFile {
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Failed to spawn ffmpeg for recording: {source}")]
+    SpawnFfmpeg {
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Failed to poll ffmpeg: {source}")]
+    PollFfmpeg {
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("ffmpeg exited early with status {status}")]
+    FfmpegExitedEarly { status: std::process::ExitStatus },
+    #[error("timed out waiting for capture to begin")]
+    StartTimedOut,
+    #[error("ffmpeg failed to start recording: {error}{detail}")]
+    StartFailed { error: String, detail: String },
+    #[error("Failed to wait for ffmpeg to stop: {source}")]
+    WaitFfmpeg {
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("ffmpeg did not finalize the recording in time")]
+    StopTimedOut,
+    #[error("Recording produced an empty file.")]
+    EmptyOutput,
 }
 
 /// Returns an actor that can perform actions on the computer.
@@ -55,6 +100,124 @@ pub trait Actor: Send + Sync + 'static {
         actions: &[Action],
         options: Options,
     ) -> Result<ActionResult, String>;
+}
+
+/// Returns a recorder that can capture a video of the computer-use display.
+///
+/// A real recorder is only available on Linux (X11); every other platform, and
+/// any `test-util` build, gets a no-op recorder that reports recording as
+/// unsupported.
+pub fn create_recorder() -> Box<dyn Recorder> {
+    if cfg!(feature = "test-util") {
+        Box::new(noop::Recorder::new())
+    } else {
+        Box::new(imp::Recorder::new())
+    }
+}
+
+/// A long-lived capability that records a video of the computer-use display.
+///
+/// Unlike [`Actor`], a recorder spans many tool calls: `start` launches capture
+/// and returns a [`RecordingHandle`] that the caller holds for the duration of
+/// the flow, and `stop` consumes that handle to finalize the video.
+#[async_trait]
+pub trait Recorder: Send + Sync + 'static {
+    /// Begins capturing the display. Resolves once capture is confirmed live
+    /// (the display is open and the encoder has produced its first output).
+    async fn start(&self, config: RecordingConfig) -> Result<RecordingHandle, RecordingError>;
+
+    /// Stops an in-progress recording, finalizes the container, and returns the
+    /// resulting file path and metadata. The file is streamed to disk; the
+    /// caller owns publishing and cleanup.
+    async fn stop(&self, handle: RecordingHandle) -> Result<RecordingOutput, RecordingError>;
+}
+
+/// Runtime-owned capture configuration for a recording.
+#[derive(Debug, Clone)]
+pub struct RecordingConfig {
+    /// Capture frame rate in frames per second.
+    pub frame_rate: u32,
+    /// Maximum duration before the runtime auto-stops recording.
+    pub max_duration: Option<Duration>,
+    /// Maximum output size before the runtime auto-stops recording.
+    pub max_size_bytes: Option<u64>,
+}
+
+impl Default for RecordingConfig {
+    fn default() -> Self {
+        Self {
+            // NOTE: 15fps keeps UI interactions readable while reducing file size and encoder load.
+            frame_rate: 15,
+            max_duration: None,
+            max_size_bytes: None,
+        }
+    }
+}
+
+/// An opaque handle to an in-progress recording, returned by [`Recorder::start`]
+/// and consumed by [`Recorder::stop`]. It owns the live capture process and the
+/// metadata needed to report the applied capture settings.
+pub struct RecordingHandle {
+    width: u32,
+    height: u32,
+    frame_rate: u32,
+    max_duration: Option<Duration>,
+    max_size_bytes: Option<u64>,
+    // The live capture process plus the fields used to finalize it are only
+    // populated by the real Linux recorder; the no-op recorders never construct
+    // a handle.
+    #[cfg(linux)]
+    path: PathBuf,
+    #[cfg(linux)]
+    started_at: std::time::Instant,
+    #[cfg(linux)]
+    process: tokio::process::Child,
+}
+
+impl RecordingHandle {
+    /// The applied capture width in pixels.
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// The applied capture height in pixels.
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// The applied capture frame rate in frames per second.
+    pub fn frame_rate(&self) -> u32 {
+        self.frame_rate
+    }
+
+    /// The enforced maximum recording duration, if any.
+    pub fn max_duration(&self) -> Option<Duration> {
+        self.max_duration
+    }
+
+    /// The enforced maximum recording size in bytes, if any.
+    pub fn max_size_bytes(&self) -> Option<u64> {
+        self.max_size_bytes
+    }
+}
+
+/// The finalized output of a stopped recording. Carries the local file path and
+/// metadata only; callers are responsible for publishing and deleting the file.
+#[derive(Debug, Clone)]
+pub struct RecordingOutput {
+    pub path: PathBuf,
+    pub duration: Duration,
+    pub width: u32,
+    pub height: u32,
+    pub size_bytes: u64,
+    pub completion_status: RecordingCompletionStatus,
+}
+
+/// Whether capture completed normally or stopped before an explicit stop.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RecordingCompletionStatus {
+    Completed,
+    StoppedEarly,
 }
 
 /// A key that can be pressed or released.
