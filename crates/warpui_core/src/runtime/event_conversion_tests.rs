@@ -1,9 +1,12 @@
+use std::time::Duration;
+
+use instant::Instant;
 use ratatui::crossterm::event::{
     Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
     MouseEvent, MouseEventKind,
 };
 
-use super::crossterm_event_to_tui_event;
+use super::{crossterm_event_to_tui_event, ClickTracker};
 use crate::elements::tui::{TuiEvent, TuiPoint};
 use crate::keymap::Keystroke;
 
@@ -250,4 +253,164 @@ fn unsupported_mouse_up_and_drag_buttons_are_ignored() {
         KeyModifiers::empty()
     )
     .is_none());
+}
+
+/// Builds a `button` mouse-down at `(x, y)` via the real conversion (so it
+/// starts with `click_count: 1`).
+fn down_at(button: MouseButton, x: u16, y: u16) -> TuiEvent {
+    crossterm_event_to_tui_event(CrosstermEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(button),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::empty(),
+    }))
+    .expect("mouse down should convert")
+}
+
+/// The synthesized click count carried by a mouse-down event.
+fn count_of(event: &TuiEvent) -> u32 {
+    match event {
+        TuiEvent::LeftMouseDown { click_count, .. }
+        | TuiEvent::MiddleMouseDown { click_count, .. }
+        | TuiEvent::RightMouseDown { click_count, .. } => *click_count,
+        other => panic!("expected a mouse-down, got {other:?}"),
+    }
+}
+
+/// Annotates a `button` mouse-down at `(x, y)` / `now` through `tracker` and
+/// returns the synthesized click count.
+fn annotate_down(
+    tracker: &mut ClickTracker,
+    button: MouseButton,
+    x: u16,
+    y: u16,
+    now: Instant,
+) -> u32 {
+    let mut event = down_at(button, x, y);
+    tracker.annotate(&mut event, now);
+    count_of(&event)
+}
+
+/// Convenience wrapper for the common left-button case.
+fn click_count(tracker: &mut ClickTracker, x: u16, y: u16, now: Instant) -> u32 {
+    annotate_down(tracker, MouseButton::Left, x, y, now)
+}
+
+#[test]
+fn click_count_escalates_then_wraps_for_fast_clicks_on_same_cell() {
+    let mut tracker = ClickTracker::default();
+    let t = Instant::now();
+    assert_eq!(click_count(&mut tracker, 5, 2, t), 1);
+    assert_eq!(
+        click_count(&mut tracker, 5, 2, t + Duration::from_millis(100)),
+        2
+    );
+    assert_eq!(
+        click_count(&mut tracker, 5, 2, t + Duration::from_millis(200)),
+        3
+    );
+    // A fourth fast click wraps back to a single click.
+    assert_eq!(
+        click_count(&mut tracker, 5, 2, t + Duration::from_millis(300)),
+        1
+    );
+}
+
+#[test]
+fn slow_second_click_resets_to_single() {
+    let mut tracker = ClickTracker::default();
+    let t = Instant::now();
+    assert_eq!(click_count(&mut tracker, 5, 2, t), 1);
+    // Past the multi-click interval, so the next press is a fresh single click.
+    assert_eq!(
+        click_count(&mut tracker, 5, 2, t + Duration::from_millis(600)),
+        1
+    );
+}
+
+#[test]
+fn click_on_distant_cell_resets_to_single() {
+    let mut tracker = ClickTracker::default();
+    let t = Instant::now();
+    assert_eq!(click_count(&mut tracker, 5, 2, t), 1);
+    assert_eq!(
+        click_count(&mut tracker, 20, 2, t + Duration::from_millis(100)),
+        1
+    );
+}
+
+#[test]
+fn click_within_one_cell_counts_as_multi_click() {
+    let mut tracker = ClickTracker::default();
+    let t = Instant::now();
+    assert_eq!(click_count(&mut tracker, 5, 2, t), 1);
+    // One cell of jitter between presses is tolerated.
+    assert_eq!(
+        click_count(&mut tracker, 6, 2, t + Duration::from_millis(100)),
+        2
+    );
+}
+
+#[test]
+fn right_and_middle_clicks_escalate_like_left() {
+    let mut tracker = ClickTracker::default();
+    let t = Instant::now();
+    assert_eq!(annotate_down(&mut tracker, MouseButton::Right, 5, 2, t), 1);
+    assert_eq!(
+        annotate_down(
+            &mut tracker,
+            MouseButton::Right,
+            5,
+            2,
+            t + Duration::from_millis(100)
+        ),
+        2
+    );
+
+    let mut tracker = ClickTracker::default();
+    assert_eq!(annotate_down(&mut tracker, MouseButton::Middle, 5, 2, t), 1);
+    assert_eq!(
+        annotate_down(
+            &mut tracker,
+            MouseButton::Middle,
+            5,
+            2,
+            t + Duration::from_millis(100)
+        ),
+        2
+    );
+}
+
+#[test]
+fn switching_button_resets_click_count() {
+    let mut tracker = ClickTracker::default();
+    let t = Instant::now();
+    // A left press then a quick right press on the same cell are two separate
+    // single clicks, not a double-click.
+    assert_eq!(annotate_down(&mut tracker, MouseButton::Left, 5, 2, t), 1);
+    assert_eq!(
+        annotate_down(
+            &mut tracker,
+            MouseButton::Right,
+            5,
+            2,
+            t + Duration::from_millis(50)
+        ),
+        1
+    );
+}
+
+#[test]
+fn annotate_leaves_non_button_events_untouched() {
+    let mut tracker = ClickTracker::default();
+    // A scroll-wheel event carries no click count; annotate must be a no-op.
+    let mut event = crossterm_event_to_tui_event(CrosstermEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 5,
+        row: 2,
+        modifiers: KeyModifiers::empty(),
+    }))
+    .expect("scroll up should convert");
+    tracker.annotate(&mut event, Instant::now());
+    assert!(matches!(event, TuiEvent::ScrollWheel { .. }));
 }
