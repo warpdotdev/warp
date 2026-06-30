@@ -51,8 +51,8 @@ fn tui_block_list_viewport_source_slices_terminal_blocks_to_visible_rows() {
                 TuiViewportWindow {
                     scroll_top: 1,
                     viewport_height: 1,
-                    viewport_width: 80,
                 },
+                80,
                 app,
             );
 

@@ -110,7 +110,9 @@ impl TuiBlockListViewportSource {
         let model = self.model.lock();
         let block_list = model.block_list();
         let agent_blocks = self.agent_blocks.borrow();
-        let viewport_bottom = window.scroll_top.saturating_add(window.viewport_height);
+        let viewport_bottom = window
+            .scroll_top
+            .saturating_add(usize::from(window.viewport_height));
         let mut descriptors = Vec::new();
         let mut content_height = 0usize;
         let mut cursor = block_list
@@ -222,16 +224,21 @@ impl TuiBlockListViewportSource {
 }
 
 impl TuiViewportedElement for TuiBlockListViewportSource {
-    fn visible_items(&self, window: TuiViewportWindow, app: &AppContext) -> TuiViewportContent {
+    fn visible_items(
+        &self,
+        window: TuiViewportWindow,
+        available_width: u16,
+        app: &AppContext,
+    ) -> TuiViewportContent {
         let dirty_rich_content_items = self.take_dirty_rich_content_items();
         let height_updates =
-            self.measured_dirty_agent_heights(dirty_rich_content_items, window.viewport_width, app);
+            self.measured_dirty_agent_heights(dirty_rich_content_items, available_width, app);
         self.apply_height_updates(&height_updates);
 
         let (content_height, descriptors) = self.visible_item_descriptors(window);
         let items = descriptors
             .into_iter()
-            .map(|descriptor| descriptor.render(&self.model, window, app))
+            .map(|descriptor| descriptor.render(&self.model, window, available_width, app))
             .collect();
 
         TuiViewportContent {
@@ -246,6 +253,7 @@ impl TuiBlockListVisibleItemDescriptor {
         self,
         model: &Arc<FairMutex<TerminalModel>>,
         window: TuiViewportWindow,
+        available_width: u16,
         app: &AppContext,
     ) -> TuiVisibleViewportItem {
         let visible_rows = self.visible_rows(window);
@@ -258,7 +266,7 @@ impl TuiBlockListVisibleItemDescriptor {
             origin_y,
             element: self
                 .item
-                .render(model, visible_rows, window.viewport_width, app),
+                .render(model, visible_rows, available_width, app),
         }
     }
 
@@ -267,7 +275,7 @@ impl TuiBlockListVisibleItemDescriptor {
         let item_bottom = item_top.saturating_add(self.height);
         let visible_top = item_top.max(window.scroll_top);
         let visible_bottom =
-            item_bottom.min(window.scroll_top.saturating_add(window.viewport_height));
+            item_bottom.min(window.scroll_top.saturating_add(usize::from(window.viewport_height)));
         visible_top.saturating_sub(item_top)..visible_bottom.saturating_sub(item_top)
     }
 }
