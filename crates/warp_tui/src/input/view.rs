@@ -28,8 +28,8 @@ use warp_editor::render::model::{
 };
 use warp_editor::selection::TextUnit;
 use warpui_core::elements::tui::{
-    Modifier, TuiBuffer, TuiColumn, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
-    TuiParentElement, TuiRect, TuiSize, TuiStyle, TuiText,
+    Modifier, TuiBuffer, TuiColumn, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiParentElement, TuiRect, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
@@ -736,7 +736,7 @@ impl TuiElement for TuiInputElement {
 
     fn dispatch_event(
         &mut self,
-        event: &warpui_core::Event,
+        event: &TuiEvent,
         area: TuiRect,
         event_ctx: &mut TuiEventContext,
         ctx: &mut TuiLayoutContext,
@@ -746,7 +746,7 @@ impl TuiElement for TuiInputElement {
             return true;
         }
 
-        if let warpui_core::Event::KeyDown {
+        if let TuiEvent::KeyDown {
             keystroke, chars, ..
         } = event
         {
