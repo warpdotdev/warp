@@ -2,19 +2,17 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::theme::{AGENT_INPUT_BACKGROUND, AGENT_INPUT_TEXT, AGENT_OUTPUT_TEXT};
 use warp::tui_export::{AIAgentTextSection, AIBlockModel};
 use warpui_core::elements::tui::{
-    Color, Modifier, TuiBuffer, TuiColumn, TuiConstraint, TuiContainer, TuiElement,
-    TuiLayoutContext, TuiParentElement, TuiRect, TuiSize, TuiStyle, TuiText,
+    Modifier, TuiBuffer, TuiColumn, TuiConstraint, TuiContainer, TuiElement, TuiLayoutContext,
+    TuiParentElement, TuiRect, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::{AppContext, Entity, EntityIdMap, TuiView};
 
 const INPUT_PREFIX: &str = "≫ ";
-const INPUT_TEXT_COLOR: Color = Color::from_u32(0xffffff);
-const INPUT_BACKGROUND: Color = Color::from_u32(0x2c2d34);
 const INPUT_OUTPUT_GAP_ROWS: u16 = 1;
 const BLOCK_BOTTOM_PADDING_ROWS: u16 = 1;
-const OUTPUT_COLOR: Color = Color::from_u32(0xf1f1f1);
 
 /// Renderable pieces of an agent block; this will grow as we add tool calls and other sub-elements.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -162,17 +160,18 @@ impl TuiAgentBlockSection {
                 TuiContainer::new(
                     TuiText::new(format!("{INPUT_PREFIX}{text}")).with_style(
                         TuiStyle::default()
-                            .fg(INPUT_TEXT_COLOR)
-                            .bg(INPUT_BACKGROUND)
+                            .fg(AGENT_INPUT_TEXT)
+                            .bg(AGENT_INPUT_BACKGROUND)
                             .add_modifier(Modifier::BOLD),
                     ),
                 )
-                .with_background(INPUT_BACKGROUND)
+                .with_background(AGENT_INPUT_BACKGROUND)
                 .with_padding_top(top_padding),
             ),
             Self::PlainText(text) => Box::new(
                 TuiContainer::new(
-                    TuiText::new(text.clone()).with_style(TuiStyle::default().fg(OUTPUT_COLOR)),
+                    TuiText::new(text.clone())
+                        .with_style(TuiStyle::default().fg(AGENT_OUTPUT_TEXT)),
                 )
                 .with_padding_top(top_padding),
             ),

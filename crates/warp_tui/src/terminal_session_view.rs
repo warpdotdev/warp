@@ -8,7 +8,7 @@ use warp::tui_export::{
     TerminalSurface, TerminalSurfaceInit,
 };
 use warpui_core::elements::tui::{
-    Color, TuiChildView, TuiColumn, TuiConstrainedBox, TuiContainer, TuiElement, TuiStyle,
+    TuiChildView, TuiColumn, TuiConstrainedBox, TuiContainer, TuiElement, TuiStyle,
 };
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
@@ -16,13 +16,13 @@ use warpui_core::{
 
 use crate::conversation_selection::TuiConversationSelection;
 use crate::input::{TuiInputView, TuiInputViewEvent};
+use crate::theme::INPUT_BORDER;
 use crate::transcript_view::TuiTranscriptView;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
 const BORDER_ROWS: u16 = 2;
-const INPUT_BORDER_COLOR: Color = Color::from_u32(0xd0d1fe);
 const SESSION_PADDING: u16 = 2;
 
 /// This surface emits no PTY intents; commands are driven only by the spawned shell.
@@ -163,7 +163,7 @@ impl TuiTerminalSessionView {
     fn render_session(&self) -> Box<dyn TuiElement> {
         let input_box = TuiConstrainedBox::new(
             TuiContainer::new(TuiChildView::new(&self.input_view))
-                .with_border_style(TuiStyle::default().fg(INPUT_BORDER_COLOR)),
+                .with_border_style(TuiStyle::default().fg(INPUT_BORDER)),
         )
         .with_max_rows(MAX_INPUT_TEXT_ROWS + BORDER_ROWS);
         Box::new(

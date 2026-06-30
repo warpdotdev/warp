@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use crate::theme::{AGENT_INPUT_BACKGROUND, AGENT_INPUT_TEXT, AGENT_OUTPUT_TEXT};
 use warp::tui_export::{
     AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText,
     AIAgentTextSection, AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, LLMId,
@@ -9,10 +10,7 @@ use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, ViewContext};
 
-use super::{
-    TuiAgentBlockElement, TuiAgentBlockSection, TuiAgentBlockView, INPUT_BACKGROUND,
-    INPUT_TEXT_COLOR, OUTPUT_COLOR,
-};
+use super::{TuiAgentBlockElement, TuiAgentBlockSection, TuiAgentBlockView};
 
 #[test]
 fn simple_agent_block_reports_full_height_and_renders_content() {
@@ -36,12 +34,12 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
                     .collect::<Vec<_>>(),
                 vec!["≫ hello", "", "one", "two", "three", ""],
             );
-            assert_eq!(frame.buffer[(0, 0)].fg, INPUT_TEXT_COLOR);
-            assert_eq!(frame.buffer[(0, 0)].bg, INPUT_BACKGROUND);
+            assert_eq!(frame.buffer[(0, 0)].fg, AGENT_INPUT_TEXT);
+            assert_eq!(frame.buffer[(0, 0)].bg, AGENT_INPUT_BACKGROUND);
             assert!(frame.buffer[(0, 0)].modifier.contains(Modifier::BOLD));
-            assert_eq!(frame.buffer[(2, 0)].fg, INPUT_TEXT_COLOR);
-            assert_eq!(frame.buffer[(19, 0)].bg, INPUT_BACKGROUND);
-            assert_eq!(frame.buffer[(0, 2)].fg, OUTPUT_COLOR);
+            assert_eq!(frame.buffer[(2, 0)].fg, AGENT_INPUT_TEXT);
+            assert_eq!(frame.buffer[(19, 0)].bg, AGENT_INPUT_BACKGROUND);
+            assert_eq!(frame.buffer[(0, 2)].fg, AGENT_OUTPUT_TEXT);
         });
     });
 }
