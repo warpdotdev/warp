@@ -20,11 +20,6 @@ impl FontDB {
         scale: Vector2F,
         _glyph_config: &GlyphConfig,
     ) -> Result<RectI> {
-        // Short-circuit for fonts already confirmed corrupted at runtime.
-        if self.text_layout_system.is_corrupted(font_id) {
-            return Ok(RectI::new(Vector2I::zero(), Vector2I::zero()));
-        }
-
         let Ok(_typographic_bounds) = self
             .glyph_typographic_bounds(font_id, glyph_id)
             .map(|bounds| bounds.to_f32())
@@ -56,20 +51,8 @@ impl FontDB {
                 )
                 .0,
             )
-            .clone();
-
-        let image = match image {
-            Some(img) => img,
-            None => {
-                // A non-zero glyph ID that swash cannot rasterize may indicate
-                // a corrupted glyf table. Mark the font for removal after a
-                // threshold of failures.
-                if glyph_id != 0 {
-                    self.text_layout_system.mark_font_corrupted(font_id);
-                }
-                return Err(anyhow!("Failed to get raster image"));
-            }
-        };
+            .clone()
+            .ok_or_else(|| anyhow!("Failed to get raster image"))?;
 
         let origin = vec2i(image.placement.left, -image.placement.top);
         let size = vec2i(image.placement.width as i32, image.placement.height as i32);
@@ -87,12 +70,6 @@ impl FontDB {
         glyph_config: &GlyphConfig,
         requested_format: RasterFormat,
     ) -> Result<RasterizedGlyph> {
-        // Safety net for fonts confirmed corrupted between glyph_raster_bounds
-        // and rasterize_glyph calls.
-        if self.text_layout_system.is_corrupted(font_id) {
-            anyhow::bail!("Font {font_id:?} is corrupted");
-        }
-
         let raster_bounds =
             self.glyph_raster_bounds(font_id, size, glyph_id, scale, glyph_config)?;
 
@@ -117,17 +94,8 @@ impl FontDB {
                 )
                 .0,
             )
-            .clone();
-
-        let image = match image {
-            Some(img) => img,
-            None => {
-                if glyph_id != 0 {
-                    self.text_layout_system.mark_font_corrupted(font_id);
-                }
-                return Err(anyhow!("Failed to get raster image"));
-            }
-        };
+            .clone()
+            .unwrap();
 
         let (original_format, is_color) = match image.content {
             cosmic_text::SwashContent::Mask => (RasterFormat::A8, false),
