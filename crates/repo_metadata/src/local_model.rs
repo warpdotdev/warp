@@ -4,7 +4,9 @@
 //! This module provides a singleton model that manages repository metadata across
 //! all repositories tracked by Warp.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(feature = "local_fs")]
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -1151,9 +1153,6 @@ impl LocalRepoMetadataModel {
         let mut mutations = Vec::new();
         let mut standing_results = StandingQueryResults::default();
         let mut removed_roots = Vec::new();
-        // Tracks ignored-root placeholders already emitted in this batch so a burst of events under
-        // the same ignored directory  collapses to one entry.
-        let mut emitted_ignored_roots: HashSet<PathBuf> = HashSet::new();
 
         // Removals for deleted and moved-from paths
         for path_to_remove in update.deleted.iter().chain(update.moved.values()) {
@@ -1176,22 +1175,6 @@ impl LocalRepoMetadataModel {
             }
 
             let is_ignored = Self::path_is_ignored(path_to_add, gitignores);
-
-            // A path that is ignored because of an ancestor directory is represented as  single
-            // unloaded placeholder at the topmost ignored ancestor, with nothing below it materialized.
-            if !lazy_load && is_ignored {
-                if let Some(ignored_root) =
-                    Self::topmost_ignored_ancestor(path_to_add, gitignores, force_included_paths)
-                {
-                    if emitted_ignored_roots.insert(ignored_root.clone()) {
-                        mutations.push(FileTreeMutation::AddUnloadedDirectory {
-                            path: ignored_root,
-                            is_ignored: true,
-                        });
-                    }
-                    continue;
-                }
-            }
 
             if path_to_add.is_dir() {
                 if lazy_load {
@@ -1314,7 +1297,12 @@ impl LocalRepoMetadataModel {
                     let Some(std_path) = StandardizedPath::try_from_local(path).ok() else {
                         continue;
                     };
-                    if lazy_load && !Self::is_parent_loaded_in_entry(root_entry, &std_path) {
+                    // Gitignored entries are lazy: like `lazy_load`, don't materialize one
+                    // beneath an unloaded (collapsed) ignored ancestor. The ignored root keeps a
+                    // loaded parent, so it is still created.
+                    if (lazy_load || is_ignored)
+                        && !Self::is_parent_loaded_in_entry(root_entry, &std_path)
+                    {
                         continue;
                     }
                     let Some(parent) = std_path.parent() else {
@@ -1391,7 +1379,19 @@ impl LocalRepoMetadataModel {
                     let Some(std_path) = StandardizedPath::try_from_local(path).ok() else {
                         continue;
                     };
-                    if lazy_load && !Self::is_parent_loaded_in_entry(root_entry, &std_path) {
+                    // Never downgrade a directory the user has already expanded back to an
+                    // unloaded placeholder (e.g. a self-event on a loaded gitignored dir).
+                    if matches!(
+                        root_entry.get(&std_path),
+                        Some(FileTreeEntryState::Directory(dir)) if dir.loaded
+                    ) {
+                        continue;
+                    }
+                    // Gitignored placeholders are lazy: like `lazy_load`, don't materialize one
+                    // beneath an unloaded (collapsed) ignored ancestor.
+                    if (lazy_load || is_ignored)
+                        && !Self::is_parent_loaded_in_entry(root_entry, &std_path)
+                    {
                         continue;
                     }
                     let Some(parent) = std_path.parent() else {
@@ -1458,33 +1458,6 @@ impl LocalRepoMetadataModel {
         // Check if path matches any gitignore patterns
         let is_dir = path.is_dir();
         matches_gitignores(path, is_dir, gitignores, true)
-    }
-
-    /// Returns the shallowest ancestor directory of `path` that is gitignored (and not
-    /// force-included), or `None` when `path`'s parent is not an ignored, non-force-included
-    /// directory.
-    fn topmost_ignored_ancestor(
-        path: &Path,
-        gitignores: &[Gitignore],
-        force_included_paths: &[PathBuf],
-    ) -> Option<PathBuf> {
-        let parent = path.parent()?;
-        if !Self::path_is_ignored(parent, gitignores)
-            || matches_force_included_path(parent, force_included_paths)
-        {
-            return None;
-        }
-        let mut ancestor = parent;
-        while let Some(next) = ancestor.parent() {
-            if Self::path_is_ignored(next, gitignores)
-                && !matches_force_included_path(next, force_included_paths)
-            {
-                ancestor = next;
-            } else {
-                break;
-            }
-        }
-        Some(ancestor.to_path_buf())
     }
 
     /// Fully indexes a local directory after registering it with the directory watcher.

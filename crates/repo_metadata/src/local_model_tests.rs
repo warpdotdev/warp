@@ -2396,25 +2396,47 @@ fn incremental_force_included_dir_under_ignored_parent_matches_initial_index() {
     );
 }
 
-/// A deep event under a gitignored directory (e.g. `target/debug/.fingerprint`) collapses to a
-/// single unloaded placeholder at the topmost ignored ancestor (`target`).
+/// A filesystem event deep under an UNLOADED (collapsed) gitignored directory is
+/// dropped at apply time, so nothing below the unloaded placeholder is
+/// materialized — matching the initial index's single-placeholder representation.
 #[test]
-fn incremental_deep_ignored_path_collapses_to_topmost_ignored_ancestor() {
+fn incremental_deep_event_under_unloaded_ignored_dir_is_collapsed() {
     VirtualFS::test(
-        "incremental_deep_ignored_collapses_to_ignored_root",
+        "incremental_deep_event_under_unloaded_ignored_dir",
         |dirs, mut vfs| {
-            vfs.mkdir("repo/target/debug/.fingerprint")
-                .with_files(vec![Stub::FileWithContent("repo/.gitignore", "target/\n")]);
+            vfs.mkdir("repo/target/debug/.fingerprint").with_files(vec![
+                Stub::FileWithContent("repo/.gitignore", "target/\n"),
+                Stub::FileWithContent("repo/target/debug/.fingerprint/x.json", "{}"),
+            ]);
 
             let repo_local = dirs.tests().join("repo");
-            let deep_local = repo_local.join("target").join("debug").join(".fingerprint");
             let target_local = repo_local.join("target");
+            let deep_dir_local = target_local.join("debug").join(".fingerprint");
+            let deep_file_local = deep_dir_local.join("x.json");
+
+            let repo_std = StandardizedPath::try_from_local(&repo_local).unwrap();
+            let target_std = StandardizedPath::try_from_local(&target_local).unwrap();
+            let debug_std = StandardizedPath::try_from_local(&target_local.join("debug")).unwrap();
+
+            // Post-initial-index state: `target` is a single UNLOADED ignored placeholder.
+            let root_entry = Entry::Directory(DirectoryEntry {
+                path: repo_std,
+                ignored: false,
+                loaded: true,
+                children: vec![Entry::Directory(DirectoryEntry {
+                    path: target_std.clone(),
+                    ignored: true,
+                    loaded: false,
+                    children: vec![],
+                })],
+            });
+            let mut tree = FileTreeEntry::from(root_entry);
 
             let gitignores = crate::gitignores_for_directory(&repo_local);
             let definitions = StandingQueryDefinitions::default();
 
             let update = RepoUpdate {
-                added: vec![deep_local],
+                added: vec![deep_dir_local, deep_file_local],
                 ..Default::default()
             };
             let (mutations, _standing_results, _removed) =
@@ -2425,22 +2447,105 @@ fn incremental_deep_ignored_path_collapses_to_topmost_ignored_ancestor() {
                     &definitions,
                     false, /* lazy_load */
                 ));
+            LocalRepoMetadataModel::apply_file_tree_mutations(&mut tree, mutations, false, false);
 
-            assert_eq!(
-                mutations.len(),
-                1,
-                "deep ignored event should collapse to one placeholder, got {mutations:?}"
-            );
-            match &mutations[0] {
-                FileTreeMutation::AddUnloadedDirectory { path, is_ignored } => {
-                    assert_eq!(
-                        path, &target_local,
-                        "placeholder should sit at the topmost ignored ancestor `target`"
+            // `target` stays a single unloaded placeholder; nothing below it is materialized.
+            match tree
+                .get(&target_std)
+                .expect("`target` should remain in the tree")
+            {
+                FileTreeEntryState::Directory(directory) => {
+                    assert!(
+                        !directory.loaded,
+                        "`target` should remain an unloaded placeholder"
                     );
-                    assert!(*is_ignored, "the ignored root placeholder must be ignored");
+                    assert!(directory.ignored, "`target` should stay ignored");
                 }
-                other => panic!("expected AddUnloadedDirectory at `target`, got {other:?}"),
+                FileTreeEntryState::File(_) => panic!("`target` should be a directory"),
             }
+            assert!(
+                tree.get(&debug_std).is_none(),
+                "nothing below the unloaded `target` placeholder should be materialized"
+            );
+        },
+    );
+}
+
+/// A filesystem event under a gitignored directory the user has already
+/// expanded (so it is `loaded`) must keep that directory loaded.
+#[test]
+fn incremental_event_under_expanded_ignored_dir_keeps_it_loaded() {
+    VirtualFS::test(
+        "incremental_event_under_expanded_ignored_dir",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/target/debug").with_files(vec![
+                Stub::FileWithContent("repo/.gitignore", "target/\n"),
+                Stub::FileWithContent("repo/target/debug/new.rs", "x"),
+            ]);
+
+            let repo_local = dirs.tests().join("repo");
+            let target_local = repo_local.join("target");
+            let new_file_local = target_local.join("debug").join("new.rs");
+
+            let repo_std = StandardizedPath::try_from_local(&repo_local).unwrap();
+            let target_std = StandardizedPath::try_from_local(&target_local).unwrap();
+            let debug_std = StandardizedPath::try_from_local(&target_local.join("debug")).unwrap();
+            let new_file_std = StandardizedPath::try_from_local(&new_file_local).unwrap();
+
+            // The user has expanded the gitignored `target/`, so it is loaded.
+            let root_entry = Entry::Directory(DirectoryEntry {
+                path: repo_std,
+                ignored: false,
+                loaded: true,
+                children: vec![Entry::Directory(DirectoryEntry {
+                    path: target_std.clone(),
+                    ignored: true,
+                    loaded: true,
+                    children: vec![Entry::Directory(DirectoryEntry {
+                        path: debug_std,
+                        ignored: true,
+                        loaded: true,
+                        children: vec![],
+                    })],
+                })],
+            });
+            let mut tree = FileTreeEntry::from(root_entry);
+
+            let gitignores = crate::gitignores_for_directory(&repo_local);
+            let definitions = StandingQueryDefinitions::default();
+
+            let update = RepoUpdate {
+                added: vec![new_file_local],
+                ..Default::default()
+            };
+            let (mutations, _standing_results, _removed) =
+                block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                    &update,
+                    &gitignores,
+                    &[], /* force_included_paths */
+                    &definitions,
+                    false, /* lazy_load */
+                ));
+            LocalRepoMetadataModel::apply_file_tree_mutations(&mut tree, mutations, false, false);
+
+            match tree
+                .get(&target_std)
+                .expect("expanded `target` should remain in the tree")
+            {
+                FileTreeEntryState::Directory(directory) => {
+                    assert!(
+                        directory.loaded,
+                        "an event under an expanded ignored dir must not collapse it to an \
+                         unloaded placeholder"
+                    );
+                    assert!(directory.ignored, "`target` should still be ignored");
+                }
+                FileTreeEntryState::File(_) => panic!("`target` should be a directory"),
+            }
+            assert!(
+                tree.get(&new_file_std).is_some(),
+                "the new file under the expanded ignored dir should be delivered"
+            );
         },
     );
 }
