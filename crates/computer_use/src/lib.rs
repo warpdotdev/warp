@@ -94,8 +94,10 @@ pub enum Target {
     Screen,
     /// Target a specific background window of a specific process.
     Window {
-        /// The platform window id (a `CGWindowID` on macOS). May be `0` when unknown, in which
-        /// case the implementation resolves the window from the action's coordinates and pid.
+        /// The platform window id (a `CGWindowID` on macOS). Must be a concrete, non-zero id
+        /// selected from the enumerated window list. `0` is the "unknown" sentinel and is
+        /// rejected by the actor, since coordinate remapping and window capture both require a
+        /// known window.
         window_id: u32,
         /// The pid of the process that owns the window.
         pid: i32,

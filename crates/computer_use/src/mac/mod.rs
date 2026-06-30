@@ -38,6 +38,22 @@ fn post_target_for(target: Target) -> PostTarget {
     }
 }
 
+/// Activates the target window so background keyboard events are accepted, resolving it by id.
+///
+/// Mouse actions activate the target window lazily from the event location (see
+/// [`mouse::Mouse`]), but keyboard actions carry no location, so a keyboard-only interaction
+/// with a background window would otherwise never trigger activation and the first key events
+/// could be dropped or routed to the wrong window. Activation is idempotent per window, so
+/// calling this before each keyboard action is cheap and does not re-send the activation primer.
+fn activate_window_for_keyboard(target: Target) {
+    let Target::Window { window_id, pid } = target else {
+        return;
+    };
+    if let Some(info) = window::window_by_id(window_id) {
+        activation::ensure_activated(pid as libc::pid_t, &info);
+    }
+}
+
 /// Returns a copy of `action` with its coordinates remapped for the given target.
 ///
 /// For a `Window` target the incoming coordinates are window-local pixels in the captured window
@@ -145,6 +161,18 @@ impl super::Actor for Actor {
                 Target::Screen
             };
 
+            // A window target must carry a concrete window id. `0` is the "unknown" sentinel
+            // produced by the CLI default and by unparseable wire ids; reject it here rather than
+            // failing later in window resolution with an opaque message, since a well-behaved
+            // caller always echoes a real window id selected from the enumerated window list.
+            if let Target::Window { window_id: 0, .. } = target {
+                return Err(
+                    "A window target requires a non-zero window id. Select a window from the \
+                     enumerated window list."
+                        .to_string(),
+                );
+            }
+
             // Route this action to its target: the HID tap for screen actions, or directly to the
             // owning process for a window action (without raising it or moving the cursor).
             let post_target = post_target_for(target);
@@ -173,9 +201,11 @@ impl super::Actor for Actor {
                     self.mouse.scroll(direction, distance)?;
                 }
                 Action::TypeText { text } => {
+                    activate_window_for_keyboard(target);
                     self.keyboard.type_text(text)?;
                 }
                 Action::KeyDown { key } => {
+                    activate_window_for_keyboard(target);
                     self.keyboard.key_down(key)?;
                 }
                 Action::KeyUp { key } => {

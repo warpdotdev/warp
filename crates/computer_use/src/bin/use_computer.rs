@@ -18,9 +18,8 @@ struct Cli {
     #[arg(long, global = true)]
     pid: Option<i32>,
 
-    /// Experimental (macOS only): the CGWindowID of the window to target, used with `--pid`.
-    /// When omitted, the window is resolved from the action's coordinates. Use the `windows`
-    /// subcommand to list window ids.
+    /// Experimental (macOS only): the CGWindowID of the window to target. Required when `--pid`
+    /// is given. Use the `windows` subcommand to list window ids.
     #[arg(long, global = true)]
     window_id: Option<u32>,
 
@@ -30,14 +29,15 @@ struct Cli {
 
 impl Cli {
     /// Resolves the per-action / screenshot target from the CLI flags. A `--pid` selects a
-    /// background window target; otherwise the legacy whole-screen target is used.
+    /// background window target; otherwise the legacy whole-screen target is used. Callers must
+    /// validate that `--window-id` is present whenever `--pid` is given (see `main`), so the
+    /// ambiguous `0` sentinel is never sent to the actor.
     fn target(&self) -> Target {
-        match self.pid {
-            Some(pid) => Target::Window {
-                window_id: self.window_id.unwrap_or(0),
-                pid,
-            },
-            None => Target::Screen,
+        match (self.pid, self.window_id) {
+            (Some(pid), Some(window_id)) => Target::Window { window_id, pid },
+            // `--pid` without `--window-id` is rejected up front in `main`; fall back to the
+            // screen target here so a missing id can never become a `0`-id window target.
+            (Some(_), None) | (None, _) => Target::Screen,
         }
     }
 }
@@ -134,6 +134,16 @@ async fn main() {
             }
         }
         return;
+    }
+
+    // A window target needs a concrete window id; require it alongside `--pid` so the ambiguous
+    // `0` sentinel is never sent to the actor.
+    if cli.pid.is_some() && cli.window_id.is_none() {
+        eprintln!(
+            "--window-id is required when --pid is given. Use the `windows` subcommand to list \
+             window ids."
+        );
+        std::process::exit(1);
     }
 
     let target = cli.target();
