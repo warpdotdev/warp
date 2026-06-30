@@ -51,4 +51,4 @@ pub use crate::terminal::{
     PtyIntent, PtyIntentEvent, ShellLaunchData, TerminalManager as TerminalManagerTrait,
     TerminalModel, TerminalSurface,
 };
-pub use crate::themes::default_themes::dark_theme;
+pub use crate::themes::default_themes::tui_dark_theme;

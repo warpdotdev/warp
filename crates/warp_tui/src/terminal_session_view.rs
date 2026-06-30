@@ -7,7 +7,6 @@ use warp::tui_export::{
     ConversationSelectionHandle, GetRelevantFilesController, PtyIntent, PtyIntentEvent,
     TerminalSurface, TerminalSurfaceInit,
 };
-use warp_core::ui::color::blend::Blend;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     Color, TuiChildView, TuiColumn, TuiConstrainedBox, TuiContainer, TuiElement, TuiStyle,
@@ -164,7 +163,8 @@ impl TuiTerminalSessionView {
 
     fn render_session(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let theme = Appearance::as_ref(app).theme();
-        let border_color: Color = GuiFill::from(theme.background().blend(&theme.outline())).into();
+        let border_color: Color = GuiFill::from(theme.tui_transcript_accent_color()).into();
+        let background: Color = GuiFill::from(theme.tui_transcript_background()).into();
         let input_box = TuiConstrainedBox::new(
             TuiContainer::new(TuiChildView::new(&self.input_view))
                 .with_border_style(TuiStyle::default().fg(border_color)),
@@ -176,6 +176,7 @@ impl TuiTerminalSessionView {
                     .flex_child(TuiChildView::new(&self.transcript))
                     .child(input_box),
             )
+            .with_background(background)
             .with_padding(SESSION_PADDING),
         )
     }

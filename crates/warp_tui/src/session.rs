@@ -11,7 +11,7 @@ use std::ffi::OsString;
 use anyhow::Result;
 use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
-    dark_theme, Appearance, BannerState, IsSharedSessionCreator, LocalTtyTerminalManager,
+    tui_dark_theme, Appearance, BannerState, IsSharedSessionCreator, LocalTtyTerminalManager,
     TerminalManagerTrait, TerminalSurfaceResult,
 };
 use warpui::SingletonEntity;
@@ -52,7 +52,7 @@ fn init(ctx: &mut AppContext) {
     // the TUI process by overriding the already-initialized Appearance theme at
     // mount time, without changing normal GUI theme selection or font settings.
     Appearance::handle(ctx).update(ctx, |appearance, ctx| {
-        appearance.set_theme(dark_theme(), ctx);
+        appearance.set_theme(tui_dark_theme(), ctx);
     });
 
     let banner = ctx.add_model(|_| BannerState::default());

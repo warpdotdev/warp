@@ -6,7 +6,6 @@ use warp::tui_export::{
     Appearance, LLMId, MessageId, OutputStatusUpdateCallback, ServerOutputId, Shared,
     UserQueryMode,
 };
-use warp_core::ui::color::blend::Blend;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     Color, Modifier, TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize,
@@ -43,12 +42,12 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
                     .collect::<Vec<_>>(),
                 vec!["≫ hello", "", "one", "two", "three", ""],
             );
-            assert_eq!(frame.buffer[(0, 0)].fg, expected_text_color(app_ctx));
+            assert_eq!(frame.buffer[(0, 0)].fg, expected_prompt_text_color(app_ctx));
             assert_eq!(frame.buffer[(0, 0)].bg, expected_input_background(app_ctx));
             assert!(frame.buffer[(0, 0)].modifier.contains(Modifier::BOLD));
-            assert_eq!(frame.buffer[(2, 0)].fg, expected_text_color(app_ctx));
+            assert_eq!(frame.buffer[(2, 0)].fg, expected_prompt_text_color(app_ctx));
             assert_eq!(frame.buffer[(19, 0)].bg, expected_input_background(app_ctx));
-            assert_eq!(frame.buffer[(0, 2)].fg, expected_text_color(app_ctx));
+            assert_eq!(frame.buffer[(0, 2)].fg, expected_output_text_color(app_ctx));
         });
     });
 }
@@ -92,14 +91,19 @@ fn simple_agent_block_reflows_height_at_narrow_width() {
     });
 }
 
-fn expected_text_color(app: &AppContext) -> Color {
+fn expected_prompt_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    GuiFill::from(theme.main_text_color(theme.surface_1())).into()
+    GuiFill::from(theme.tui_transcript_prompt_text_color()).into()
 }
 
 fn expected_input_background(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    GuiFill::from(theme.background().blend(&theme.ai_blocks_overlay())).into()
+    GuiFill::from(theme.tui_transcript_prompt_background()).into()
+}
+
+fn expected_output_text_color(app: &AppContext) -> Color {
+    let theme = Appearance::as_ref(app).theme();
+    GuiFill::from(theme.tui_transcript_output_text_color()).into()
 }
 
 #[test]

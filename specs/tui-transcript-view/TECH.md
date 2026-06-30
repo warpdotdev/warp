@@ -25,26 +25,46 @@ TuiColumn::new()
     .flex_child(TuiChildView::new(&transcript_view))
     .child(bordered_input)
 ```
-The transcript fills remaining rows above the input. Short transcript content is bottom-aligned so it grows upward from the input; once content reaches the top of the transcript region, the existing viewport scrolling behavior takes over. The bordered input uses the real layout width minus the session padding, not a fixed input width. The input border uses the TUI accent color.
+The transcript fills remaining rows above the input. Short transcript content is bottom-aligned so it grows upward from the input; once content reaches the top of the transcript region, the existing viewport scrolling behavior takes over. The bordered input uses the real layout width minus the session padding, not a fixed input width. The input border uses the Figma cyan token through the active theme's terminal palette.
 
 `TuiTerminalSessionView` is the `TerminalSurface` driven by the normal local terminal manager, so its transcript reads the same `TerminalModel` that receives shell output. `RootTuiView` remains only the login-gated app shell. `crates/warp_tui/src/session.rs` keeps the terminal manager and the `spawn_tui_driver` handle alive in a TUI-session singleton.
+For now, `crates/warp_tui/src/session.rs::init` forces the already-initialized `Appearance` singleton to the TUI dark theme before constructing the TUI session. This is scoped to the TUI process and preserves the user's font and non-theme appearance settings. It does not change normal GUI theme selection. The temporary override exists because the current TUI transcript design is dark-mode-only.
 
-This PR also relies on small TUI-core support changes: `TuiViewportedList` supports `TuiViewportVerticalAlignment::GrowFromBottom` for short transcript content, `TuiEventContext::set_origin_view` is public for TUI event tests, `AppContext::subscribe_to_view` can subscribe to any `Entity`-backed `ViewHandle` rather than only GUI `View`s, and `TuiContainer` supports uniform, per-axis, and per-side padding so callers can express one-sided spacing without local spacer elements.
+This PR also relies on small TUI-core support changes: `TuiViewportedList` supports `TuiViewportVerticalAlignment::GrowFromBottom` for short transcript content, `TuiEventContext::set_origin_view` is public for TUI event tests, `AppContext::subscribe_to_view` can subscribe to any `Entity`-backed `ViewHandle` rather than only GUI `View`s, `TuiContainer` supports uniform, per-axis, and per-side padding so callers can express one-sided spacing without local spacer elements, and `warpui_core::elements::tui::color` converts GUI `Fill` values into Ratatui `Color` values at the final TUI rendering boundary.
 
 ### App integration surface
 The `warp_tui` crate accesses app-owned terminal and AI types through `app/src/tui_export.rs`. This PR expands that export boundary for the transcript, including:
 - agent exchange/input/output types, `AIBlockModel`, and `AIBlockModelImpl`
 - terminal block/grid/list/rich-content types and terminal colors
 - `CommandExecutionSource`, `ExecuteCommandEvent`, and `should_show_task_in_blocklist`
+- `Appearance` and the TUI dark theme constructor needed by the TUI startup theme override
 
 The app-side trait bounds are relaxed where TUI surfaces now share production models:
 - `AIBlockModelImpl<V>` is bounded by `Entity` rather than GUI `View`, allowing `TuiAgentBlockView` to reuse the production exchange model.
 - `TerminalSurface` is bounded by `Entity` rather than GUI `View`, with default no-op callbacks for optional GUI-oriented hooks.
 - selected terminal model test helpers are exposed behind `test-util` for `warp_tui` tests.
 
+### Appearance and color handling
+TUI transcript colors are derived from the same `Appearance::theme()` source of truth used by GUI code. The TUI does not own feature-local fixed color constants or a separate `crates/warp_tui/src/theme.rs` color role module.
+
+The Figma node for `Terminal/Dark/True` defines the relevant dark tokens as `background: #050505`, `foreground: #ffffff`, `cyan: #d0d1fe`, `cyan_overlay_1: #d0d1fe1a`, `white: #f1f1f1`, `green: #b4fa72`, `red: #ff8272`, and `ANSI Bright/ANSI Bright black: #8e8e8e`. Most of these already exist in Warp's default dark terminal palette. The missing `background: #050505` enters through `app/src/themes/default_themes.rs::tui_dark_theme()`.
+
+TUI render code reads the active `WarpTheme` and calls semantic TUI transcript theme methods, following the GUI pattern of keeping design-token mapping in the theme layer rather than in feature render code:
+- terminal surface background uses `theme.tui_transcript_background()`
+- submitted prompt text uses `theme.tui_transcript_prompt_text_color()`
+- submitted prompt row background uses `theme.tui_transcript_prompt_background()`, which blends `theme.background()` with `theme.tui_transcript_accent_color()` at 10% opacity twice, matching the two `cyan_overlay_1` layers in Figma
+- agent plain-text output uses `theme.tui_transcript_output_text_color()`
+- input border color uses `theme.tui_transcript_accent_color()`
+
+The explicit background blending is required because Ratatui terminal colors are opaque cell colors. The generic conversion from GUI `Fill` to Ratatui `Color` does not invent a background context for translucent fills. Callers must blend overlays against the intended background before converting.
+
+The shared conversion lives in `crates/warpui_core/src/elements/tui/color.rs` as `impl From<warpui_core::elements::Fill> for ratatui::style::Color`. This keeps Ratatui-specific knowledge in the TUI element layer while allowing `warp_tui` call sites to convert existing GUI `Fill` values with `.into()`.
+
+The TUI dark theme's terminal palette also supplies future richer transcript roles. Diff additions/removals should use `theme.terminal_colors().normal.green` and `.normal.red`, and lower-priority status text should use `theme.terminal_colors().bright.black` when matching the Figma terminal token semantics.
+
 ### Interactive input hookup
 `TuiTerminalSessionView` embeds the editor-backed [`TuiInputView`](../../crates/warp_tui/src/input/view.rs) (a `warp::editor::CodeEditorModel` in char-cell mode) as the fixed bottom child. It subscribes to `TuiInputViewEvent::Submitted`; on submit it trims the text, ignores empty prompts, creates a selected `AgentViewEntryOrigin::Cli` conversation through `TuiConversationSelection` if needed, and sends through `BlocklistAIController`. `TuiInputView::submit` already clears the editor buffer, so the input resets after each send.
-The input box is rendered with a styled `TuiContainer` border. The input view reports cursor coordinates through the normal `TuiElement::cursor_position` path.
+The input box is rendered with a styled `TuiContainer` border using `theme.tui_transcript_accent_color()`. The input view reports cursor coordinates through the normal `TuiElement::cursor_position` path.
 The input view drives agent prompts only. Running shell commands from the TUI is future work, so the terminal session view emits no PTY intents; terminal-block rendering is exercised by tests that drive `TerminalModel` directly rather than by interactive input.
 
 ### TUI block-list viewport source
@@ -100,7 +120,7 @@ Add a simple `TuiAgentBlockView` keyed by `(AIConversationId, AIAgentExchangeId)
 - the exchange's displayable user input
 - concatenated streamed `AIAgentTextSection::PlainText` output
 
-The view returns a normal generic TUI element tree from those sections rather than introducing a custom agent-block element. User input is rendered with `TuiContainer` and `TuiText` using a full-width highlighted background and the `≫ ` prompt prefix. Plain-text output is rendered with `TuiText`. Input/output separation and bottom padding are expressed with `TuiContainer` padding in the composed `TuiColumn` tree, not with a separate manual height formula.
+The view returns a normal generic TUI element tree from those sections rather than introducing a custom agent-block element. User input is rendered with `TuiContainer` and `TuiText` using a full-width background derived from the TUI dark theme background plus two cyan overlay layers, matching the Figma prompt row. The `≫ ` prompt prefix and submitted text share the same styled `TuiText` run until the TUI text element supports mixed-style spans. Plain-text output is rendered with `TuiText` using the active theme's terminal white token. Input/output separation and bottom padding are expressed with `TuiContainer` padding in the composed `TuiColumn` tree, not with a separate manual height formula.
 
 The rich-content height adapter measures the same composed element tree at the actual viewport width through `TuiAgentBlockView::desired_height` and writes that height back to `BlockList`. The viewport renders the agent block through the registered view handle and clips the resulting generic element tree through the viewport item boundary. It intentionally omits all non-plain-text agent output rather than inventing placeholder production behavior in this PR.
 ## End-to-end flow
@@ -134,6 +154,7 @@ The generalized viewport element, scroll/anchor model, height reconciliation, an
 ### Block renderer tests
 Current focused `warp_tui` crate unit tests cover:
 - agent block rendering of user input and streamed plain-text output
+- agent block colors sourced from `Appearance::theme()` rather than fixed hex constants
 - agent block width-dependent height measurement through composed TUI layout
 - rich-content height writeback using the agent block view's measured height
 - omission of unsupported agent sections until the TUI renders them intentionally

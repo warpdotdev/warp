@@ -2,7 +2,6 @@
 use std::rc::Rc;
 
 use warp::tui_export::{AIAgentTextSection, AIBlockModel, Appearance};
-use warp_core::ui::color::blend::Blend;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     Color, Modifier, TuiColumn, TuiConstraint, TuiContainer, TuiElement, TuiLayoutContext,
@@ -118,11 +117,12 @@ impl TuiAgentBlockView {
 impl TuiAgentBlockSection {
     fn render_element(&self, top_padding: u16, app: &AppContext) -> Box<dyn TuiElement> {
         let theme = Appearance::as_ref(app).theme();
-        let text_color: Color = GuiFill::from(theme.main_text_color(theme.surface_1())).into();
         match self {
             Self::Input(text) => {
+                let text_color: Color =
+                    GuiFill::from(theme.tui_transcript_prompt_text_color()).into();
                 let background: Color =
-                    GuiFill::from(theme.background().blend(&theme.ai_blocks_overlay())).into();
+                    GuiFill::from(theme.tui_transcript_prompt_background()).into();
                 Box::new(
                     TuiContainer::new(
                         TuiText::new(format!("{INPUT_PREFIX}{text}")).with_style(
@@ -136,12 +136,16 @@ impl TuiAgentBlockSection {
                     .with_padding_top(top_padding),
                 )
             }
-            Self::PlainText(text) => Box::new(
-                TuiContainer::new(
-                    TuiText::new(text.clone()).with_style(TuiStyle::default().fg(text_color)),
+            Self::PlainText(text) => {
+                let text_color: Color =
+                    GuiFill::from(theme.tui_transcript_output_text_color()).into();
+                Box::new(
+                    TuiContainer::new(
+                        TuiText::new(text.clone()).with_style(TuiStyle::default().fg(text_color)),
+                    )
+                    .with_padding_top(top_padding),
                 )
-                .with_padding_top(top_padding),
-            ),
+            }
         }
     }
 }
