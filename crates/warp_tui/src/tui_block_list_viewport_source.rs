@@ -96,6 +96,29 @@ impl TuiBlockListViewportSource {
             .collect()
     }
 
+    /// Measures visible agent blocks whose cached height no longer matches the current width.
+    fn measured_visible_agent_heights(
+        &self,
+        descriptors: &[TuiBlockListVisibleItemDescriptor],
+        width: u16,
+        app: &AppContext,
+    ) -> HashMap<EntityId, f64> {
+        descriptors
+            .iter()
+            .filter_map(|descriptor| {
+                let TuiBlockListVisibleItem::AgentBlock { registration } = &descriptor.item else {
+                    return None;
+                };
+                let height = registration
+                    .view
+                    .as_ref(app)
+                    .desired_height(width, app)
+                    .max(1);
+                (height != descriptor.height).then_some((registration.view.id(), height as f64))
+            })
+            .collect()
+    }
+
     fn visible_item_descriptors(
         &self,
         window: TuiViewportWindow,
@@ -170,10 +193,15 @@ impl TuiBlockListViewportSource {
         if height_updates.is_empty() {
             return;
         }
-        self.model
-            .lock()
+        let mut model = self.model.lock();
+        let cell_height_px = f64::from(model.block_list().size().cell_height_px().as_f32());
+        let height_updates = height_updates
+            .iter()
+            .map(|(view_id, height)| (*view_id, height * cell_height_px))
+            .collect::<HashMap<_, _>>();
+        model
             .block_list_mut()
-            .update_rich_content_heights(height_updates);
+            .update_rich_content_heights(&height_updates);
     }
 
     #[cfg(test)]
@@ -231,8 +259,13 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
         let height_updates =
             self.measured_dirty_agent_heights(dirty_rich_content_items, available_width, app);
         self.apply_height_updates(&height_updates);
-
-        let (content_height, descriptors) = self.visible_item_descriptors(window);
+        let (mut content_height, mut descriptors) = self.visible_item_descriptors(window);
+        let height_updates =
+            self.measured_visible_agent_heights(&descriptors, available_width, app);
+        if !height_updates.is_empty() {
+            self.apply_height_updates(&height_updates);
+            (content_height, descriptors) = self.visible_item_descriptors(window);
+        }
         let items = descriptors
             .into_iter()
             .map(|descriptor| descriptor.render(&self.model, window, available_width, app))
