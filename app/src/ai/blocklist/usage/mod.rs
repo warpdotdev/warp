@@ -31,7 +31,7 @@ impl LongContextWarningState {
         }
     }
 
-    pub fn sync_from_server(&mut self, total_input_tokens: u32) {
+    pub fn set_total_input_tokens(&mut self, total_input_tokens: u32) {
         self.total_input_tokens = total_input_tokens;
     }
 

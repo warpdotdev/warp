@@ -858,9 +858,9 @@ impl AgentInputFooter {
                         ctx.notify();
                     }
                     BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. } => {
+                        // Autoexecute changes don't affect token usage or the
+                        // effective model, so the long-context warning can't change here.
                         me.sync_fast_forward_button(ctx);
-                        me.update_context_window_button(ctx);
-                        me.model_selector.update(ctx, |_, ctx| ctx.notify());
                         ctx.notify();
                     }
                     BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
@@ -1109,7 +1109,7 @@ impl AgentInputFooter {
             .active_conversation(self.terminal_view_id)
             .map_or(0, |conversation| conversation.total_input_tokens());
         self.long_context_warning_state
-            .sync_from_server(total_input_tokens);
+            .set_total_input_tokens(total_input_tokens);
     }
 
     fn has_active_cli_agent_input_session(&self, app: &AppContext) -> bool {
@@ -2107,8 +2107,6 @@ impl AgentInputFooter {
             self.prompt_cache_expired = is_cache_expired;
             self.context_window_button.update(ctx, |button, ctx| {
                 button.set_icon(Some(icon), ctx);
-                // Icon color flows from theme.text_color(); no separate ANSI override needed.
-                button.set_icon_ansi_color(None, ctx);
                 if show_long_context_warning {
                     button.set_theme(LongContextWarningButtonTheme, ctx);
                 } else {

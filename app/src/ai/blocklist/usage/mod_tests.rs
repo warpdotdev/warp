@@ -31,16 +31,16 @@ fn visible_only_strictly_above_threshold() {
 }
 
 #[test]
-fn sync_from_server_updates_visibility() {
-    let mut state = LongContextWarningState::new(LLMProvider::OpenAI, Some(THRESHOLD), 0);
+fn set_total_input_tokens_updates_visibility() {
+    let mut state = LongContextWarningState::new(LLMProvider::OpenAI, Some(THRESHOLD), false, 0);
     assert!(!state.is_visible());
 
     // A qualifying request shows the warning.
-    state.sync_from_server(THRESHOLD + 1);
+    state.set_total_input_tokens(THRESHOLD + 1);
     assert!(state.is_visible());
 
     // A later short request clears it.
-    state.sync_from_server(12_000);
+    state.set_total_input_tokens(12_000);
     assert!(!state.is_visible());
 }
 

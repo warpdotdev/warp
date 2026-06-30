@@ -901,6 +901,10 @@ pub enum FeatureFlag {
     /// Enables the `--runner` flag on `run-cloud`, which overrides an agent's
     /// compute (docker image, instance shape, setup commands) by runner ID.
     CloudRunners,
+
+    /// Controls visibility of the long-context warning UI, shown when a
+    /// conversation approaches the model's long context window limit.
+    LongContextWarning,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -971,6 +975,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
+    FeatureFlag::LongContextWarning,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

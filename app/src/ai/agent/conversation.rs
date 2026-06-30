@@ -1974,9 +1974,9 @@ impl AIConversation {
         if let Some(usage_metadata) = usage_metadata {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
-            // 0 means the turn had no chargeable primary-agent call (e.g. a
-            // failed or custom-endpoint-only request, or an old server);
-            // keep the previous value, matching server-side merge semantics.
+            // 0 means this turn had no chargeable primary-agent call (failed,
+            // custom-endpoint-only, or old server), not a context reset. Keep the
+            // last known value, mirroring server-side merge semantics.
             if usage_metadata.total_input_tokens != 0 {
                 self.conversation_usage_metadata.total_input_tokens =
                     usage_metadata.total_input_tokens;
