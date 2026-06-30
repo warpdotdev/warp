@@ -7248,17 +7248,18 @@ impl Workspace {
         ctx.notify();
     }
 
-    /// An active member reuses the normal new-tab inheritance + placement;
-    /// otherwise the new tab is appended to the end of the group's run.
+    /// "New tab in group" (group more-options menu). Creates a new terminal tab
+    /// and ensures it lands inside `group_id`. With `AfterCurrentTab` while a
+    /// member of this group is active, the creation path's group inheritance
+    /// already places it right after the active tab; in every other case the new
+    /// tab is created top-level (or in another group), so we pull it to the end
+    /// of this group's run.
     fn new_tab_in_group(&mut self, group_id: TabGroupId, ctx: &mut ViewContext<Self>) {
         if !FeatureFlag::GroupedTabs.is_enabled() || !self.tab_groups.contains_key(&group_id) {
             return;
         }
-        let active_is_member = self
-            .tabs
-            .get(self.active_tab_index)
-            .is_some_and(|tab| tab.group_id == Some(group_id));
 
+        // Creating the tab honors the default session mode and becomes active.
         self.add_new_session_tab_with_default_mode(
             NewSessionSource::Tab,
             Some(ctx.window_id()),
@@ -7268,12 +7269,15 @@ impl Workspace {
             ctx,
         );
 
-        // If the active tab is a member of the group, the new tab inherits this group on creation.
-        // Otherwise we must manually update it here, and place this new tab at the end of the group.
-        if !active_is_member {
-            let new_idx = self.active_tab_index;
-            // Resolve the destination from the group's existing members before
-            // adding the new tab to the group.
+        // If the creation path already dropped the new tab into this group
+        // (`AfterCurrentTab` with a member active), it's correctly placed right
+        // after the active tab. Otherwise pull it to the end of the group's run.
+        let new_idx = self.active_tab_index;
+        let already_in_group = self
+            .tabs
+            .get(new_idx)
+            .is_some_and(|tab| tab.group_id == Some(group_id));
+        if !already_in_group {
             let target_index = self.index_after_group(group_id).unwrap_or(self.tabs.len());
             if let Some(tab) = self.tabs.get_mut(new_idx) {
                 tab.group_id = Some(group_id);
@@ -12439,9 +12443,12 @@ impl Workspace {
     }
 
     /// Returns where a newly-opened tab should be inserted and the group it
-    /// should inherit, so it joins the active tab's group (keeping that group
-    /// contiguous) instead of splitting it. Honors the `NewTabPlacement`
-    /// setting within the group's bounds.
+    /// should inherit, driven by the `NewTabPlacement` setting:
+    /// - `AfterCurrentTab` lands right after the active tab and inherits its
+    ///   group, so a new tab joins the group you're currently working in.
+    /// - `AfterAllTabs` lands at the very end of the bar, outside any group, so
+    ///   there is always a way to open a top-level tab even when every tab is
+    ///   grouped.
     fn new_tab_index_and_group(&self, ctx: &AppContext) -> (usize, Option<TabGroupId>) {
         let active_group_id = if FeatureFlag::GroupedTabs.is_enabled() {
             self.tabs
@@ -12451,24 +12458,22 @@ impl Workspace {
             None
         };
 
-        let insert_idx = match TabSettings::as_ref(ctx).new_tab_placement {
-            // Land at the end of the group's contiguous run rather than past it
-            // so the "after all tabs" preference is honored within the group.
-            NewTabPlacement::AfterAllTabs => active_group_id
-                .and_then(|gid| self.index_after_group(gid))
-                .unwrap_or_else(|| self.tab_count()),
-            NewTabPlacement::AfterCurrentTab => self.active_tab_index + 1,
-        };
-
-        // A standalone (ungrouped) new tab must not land inside the pinned
-        // region; a tab joining a group already sits wherever its group lives.
-        let insert_idx = if active_group_id.is_none() {
-            self.clamp_to_unpinned_region(&self.tabs, insert_idx)
-        } else {
-            insert_idx
-        };
-
-        (insert_idx, active_group_id)
+        match TabSettings::as_ref(ctx).new_tab_placement {
+            // End of the bar, outside any group.
+            NewTabPlacement::AfterAllTabs => (self.tab_count(), None),
+            NewTabPlacement::AfterCurrentTab => {
+                let insert_idx = self.active_tab_index + 1;
+                // A standalone (ungrouped) new tab must not land inside the
+                // pinned region; a tab joining a group already sits wherever its
+                // group lives.
+                let insert_idx = if active_group_id.is_none() {
+                    self.clamp_to_unpinned_region(&self.tabs, insert_idx)
+                } else {
+                    insert_idx
+                };
+                (insert_idx, active_group_id)
+            }
+        }
     }
 
     pub fn add_tab_with_pane_layout(
@@ -12514,9 +12519,10 @@ impl Workspace {
             me.handle_file_tree_event(pane_group, event, ctx)
         });
 
-        // Compute where the new tab goes and which group it inherits, then
+        // Compute where the new tab goes and whether it inherits a group, then
         // insert it. An empty workspace has no active tab to key off of, so it
-        // takes index 0 with no group; the helper covers every other case.
+        // takes index 0 with no group; otherwise position and group membership
+        // follow the `NewTabPlacement` setting.
         let (insert_idx, inherited_group_id) = if self.tab_count() == 0 {
             (0, None)
         } else {
@@ -12527,7 +12533,7 @@ impl Workspace {
             .push(self.tabs[insert_idx].pane_group.id());
         self.activate_tab_internal(insert_idx, ctx);
 
-        // Inherit the active tab's group membership.
+        // Inherit the active tab's group membership (skipped for top-level tabs).
         if let Some(group_id) = inherited_group_id {
             let new_idx = self.active_tab_index;
             if let Some(new_tab) = self.tabs.get_mut(new_idx) {
