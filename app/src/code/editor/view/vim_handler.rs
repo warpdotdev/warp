@@ -664,7 +664,10 @@ impl VimHandler for CodeEditorView {
 
     fn jump_to_line(&mut self, line_number: u32, ctx: &mut ViewContext<Self>) {
         self.model.update(ctx, |model, ctx| {
-            model.jump_to_line_column(line_number as usize, None, ctx);
+            let buffer = model.content().as_ref(ctx);
+            let max_row = buffer.max_point().row as usize;
+            let row = (line_number as usize).saturating_sub(1).min(max_row);
+            model.jump_to_line_column(row, None, ctx);
         });
     }
 
