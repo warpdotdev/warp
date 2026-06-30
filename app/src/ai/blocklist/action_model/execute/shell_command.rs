@@ -238,7 +238,9 @@ impl ShellCommandExecutor {
                 {
                     // If there is an active block, we can't execute another command.
                     return ActionExecution::Sync(AIAgentActionResultType::RequestCommandOutput(
-                        RequestCommandOutputResult::CancelledBeforeExecution,
+                        RequestCommandOutputResult::CancelledBeforeExecution {
+                            command: command.clone(),
+                        },
                     ));
                 }
                 // If another conversation has taken over the agent view since this command
@@ -250,7 +252,9 @@ impl ShellCommandExecutor {
                     .is_some_and(|active_id| active_id != input.conversation_id);
                 if is_displaced_by_other_conversation {
                     return ActionExecution::Sync(AIAgentActionResultType::RequestCommandOutput(
-                        RequestCommandOutputResult::CancelledBeforeExecution,
+                        RequestCommandOutputResult::CancelledBeforeExecution {
+                            command: command.clone(),
+                        },
                     ));
                 }
                 // If the command might use pager and can't be interacted with,
@@ -744,7 +748,7 @@ fn action_result_for_requested_command(
         ),
         ActionResult::BlockNotFound | ActionResult::Cancelled => {
             AIAgentActionResultType::RequestCommandOutput(
-                RequestCommandOutputResult::CancelledBeforeExecution,
+                RequestCommandOutputResult::CancelledBeforeExecution { command },
             )
         }
     }

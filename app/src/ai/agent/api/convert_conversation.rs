@@ -616,7 +616,9 @@ pub(crate) fn convert_tool_call_result_to_input(
                 ))
                 | None => {
                     // If no result is present, treat as cancelled
-                    RequestCommandOutputResult::CancelledBeforeExecution
+                    RequestCommandOutputResult::CancelledBeforeExecution {
+                        command: result.command.clone(),
+                    }
                 }
             };
 
@@ -1668,7 +1670,9 @@ fn create_cancelled_result_for_tool_call(
     let Some(original_tool_call) = tool_call_map.get(tool_call_id) else {
         log::warn!("No original tool call found for cancelled tool call ID: {tool_call_id}");
         // Default to RequestCommandOutput if we can't find the original tool call
-        let cancelled_result = RequestCommandOutputResult::CancelledBeforeExecution;
+        let cancelled_result = RequestCommandOutputResult::CancelledBeforeExecution {
+            command: String::new(),
+        };
         return Some(AIAgentInput::ActionResult {
             result: AIAgentActionResult {
                 id: tool_call_id.to_string().into(),
@@ -1682,7 +1686,9 @@ fn create_cancelled_result_for_tool_call(
     let Some(tool) = &original_tool_call.tool else {
         log::warn!("No tool found in original tool call for ID: {tool_call_id}");
         // Default to RequestCommandOutput if we can't find the tool type
-        let cancelled_result = RequestCommandOutputResult::CancelledBeforeExecution;
+        let cancelled_result = RequestCommandOutputResult::CancelledBeforeExecution {
+            command: String::new(),
+        };
         return Some(AIAgentInput::ActionResult {
             result: AIAgentActionResult {
                 id: tool_call_id.to_string().into(),
@@ -1694,9 +1700,13 @@ fn create_cancelled_result_for_tool_call(
     };
 
     let result_type = match tool {
-        ToolType::RunShellCommand(_) => AIAgentActionResultType::RequestCommandOutput(
-            RequestCommandOutputResult::CancelledBeforeExecution,
-        ),
+        ToolType::RunShellCommand(run_shell_command) => {
+            AIAgentActionResultType::RequestCommandOutput(
+                RequestCommandOutputResult::CancelledBeforeExecution {
+                    command: run_shell_command.command.clone(),
+                },
+            )
+        }
         ToolType::WriteToLongRunningShellCommand(_) => {
             AIAgentActionResultType::WriteToLongRunningShellCommand(
                 WriteToLongRunningShellCommandResult::Cancelled,

@@ -74,9 +74,17 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
                     },
                 ),
             ),
-            RequestCommandOutputResult::CancelledBeforeExecution => {
-                Err(ConvertToAPITypeError::Ignore)
-            }
+            RequestCommandOutputResult::CancelledBeforeExecution { command } => Ok(
+                api::request::input::tool_call_result::Result::RunShellCommand(
+                    #[allow(deprecated)]
+                    api::RunShellCommandResult {
+                        command,
+                        output: Default::default(),
+                        exit_code: Default::default(),
+                        result: None,
+                    },
+                ),
+            ),
             RequestCommandOutputResult::Denylisted { command } =>
             {
                 #[allow(deprecated)]

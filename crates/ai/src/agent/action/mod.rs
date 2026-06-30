@@ -316,9 +316,13 @@ impl AIAgentActionType {
 
     pub fn cancelled_result(&self) -> AIAgentActionResultType {
         match self {
-            Self::RequestCommandOutput { .. } => AIAgentActionResultType::RequestCommandOutput(
-                RequestCommandOutputResult::CancelledBeforeExecution,
-            ),
+            Self::RequestCommandOutput { command, .. } => {
+                AIAgentActionResultType::RequestCommandOutput(
+                    RequestCommandOutputResult::CancelledBeforeExecution {
+                        command: command.clone(),
+                    },
+                )
+            }
             Self::RequestFileEdits { .. } => {
                 AIAgentActionResultType::RequestFileEdits(RequestFileEditsResult::Cancelled)
             }

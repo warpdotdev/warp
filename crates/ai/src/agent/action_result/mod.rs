@@ -126,6 +126,9 @@ impl AIAgentActionResultType {
             | AIAgentActionResultType::RequestCommandOutput(
                 RequestCommandOutputResult::LongRunningCommandSnapshot { command, .. },
             )
+            | AIAgentActionResultType::RequestCommandOutput(
+                RequestCommandOutputResult::CancelledBeforeExecution { command },
+            )
             | AIAgentActionResultType::ReadShellCommandOutput(
                 ReadShellCommandOutputResult::CommandFinished { command, .. },
             )
@@ -198,7 +201,7 @@ pub enum RequestCommandOutputResult {
     },
     /// A running command canceled via ctrl-c
     /// would have Completed result with exit code 130.
-    CancelledBeforeExecution,
+    CancelledBeforeExecution { command: String },
     /// The command was denied because it was present on the denylist.
     Denylisted { command: String },
 }
@@ -208,7 +211,7 @@ impl RequestCommandOutputResult {
         match self {
             Self::Completed { exit_code, .. } => exit_code.was_successful(),
             Self::LongRunningCommandSnapshot { .. } => true,
-            Self::CancelledBeforeExecution | Self::Denylisted { .. } => false,
+            Self::CancelledBeforeExecution { .. } | Self::Denylisted { .. } => false,
         }
     }
 
@@ -216,7 +219,9 @@ impl RequestCommandOutputResult {
         match self {
             Self::Completed { exit_code, .. } => !exit_code.was_successful(),
             Self::Denylisted { .. } => true,
-            Self::CancelledBeforeExecution | Self::LongRunningCommandSnapshot { .. } => false,
+            Self::CancelledBeforeExecution { .. } | Self::LongRunningCommandSnapshot { .. } => {
+                false
+            }
         }
     }
 }
@@ -241,8 +246,8 @@ impl Display for RequestCommandOutputResult {
             RequestCommandOutputResult::LongRunningCommandSnapshot { command, .. } => {
                 write!(f, "Command '{command}' is long-running")
             }
-            RequestCommandOutputResult::CancelledBeforeExecution => {
-                write!(f, "Command output cancelled")
+            RequestCommandOutputResult::CancelledBeforeExecution { command } => {
+                write!(f, "Command '{command}' output cancelled")
             }
             RequestCommandOutputResult::Denylisted { .. } => {
                 write!(f, "Command output was on denylist")
@@ -853,9 +858,9 @@ impl AIAgentActionResultType {
 
     pub fn is_cancelled(&self) -> bool {
         match self {
-            Self::RequestCommandOutput(RequestCommandOutputResult::CancelledBeforeExecution) => {
-                true
-            }
+            Self::RequestCommandOutput(RequestCommandOutputResult::CancelledBeforeExecution {
+                ..
+            }) => true,
             Self::RequestCommandOutput(RequestCommandOutputResult::Completed {
                 exit_code, ..
             }) if exit_code.value() == 130 => true,

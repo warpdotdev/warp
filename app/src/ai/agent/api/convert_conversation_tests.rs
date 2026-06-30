@@ -871,7 +871,9 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
                 &result.result
             {
                 match command_result {
-                    crate::ai::agent::RequestCommandOutputResult::CancelledBeforeExecution => {
+                    crate::ai::agent::RequestCommandOutputResult::CancelledBeforeExecution {
+                        ..
+                    } => {
                         found_cancelled = true;
                     }
                     crate::ai::agent::RequestCommandOutputResult::Completed { .. } => {

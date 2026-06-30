@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn cancelled_request_command_converts_to_explicit_tool_result() {
+    let result = api::request::input::tool_call_result::Result::try_from(
+        RequestCommandOutputResult::CancelledBeforeExecution {
+            command: "sleep 10".to_string(),
+        },
+    )
+    .expect("cancelled run command should still produce a tool result");
+
+    let api::request::input::tool_call_result::Result::RunShellCommand(result) = result else {
+        panic!("expected run_shell_command result");
+    };
+
+    assert_eq!(result.command, "sleep 10");
+    assert!(
+        result.result.is_none(),
+        "cancelled run command should resolve the tool call with an empty result"
+    );
+}
+
+#[test]
 fn ask_user_question_skipped_by_auto_approve_converts_to_skipped_answers() {
     let result = api::request::input::tool_call_result::Result::from(
         AskUserQuestionResult::SkippedByAutoApprove {
