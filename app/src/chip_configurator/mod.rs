@@ -9,10 +9,9 @@ pub(crate) use modal_shell::{
     render_chip_editor_modal, render_chip_editor_sections, ChipEditorModalConfig,
     ChipEditorMouseHandles, ChipEditorSectionsConfig,
 };
-use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::{Fill, WarpTheme};
+use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CrossAxisAlignment, Dash, DispatchEventResult, Draggable,
     DraggableState, Element, Empty, EventHandler, Flex, Hoverable, MouseStateHandle,
@@ -232,7 +231,8 @@ impl ControlItemRenderer {
             } else {
                 appearance.theme().surface_1()
             };
-            let color = control_chip_text_color(appearance.theme(), background);
+            let color =
+                crate::context_chips::readable_chip_label_color(appearance.theme(), background);
 
             let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
@@ -291,19 +291,6 @@ impl ControlItemRenderer {
 
         hoverable.finish()
     }
-}
-
-/// Returns the label/icon color for a configurator **control** chip drawn on
-/// `background`.
-///
-/// Uses the theme's fully-opaque, contrast-enforced `font_color` rather than
-/// `sub_text_color`. `sub_text_color` is `font_color` at 60% opacity, and the
-/// contrast machinery is alpha-blind, so on light themes that muted color
-/// composites to a faint mid-grey that can drop below WCAG AA — which left the
-/// "Header toolbar layout" chip labels in Settings hard to read in light mode. A
-/// fully-opaque contrast-picked color stays legible on every theme and surface.
-fn control_chip_text_color(theme: &WarpTheme, background: Fill) -> ColorU {
-    theme.font_color(background).into_solid()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1021,7 +1008,3 @@ impl ChipConfigurator {
         )
     }
 }
-
-#[cfg(test)]
-#[path = "mod_test.rs"]
-mod tests;
