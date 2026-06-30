@@ -232,6 +232,7 @@ impl Event {
             _ => None,
         }
     }
+
     /// Returns the mouse-down position of the event,
     /// iff the event is one of the many `*MouseDown` events.
     pub fn mouse_down_position(&self) -> Option<Vector2F> {

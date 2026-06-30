@@ -50,20 +50,17 @@ pub enum TuiEvent {
     },
     MiddleMouseDown {
         position: TuiPoint,
-        cmd: bool,
-        shift: bool,
+        modifiers: ModifiersState,
         click_count: u32,
     },
     RightMouseDown {
         position: TuiPoint,
-        cmd: bool,
-        shift: bool,
+        modifiers: ModifiersState,
         click_count: u32,
     },
     MouseMoved {
         position: TuiPoint,
-        cmd: bool,
-        shift: bool,
+        modifiers: ModifiersState,
         is_synthetic: bool,
     },
 }

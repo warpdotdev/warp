@@ -82,7 +82,7 @@ fn non_press_key_events_are_ignored() {
 }
 
 #[test]
-fn pure_modifier_keys_have_no_warp_equivalent() {
+fn pure_modifier_keys_have_no_tui_equivalent() {
     let event = KeyEvent::new(
         KeyCode::Modifier(ratatui::crossterm::event::ModifierKeyCode::LeftControl),
         KeyModifiers::empty(),
@@ -152,8 +152,7 @@ fn mouse_buttons_map_to_tui_mouse_down_events() {
 
     let Some(TuiEvent::MiddleMouseDown {
         position,
-        cmd,
-        shift,
+        modifiers,
         click_count,
     }) = mouse(
         MouseEventKind::Down(MouseButton::Middle),
@@ -163,13 +162,12 @@ fn mouse_buttons_map_to_tui_mouse_down_events() {
         panic!("expected MiddleMouseDown");
     };
     assert_eq!(position, (7, 3));
-    assert!(cmd);
-    assert!(shift);
+    assert!(modifiers.cmd);
+    assert!(modifiers.shift);
     assert_eq!(click_count, 1);
 
     let Some(TuiEvent::RightMouseDown {
-        cmd,
-        shift,
+        modifiers,
         click_count,
         ..
     }) = mouse(
@@ -179,8 +177,8 @@ fn mouse_buttons_map_to_tui_mouse_down_events() {
     else {
         panic!("expected RightMouseDown");
     };
-    assert!(!cmd);
-    assert!(shift);
+    assert!(!modifiers.cmd);
+    assert!(modifiers.shift);
     assert_eq!(click_count, 1);
 }
 
@@ -214,8 +212,7 @@ fn left_mouse_up_and_drag_map_to_tui_mouse_events() {
 fn mouse_moved_maps_to_tui_mouse_moved_event() {
     let Some(TuiEvent::MouseMoved {
         position,
-        cmd,
-        shift,
+        modifiers,
         is_synthetic,
     }) = mouse(
         MouseEventKind::Moved,
@@ -226,8 +223,8 @@ fn mouse_moved_maps_to_tui_mouse_moved_event() {
     };
 
     assert_eq!(position, (7, 3));
-    assert!(cmd);
-    assert!(shift);
+    assert!(modifiers.cmd);
+    assert!(modifiers.shift);
     assert!(!is_synthetic);
 }
 

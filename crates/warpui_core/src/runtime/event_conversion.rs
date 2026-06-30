@@ -11,13 +11,13 @@ use crate::event::{KeyEventDetails, ModifiersState};
 use crate::keymap::Keystroke;
 
 /// Converts a raw crossterm event into the TUI event vocabulary, or
-/// `None` if the event has no warp equivalent.
+/// `None` if the event has no TUI equivalent yet.
 pub fn crossterm_event_to_tui_event(event: CrosstermEvent) -> Option<TuiEvent> {
     match event {
         CrosstermEvent::Key(key_event) => key_event_to_tui_event(key_event),
         CrosstermEvent::Mouse(mouse_event) => TuiEvent::try_from(mouse_event).ok(),
-        // TODO: FocusGained, FocusLost, and Paste have no Warp equivalents yet.
-        // If these are needed in the future, consider adding matching Warp events.
+        // TODO: FocusGained, FocusLost, and Paste have no TUI equivalents yet.
+        // If these are needed in the future, consider adding matching TuiEvent variants.
         CrosstermEvent::FocusGained
         | CrosstermEvent::FocusLost
         | CrosstermEvent::Paste(_)
@@ -31,8 +31,6 @@ impl TryFrom<MouseEvent> for TuiEvent {
     fn try_from(event: MouseEvent) -> Result<Self, Self::Error> {
         let position = (event.column, event.row);
         let modifiers = modifiers_state(event.modifiers);
-        let cmd = modifiers.cmd;
-        let shift = modifiers.shift;
 
         match event.kind {
             MouseEventKind::ScrollUp => Ok(scroll_wheel(position, (0, 1), modifiers)),
@@ -47,14 +45,12 @@ impl TryFrom<MouseEvent> for TuiEvent {
             }),
             MouseEventKind::Down(MouseButton::Middle) => Ok(TuiEvent::MiddleMouseDown {
                 position,
-                cmd,
-                shift,
+                modifiers,
                 click_count: 1,
             }),
             MouseEventKind::Down(MouseButton::Right) => Ok(TuiEvent::RightMouseDown {
                 position,
-                cmd,
-                shift,
+                modifiers,
                 click_count: 1,
             }),
             MouseEventKind::Up(MouseButton::Left) => Ok(TuiEvent::LeftMouseUp {
@@ -67,11 +63,10 @@ impl TryFrom<MouseEvent> for TuiEvent {
             }),
             MouseEventKind::Moved => Ok(TuiEvent::MouseMoved {
                 position,
-                cmd,
-                shift,
+                modifiers,
                 is_synthetic: false,
             }),
-            // The shared Event vocabulary has no right/middle mouse-up or drag variants yet.
+            // Add these variants when a concrete TUI consumer needs them.
             MouseEventKind::Up(MouseButton::Middle | MouseButton::Right)
             | MouseEventKind::Drag(MouseButton::Middle | MouseButton::Right) => Err(()),
         }
@@ -128,8 +123,8 @@ fn key_event_to_tui_event(event: KeyEvent) -> Option<TuiEvent> {
     })
 }
 
-/// The warp keystroke `key` name for a crossterm key code, or `None` for keys
-/// with no warp equivalent (pure modifiers, lock keys, media keys, etc.).
+/// The TUI keystroke `key` name for a crossterm key code, or `None` for keys
+/// with no TUI equivalent (pure modifiers, lock keys, media keys, etc.).
 fn key_name(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
     match code {
         KeyCode::Backspace => Some("backspace".to_owned()),
