@@ -826,15 +826,18 @@ fn fetched_memories_preserves_order_across_and_within_messages() {
 fn fetched_memories_dedupes_keeping_first_position_and_latest_data() {
     let conversation = restored_conversation_with_memories_per_query(vec![
         vec![
-            fetched_memory("m1", "old content", "store-old", None),
+            fetched_memory("m1", "old content", "store-1", None),
             fetched_memory("m2", "other", "store-1", None),
         ],
-        vec![fetched_memory(
-            "m1",
-            "new content",
-            "store-new",
-            conversation_source("conversation-1"),
-        )],
+        vec![
+            fetched_memory(
+                "m1",
+                "new content",
+                "store-1",
+                conversation_source("conversation-1"),
+            ),
+            fetched_memory("m1", "same memory id different store", "store-2", None),
+        ],
     ]);
 
     let memories = conversation.fetched_memories();
@@ -844,10 +847,11 @@ fn fetched_memories_dedupes_keeping_first_position_and_latest_data() {
             fetched_memory(
                 "m1",
                 "new content",
-                "store-new",
+                "store-1",
                 conversation_source("conversation-1"),
             ),
             fetched_memory("m2", "other", "store-1", None),
+            fetched_memory("m1", "same memory id different store", "store-2", None),
         ]
     );
 }

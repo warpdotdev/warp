@@ -211,8 +211,8 @@ impl AgentToolbarItemKind {
         let mut items = vec![
             Self::ContextChip(ContextChipKind::AgentPlanAndTodoList),
             Self::ContextWindowUsage,
+            Self::ModelSelector,
         ];
-        items.push(Self::ModelSelector);
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && FeatureFlag::HOARemoteControl.is_enabled()
         {

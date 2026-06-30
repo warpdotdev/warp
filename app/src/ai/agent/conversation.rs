@@ -1186,17 +1186,18 @@ impl AIConversation {
 
     /// Returns the memories the server fetched for this conversation, in the order they first
     /// appeared across messages (server-side rank order within each message). Re-fetched
-    /// memories are deduped by `memory_id`: the first appearance keeps its position while the
-    /// entry's content/store/source are updated to the latest occurrence.
+    /// memories are deduped by `(memory_store_id, memory_id)`: the first appearance keeps its
+    /// position while the entry's content/source are updated to the latest occurrence.
     pub fn fetched_memories(&self) -> Vec<api::message::FetchedMemory> {
         let mut memories: Vec<api::message::FetchedMemory> = Vec::new();
-        let mut index_by_id: HashMap<String, usize> = HashMap::new();
+        let mut index_by_id: HashMap<(String, String), usize> = HashMap::new();
         for message in self.task_store.all_linearized_messages() {
             for memory in &message.fetched_memories {
-                match index_by_id.get(&memory.memory_id) {
+                let key = (memory.memory_store_id.clone(), memory.memory_id.clone());
+                match index_by_id.get(&key) {
                     Some(index) => memories[*index] = memory.clone(),
                     None => {
-                        index_by_id.insert(memory.memory_id.clone(), memories.len());
+                        index_by_id.insert(key, memories.len());
                         memories.push(memory.clone());
                     }
                 }
