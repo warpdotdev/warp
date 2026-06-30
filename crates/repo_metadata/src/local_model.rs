@@ -1297,9 +1297,6 @@ impl LocalRepoMetadataModel {
                     let Some(std_path) = StandardizedPath::try_from_local(path).ok() else {
                         continue;
                     };
-                    // Gitignored entries are lazy: like `lazy_load`, don't materialize one
-                    // beneath an unloaded (collapsed) ignored ancestor. The ignored root keeps a
-                    // loaded parent, so it is still created.
                     if (lazy_load || is_ignored)
                         && !Self::is_parent_loaded_in_entry(root_entry, &std_path)
                     {
@@ -1379,8 +1376,6 @@ impl LocalRepoMetadataModel {
                     let Some(std_path) = StandardizedPath::try_from_local(path).ok() else {
                         continue;
                     };
-                    // Never downgrade a directory the user has already expanded back to an
-                    // unloaded placeholder (e.g. a self-event on a loaded gitignored dir).
                     if matches!(
                         root_entry.get(&std_path),
                         Some(FileTreeEntryState::Directory(dir)) if dir.loaded
