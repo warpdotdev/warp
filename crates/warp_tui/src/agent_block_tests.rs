@@ -48,6 +48,14 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
             assert_eq!(frame.buffer[(2, 0)].fg, expected_prompt_text_color(app_ctx));
             assert_eq!(frame.buffer[(19, 0)].bg, expected_input_background(app_ctx));
             assert_eq!(frame.buffer[(0, 2)].fg, expected_output_text_color(app_ctx));
+            assert_eq!(
+                frame.buffer[(0, 2)].bg,
+                expected_transcript_background(app_ctx)
+            );
+            assert_eq!(
+                frame.buffer[(19, 2)].bg,
+                expected_transcript_background(app_ctx)
+            );
         });
     });
 }
@@ -104,6 +112,11 @@ fn expected_input_background(app: &AppContext) -> Color {
 fn expected_output_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
     GuiFill::from(theme.tui_transcript_output_text_color()).into()
+}
+
+fn expected_transcript_background(app: &AppContext) -> Color {
+    let theme = Appearance::as_ref(app).theme();
+    GuiFill::from(theme.tui_transcript_background()).into()
 }
 
 #[test]

@@ -95,6 +95,8 @@ impl TuiAgentBlockView {
 
     /// Builds the generic TUI element tree for logical render sections.
     fn render_sections(sections: &[TuiAgentBlockSection], app: &AppContext) -> Box<dyn TuiElement> {
+        let theme = Appearance::as_ref(app).theme();
+        let background: Color = GuiFill::from(theme.tui_transcript_background()).into();
         let mut column = TuiColumn::new();
         let mut should_gap_before_next = false;
         for section in sections {
@@ -108,6 +110,7 @@ impl TuiAgentBlockView {
         }
         Box::new(
             TuiContainer::new(column)
+                .with_background(background)
                 .with_padding_bottom(u16::from(!sections.is_empty()) * BLOCK_BOTTOM_PADDING_ROWS),
         )
     }
