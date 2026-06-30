@@ -366,7 +366,7 @@ impl From<&AIAgentActionType> for PersistedAIAgentActionType {
             AIAgentActionType::WaitForEvents { .. } => Self::NotPersisted,
             // Recordings are tied to a live capture process that cannot survive
             // a restart, so there is nothing useful to persist.
-            AIAgentActionType::StartRecording | AIAgentActionType::StopRecording { .. } => {
+            AIAgentActionType::StartRecording { .. } | AIAgentActionType::StopRecording { .. } => {
                 Self::NotPersisted
             }
         }

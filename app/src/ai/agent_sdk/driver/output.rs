@@ -411,7 +411,7 @@ pub mod text {
                     AIAgentActionType::RequestComputerUse(request) => {
                         writeln!(w, "Requesting computer use: {}", request.task_summary)?;
                     }
-                    AIAgentActionType::StartRecording => {
+                    AIAgentActionType::StartRecording { .. } => {
                         writeln!(w, "Starting recording")?;
                     }
                     AIAgentActionType::StopRecording { recording_id } => {
@@ -1102,7 +1102,7 @@ pub mod json {
                     // TODO(AGENT-2281): implement
                     AIAgentActionType::RequestComputerUse(_) => None,
                     // Internal or non-CLI tool calls: skip them
-                    AIAgentActionType::StartRecording
+                    AIAgentActionType::StartRecording { .. }
                     | AIAgentActionType::StopRecording { .. }
                     | AIAgentActionType::SuggestNewConversation { .. }
                     | AIAgentActionType::SuggestPrompt { .. }

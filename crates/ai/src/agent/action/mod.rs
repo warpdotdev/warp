@@ -138,8 +138,13 @@ pub enum AIAgentActionType {
     RequestComputerUse(RequestComputerUseRequest),
 
     /// AI requested to start recording a video of the computer-use session.
-    /// Capture configuration is runtime-controlled, so v0 carries no arguments.
-    StartRecording,
+    /// Capture configuration (frame rate, limits) is server-owned and arrives
+    /// on the tool call; the client applies it. `frame_rate` of 0 means unset.
+    StartRecording {
+        frame_rate: u32,
+        max_duration: Option<Duration>,
+        max_size_bytes: Option<u64>,
+    },
 
     /// AI requested to stop an in-progress recording and publish the video.
     StopRecording {
@@ -384,7 +389,7 @@ impl AIAgentActionType {
             Self::RequestComputerUse(_) => {
                 AIAgentActionResultType::RequestComputerUse(RequestComputerUseResult::Cancelled)
             }
-            Self::StartRecording => {
+            Self::StartRecording { .. } => {
                 AIAgentActionResultType::StartRecording(StartRecordingResult::Cancelled)
             }
             Self::StopRecording { .. } => {
@@ -449,7 +454,7 @@ impl AIAgentActionType {
                 format!("Insert {} code review comments", comments.len())
             }
             Self::RequestComputerUse(_) => "Request computer use".to_string(),
-            Self::StartRecording => "Start recording".to_string(),
+            Self::StartRecording { .. } => "Start recording".to_string(),
             Self::StopRecording { .. } => "Stop recording".to_string(),
             Self::ReadSkill(_) => "Read skill".to_string(),
             Self::FetchConversation { .. } => "Fetch conversation".to_string(),
@@ -613,7 +618,7 @@ impl Display for AIAgentActionType {
             AIAgentActionType::RequestComputerUse(req) => {
                 write!(f, "RequestComputerUse: {}", req.task_summary)
             }
-            AIAgentActionType::StartRecording => {
+            AIAgentActionType::StartRecording { .. } => {
                 write!(f, "StartRecording")
             }
             AIAgentActionType::StopRecording { recording_id } => {

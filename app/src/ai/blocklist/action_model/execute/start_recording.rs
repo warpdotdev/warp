@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use ai::agent::action_result::{AIAgentActionResultType, RecordingStarted, StartRecordingResult};
 use futures::future::BoxFuture;
@@ -12,13 +12,6 @@ use crate::ai::agent::AIAgentActionType;
 use crate::ai::blocklist::action_model::recording_controller::{
     RecordingController, RecordingSession,
 };
-
-/// Enforced maximum recording duration. Bounds orphaned captures while leaving
-/// enough room for a typical computer-use task.
-const MAX_RECORDING_DURATION: Duration = Duration::from_secs(10 * 60);
-/// Enforced maximum recording size in bytes. Caps local disk growth if display
-/// content produces a large video before the time limit.
-const MAX_RECORDING_SIZE_BYTES: u64 = 1024 * 1024 * 1024;
 
 pub struct StartRecordingExecutor;
 
@@ -35,7 +28,7 @@ impl StartRecordingExecutor {
         let ExecuteActionInput { action, .. } = input;
         // Recording is only offered within an already-approved computer-use
         // subagent, so approval extends to it. Still require the feature flag.
-        matches!(action.action, AIAgentActionType::StartRecording)
+        matches!(action.action, AIAgentActionType::StartRecording { .. })
             && FeatureFlag::VideoRecording.is_enabled()
     }
 
@@ -45,9 +38,17 @@ impl StartRecordingExecutor {
         ctx: &mut ModelContext<Self>,
     ) -> impl Into<AnyActionExecution> {
         let ExecuteActionInput { action, .. } = input;
-        let AIAgentActionType::StartRecording = &action.action else {
+        let AIAgentActionType::StartRecording {
+            frame_rate,
+            max_duration,
+            max_size_bytes,
+        } = &action.action
+        else {
             return ActionExecution::InvalidAction;
         };
+        let frame_rate = *frame_rate;
+        let max_duration = *max_duration;
+        let max_size_bytes = *max_size_bytes;
 
         // Reserve the single runtime slot up front so a concurrent start can't
         // race past the guard while ffmpeg is spinning up.
@@ -62,9 +63,15 @@ impl StartRecordingExecutor {
             async move {
                 let recorder = computer_use::create_recorder();
                 let config = computer_use::RecordingConfig {
-                    max_duration: Some(MAX_RECORDING_DURATION),
-                    max_size_bytes: Some(MAX_RECORDING_SIZE_BYTES),
-                    ..Default::default()
+                    // A frame rate of 0 means the server did not specify one;
+                    // fall back to the recorder's default in that case.
+                    frame_rate: if frame_rate > 0 {
+                        frame_rate
+                    } else {
+                        computer_use::RecordingConfig::default().frame_rate
+                    },
+                    max_duration,
+                    max_size_bytes,
                 };
                 recorder.start(config).await
             },
@@ -74,9 +81,6 @@ impl StartRecordingExecutor {
                     let started_at = SystemTime::now();
                     let width_px = handle.width() as i32;
                     let height_px = handle.height() as i32;
-                    let frame_rate = handle.frame_rate() as i32;
-                    let max_duration = handle.max_duration();
-                    let max_size_bytes = handle.max_size_bytes().map(|bytes| bytes as i64);
                     RecordingController::handle(ctx).update(ctx, |controller, _| {
                         controller
                             .finish_start(recording_id.clone(), RecordingSession::new(handle));
@@ -87,9 +91,6 @@ impl StartRecordingExecutor {
                             started_at,
                             width_px,
                             height_px,
-                            frame_rate,
-                            max_duration,
-                            max_size_bytes,
                         },
                     ))
                 }

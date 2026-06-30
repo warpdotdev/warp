@@ -1215,8 +1215,8 @@ impl Display for RequestComputerUseResult {
     }
 }
 
-/// The result of a `StartRecording` tool call. Carries the runtime-applied
-/// capture settings and enforced limits so the agent knows the recording state.
+/// The result of a `StartRecording` tool call. Carries the resolved capture
+/// dimensions; frame rate and limits are server-owned and not echoed back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StartRecordingResult {
     Success(RecordingStarted),
@@ -1230,9 +1230,6 @@ pub struct RecordingStarted {
     pub started_at: SystemTime,
     pub width_px: i32,
     pub height_px: i32,
-    pub frame_rate: i32,
-    pub max_duration: Option<Duration>,
-    pub max_size_bytes: Option<i64>,
 }
 
 impl Display for StartRecordingResult {
@@ -1240,8 +1237,8 @@ impl Display for StartRecordingResult {
         match self {
             StartRecordingResult::Success(started) => write!(
                 f,
-                "Recording started ({}x{} @ {}fps)",
-                started.width_px, started.height_px, started.frame_rate
+                "Recording started ({}x{})",
+                started.width_px, started.height_px
             ),
             StartRecordingResult::Error(error) => write!(f, "Start recording error: {error}"),
             StartRecordingResult::Cancelled => write!(f, "Start recording cancelled"),

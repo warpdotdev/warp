@@ -1687,17 +1687,6 @@ pub(crate) fn convert_tool_call_result_to_input(
                             .as_ref()
                             .map(|s| s.height_px)
                             .unwrap_or_default(),
-                        frame_rate: success
-                            .settings
-                            .as_ref()
-                            .map(|s| s.frame_rate)
-                            .unwrap_or_default(),
-                        max_duration: success
-                            .limits
-                            .as_ref()
-                            .and_then(|l| l.max_duration.as_ref())
-                            .map(proto_duration_to_duration),
-                        max_size_bytes: success.limits.as_ref().map(|l| l.max_size_bytes),
                     })
                 }
                 Some(api::start_recording_result::Result::Error(error)) => {

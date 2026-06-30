@@ -553,7 +553,7 @@ impl BlocklistAIActionExecutor {
             AIAgentActionType::RequestComputerUse(_) => self
                 .request_computer_use_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::StartRecording => self
+            AIAgentActionType::StartRecording { .. } => self
                 .start_recording_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
             AIAgentActionType::StopRecording { .. } => self
@@ -746,7 +746,7 @@ impl BlocklistAIActionExecutor {
                 .request_computer_use_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
                 .into(),
-            AIAgentActionType::StartRecording => self
+            AIAgentActionType::StartRecording { .. } => self
                 .start_recording_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
                 .into(),
@@ -887,7 +887,10 @@ impl BlocklistAIActionExecutor {
                 self.run_agents_executor.update(ctx, |executor, ctx| {
                     executor.cancel_execution(&running.action.id, ctx);
                 });
-            } else if matches!(running.action.action, AIAgentActionType::StartRecording) {
+            } else if matches!(
+                running.action.action,
+                AIAgentActionType::StartRecording { .. }
+            ) {
                 RecordingController::handle(ctx).update(ctx, |controller, _| {
                     controller.abort_start();
                 });
@@ -987,7 +990,7 @@ impl BlocklistAIActionExecutor {
             AIAgentActionType::RequestComputerUse(_) => self
                 .request_computer_use_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
-            AIAgentActionType::StartRecording => self
+            AIAgentActionType::StartRecording { .. } => self
                 .start_recording_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::StopRecording { .. } => self
