@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# Best-effort installer for the internal warpdotdev/warp-skills skills pinned
+# in warp-skills-lock.json. Invoked optionally from script/bootstrap and
+# script/run after the common-skills step. It NEVER fails its caller: any
+# problem (no lock file, no repo access, missing tooling) results in a single
+# notice and exit 0. Not required for external contributors.
+
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+LOCK_FILE="${REPO_ROOT}/warp-skills-lock.json"
+SKILLS_CLI_VERSION="1.5.6"
+SKILLS_REPO="warpdotdev/warp-skills"
+
+notice() { echo "warp-skills: $*"; }
+
+# Opt out via WARP_SKIP_WARP_SKILLS_INSTALL=1 or a --skip-warp-skills argument.
+skip_requested=0
+if [[ "${WARP_SKIP_WARP_SKILLS_INSTALL:-}" = "1" ]]; then
+  skip_requested=1
+fi
+for arg in "$@"; do
+  case "${arg}" in
+    --skip-warp-skills) skip_requested=1 ;;
+  esac
+done
+if [[ "${skip_requested}" -eq 1 ]]; then
+  notice "skipping install (opt-out requested)."
+  exit 0
+fi
+
+# Nothing to install without a committed lock file.
+if [[ ! -f "${LOCK_FILE}" ]]; then
+  exit 0
+fi
+
+# Read the pinned ref recorded in the lock file (all entries share one ref).
+pinned_ref="$(grep -o '"ref"[[:space:]]*:[[:space:]]*"[^"]*"' "${LOCK_FILE}" 2>/dev/null \
+  | head -1 \
+  | sed 's/.*"ref"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+
+source_spec="${SKILLS_REPO}"
+if [[ -n "${pinned_ref}" ]]; then
+  source_spec="${SKILLS_REPO}#${pinned_ref}"
+fi
+
+# Match the install target chosen for common skills (project by default).
+target_args=()
+if [[ "${WARP_COMMON_SKILLS_INSTALL_TARGET:-}" = "global" ]]; then
+  target_args=(--global)
+fi
+
+# Clone uses the developer's git auth (SSH or the gh credential helper).
+cd "${REPO_ROOT}"
+if npx --yes "skills@${SKILLS_CLI_VERSION}" add "${source_spec}" \
+  --agent warp --skill '*' --yes --copy "${target_args[@]}"; then
+  notice "installed pinned skills from ${source_spec}."
+else
+  notice "not installed (no access) — skipping."
+fi
+
+exit 0
