@@ -212,6 +212,14 @@ impl CLISubagentController {
                 let requested_command_action_id = block.requested_command_action_id().cloned();
                 let was_agent_tagged_in = block.interaction_mode().is_agent_tagged_in();
                 let has_agent_metadata = block.agent_interaction_metadata().is_some();
+                // Capture block finish data upfront so we can resolve any pending
+                // TransferShellCommandControlToUser actions after the lock is dropped.
+                let block_finish_data = (
+                    block.output_with_secrets_unobfuscated(),
+                    block.exit_code(),
+                    block.start_ts().cloned(),
+                    block.completed_ts().cloned(),
+                );
                 drop(terminal_model);
                 let removed_subagent_state = me.active_subagents_by_block.remove(&block_id);
                 if removed_subagent_state
@@ -231,16 +239,43 @@ impl CLISubagentController {
                         });
 
                     if is_inline_agent_view {
-                        // Mark conversation as successfully completed BEFORE exiting agent view.
-                        // The command finished naturally, so this is a successful completion.
                         if let Some(conversation_id) = conversation_id {
-                            me.controller.update(ctx, |controller, ctx| {
-                                controller.cancel_conversation_progress(
-                                    conversation_id,
-                                    CancellationReason::OptimisticCLISubagentCompletion,
-                                    ctx,
-                                );
-                            });
+                            // If a TransferShellCommandControlToUser action is pending (i.e. the
+                            // agent asked the user to take control but the user hadn't clicked yet),
+                            // resolve it with a CommandFinished result so the main agent can resume.
+                            // Without this, cancel_conversation_progress would cancel the pending
+                            // action with OptimisticCLISubagentCompletion, which suppresses the
+                            // follow-up and silently stops the conversation.
+                            let (output, exit_code, start_ts, completed_ts) = block_finish_data;
+                            let had_pending_transfer_control =
+                                me.action_model.update(ctx, |action_model, ctx| {
+                                    action_model
+                                        .resolve_pending_transfer_control_to_user_with_command_finished(
+                                            conversation_id,
+                                            &block_id,
+                                            output,
+                                            exit_code,
+                                            start_ts,
+                                            completed_ts,
+                                            ctx,
+                                        )
+                                });
+
+                            if !had_pending_transfer_control {
+                                // Normal path: no pending transfer-control action, so mark
+                                // conversation as successfully completed as before.
+                                me.controller.update(ctx, |controller, ctx| {
+                                    controller.cancel_conversation_progress(
+                                        conversation_id,
+                                        CancellationReason::OptimisticCLISubagentCompletion,
+                                        ctx,
+                                    );
+                                });
+                            }
+                            // If had_pending_transfer_control is true, the resolved action
+                            // already triggered a follow-up via handle_action_result, so
+                            // calling cancel_conversation_progress here would cancel that
+                            // newly-created follow-up stream.
                         }
                     }
 

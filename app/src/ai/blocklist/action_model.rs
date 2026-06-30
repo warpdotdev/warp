@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chrono::Local;
+use chrono::{DateTime, Local};
 pub(crate) use execute::{
     apply_edits, coerce_integer_args, FileReadResult, MalformedFinalLineProxyEvent,
 };
@@ -37,6 +37,7 @@ use futures::future::{join_all, BoxFuture};
 use itertools::Itertools;
 use parking_lot::FairMutex;
 use preprocess::{PendingPreprocessedActions, PreprocessId};
+use warp_core::command::ExitCode;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::execute::ask_user_question::AskUserQuestionExecutor;
@@ -51,11 +52,13 @@ use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentActionTypeDiscriminants, AIAgentExchange, AIAgentInput,
     CancellationReason, CreateDocumentsResult, EditDocumentsResult, RequestCommandOutputResult,
+    TransferShellCommandControlToUserResult,
 };
 use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::TerminalModel;
@@ -1159,6 +1162,77 @@ impl BlocklistAIActionModel {
             result: pending_action.action.cancelled_result(),
         });
         self.handle_action_result(conversation_id, result, reason, ctx);
+    }
+
+    /// Resolves any pending `TransferShellCommandControlToUser` actions for the given
+    /// conversation with a `CommandFinished` result. This is called when the LRC block
+    /// finishes while a `TransferShellCommandControlToUser` action is still pending
+    /// (waiting for user confirmation), so the main agent can resume instead of silently
+    /// stopping.
+    ///
+    /// Returns `true` if any pending actions were resolved.
+    pub fn resolve_pending_transfer_control_to_user_with_command_finished(
+        &mut self,
+        conversation_id: AIConversationId,
+        block_id: &BlockId,
+        output: String,
+        exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let Some(pending_actions) = self.pending_actions.get(&conversation_id) else {
+            return false;
+        };
+
+        // Collect indices and data for TransferShellCommandControlToUser actions.
+        let transfer_action_indices: Vec<(usize, AIAgentActionId, _)> = pending_actions
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, action)| {
+                if matches!(
+                    action.action,
+                    AIAgentActionType::TransferShellCommandControlToUser { .. }
+                ) {
+                    Some((idx, action.id.clone(), action.task_id.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if transfer_action_indices.is_empty() {
+            return false;
+        }
+
+        // Process in reverse index order so removals don't shift earlier indices.
+        for (idx, action_id, task_id) in transfer_action_indices.into_iter().rev() {
+            if self
+                .pending_actions
+                .get_mut(&conversation_id)
+                .and_then(|q| q.remove(idx))
+                .is_some()
+            {
+                let result = Arc::new(AIAgentActionResult {
+                    id: action_id,
+                    task_id,
+                    result: AIAgentActionResultType::TransferShellCommandControlToUser(
+                        TransferShellCommandControlToUserResult::CommandFinished {
+                            block_id: block_id.clone(),
+                            output: output.clone(),
+                            exit_code,
+                            start_ts: start_ts.clone(),
+                            completed_ts: completed_ts.clone(),
+                        },
+                    ),
+                });
+                // Pass None for cancellation_reason so this is treated as a successful
+                // completion, not a cancellation, triggering a follow-up to the main agent.
+                self.handle_action_result(conversation_id, result, None, ctx);
+            }
+        }
+
+        true
     }
 
     /// Returns all finished action results from the given conversation, moving them to the
