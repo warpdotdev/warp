@@ -125,18 +125,6 @@ impl TryFrom<api::Citation> for AIAgentCitation {
             api::DocumentType::WebPage => Ok(AIAgentCitation::WebPage {
                 url: citation.document_id,
             }),
-            api::DocumentType::AgentMemory => {
-                let (memory_store_id, memory_id) = citation
-                    .document_id
-                    .split_once(':')
-                    .map(|(s, m)| (s.to_string(), m.to_string()))
-                    .ok_or(UnknownCitationTypeError)?;
-                Ok(AIAgentCitation::AgentMemory {
-                    memory_store_id,
-                    memory_id,
-                    content: String::new(),
-                })
-            }
             api::DocumentType::Unknown => Err(UnknownCitationTypeError),
         }
     }
