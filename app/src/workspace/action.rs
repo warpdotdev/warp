@@ -186,6 +186,10 @@ pub enum WorkspaceAction {
     ToggleTabGroupCollapsed(TabGroupId),
     /// Opens an inline editor over the given group's header for renaming.
     RenameTabGroup(TabGroupId),
+    /// Cancels any active rename (tab, pane, or group) without committing the
+    /// new name. Dispatched when clicking on the vtab panel background while a
+    /// rename editor is open.
+    CancelActiveRename,
     /// Creates a new tab group containing the tab at the given index.
     NewTabGroupFromTab(usize),
     /// Moves the tab at `tab_index` into `group_id`, appending it to the
@@ -1133,6 +1137,7 @@ impl WorkspaceAction {
             | ShiftSelectTabRange { .. }
             | ToggleTabMultiSelection { .. }
             | ClearTabMultiSelection
+            | CancelActiveRename
             | StartNewConversation { .. }
             | UndoRevertInCodeReviewPane { .. }
             | JumpToLatestToast

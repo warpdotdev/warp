@@ -407,7 +407,7 @@ fn render_pane_row_element(
         in_colored_group,
         badge_mouse_states: _,
         detail_hover_state,
-        display_granularity: _,
+        display_granularity,
         renamable_tab_index,
         pane_context_menu_tab_index,
         is_tab_being_renamed,
@@ -547,18 +547,22 @@ fn render_pane_row_element(
     .with_skip_synthetic_hover_out()
     .with_cursor(Cursor::PointingHand);
 
-    if let Some(tab_index) = renamable_tab_index.filter(|_| !is_tab_being_renamed) {
-        row = row.on_double_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::RenameTab(tab_index));
-        });
-    }
     let pane_locator = PaneViewLocator {
         pane_group_id,
         pane_id,
     };
-    if pane_context_menu_tab_index.is_some() && !is_pane_being_renamed {
+    let row_supports_rename =
+        renamable_tab_index.is_some() || pane_context_menu_tab_index.is_some();
+    // Panes view: row == a pane, rename the pane. Tabs/Summary: row == the tab, rename the tab.
+    if matches!(display_granularity, VerticalTabsDisplayGranularity::Panes) {
+        if row_supports_rename && !is_pane_being_renamed && !is_tab_being_renamed {
+            row = row.on_double_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::RenamePane(pane_locator));
+            });
+        }
+    } else if let Some(tab_index) = renamable_tab_index.filter(|_| !is_tab_being_renamed) {
         row = row.on_double_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::RenamePane(pane_locator));
+            ctx.dispatch_typed_action(WorkspaceAction::RenameTab(tab_index));
         });
     }
     if let Some(tab_index) = pane_context_menu_tab_index {
@@ -1720,6 +1724,9 @@ fn render_vertical_tabs_panel(
         Container::new(panel_with_popup)
             .with_background(internal_colors::fg_overlay_1(theme))
             .finish()
+    })
+    .on_click(|ctx, _, _| {
+        ctx.dispatch_typed_action(WorkspaceAction::CancelActiveRename);
     })
     .on_right_click(|ctx, _, position| {
         if FeatureFlag::GroupedTabs.is_enabled() {
