@@ -6,9 +6,10 @@
 
 use std::path::Path;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
+use instant::Instant;
 use tokio::process::{Child, Command};
 use x11rb::connection::Connection;
 use x11rb::rust_connection::RustConnection;

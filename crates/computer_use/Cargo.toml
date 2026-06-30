@@ -17,6 +17,7 @@ test-util = []
 async-trait.workspace = true
 cfg-if.workspace = true
 clap.workspace = true
+instant.workspace = true
 log.workspace = true
 pathfinder_geometry.workspace = true
 serde.workspace = true
@@ -28,7 +29,6 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 command.workspace = true
 dispatch2 = "0.3.0"
 image.workspace = true
-instant.workspace = true
 objc2.workspace = true
 objc2-app-kit.workspace = true
 objc2-core-foundation.workspace = true

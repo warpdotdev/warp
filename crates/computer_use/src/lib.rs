@@ -169,7 +169,7 @@ pub struct RecordingHandle {
     #[cfg(linux)]
     path: PathBuf,
     #[cfg(linux)]
-    started_at: std::time::Instant,
+    started_at: instant::Instant,
     #[cfg(linux)]
     process: tokio::process::Child,
 }
