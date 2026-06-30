@@ -143,6 +143,8 @@ Cons:
 **Option E1 — Custom right-click handler with `warpui` Menu (recommended)**
 Use `Hoverable::with_on_right_click` (already used in other inline actions) to show a `Menu` element containing "Copy" and "Copy JSON" items. Each row in the tree registers its own right-click handler, capturing the `JsonPath` of that row.
 
+**Note on toggle disambiguation:** The expansion-state API uses two separate `HashMap<Vec<PathSegment>, bool>` maps — one for container node toggle state and one for long-string toggle state — along with two corresponding action variants (`ToggleJsonNode` and `ToggleJsonString`). This provides the independent persistence required between object/array expansion and long-string expansion. Implemented in Phase 2.
+
 Pros:
 - Consistent with existing right-click menus elsewhere in the app.
 - Per-row context (the path captured in the handler) allows "Copy JSON" to copy exactly the subtree at that row.

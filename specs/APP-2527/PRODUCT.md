@@ -57,8 +57,8 @@ Long string elision (collapsed → expanded):
 12. An empty object renders as `{} 0 keys` and an empty array as `[] 0 items`; they have no chevron and do not respond to click, and never expand to an empty body.
 
 ### Default expansion state
-13. On first render of a tool call's detail, the root request object and root response value are expanded so the user immediately sees top-level fields. Nested objects/arrays default to collapsed.
-14. **Open question:** whether deeply/large trees should auto-collapse the root too (e.g. when the root has more than N children) to avoid a wall of rows. Default assumption: root expanded, descendants collapsed, regardless of size.
+13. All nodes in the tree default to expanded on first render. The MCP tool call detail block is scrollable and height-capped, so a fully-open tree does not push content off-screen. Users can collapse individual nodes by clicking their chevrons.
+14. No auto-collapse threshold is applied. The tree renders fully open regardless of depth or node count.
 15. Expansion state is per tool-call-detail view state. It persists while the conversation stays open (collapsing and re-expanding the action header restores the user's last per-node expansion state for that tool call rather than resetting to defaults). It does not need to persist across app restarts or conversation reloads.
 16. If a tool call response arrives while the action header is collapsed, the response data is retained; expanding the header shows both the request and response trees. No data is lost due to the header being collapsed at the time of response arrival.
 17. The tree body scrolls vertically when the expanded tree exceeds the height of the action detail container. A maximum height cap is applied to the tree body (consistent with the existing max-height cap used for command editor bodies) so that a fully expanded tree does not push subsequent blocks off-screen. Scrolling the tree does not interfere with scrolling the outer block list.
@@ -89,7 +89,7 @@ Long string elision (collapsed → expanded):
     - A cancelled tool call renders a clear "cancelled" indication rather than an empty tree.
 29. If the request arguments are absent or null (a tool called with no arguments), the request tree renders an empty/`null` indication rather than a broken node.
 30. Values that are valid JSON but unusual — empty string, very large numbers, numbers that are whole-valued floats, unicode, nested arrays of objects — all render without panicking and without losing data. Whole-number integer arguments display as integers (e.g. `5`, not `5.0`), consistent with how the tool call is actually dispatched.
-31. Duplicate object keys (possible in raw JSON) all render; none are silently dropped.
+31. **Known limitation — duplicate object keys:** `serde_json::Value::Object` normalizes duplicate keys before rendering, retaining only the last value for any given key. Truly duplicate-keyed JSON objects cannot be represented in the implementation's chosen data structure. In practice MCP tool results do not produce duplicate keys.
 
 ### Streaming
 32. While the tool-call request arguments are still streaming in, the request tree may update as more of the structure arrives; partial/in-progress structure renders without flicker that resets the user's expansion state for already-rendered nodes.
