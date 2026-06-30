@@ -567,7 +567,7 @@ fn terminal_cloud_status_transition_drains_once_through_cloud_followup_input_eve
                 history_model.clone(),
                 &BlocklistAIHistoryEvent::UpdatedConversationStatus {
                     conversation_id,
-                    terminal_view_id,
+                    terminal_surface_id: terminal_view_id,
                     update: ConversationStatusUpdate::Changed {
                         prev_status: ConversationStatus::InProgress,
                     },
@@ -579,7 +579,7 @@ fn terminal_cloud_status_transition_drains_once_through_cloud_followup_input_eve
                 history_model,
                 &BlocklistAIHistoryEvent::UpdatedConversationStatus {
                     conversation_id,
-                    terminal_view_id,
+                    terminal_surface_id: terminal_view_id,
                     update: ConversationStatusUpdate::Changed {
                         prev_status: ConversationStatus::Success,
                     },

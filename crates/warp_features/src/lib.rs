@@ -708,6 +708,11 @@ pub enum FeatureFlag {
     /// Uses a parent-family ancestor stream for owner-side orchestrator event delivery.
     OwnerOrchestrationAncestorStreamer,
 
+    /// On `wait_for_events`, confirms parent status against the server and
+    /// registers an orchestrator for the owner-side ancestor stream so it
+    /// receives events for children created out-of-band (Oz CLI / web API).
+    WaitForEventsParentRegistration,
+
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
     PendingUserQueryIndicator,
@@ -965,6 +970,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PinnedTabs,
     FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::CloudRunners,
+    FeatureFlag::WaitForEventsParentRegistration,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
@@ -973,6 +979,8 @@ pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     #[cfg(target_os = "macos")]
     FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    FeatureFlag::DragTabsToWindows,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
@@ -988,8 +996,6 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    FeatureFlag::DragTabsToWindows,
 ];
 
 /// Flags that we want to allow to switch at runtime (assuming RuntimeFeatureFlags is set)

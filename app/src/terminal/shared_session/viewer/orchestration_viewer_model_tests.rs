@@ -720,7 +720,7 @@ fn child_status_changed_with_unknown_run_id_is_silently_dropped() {
         history.read(&app, |history, _| {
             assert!(
                 history
-                    .all_live_conversations_for_terminal_view(terminal_view_id)
+                    .all_live_conversations_for_terminal_surface(terminal_view_id)
                     .filter(|conversation| conversation.is_viewing_shared_session())
                     .count()
                     == 0,
@@ -1199,7 +1199,7 @@ fn b2_backfills_parent_agent_id_on_orchestrator_token_assigned() {
         });
         let synthetic_event = BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
             conversation_id: parent_conv_id,
-            terminal_view_id,
+            terminal_surface_id: terminal_view_id,
         };
         model_handle.update(&mut app, |model, ctx| {
             model.maybe_backfill_parent_agent_ids(&synthetic_event, ctx);
@@ -1263,7 +1263,7 @@ fn b2_does_not_overwrite_existing_parent_agent_id() {
         // Now fire a backfill: the existing `parent_agent_id` must stay.
         let synthetic_event = BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
             conversation_id: parent_conv_id,
-            terminal_view_id,
+            terminal_surface_id: terminal_view_id,
         };
         model_handle.update(&mut app, |model, ctx| {
             model.maybe_backfill_parent_agent_ids(&synthetic_event, ctx);
@@ -1305,7 +1305,7 @@ fn b2_ignores_token_assigned_for_unrelated_conversation() {
         // backfill handler must short-circuit on the parent-mismatch check.
         let unrelated_event = BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
             conversation_id: AIConversationId::new(),
-            terminal_view_id,
+            terminal_surface_id: terminal_view_id,
         };
         model_handle.update(&mut app, |model, ctx| {
             model.maybe_backfill_parent_agent_ids(&unrelated_event, ctx);
@@ -1315,7 +1315,7 @@ fn b2_ignores_token_assigned_for_unrelated_conversation() {
         // the orchestrator id is still unknown.
         let still_no_parent_id = BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
             conversation_id: parent_conv_id,
-            terminal_view_id,
+            terminal_surface_id: terminal_view_id,
         };
         model_handle.update(&mut app, |model, ctx| {
             model.maybe_backfill_parent_agent_ids(&still_no_parent_id, ctx);
@@ -1350,7 +1350,7 @@ fn make_appended_exchange_event(
     BlocklistAIHistoryEvent::AppendedExchange {
         exchange_id: AIAgentExchangeId::new(),
         task_id: TaskId::new("test-task".to_string()),
-        terminal_view_id,
+        terminal_surface_id: terminal_view_id,
         conversation_id,
         is_hidden: false,
         response_stream_id: None,

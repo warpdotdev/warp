@@ -594,7 +594,10 @@ jobs:
       # Namespace's User Bundled Cache persists target/ between jobs on the same profile, which can
       # leave stale packages from a previous channel's build in the linux bundle output dir.
       - name: Clean stale bundle output
-        run: rm -rf target/*/bundle/linux
+        run: |
+          if [[ -d target ]]; then
+            find target -path '*/bundle/linux' -type d -prune -exec rm -rf {} +
+          fi
         shell: bash
 
       - name: Bundle app
@@ -671,7 +674,7 @@ jobs:
 
   release_linux_cli_x86:
     name: Build Release (Linux CLI x86_64)
-    runs-on: namespace-profile-ubuntu-20-04
+    runs-on: namespace-profile-ubuntu-22-04
     needs: prepare_release
     if: ${{ inputs.build_linux != false }}
     timeout-minutes: 90
@@ -745,7 +748,10 @@ jobs:
       # Namespace's User Bundled Cache persists target/ between jobs on the same profile, which can
       # leave stale packages from a previous channel's build in the linux bundle output dir.
       - name: Clean stale bundle output
-        run: rm -rf target/*/bundle/linux
+        run: |
+          if [[ -d target ]]; then
+            find target -path '*/bundle/linux' -type d -prune -exec rm -rf {} +
+          fi
         shell: bash
 
       - name: Bundle CLI
@@ -943,7 +949,7 @@ jobs:
 
   build_linux_cli_arm_binaries:
     name: Build Release (Linux CLI ARM)
-    runs-on: namespace-profile-ubuntu-20-04-arm
+    runs-on: namespace-profile-ubuntu-22-04
     needs: prepare_release
     if: ${{ inputs.build_linux != false }}
     timeout-minutes: 90
@@ -989,7 +995,7 @@ jobs:
         id: build_cli
         run: |
           # Build the CLI only
-          script/bundle --channel $CHANNEL --artifact cli --packages none
+          script/bundle --channel $CHANNEL --artifact cli --packages none --arch aarch64
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}

@@ -667,15 +667,8 @@ impl TuiInputElement {
             }
         }
 
-        // Assemble the column of visible rows.
-        let dim = TuiStyle::default().add_modifier(Modifier::DIM);
         let mut column = TuiColumn::new();
-        for (row_idx, (row_text, _)) in visible_rows_slice.iter().enumerate() {
-            let style = if row_idx as u32 == cursor_row_in_view {
-                TuiStyle::default()
-            } else {
-                dim
-            };
+        for (row_text, _) in &visible_rows_slice {
             // An empty `TuiText` lays out to zero rows, which would collapse the
             // row and clip the cursor (or following rows) off the column. Render
             // a single space so every visual row keeps a height of exactly one.
@@ -684,9 +677,7 @@ impl TuiInputElement {
             } else {
                 row_text.clone()
             };
-            column = column.with_child(Box::new(
-                TuiText::new(row_display).with_style(style).truncate(),
-            ));
+            column = column.with_child(Box::new(TuiText::new(row_display).truncate()));
         }
 
         self.column = column;

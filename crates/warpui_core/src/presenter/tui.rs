@@ -38,12 +38,10 @@
 //!
 //! [`TuiChildView`]: crate::elements::tui::TuiChildView
 
-use std::collections::HashMap;
-
 use crate::elements::tui::{
     TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiPresentationContext, TuiRect,
 };
-use crate::{AppContext, EntityId, TuiView, ViewHandle, WindowId, WindowInvalidation};
+use crate::{AppContext, EntityIdMap, TuiView, ViewHandle, WindowId, WindowInvalidation};
 
 /// A painted frame: the composited cell [`TuiBuffer`] plus the absolute cursor
 /// position (in buffer cell coordinates), if a focused element owns the cursor.
@@ -81,7 +79,7 @@ impl TuiFrame {
 pub struct TuiPresenter {
     /// Pre-rendered elements keyed by view id. Populated by [`invalidate`](Self::invalidate)
     /// for each view that changed; consumed by [`TuiChildView`] during layout.
-    pub(crate) rendered_views: HashMap<EntityId, Box<dyn TuiElement>>,
+    pub(crate) rendered_views: EntityIdMap<Box<dyn TuiElement>>,
     /// The root element tree from the last [`present`](Self::present) call,
     /// with all child views already laid out inside it. Reused as the starting
     /// point for the next frame's layout (for unchanged child subtrees) and for
@@ -170,7 +168,7 @@ impl TuiPresenter {
         };
         let arranged = arrange(element.as_mut(), area, &mut layout_ctx, ctx);
 
-        let mut embeddings = HashMap::new();
+        let mut embeddings = EntityIdMap::default();
         {
             let mut present_ctx = TuiPresentationContext::new(
                 root_view_id,
@@ -197,7 +195,7 @@ impl TuiPresenter {
         area: TuiRect,
         app: &AppContext,
     ) -> TuiFrame {
-        let mut empty_views = HashMap::new();
+        let mut empty_views = EntityIdMap::default();
         let mut layout_ctx = TuiLayoutContext {
             rendered_views: &mut empty_views,
         };
@@ -239,7 +237,7 @@ fn paint(
     root: &dyn TuiElement,
     arranged: TuiRect,
     area: TuiRect,
-    rendered_views: &mut HashMap<EntityId, Box<dyn TuiElement>>,
+    rendered_views: &mut EntityIdMap<Box<dyn TuiElement>>,
 ) -> TuiFrame {
     let mut buffer = TuiBuffer::empty(buffer_rect_for(area));
     let mut ctx = TuiLayoutContext { rendered_views };

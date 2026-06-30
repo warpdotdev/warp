@@ -30,6 +30,8 @@ use serde::{Deserialize, Serialize};
 use shell::ShellStarter;
 
 pub use self::terminal_manager::{get_shell_starter, TerminalManager};
+#[cfg(feature = "tui")]
+pub use self::terminal_manager::{TerminalManagerInit, TerminalSurfaceInit, TerminalSurfaceResult};
 #[cfg(windows)]
 pub use self::terminal_view_adaptor::shutdown_all_pty_event_loops;
 pub(crate) use self::terminal_view_adaptor::{

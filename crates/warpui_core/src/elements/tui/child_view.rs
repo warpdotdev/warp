@@ -20,6 +20,8 @@ use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
     TuiPresentationContext, TuiRect, TuiSize,
 };
+#[cfg(test)]
+use crate::EntityIdMap;
 use crate::{AppContext, EntityId, Event, TuiView, ViewHandle};
 
 /// Embeds a registered [`TuiView`] as a node in the element tree, mirroring
@@ -48,7 +50,7 @@ impl TuiChildView {
     pub(crate) fn from_rendered(
         view_id: EntityId,
         child: Box<dyn TuiElement>,
-        rendered_views: &mut std::collections::HashMap<EntityId, Box<dyn TuiElement>>,
+        rendered_views: &mut EntityIdMap<Box<dyn TuiElement>>,
     ) -> Self {
         rendered_views.insert(view_id, child);
         Self { view_id }

@@ -38,8 +38,10 @@ use crate::terminal::cli_agent_sessions::{
 /// a `terminal_view_id → task_id` mapping via `register_cli_session`.
 pub struct LocalAgentTaskSyncModel {
     ai_client: Arc<dyn AIClient>,
-    /// Maps terminal view IDs to task IDs for third-party harness sessions
-    /// that don't have conversations in `BlocklistAIHistoryModel`.
+    /// Maps terminal view IDs to task IDs for third-party harness runs that
+    /// don't have conversations in `BlocklistAIHistoryModel`. These mappings
+    /// live for the process-scoped `AgentDriver` run, which can span multiple
+    /// pane-scoped CLI agent sessions.
     cli_session_task_ids: HashMap<EntityId, AmbientAgentTaskId>,
     /// Serializes and coalesces model-owned updates independently per task.
     update_queue: LocalTaskUpdateQueue,
@@ -130,6 +132,16 @@ impl LocalAgentTaskSyncModel {
         );
     }
 
+    /// Stops reporting CLI agent status changes for a completed driver run.
+    /// Task updates accepted before unregistration remain queued until delivery
+    /// finishes.
+    #[cfg_attr(target_family = "wasm", expect(dead_code))]
+    pub fn unregister_cli_session(&mut self, terminal_view_id: EntityId) {
+        if let Some(task_id) = self.cli_session_task_ids.remove(&terminal_view_id) {
+            self.update_queue.remove_task(&task_id);
+        }
+    }
+
     fn remove_queued_update_state_for_run_id(&mut self, run_id: Option<&str>) {
         let Some(task_id) = run_id.and_then(|run_id| run_id.parse::<AmbientAgentTaskId>().ok())
         else {
@@ -189,14 +201,12 @@ impl LocalAgentTaskSyncModel {
             } => {
                 self.on_cli_session_status_changed(*terminal_view_id, status, ctx);
             }
-            CLIAgentSessionsModelEvent::Ended {
-                terminal_view_id, ..
-            } => {
-                if let Some(task_id) = self.cli_session_task_ids.remove(terminal_view_id) {
-                    self.update_queue.remove_task(&task_id);
-                }
-            }
-            _ => {}
+            // Pane-scoped CLI agent sessions can end between preflight, the
+            // harness, and follow-ups, but the mapping belongs to the driver run.
+            CLIAgentSessionsModelEvent::Started { .. }
+            | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
+            | CLIAgentSessionsModelEvent::Ended { .. }
+            | CLIAgentSessionsModelEvent::SessionUpdated { .. } => {}
         }
     }
 
@@ -205,17 +215,32 @@ impl LocalAgentTaskSyncModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some((task_id, update)) =
+        let Some((task_id, Some(update))) =
             with_local_conversation(conversation_id, ctx, |conversation| {
+                // When the conversation transitions to Error but the last exchange is
+                // still streaming, the stream hasn't finished processing the error yet.
+                // Skip this update — `mark_request_completed_with_error` will fire
+                // `UpdatedConversationStatus` again once the exchange finishes, at
+                // which point we can read and classify the real structured error.
+                if matches!(conversation.status(), ConversationStatus::Error) {
+                    let last_is_streaming =
+                        conversation.root_task_exchanges().last().is_some_and(|e| {
+                            matches!(&e.output_status, AIAgentOutputStatus::Streaming { .. })
+                        });
+                    if last_is_streaming {
+                        return None;
+                    }
+                }
+
                 let (task_state, status_message) = map_conversation_status(conversation);
-                LocalTaskUpdate {
+                Some(LocalTaskUpdate {
                     task_state: Some(task_state),
                     server_conversation_token: conversation
                         .server_conversation_token()
                         .map(|token| token.as_str().to_string()),
                     status_message,
                     ..LocalTaskUpdate::default()
-                }
+                })
             })
         else {
             return;
@@ -385,7 +410,10 @@ fn map_conversation_status(
                         None
                     }
                 });
-            task_update_for_conversation_error(renderable_error)
+            task_update_for_conversation_error(
+                renderable_error,
+                conversation.status_error_message(),
+            )
         }
         ConversationStatus::Cancelled => (
             AgentTaskState::Cancelled,
@@ -403,14 +431,24 @@ fn map_conversation_status(
 /// Maps a conversation-level error to a terminal task update. In-flight recoveries
 /// surface as `TransientError`, so an `Error` status is always terminal here — the
 /// `will_attempt_resume` rendering hint is deliberately ignored.
+///
+/// When no structured exchange error is available, falls back to `status_error_message`
+/// so that the real failure reason is visible rather than the generic
+/// "Agent encountered an error" text. This covers pre-spawn failures (quota check
+/// before any stream) where the exchange is never populated.
 fn task_update_for_conversation_error(
     error: Option<&RenderableAIError>,
+    status_error_message: Option<&str>,
 ) -> (AgentTaskState, Option<TaskStatusUpdate>) {
     match error {
         Some(error) => classify_renderable_error(error),
         None => (
             AgentTaskState::Error,
-            Some(TaskStatusUpdate::message("Agent encountered an error")),
+            Some(TaskStatusUpdate::message(
+                status_error_message
+                    .unwrap_or("Agent encountered an error")
+                    .to_string(),
+            )),
         ),
     }
 }
