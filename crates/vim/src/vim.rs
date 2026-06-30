@@ -2071,3 +2071,7 @@ pub trait VimHandler {
     /// Move the cursor up `count` half-pages and scroll the viewport (`<C-u>`).
     fn scroll_half_page_up(&mut self, _count: u32, _ctx: &mut ViewContext<Self>) {}
 }
+
+#[cfg(test)]
+#[path = "vim_tests.rs"]
+mod tests;
