@@ -2,7 +2,7 @@
 //!
 //! The TUI runtime (`crate::runtime`) converts raw crossterm events into
 //! [`TuiEvent`]s, then walks the rendered element tree handing each element the
-//! event plus a [`TuiEventContext`] it can use to queue app updates and typed
+//! event plus a [`TuiEventContext`] it can use to queue notifications and typed
 //! actions back into the shared core.
 //!
 //! This module holds the dispatch-side types that are part of the
@@ -112,7 +112,7 @@ pub struct TuiEventDispatchResult {
 
 #[derive(Default)]
 pub struct TuiEventContext {
-    app_updates: HashSet<EntityId>,
+    notified: HashSet<EntityId>,
     typed_actions: Vec<TuiDispatchedAction>,
     origin_view_id: Option<EntityId>,
 }
@@ -139,17 +139,17 @@ impl TuiEventContext {
         });
     }
 
-    /// Queues an app update for the current event origin.
+    /// Queues a notification for the current event origin.
     pub fn notify(&mut self) {
         let origin_view_id = self
             .origin_view_id
-            .expect("app updates can only be queued while processing a rendered TUI view");
-        self.app_updates.insert(origin_view_id);
+            .expect("notifications can only be queued while processing a rendered TUI view");
+        self.notified.insert(origin_view_id);
     }
 
-    /// Drains app updates after dispatch so each origin view is notified once.
-    pub(crate) fn take_app_updates(&mut self) -> HashSet<EntityId> {
-        std::mem::take(&mut self.app_updates)
+    /// Drains notifications after dispatch so each origin view is notified once.
+    pub(crate) fn take_notified(&mut self) -> HashSet<EntityId> {
+        std::mem::take(&mut self.notified)
     }
 
     pub(crate) fn take_typed_actions(&mut self) -> Vec<TuiDispatchedAction> {

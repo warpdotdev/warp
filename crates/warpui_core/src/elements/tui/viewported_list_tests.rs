@@ -114,7 +114,7 @@ fn wheel_with_notify_count(
             modifiers: ModifiersState::default(),
         };
         let handled = viewport.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx);
-        (handled, event_ctx.take_app_updates().len())
+        (handled, event_ctx.take_notified().len())
     })
 }
 
