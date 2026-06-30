@@ -10,7 +10,7 @@ mod linux;
 #[cfg(target_os = "windows")]
 mod windows;
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ops::{DerefMut, Range};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -203,17 +203,6 @@ pub struct TextLayoutSystem {
     loaded_font_ids_since_last_raster: RwLock<Vec<FontId>>,
     #[cfg(not(target_os = "windows"))]
     fallback_fonts: DashMap<FontId, Vec<FontId>>,
-
-    /// Per-font counter of rasterization failures (e.g., skrifa rejecting
-    /// corrupted glyph outlines). Incremented for non-zero glyph IDs when
-    /// swash cannot rasterize them. When the threshold is reached, the
-    /// font is marked as corrupted and removed from the database.
-    #[cfg_attr(feature = "fontkit-rasterizer", allow(dead_code))]
-    raster_failures: RwLock<HashMap<FontId, u32>>,
-    /// Set of fonts whose glyf tables have been found corrupted at runtime.
-    /// Rasterization short-circuits for these fonts, returning empty bounds.
-    #[cfg_attr(feature = "fontkit-rasterizer", allow(dead_code))]
-    corrupted_fonts: RwLock<HashSet<FontId>>,
 }
 
 pub struct FontDB {
@@ -318,8 +307,6 @@ impl TextLayoutSystem {
             fallback_fonts: Default::default(),
             #[cfg(feature = "fontkit-rasterizer")]
             loaded_font_ids_since_last_raster: Default::default(),
-            raster_failures: Default::default(),
-            corrupted_fonts: Default::default(),
         }
     }
 
@@ -472,40 +459,43 @@ impl TextLayoutSystem {
     /// font.
     /// If the font has already been loaded, the same [`FontId`] from the initial time the font was loaded is returned.
     fn insert_font(&self, font_handle: FontHandle) -> Result<FontId> {
-        // Check if we've already loaded this font from this path.
-        let pre_loaded_path = match font_handle.data() {
-            FontData::Path { path, index, .. } => {
-                if let Some(id) = self.loaded_fonts.get(&FontKey {
-                    path: path.clone(),
-                    index: *index,
-                }) {
-                    return Ok(*id);
-                }
-                Some(path.clone())
-            }
-            _ => None,
-        };
-
         let (source, index) = match font_handle.into_data() {
             FontData::Bytes(face) => (fontdb::Source::Binary(Arc::new(face.into_vec())), 0),
-            // Defer to fontdb's mmap for file sources; check for corruption below
-            // using the already-loaded data to avoid an extra fs::read on every font.
-            FontData::Path { path, index, .. } => (fontdb::Source::File(path), index),
+            FontData::Path { path, index, .. } => (fontdb::Source::File(path.clone()), index),
         };
 
-        let mut fontdb_ids = self.font_store.write().db_mut().load_font_source(source);
+        if let Source::File(path) = &source {
+            // The font we're trying to load has already been loaded into the DB.
+            if let Some(id) = self.loaded_fonts.get(&FontKey {
+                path: path.clone(),
+                index,
+            }) {
+                return Ok(*id);
+            }
+        }
 
-        // Only for file-based fonts: reuse fontdb's mmap'd data to check for
-        // corrupted glyf tables (reserved bit 7 on simple glyph flags).
-        // Corrupted faces are removed from the database immediately so they
-        // cannot be matched by future font fallback queries.
-        if let Some(ref path) = pre_loaded_path {
+        // TODO(alokedesai): Consider using FontDB's `make_shared_font_data` here. FontDB creates a temporary memory
+        // mapped file every time data is read via a call to `with_face_data`. When rendering text this can
+        // repeatedly cause allocation of a large amount of virtual address space, especially when trying to load
+        // large fonts. See https://github.com/RazrFalcon/fontdb/issues/18 for more details.
+        let fontdb_ids = {
+            let mut font_store = self.font_store.write();
+            let db = font_store.db_mut();
+            let mut fontdb_ids = db.load_font_source(source);
+
+            // For file-based fonts: reuse fontdb's mmap'd data to check for
+            // corrupted glyf tables (reserved bit 7 on simple glyph flags).
+            // Corrupted faces are removed from the database immediately so they
+            // cannot be matched by future font fallback queries.
             let mut corrupted_ids = Vec::new();
             for &id in &fontdb_ids {
-                let is_corrupted = self
-                    .font_store
-                    .read()
-                    .db()
+                let is_file_based = db
+                    .face(id)
+                    .is_some_and(|f| matches!(f.source, Source::File(_)));
+                if !is_file_based {
+                    continue;
+                }
+                let is_corrupted = db
                     .with_face_data(id, |data, face_index| {
                         Self::has_reserved_bit7_in_glyph_flags(data, face_index)
                     })
@@ -517,17 +507,19 @@ impl TextLayoutSystem {
             }
 
             for &id in &corrupted_ids {
-                self.font_store.write().db_mut().remove_face(id);
+                db.remove_face(id);
             }
 
             if !corrupted_ids.is_empty() {
                 fontdb_ids.retain(|id| !corrupted_ids.contains(id));
                 log::warn!(
-                    "Removed {} corrupted face(s) from {path:?} (reserved bit 7 set on simple glyph flags)",
+                    "Removed {} corrupted face(s) (reserved bit 7 set on simple glyph flags)",
                     corrupted_ids.len()
                 );
             }
-        }
+
+            fontdb_ids
+        };
 
         if fontdb_ids.is_empty() {
             bail!("Loaded a font source that corresponds to 0 font faces")
@@ -549,7 +541,7 @@ impl TextLayoutSystem {
             #[cfg(feature = "fontkit-rasterizer")]
             self.loaded_font_ids_since_last_raster.write().push(font_id);
 
-            if let Some(ref path) = pre_loaded_path {
+            if let Source::File(path) = &face_info.source {
                 self.loaded_fonts.insert(
                     FontKey {
                         path: path.clone(),
@@ -568,43 +560,10 @@ impl TextLayoutSystem {
             .ok_or_else(|| anyhow!("Requested index for the font handle was unable to be loaded"))
     }
 
-    /// Returns true if this font has been confirmed corrupted at runtime.
-    /// Rasterization callers should short-circuit and return empty bounds.
-    #[cfg_attr(feature = "fontkit-rasterizer", allow(dead_code))]
-    fn is_corrupted(&self, font_id: FontId) -> bool {
-        self.corrupted_fonts.read().contains(&font_id)
-    }
-
-    /// Increments the rasterization failure counter for this font.
-    /// When the threshold is exceeded, the font is removed from fontdb
-    /// so future font fallback queries skip it.
-    #[cfg_attr(feature = "fontkit-rasterizer", allow(dead_code))]
-    fn mark_font_corrupted(&self, font_id: FontId) {
-        const MAX_RASTER_FAILURES: u32 = 3;
-
-        {
-            let mut failures = self.raster_failures.write();
-            let count = failures.entry(font_id).or_insert(0);
-            *count += 1;
-            if *count < MAX_RASTER_FAILURES {
-                return;
-            }
-        }
-
-        if !self.corrupted_fonts.write().insert(font_id) {
-            return;
-        }
-
-        if let Some(&internal_id) = self.font_id_map.read().get_by_left(&font_id) {
-            self.font_store.write().db_mut().remove_face(internal_id);
-            log::warn!(
-                "Font (FontId {font_id:?}, fontdb face {internal_id}) marked as corrupted \
-                 after {MAX_RASTER_FAILURES} rasterization failures",
-            );
-        }
-    }
-
-    /// Checks whether reserved bit 7 is set on simple glyph coordinate flags.
+    /// Checks whether any simple glyph in the `glyf` table has reserved bit 7 set
+    /// on its coordinate flags. Fully parses all flags (respecting the repeat flag)
+    /// for every simple glyph, rather than sampling.
+    ///
     /// Some fonts (notably DroidSansFallback.ttf) have this corruption, which
     /// causes skrifa/swash to reject all outline rendering from the font.
     fn has_reserved_bit7_in_glyph_flags(data: &[u8], face_index: u32) -> bool {
@@ -613,24 +572,33 @@ impl TextLayoutSystem {
             Err(_) => return false,
         };
 
-        let glyf_data = match face.raw_face().table(owned_ttf_parser::Tag::from_bytes(b"glyf")) {
+        let glyf_data = match face
+            .raw_face()
+            .table(owned_ttf_parser::Tag::from_bytes(b"glyf"))
+        {
             Some(d) => d,
             None => return false,
         };
-        let loca_data = match face.raw_face().table(owned_ttf_parser::Tag::from_bytes(b"loca")) {
+        let loca_data = match face
+            .raw_face()
+            .table(owned_ttf_parser::Tag::from_bytes(b"loca"))
+        {
             Some(d) => d,
             None => return false,
         };
-        let head_data = match face.raw_face().table(owned_ttf_parser::Tag::from_bytes(b"head")) {
+        let head_data = match face
+            .raw_face()
+            .table(owned_ttf_parser::Tag::from_bytes(b"head"))
+        {
             Some(d) => d,
             None => return false,
         };
 
-        let index_to_loc = u16::from_be_bytes([head_data[50], head_data[51]]);
+        let index_to_loc_format = u16::from_be_bytes([head_data[50], head_data[51]]);
         let num_glyphs = face.number_of_glyphs() as usize;
 
         let read_loca = |idx: usize| -> Option<usize> {
-            if index_to_loc == 1 {
+            if index_to_loc_format == 1 {
                 let base = 4 * idx;
                 if base + 4 > loca_data.len() {
                     return None;
@@ -650,45 +618,73 @@ impl TextLayoutSystem {
             }
         };
 
-        let mut glyphs_to_check: Vec<u16> = (1..=20).step_by(3).collect();
-        glyphs_to_check.extend_from_slice(&[50, 100, 200, 500, 1000]);
-        if let Ok(last) = u16::try_from(num_glyphs.saturating_sub(1)) {
-            if last >= 1000 {
-                glyphs_to_check.push(last);
-            }
-        }
-
-        for gid in glyphs_to_check {
-            if gid as usize >= num_glyphs {
-                break;
-            }
-            let (Some(offs), Some(offe)) = (read_loca(gid as usize), read_loca(gid as usize + 1))
-            else {
-                break;
+        for glyph_index in 0..num_glyphs {
+            let Some(offset) = read_loca(glyph_index) else {
+                continue;
             };
-            if offs + 2 > offe || offs + 2 > glyf_data.len() {
+            let Some(next_offset) = read_loca(glyph_index + 1) else {
+                continue;
+            };
+
+            if offset + 2 > next_offset || offset + 2 > glyf_data.len() {
                 continue;
             }
-            let num_contours = i16::from_be_bytes([glyf_data[offs], glyf_data[offs + 1]]);
+
+            let num_contours = i16::from_be_bytes([glyf_data[offset], glyf_data[offset + 1]]);
             if num_contours <= 0 {
                 continue;
             }
-            let end_pts_end = 10 + num_contours as usize * 2;
-            if offs + end_pts_end + 2 > offe || offs + end_pts_end + 2 > glyf_data.len() {
+
+            let end_pts_offset = offset + 10;
+            let end_pts_count = num_contours as usize;
+            let end_pts_end = end_pts_offset + end_pts_count * 2;
+            if end_pts_end > next_offset || end_pts_end > glyf_data.len() {
                 continue;
             }
-            let ins_len = u16::from_be_bytes([
-                glyf_data[offs + end_pts_end],
-                glyf_data[offs + end_pts_end + 1],
-            ]) as usize;
-            let flag_offset = offs + end_pts_end + 2 + ins_len;
-            if flag_offset >= offe || flag_offset >= glyf_data.len() {
+
+            let total_points =
+                u16::from_be_bytes([glyf_data[end_pts_end - 2], glyf_data[end_pts_end - 1]])
+                    as usize
+                    + 1;
+
+            let ins_len_offset = end_pts_end;
+            if ins_len_offset + 2 > next_offset || ins_len_offset + 2 > glyf_data.len() {
                 continue;
             }
-            if glyf_data[flag_offset] & 0x80 != 0 {
-                return true;
+            let ins_len =
+                u16::from_be_bytes([glyf_data[ins_len_offset], glyf_data[ins_len_offset + 1]])
+                    as usize;
+
+            let flags_start = ins_len_offset + 2 + ins_len;
+            if flags_start > next_offset || flags_start > glyf_data.len() {
+                continue;
+            }
+
+            let mut flags_pos = flags_start;
+            let mut points_processed = 0;
+            while points_processed < total_points {
+                if flags_pos >= next_offset || flags_pos >= glyf_data.len() {
+                    break;
+                }
+                let flag = glyf_data[flags_pos];
+                flags_pos += 1;
+                points_processed += 1;
+
+                if flag & 0x80 != 0 {
+                    return true;
+                }
+
+                if flag & 0x08 != 0 {
+                    if flags_pos >= next_offset || flags_pos >= glyf_data.len() {
+                        break;
+                    }
+                    let repeat_count = glyf_data[flags_pos];
+                    flags_pos += 1;
+                    points_processed += repeat_count as usize;
+                }
             }
         }
+
         false
     }
 
