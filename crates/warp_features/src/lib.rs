@@ -967,7 +967,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
     FeatureFlag::PromptCacheExpiryWarning,
-    FeatureFlag::PinnedTabs,
     FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
@@ -981,6 +980,7 @@ pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::AsyncFind,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     FeatureFlag::DragTabsToWindows,
+    FeatureFlag::PinnedTabs,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
@@ -1088,6 +1088,7 @@ impl FeatureFlag {
                 "Enables commit, push, and create-PR actions directly from the code review panel.",
             ),
             GroupedTabs => Some("Enables organizing tabs into named, collapsible groups."),
+            PinnedTabs => Some("Enables pinning individual tabs and tab groups to the front of the tab bar."),
             AsyncFind => Some(
                 "Runs terminal find on a background thread to keep the UI responsive while searching large outputs.",
             ),
