@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use ai::skills::{parse_bundled_skill, ParsedSkill, SkillPathOrigin, SkillReference};
 use futures::TryStreamExt;
 use warp_core::channel::ChannelState;
+use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
 use warp_core::{report_error, safe_warn};
@@ -28,6 +29,10 @@ pub enum BundledSkillActivation {
     RequiresMcp(McpIntegration),
     /// Active only when a specific file exists on disk.
     RequiresFile(PathBuf),
+    /// Active only when running as the interactive desktop app — i.e. NOT in an
+    /// autonomous cloud-agent or CLI run, where there is no user present to drive
+    /// an interactive skill.
+    RequiresInteractiveApp,
 }
 
 impl BundledSkillActivation {
@@ -39,6 +44,7 @@ impl BundledSkillActivation {
                 TemplatableMCPServerManager::as_ref(ctx).is_mcp_server_running(*integration)
             }
             Self::RequiresFile(path) => path.exists(),
+            Self::RequiresInteractiveApp => !AppExecutionMode::as_ref(ctx).is_autonomous(),
         }
     }
 }
@@ -291,7 +297,8 @@ impl BundledSkill {
                     BundledSkillActivation::RequiresMcp(McpIntegration::Figma) => Icon::Figma,
                     BundledSkillActivation::Always
                     | BundledSkillActivation::RequiresFeature(_)
-                    | BundledSkillActivation::RequiresFile(_) => icon_for_bundled_skill(&id),
+                    | BundledSkillActivation::RequiresFile(_)
+                    | BundledSkillActivation::RequiresInteractiveApp => icon_for_bundled_skill(&id),
                 };
                 (
                     id,
@@ -521,6 +528,11 @@ pub(crate) fn activation_for_bundled_skill(
             BundledSkillActivation::RequiresFile(resources_dir.join("settings_schema.json"))
         }
         "warpctrl" => BundledSkillActivation::RequiresFeature(FeatureFlag::WarpControlCli),
+        // `pr-comments` renders an interactive review UI (via `insert_code_review_comments`)
+        // and then waits for the user. In autonomous cloud-agent / CLI runs there is no
+        // review UI or user to wait for, and its slow, network-bound fetch commands trigger
+        // a cancel-retry loop, so it should not be surfaced or invoked there.
+        "pr-comments" => BundledSkillActivation::RequiresInteractiveApp,
         _ => BundledSkillActivation::Always,
     }
 }
