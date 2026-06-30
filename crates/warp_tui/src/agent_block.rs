@@ -1,14 +1,15 @@
 //! Simple input and streamed plain-text agent blocks for the TUI transcript.
 use std::rc::Rc;
 
-use warp::tui_export::{AIAgentTextSection, AIBlockModel};
+use warp::tui_export::{AIAgentTextSection, AIBlockModel, Appearance};
+use warp_core::ui::color::blend::Blend;
+use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    Modifier, TuiColumn, TuiConstraint, TuiContainer, TuiElement, TuiLayoutContext,
+    Color, Modifier, TuiColumn, TuiConstraint, TuiContainer, TuiElement, TuiLayoutContext,
     TuiParentElement, TuiSize, TuiStyle, TuiText,
 };
+use warpui_core::elements::Fill as GuiFill;
 use warpui_core::{AppContext, Entity, EntityIdMap, TuiView};
-
-use crate::theme::{AGENT_INPUT_BACKGROUND, AGENT_INPUT_TEXT, AGENT_OUTPUT_TEXT};
 
 const INPUT_PREFIX: &str = "≫ ";
 const INPUT_OUTPUT_GAP_ROWS: u16 = 1;
@@ -90,11 +91,11 @@ impl TuiAgentBlockView {
     }
     /// Builds this block's generic TUI element tree.
     fn render_element(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        Self::render_sections(&self.sections(app))
+        Self::render_sections(&self.sections(app), app)
     }
 
     /// Builds the generic TUI element tree for logical render sections.
-    fn render_sections(sections: &[TuiAgentBlockSection]) -> Box<dyn TuiElement> {
+    fn render_sections(sections: &[TuiAgentBlockSection], app: &AppContext) -> Box<dyn TuiElement> {
         let mut column = TuiColumn::new();
         let mut should_gap_before_next = false;
         for section in sections {
@@ -103,7 +104,7 @@ impl TuiAgentBlockView {
             } else {
                 0
             };
-            column = column.with_child(section.render_element(top_padding));
+            column = column.with_child(section.render_element(top_padding, app));
             should_gap_before_next = matches!(section, TuiAgentBlockSection::Input(_));
         }
         Box::new(
@@ -115,24 +116,29 @@ impl TuiAgentBlockView {
 
 /// Converts one logical section into a renderable TUI element.
 impl TuiAgentBlockSection {
-    fn render_element(&self, top_padding: u16) -> Box<dyn TuiElement> {
+    fn render_element(&self, top_padding: u16, app: &AppContext) -> Box<dyn TuiElement> {
+        let theme = Appearance::as_ref(app).theme();
+        let text_color: Color = GuiFill::from(theme.main_text_color(theme.surface_1())).into();
         match self {
-            Self::Input(text) => Box::new(
-                TuiContainer::new(
-                    TuiText::new(format!("{INPUT_PREFIX}{text}")).with_style(
-                        TuiStyle::default()
-                            .fg(AGENT_INPUT_TEXT)
-                            .bg(AGENT_INPUT_BACKGROUND)
-                            .add_modifier(Modifier::BOLD),
-                    ),
+            Self::Input(text) => {
+                let background: Color =
+                    GuiFill::from(theme.background().blend(&theme.ai_blocks_overlay())).into();
+                Box::new(
+                    TuiContainer::new(
+                        TuiText::new(format!("{INPUT_PREFIX}{text}")).with_style(
+                            TuiStyle::default()
+                                .fg(text_color)
+                                .bg(background)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    )
+                    .with_background(background)
+                    .with_padding_top(top_padding),
                 )
-                .with_background(AGENT_INPUT_BACKGROUND)
-                .with_padding_top(top_padding),
-            ),
+            }
             Self::PlainText(text) => Box::new(
                 TuiContainer::new(
-                    TuiText::new(text.clone())
-                        .with_style(TuiStyle::default().fg(AGENT_OUTPUT_TEXT)),
+                    TuiText::new(text.clone()).with_style(TuiStyle::default().fg(text_color)),
                 )
                 .with_padding_top(top_padding),
             ),

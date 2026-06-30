@@ -2,21 +2,23 @@
 
 use warp::editor::CodeEditorModel;
 use warp::tui_export::{
-    ActiveSession, AgentViewEntryOrigin, BlocklistAIActionModel, BlocklistAIContextModel,
-    BlocklistAIController, BlocklistAIInputModel, ConversationSelection,
+    ActiveSession, AgentViewEntryOrigin, Appearance, BlocklistAIActionModel,
+    BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel, ConversationSelection,
     ConversationSelectionHandle, GetRelevantFilesController, PtyIntent, PtyIntentEvent,
     TerminalSurface, TerminalSurfaceInit,
 };
+use warp_core::ui::color::blend::Blend;
+use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    TuiChildView, TuiColumn, TuiConstrainedBox, TuiContainer, TuiElement, TuiStyle,
+    Color, TuiChildView, TuiColumn, TuiConstrainedBox, TuiContainer, TuiElement, TuiStyle,
 };
+use warpui_core::elements::Fill as GuiFill;
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
 use crate::conversation_selection::TuiConversationSelection;
 use crate::input::{TuiInputView, TuiInputViewEvent};
-use crate::theme::INPUT_BORDER;
 use crate::transcript_view::TuiTranscriptView;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
@@ -160,10 +162,12 @@ impl TuiTerminalSessionView {
         });
     }
 
-    fn render_session(&self) -> Box<dyn TuiElement> {
+    fn render_session(&self, app: &AppContext) -> Box<dyn TuiElement> {
+        let theme = Appearance::as_ref(app).theme();
+        let border_color: Color = GuiFill::from(theme.background().blend(&theme.outline())).into();
         let input_box = TuiConstrainedBox::new(
             TuiContainer::new(TuiChildView::new(&self.input_view))
-                .with_border_style(TuiStyle::default().fg(INPUT_BORDER)),
+                .with_border_style(TuiStyle::default().fg(border_color)),
         )
         .with_max_rows(MAX_INPUT_TEXT_ROWS + BORDER_ROWS);
         Box::new(
@@ -190,8 +194,8 @@ impl TuiView for TuiTerminalSessionView {
         vec![self.transcript.id(), self.input_view.id()]
     }
 
-    fn render(&self, _ctx: &AppContext) -> Box<dyn TuiElement> {
-        self.render_session()
+    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        self.render_session(ctx)
     }
 }
 

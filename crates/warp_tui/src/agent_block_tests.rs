@@ -2,21 +2,25 @@ use std::rc::Rc;
 
 use warp::tui_export::{
     AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText,
-    AIAgentTextSection, AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, LLMId,
-    MessageId, OutputStatusUpdateCallback, ServerOutputId, Shared, UserQueryMode,
+    AIAgentTextSection, AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType,
+    Appearance, LLMId, MessageId, OutputStatusUpdateCallback, ServerOutputId, Shared,
+    UserQueryMode,
 };
+use warp_core::ui::color::blend::Blend;
+use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    Modifier, TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize,
+    Color, Modifier, TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize,
 };
+use warpui_core::elements::Fill as GuiFill;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, EntityIdMap, ViewContext};
 
 use super::{TuiAgentBlockSection, TuiAgentBlockView};
-use crate::theme::{AGENT_INPUT_BACKGROUND, AGENT_INPUT_TEXT, AGENT_OUTPUT_TEXT};
 
 #[test]
 fn simple_agent_block_reports_full_height_and_renders_content() {
     App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
         app.read(|app_ctx| {
             let sections = vec![
                 TuiAgentBlockSection::Input("hello".to_owned()),
@@ -26,7 +30,7 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
 
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
-                TuiAgentBlockView::render_sections(&sections),
+                TuiAgentBlockView::render_sections(&sections, app_ctx),
                 TuiRect::new(0, 0, 20, 6),
                 app_ctx,
             );
@@ -39,12 +43,12 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
                     .collect::<Vec<_>>(),
                 vec!["≫ hello", "", "one", "two", "three", ""],
             );
-            assert_eq!(frame.buffer[(0, 0)].fg, AGENT_INPUT_TEXT);
-            assert_eq!(frame.buffer[(0, 0)].bg, AGENT_INPUT_BACKGROUND);
+            assert_eq!(frame.buffer[(0, 0)].fg, expected_text_color(app_ctx));
+            assert_eq!(frame.buffer[(0, 0)].bg, expected_input_background(app_ctx));
             assert!(frame.buffer[(0, 0)].modifier.contains(Modifier::BOLD));
-            assert_eq!(frame.buffer[(2, 0)].fg, AGENT_INPUT_TEXT);
-            assert_eq!(frame.buffer[(19, 0)].bg, AGENT_INPUT_BACKGROUND);
-            assert_eq!(frame.buffer[(0, 2)].fg, AGENT_OUTPUT_TEXT);
+            assert_eq!(frame.buffer[(2, 0)].fg, expected_text_color(app_ctx));
+            assert_eq!(frame.buffer[(19, 0)].bg, expected_input_background(app_ctx));
+            assert_eq!(frame.buffer[(0, 2)].fg, expected_text_color(app_ctx));
         });
     });
 }
@@ -59,7 +63,7 @@ fn desired_height_for_sections(
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
     };
-    let mut element = TuiAgentBlockView::render_sections(sections);
+    let mut element = TuiAgentBlockView::render_sections(sections, app);
     usize::from(
         element
             .layout(
@@ -74,6 +78,7 @@ fn desired_height_for_sections(
 #[test]
 fn simple_agent_block_reflows_height_at_narrow_width() {
     App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
         app.read(|app_ctx| {
             let sections = vec![
                 TuiAgentBlockSection::Input("hello world".to_owned()),
@@ -85,6 +90,16 @@ fn simple_agent_block_reflows_height_at_narrow_width() {
             assert!(narrow > wide, "narrow text should occupy more logical rows");
         });
     });
+}
+
+fn expected_text_color(app: &AppContext) -> Color {
+    let theme = Appearance::as_ref(app).theme();
+    GuiFill::from(theme.main_text_color(theme.surface_1())).into()
+}
+
+fn expected_input_background(app: &AppContext) -> Color {
+    let theme = Appearance::as_ref(app).theme();
+    GuiFill::from(theme.background().blend(&theme.ai_blocks_overlay())).into()
 }
 
 #[test]

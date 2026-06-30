@@ -26,6 +26,7 @@ use crate::{AppContext, EntityId, EntityIdMap};
 mod buffer;
 mod child_view;
 mod clipped;
+mod color;
 mod column;
 mod constrained_box;
 mod container;

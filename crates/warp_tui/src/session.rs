@@ -11,12 +11,13 @@ use std::ffi::OsString;
 use anyhow::Result;
 use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
-    BannerState, IsSharedSessionCreator, LocalTtyTerminalManager, TerminalManagerTrait,
-    TerminalSurfaceResult,
+    dark_theme, Appearance, BannerState, IsSharedSessionCreator, LocalTtyTerminalManager,
+    TerminalManagerTrait, TerminalSurfaceResult,
 };
+use warpui::SingletonEntity;
 use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};
-use warpui_core::{AddWindowOptions, AppContext, Entity, ModelHandle, SingletonEntity, ViewHandle};
+use warpui_core::{AddWindowOptions, AppContext, Entity, ModelHandle, ViewHandle};
 
 use crate::root_view::RootTuiView;
 use crate::terminal_session_view::TuiTerminalSessionView;
@@ -47,6 +48,13 @@ pub fn run() -> Result<()> {
 /// Creates the transcript root surface and starts the headless draw + input
 /// driver. Registered as a singleton so the session lives for the app lifetime.
 fn init(ctx: &mut AppContext) {
+    // The current TUI transcript design is dark-mode-only. Keep this scoped to
+    // the TUI process by overriding the already-initialized Appearance theme at
+    // mount time, without changing normal GUI theme selection or font settings.
+    Appearance::handle(ctx).update(ctx, |appearance, ctx| {
+        appearance.set_theme(dark_theme(), ctx);
+    });
+
     let banner = ctx.add_model(|_| BannerState::default());
     let mut root_for_driver = None;
     let manager = LocalTtyTerminalManager::<TuiTerminalSessionView>::create_tui_model(

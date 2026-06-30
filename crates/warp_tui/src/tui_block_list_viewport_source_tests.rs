@@ -6,7 +6,7 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentExchangeId, AIAgentInput, AIBlockModel, AIBlockOutputStatus, AIConversationId,
-    AIRequestType, BlockHeightItem, LLMId, OutputStatusUpdateCallback, RichContentItem,
+    AIRequestType, Appearance, BlockHeightItem, LLMId, OutputStatusUpdateCallback, RichContentItem,
     RichContentType, ServerOutputId, TerminalModel, UserQueryMode,
 };
 use warpui::platform::WindowStyle;
@@ -117,6 +117,7 @@ fn tui_agent_rich_content_stays_visible_without_gui_agent_view_state() {
 #[test]
 fn tui_agent_rich_content_remeasures_visible_height_when_width_changes() {
     App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
         let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
         let agent_blocks = AgentBlockRegistry::new(RefCell::new(HashMap::new()));
         let agent_block = app.update(|ctx| {
