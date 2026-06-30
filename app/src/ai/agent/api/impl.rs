@@ -252,7 +252,11 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
 
     if FeatureFlag::AgentModeComputerUse.is_enabled() && params.computer_use_enabled {
         supported_tools.extend(&[api::ToolType::UseComputer]);
-        supported_tools.extend(&[api::ToolType::RequestComputerUse])
+        supported_tools.extend(&[api::ToolType::RequestComputerUse]);
+
+        if FeatureFlag::VideoRecording.is_enabled() {
+            supported_tools.extend(&[api::ToolType::StartRecording, api::ToolType::StopRecording]);
+        }
     }
 
     if FeatureFlag::PRCommentsSlashCommand.is_enabled() {

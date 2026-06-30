@@ -500,6 +500,20 @@ impl From<api::message::tool_call::RequestComputerUse> for AIAgentActionType {
     }
 }
 
+impl From<api::message::tool_call::StartRecording> for AIAgentActionType {
+    fn from(_value: api::message::tool_call::StartRecording) -> Self {
+        AIAgentActionType::StartRecording
+    }
+}
+
+impl From<api::message::tool_call::StopRecording> for AIAgentActionType {
+    fn from(value: api::message::tool_call::StopRecording) -> Self {
+        AIAgentActionType::StopRecording {
+            recording_id: value.recording_id,
+        }
+    }
+}
+
 impl From<api::message::tool_call::FetchConversation> for AIAgentActionType {
     fn from(value: api::message::tool_call::FetchConversation) -> Self {
         AIAgentActionType::FetchConversation {
