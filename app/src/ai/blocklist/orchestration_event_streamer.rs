@@ -641,6 +641,12 @@ impl OrchestrationEventStreamer {
             .map(|stream| stream.event_cursor)
             .unwrap_or(0);
         self.apply_task_children(conversation_id, &task, base_cursor);
+        // Mirror `register_watched_run_id`: also watch `self_run_id` so the
+        // parent's own inbox is delivered if `desired_sse_filter` falls back to
+        // `RunIds` (i.e. `OwnerOrchestrationAncestorStreamer` disabled, where
+        // the filter would otherwise watch only children). A no-op in the
+        // ancestor-stream path, which already covers self via `include_self`.
+        self.ensure_self_run_id_watched(conversation_id, ctx);
         self.reevaluate_eligibility(conversation_id, ctx);
     }
 

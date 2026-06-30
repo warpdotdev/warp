@@ -2696,3 +2696,70 @@ fn register_parent_on_wait_without_self_run_id_is_noop() {
         });
     });
 }
+
+#[test]
+fn wait_registration_runids_fallback_watches_self_for_parent_inbox() {
+    // With OwnerOrchestrationAncestorStreamer disabled, desired_sse_filter
+    // falls back to RunIds(watched_run_ids). The wait-time registration must
+    // also watch self_run_id (not just the children) so the parent's own
+    // inbox events are delivered — mirroring register_watched_run_id.
+    App::test((), |mut app| async move {
+        // OwnerOrchestrationAncestorStreamer intentionally left disabled.
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440527";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        // Only an active consumer — self_run_id is intentionally NOT
+        // pre-watched, so the assertion verifies registration adds it.
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, _| {
+            me.streams
+                .entry(conversation_id)
+                .or_default()
+                .consumers
+                .insert(consumer_id);
+        });
+
+        poller.update(&mut app, |me, ctx| {
+            me.finish_register_parent_on_wait(
+                conversation_id,
+                Ok(make_ambient_task_with_children(vec![
+                    "child-run-1".to_string()
+                ])),
+                ctx,
+            );
+        });
+
+        poller.read(&app, |me, _| match connected_filter(me, conversation_id) {
+            Some(AgentEventFilter::RunIds(run_ids)) => {
+                assert!(
+                    run_ids.contains(&own_run_id.to_string()),
+                    "RunIds fallback must watch self_run_id for the parent's own inbox; got {run_ids:?}"
+                );
+                assert!(
+                    run_ids.contains(&"child-run-1".to_string()),
+                    "RunIds fallback must watch the child; got {run_ids:?}"
+                );
+            }
+            other => panic!("expected RunIds fallback filter, got {other:?}"),
+        });
+    });
+}
