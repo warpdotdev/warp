@@ -57,7 +57,7 @@ warp_core = { workspace = true, features = ["test-util"] }
 # Process-level worker-dispatch regression test.
 command.workspace = true
 pathfinder_color.workspace = true
-warp = { workspace = true, features = ["tui_test_support"] }
+warp = { workspace = true, features = ["tui", "test-util"] }
 
 [[example]]
 name = "tui_input_demo"
