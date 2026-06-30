@@ -1,39 +1,40 @@
 //! Simple input and streamed plain-text agent blocks for the TUI transcript.
+use std::rc::Rc;
 
-use warp::tui_export::{
-    AIAgentExchangeId, AIAgentTextSection, AIConversationId, BlocklistAIHistoryModel,
-};
+use warp::tui_export::{AIAgentTextSection, AIBlockModel};
 use warpui_core::elements::tui::{
     Color, TuiColumn, TuiElement, TuiParentElement, TuiStyle, TuiText,
 };
-use warpui_core::{AppContext, Entity, SingletonEntity, TuiView};
+use warpui_core::{AppContext, Entity, TuiView};
 
 const INPUT_COLOR: Color = Color::Rgb(0x8e, 0x8e, 0x8e);
 const OUTPUT_COLOR: Color = Color::Rgb(0xf1, 0xf1, 0xf1);
 
+#[derive(Debug, Eq, PartialEq)]
+enum TuiAgentBlockItem {
+    Input(String),
+    PlainText(String),
+}
+
+#[derive(Debug, Eq, PartialEq)]
 struct AgentBlockContent {
-    input: String,
-    output: String,
+    items: Vec<TuiAgentBlockItem>,
 }
 
 /// A simple TUI block backed by one agent exchange.
 pub(super) struct TuiAgentBlockView {
-    conversation_id: AIConversationId,
-    exchange_id: AIAgentExchangeId,
+    model: Rc<dyn AIBlockModel<View = Self>>,
 }
 
 impl TuiAgentBlockView {
     /// Creates a simple exchange-backed agent block.
-    pub(super) fn new(conversation_id: AIConversationId, exchange_id: AIAgentExchangeId) -> Self {
-        Self {
-            conversation_id,
-            exchange_id,
-        }
+    pub(super) fn new(model: Rc<dyn AIBlockModel<View = Self>>) -> Self {
+        Self { model }
     }
 
-    /// Updates the conversation containing this exchange.
-    pub(super) fn set_conversation_id(&mut self, conversation_id: AIConversationId) {
-        self.conversation_id = conversation_id;
+    /// Replaces the exchange model backing this block.
+    pub(super) fn set_model(&mut self, model: Rc<dyn AIBlockModel<View = Self>>) {
+        self.model = model;
     }
 
     /// Returns this block's wrapped height at the given width.
@@ -48,60 +49,64 @@ impl TuiAgentBlockView {
     }
 
     fn content(&self, app: &AppContext) -> AgentBlockContent {
-        let Some(exchange) = BlocklistAIHistoryModel::as_ref(app)
-            .conversation(&self.conversation_id)
-            .and_then(|conversation| conversation.exchange_with_id(self.exchange_id))
-        else {
-            return AgentBlockContent {
-                input: String::new(),
-                output: String::new(),
-            };
-        };
+        let mut items = Vec::new();
+        let input = self
+            .model
+            .inputs_to_render(app)
+            .iter()
+            .filter_map(|input| input.display_query())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !input.is_empty() {
+            items.push(TuiAgentBlockItem::Input(input));
+        }
 
-        let input = exchange.format_input_for_copy();
-        let output = exchange
-            .output_status
-            .output()
-            .map(|output| {
-                let output = output.get();
-                output
-                    .text_from_agent_output()
-                    .flat_map(|text| text.sections.iter())
-                    .filter_map(|section| match section {
-                        AIAgentTextSection::PlainText { text } => Some(text.text()),
-                        AIAgentTextSection::Code { .. }
-                        | AIAgentTextSection::Table { .. }
-                        | AIAgentTextSection::Image { .. }
-                        | AIAgentTextSection::MermaidDiagram { .. } => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .unwrap_or_default();
-        AgentBlockContent { input, output }
+        if let Some(output) = self.model.status(app).output_to_render() {
+            let output = output.get();
+            items.extend(output.text_from_agent_output().flat_map(|text| {
+                text.sections.iter().filter_map(|section| match section {
+                    AIAgentTextSection::PlainText { text } if !text.text().is_empty() => {
+                        Some(TuiAgentBlockItem::PlainText(text.text().to_owned()))
+                    }
+                    AIAgentTextSection::PlainText { .. }
+                    | AIAgentTextSection::Code { .. }
+                    | AIAgentTextSection::Table { .. }
+                    | AIAgentTextSection::Image { .. }
+                    | AIAgentTextSection::MermaidDiagram { .. } => None,
+                })
+            }));
+        }
+
+        AgentBlockContent { items }
     }
 }
 
 fn desired_content_height(content: &AgentBlockContent, width: u16) -> usize {
-    let input = TuiText::new(content.input.clone()).with_style(TuiStyle::default().fg(INPUT_COLOR));
-    let output =
-        TuiText::new(content.output.clone()).with_style(TuiStyle::default().fg(OUTPUT_COLOR));
-    let input_height = usize::from(input.desired_height(width));
-    let output_height = usize::from(output.desired_height(width));
-    (input_height + output_height).max(1)
+    content
+        .items
+        .iter()
+        .map(|item| usize::from(item.text_element().desired_height(width)))
+        .sum::<usize>()
+        .max(1)
 }
 
 fn render_content(content: &AgentBlockContent) -> Box<dyn TuiElement> {
-    Box::new(
-        TuiColumn::new()
-            .with_child(Box::new(
-                TuiText::new(content.input.clone()).with_style(TuiStyle::default().fg(INPUT_COLOR)),
-            ))
-            .with_child(Box::new(
-                TuiText::new(content.output.clone())
-                    .with_style(TuiStyle::default().fg(OUTPUT_COLOR)),
-            )),
-    )
+    let mut column = TuiColumn::new();
+    for item in &content.items {
+        column = column.with_child(Box::new(item.text_element()));
+    }
+    Box::new(column)
+}
+
+impl TuiAgentBlockItem {
+    /// Renders this item as one styled TUI text element.
+    fn text_element(&self) -> TuiText {
+        let (text, color) = match self {
+            Self::Input(text) => (text.clone(), INPUT_COLOR),
+            Self::PlainText(text) => (text.clone(), OUTPUT_COLOR),
+        };
+        TuiText::new(text).with_style(TuiStyle::default().fg(color))
+    }
 }
 
 #[cfg(test)]

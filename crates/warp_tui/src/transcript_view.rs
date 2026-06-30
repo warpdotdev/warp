@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    should_show_task_in_blocklist, AIAgentExchangeId, AIConversationId, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, RichContentItem, RichContentType, TerminalModel,
+    should_show_task_in_blocklist, AIAgentExchangeId, AIBlockModelImpl, AIConversationId,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, RichContentItem, RichContentType,
+    TerminalModel,
 };
 use warpui_core::elements::tui::{
     TuiElement, TuiScrollable, TuiViewportedList, TuiViewportedListState,
@@ -47,7 +48,7 @@ impl TuiTranscriptView {
             model,
             agent_blocks: Rc::new(RefCell::new(HashMap::new())),
             dirty_agent_blocks: Rc::new(RefCell::new(HashSet::new())),
-            viewport: TuiViewportedListState::at_end(),
+            viewport: TuiViewportedListState::new_at_end(),
         }
     }
 
@@ -120,7 +121,20 @@ impl TuiTranscriptView {
         {
             return;
         }
-        let view = ctx.add_tui_view(|_| TuiAgentBlockView::new(conversation_id, exchange_id));
+        let Ok(block_model) = AIBlockModelImpl::<TuiAgentBlockView>::new(
+            exchange_id,
+            conversation_id,
+            false,
+            false,
+            ctx,
+        ) else {
+            log::warn!(
+                "Failed to create TUI model for AI block on AppendedExchange: {exchange_id:?}"
+            );
+            return;
+        };
+        let block_model = Rc::new(block_model);
+        let view = ctx.add_tui_view(|_| TuiAgentBlockView::new(block_model));
         let view_id = view.id();
         self.agent_blocks.borrow_mut().insert(
             view_id,
@@ -169,10 +183,22 @@ impl TuiTranscriptView {
         let Some((view_id, registration)) = registration else {
             return;
         };
+        let Ok(block_model) = AIBlockModelImpl::<TuiAgentBlockView>::new(
+            exchange_id,
+            conversation_id,
+            false,
+            false,
+            ctx,
+        ) else {
+            log::warn!(
+                "Failed to create reassigned TUI model for AI block on ReassignedExchange: {exchange_id:?}"
+            );
+            return;
+        };
         registration.conversation_id = conversation_id;
         registration
             .view
-            .update(ctx, |view, _| view.set_conversation_id(conversation_id));
+            .update(ctx, |view, _| view.set_model(Rc::new(block_model)));
         self.dirty_agent_blocks.borrow_mut().insert(view_id);
         self.model
             .lock()

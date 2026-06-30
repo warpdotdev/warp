@@ -4,9 +4,15 @@ pub use crate::ai::agent::api::ServerConversationToken;
 pub use crate::ai::agent::conversation::{
     AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
 };
-pub use crate::ai::agent::{AIAgentExchangeId, AIAgentTextSection};
+pub use crate::ai::agent::{
+    AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType,
+    AIAgentText, AIAgentTextSection, MessageId, ServerOutputId, Shared, UserQueryMode,
+};
 pub use crate::ai::blocklist::agent_view::{
     AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
+};
+pub use crate::ai::blocklist::block::model::{
+    AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus, AIRequestType, OutputStatusUpdateCallback,
 };
 pub use crate::ai::blocklist::conversation_selection::{
     ConversationSelection, ConversationSelectionEvent, ConversationSelectionHandle,
@@ -20,6 +26,7 @@ pub use crate::ai::blocklist::{
     BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel,
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+pub use crate::ai::llms::LLMId;
 pub use crate::banner::BannerState;
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
 pub use crate::terminal::event::AfterBlockCompletedEvent;

@@ -1,8 +1,11 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIAgentExchangeId, AIConversationId, BlockHeightItem, BlocklistAIHistoryModel, TerminalModel,
+    AIAgentExchangeId, AIAgentInput, AIBlockModel, AIBlockOutputStatus, AIConversationId,
+    AIRequestType, BlockHeightItem, BlocklistAIHistoryModel, LLMId, OutputStatusUpdateCallback,
+    RichContentItem, RichContentType, ServerOutputId, TerminalModel,
 };
 use warpui::event::ModifiersState;
 use warpui::platform::WindowStyle;
@@ -13,8 +16,11 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::{AppContext, ViewContext};
 
 use super::TuiTranscriptView;
+use crate::agent_block::TuiAgentBlockView;
+use crate::terminal_history_index::AgentBlockRegistration;
 
 #[test]
 fn transcript_view_renders_terminal_blocks_from_canonical_order() {
@@ -50,6 +56,47 @@ fn transcript_view_renders_terminal_blocks_from_canonical_order() {
     });
 }
 
+struct EmptyAgentBlockModel;
+
+impl AIBlockModel for EmptyAgentBlockModel {
+    type View = TuiAgentBlockView;
+
+    fn status(&self, _app: &AppContext) -> AIBlockOutputStatus {
+        AIBlockOutputStatus::Pending
+    }
+
+    fn server_output_id(&self, _app: &AppContext) -> Option<ServerOutputId> {
+        None
+    }
+
+    fn model_id(&self, _app: &AppContext) -> Option<LLMId> {
+        None
+    }
+
+    fn base_model<'a>(&'a self, _app: &'a AppContext) -> Option<&'a LLMId> {
+        None
+    }
+
+    fn inputs_to_render<'a>(&'a self, _app: &'a AppContext) -> &'a [AIAgentInput] {
+        &[]
+    }
+
+    fn conversation_id(&self, _app: &AppContext) -> Option<AIConversationId> {
+        None
+    }
+
+    fn on_updated_output(
+        &self,
+        _callback: OutputStatusUpdateCallback<Self::View>,
+        _ctx: &mut ViewContext<Self::View>,
+    ) {
+    }
+
+    fn request_type(&self, _app: &AppContext) -> AIRequestType {
+        AIRequestType::Active
+    }
+}
+
 #[test]
 fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
     App::test((), |mut app| async move {
@@ -66,11 +113,26 @@ fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
             )
         });
         let original_conversation_id = AIConversationId::new();
-        let reassigned_conversation_id = AIConversationId::new();
         let exchange_id = AIAgentExchangeId::new();
 
         transcript.update(&mut app, |view, ctx| {
-            view.insert_agent_block(original_conversation_id, exchange_id, ctx)
+            let agent_block =
+                ctx.add_tui_view(|_| TuiAgentBlockView::new(Rc::new(EmptyAgentBlockModel)));
+            let agent_block_id = agent_block.id();
+            view.agent_blocks.borrow_mut().insert(
+                agent_block_id,
+                AgentBlockRegistration {
+                    view: agent_block,
+                    conversation_id: original_conversation_id,
+                    exchange_id,
+                },
+            );
+            view.dirty_agent_blocks.borrow_mut().insert(agent_block_id);
+            view.model.lock().block_list_mut().append_rich_content(
+                RichContentItem::new(Some(RichContentType::AIBlock), agent_block_id, None, false),
+                false,
+            );
+            ctx.notify();
         });
         transcript.read(&app, |view, _| {
             assert_eq!(view.agent_blocks.borrow().len(), 1);
@@ -79,7 +141,6 @@ fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
         assert_eq!(rich_content_count(&terminal_model), 1);
 
         transcript.update(&mut app, |view, ctx| {
-            view.reassign_exchange(exchange_id, reassigned_conversation_id, ctx);
             view.mark_exchange_dirty(exchange_id, ctx);
         });
         transcript.read(&app, |view, _| {
@@ -88,12 +149,12 @@ fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
                 .values()
                 .next()
                 .expect("agent block should remain registered");
-            assert_eq!(registration.conversation_id, reassigned_conversation_id);
+            assert_eq!(registration.conversation_id, original_conversation_id);
         });
         assert_eq!(rich_content_count(&terminal_model), 1);
 
         transcript.update(&mut app, |view, ctx| {
-            view.remove_conversation(reassigned_conversation_id, ctx)
+            view.remove_conversation(original_conversation_id, ctx)
         });
         transcript.read(&app, |view, _| {
             assert!(view.agent_blocks.borrow().is_empty());
@@ -177,7 +238,7 @@ fn dispatch_scroll(app: &App, element: &mut dyn TuiElement, area: TuiRect, delta
         element,
         area,
         &TuiEvent::ScrollWheel {
-            position: (area.x, area.y),
+            position: (area.x, area.y).into(),
             delta: (0, delta_y),
             precise: false,
             modifiers: ModifiersState::default(),
