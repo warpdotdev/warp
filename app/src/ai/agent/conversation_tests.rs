@@ -186,6 +186,35 @@ fn title_falls_back_to_initial_query_when_root_description_is_empty() {
 }
 
 #[test]
+fn reassign_exchange_ids_keeps_exchange_lookup_consistent() {
+    let mut conversation = restored_conversation_with_queries(&["one", "two"]);
+
+    let old_ids: Vec<_> = conversation.all_exchanges().iter().map(|e| e.id).collect();
+    assert!(!old_ids.is_empty());
+
+    // Pre-condition: every original id resolves via the exchange-id index.
+    for id in &old_ids {
+        assert!(conversation.exchange_with_id(*id).is_some());
+    }
+
+    conversation.reassign_exchange_ids();
+
+    // Reassigning regenerates ids without changing the exchange count, so
+    // `modify_task` does not rebuild the index; correctness relies on the
+    // explicit `rebuild_exchange_id_index()` call. The stale ids must be gone.
+    for id in &old_ids {
+        assert!(conversation.exchange_with_id(*id).is_none());
+    }
+
+    // Every current id resolves via the rebuilt index.
+    let new_ids: Vec<_> = conversation.all_exchanges().iter().map(|e| e.id).collect();
+    assert_eq!(new_ids.len(), old_ids.len());
+    for id in &new_ids {
+        assert!(conversation.exchange_with_id(*id).is_some());
+    }
+}
+
+#[test]
 fn restored_conversation_defaults_autoexecute_override_when_not_persisted() {
     let _flag = FeatureFlag::RememberFastForwardState.override_enabled(true);
     let conversation_data: AgentConversationData =

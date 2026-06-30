@@ -621,3 +621,119 @@ fn test_all_exchanges_by_task_with_subtasks() {
     assert_eq!(by_task[2].1.len(), 1);
     assert_eq!(by_task[2].1[0].id, root_exchange3_id);
 }
+
+#[test]
+fn test_exchange_by_id_resolves_subtask_exchange() {
+    // The index spans all tasks, not just the root, so exchanges that live in a
+    // subtask must be resolvable by id.
+    let root_task = create_test_task_with_exchanges(1);
+    let root_task_id = root_task.id().clone();
+    let mut store = TaskStore::with_root_task(root_task);
+
+    let subtask = create_test_subtask_with_exchanges(2);
+    let subtask_id = subtask.id().clone();
+    let subtask_exchange_ids: Vec<_> = subtask.exchanges().map(|e| e.id).collect();
+
+    let subagent_exchange = create_exchange_with_subagent_call(&subtask_id);
+    store.append_exchange(&root_task_id, subagent_exchange);
+    store.insert(subtask);
+
+    for id in &subtask_exchange_ids {
+        assert_eq!(store.exchange_by_id(*id).map(|e| e.id), Some(*id));
+    }
+}
+
+#[test]
+fn test_exchange_by_id_after_remove_task() {
+    let root_task = create_test_task_with_exchanges(1);
+    let root_task_id = root_task.id().clone();
+    let root_exchange_id = root_task.exchanges().next().unwrap().id;
+    let mut store = TaskStore::with_root_task(root_task);
+
+    let subtask = create_test_subtask_with_exchanges(2);
+    let subtask_id = subtask.id().clone();
+    let subtask_exchange_ids: Vec<_> = subtask.exchanges().map(|e| e.id).collect();
+
+    let subagent_exchange = create_exchange_with_subagent_call(&subtask_id);
+    store.append_exchange(&root_task_id, subagent_exchange);
+    store.insert(subtask);
+
+    // Sanity: the subtask's exchanges resolve before removal.
+    assert!(store.exchange_by_id(subtask_exchange_ids[0]).is_some());
+
+    store.remove(&subtask_id);
+
+    // The removed task's exchanges are no longer resolvable.
+    for id in &subtask_exchange_ids {
+        assert!(store.exchange_by_id(*id).is_none());
+    }
+    // The surviving root exchange still resolves.
+    assert_eq!(
+        store.exchange_by_id(root_exchange_id).map(|e| e.id),
+        Some(root_exchange_id)
+    );
+}
+
+#[test]
+fn test_exchange_by_id_after_remove_task_exchange_index_shift() {
+    let task = create_test_task_with_exchanges(3);
+    let task_id = task.id().clone();
+    let exchange_ids: Vec<_> = task.exchanges().map(|e| e.id).collect();
+    let mut store = TaskStore::with_root_task(task);
+
+    // Remove the middle exchange, which shifts the index of everything after it.
+    store.remove_task_exchange(&task_id, exchange_ids[1]);
+
+    // The removed id no longer resolves.
+    assert!(store.exchange_by_id(exchange_ids[1]).is_none());
+
+    // The exchange that followed it (now at a different index) still resolves to itself.
+    assert_eq!(
+        store.exchange_by_id(exchange_ids[2]).map(|e| e.id),
+        Some(exchange_ids[2])
+    );
+    // The exchange before it is unaffected.
+    assert_eq!(
+        store.exchange_by_id(exchange_ids[0]).map(|e| e.id),
+        Some(exchange_ids[0])
+    );
+}
+
+#[test]
+fn test_exchange_by_id_after_modify_task_append() {
+    let task = create_test_task_with_exchanges(2);
+    let task_id = task.id().clone();
+    let mut store = TaskStore::with_root_task(task);
+
+    let new_exchange = create_test_exchange();
+    let new_exchange_id = new_exchange.id;
+    store.modify_task(&task_id, |task| {
+        task.append_exchange(new_exchange);
+    });
+
+    // The newly appended exchange is found via the rebuilt index.
+    assert_eq!(
+        store.exchange_by_id(new_exchange_id).map(|e| e.id),
+        Some(new_exchange_id)
+    );
+}
+
+#[test]
+fn test_exchange_by_id_after_set_root_task() {
+    let task1 = create_test_task_with_exchanges(2);
+    let task1_exchange_ids: Vec<_> = task1.exchanges().map(|e| e.id).collect();
+    let mut store = TaskStore::with_root_task(task1);
+
+    let task2 = create_test_task_with_exchanges(3);
+    let task2_exchange_ids: Vec<_> = task2.exchanges().map(|e| e.id).collect();
+    store.set_root_task(task2);
+
+    // The old root's exchanges no longer resolve.
+    for id in &task1_exchange_ids {
+        assert!(store.exchange_by_id(*id).is_none());
+    }
+    // The new root's exchanges resolve.
+    for id in &task2_exchange_ids {
+        assert_eq!(store.exchange_by_id(*id).map(|e| e.id), Some(*id));
+    }
+}
