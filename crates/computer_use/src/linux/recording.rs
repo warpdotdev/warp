@@ -146,10 +146,13 @@ impl crate::Recorder for Recorder {
                     Ok(Ok(_)) => {}
                     Ok(Err(_)) => completion_status = RecordingCompletionStatus::StoppedEarly,
                     Err(_) => {
-                        // ffmpeg did not finalize in time; force-kill so we don't leak it.
+                        // ffmpeg missed the finalization deadline, so the container is
+                        // likely missing its moov atom and unplayable. Force-kill and
+                        // discard the file rather than returning a corrupt recording.
                         let _ = process.start_kill();
                         let _ = process.wait().await;
-                        completion_status = RecordingCompletionStatus::StoppedEarly;
+                        let _ = std::fs::remove_file(&path);
+                        return Err(RecordingError::StopTimedOut);
                     }
                 }
                 completion_status
