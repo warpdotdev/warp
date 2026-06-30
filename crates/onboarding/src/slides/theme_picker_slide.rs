@@ -194,7 +194,7 @@ impl ThemePickerSlide {
     fn render_header_text(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = appearance
             .ui_builder()
-            .paragraph("Choose a theme")
+            .paragraph(crate::menu_label("onboarding.theme_picker.title", "Choose a theme"))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -204,7 +204,10 @@ impl ThemePickerSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Click or use arrow keys to select, Enter to confirm.",
+            crate::menu_label(
+                "onboarding.theme_picker.subtitle",
+                "Click or use arrow keys to select, Enter to confirm.",
+            ),
             appearance.ui_font_family(),
             16.,
         )
@@ -261,7 +264,9 @@ impl ThemePickerSlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(
+                    crate::menu_label("common.back", "Back").into(),
+                ),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -274,9 +279,9 @@ impl ThemePickerSlide {
 
         let theme_picker_last = FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
         let next_label = if theme_picker_last {
-            "Get Warping"
+            crate::menu_label("common.get_warping", "Get Warping")
         } else {
-            "Next"
+            crate::menu_label("common.next", "Next")
         };
 
         let enter = Keystroke::parse("enter").unwrap_or_default();
@@ -532,7 +537,10 @@ impl ThemePickerSlide {
             .finish();
 
         let label = Text::new(
-            "Sync light/dark theme with OS",
+            crate::menu_label(
+                "onboarding.theme_picker.sync_with_os",
+                "Sync light/dark theme with OS",
+            ),
             appearance.ui_font_family(),
             14.0,
         )
@@ -576,7 +584,10 @@ impl ThemePickerSlide {
         let privacy_line = Flex::row()
             .with_child(
                 ui_builder
-                    .span("If you'd like to opt out of analytics, you can adjust your ")
+                    .span(crate::menu_label(
+                        "onboarding.theme_picker.analytics_opt_out_prefix",
+                        "If you'd like to opt out of analytics, you can adjust your ",
+                    ))
                     .with_style(disclaimer_styles)
                     .build()
                     .finish(),
@@ -584,7 +595,11 @@ impl ThemePickerSlide {
             .with_child(
                 ui_builder
                     .link(
-                        "Privacy Settings".into(),
+                        crate::menu_label(
+                            "onboarding.theme_picker.privacy_settings",
+                            "Privacy Settings",
+                        )
+                        .into(),
                         None,
                         Some(Box::new(|ctx| {
                             ctx.dispatch_typed_action(
@@ -603,7 +618,10 @@ impl ThemePickerSlide {
         let tos_line = Flex::row()
             .with_child(
                 ui_builder
-                    .span("By continuing, you agree to Warp's ")
+                    .span(crate::menu_label(
+                        "onboarding.theme_picker.tos_prefix",
+                        "By continuing, you agree to Warp's ",
+                    ))
                     .with_style(disclaimer_styles)
                     .build()
                     .finish(),
@@ -611,7 +629,11 @@ impl ThemePickerSlide {
             .with_child(
                 ui_builder
                     .link(
-                        "Terms of Service".into(),
+                        crate::menu_label(
+                            "onboarding.theme_picker.terms_of_service",
+                            "Terms of Service",
+                        )
+                        .into(),
                         Some(TOS_URL.into()),
                         None,
                         self.tos_mouse_state.clone(),
