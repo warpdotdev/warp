@@ -1,5 +1,6 @@
 //! Simple visible-row terminal block rendering for the TUI transcript.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use super::grid_render::TerminalGridSnapshot;
@@ -7,10 +8,11 @@ use parking_lot::FairMutex;
 use warp::tui_export::{BlockId, TerminalModel};
 use warpui_core::elements::tui::TuiElement;
 
-/// Snapshots a terminal block's visible grids for viewport rendering.
-pub(super) fn render_terminal_block(
+/// Snapshots the requested logical rows from a terminal block's visible grids.
+pub(super) fn render_terminal_block_rows(
     model: &Arc<FairMutex<TerminalModel>>,
     block_id: &BlockId,
+    rows: Range<usize>,
     width: u16,
 ) -> Box<dyn TuiElement> {
     let snapshot = {
@@ -30,17 +32,24 @@ pub(super) fn render_terminal_block(
         } else {
             block.output_grid().len_displayed()
         };
+        let total_rows = prompt_rows.saturating_add(output_rows);
+        let rows = rows.start.min(total_rows)..rows.end.min(total_rows);
         let mut snapshot = TerminalGridSnapshot::empty();
-        if prompt_rows > 0 {
+        if rows.start < prompt_rows {
             snapshot.append_displayed_rows(
                 block.prompt_and_command_grid(),
-                0..prompt_rows,
+                rows.start..rows.end.min(prompt_rows),
                 width,
                 &colors,
             );
         }
-        if output_rows > 0 {
-            snapshot.append_displayed_rows(block.output_grid(), 0..output_rows, width, &colors);
+        if rows.end > prompt_rows {
+            snapshot.append_displayed_rows(
+                block.output_grid(),
+                rows.start.saturating_sub(prompt_rows)..rows.end.saturating_sub(prompt_rows),
+                width,
+                &colors,
+            );
         }
         snapshot
     };

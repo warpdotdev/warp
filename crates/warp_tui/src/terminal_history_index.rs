@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -18,7 +19,7 @@ use warpui_core::elements::tui::{
 use warpui_core::AppContext;
 
 use super::agent_block::TuiAgentBlockView;
-use super::terminal_block::render_terminal_block;
+use super::terminal_block::render_terminal_block_rows;
 
 /// A registered TUI agent block and its canonical exchange identity.
 #[derive(Clone)]
@@ -49,6 +50,7 @@ enum TerminalHistoryVisibleItem {
 
 struct TerminalHistoryVisibleItemDescriptor {
     origin_y: usize,
+    height: usize,
     item: TerminalHistoryVisibleItem,
 }
 
@@ -167,6 +169,7 @@ impl TerminalHistoryIndex {
                 if item_bottom > window.scroll_top && item_top < viewport_bottom {
                     descriptors.push(TerminalHistoryVisibleItemDescriptor {
                         origin_y: item_top,
+                        height,
                         item,
                     });
                 }
@@ -239,12 +242,7 @@ impl TuiViewportedElement for TerminalHistoryIndex {
 
         let items = descriptors
             .into_iter()
-            .map(|descriptor| TuiVisibleViewportItem {
-                origin_y: descriptor.origin_y,
-                element: descriptor
-                    .item
-                    .render(&self.model, window.viewport_width, app),
-            })
+            .map(|descriptor| descriptor.render(&self.model, window, app))
             .collect();
 
         TuiViewportContent {
@@ -254,15 +252,49 @@ impl TuiViewportedElement for TerminalHistoryIndex {
     }
 }
 
+impl TerminalHistoryVisibleItemDescriptor {
+    fn render(
+        self,
+        model: &Arc<FairMutex<TerminalModel>>,
+        window: TuiViewportWindow,
+        app: &AppContext,
+    ) -> TuiVisibleViewportItem {
+        let visible_rows = self.visible_rows(window);
+        let origin_y = if matches!(&self.item, TerminalHistoryVisibleItem::TerminalBlock { .. }) {
+            self.origin_y.saturating_add(visible_rows.start)
+        } else {
+            self.origin_y
+        };
+        TuiVisibleViewportItem {
+            origin_y,
+            element: self
+                .item
+                .render(model, visible_rows, window.viewport_width, app),
+        }
+    }
+
+    fn visible_rows(&self, window: TuiViewportWindow) -> Range<usize> {
+        let item_top = self.origin_y;
+        let item_bottom = item_top.saturating_add(self.height);
+        let visible_top = item_top.max(window.scroll_top);
+        let visible_bottom =
+            item_bottom.min(window.scroll_top.saturating_add(window.viewport_height));
+        visible_top.saturating_sub(item_top)..visible_bottom.saturating_sub(item_top)
+    }
+}
+
 impl TerminalHistoryVisibleItem {
     fn render(
         self,
         model: &Arc<FairMutex<TerminalModel>>,
+        visible_rows: Range<usize>,
         width: u16,
         app: &AppContext,
     ) -> Box<dyn TuiElement> {
         match self {
-            Self::TerminalBlock { block_id } => render_terminal_block(model, &block_id, width),
+            Self::TerminalBlock { block_id } => {
+                render_terminal_block_rows(model, &block_id, visible_rows, width)
+            }
             Self::AgentBlock { registration } => registration.view.as_ref(app).render_full(app),
         }
     }

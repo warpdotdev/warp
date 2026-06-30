@@ -5,7 +5,11 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{BlockHeightItem, RichContentItem, RichContentType, TerminalModel};
-use warpui::EntityId;
+use warpui::{EntityId, EntityIdMap};
+use warpui_core::elements::tui::{
+    TuiConstraint, TuiLayoutContext, TuiSize, TuiViewportWindow, TuiViewportedElement,
+};
+use warpui_core::App;
 
 use super::{block_rows, AgentBlockRegistry, TerminalHistoryIndex, TerminalHistoryItemId};
 
@@ -30,6 +34,45 @@ fn terminal_history_index_uses_canonical_block_list_order() {
     let actual = index.item_ids_for_test();
 
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn terminal_history_index_slices_terminal_blocks_to_visible_rows() {
+    App::test((), |app| async move {
+        app.read(|app| {
+            let mut model = TerminalModel::mock(None, None);
+            model.simulate_block("printf", "one\r\ntwo\r\nthree\r\n");
+            let index = TerminalHistoryIndex::new(
+                Arc::new(FairMutex::new(model)),
+                AgentBlockRegistry::new(RefCell::new(HashMap::new())),
+                Rc::new(RefCell::new(HashSet::new())),
+            );
+
+            let content = index.visible_items(
+                TuiViewportWindow {
+                    scroll_top: 1,
+                    viewport_height: 1,
+                    viewport_width: 80,
+                },
+                app,
+            );
+
+            assert_eq!(content.items.len(), 1);
+            let mut item = content.items.into_iter().next().unwrap();
+            assert_eq!(item.origin_y, 1);
+
+            let mut rendered_views = EntityIdMap::default();
+            let mut layout_ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let size = item.element.layout(
+                TuiConstraint::loose(TuiSize::new(80, u16::MAX)),
+                &mut layout_ctx,
+                app,
+            );
+            assert_eq!(size.height, 1);
+        });
+    });
 }
 
 #[test]
