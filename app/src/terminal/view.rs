@@ -8309,6 +8309,41 @@ impl TerminalView {
             )
     }
 
+    /// Surfaces a terminal failed state when a cloud-mode shared session ends
+    /// while the run is still in the environment-setup phase (before the agent's
+    /// first exchange). The spawn-status stream completes once the setup session
+    /// becomes joinable, so a setup-command failure that happens afterwards is
+    /// only observable to the client as the session ending mid-setup — the
+    /// otherwise-stuck "Running setup commands…" / queued state described in
+    /// APP-4693. Outside the setup phase this is a no-op, so normal run
+    /// completions and post-first-exchange failures are unaffected.
+    pub(crate) fn maybe_fail_cloud_mode_setup_on_session_end(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::CloudModeSetupV2.is_enabled() {
+            return;
+        }
+        let Some(ambient_agent_view_model) = self.ambient_agent_view_model.clone() else {
+            return;
+        };
+        let is_pre_first_exchange = {
+            let model = self.model.lock();
+            ambient_agent::is_cloud_agent_pre_first_exchange(
+                Some(&ambient_agent_view_model),
+                &self.agent_view_controller,
+                &model,
+                ctx,
+            )
+        };
+        if !is_pre_first_exchange {
+            return;
+        }
+        ambient_agent_view_model.update(ctx, |model, ctx| {
+            model.fail_due_to_setup_termination(ctx);
+        });
+    }
+
     /// Give the agent control of the active long running command
     /// (which was started outside of a conversation).
     fn tag_agent_in(&mut self, ctx: &mut ViewContext<Self>) {
