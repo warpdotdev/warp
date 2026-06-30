@@ -294,6 +294,7 @@ impl Default for CrosstermTerminal {
         Self::new()
     }
 }
+
 impl TuiTerminal for CrosstermTerminal {
     fn size(&self) -> io::Result<TuiSize> {
         let (width, height) = terminal::size()?;

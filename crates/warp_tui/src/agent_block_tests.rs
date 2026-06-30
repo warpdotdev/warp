@@ -9,9 +9,7 @@ use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, ViewContext};
 
-use super::{
-    desired_content_height, render_content, AgentBlockContent, TuiAgentBlockItem, TuiAgentBlockView,
-};
+use super::{AgentBlockContent, TuiAgentBlockItem, TuiAgentBlockView};
 
 #[test]
 fn simple_agent_block_reports_full_height_and_renders_content() {
@@ -23,11 +21,11 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
                     TuiAgentBlockItem::PlainText("one\ntwo\nthree".to_owned()),
                 ],
             };
-            assert_eq!(desired_content_height(&content, 20), 4);
+            assert_eq!(content.desired_height(20), 4);
 
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
-                render_content(&content),
+                content.render(),
                 TuiRect::new(0, 0, 20, 4),
                 app_ctx,
             );
@@ -53,8 +51,8 @@ fn simple_agent_block_reflows_height_at_narrow_width() {
         ],
     };
 
-    let wide = desired_content_height(&content, 40);
-    let narrow = desired_content_height(&content, 6);
+    let wide = content.desired_height(40);
+    let narrow = content.desired_height(6);
     assert!(narrow > wide, "narrow text should occupy more logical rows");
 }
 

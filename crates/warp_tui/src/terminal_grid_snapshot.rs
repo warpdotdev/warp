@@ -1,4 +1,4 @@
-//! Terminal-grid snapshots rendered as normal TUI elements.
+//! Snapshot terminal grid rows while the model is locked, then render them as TUI elements.
 
 use std::ops::Range;
 
@@ -17,10 +17,6 @@ struct TerminalCellSnapshot {
     symbol: String,
     style: TuiStyle,
 }
-
-#[cfg(test)]
-#[path = "grid_render_tests.rs"]
-mod tests;
 
 /// Renderable terminal-grid rows copied out of the terminal-model lock.
 pub(super) struct TerminalGridSnapshot {
@@ -139,3 +135,7 @@ fn sanitized_symbol(cell: &Cell) -> String {
         content
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_grid_snapshot_tests.rs"]
+mod tests;

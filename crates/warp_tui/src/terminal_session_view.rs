@@ -2,20 +2,17 @@
 
 use warp::editor::CodeEditorModel;
 use warp::tui_export::{
-    ActiveSession, AfterBlockCompletedEvent, BlockIndex, BlocklistAIActionModel,
-    BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel, ConversationSelection,
-    GetRelevantFilesController, PtyIntent, PtyIntentEvent, ShellLaunchData, TerminalSurface,
-    TerminalSurfaceInit,
+    ActiveSession, AgentViewEntryOrigin, BlocklistAIActionModel, BlocklistAIContextModel,
+    BlocklistAIController, BlocklistAIInputModel, ConversationSelection, ConversationSelectionHandle,
+    GetRelevantFilesController, PtyIntent, PtyIntentEvent, TerminalSurface, TerminalSurfaceInit,
 };
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiChildView, TuiColumn, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement,
-    TuiEvent, TuiEventContext, TuiLayoutContext, TuiPresentationContext, TuiRect, TuiSize,
+    TuiChildView, TuiColumn, TuiConstrainedBox, TuiContainer, TuiElement,
 };
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
-use crate::conversation_model::TuiConversationModel;
 use crate::conversation_selection::TuiConversationSelection;
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::transcript_view::TuiTranscriptView;
@@ -24,7 +21,7 @@ use crate::transcript_view::TuiTranscriptView;
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
 const BORDER_ROWS: u16 = 2;
-const INPUT_HORIZONTAL_INSET: u16 = 2;
+const SESSION_PADDING: u16 = 2;
 
 /// This surface emits no PTY intents; commands are driven only by the spawned shell.
 pub(crate) enum TuiTerminalSessionEvent {}
@@ -39,7 +36,8 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
 pub(crate) struct TuiTerminalSessionView {
     transcript: ViewHandle<TuiTranscriptView>,
     input_view: ViewHandle<TuiInputView>,
-    conversation_model: ModelHandle<TuiConversationModel>,
+    conversation_selection: ConversationSelectionHandle,
+    ai_controller: ModelHandle<BlocklistAIController>,
 }
 
 impl TuiTerminalSessionView {
@@ -101,21 +99,15 @@ impl TuiTerminalSessionView {
                 ctx,
             )
         });
-        let conversation_model = ctx.add_model(|ctx| {
-            TuiConversationModel::new(
-                terminal_surface_id,
-                conversation_selection,
-                ai_controller,
-                ctx,
-            )
-        });
         let transcript = ctx.add_typed_action_tui_view(|ctx| {
             TuiTranscriptView::new(terminal_surface_id, model.clone(), ctx)
         });
         let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
         let input_view =
             ctx.add_typed_action_tui_view(move |ctx| TuiInputView::new(input_model, ctx));
-        ctx.subscribe_to_view(&input_view, Self::handle_submitted_prompt);
+        ctx.subscribe_to_view(&input_view, |view, _, event, ctx| {
+            view.handle_submitted_prompt(event, ctx);
+        });
 
         ctx.subscribe_to_model(&model_events, |_, _, _, ctx| ctx.notify());
         ctx.spawn_stream_local(wakeups_rx, |_, _, ctx| ctx.notify(), |_, _| {});
@@ -124,14 +116,14 @@ impl TuiTerminalSessionView {
         Self {
             transcript,
             input_view,
-            conversation_model,
+            conversation_selection,
+            ai_controller,
         }
     }
 
     /// Routes submitted prompts to the surface's conversation.
     fn handle_submitted_prompt(
         &mut self,
-        _input_view: ViewHandle<TuiInputView>,
         event: &TuiInputViewEvent,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -141,11 +133,33 @@ impl TuiTerminalSessionView {
                 if prompt.is_empty() {
                     return;
                 }
-                self.conversation_model
-                    .update(ctx, |model, ctx| model.send_prompt(prompt, ctx));
+                self.send_prompt(prompt, ctx);
                 ctx.notify();
             }
         }
+    }
+
+    /// Sends a prompt to the selected conversation, creating one if needed.
+    fn send_prompt(&mut self, prompt: String, ctx: &mut ViewContext<Self>) {
+        let conversation_id = match self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        {
+            Some(conversation_id) => conversation_id,
+            None => match self.conversation_selection.update(ctx, |selection, ctx| {
+                selection.try_start_new_conversation(AgentViewEntryOrigin::Cli, ctx)
+            }) {
+                Ok(conversation_id) => conversation_id,
+                Err(error) => {
+                    log::error!("Failed to create TUI conversation: {error:#}");
+                    return;
+                }
+            },
+        };
+        self.ai_controller.update(ctx, |controller, ctx| {
+            controller.send_user_query_in_conversation(prompt, conversation_id, None, ctx);
+        });
     }
 
     fn render_session(&self) -> Box<dyn TuiElement> {
@@ -154,9 +168,12 @@ impl TuiTerminalSessionView {
         )
         .with_max_rows(MAX_INPUT_TEXT_ROWS + BORDER_ROWS);
         Box::new(
-            TuiColumn::new()
-                .flex_child(TuiChildView::new(&self.transcript))
-                .child(TuiHorizontalInset::new(input_box, INPUT_HORIZONTAL_INSET)),
+            TuiContainer::new(
+                TuiColumn::new()
+                    .flex_child(TuiChildView::new(&self.transcript))
+                    .child(input_box),
+            )
+            .with_padding(SESSION_PADDING),
         )
     }
 }
@@ -184,125 +201,13 @@ impl TypedActionView for TuiTerminalSessionView {
 }
 
 impl TerminalSurface for TuiTerminalSessionView {
-    #[cfg(unix)]
-    fn should_start_password_prompt_polling(&self, _command: &str, _ctx: &AppContext) -> bool {
-        false
-    }
-
-    #[cfg(unix)]
-    fn should_stop_password_prompt_polling(&self, _completed: &AfterBlockCompletedEvent) -> bool {
-        false
-    }
-
     fn on_shell_determined(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.notify();
-    }
-
-    fn on_active_shell_launch_data_updated(
-        &mut self,
-        _shell_launch_data: Option<ShellLaunchData>,
-        _ctx: &mut ViewContext<Self>,
-    ) {
     }
 
     fn on_pty_spawn_failed(&mut self, error: anyhow::Error, ctx: &mut ViewContext<Self>) {
         log::error!("TUI PTY spawn failed: {error:#}");
         ctx.notify();
     }
-
-    #[cfg(unix)]
-    fn on_possible_password_prompt(
-        &mut self,
-        _block_index: Option<BlockIndex>,
-        _ctx: &mut ViewContext<Self>,
-    ) {
-    }
-
-    #[cfg(unix)]
-    fn on_polled_block_completed(
-        &mut self,
-        _completed: &AfterBlockCompletedEvent,
-        _ctx: &mut ViewContext<Self>,
-    ) {
-    }
 }
 
-/// Adds exterior horizontal margin while preserving child layout, cursor, and events.
-struct TuiHorizontalInset {
-    child: Box<dyn TuiElement>,
-    inset: u16,
-}
-
-impl TuiHorizontalInset {
-    fn new(child: impl TuiElement + 'static, inset: u16) -> Self {
-        Self {
-            child: Box::new(child),
-            inset,
-        }
-    }
-
-    fn inner_rect(&self, area: TuiRect) -> TuiRect {
-        let inset = self.inset.min(area.width / 2);
-        TuiRect::new(
-            area.x.saturating_add(inset),
-            area.y,
-            area.width.saturating_sub(inset.saturating_mul(2)),
-            area.height,
-        )
-    }
-
-    fn inner_constraint(&self, constraint: TuiConstraint) -> TuiConstraint {
-        let inset = self.inset.saturating_mul(2);
-        let max_width = constraint.max.width.saturating_sub(inset);
-        let min_width = constraint.min.width.saturating_sub(inset).min(max_width);
-        TuiConstraint::new(
-            TuiSize::new(min_width, constraint.min.height),
-            TuiSize::new(max_width, constraint.max.height),
-        )
-    }
-}
-
-impl TuiElement for TuiHorizontalInset {
-    fn layout(
-        &mut self,
-        constraint: TuiConstraint,
-        ctx: &mut TuiLayoutContext,
-        app: &AppContext,
-    ) -> TuiSize {
-        let child_size = self
-            .child
-            .layout(self.inner_constraint(constraint), ctx, app);
-        constraint.clamp(TuiSize::new(
-            child_size
-                .width
-                .saturating_add(self.inset.saturating_mul(2)),
-            child_size.height,
-        ))
-    }
-
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
-        self.child.render(self.inner_rect(area), buffer, ctx);
-    }
-
-    fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
-        self.child.present(ctx);
-    }
-
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
-        self.child
-            .cursor_position(self.inner_rect(area), ctx)
-            .map(|(x, y)| (x.saturating_add(self.inset.min(area.width / 2)), y))
-    }
-
-    fn dispatch_event(
-        &mut self,
-        event: &TuiEvent,
-        area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        ctx: &mut TuiLayoutContext,
-        app: &AppContext,
-    ) -> bool {
-        self.child
-            .dispatch_event(event, self.inner_rect(area), event_ctx, ctx, app)
-    }
-}

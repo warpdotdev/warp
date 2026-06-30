@@ -283,12 +283,12 @@ fn default_alignment_starts_short_content_at_the_top() {
 }
 
 #[test]
-fn bottom_when_at_end_alignment_docks_short_content_at_the_bottom() {
+fn grow_from_bottom_docks_short_content_at_the_bottom() {
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 1), fake_item(2, 1)]);
         let state = TuiViewportedListState::new_at_end();
         let mut viewport = viewport_with_state(state, content)
-            .with_vertical_alignment(TuiViewportVerticalAlignment::BottomWhenAtEnd);
+            .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
 
         let lines = render_viewport(&app, &mut viewport, TuiSize::new(8, 4));
 
@@ -300,13 +300,13 @@ fn bottom_when_at_end_alignment_docks_short_content_at_the_bottom() {
 }
 
 #[test]
-fn bottom_when_at_end_alignment_does_not_offset_rows_from_top() {
+fn grow_from_bottom_does_not_offset_rows_from_top() {
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 1), fake_item(2, 1)]);
         let state = TuiViewportedListState::new_at_end();
         state.scroll_to_rows_from_top(0);
         let mut viewport = viewport_with_state(state, content)
-            .with_vertical_alignment(TuiViewportVerticalAlignment::BottomWhenAtEnd);
+            .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
 
         let lines = render_viewport(&app, &mut viewport, TuiSize::new(8, 4));
 

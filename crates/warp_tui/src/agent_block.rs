@@ -7,9 +7,10 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::{AppContext, Entity, TuiView};
 
-const INPUT_COLOR: Color = Color::Rgb(0x8e, 0x8e, 0x8e);
-const OUTPUT_COLOR: Color = Color::Rgb(0xf1, 0xf1, 0xf1);
+const INPUT_COLOR: Color = Color::from_u32(0x8e8e8e);
+const OUTPUT_COLOR: Color = Color::from_u32(0xf1f1f1);
 
+/// Renderable pieces of an agent block; this will grow as we add tool calls and other sub-elements.
 #[derive(Debug, Eq, PartialEq)]
 enum TuiAgentBlockItem {
     Input(String),
@@ -39,17 +40,12 @@ impl TuiAgentBlockView {
 
     /// Returns this block's wrapped height at the given width.
     pub(super) fn desired_height(&self, width: u16, app: &AppContext) -> usize {
-        let content = self.content(app);
-        desired_content_height(&content, width)
-    }
-
-    /// Renders the complete agent block.
-    pub(super) fn render_full(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        render_content(&self.content(app))
+        self.content(app).desired_height(width)
     }
 
     fn content(&self, app: &AppContext) -> AgentBlockContent {
         let mut items = Vec::new();
+        // Match the GUI block prompt text: displayable input queries separated by newlines.
         let input = self
             .model
             .inputs_to_render(app)
@@ -65,11 +61,12 @@ impl TuiAgentBlockView {
             let output = output.get();
             items.extend(output.text_from_agent_output().flat_map(|text| {
                 text.sections.iter().filter_map(|section| match section {
-                    AIAgentTextSection::PlainText { text } if !text.text().is_empty() => {
-                        Some(TuiAgentBlockItem::PlainText(text.text().to_owned()))
+                    AIAgentTextSection::PlainText { text } => {
+                        (!text.text().is_empty())
+                            .then(|| TuiAgentBlockItem::PlainText(text.text().to_owned()))
                     }
-                    AIAgentTextSection::PlainText { .. }
-                    | AIAgentTextSection::Code { .. }
+                    // Add item variants here as the TUI learns to render richer sections.
+                    AIAgentTextSection::Code { .. }
                     | AIAgentTextSection::Table { .. }
                     | AIAgentTextSection::Image { .. }
                     | AIAgentTextSection::MermaidDiagram { .. } => None,
@@ -81,21 +78,24 @@ impl TuiAgentBlockView {
     }
 }
 
-fn desired_content_height(content: &AgentBlockContent, width: u16) -> usize {
-    content
-        .items
-        .iter()
-        .map(|item| usize::from(item.text_element().desired_height(width)))
-        .sum::<usize>()
-        .max(1)
-}
-
-fn render_content(content: &AgentBlockContent) -> Box<dyn TuiElement> {
-    let mut column = TuiColumn::new();
-    for item in &content.items {
-        column = column.with_child(Box::new(item.text_element()));
+impl AgentBlockContent {
+    /// Returns this content's wrapped height at the given width.
+    fn desired_height(&self, width: u16) -> usize {
+        self.items
+            .iter()
+            .map(|item| usize::from(item.text_element().desired_height(width)))
+            .sum::<usize>()
+            .max(1)
     }
-    Box::new(column)
+
+    /// Renders this content as a vertical list of agent block items.
+    fn render(&self) -> Box<dyn TuiElement> {
+        let mut column = TuiColumn::new();
+        for item in &self.items {
+            column = column.with_child(Box::new(item.text_element()));
+        }
+        Box::new(column)
+    }
 }
 
 impl TuiAgentBlockItem {
@@ -123,6 +123,6 @@ impl TuiView for TuiAgentBlockView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        self.render_full(app)
+        self.content(app).render()
     }
 }

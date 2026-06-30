@@ -13,10 +13,9 @@ pub mod root_view;
 pub mod session;
 mod ui;
 
-mod conversation_model;
 mod conversation_selection;
-mod grid_render;
 mod terminal_block;
+mod terminal_grid_snapshot;
 mod terminal_session_view;
 mod transcript_view;
 mod tui_block_list_viewport_source;

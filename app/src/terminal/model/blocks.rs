@@ -1954,23 +1954,6 @@ impl BlockList {
         &self.block_heights
     }
 
-    /// Returns the total block-list index for a terminal block.
-    pub fn total_index_for_block_id(&self, id: &BlockId) -> Option<TotalIndex> {
-        let block_index = self.block_index_for_id(id)?;
-        let mut cursor = self
-            .block_heights
-            .cursor::<BlockIndex, BlockHeightSummary>();
-        cursor.seek(&block_index, SeekBias::Right);
-        Some(cursor.start().total_count.into())
-    }
-
-    /// Returns the total block-list index for a rich-content view.
-    pub fn total_index_for_rich_content(&self, view_id: EntityId) -> Option<TotalIndex> {
-        self.removable_blocklist_item_positions
-            .get(&RemovableBlocklistItem::RichContent(view_id))
-            .copied()
-    }
-
     pub fn is_requested_command_block_immediately_after_ai_block(
         &self,
         ai_block_id: EntityId,

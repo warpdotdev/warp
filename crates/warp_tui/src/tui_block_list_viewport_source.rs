@@ -16,7 +16,7 @@ use warpui::{EntityId, ViewHandle};
 use warpui_core::elements::tui::{
     TuiElement, TuiViewportContent, TuiViewportWindow, TuiViewportedElement, TuiVisibleViewportItem,
 };
-use warpui_core::AppContext;
+use warpui_core::{AppContext, TuiView};
 
 use super::agent_block::TuiAgentBlockView;
 use super::terminal_block::render_terminal_block_rows;
@@ -71,13 +71,6 @@ impl TuiBlockListViewportSource {
             model,
             agent_blocks,
         }
-    }
-
-    fn take_dirty_rich_content_items(&self) -> HashSet<EntityId> {
-        self.model
-            .lock()
-            .block_list_mut()
-            .take_dirty_rich_content_items()
     }
 
     fn measured_dirty_agent_heights(
@@ -230,7 +223,11 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
         available_width: u16,
         app: &AppContext,
     ) -> TuiViewportContent {
-        let dirty_rich_content_items = self.take_dirty_rich_content_items();
+        let dirty_rich_content_items = self
+            .model
+            .lock()
+            .block_list_mut()
+            .take_dirty_rich_content_items();
         let height_updates =
             self.measured_dirty_agent_heights(dirty_rich_content_items, available_width, app);
         self.apply_height_updates(&height_updates);
@@ -264,9 +261,7 @@ impl TuiBlockListVisibleItemDescriptor {
         };
         TuiVisibleViewportItem {
             origin_y,
-            element: self
-                .item
-                .render(model, visible_rows, available_width, app),
+            element: self.item.render(model, visible_rows, available_width, app),
         }
     }
 
@@ -274,8 +269,11 @@ impl TuiBlockListVisibleItemDescriptor {
         let item_top = self.origin_y;
         let item_bottom = item_top.saturating_add(self.height);
         let visible_top = item_top.max(window.scroll_top);
-        let visible_bottom =
-            item_bottom.min(window.scroll_top.saturating_add(usize::from(window.viewport_height)));
+        let visible_bottom = item_bottom.min(
+            window
+                .scroll_top
+                .saturating_add(usize::from(window.viewport_height)),
+        );
         visible_top.saturating_sub(item_top)..visible_bottom.saturating_sub(item_top)
     }
 }
@@ -292,7 +290,7 @@ impl TuiBlockListVisibleItem {
             Self::TerminalBlock { block_id } => {
                 render_terminal_block_rows(model, &block_id, visible_rows, width)
             }
-            Self::AgentBlock { registration } => registration.view.as_ref(app).render_full(app),
+            Self::AgentBlock { registration } => registration.view.as_ref(app).render(app),
         }
     }
 }

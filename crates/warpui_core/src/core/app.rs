@@ -1104,6 +1104,10 @@ impl AppContext {
     }
 
     /// Subscribes to a GUI or TUI [`ViewHandle`] for emitted events.
+    ///
+    /// This is bounded by [`Entity`] rather than [`View`](crate::View) because
+    /// TUI views implement [`TuiView`](crate::TuiView), not GUI `View`. The
+    /// [`ViewHandle`] parameter still limits callers to actual view instances.
     pub fn subscribe_to_view<S, F>(&mut self, handle: &ViewHandle<S>, mut callback: F)
     where
         S: Entity,
@@ -3481,7 +3485,7 @@ impl AppContext {
     /// directly to imperatively trigger a redraw after work that doesn't flush
     /// app effects (e.g. the repaint tasks in this file, and the TUI driver's
     /// input handling).
-    pub(crate) fn update_windows(&mut self) {
+    fn update_windows(&mut self) {
         let invalidated_window_ids = self
             .window_invalidations
             .keys()

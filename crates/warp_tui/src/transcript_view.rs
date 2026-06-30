@@ -121,6 +121,7 @@ impl TuiTranscriptView {
         {
             return;
         }
+
         let Ok(block_model) = AIBlockModelImpl::<TuiAgentBlockView>::new(
             exchange_id,
             conversation_id,
@@ -260,7 +261,7 @@ impl TuiView for TuiTranscriptView {
         let source = TuiBlockListViewportSource::new(self.model.clone(), self.agent_blocks.clone());
         Box::new(TuiScrollable::new(
             TuiViewportedList::new(self.viewport.clone(), source)
-                .with_vertical_alignment(TuiViewportVerticalAlignment::BottomWhenAtEnd),
+                .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom),
         ))
     }
 }

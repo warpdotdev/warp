@@ -21,8 +21,10 @@ pub enum TuiViewportPosition {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TuiViewportVerticalAlignment {
+    /// Render content from the top of the viewport.
     Top,
-    BottomWhenAtEnd,
+    /// Dock short content to the bottom while following the end, so transcripts grow upward.
+    GrowFromBottom,
 }
 
 /// Shared storage for a caller-owned viewport position.
@@ -212,10 +214,11 @@ where
             self.viewport_content(requested_scroll_top, viewport_height, available_width, app);
 
         self.content_height = content.content_height;
+
         let bottom_alignment_offset =
             if matches!(
                 self.vertical_alignment,
-                TuiViewportVerticalAlignment::BottomWhenAtEnd
+                TuiViewportVerticalAlignment::GrowFromBottom
             ) && matches!(self.state.position(), TuiViewportPosition::End)
                 && content.content_height < viewport_height_rows
             {

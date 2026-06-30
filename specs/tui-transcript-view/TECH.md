@@ -79,7 +79,7 @@ let source = TuiBlockListViewportSource::new(
     self.agent_blocks.clone(),
 );
 TuiViewportedList::new(self.viewport.clone(), source)
-    .with_vertical_alignment(TuiViewportVerticalAlignment::BottomWhenAtEnd)
+    .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom)
 ```
 
 ### Simple terminal block
