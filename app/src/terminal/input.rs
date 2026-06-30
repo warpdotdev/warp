@@ -13684,6 +13684,7 @@ impl Input {
                     detected_command.argument.as_ref(),
                     SlashCommandTrigger::input(),
                     /*is_queued_prompt*/ true,
+                    Some(query_id),
                     ctx,
                 )
             }
