@@ -23,8 +23,7 @@ fn render_to_lines(element: &mut dyn TuiElement, size: TuiSize) -> Vec<String> {
 
 #[test]
 fn renders_from_the_requested_logical_row() {
-    let mut clipped =
-        TuiClipped::new(TuiText::new("a\nb\nc").truncate()).with_viewport_origin_y(1);
+    let mut clipped = TuiClipped::new(TuiText::new("a\nb\nc").truncate()).with_viewport_origin_y(1);
 
     assert_eq!(
         render_to_lines(&mut clipped, TuiSize::new(3, 2)),

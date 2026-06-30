@@ -22,6 +22,7 @@ struct FakeItem {
 struct FakeContent {
     items: Rc<RefCell<Vec<FakeItem>>>,
     requests: Rc<RefCell<Vec<TuiViewportWindow>>>,
+    widths: Rc<RefCell<Vec<u16>>>,
 }
 
 impl FakeContent {
@@ -29,13 +30,20 @@ impl FakeContent {
         Self {
             items: Rc::new(RefCell::new(items)),
             requests: Rc::new(RefCell::new(Vec::new())),
+            widths: Rc::new(RefCell::new(Vec::new())),
         }
     }
 }
 
 impl TuiViewportedElement for FakeContent {
-    fn visible_items(&self, window: TuiViewportWindow, _app: &AppContext) -> TuiViewportContent {
+    fn visible_items(
+        &self,
+        window: TuiViewportWindow,
+        available_width: u16,
+        _app: &AppContext,
+    ) -> TuiViewportContent {
         self.requests.borrow_mut().push(window);
+        self.widths.borrow_mut().push(available_width);
         let viewport_bottom = window.scroll_top.saturating_add(window.viewport_height);
         let mut origin_y = 0usize;
         let mut visible_items = Vec::new();
@@ -119,10 +127,11 @@ fn wheel_with_notify_count(
 }
 
 #[test]
-fn request_includes_scroll_top_height_and_width() {
+fn request_includes_scroll_top_and_height() {
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 3), fake_item(2, 3)]);
         let requests = content.requests.clone();
+        let widths = content.widths.clone();
         let state = TuiViewportedListState::new_at_end();
         state.scroll_to_rows_from_top(2);
         let mut viewport = viewport_with_state(state, content);
@@ -134,9 +143,9 @@ fn request_includes_scroll_top_height_and_width() {
             &[TuiViewportWindow {
                 scroll_top: 2,
                 viewport_height: 4,
-                viewport_width: 8,
             }],
         );
+        assert_eq!(widths.borrow().as_slice(), &[8]);
     });
 }
 
@@ -320,7 +329,12 @@ struct SingleElementContent {
 }
 
 impl TuiViewportedElement for SingleElementContent {
-    fn visible_items(&self, _window: TuiViewportWindow, _app: &AppContext) -> TuiViewportContent {
+    fn visible_items(
+        &self,
+        _window: TuiViewportWindow,
+        _available_width: u16,
+        _app: &AppContext,
+    ) -> TuiViewportContent {
         TuiViewportContent {
             content_height: 3,
             items: vec![TuiVisibleViewportItem {

@@ -93,17 +93,20 @@ struct DemoViewportContent {
 }
 
 impl TuiViewportedElement for DemoViewportContent {
-    fn visible_items(&self, window: TuiViewportWindow, _app: &AppContext) -> TuiViewportContent {
-        let width_changed =
-            self.last_width.replace(Some(window.viewport_width)) != Some(window.viewport_width);
+    fn visible_items(
+        &self,
+        window: TuiViewportWindow,
+        available_width: u16,
+        _app: &AppContext,
+    ) -> TuiViewportContent {
+        let width_changed = self.last_width.replace(Some(available_width)) != Some(available_width);
 
         let mut items = self.items.borrow_mut();
         for item in items.iter_mut() {
             if let Some(text) = &item.measured_text {
                 if item.needs_measurement || width_changed {
-                    item.height = usize::from(
-                        TuiText::new(text.clone()).desired_height(window.viewport_width),
-                    );
+                    item.height =
+                        usize::from(TuiText::new(text.clone()).desired_height(available_width));
                     item.needs_measurement = false;
                 }
             }

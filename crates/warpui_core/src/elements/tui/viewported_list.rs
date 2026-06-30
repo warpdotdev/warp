@@ -60,7 +60,6 @@ impl TuiViewportedListState {
 pub struct TuiViewportWindow {
     pub scroll_top: usize,
     pub viewport_height: usize,
-    pub viewport_width: u16,
 }
 
 /// A child element visible in a content-space viewport.
@@ -78,7 +77,15 @@ pub struct TuiViewportContent {
 /// Supplies visible TUI elements for an absolute content-space viewport window.
 pub trait TuiViewportedElement {
     /// Returns the content height and visible child elements for `window`.
-    fn visible_items(&self, window: TuiViewportWindow, app: &AppContext) -> TuiViewportContent;
+    ///
+    /// `available_width` is the layout width for width-dependent height
+    /// measurement, not horizontal viewport state.
+    fn visible_items(
+        &self,
+        window: TuiViewportWindow,
+        available_width: u16,
+        app: &AppContext,
+    ) -> TuiViewportContent;
 }
 
 struct VisibleElement {
@@ -131,15 +138,15 @@ where
         &mut self,
         scroll_top: usize,
         viewport_height: usize,
-        viewport_width: u16,
+        available_width: u16,
         app: &AppContext,
     ) -> (usize, TuiViewportContent) {
         let mut content = self.content.visible_items(
             TuiViewportWindow {
                 scroll_top,
                 viewport_height,
-                viewport_width,
             },
+            available_width,
             app,
         );
         let max_scroll_top = max_scroll_top(content.content_height, viewport_height);
@@ -153,8 +160,8 @@ where
                 TuiViewportWindow {
                     scroll_top: clamped_scroll_top,
                     viewport_height,
-                    viewport_width,
                 },
+                available_width,
                 app,
             );
         }
@@ -176,10 +183,10 @@ where
     ) {
         self.visible_elements.clear();
         let viewport_height = usize::from(constraint.max.height);
-        let viewport_width = constraint.max.width;
+        let available_width = constraint.max.width;
         let requested_scroll_top = self.requested_scroll_top(viewport_height);
         let (scroll_top, content) =
-            self.viewport_content(requested_scroll_top, viewport_height, viewport_width, app);
+            self.viewport_content(requested_scroll_top, viewport_height, available_width, app);
 
         self.content_height = content.content_height;
 
@@ -187,7 +194,7 @@ where
         for item in content.items {
             let mut element = item.element;
             let full_size = element.layout(
-                TuiConstraint::loose(TuiSize::new(viewport_width, u16::MAX)),
+                TuiConstraint::loose(TuiSize::new(available_width, u16::MAX)),
                 ctx,
                 app,
             );
