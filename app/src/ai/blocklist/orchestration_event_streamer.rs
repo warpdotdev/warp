@@ -578,6 +578,13 @@ impl OrchestrationEventStreamer {
         if is_child {
             return;
         }
+        // Passive views of a run hosted elsewhere (shared-session viewers,
+        // remote-child placeholders) must not register: the owning process
+        // owns the inbox. Mirrors the `is_eligible` exclusion and avoids a
+        // wasted `get_ambient_agent_task` fetch.
+        if self.is_remote_run_view(conversation_id, ctx) {
+            return;
+        }
         // Already a known parent: the live ancestor stream already discovers
         // new children via the server `parent_run_id` JOIN, so no re-fetch is
         // needed. The fetch below exists only to make the initial

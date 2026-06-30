@@ -27,9 +27,10 @@ Relevant code:
 2. **New method on `OrchestrationEventStreamer`** — `register_parent_on_wait(conversation_id, ctx)`:
    - Flag disabled → return.
    - `conversation.has_parent_agent()` is true → return. One-level-tree invariant: a child cannot be a parent, so skip the server fetch entirely. The child still receives its own inbox via the existing `is_eligible` → `RunIds(self)` stream, so there is no regression.
+   - `is_remote_run_view(conversation_id)` is true → return. A shared-session viewer or remote-child placeholder is a passive view of a run executing elsewhere; that process owns the inbox. Mirrors the `is_eligible` exclusion and avoids a wasted fetch.
    - `is_parent_agent_conversation(conversation_id)` already true → return. No re-fetch is needed to discover children added later: once the parent is on the `include_self` ancestor stream, the server `parent_run_id` JOIN and `AncestorKey` fan-out already deliver events for any new child (including out-of-band ones), so new-child discovery is the stream's job, not the fetch's. The fetch exists only to make the initial not-parent → parent transition, and the role is permanent thereafter.
    - Otherwise resolve `self_run_id`; if absent, return (rare — the next wait re-checks). Spawn `ai_client.get_ambient_agent_task(self_run_id)`.
-   - On result, if `task.children` is non-empty: insert the ids into `watched_run_ids`, advance `event_cursor = max(local, task.last_event_sequence)`, then call `reevaluate_eligibility`. With `OwnerOrchestrationAncestorStreamer` on, this opens the `AncestorRunId { include_self: true }` stream, which thereafter tracks all children dynamically (the out-of-band ones and any created later). Mirror the restore path's task-application logic (`:1386`); factor a shared helper if convenient. If `children` is empty → no-op (not a parent).
+   - On result, if `task.children` is non-empty: insert the ids into `watched_run_ids`, advance `event_cursor = max(local, task.last_event_sequence)`, then call `reevaluate_eligibility`. Note `last_event_sequence` is the client's confirmed-processing **delivery** cursor for the run, not the max recorded sequence; it is `NULL` until the client acknowledges events (advanced only via the advance-only `PATCH /agent/runs/:runId/event-sequence`). So a first-time-registering root has `NULL`, the cursor stays at 0, and the ancestor stream replays from the beginning and delivers the child's already-pending events — which is also why reusing the restore path's `max(local, confirmed)` merge is correct here (it resumes past acknowledged events, not unseen ones). With `OwnerOrchestrationAncestorStreamer` on, this opens the `AncestorRunId { include_self: true }` stream, which thereafter tracks all children dynamically (the out-of-band ones and any created later). Mirror the restore path's task-application logic (`:1386`); factor a shared helper if convenient. If `children` is empty → no-op (not a parent).
 
 3. **Invoke from `wait_for_events.rs::execute()`** via `OrchestrationEventStreamer::handle(ctx).update(ctx, |s, ctx| s.register_parent_on_wait(conversation_id, ctx))`, using the same access pattern as `start_agent.rs:182`.
 
@@ -41,7 +42,9 @@ flowchart TD
   F -- no --> X1["return (no-op)"]
   F -- yes --> C{"has_parent_agent()?"}
   C -- "yes / child" --> X2["return: child already gets its inbox via RunIds(self)"]
-  C -- "no / root" --> P{"already is_parent?"}
+  C -- "no / root" --> RV{"is_remote_run_view?"}
+  RV -- yes --> X5["return: passive view; owner process holds the inbox"]
+  RV -- no --> P{"already is_parent?"}
   P -- yes --> X3["return: ancestor stream already tracks new children"]
   P -- no --> G["get_ambient_agent_task(self)"]
   G --> H{"task.children non-empty?"}
@@ -66,6 +69,10 @@ pub fn register_parent_on_wait(
         .conversation(&conversation_id)
         .is_some_and(|c| c.has_parent_agent());
     if is_child {
+        return;
+    }
+    // Passive view (shared-session viewer / remote child): owner process holds the inbox.
+    if self.is_remote_run_view(conversation_id, ctx) {
         return;
     }
     // Already a known parent: the ancestor stream already tracks new children.
