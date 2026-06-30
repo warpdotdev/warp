@@ -5153,18 +5153,6 @@ impl Workspace {
         self.tabs.get(index).and_then(|tab| tab.color())
     }
 
-    /// Returns the effective render color for a tab. A tab in a group is fully
-    /// colored by that group: the group's color applies, and a group with no
-    /// color (the default for a fresh group) renders the member with no color,
-    /// ignoring the tab's own selected/directory color. Ungrouped tabs use their
-    /// own color.
-    fn effective_tab_color(&self, tab: &TabData) -> Option<AnsiColorIdentifier> {
-        if let Some(group) = tab.group_id.and_then(|gid| self.tab_groups.get(&gid)) {
-            return group.color.resolve(None);
-        }
-        tab.color()
-    }
-
     /// Finds the pane containing a terminal viewing the given ambient agent conversation,
     /// returning None if the ambient conversation is not open in any tab.
     fn find_pane_with_ambient_agent_conversation(
@@ -19720,7 +19708,7 @@ impl Workspace {
                     row.add_child(self.render_tab_hover_indicator(appearance));
                 }
                 let tab = &self.tabs[idx];
-                let effective_color = self.effective_tab_color(tab);
+                let effective_color = tab.color();
                 // Highlight the member when a drag is hovering directly over it.
                 let is_drag_target = self.hovered_tab_index == Some(TabBarHoverIndex::OverTab(idx));
                 let member = TabComponent::new(
@@ -20098,7 +20086,7 @@ impl Workspace {
             // outer `SavePosition`, `Draggable`, and `DropTarget` wrappers
             // so the chip overlay doesn't pollute the target window's
             // position cache (see `TabComponent::for_drag_ghost`).
-            let effective_color = self.effective_tab_color(tab);
+            let effective_color = tab.color();
             TabComponent::new(
                 tab_index,
                 tab_bar_state,
@@ -20108,7 +20096,6 @@ impl Workspace {
                 false,
                 ctx,
             )
-            // Show the tab groups color on this tab while it is dragging and part of a group.
             .with_effective_color(effective_color)
             .for_drag_ghost()
             .build()

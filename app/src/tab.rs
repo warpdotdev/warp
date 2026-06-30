@@ -655,10 +655,6 @@ impl TabData {
         index: usize,
         terminal_colors: AnsiColors,
     ) -> Vec<MenuItem<WorkspaceAction>> {
-        // Tabs inside a group have their color controlled by the group.
-        if self.group_id.is_some() {
-            return vec![];
-        }
         if FeatureFlag::DirectoryTabColors.is_enabled() {
             color_picker_menu_items(
                 self.color(),
@@ -1556,35 +1552,29 @@ impl<'a> TabComponent<'a> {
             let bg = if let Some(custom_background) = self.styles.background {
                 let base_opacity = if is_active || (is_in_multi_tab_selection && is_hovered) {
                     60
+                } else if is_in_multi_tab_selection {
+                    // Multi-selected (but not hovered): brighter than the resting
+                    // tint. A grouped member sits on the group's color backdrop,
+                    // so it needs a bigger step to read as selected against it;
+                    // at rest it just shows its own color over that backdrop.
+                    if self.grouped_member {
+                        55
+                    } else {
+                        30
+                    }
                 } else if is_hovered {
                     40
-                } else if is_in_multi_tab_selection {
-                    // A saturated color reads louder than the neutral multi-select
-                    // overlay regular tabs use, so keep multi-selection to just a
-                    // tiny bump above the resting color rather than the hover tier.
-                    25
-                } else if self.grouped_member {
-                    // Member of a colored group: the group container paints the
-                    // idle color behind this tab, so stay transparent at rest.
-                    // Painting the color again here would double-tint and make
-                    // the member look a shade lighter than the container.
-                    0
                 } else {
                     20
                 };
-                if base_opacity == 0 {
-                    Fill::None
-                } else {
-                    let opacity =
-                        (base_opacity as f32 * self.background_opacity as f32 / 100.) as u8;
-                    match custom_background {
-                        ThemeFill::Solid(color) => coloru_with_opacity(color, opacity).into(),
-                        ThemeFill::VerticalGradient(gradient) => {
-                            coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
-                        }
-                        ThemeFill::HorizontalGradient(gradient) => {
-                            coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
-                        }
+                let opacity = (base_opacity as f32 * self.background_opacity as f32 / 100.) as u8;
+                match custom_background {
+                    ThemeFill::Solid(color) => coloru_with_opacity(color, opacity).into(),
+                    ThemeFill::VerticalGradient(gradient) => {
+                        coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
+                    }
+                    ThemeFill::HorizontalGradient(gradient) => {
+                        coloru_with_opacity(gradient.get_most_opaque(), opacity).into()
                     }
                 }
             } else if is_active {
@@ -1614,20 +1604,13 @@ impl<'a> TabComponent<'a> {
             };
 
             let bg = if let Some(custom_background) = self.styles.background {
-                if self.grouped_member && !is_active && !is_hovered {
-                    // Member of a colored group: the group container paints the
-                    // idle color behind this tab, so stay transparent at rest to
-                    // avoid double-tinting.
-                    Fill::None
-                } else {
-                    match custom_background {
-                        ThemeFill::Solid(color) => coloru_with_opacity(color, tab_opacity).into(),
-                        ThemeFill::VerticalGradient(gradient) => {
-                            coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
-                        }
-                        ThemeFill::HorizontalGradient(gradient) => {
-                            coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
-                        }
+                match custom_background {
+                    ThemeFill::Solid(color) => coloru_with_opacity(color, tab_opacity).into(),
+                    ThemeFill::VerticalGradient(gradient) => {
+                        coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
+                    }
+                    ThemeFill::HorizontalGradient(gradient) => {
+                        coloru_with_opacity(gradient.get_most_opaque(), tab_opacity).into()
                     }
                 }
             } else {

@@ -113,6 +113,8 @@ const DETAIL_SIDECAR_CORNER_RADIUS: f32 = 4.;
 const METADATA_ROW_HEIGHT: f32 = BADGE_ICON_SIZE + 2.;
 const TAB_COLOR_OPACITY: Opacity = 15;
 const TAB_COLOR_HOVER_OPACITY: Opacity = 50;
+/// Opacity for a colored row that is part of a multi-selection.
+const TAB_COLOR_MULTI_SELECT_OPACITY: Opacity = 30;
 
 // Circular icon constants
 const ICON_WITH_STATUS_GAP: f32 = 8.;
@@ -342,19 +344,13 @@ fn pane_row_background(
     is_in_multi_selection: bool,
     is_hovered: bool,
     is_being_dragged: bool,
-    in_colored_group: bool,
     theme: &WarpTheme,
 ) -> Option<ThemeFill> {
     if let Some(color) = pane_color {
-        let is_highlighted = is_selected || is_hovered || is_in_multi_selection;
-        // Member of a colored group: the group container already paints this
-        // color behind the row at idle, so stay transparent at rest to avoid
-        // double-tinting that makes the row look lighter than the container.
-        if in_colored_group && !is_highlighted {
-            return None;
-        }
-        let opacity = if is_highlighted {
+        let opacity = if is_selected || is_hovered {
             TAB_COLOR_HOVER_OPACITY
+        } else if is_in_multi_selection {
+            TAB_COLOR_MULTI_SELECT_OPACITY
         } else {
             TAB_COLOR_OPACITY
         };
@@ -404,7 +400,6 @@ fn render_pane_row_element(
         is_in_multi_selection,
         is_in_multi_tab_selection,
         pane_color,
-        in_colored_group,
         badge_mouse_states: _,
         detail_hover_state,
         display_granularity: _,
@@ -437,7 +432,6 @@ fn render_pane_row_element(
             is_in_multi_selection,
             state.is_hovered(),
             is_being_dragged,
-            in_colored_group,
             theme,
         ) {
             container = container.with_background(background);
@@ -844,10 +838,6 @@ struct PaneProps<'a> {
     /// otherwise the single-pane menu.
     is_in_multi_tab_selection: bool,
     pane_color: Option<ThemeFill>,
-    /// True when this row is a member of a colored group whose container paints
-    /// the group color behind it. Suppresses the row's own idle color tint so it
-    /// blends into the container instead of double-tinting at rest.
-    in_colored_group: bool,
     badge_mouse_states: PaneRowBadgeMouseStates,
     detail_hover_state: VerticalTabsDetailHoverState,
     display_granularity: VerticalTabsDisplayGranularity,
@@ -2133,23 +2123,8 @@ fn render_tab_group_internal(
     // Captured into row/group right-click closures so they can pick between
     // the single-pane menu and the multi-tab selection menu.
     let is_in_multi_tab_selection = workspace.is_tab_in_multi_tab_selection(tab_index);
-    let tab_group_for_color = tab.group_id.and_then(|gid| workspace.tab_groups.get(&gid));
-    let color_mode = compute_tab_group_color_mode(
-        tab,
-        pane_group,
-        &visible_pane_ids,
-        theme,
-        tab_group_for_color,
-        app,
-    );
+    let color_mode = compute_tab_group_color_mode(tab, pane_group, &visible_pane_ids, theme, app);
     let per_pane_colors = color_mode.into_per_pane_colors(&visible_pane_ids);
-    // Members of a colored group blend into the group container's colored
-    // background; suppress each member row's own idle color tint so it doesn't
-    // double-tint on top of the container at rest.
-    let in_colored_group = in_tab_group
-        && tab_group_for_color
-            .and_then(|group| group.color.resolve(None))
-            .is_some();
     let is_being_renamed = is_active && workspace.current_workspace_state.is_tab_being_renamed();
     let rename_editor = workspace.tab_rename_editor.clone();
     let has_custom_title = pane_group.custom_title(app).is_some();
@@ -2222,7 +2197,7 @@ fn render_tab_group_internal(
                     }
                     handles[..branch_line_count].to_vec()
                 };
-                let Some(mut pane_props) = PaneProps::new(
+                let Some(pane_props) = PaneProps::new(
                     pane_group,
                     *pane_id,
                     pane_group_id,
@@ -2251,7 +2226,6 @@ fn render_tab_group_internal(
                 ) else {
                     return Empty::new().finish();
                 };
-                pane_props.in_colored_group = in_colored_group;
                 rows.add_child(render_summary_tab_item(
                     pane_props,
                     summary
@@ -2317,7 +2291,6 @@ fn render_tab_group_internal(
                         is_last: row_idx + 1 == total_rows,
                     };
                 }
-                pane_props.in_colored_group = in_colored_group;
                 let view_mode = *TabSettings::as_ref(app).vertical_tabs_view_mode.value();
                 let row = match view_mode {
                     VerticalTabsViewMode::Compact => render_compact_pane_row(pane_props, app),
@@ -2963,9 +2936,9 @@ fn render_grouped_tabs_header(
     hoverable.finish()
 }
 
-/// Renders a tab group: pane-like header followed by indented member rows. A colored group fills
-/// the container with the group color so the header and member rows blend into one colored block; an
-/// uncolored group only paints its background on hover or when a member is active.
+/// Renders a tab group: pane-like header followed by indented member rows. A colored group tints the
+/// container (and header) with the group's color as a backdrop; member rows carry their own colors and
+/// layer on top. An uncolored group only paints its background on hover or when a member is active.
 fn render_grouped_tab_container(
     state: &VerticalTabsPanelState,
     workspace: &Workspace,
@@ -3106,17 +3079,26 @@ fn render_grouped_tab_container(
             }
         }
 
-        // When the group is colored, back the container with the group color at
-        // the same idle opacity a member row uses, so member rows blend into the
-        // container and the group reads as one colored block. Fall back to the
-        // neutral hover/active highlight when the group has no color.
+        // When the group is colored, tint the container with the group's color as
+        // a backdrop (member rows carry their own colors and layer on top), and
+        // strengthen that tint on hover/active as the highlight. Fall back to the
+        // neutral highlight when the group has no color.
         let group_color_fill: Option<ThemeFill> = group
             .color
             .resolve(None)
             .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into());
+        let is_highlighted = hover_state.is_hovered() || any_member_active;
         let background = if let Some(color) = group_color_fill {
-            color.with_opacity(TAB_COLOR_OPACITY)
-        } else if hover_state.is_hovered() || any_member_active {
+            // Highlight a colored tab group when it is hovered or active,
+            // but not as much as regular colored active tabs (otherwise
+            // nested color tabs appear very faded).
+            let opacity = if is_highlighted {
+                TAB_COLOR_OPACITY + 10
+            } else {
+                TAB_COLOR_OPACITY
+            };
+            color.with_opacity(opacity)
+        } else if is_highlighted {
             internal_colors::fg_overlay_1(theme)
         } else {
             ThemeFill::Solid(ColorU::transparent_black())
@@ -3841,7 +3823,6 @@ impl<'a> PaneProps<'a> {
             is_in_multi_selection,
             is_in_multi_tab_selection,
             pane_color: pane_row_state.pane_color,
-            in_colored_group: false,
             badge_mouse_states: pane_row_state.badge_mouse_states,
             detail_hover_state,
             display_granularity,
@@ -5483,31 +5464,19 @@ fn render_pull_request_badge_content(label: &str, appearance: &Appearance) -> Bo
         .finish()
 }
 
-/// Resolves the rendered color mode for a tab's panes. A tab in a `tab_group`
-/// is fully colored by that group: the group's color applies uniformly, and a
-/// group with no color (the default for a fresh group) renders its members with
-/// no color, ignoring each member's own selected/directory color. An ungrouped
-/// tab uses its own `selected_color`, falling through to per-pane directory
-/// colors when unset.
+/// Resolves the rendered color mode for a tab's panes from the tab's own color,
+/// whether or not it's in a group: a manual `selected_color` override applies to
+/// the whole tab, otherwise it falls through to per-pane directory colors. A
+/// group's color tints the group container separately and does not override its
+/// members.
 fn compute_tab_group_color_mode(
     tab: &TabData,
     pane_group: &PaneGroup,
     visible_pane_ids: &[PaneId],
     theme: &WarpTheme,
-    tab_group: Option<&TabGroup>,
     app: &AppContext,
 ) -> TabGroupColorMode {
-    // A grouped tab's color is fully owned by its group.
-    if let Some(group) = tab_group {
-        return match group.color.resolve(None) {
-            Some(color) => TabGroupColorMode::Uniform(
-                color.to_ansi_color(&theme.terminal_colors().normal).into(),
-            ),
-            None => TabGroupColorMode::None,
-        };
-    }
-
-    // Ungrouped tab: a manual color override applies to the whole tab.
+    // A manual color override applies to the whole tab.
     if !matches!(tab.selected_color, SelectedTabColor::Unset) {
         return match tab.selected_color.resolve(tab.default_directory_color) {
             Some(color) => TabGroupColorMode::Uniform(
