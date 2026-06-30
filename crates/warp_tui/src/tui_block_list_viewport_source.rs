@@ -1,4 +1,4 @@
-//! Canonical terminal-history ordering adapter for the generalized TUI viewport.
+//! TUI viewport source backed by the canonical terminal block list.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -31,15 +31,15 @@ pub(super) struct AgentBlockRegistration {
 
 pub(super) type AgentBlockRegistry = Rc<RefCell<HashMap<EntityId, AgentBlockRegistration>>>;
 
-/// Stable identities used by terminal-history tests.
+/// Stable identities used by TUI block-list viewport tests.
 #[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum TerminalHistoryItemId {
+pub(super) enum TuiBlockListViewportItemId {
     TerminalBlock(BlockId),
     AgentBlock(EntityId),
 }
 
-enum TerminalHistoryVisibleItem {
+enum TuiBlockListVisibleItem {
     TerminalBlock {
         block_id: BlockId,
     },
@@ -48,50 +48,57 @@ enum TerminalHistoryVisibleItem {
     },
 }
 
-struct TerminalHistoryVisibleItemDescriptor {
+struct TuiBlockListVisibleItemDescriptor {
     origin_y: usize,
     height: usize,
-    item: TerminalHistoryVisibleItem,
+    item: TuiBlockListVisibleItem,
 }
 
 /// Adapts a terminal model's canonical block-list order for TUI viewporting.
 #[derive(Clone)]
-pub(super) struct TerminalHistoryIndex {
+pub(super) struct TuiBlockListViewportSource {
     model: Arc<FairMutex<TerminalModel>>,
     agent_blocks: AgentBlockRegistry,
-    dirty_agent_blocks: Rc<RefCell<HashSet<EntityId>>>,
 }
 
-impl TerminalHistoryIndex {
-    /// Creates a terminal-history index over the canonical terminal model.
+impl TuiBlockListViewportSource {
+    /// Creates a TUI viewport source over the canonical terminal model.
     pub(super) fn new(
         model: Arc<FairMutex<TerminalModel>>,
         agent_blocks: AgentBlockRegistry,
-        dirty_agent_blocks: Rc<RefCell<HashSet<EntityId>>>,
     ) -> Self {
         Self {
             model,
             agent_blocks,
-            dirty_agent_blocks,
         }
+    }
+
+    fn take_dirty_rich_content_items(&self) -> HashSet<EntityId> {
+        self.model
+            .lock()
+            .block_list_mut()
+            .take_dirty_rich_content_items()
     }
 
     fn measured_dirty_agent_heights(
         &self,
+        dirty_rich_content_items: HashSet<EntityId>,
         width: u16,
         app: &AppContext,
-    ) -> HashMap<EntityId, usize> {
+    ) -> HashMap<EntityId, f64> {
         let agent_blocks = self.agent_blocks.borrow();
-        let dirty_agent_blocks = self.dirty_agent_blocks.borrow();
-        agent_blocks
-            .iter()
-            .filter_map(|(view_id, registration)| {
-                dirty_agent_blocks.contains(view_id).then(|| {
-                    (
-                        *view_id,
-                        registration.view.as_ref(app).desired_height(width, app),
-                    )
-                })
+        dirty_rich_content_items
+            .into_iter()
+            .filter_map(|view_id| {
+                let registration = agent_blocks.get(&view_id)?;
+                Some((
+                    view_id,
+                    registration
+                        .view
+                        .as_ref(app)
+                        .desired_height(width, app)
+                        .max(1) as f64,
+                ))
             })
             .collect()
     }
@@ -99,19 +106,12 @@ impl TerminalHistoryIndex {
     fn visible_item_descriptors(
         &self,
         window: TuiViewportWindow,
-        measured_agent_heights: &HashMap<EntityId, usize>,
-    ) -> (
-        usize,
-        Vec<TerminalHistoryVisibleItemDescriptor>,
-        HashMap<EntityId, f64>,
-    ) {
+    ) -> (usize, Vec<TuiBlockListVisibleItemDescriptor>) {
         let model = self.model.lock();
         let block_list = model.block_list();
         let agent_blocks = self.agent_blocks.borrow();
-        let dirty_agent_blocks = self.dirty_agent_blocks.borrow();
         let viewport_bottom = window.scroll_top.saturating_add(window.viewport_height);
         let mut descriptors = Vec::new();
-        let mut height_updates = HashMap::new();
         let mut content_height = 0usize;
         let mut cursor = block_list
             .block_heights()
@@ -126,7 +126,7 @@ impl TerminalHistoryIndex {
                         let height = block_rows(block, block_list)?;
                         Some((
                             height,
-                            TerminalHistoryVisibleItem::TerminalBlock {
+                            TuiBlockListVisibleItem::TerminalBlock {
                                 block_id: block.id().clone(),
                             },
                         ))
@@ -136,20 +136,10 @@ impl TerminalHistoryIndex {
                     if item.should_hide {
                         None
                     } else if let Some(registration) = agent_blocks.get(&item.view_id) {
-                        let height = if dirty_agent_blocks.contains(&item.view_id) {
-                            let height = measured_agent_heights
-                                .get(&item.view_id)
-                                .copied()
-                                .unwrap_or(1)
-                                .max(1);
-                            height_updates.insert(item.view_id, height as f64);
-                            height
-                        } else {
-                            item.last_laid_out_height.as_f64().ceil().max(1.0) as usize
-                        };
+                        let height = item.last_laid_out_height.as_f64().ceil().max(1.0) as usize;
                         Some((
                             height,
-                            TerminalHistoryVisibleItem::AgentBlock {
+                            TuiBlockListVisibleItem::AgentBlock {
                                 registration: registration.clone(),
                             },
                         ))
@@ -167,7 +157,7 @@ impl TerminalHistoryIndex {
                 let item_top = content_height;
                 let item_bottom = item_top.saturating_add(height);
                 if item_bottom > window.scroll_top && item_top < viewport_bottom {
-                    descriptors.push(TerminalHistoryVisibleItemDescriptor {
+                    descriptors.push(TuiBlockListVisibleItemDescriptor {
                         origin_y: item_top,
                         height,
                         item,
@@ -178,25 +168,21 @@ impl TerminalHistoryIndex {
             cursor.next();
         }
 
-        (content_height, descriptors, height_updates)
+        (content_height, descriptors)
     }
 
-    fn apply_height_updates(&self, height_updates: HashMap<EntityId, f64>) {
+    fn apply_height_updates(&self, height_updates: &HashMap<EntityId, f64>) {
         if height_updates.is_empty() {
             return;
         }
         self.model
             .lock()
             .block_list_mut()
-            .update_rich_content_heights(&height_updates);
-        let mut dirty_agent_blocks = self.dirty_agent_blocks.borrow_mut();
-        for view_id in height_updates.keys() {
-            dirty_agent_blocks.remove(view_id);
-        }
+            .update_rich_content_heights(height_updates);
     }
 
     #[cfg(test)]
-    pub(super) fn item_ids_for_test(&self) -> Vec<TerminalHistoryItemId> {
+    pub(super) fn item_ids_for_test(&self) -> Vec<TuiBlockListViewportItemId> {
         let model = self.model.lock();
         let block_list = model.block_list();
         let agent_blocks = self.agent_blocks.borrow();
@@ -213,13 +199,15 @@ impl TerminalHistoryIndex {
                     if let Some(block) =
                         block.filter(|block| block_rows(block, block_list).is_some())
                     {
-                        item_ids.push(TerminalHistoryItemId::TerminalBlock(block.id().clone()));
+                        item_ids.push(TuiBlockListViewportItemId::TerminalBlock(
+                            block.id().clone(),
+                        ));
                     }
                 }
                 BlockHeightItem::RichContent(item)
                     if !item.should_hide && agent_blocks.contains_key(&item.view_id) =>
                 {
-                    item_ids.push(TerminalHistoryItemId::AgentBlock(item.view_id));
+                    item_ids.push(TuiBlockListViewportItemId::AgentBlock(item.view_id));
                 }
                 BlockHeightItem::RichContent(_)
                 | BlockHeightItem::Gap(_)
@@ -233,13 +221,14 @@ impl TerminalHistoryIndex {
     }
 }
 
-impl TuiViewportedElement for TerminalHistoryIndex {
+impl TuiViewportedElement for TuiBlockListViewportSource {
     fn visible_items(&self, window: TuiViewportWindow, app: &AppContext) -> TuiViewportContent {
-        let measured_agent_heights = self.measured_dirty_agent_heights(window.viewport_width, app);
-        let (content_height, descriptors, height_updates) =
-            self.visible_item_descriptors(window, &measured_agent_heights);
-        self.apply_height_updates(height_updates);
+        let dirty_rich_content_items = self.take_dirty_rich_content_items();
+        let height_updates =
+            self.measured_dirty_agent_heights(dirty_rich_content_items, window.viewport_width, app);
+        self.apply_height_updates(&height_updates);
 
+        let (content_height, descriptors) = self.visible_item_descriptors(window);
         let items = descriptors
             .into_iter()
             .map(|descriptor| descriptor.render(&self.model, window, app))
@@ -252,7 +241,7 @@ impl TuiViewportedElement for TerminalHistoryIndex {
     }
 }
 
-impl TerminalHistoryVisibleItemDescriptor {
+impl TuiBlockListVisibleItemDescriptor {
     fn render(
         self,
         model: &Arc<FairMutex<TerminalModel>>,
@@ -260,7 +249,7 @@ impl TerminalHistoryVisibleItemDescriptor {
         app: &AppContext,
     ) -> TuiVisibleViewportItem {
         let visible_rows = self.visible_rows(window);
-        let origin_y = if matches!(&self.item, TerminalHistoryVisibleItem::TerminalBlock { .. }) {
+        let origin_y = if matches!(&self.item, TuiBlockListVisibleItem::TerminalBlock { .. }) {
             self.origin_y.saturating_add(visible_rows.start)
         } else {
             self.origin_y
@@ -283,7 +272,7 @@ impl TerminalHistoryVisibleItemDescriptor {
     }
 }
 
-impl TerminalHistoryVisibleItem {
+impl TuiBlockListVisibleItem {
     fn render(
         self,
         model: &Arc<FairMutex<TerminalModel>>,
@@ -318,5 +307,5 @@ fn block_rows(block: &Block, block_list: &BlockList) -> Option<usize> {
 }
 
 #[cfg(test)]
-#[path = "terminal_history_index_tests.rs"]
+#[path = "tui_block_list_viewport_source_tests.rs"]
 mod tests;

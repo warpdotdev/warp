@@ -19,8 +19,8 @@ mod grid_render;
 #[allow(dead_code)]
 mod prompt_stream;
 mod terminal_block;
-mod terminal_history_index;
 mod transcript_view;
+mod tui_block_list_viewport_source;
 
 pub use root_view::RootTuiView;
 pub use session::run;

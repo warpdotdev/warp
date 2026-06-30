@@ -1,7 +1,7 @@
 //! The production-shaped TUI transcript over canonical terminal block-list order.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -19,8 +19,8 @@ use warpui_core::{
 };
 
 use super::agent_block::TuiAgentBlockView;
-use super::terminal_history_index::{
-    AgentBlockRegistration, AgentBlockRegistry, TerminalHistoryIndex,
+use super::tui_block_list_viewport_source::{
+    AgentBlockRegistration, AgentBlockRegistry, TuiBlockListViewportSource,
 };
 
 /// TUI transcript view over one terminal surface's canonical block-list order.
@@ -28,7 +28,6 @@ pub(super) struct TuiTranscriptView {
     terminal_surface_id: EntityId,
     model: Arc<FairMutex<TerminalModel>>,
     agent_blocks: AgentBlockRegistry,
-    dirty_agent_blocks: Rc<RefCell<HashSet<EntityId>>>,
     viewport: TuiViewportedListState,
 }
 
@@ -43,11 +42,11 @@ impl TuiTranscriptView {
             &BlocklistAIHistoryModel::handle(ctx),
             |view, _, event, ctx| view.handle_history_event(event, ctx),
         );
+
         Self {
             terminal_surface_id,
             model,
             agent_blocks: Rc::new(RefCell::new(HashMap::new())),
-            dirty_agent_blocks: Rc::new(RefCell::new(HashSet::new())),
             viewport: TuiViewportedListState::new_at_end(),
         }
     }
@@ -144,7 +143,6 @@ impl TuiTranscriptView {
                 exchange_id,
             },
         );
-        self.dirty_agent_blocks.borrow_mut().insert(view_id);
         self.model.lock().block_list_mut().append_rich_content(
             RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
             false,
@@ -161,7 +159,6 @@ impl TuiTranscriptView {
                 (registration.exchange_id == exchange_id).then_some(*view_id)
             });
         if let Some(view_id) = view_id {
-            self.dirty_agent_blocks.borrow_mut().insert(view_id);
             self.model
                 .lock()
                 .block_list_mut()
@@ -199,7 +196,6 @@ impl TuiTranscriptView {
         registration
             .view
             .update(ctx, |view, _| view.set_model(Rc::new(block_model)));
-        self.dirty_agent_blocks.borrow_mut().insert(view_id);
         self.model
             .lock()
             .block_list_mut()
@@ -222,7 +218,6 @@ impl TuiTranscriptView {
             .collect::<Vec<_>>();
         for view_id in view_ids {
             self.agent_blocks.borrow_mut().remove(&view_id);
-            self.dirty_agent_blocks.borrow_mut().remove(&view_id);
             self.model
                 .lock()
                 .block_list_mut()
@@ -239,7 +234,6 @@ impl TuiTranscriptView {
             .copied()
             .collect::<Vec<_>>();
         self.agent_blocks.borrow_mut().clear();
-        self.dirty_agent_blocks.borrow_mut().clear();
         let mut model = self.model.lock();
         for view_id in view_ids {
             model.block_list_mut().remove_rich_content(view_id);
@@ -262,14 +256,10 @@ impl TuiView for TuiTranscriptView {
     }
 
     fn render(&self, _app: &AppContext) -> Box<dyn TuiElement> {
-        let index = TerminalHistoryIndex::new(
-            self.model.clone(),
-            self.agent_blocks.clone(),
-            self.dirty_agent_blocks.clone(),
-        );
+        let source = TuiBlockListViewportSource::new(self.model.clone(), self.agent_blocks.clone());
         Box::new(TuiScrollable::new(TuiViewportedList::new(
             self.viewport.clone(),
-            index,
+            source,
         )))
     }
 }

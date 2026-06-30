@@ -3,10 +3,11 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::grid_render::TerminalGridSnapshot;
 use parking_lot::FairMutex;
 use warp::tui_export::{BlockId, TerminalModel};
 use warpui_core::elements::tui::TuiElement;
+
+use super::grid_render::TerminalGridSnapshot;
 
 /// Snapshots the requested logical rows from a terminal block's visible grids.
 pub(super) fn render_terminal_block_rows(

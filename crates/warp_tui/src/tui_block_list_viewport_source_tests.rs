@@ -1,6 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
@@ -11,10 +10,12 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::App;
 
-use super::{block_rows, AgentBlockRegistry, TerminalHistoryIndex, TerminalHistoryItemId};
+use super::{
+    block_rows, AgentBlockRegistry, TuiBlockListViewportItemId, TuiBlockListViewportSource,
+};
 
 #[test]
-fn terminal_history_index_uses_canonical_block_list_order() {
+fn tui_block_list_viewport_source_uses_canonical_block_list_order() {
     let mut model = TerminalModel::mock(None, None);
     model.simulate_block("echo 1", "1\r\n");
     model.simulate_block("echo 2", "2\r\n");
@@ -23,32 +24,30 @@ fn terminal_history_index_uses_canonical_block_list_order() {
         .blocks()
         .iter()
         .filter(|block| block_rows(block, model.block_list()).is_some())
-        .map(|block| TerminalHistoryItemId::TerminalBlock(block.id().clone()))
+        .map(|block| TuiBlockListViewportItemId::TerminalBlock(block.id().clone()))
         .collect::<Vec<_>>();
-    let index = TerminalHistoryIndex::new(
+    let source = TuiBlockListViewportSource::new(
         Arc::new(FairMutex::new(model)),
         AgentBlockRegistry::new(RefCell::new(HashMap::new())),
-        Rc::new(RefCell::new(HashSet::new())),
     );
 
-    let actual = index.item_ids_for_test();
+    let actual = source.item_ids_for_test();
 
     assert_eq!(actual, expected);
 }
 
 #[test]
-fn terminal_history_index_slices_terminal_blocks_to_visible_rows() {
+fn tui_block_list_viewport_source_slices_terminal_blocks_to_visible_rows() {
     App::test((), |app| async move {
         app.read(|app| {
             let mut model = TerminalModel::mock(None, None);
             model.simulate_block("printf", "one\r\ntwo\r\nthree\r\n");
-            let index = TerminalHistoryIndex::new(
+            let source = TuiBlockListViewportSource::new(
                 Arc::new(FairMutex::new(model)),
                 AgentBlockRegistry::new(RefCell::new(HashMap::new())),
-                Rc::new(RefCell::new(HashSet::new())),
             );
 
-            let content = index.visible_items(
+            let content = source.visible_items(
                 TuiViewportWindow {
                     scroll_top: 1,
                     viewport_height: 1,

@@ -1,6 +1,7 @@
 //! Terminal-grid snapshots rendered as normal TUI elements.
 
 use std::ops::Range;
+
 use warp::tui_export::{BlockGrid, TerminalColorList};
 use warp_terminal::model::ansi::Color;
 use warp_terminal::model::grid::cell::{Cell, Flags};

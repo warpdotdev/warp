@@ -20,7 +20,7 @@ use warpui_core::{AppContext, ViewContext};
 
 use super::TuiTranscriptView;
 use crate::agent_block::TuiAgentBlockView;
-use crate::terminal_history_index::AgentBlockRegistration;
+use crate::tui_block_list_viewport_source::AgentBlockRegistration;
 
 #[test]
 fn transcript_view_renders_terminal_blocks_from_canonical_order() {
@@ -127,22 +127,29 @@ fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
                     exchange_id,
                 },
             );
-            view.dirty_agent_blocks.borrow_mut().insert(agent_block_id);
             view.model.lock().block_list_mut().append_rich_content(
                 RichContentItem::new(Some(RichContentType::AIBlock), agent_block_id, None, false),
                 false,
             );
             ctx.notify();
         });
-        transcript.read(&app, |view, _| {
+        let agent_block_id = transcript.read(&app, |view, _| {
             assert_eq!(view.agent_blocks.borrow().len(), 1);
-            assert_eq!(view.dirty_agent_blocks.borrow().len(), 1);
+            *view.agent_blocks.borrow().keys().next().unwrap()
         });
+        assert!(
+            take_dirty_rich_content_items(&terminal_model).contains(&agent_block_id),
+            "appended TUI agent rich content should be dirty in the canonical block list"
+        );
         assert_eq!(rich_content_count(&terminal_model), 1);
 
         transcript.update(&mut app, |view, ctx| {
             view.mark_exchange_dirty(exchange_id, ctx);
         });
+        assert!(
+            take_dirty_rich_content_items(&terminal_model).contains(&agent_block_id),
+            "streaming updates should dirty canonical rich content"
+        );
         transcript.read(&app, |view, _| {
             let registrations = view.agent_blocks.borrow();
             let registration = registrations
@@ -271,4 +278,13 @@ fn rich_content_count(model: &Arc<FairMutex<TerminalModel>>) -> usize {
         .cursor::<(), ()>()
         .filter(|item| matches!(item, BlockHeightItem::RichContent(_)))
         .count()
+}
+
+fn take_dirty_rich_content_items(
+    model: &Arc<FairMutex<TerminalModel>>,
+) -> std::collections::HashSet<EntityId> {
+    model
+        .lock()
+        .block_list_mut()
+        .take_dirty_rich_content_items()
 }

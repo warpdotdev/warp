@@ -41,63 +41,44 @@ This is runtime plumbing for the real TUI composition root, not transcript-speci
 The root embeds the editor-backed [`TuiInputView`](../../crates/warp_tui/src/input/view.rs) (a `warp::editor::CodeEditorModel` in char-cell mode) as the first column child. The root subscribes to its `TuiInputViewEvent::Submitted`; on submit it trims the text and, when non-empty, calls `TuiConversationModel::send_prompt`, which streams the response into the transcript as an agent block. `TuiInputView::submit` already clears the editor buffer, so the input resets after each send.
 The input view drives agent prompts only. Running shell commands from the TUI is future work, so the root emits no PTY intents; terminal-block rendering is exercised by tests that drive `TerminalModel` directly rather than by interactive input.
 
-### Terminal history index
-Add a `TerminalHistoryIndex` adapter under `crates/warp_tui/src/` over the canonical `TerminalModel::BlockList` sum tree.
+### TUI block-list viewport source
+Add a `TuiBlockListViewportSource` adapter under `crates/warp_tui/src/` over the canonical `TerminalModel::BlockList` sum tree.
 
 The adapter maps canonical entries to owned TUI transcript descriptors:
 ```rust
-enum TerminalHistoryItemId {
+enum TuiBlockListViewportItemId {
     TerminalBlock(BlockId),
     AgentBlock(EntityId),
 }
-
-enum TerminalHistoryItem {
+enum TuiBlockListVisibleItem {
     TerminalBlock { block_id: BlockId },
     AgentBlock {
-        view_id: EntityId,
-        conversation_id: AIConversationId,
-        exchange_id: AIAgentExchangeId,
+        registration: AgentBlockRegistration,
     },
 }
 ```
 
 The adapter uses one scoped sum-tree traversal to seek and walk ordered entries. It does not repeatedly scan from the start of the blocklist. It skips unsupported blocklist item kinds in this PR rather than rendering placeholders for them.
 
-`TerminalHistoryIndex` collects owned descriptors while holding the terminal-model lock, releases that lock, and only then permits the viewport to invoke the item-render function. Generic view-measured height updates are batched and written back into rich-content heights under one short lock.
+`TuiBlockListViewportSource` consumes `BlockList`'s existing dirty rich-content queue, measures dirty registered TUI agent blocks at the current viewport width, and writes the resulting heights back through `BlockList::update_rich_content_heights`. It then collects owned descriptors while holding the terminal-model lock, releases that lock, and only then permits the viewport to invoke the item-render function.
 
 Small public `BlockList` helpers may be added where required to seek rich-content positions and read/update dirty rich-content height state. The `warp_tui` crate accesses those helpers and other app-owned model types only through the narrow `warp::tui_export` boundary.
 
 ### Transcript view and exchange lifecycle
 Add a TUI transcript view under `crates/warp_tui/src/` that owns the generalized viewport state and the terminal-history integration. The root TUI view embeds it as the lower column child beneath the input view in this PR. It subscribes to terminal-surface-scoped `BlocklistAIHistoryEvent`s and mirrors the existing GUI model-level lifecycle:
 - `AppendedExchange` creates a simple TUI agent block view and inserts one `RichContentItem` into the canonical `BlockList`.
-- `UpdatedStreamingExchange` invalidates the corresponding agent block's content/height and notifies the transcript.
+- `UpdatedStreamingExchange` marks the corresponding canonical rich-content item dirty and notifies the transcript.
 - `ReassignedExchange` updates the block's conversation association.
 - removal, deletion, clear, and transfer events remove the affected TUI agent rich-content entries.
 TUI agent rich-content entries intentionally leave `agent_view_conversation_id` unset. That field encodes GUI Agent View filtering; setting it while the TUI block list remains in `AgentViewState::Inactive` causes the shared `BlockList` height-update path to hide the entry. The TUI transcript keeps its conversation/exchange association in its own registration map while retaining canonical outer ordering in `BlockList`.
 
-The transcript renders `TerminalHistoryIndex` through an injected item-render function and stores viewport position in its view-owned handle:
+The transcript renders `TuiBlockListViewportSource` through `TuiViewportedList` and stores viewport position in its view-owned handle:
 ```rust
-let position = self.viewport.position();
-let viewport = self.viewport.clone();
-TuiViewportedList::new(
-    position,
-    index,
-    move |request, app| match request.item {
-        TerminalHistoryItem::TerminalBlock { block_id } => {
-            render_terminal_block(block_id, request.visible_rows, request.width, app)
-        }
-        TerminalHistoryItem::AgentBlock { conversation_id, exchange_id, .. } => {
-            render_agent_block(
-                conversation_id,
-                exchange_id,
-                request.visible_rows,
-                request.width,
-                app,
-            )
-        }
-    },
-    move |position| viewport.set_position(position),
-)
+let source = TuiBlockListViewportSource::new(
+    self.model.clone(),
+    self.agent_blocks.clone(),
+);
+TuiViewportedList::new(self.viewport.clone(), source)
 ```
 
 ### Simple terminal block
@@ -123,7 +104,7 @@ flowchart TD
   Root --> Transcript
   TerminalModel --> BlockList["TerminalModel::BlockList<br/>canonical SumTree"]
   Transcript -->|append/update/remove agent rich content| BlockList
-  BlockList --> Index["TerminalHistoryIndex<br/>scoped cursor"]
+  BlockList --> Index["TuiBlockListViewportSource<br/>scoped cursor"]
   Index -->|owned visible descriptors| Viewport["TuiViewportedList"]
   Viewport --> Render["Injected item renderer"]
   Render --> Terminal["Simple terminal block<br/>visible rows"]
@@ -170,9 +151,9 @@ Run:
 - `cargo check -p warp --tests`
 - `cargo clippy -p warp -p warp_tui --all-targets -- -D warnings`
 ## Parallelization
-Parallel implementation agents are not proposed. The generalized viewport API, terminal-history index, block renderers, and transcript lifecycle are tightly coupled through evolving associated types and height/locking contracts; parallel branches would spend significant time restacking and reconciling the same interfaces. Implement sequentially on `harry/tui-transcript-view`, then run focused validation in parallel where the test runner permits it.
+Parallel implementation agents are not proposed. The generalized viewport API, TUI block-list viewport source, block renderers, and transcript lifecycle are tightly coupled through evolving associated types and height/locking contracts; parallel branches would spend significant time restacking and reconciling the same interfaces. Implement sequentially on `harry/tui-transcript-view`, then run focused validation in parallel where the test runner permits it.
 ## Risks and mitigations
-- **A second transcript order diverges from the terminal model.** Use `TerminalModel::BlockList` as the only canonical order; `TerminalHistoryIndex` is an adapter, not storage.
+- **A second transcript order diverges from the terminal model.** Use `TerminalModel::BlockList` as the only canonical order; `TuiBlockListViewportSource` is an adapter, not storage.
 - **Viewport abstraction leaks terminal or agent types.** Keep descriptors opaque to `TuiViewportedList`; all type-specific rendering stays in the injected app-layer function.
 - **Terminal-model deadlock or UI stall.** End scoped index traversal before item rendering; snapshot only required terminal grid rows; batch height writeback under one short lock.
 - **Hidden O(N) traversal defeats virtualization.** Require efficient cursor seek/advance/retreat and verify traversal counts with fake indexes.
