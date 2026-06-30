@@ -32,6 +32,7 @@ pub(crate) mod codebase_index_speedbump_banner;
 pub(crate) mod telemetry_banner;
 pub(super) mod view_util;
 
+pub(crate) use action_model::recording_controller::RecordingController;
 pub use action_model::BlocklistAIActionModel;
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{

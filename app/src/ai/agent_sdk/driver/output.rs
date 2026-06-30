@@ -286,6 +286,8 @@ pub mod text {
                 },
                 // TODO(AGENT-2281): implement
                 AIAgentActionResultType::RequestComputerUse(_result) => Ok(()),
+                AIAgentActionResultType::StartRecording(_)
+                | AIAgentActionResultType::StopRecording(_) => Ok(()),
                 AIAgentActionResultType::FetchConversation(result) => match result {
                     FetchConversationResult::Success { directory_path } => {
                         writeln!(w, "Fetched conversation to {directory_path}")
@@ -408,6 +410,12 @@ pub mod text {
                     }
                     AIAgentActionType::RequestComputerUse(request) => {
                         writeln!(w, "Requesting computer use: {}", request.task_summary)?;
+                    }
+                    AIAgentActionType::StartRecording { .. } => {
+                        writeln!(w, "Starting recording")?;
+                    }
+                    AIAgentActionType::StopRecording { recording_id } => {
+                        writeln!(w, "Stopping recording {recording_id}")?;
                     }
                     AIAgentActionType::ReadSkill(request) => {
                         writeln!(w, "Reading skill: {}", request.skill)?;
@@ -1094,7 +1102,9 @@ pub mod json {
                     // TODO(AGENT-2281): implement
                     AIAgentActionType::RequestComputerUse(_) => None,
                     // Internal or non-CLI tool calls: skip them
-                    AIAgentActionType::SuggestNewConversation { .. }
+                    AIAgentActionType::StartRecording { .. }
+                    | AIAgentActionType::StopRecording { .. }
+                    | AIAgentActionType::SuggestNewConversation { .. }
                     | AIAgentActionType::SuggestPrompt { .. }
                     | AIAgentActionType::InitProject
                     | AIAgentActionType::OpenCodeReview
