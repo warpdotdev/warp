@@ -44,7 +44,9 @@ impl TuiViewportedElement for FakeContent {
     ) -> TuiViewportContent {
         self.requests.borrow_mut().push(window);
         self.widths.borrow_mut().push(available_width);
-        let viewport_bottom = window.scroll_top.saturating_add(window.viewport_height);
+        let viewport_bottom = window
+            .scroll_top
+            .saturating_add(usize::from(window.viewport_height));
         let mut origin_y = 0usize;
         let mut visible_items = Vec::new();
         for item in self.items.borrow().iter() {

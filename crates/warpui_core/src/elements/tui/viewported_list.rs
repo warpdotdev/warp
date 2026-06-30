@@ -58,18 +58,22 @@ impl TuiViewportedListState {
 /// A content-space viewport window.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TuiViewportWindow {
+    /// Absolute content-space row at the top of the viewport.
     pub scroll_top: usize,
-    pub viewport_height: usize,
+    /// Visible terminal height in rows.
+    pub viewport_height: u16,
 }
 
 /// A child element visible in a content-space viewport.
 pub struct TuiVisibleViewportItem {
+    /// Absolute content-space row where this child starts.
     pub origin_y: usize,
     pub element: Box<dyn TuiElement>,
 }
 
 /// The content returned for a viewport window.
 pub struct TuiViewportContent {
+    /// Total content height in content-space rows.
     pub content_height: usize,
     pub items: Vec<TuiVisibleViewportItem>,
 }
@@ -89,6 +93,7 @@ pub trait TuiViewportedElement {
 }
 
 struct VisibleElement {
+    // Viewport-local render coordinates use `u16` to match TUI geometry.
     viewport_y: u16,
     height: u16,
     element: TuiClipped,
@@ -137,10 +142,11 @@ where
     fn viewport_content(
         &mut self,
         scroll_top: usize,
-        viewport_height: usize,
+        viewport_height: u16,
         available_width: u16,
         app: &AppContext,
     ) -> (usize, TuiViewportContent) {
+        let viewport_height_rows = usize::from(viewport_height);
         let mut content = self.content.visible_items(
             TuiViewportWindow {
                 scroll_top,
@@ -149,7 +155,7 @@ where
             available_width,
             app,
         );
-        let max_scroll_top = max_scroll_top(content.content_height, viewport_height);
+        let max_scroll_top = max_scroll_top(content.content_height, viewport_height_rows);
         let clamped_scroll_top = match self.state.position() {
             TuiViewportPosition::End => max_scroll_top,
             TuiViewportPosition::RowsFromTop(_) => scroll_top.min(max_scroll_top),
@@ -182,15 +188,16 @@ where
         app: &AppContext,
     ) {
         self.visible_elements.clear();
-        let viewport_height = usize::from(constraint.max.height);
+        let viewport_height = constraint.max.height;
+        let viewport_height_rows = usize::from(viewport_height);
         let available_width = constraint.max.width;
-        let requested_scroll_top = self.requested_scroll_top(viewport_height);
+        let requested_scroll_top = self.requested_scroll_top(viewport_height_rows);
         let (scroll_top, content) =
             self.viewport_content(requested_scroll_top, viewport_height, available_width, app);
 
         self.content_height = content.content_height;
 
-        let viewport_bottom = scroll_top.saturating_add(viewport_height);
+        let viewport_bottom = scroll_top.saturating_add(viewport_height_rows);
         for item in content.items {
             let mut element = item.element;
             let full_size = element.layout(

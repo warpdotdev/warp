@@ -7,7 +7,7 @@ WarpUI already has a TUI element/view/presenter stack. [`TuiElement`](../../crat
 ### Generalized viewport element
 Add `crates/warpui_core/src/elements/tui/viewported_list.rs`: a `TuiViewportedList` that delegates content slicing to a caller-provided `TuiViewportedElement`. The list owns viewport geometry, scroll position clamping, visible child layout, painting, presentation, cursor lookup, and event dispatch. The content source owns item storage, item identity, ordered traversal, height caches, and any width-dependent measurement reconciliation.
 The content source API is absolute-row based:
-- `TuiViewportWindow { scroll_top, viewport_height }` describes the requested visible row window in content-space rows.
+- `TuiViewportWindow { scroll_top, viewport_height }` describes the requested visible row window, with `scroll_top` in content-space rows and `viewport_height` in terminal rows.
 - `TuiViewportedElement::visible_items(window, available_width, app)` returns `TuiViewportContent`; `available_width` is layout context for width-dependent height reconciliation, not horizontal viewport state.
 - `TuiViewportContent { content_height, items }` reports the full content height and the child elements visible in or near the requested window.
 - `TuiVisibleViewportItem { origin_y, element }` gives each returned child element's top row in content coordinates.

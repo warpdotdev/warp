@@ -112,7 +112,9 @@ impl TuiViewportedElement for DemoViewportContent {
             }
         }
 
-        let viewport_bottom = window.scroll_top.saturating_add(window.viewport_height);
+        let viewport_bottom = window
+            .scroll_top
+            .saturating_add(usize::from(window.viewport_height));
         let mut origin_y = 0usize;
         let mut visible_items = Vec::new();
         for item in items.iter() {
