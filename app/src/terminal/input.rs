@@ -13669,6 +13669,16 @@ impl Input {
             );
         });
 
+        let compact_and_argument = if prompt == commands::COMPACT_AND.name {
+            Some(None)
+        } else {
+            commands::strip_command_prefix(&prompt, commands::COMPACT_AND.name).map(Some)
+        };
+        if let Some(argument) = compact_and_argument {
+            self.execute_queued_compact_and(conversation_id, query_id, argument, ctx);
+            return;
+        }
+
         let detected = self
             .slash_command_model
             .as_ref(ctx)
@@ -13684,6 +13694,7 @@ impl Input {
                     detected_command.argument.as_ref(),
                     SlashCommandTrigger::input(),
                     /*is_queued_prompt*/ true,
+                    Some(conversation_id),
                     Some(query_id),
                     ctx,
                 )
@@ -13768,6 +13779,7 @@ impl Input {
                         .as_ref(ctx)
                         .is_ready_for_cloud_followup_prompt()
                 });
+
         if is_ready_for_cloud_followup {
             // Cloud follow-up does not support attachments; a queued row's attachments are dropped
             // when the row is removed after dispatch.
@@ -13971,9 +13983,8 @@ impl Input {
             });
             QueuedQuery::new_with_attachments(prompt, origin, attachments)
         };
-        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-            model.append(conversation_id, query, ctx);
-        });
+        QueuedQueryModel::handle(ctx)
+            .update(ctx, |model, ctx| model.append(conversation_id, query, ctx));
 
         true
     }

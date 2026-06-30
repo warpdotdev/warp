@@ -175,7 +175,7 @@ impl Input {
         }
         if command.argument.as_ref().is_none() {
             self.execute_slash_command(
-                command, None, trigger, /*is_queued_prompt*/ false, None, ctx,
+                command, None, trigger, /*is_queued_prompt*/ false, None, None, ctx,
             );
         } else if command
             .argument
@@ -195,6 +195,7 @@ impl Input {
                 argument.as_ref(),
                 trigger,
                 /*is_queued_prompt*/ false,
+                None,
                 None,
                 ctx,
             );
@@ -370,6 +371,7 @@ impl Input {
         argument: Option<&String>,
         trigger: SlashCommandTrigger,
         is_queued_prompt: bool,
+        queued_conversation_id: Option<AIConversationId>,
         queued_query_id: Option<QueuedQueryId>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
@@ -1084,16 +1086,25 @@ impl Input {
                 });
             }
             compact_and if command.name == commands::COMPACT_AND.name => {
-                let Some(conversation_id) = self
-                    .ai_context_model
-                    .as_ref(ctx)
-                    .selected_conversation_id(ctx)
-                else {
-                    show_error_toast(
-                        "/compact-and requires an active conversation".to_owned(),
-                        ctx,
-                    );
-                    return true;
+                let conversation_id = if is_queued_prompt {
+                    let Some(conversation_id) = queued_conversation_id else {
+                        log::error!("Queued /compact-and missing conversation id");
+                        return true;
+                    };
+                    conversation_id
+                } else {
+                    let Some(conversation_id) = self
+                        .ai_context_model
+                        .as_ref(ctx)
+                        .selected_conversation_id(ctx)
+                    else {
+                        show_error_toast(
+                            "/compact-and requires an active conversation".to_owned(),
+                            ctx,
+                        );
+                        return true;
+                    };
+                    conversation_id
                 };
 
                 if is_queued_prompt {
@@ -1264,6 +1275,7 @@ impl Input {
                     SlashCommandTrigger::cmd_or_ctrl_enter(),
                     /*is_queued_prompt*/ false,
                     None,
+                    None,
                     ctx,
                 )
             }
@@ -1364,6 +1376,7 @@ impl Input {
                     SlashCommandTrigger::input(),
                     /*is_queued_prompt*/ false,
                     None,
+                    None,
                     ctx,
                 )
             }
@@ -1401,7 +1414,7 @@ impl Input {
     }
 
     /// Sends a queued `/compact-and` summary and stores its follow-up on the original conversation.
-    fn execute_queued_compact_and(
+    pub(super) fn execute_queued_compact_and(
         &mut self,
         conversation_id: AIConversationId,
         queued_query_id: QueuedQueryId,
@@ -1432,7 +1445,7 @@ impl Input {
                     followup_attachments,
                 ),
                 ctx,
-            );
+            )
         });
     }
 }

@@ -3160,6 +3160,26 @@ impl AIConversation {
         new_task_id
     }
 
+    /// Marks an optimistic CLI subagent active without emitting UI events.
+    #[cfg(test)]
+    pub(crate) fn create_optimistic_cli_subagent_task_for_test(
+        &mut self,
+        block_id: &BlockId,
+    ) -> TaskId {
+        let new_task = Task::new_optimistic_cli_agent_subtask(block_id.clone());
+        let new_task_id = new_task.id().clone();
+        self.optimistic_cli_subagent_subtask_id = Some(new_task_id.clone());
+        self.task_store.insert(new_task);
+        new_task_id
+    }
+
+    /// Clears an optimistic CLI subagent without emitting UI events.
+    #[cfg(test)]
+    pub(crate) fn clear_optimistic_cli_subagent_task_for_test(&mut self) {
+        if let Some(task_id) = self.optimistic_cli_subagent_subtask_id.take() {
+            self.task_store.remove(&task_id);
+        }
+    }
     pub fn is_subagent_task_finished(
         &self,
         subagent_task_id: &TaskId,

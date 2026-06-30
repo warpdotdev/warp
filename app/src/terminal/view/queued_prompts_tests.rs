@@ -1049,18 +1049,20 @@ fn lrc_finish_queued_compact_and_sends_followup_after_summary() {
         let _summarization = FeatureFlag::SummarizationConversationCommand.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
-        let conversation_id = terminal.update(&mut app, |view, ctx| {
-            view.agent_view_controller().update(ctx, |controller, ctx| {
-                controller
-                    .try_enter_agent_view(
-                        None,
-                        AgentViewEntryOrigin::Input {
-                            was_prompt_autodetected: false,
-                        },
-                        ctx,
-                    )
-                    .expect("should enter agent view")
-            })
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.ai_context_model
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx),
+                None
+            );
         });
 
         QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
