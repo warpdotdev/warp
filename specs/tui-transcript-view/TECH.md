@@ -25,11 +25,11 @@ TuiColumn::new()
     .flex_child(TuiChildView::new(&transcript_view))
     .child(bordered_input)
 ```
-The transcript fills remaining rows above the input. Short transcript content is bottom-aligned so it grows upward from the input; once content reaches the top of the transcript region, the existing viewport scrolling behavior takes over. The bordered input uses the real layout width minus a small horizontal inset, not a fixed input width.
+The transcript fills remaining rows above the input. Short transcript content is bottom-aligned so it grows upward from the input; once content reaches the top of the transcript region, the existing viewport scrolling behavior takes over. The bordered input uses the real layout width minus the session padding, not a fixed input width. The input border uses the TUI accent color.
 
 `TuiTerminalSessionView` is the `TerminalSurface` driven by the normal local terminal manager, so its transcript reads the same `TerminalModel` that receives shell output. `RootTuiView` remains only the login-gated app shell. `crates/warp_tui/src/session.rs` keeps the terminal manager and the `spawn_tui_driver` handle alive in a TUI-session singleton.
 
-This PR also relies on small TUI-core support changes: `TuiViewportedList` supports `TuiViewportVerticalAlignment::GrowFromBottom` for short transcript content, `TuiEventContext::set_origin_view` is public for TUI event tests, and `AppContext::subscribe_to_view` can subscribe to any `Entity`-backed `ViewHandle` rather than only GUI `View`s.
+This PR also relies on small TUI-core support changes: `TuiViewportedList` supports `TuiViewportVerticalAlignment::GrowFromBottom` for short transcript content, `TuiEventContext::set_origin_view` is public for TUI event tests, `AppContext::subscribe_to_view` can subscribe to any `Entity`-backed `ViewHandle` rather than only GUI `View`s, and `TuiContainer` supports uniform, per-axis, and per-side padding so callers can express one-sided spacing without local spacer elements.
 
 ### App integration surface
 The `warp_tui` crate accesses app-owned terminal and AI types through `app/src/tui_export.rs`. This PR expands that export boundary for the transcript, including:
@@ -44,6 +44,7 @@ The app-side trait bounds are relaxed where TUI surfaces now share production mo
 
 ### Interactive input hookup
 `TuiTerminalSessionView` embeds the editor-backed [`TuiInputView`](../../crates/warp_tui/src/input/view.rs) (a `warp::editor::CodeEditorModel` in char-cell mode) as the fixed bottom child. It subscribes to `TuiInputViewEvent::Submitted`; on submit it trims the text, ignores empty prompts, creates a selected `AgentViewEntryOrigin::Cli` conversation through `TuiConversationSelection` if needed, and sends through `BlocklistAIController`. `TuiInputView::submit` already clears the editor buffer, so the input resets after each send.
+The input box is rendered with a styled `TuiContainer` border. The input view reports cursor coordinates through the normal `TuiElement::cursor_position` path.
 The input view drives agent prompts only. Running shell commands from the TUI is future work, so the terminal session view emits no PTY intents; terminal-block rendering is exercised by tests that drive `TerminalModel` directly rather than by interactive input.
 
 ### TUI block-list viewport source
@@ -95,11 +96,13 @@ Add a simple terminal-block renderer under `crates/warp_tui/src/`. It renders on
 The renderer preserves terminal cell glyphs and styles and supports incremental output because terminal block heights and grid contents are already updated by `TerminalModel`.
 
 ### Simple agent block
-Add a simple TUI agent block view keyed by `(AIConversationId, AIAgentExchangeId)`. It reads the current exchange from `BlocklistAIHistoryModel` and renders:
+Add a simple TUI agent block view keyed by `(AIConversationId, AIAgentExchangeId)`. It reads the current exchange from `BlocklistAIHistoryModel` and extracts logical `TuiAgentBlockSection`s:
 - the exchange's displayable user input
 - concatenated streamed `AIAgentTextSection::PlainText` output
 
-The block calculates its full logical height at the actual width and reports it for rich-content height feedback. The viewport renders the agent block as a normal child view and clips it through the viewport item boundary. It intentionally omits all non-plain-text agent output rather than inventing placeholder production behavior in this PR.
+The view builds a normal TUI element tree from those sections. User input is rendered with `TuiContainer` and `TuiText` using a full-width highlighted background and the `≫ ` prompt prefix. Plain-text output is rendered with `TuiText`. Input/output separation and bottom padding are expressed with `TuiContainer` padding in the composed element tree, not with a separate manual height formula.
+
+The rich-content height adapter measures the same composed element tree at the actual viewport width and writes that height back to `BlockList`. The viewport renders the agent block as a normal child view and clips it through the viewport item boundary. It intentionally omits all non-plain-text agent output rather than inventing placeholder production behavior in this PR.
 ## End-to-end flow
 ```mermaid
 flowchart TD
@@ -131,10 +134,11 @@ The generalized viewport element, scroll/anchor model, height reconciliation, an
 ### Block renderer tests
 Current focused `warp_tui` crate unit tests cover:
 - agent block rendering of user input and streamed plain-text output
-- agent block width-dependent height calculation
+- agent block width-dependent height measurement through composed TUI layout
 - omission of unsupported agent sections until the TUI renders them intentionally
 - terminal grid snapshot preservation of theme colors, RGB colors, and common style flags
 - terminal block row slicing through the block-list viewport source
+- directional and axis-specific `TuiContainer` padding
 
 ### Transcript integration tests
 Current `warpui::App::test` and `TuiPresenter` coverage verifies:

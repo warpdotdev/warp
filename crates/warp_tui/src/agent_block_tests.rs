@@ -5,30 +5,28 @@ use warp::tui_export::{
     AIAgentTextSection, AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, LLMId,
     MessageId, OutputStatusUpdateCallback, ServerOutputId, Shared, UserQueryMode,
 };
-use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
+use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, ViewContext};
 
-use super::{AgentBlockContent, TuiAgentBlockItem, TuiAgentBlockView};
+use super::{
+    TuiAgentBlockElement, TuiAgentBlockSection, TuiAgentBlockView, INPUT_BACKGROUND,
+    INPUT_TEXT_COLOR, OUTPUT_COLOR,
+};
 
 #[test]
 fn simple_agent_block_reports_full_height_and_renders_content() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
-            let content = AgentBlockContent {
-                items: vec![
-                    TuiAgentBlockItem::Input("hello".to_owned()),
-                    TuiAgentBlockItem::PlainText("one\ntwo\nthree".to_owned()),
-                ],
-            };
-            assert_eq!(content.desired_height(20), 4);
+            let element = TuiAgentBlockElement::new(vec![
+                TuiAgentBlockSection::Input("hello".to_owned()),
+                TuiAgentBlockSection::PlainText("one\ntwo\nthree".to_owned()),
+            ]);
+            assert_eq!(element.desired_height(20, app_ctx), 6);
 
             let mut presenter = TuiPresenter::new();
-            let frame = presenter.present_element(
-                content.render(),
-                TuiRect::new(0, 0, 20, 4),
-                app_ctx,
-            );
+            let frame =
+                presenter.present_element(Box::new(element), TuiRect::new(0, 0, 20, 6), app_ctx);
             assert_eq!(
                 frame
                     .buffer
@@ -36,24 +34,32 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
                     .into_iter()
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
-                vec!["hello", "one", "two", "three"],
+                vec!["≫ hello", "", "one", "two", "three", ""],
             );
+            assert_eq!(frame.buffer[(0, 0)].fg, INPUT_TEXT_COLOR);
+            assert_eq!(frame.buffer[(0, 0)].bg, INPUT_BACKGROUND);
+            assert!(frame.buffer[(0, 0)].modifier.contains(Modifier::BOLD));
+            assert_eq!(frame.buffer[(2, 0)].fg, INPUT_TEXT_COLOR);
+            assert_eq!(frame.buffer[(19, 0)].bg, INPUT_BACKGROUND);
+            assert_eq!(frame.buffer[(0, 2)].fg, OUTPUT_COLOR);
         });
     });
 }
 
 #[test]
 fn simple_agent_block_reflows_height_at_narrow_width() {
-    let content = AgentBlockContent {
-        items: vec![
-            TuiAgentBlockItem::Input("hello world".to_owned()),
-            TuiAgentBlockItem::PlainText("streamed output".to_owned()),
-        ],
-    };
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let element = TuiAgentBlockElement::new(vec![
+                TuiAgentBlockSection::Input("hello world".to_owned()),
+                TuiAgentBlockSection::PlainText("streamed output".to_owned()),
+            ]);
 
-    let wide = content.desired_height(40);
-    let narrow = content.desired_height(6);
-    assert!(narrow > wide, "narrow text should occupy more logical rows");
+            let wide = element.desired_height(40, app_ctx);
+            let narrow = element.desired_height(6, app_ctx);
+            assert!(narrow > wide, "narrow text should occupy more logical rows");
+        });
+    });
 }
 
 #[test]
@@ -71,16 +77,13 @@ fn agent_block_extracts_input_and_plain_text_from_model() {
                     },
                 ]),
             }));
-
             assert_eq!(
-                block.content(app_ctx),
-                AgentBlockContent {
-                    items: vec![
-                        TuiAgentBlockItem::Input("hello".to_owned()),
-                        TuiAgentBlockItem::PlainText("one".to_owned()),
-                        TuiAgentBlockItem::PlainText("two".to_owned()),
-                    ],
-                }
+                block.element(app_ctx).sections,
+                vec![
+                    TuiAgentBlockSection::Input("hello".to_owned()),
+                    TuiAgentBlockSection::PlainText("one".to_owned()),
+                    TuiAgentBlockSection::PlainText("two".to_owned()),
+                ]
             );
         });
     });
@@ -105,10 +108,8 @@ fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {
             }));
 
             assert_eq!(
-                block.content(app_ctx),
-                AgentBlockContent {
-                    items: vec![TuiAgentBlockItem::PlainText("visible".to_owned())],
-                }
+                block.element(app_ctx).sections,
+                vec![TuiAgentBlockSection::PlainText("visible".to_owned())]
             );
         });
     });

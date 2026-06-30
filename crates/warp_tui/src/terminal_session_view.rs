@@ -3,11 +3,12 @@
 use warp::editor::CodeEditorModel;
 use warp::tui_export::{
     ActiveSession, AgentViewEntryOrigin, BlocklistAIActionModel, BlocklistAIContextModel,
-    BlocklistAIController, BlocklistAIInputModel, ConversationSelection, ConversationSelectionHandle,
-    GetRelevantFilesController, PtyIntent, PtyIntentEvent, TerminalSurface, TerminalSurfaceInit,
+    BlocklistAIController, BlocklistAIInputModel, ConversationSelection,
+    ConversationSelectionHandle, GetRelevantFilesController, PtyIntent, PtyIntentEvent,
+    TerminalSurface, TerminalSurfaceInit,
 };
 use warpui_core::elements::tui::{
-    TuiChildView, TuiColumn, TuiConstrainedBox, TuiContainer, TuiElement,
+    Color, TuiChildView, TuiColumn, TuiConstrainedBox, TuiContainer, TuiElement, TuiStyle,
 };
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
@@ -21,6 +22,7 @@ use crate::transcript_view::TuiTranscriptView;
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
 const BORDER_ROWS: u16 = 2;
+const INPUT_BORDER_COLOR: Color = Color::from_u32(0xd0d1fe);
 const SESSION_PADDING: u16 = 2;
 
 /// This surface emits no PTY intents; commands are driven only by the spawned shell.
@@ -122,11 +124,7 @@ impl TuiTerminalSessionView {
     }
 
     /// Routes submitted prompts to the surface's conversation.
-    fn handle_submitted_prompt(
-        &mut self,
-        event: &TuiInputViewEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    fn handle_submitted_prompt(&mut self, event: &TuiInputViewEvent, ctx: &mut ViewContext<Self>) {
         match event {
             TuiInputViewEvent::Submitted(prompt) => {
                 let prompt = prompt.trim().to_owned();
@@ -164,7 +162,8 @@ impl TuiTerminalSessionView {
 
     fn render_session(&self) -> Box<dyn TuiElement> {
         let input_box = TuiConstrainedBox::new(
-            TuiContainer::new(TuiChildView::new(&self.input_view)).with_border(),
+            TuiContainer::new(TuiChildView::new(&self.input_view))
+                .with_border_style(TuiStyle::default().fg(INPUT_BORDER_COLOR)),
         )
         .with_max_rows(MAX_INPUT_TEXT_ROWS + BORDER_ROWS);
         Box::new(
@@ -210,4 +209,3 @@ impl TerminalSurface for TuiTerminalSessionView {
         ctx.notify();
     }
 }
-
