@@ -6,6 +6,12 @@ pub fn is_supported_on_current_platform() -> bool {
     false
 }
 
+/// Reports whether background, per-window control is available. The noop backend performs no
+/// real actions, so per-window background control is unsupported.
+pub fn background_supported() -> bool {
+    false
+}
+
 pub struct Actor;
 
 impl Actor {

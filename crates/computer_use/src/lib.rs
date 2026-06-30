@@ -50,7 +50,7 @@ pub fn create_actor() -> Box<dyn Actor> {
 /// the whole screen / frontmost application.
 pub fn background_supported() -> bool {
     if cfg!(feature = "test-util") {
-        false
+        noop::background_supported()
     } else {
         imp::background_supported()
     }

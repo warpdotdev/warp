@@ -24,6 +24,12 @@ pub fn is_supported_on_current_platform() -> bool {
     probe_input_desktop_available()
 }
 
+/// Reports whether background, per-window control is available. The Windows input stack drives the
+/// screen / foreground window, so per-window background control is unsupported.
+pub fn background_supported() -> bool {
+    false
+}
+
 /// Shared probe used by both [`is_supported_on_current_platform`] and [`Actor::new`] so the
 /// "can we drive input right now?" logic lives in one place. This still runs the probe on each
 /// call (it's a cheap `OpenInputDesktop` / `CloseDesktop` round-trip) — we don't cache it because

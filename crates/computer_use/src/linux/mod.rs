@@ -24,6 +24,12 @@ pub fn is_supported_on_current_platform() -> bool {
     is_wayland_available() || is_x11_available()
 }
 
+/// Reports whether background, per-window control is available. The Linux input stack drives the
+/// whole screen / frontmost application, so per-window background control is unsupported.
+pub fn background_supported() -> bool {
+    false
+}
+
 pub struct Actor {
     inner: ActorInner,
 }
