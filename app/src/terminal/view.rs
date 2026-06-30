@@ -1659,6 +1659,7 @@ pub enum Event {
     Escape,
     Exited,
     BlockListCleared,
+    ReloadShellRequested,
     ShareModalOpened(BlockIndex),
     SendNotification(BlockNotification),
     BlockCompleted {
@@ -2529,6 +2530,11 @@ pub struct TerminalView {
 
     /// None iff there is no context menu open currently.
     context_menu_state: Option<ContextMenuState>,
+
+    /// True while this terminal view is shown as a temporary replacement for
+    /// another pane. That relationship is owned by PaneGroup, but TerminalView
+    /// needs this bit to keep local menu/keybinding affordances in sync.
+    is_temporary_replacement: bool,
 
     /// The search bar at the top of the terminal view.
     find_bar: ViewHandle<Find<TerminalFindModel>>,
@@ -4301,6 +4307,7 @@ impl TerminalView {
             horizontal_clipped_scroll_state: Default::default(),
             is_selecting: false,
             context_menu_state: None,
+            is_temporary_replacement: false,
             context_menu,
             hovered_secret: None,
             open_secret_tool_tip: None,
@@ -17127,25 +17134,28 @@ impl TerminalView {
                 | BlockListMenuSource::RichContentTextRightClick { .. }
                 | BlockListMenuSource::OutsideBlockRightClick { .. }
         ) {
-            // Surface "Clear Blocks" in the right-click menu so it's
-            // discoverable without the keyboard shortcut. We skip
-            // text-selection contexts (`Regular*TextRightClick` /
-            // `RichContentTextRightClick`) because those menus are scoped to
-            // actions on the selected text.
-            let include_clear = matches!(
+            // Surface terminal-wide actions in the right-click menu so they're
+            // discoverable without keyboard shortcuts.
+            let include_terminal_actions = matches!(
                 menu_source,
                 BlockListMenuSource::RegularBlockRightClick { .. }
                     | BlockListMenuSource::RichContentBlockRightClick { .. }
                     | BlockListMenuSource::OutsideBlockRightClick { .. }
             );
-            let clear_menu_item = include_clear
-                .then(|| self.clear_buffer_menu_item(&model, ctx))
-                .flatten();
-            if let Some(clear_menu_item) = clear_menu_item {
+            let mut terminal_action_items = Vec::new();
+            if include_terminal_actions {
+                if let Some(clear_menu_item) = self.clear_buffer_menu_item(&model, ctx) {
+                    terminal_action_items.push(clear_menu_item);
+                }
+                if self.can_reload_shell_from_model(&model, ctx) {
+                    terminal_action_items.push(self.reload_shell_menu_item(ctx));
+                }
+            }
+            if !terminal_action_items.is_empty() {
                 if !items.is_empty() {
                     items.push(MenuItem::Separator);
                 }
-                items.push(clear_menu_item);
+                items.extend(terminal_action_items);
             }
 
             let current_shell = model.shell_launch_state().available_shell();
@@ -17160,6 +17170,15 @@ impl TerminalView {
         }
 
         items
+    }
+
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub(crate) fn context_menu_items_for_test(
+        &self,
+        menu_source: &BlockListMenuSource,
+        ctx: &mut ViewContext<Self>,
+    ) -> Vec<MenuItem<TerminalAction>> {
+        self.context_menu_items(menu_source, ctx)
     }
 
     /// Builds the "Clear Blocks" entry for the terminal right-click context
@@ -17183,6 +17202,41 @@ impl TerminalView {
                 ))
                 .into_item(),
         )
+    }
+
+    /// Builds the "Reload Shell" entry for the terminal right-click context menu.
+    fn reload_shell_menu_item(&self, ctx: &AppContext) -> MenuItem<TerminalAction> {
+        MenuItemFields::new("Reload Shell")
+            .with_on_select_action(TerminalAction::ReloadShell)
+            .with_key_shortcut_label(keybinding_name_to_display_string(
+                "terminal:reload_shell",
+                ctx,
+            ))
+            .into_item()
+    }
+
+    pub fn can_reload_shell(&self, ctx: &AppContext) -> bool {
+        let model = self.model.lock();
+        self.can_reload_shell_from_model(&model, ctx)
+    }
+
+    fn can_reload_shell_from_model(&self, model: &TerminalModel, ctx: &AppContext) -> bool {
+        matches!(
+            model.shared_session_status(),
+            SharedSessionStatus::NotShared
+        ) && !model.is_read_only()
+            && !self.is_temporary_replacement
+            && !self.is_orchestration_split_off()
+            && !self.is_ambient_agent_session(ctx)
+            && CLIAgentSessionsModel::as_ref(ctx)
+                .session(self.view_id)
+                .is_none()
+            && !(FeatureFlag::AgentView.is_enabled()
+                && self.agent_view_controller.as_ref(ctx).is_active())
+    }
+
+    pub(crate) fn set_is_temporary_replacement(&mut self, is_temporary_replacement: bool) {
+        self.is_temporary_replacement = is_temporary_replacement;
     }
 
     fn copy_prompt_menu_items(
@@ -26269,6 +26323,7 @@ impl TypedActionView for TerminalView {
             | ReinputCommands
             | ReinputCommandsWithSudo
             | ClearBuffer
+            | ReloadShell
             | Focus
             | ShowFindBar
             | PageUp
@@ -26591,6 +26646,7 @@ impl TypedActionView for TerminalView {
             ReinputCommands => self.reinput_commands(false, ctx),
             ReinputCommandsWithSudo => self.reinput_commands(true, ctx),
             ClearBuffer => self.clear_buffer(ctx),
+            ReloadShell => ctx.emit(Event::ReloadShellRequested),
             Focus => self.redetermine_global_focus(ctx),
             FocusInputAndClearSelection => self.focus_input_and_clear_selections(ctx),
             ShowFindBar => self.show_find_bar(ctx),
@@ -28173,6 +28229,10 @@ impl View for TerminalView {
 
         if self.is_input_box_visible(&model_lock, app) {
             context.set.insert(INPUT_BOX_VISIBLE_KEY);
+        }
+
+        if self.can_reload_shell_from_model(&model_lock, app) {
+            context.set.insert(init::CAN_RELOAD_SHELL_KEY);
         }
 
         if self.input.as_ref(app).editor().as_ref(app).is_focused() {

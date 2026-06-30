@@ -1204,6 +1204,60 @@ impl PaneGroup {
         }
     }
 
+    fn reload_shell_in_pane(
+        &mut self,
+        terminal_pane_id: TerminalPaneId,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let pane_id = terminal_pane_id.into();
+        if !self.pane_contents.contains_key(&pane_id)
+            || self.is_child_agent_pane(pane_id)
+            || self.is_split_off_child_agent_pane(pane_id, ctx)
+            || self.panes.is_temporary_replacement(pane_id)
+            || !self.panes.is_pane_in_tree(pane_id)
+            || self.panes.is_pane_hidden(&pane_id)
+        {
+            return false;
+        }
+
+        let Some(terminal_view) = self.terminal_view_from_pane_id(terminal_pane_id, ctx) else {
+            return false;
+        };
+
+        let (can_reload_shell, chosen_shell) = terminal_view.read(ctx, |view, ctx| {
+            let can_reload_shell = view.can_reload_shell(ctx);
+            let chosen_shell = view.model.lock().shell_launch_state().available_shell();
+            (can_reload_shell, chosen_shell)
+        });
+
+        if !can_reload_shell {
+            return false;
+        }
+
+        let startup_directory = self.startup_path_for_new_session(Some(terminal_pane_id), ctx);
+        let (pane_data, _) = self.create_terminal_pane_data(
+            startup_directory,
+            HashMap::new(),
+            IsSharedSessionCreator::No,
+            chosen_shell,
+            None,
+            ctx,
+        );
+
+        let replaced = self.replace_pane(pane_id, pane_data, false, ctx);
+        if replaced {
+            ctx.emit(Event::TerminalViewStateChanged);
+            ctx.emit(Event::ActiveSessionChanged);
+        }
+        replaced
+    }
+
+    fn is_split_off_child_agent_pane(&self, pane_id: PaneId, ctx: &AppContext) -> bool {
+        self.child_agent_origin.as_ref().is_some_and(|origin| {
+            self.pane_id_for_conversation_owner(origin.conversation_id, ctx) == Some(pane_id)
+        })
+    }
+
     fn handle_pane_view_event(
         &mut self,
         pane_id: PaneId,
@@ -4654,7 +4708,13 @@ impl PaneGroup {
         }
 
         if let Some(original_pane_id) = self.panes.original_pane_for_replacement(child_pane_id) {
-            self.panes.revert_temporary_replacement(child_pane_id);
+            if self
+                .panes
+                .revert_temporary_replacement(child_pane_id)
+                .is_some()
+            {
+                self.set_terminal_temporary_replacement_state(child_pane_id, false, ctx);
+            }
             if was_focused {
                 self.focus_pane(original_pane_id, true, ctx);
             }
@@ -4698,7 +4758,9 @@ impl PaneGroup {
         if self.is_child_agent_pane(pane_id) {
             // Revert the swap if the child is currently swapped in.
             if self.panes.original_pane_for_replacement(pane_id).is_some() {
-                self.panes.revert_temporary_replacement(pane_id);
+                if self.panes.revert_temporary_replacement(pane_id).is_some() {
+                    self.set_terminal_temporary_replacement_state(pane_id, false, ctx);
+                }
             }
             // Or remove the child from the tree if it was split off.
             else if self.panes.is_pane_in_tree(pane_id) && !self.panes.remove(pane_id) {
@@ -4883,7 +4945,13 @@ impl PaneGroup {
                 view.clear_orchestration_split_off(ctx);
             });
         }
-        self.panes.revert_temporary_replacement(replacement_id);
+        if self
+            .panes
+            .revert_temporary_replacement(replacement_id)
+            .is_some()
+        {
+            self.set_terminal_temporary_replacement_state(replacement_id, false, ctx);
+        }
     }
 
     /// Reveal `pane_id` if it's currently the original of an active swap,
@@ -4940,6 +5008,7 @@ impl PaneGroup {
             );
             return false;
         };
+        self.set_terminal_temporary_replacement_state(replacement_pane_id, is_temporary, ctx);
         let success = self
             .panes
             .replace_pane(original_pane_id, replacement_pane_id, is_temporary);
@@ -4981,6 +5050,9 @@ impl PaneGroup {
         ctx: &mut ViewContext<Self>,
     ) -> Option<PaneId> {
         let original_pane_id = self.panes.revert_temporary_replacement(replacement_pane_id);
+        if original_pane_id.is_some() {
+            self.set_terminal_temporary_replacement_state(replacement_pane_id, false, ctx);
+        }
         self.clean_up_pane(replacement_pane_id, ctx);
         self.pane_contents.remove(&replacement_pane_id);
 
@@ -6941,6 +7013,19 @@ impl PaneGroup {
             .map(|session| session.terminal_view(ctx))
     }
 
+    fn set_terminal_temporary_replacement_state(
+        &self,
+        pane_id: impl Into<PaneId>,
+        is_temporary_replacement: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) {
+            terminal_view.update(ctx, |view, _ctx| {
+                view.set_is_temporary_replacement(is_temporary_replacement);
+            });
+        }
+    }
+
     pub fn attach_execution_session_to_ambient_pane(
         &mut self,
         pane_id: PaneId,
@@ -7110,6 +7195,7 @@ impl PaneGroup {
             );
             return;
         }
+        self.set_terminal_temporary_replacement_state(target_pane_id, true, ctx);
         self.handle_pane_count_change(ctx);
         self.focus_pane_preserving_maximized_state(target_pane_id, true, ctx);
         // Refresh the back-button label on both swapped panes; otherwise
@@ -7224,8 +7310,12 @@ impl PaneGroup {
             .panes
             .original_pane_for_replacement(child_pane_id)
             .is_some()
+            && self
+                .panes
+                .revert_temporary_replacement(child_pane_id)
+                .is_some()
         {
-            self.panes.revert_temporary_replacement(child_pane_id);
+            self.set_terminal_temporary_replacement_state(child_pane_id, false, ctx);
         }
 
         // Remove the child from the tree if it was a real sibling.
