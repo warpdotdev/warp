@@ -14,6 +14,7 @@
 
 mod execute;
 mod preprocess;
+pub(crate) mod recording_controller;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;

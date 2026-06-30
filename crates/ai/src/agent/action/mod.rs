@@ -18,9 +18,10 @@ use crate::agent::action_result::{
     InsertReviewCommentsResult, ReadDocumentsResult, ReadFilesResult, ReadMCPResourceResult,
     ReadShellCommandOutputResult, ReadSkillResult, RequestCommandOutputResult,
     RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, SearchCodebaseResult,
-    SendMessageToAgentResult, StartAgentResult, StartAgentVersion, SuggestNewConversationResult,
-    SuggestPromptResult, TransferShellCommandControlToUserResult, UploadArtifactResult,
-    UseComputerResult, WaitForEventsResult, WriteToLongRunningShellCommandResult,
+    SendMessageToAgentResult, StartAgentResult, StartAgentVersion, StartRecordingResult,
+    StopRecordingResult, SuggestNewConversationResult, SuggestPromptResult,
+    TransferShellCommandControlToUserResult, UploadArtifactResult, UseComputerResult,
+    WaitForEventsResult, WriteToLongRunningShellCommandResult,
 };
 use crate::agent::{AIAgentCitation, FileLocations};
 use crate::diff_validation::ParsedDiff;
@@ -135,6 +136,15 @@ pub enum AIAgentActionType {
     },
 
     RequestComputerUse(RequestComputerUseRequest),
+
+    /// AI requested to start recording a video of the computer-use session.
+    /// Capture configuration is runtime-controlled, so v0 carries no arguments.
+    StartRecording,
+
+    /// AI requested to stop an in-progress recording and publish the video.
+    StopRecording {
+        recording_id: String,
+    },
 
     // AI requested to read a skill.
     ReadSkill(ReadSkillRequest),
@@ -374,6 +384,12 @@ impl AIAgentActionType {
             Self::RequestComputerUse(_) => {
                 AIAgentActionResultType::RequestComputerUse(RequestComputerUseResult::Cancelled)
             }
+            Self::StartRecording => {
+                AIAgentActionResultType::StartRecording(StartRecordingResult::Cancelled)
+            }
+            Self::StopRecording { .. } => {
+                AIAgentActionResultType::StopRecording(StopRecordingResult::Cancelled)
+            }
             Self::ReadSkill(_) => AIAgentActionResultType::ReadSkill(ReadSkillResult::Cancelled),
             Self::FetchConversation { .. } => {
                 AIAgentActionResultType::FetchConversation(FetchConversationResult::Cancelled)
@@ -433,6 +449,8 @@ impl AIAgentActionType {
                 format!("Insert {} code review comments", comments.len())
             }
             Self::RequestComputerUse(_) => "Request computer use".to_string(),
+            Self::StartRecording => "Start recording".to_string(),
+            Self::StopRecording { .. } => "Stop recording".to_string(),
             Self::ReadSkill(_) => "Read skill".to_string(),
             Self::FetchConversation { .. } => "Fetch conversation".to_string(),
             Self::StartAgent { name, .. } => format!("Start agent: {name}"),
@@ -594,6 +612,12 @@ impl Display for AIAgentActionType {
             }
             AIAgentActionType::RequestComputerUse(req) => {
                 write!(f, "RequestComputerUse: {}", req.task_summary)
+            }
+            AIAgentActionType::StartRecording => {
+                write!(f, "StartRecording")
+            }
+            AIAgentActionType::StopRecording { recording_id } => {
+                write!(f, "StopRecording: {recording_id}")
             }
             AIAgentActionType::ReadSkill(req) => {
                 write!(f, "ReadSkill: {}", req.skill)
