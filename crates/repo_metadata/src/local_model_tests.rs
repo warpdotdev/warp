@@ -2396,6 +2396,55 @@ fn incremental_force_included_dir_under_ignored_parent_matches_initial_index() {
     );
 }
 
+/// A deep event under a gitignored directory (e.g. `target/debug/.fingerprint`) collapses to a
+/// single unloaded placeholder at the topmost ignored ancestor (`target`).
+#[test]
+fn incremental_deep_ignored_path_collapses_to_topmost_ignored_ancestor() {
+    VirtualFS::test(
+        "incremental_deep_ignored_collapses_to_ignored_root",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/target/debug/.fingerprint")
+                .with_files(vec![Stub::FileWithContent("repo/.gitignore", "target/\n")]);
+
+            let repo_local = dirs.tests().join("repo");
+            let deep_local = repo_local.join("target").join("debug").join(".fingerprint");
+            let target_local = repo_local.join("target");
+
+            let gitignores = crate::gitignores_for_directory(&repo_local);
+            let definitions = StandingQueryDefinitions::default();
+
+            let update = RepoUpdate {
+                added: vec![deep_local],
+                ..Default::default()
+            };
+            let (mutations, _standing_results, _removed) =
+                block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                    &update,
+                    &gitignores,
+                    &[], /* force_included_paths */
+                    &definitions,
+                    false, /* lazy_load */
+                ));
+
+            assert_eq!(
+                mutations.len(),
+                1,
+                "deep ignored event should collapse to one placeholder, got {mutations:?}"
+            );
+            match &mutations[0] {
+                FileTreeMutation::AddUnloadedDirectory { path, is_ignored } => {
+                    assert_eq!(
+                        path, &target_local,
+                        "placeholder should sit at the topmost ignored ancestor `target`"
+                    );
+                    assert!(*is_ignored, "the ignored root placeholder must be ignored");
+                }
+                other => panic!("expected AddUnloadedDirectory at `target`, got {other:?}"),
+            }
+        },
+    );
+}
+
 /// Expanding a gitignored directory inside a git repo registers an on-demand
 /// non-recursive watch for it on Linux (where the recursive root watch prunes
 /// gitignored dirs), while other platforms rely on the recursive root watch.
