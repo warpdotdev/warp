@@ -9389,6 +9389,13 @@ impl SettingsWidget for AwsBedrockWidget {
     }
 }
 
+/// Stable `&'static str` id for the custom model routers settings widget,
+/// exposed for the `warp://settings?widget=custom_router` deeplink (see
+/// `settings_widget_deeplink_target`).
+pub(crate) fn custom_model_routers_widget_id() -> &'static str {
+    CustomModelRoutersWidget::static_widget_id()
+}
+
 #[derive(Default)]
 struct CustomModelRoutersWidget;
 
