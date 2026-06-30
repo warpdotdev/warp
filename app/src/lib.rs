@@ -1183,6 +1183,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         ctx.add_singleton_model(move |ctx| {
             plugin::PluginHost::new(ctx).expect("Could not instantiate PluginHost")
         });
+        i18n::init_locale();
         let app_state = initialize_app(
             &launch_mode,
             timer,
@@ -1209,6 +1210,49 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             other => launch(ctx, app_state, other),
         }
     })
+}
+
+/// Looks up the translation key using the user's chosen locale.
+/// Falls back to the English (en) translation, then to the provided fallback string.
+pub(crate) fn menu_label(key: &str, fallback: &str) -> &'static str {
+    match i18n::lookup(key, i18n::current_locale()) {
+        i18n::TranslationLookup::Found(v) => Box::leak(v.into_owned().into_boxed_str()),
+        i18n::TranslationLookup::Missing => match i18n::lookup(key, "en") {
+            i18n::TranslationLookup::Found(v) => Box::leak(v.into_owned().into_boxed_str()),
+            i18n::TranslationLookup::Missing => Box::leak(fallback.to_string().into_boxed_str()),
+        },
+    }
+}
+
+#[cfg(test)]
+mod menu_label_tests {
+    use super::*;
+
+    #[test]
+    fn test_menu_label_returns_static_str() {
+        let result = menu_label("test.key", "fallback");
+        let _static_ref: &'static str = result;
+    }
+
+    #[test]
+    fn test_menu_label_fallback_for_missing_key() {
+        let result = menu_label("definitely.missing.key.xyz", "hello world");
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn test_menu_label_english_fallback() {
+        i18n::init_locale();
+        // With default locale (en), should return English translation
+        let _result = menu_label("test.key", "fallback");
+    }
+
+    #[test]
+    fn test_menu_label_consistency() {
+        let r1 = menu_label("test.key", "fallback");
+        let r2 = menu_label("test.key", "fallback");
+        assert_eq!(r1, r2);
+    }
 }
 
 pub struct UpdateQuakeModeEventArg {

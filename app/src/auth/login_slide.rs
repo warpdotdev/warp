@@ -961,7 +961,7 @@ impl LoginSlideView {
                 WARP_DRIVE_FEATURES,
                 "Enable Warp Drive",
             ),
-            LoginPurpose::WarpAgent | LoginPurpose::ThirdParty => (
+LoginPurpose::WarpAgent | LoginPurpose::ThirdParty => (
                 "Continue without signing in?",
                 "Without an account, you won't have access to Warp's AI features. Sign in anytime to unlock agents and other AI features.",
                 &[],

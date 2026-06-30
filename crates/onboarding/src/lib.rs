@@ -1,5 +1,17 @@
 // Onboarding library crate
 
+/// Looks up a translation key using the user's chosen locale.
+/// Falls back to the English (en) translation, then to the provided fallback string.
+pub fn menu_label(key: &str, fallback: &str) -> &'static str {
+    match i18n::lookup(key, i18n::current_locale()) {
+        i18n::TranslationLookup::Found(v) => Box::leak(v.into_owned().into_boxed_str()),
+        i18n::TranslationLookup::Missing => match i18n::lookup(key, "en") {
+            i18n::TranslationLookup::Found(v) => Box::leak(v.into_owned().into_boxed_str()),
+            i18n::TranslationLookup::Missing => Box::leak(fallback.to_string().into_boxed_str()),
+        },
+    }
+}
+
 mod agent_onboarding_view;
 pub mod callout;
 mod model;

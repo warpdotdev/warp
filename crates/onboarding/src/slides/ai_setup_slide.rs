@@ -24,12 +24,27 @@ use crate::model::{AiSetupChoice, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 
 /// Checklist shown on the "Use Warp agent" card.
-const WARP_AGENT_FEATURES: &[&str] = &[
-    "Best harness for terminal tasks and agentic coding",
-    "Frontier models from OpenAI, Anthropic, and Google",
-    "Model routing across frontier and open-weight models",
-    "Multi-agent orchestration",
-];
+/// Localized at call time because `crate::menu_label` is a runtime lookup.
+fn warp_agent_features() -> [&'static str; 4] {
+    [
+        crate::menu_label(
+            "onboarding.ai_setup.feature_harness",
+            "Best harness for terminal tasks and agentic coding",
+        ),
+        crate::menu_label(
+            "onboarding.ai_setup.feature_models",
+            "Frontier models from OpenAI, Anthropic, and Google",
+        ),
+        crate::menu_label(
+            "onboarding.ai_setup.feature_routing",
+            "Model routing across frontier and open-weight models",
+        ),
+        crate::menu_label(
+            "onboarding.ai_setup.feature_orchestration",
+            "Multi-agent orchestration",
+        ),
+    ]
+}
 
 #[derive(Debug, Clone)]
 pub enum AiSetupSlideAction {
@@ -106,7 +121,10 @@ impl AiSetupSlide {
 
         let title = appearance
             .ui_builder()
-            .paragraph("Choose your AI setup")
+            .paragraph(crate::menu_label(
+                "onboarding.ai_setup.choose_your_setup",
+                "Choose your AI setup",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -116,7 +134,10 @@ impl AiSetupSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Choose if you'd like to use Warp Agent or third party agents.",
+            crate::menu_label(
+                "onboarding.ai_setup.subtitle",
+                "Choose if you'd like to use Warp Agent or third party agents.",
+            ),
             appearance.ui_font_family(),
             16.,
         )
@@ -227,7 +248,10 @@ impl AiSetupSlide {
         let header_row = {
             let label = appearance
                 .ui_builder()
-                .paragraph("Use Warp Agent")
+                .paragraph(crate::menu_label(
+                    "onboarding.ai_setup.use_warp_agent",
+                    "Use Warp Agent",
+                ))
                 .with_style(UiComponentStyles {
                     font_size: Some(16.),
                     font_weight: Some(Weight::Semibold),
@@ -241,7 +265,10 @@ impl AiSetupSlide {
                 let green = theme.ansi_fg_green();
                 let badge_text = appearance
                     .ui_builder()
-                    .paragraph("Access more models")
+                    .paragraph(crate::menu_label(
+                        "onboarding.ai_setup.access_more_models",
+                        "Access more models",
+                    ))
                     .with_style(UiComponentStyles {
                         font_size: Some(12.),
                         font_weight: Some(Weight::Normal),
@@ -268,7 +295,10 @@ impl AiSetupSlide {
         };
 
         let description = FormattedTextElement::from_str(
-            "State of the art agent harness deeply integrated into the terminal.",
+            crate::menu_label(
+                "onboarding.ai_setup.warp_agent_description",
+                "State of the art agent harness deeply integrated into the terminal.",
+            ),
             appearance.ui_font_family(),
             14.,
         )
@@ -289,7 +319,7 @@ impl AiSetupSlide {
             let mut col = Flex::column()
                 .with_main_axis_size(MainAxisSize::Min)
                 .with_cross_axis_alignment(CrossAxisAlignment::Start);
-            for &item in WARP_AGENT_FEATURES {
+            for item in warp_agent_features() {
                 let icon_el = ConstrainedBox::new(Icon::Check.to_warpui_icon(check_fill).finish())
                     .with_width(16.)
                     .with_height(16.)
@@ -354,7 +384,10 @@ impl AiSetupSlide {
 
         let label = appearance
             .ui_builder()
-            .paragraph("Use third party agents")
+            .paragraph(crate::menu_label(
+                "onboarding.ai_setup.use_third_party",
+                "Use third party agents",
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(16.),
                 font_weight: Some(Weight::Semibold),
@@ -365,7 +398,10 @@ impl AiSetupSlide {
             .finish();
 
         let description = FormattedTextElement::from_str(
-            "Use agents like Claude Code, Codex, and Gemini.",
+            crate::menu_label(
+                "onboarding.ai_setup.third_party_description",
+                "Use agents like Claude Code, Codex, and Gemini.",
+            ),
             appearance.ui_font_family(),
             14.,
         )
@@ -395,7 +431,9 @@ impl AiSetupSlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(
+                    crate::menu_label("common.back", "Back").into(),
+                ),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -410,7 +448,9 @@ impl AiSetupSlide {
         let next_button = self.next_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Next".into()),
+                content: button::Content::Label(
+                    crate::menu_label("common.next", "Next").into(),
+                ),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(enter),

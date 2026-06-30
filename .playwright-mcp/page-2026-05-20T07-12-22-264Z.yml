@@ -1,0 +1,42 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - link "Skip to content" [ref=e4] [cursor=pointer]:
+      - /url: "#start-of-content"
+    - banner [ref=e6]
+  - main [ref=e9]:
+    - generic [ref=e10]:
+      - generic [ref=e14]:
+        - img [ref=e17]
+        - heading "Sign in to GitHub" [level=1] [ref=e20]
+      - generic [ref=e22]:
+        - generic [ref=e23]:
+          - generic [ref=e24]: Username or email address
+          - textbox "Username or email address" [active] [ref=e25]
+        - generic [ref=e26]:
+          - generic [ref=e27]: Password
+          - textbox "Password" [ref=e28]
+          - link "Forgot password?" [ref=e29] [cursor=pointer]:
+            - /url: /password_reset
+        - button "Sign in" [ref=e31] [cursor=pointer]
+      - paragraph [ref=e34]:
+        - text: New to GitHub?
+        - link "Create an account" [ref=e35] [cursor=pointer]:
+          - /url: /signup?source=login
+  - contentinfo [ref=e36]:
+    - list [ref=e37]:
+      - listitem [ref=e38]:
+        - link "Terms" [ref=e39] [cursor=pointer]:
+          - /url: https://docs.github.com/site-policy/github-terms/github-terms-of-service
+      - listitem [ref=e40]:
+        - link "Privacy" [ref=e41] [cursor=pointer]:
+          - /url: https://docs.github.com/site-policy/privacy-policies/github-privacy-statement
+      - listitem [ref=e42]:
+        - link "Docs" [ref=e43] [cursor=pointer]:
+          - /url: https://docs.github.com
+      - listitem [ref=e44]:
+        - link "Contact GitHub Support" [ref=e45] [cursor=pointer]:
+          - /url: https://support.github.com
+      - listitem [ref=e46]:
+        - button "Manage cookies" [ref=e48] [cursor=pointer]
+      - listitem [ref=e49]:
+        - button "Do not share my personal information" [ref=e51] [cursor=pointer]
