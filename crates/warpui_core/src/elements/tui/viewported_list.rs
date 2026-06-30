@@ -200,11 +200,11 @@ where
             }
 
             let viewport_y = visible_top.saturating_sub(scroll_top);
-            let hidden_top_rows = visible_top.saturating_sub(item_top);
+            let viewport_origin_y = visible_top.saturating_sub(item_top);
             let height = visible_bottom.saturating_sub(visible_top);
             let viewport_y = viewport_y.min(usize::from(u16::MAX)) as u16;
             let height = height.min(usize::from(u16::MAX)) as u16;
-            let element = TuiClipped::from_boxed(element).with_hidden_top_rows(hidden_top_rows);
+            let element = TuiClipped::from_boxed(element).with_viewport_origin_y(viewport_origin_y);
             self.visible_elements.push(VisibleElement {
                 viewport_y,
                 height,
