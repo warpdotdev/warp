@@ -1,8 +1,10 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::time::Duration;
 
 use ::ai::api_keys::CustomEndpoint;
 use url::Url;
 use warp_editor::editor::NavigationKey;
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::elements::{
     Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Expanded, Flex, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
@@ -25,10 +27,25 @@ use crate::view_components::action_button::{ActionButton, DangerSecondaryTheme};
 
 const LABEL_FONT_SIZE: f32 = 12.;
 const INPUT_WIDTH: f32 = 480.;
+/// Timeout for the test connection HTTP request.
+const CONNECTION_TEST_TIMEOUT_SECS: u64 = 10;
 
 const MODEL_ROW_SPACING: f32 = 16.;
 const REMOVE_MODEL_BUTTON_COL_WIDTH: f32 = 32.;
 const MODEL_INPUT_WIDTH: f32 = (INPUT_WIDTH - MODEL_ROW_SPACING) / 2.;
+
+/// Status of the "Test connection" probe for a custom endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionTestStatus {
+    /// No test has been initiated yet (or the test was reset).
+    Idle,
+    /// A request is currently in flight.
+    Testing,
+    /// The endpoint responded with HTTP 200.
+    Confirmed,
+    /// The endpoint returned a non-200 status or a network error occurred.
+    Failed,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CustomEndpointModalEvent {
@@ -58,6 +75,7 @@ pub enum CustomEndpointModalAction {
     AddModel,
     RemoveModel(usize),
     RemoveEndpoint,
+    TestConnection,
 }
 
 struct ModelRow {
@@ -75,9 +93,14 @@ pub struct CustomEndpointModal {
     cancel_button_mouse_state: MouseStateHandle,
     save_button_mouse_state: MouseStateHandle,
     add_model_button_mouse_state: MouseStateHandle,
+    test_connection_mouse_state: MouseStateHandle,
     remove_endpoint_button: ViewHandle<ActionButton>,
     editing_index: Option<usize>,
     url_has_error: bool,
+    connection_test_status: ConnectionTestStatus,
+    /// Handle for the in-flight connection test request; used to abort stale
+    /// requests when the URL or API key is edited mid-flight.
+    connection_test_handle: Option<SpawnedFutureHandle>,
 }
 
 impl CustomEndpointModal {
@@ -219,9 +242,12 @@ impl CustomEndpointModal {
             cancel_button_mouse_state: Default::default(),
             save_button_mouse_state: Default::default(),
             add_model_button_mouse_state: Default::default(),
+            test_connection_mouse_state: Default::default(),
             remove_endpoint_button,
             editing_index,
             url_has_error,
+            connection_test_status: ConnectionTestStatus::Idle,
+            connection_test_handle: None,
         }
     }
 
@@ -296,6 +322,7 @@ impl CustomEndpointModal {
         });
         let url = self.endpoint_url_editor.as_ref(ctx).buffer_text(ctx);
         self.url_has_error = !url.trim().is_empty() && validate_url(&url).is_err();
+        self.reset_connection_test_status();
         self.api_key_editor.update(ctx, |editor, ctx| {
             editor.set_buffer_text(endpoint.map(|e| e.api_key.as_str()).unwrap_or(""), ctx);
         });
@@ -344,6 +371,7 @@ impl CustomEndpointModal {
     }
 
     pub fn on_close(&mut self, ctx: &mut ViewContext<Self>) {
+        self.reset_connection_test_status();
         self.endpoint_name_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
         });
@@ -539,6 +567,8 @@ impl CustomEndpointModal {
                 self.cancel(ctx);
             }
             EditorEvent::Edited(_) => {
+                // Editing the URL resets the connection test so stale results aren't shown.
+                self.reset_connection_test_status();
                 if !self.validate_url_field(ctx) {
                     ctx.notify();
                 }
@@ -577,10 +607,87 @@ impl CustomEndpointModal {
                 self.cancel(ctx);
             }
             EditorEvent::Edited(_) => {
+                // Editing the API key resets the connection test so stale results aren't shown.
+                self.reset_connection_test_status();
                 ctx.notify();
             }
             _ => {}
         }
+    }
+
+    /// Aborts any in-flight connection test and resets the status to `Idle`.
+    fn reset_connection_test_status(&mut self) {
+        if let Some(handle) = self.connection_test_handle.take() {
+            handle.abort();
+        }
+        self.connection_test_status = ConnectionTestStatus::Idle;
+    }
+
+    /// Issues a GET request to `{endpoint_url}/models` using the provided API key
+    /// and updates `connection_test_status` based on the outcome.
+    fn test_connection(&mut self, ctx: &mut ViewContext<Self>) {
+        let url = self.endpoint_url_editor.as_ref(ctx).buffer_text(ctx);
+        let api_key = self.api_key_editor.as_ref(ctx).buffer_text(ctx);
+
+        // Guard: only run when both fields are filled and the URL passes validation.
+        // Note: `validate_url` inspects the host at parse time and blocks known private/
+        // loopback addresses, but DNS resolution happens later inside `reqwest`. A public
+        // hostname that resolves to a private IP (DNS rebinding) is not blocked here.
+        // This is an accepted V0 trade-off; future hardening could pin-check the resolved
+        // address before sending the request.
+        // Redirects are disabled on the client (see client builder below) so a public URL
+        // that 30x-redirects to a private address cannot bypass the host check.
+        if url.trim().is_empty() || api_key.trim().is_empty() || validate_url(&url).is_err() {
+            return;
+        }
+
+        // Abort any previous in-flight request before starting a new one.
+        if let Some(prev) = self.connection_test_handle.take() {
+            prev.abort();
+        }
+
+        self.connection_test_status = ConnectionTestStatus::Testing;
+        ctx.notify();
+
+        let models_url = format!("{}/models", url.trim_end_matches('/'));
+
+        let handle = ctx.spawn(
+            async move {
+                // Disable redirects: a 30x to a private address could bypass
+                // the `validate_url` SSRF guard. A redirect response is therefore
+                // treated as a non-200 (connection could not be confirmed).
+                let client = match reqwest::Client::builder()
+                    .timeout(Duration::from_secs(CONNECTION_TEST_TIMEOUT_SECS))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                {
+                    Ok(c) => c,
+                    Err(_) => return false,
+                };
+                match client
+                    .get(&models_url)
+                    .header("Authorization", format!("Bearer {api_key}"))
+                    .send()
+                    .await
+                {
+                    Ok(response) => response.status().is_success(),
+                    Err(_) => false,
+                }
+            },
+            |me, confirmed, ctx| {
+                me.connection_test_handle = None;
+                // Guard: only apply the result when still in Testing state.
+                // `SpawnedFutureHandle::abort()` cancels a future only on its
+                // next poll, so a request that resolves just before the user
+                // edits a field can still deliver its result here after
+                // `reset_connection_test_status` has already set status to Idle.
+                // Dropping the stale result preserves the Idle reset.
+                me.connection_test_status =
+                    apply_connection_result(me.connection_test_status.clone(), confirmed);
+                ctx.notify();
+            },
+        );
+        self.connection_test_handle = Some(handle);
     }
 
     fn handle_model_editor_event(
@@ -719,9 +826,80 @@ impl View for CustomEndpointModal {
                     .build()
                     .finish(),
             )
-            .with_margin_bottom(16.)
+            .with_margin_bottom(8.)
             .finish(),
         );
+
+        // Test connection link + status — shown when URL and API key are both provided and URL is valid.
+        {
+            let url = self.endpoint_url_editor.as_ref(app).buffer_text(app);
+            let api_key = self.api_key_editor.as_ref(app).buffer_text(app);
+            let can_test =
+                !url.trim().is_empty() && !api_key.trim().is_empty() && validate_url(&url).is_ok();
+
+            if can_test {
+                let is_testing = self.connection_test_status == ConnectionTestStatus::Testing;
+                let mut test_btn = appearance
+                    .ui_builder()
+                    .button(ButtonVariant::Link, self.test_connection_mouse_state.clone())
+                    .with_text_label(
+                        if is_testing { "Testing\u{2026}" } else { "Test connection" }.to_string(),
+                    )
+                    .with_style(UiComponentStyles {
+                        font_size: Some(LABEL_FONT_SIZE),
+                        ..Default::default()
+                    });
+                if is_testing {
+                    test_btn = test_btn.disabled();
+                }
+                let test_btn = test_btn
+                    .build()
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(CustomEndpointModalAction::TestConnection);
+                    })
+                    .finish();
+
+                let status_element: Box<dyn Element> = match &self.connection_test_status {
+                    ConnectionTestStatus::Idle | ConnectionTestStatus::Testing => {
+                        Empty::new().finish()
+                    }
+                    ConnectionTestStatus::Confirmed => Text::new(
+                        "connection confirmed",
+                        label_font_family,
+                        LABEL_FONT_SIZE,
+                    )
+                    .with_color(theme.ui_green_color().into())
+                    .finish(),
+                    ConnectionTestStatus::Failed => Text::new(
+                        "could not confirm connection",
+                        label_font_family,
+                        LABEL_FONT_SIZE,
+                    )
+                    .with_color(theme.ui_warning_color().into())
+                    .finish(),
+                };
+
+                column.add_child(
+                    Container::new(
+                        Flex::row()
+                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                            .with_spacing(8.)
+                            .with_child(test_btn)
+                            .with_child(status_element)
+                            .finish(),
+                    )
+                    .with_margin_bottom(16.)
+                    .finish(),
+                );
+            } else {
+                // Maintain the same bottom margin even when the button is hidden.
+                column.add_child(
+                    Container::new(Empty::new().finish())
+                        .with_margin_bottom(16.)
+                        .finish(),
+                );
+            }
+        }
 
         // Model rows
         let has_remove_model_button = self.model_rows.len() > 1;
@@ -955,6 +1133,44 @@ fn is_ipv6_unique_local(ip: Ipv6Addr) -> bool {
 fn is_ipv6_link_local(ip: Ipv6Addr) -> bool {
     ip.segments()[0] & 0xffc0 == 0xfe80
 }
+
+/// Converts the raw HTTP probe result into a `ConnectionTestStatus`.
+///
+/// `success` is `true` when the server responds with a 2xx status code, and
+/// `false` for any non-2xx response or a network/transport error. Extracted as
+/// a module-level helper so the status-determination logic can be tested
+/// independently of the `ViewContext` machinery.
+pub(crate) fn connection_status_from_result(success: bool) -> ConnectionTestStatus {
+    if success {
+        ConnectionTestStatus::Confirmed
+    } else {
+        ConnectionTestStatus::Failed
+    }
+}
+
+/// Applies a completed connection-test result to the current status, returning
+/// the new status.
+///
+/// The result is applied **only when** `current` is `Testing`. If the status
+/// has already been reset to `Idle` (e.g. by a URL / API-key edit while the
+/// request was in-flight), the stale `Confirmed` or `Failed` result is dropped
+/// and `current` is returned unchanged. This guards against the race where
+/// `SpawnedFutureHandle::abort()` cannot cancel a request that resolved just
+/// before the abort was delivered.
+///
+/// Extracted as a pure helper so the race-guard logic can be unit-tested
+/// without a live `ViewContext`.
+pub(crate) fn apply_connection_result(
+    current: ConnectionTestStatus,
+    success: bool,
+) -> ConnectionTestStatus {
+    if current == ConnectionTestStatus::Testing {
+        connection_status_from_result(success)
+    } else {
+        current
+    }
+}
+
 impl TypedActionView for CustomEndpointModal {
     type Action = CustomEndpointModalAction;
 
@@ -969,6 +1185,7 @@ impl TypedActionView for CustomEndpointModal {
                     ctx.emit(CustomEndpointModalEvent::RemoveEndpoint { index });
                 }
             }
+            CustomEndpointModalAction::TestConnection => self.test_connection(ctx),
         }
     }
 }

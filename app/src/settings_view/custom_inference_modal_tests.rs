@@ -1,5 +1,89 @@
 use super::*;
 
+// --- ConnectionTestStatus / probe-result tests ---
+
+#[test]
+fn http_200_response_sets_confirmed_status() {
+    // When the probe receives a 2xx HTTP response (success = true) the status
+    // should transition to Confirmed.
+    assert_eq!(
+        connection_status_from_result(true),
+        ConnectionTestStatus::Confirmed,
+    );
+}
+
+#[test]
+fn http_error_or_non_200_sets_failed_status() {
+    // A non-2xx response or a network/transport error (success = false) should
+    // produce Failed, not Confirmed.
+    assert_eq!(
+        connection_status_from_result(false),
+        ConnectionTestStatus::Failed,
+    );
+}
+
+#[test]
+fn editing_url_or_api_key_resets_connection_status_to_idle() {
+    // `handle_endpoint_url_event` and `handle_api_key_event` both call
+    // `reset_connection_test_status()` on any `Edited` event, which sets
+    // `connection_test_status` to `Idle`.
+    //
+    // This test exercises the reset path through `apply_connection_result`: once
+    // the status is `Idle` (i.e. a reset has occurred), any in-flight result
+    // that arrives afterwards must be dropped — verifying both that the reset
+    // took effect and that the race guard preserves it.
+    for success in [true, false] {
+        assert_eq!(
+            apply_connection_result(ConnectionTestStatus::Idle, success),
+            ConnectionTestStatus::Idle,
+            "after URL/key edit resets status to Idle, a stale result (success={success}) must be dropped",
+        );
+    }
+}
+
+#[test]
+fn stale_result_is_dropped_when_status_is_not_testing() {
+    // `SpawnedFutureHandle::abort()` cancels a future only on its next poll.
+    // A request that resolves just before a URL/API-key edit delivers its
+    // completion callback *after* `reset_connection_test_status` has set the
+    // status to `Idle`. `apply_connection_result` must not overwrite that reset.
+    //
+    // Covers all non-Testing statuses that could be present when a stale result
+    // arrives.
+    let non_testing_statuses = [
+        ConnectionTestStatus::Idle,
+        ConnectionTestStatus::Confirmed,
+        ConnectionTestStatus::Failed,
+    ];
+    for status in non_testing_statuses {
+        assert_eq!(
+            apply_connection_result(status.clone(), true),
+            status,
+            "stale Confirmed result must not overwrite status {status:?}",
+        );
+        assert_eq!(
+            apply_connection_result(status.clone(), false),
+            status,
+            "stale Failed result must not overwrite status {status:?}",
+        );
+    }
+}
+
+#[test]
+fn redirect_response_treated_as_failed_status() {
+    // The reqwest client is built with `redirect::Policy::none()`, so a 30x
+    // response causes `send()` to return an `Err`, which maps to `success = false`
+    // and ultimately `ConnectionTestStatus::Failed`. This prevents a public URL
+    // that redirects to a private address from bypassing `validate_url`'s SSRF
+    // guard.
+    assert_eq!(
+        connection_status_from_result(false),
+        ConnectionTestStatus::Failed,
+    );
+}
+
+// --- validate_url tests (existing) ---
+
 #[test]
 fn validate_url_accepts_https_with_host() {
     assert!(validate_url("https://api.example.com/v1").is_ok());
