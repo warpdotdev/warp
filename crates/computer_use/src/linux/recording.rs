@@ -102,9 +102,6 @@ impl crate::Recorder for Recorder {
         Ok(RecordingHandle {
             width,
             height,
-            frame_rate: config.frame_rate,
-            max_duration: config.max_duration,
-            max_size_bytes: config.max_size_bytes,
             path,
             started_at: Instant::now(),
             process,
@@ -115,9 +112,6 @@ impl crate::Recorder for Recorder {
         let RecordingHandle {
             width,
             height,
-            frame_rate: _,
-            max_duration: _,
-            max_size_bytes: _,
             path,
             started_at,
             mut process,

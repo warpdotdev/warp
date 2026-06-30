@@ -148,8 +148,10 @@ impl Default for RecordingConfig {
         Self {
             // NOTE: 15fps keeps UI interactions readable while reducing file size and encoder load.
             frame_rate: 15,
-            max_duration: None,
-            max_size_bytes: None,
+            // NOTE: Fallback caps bound a capture when the server omits limits, so an
+            // unattended recording can't grow without bound (~10 min / 1 GiB).
+            max_duration: Some(Duration::from_secs(10 * 60)),
+            max_size_bytes: Some(1024 * 1024 * 1024),
         }
     }
 }
@@ -160,9 +162,6 @@ impl Default for RecordingConfig {
 pub struct RecordingHandle {
     width: u32,
     height: u32,
-    frame_rate: u32,
-    max_duration: Option<Duration>,
-    max_size_bytes: Option<u64>,
     // The live capture process plus the fields used to finalize it are only
     // populated by the real Linux recorder; the no-op recorders never construct
     // a handle.
@@ -183,21 +182,6 @@ impl RecordingHandle {
     /// The applied capture height in pixels.
     pub fn height(&self) -> u32 {
         self.height
-    }
-
-    /// The applied capture frame rate in frames per second.
-    pub fn frame_rate(&self) -> u32 {
-        self.frame_rate
-    }
-
-    /// The enforced maximum recording duration, if any.
-    pub fn max_duration(&self) -> Option<Duration> {
-        self.max_duration
-    }
-
-    /// The enforced maximum recording size in bytes, if any.
-    pub fn max_size_bytes(&self) -> Option<u64> {
-        self.max_size_bytes
     }
 }
 
