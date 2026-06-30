@@ -19,6 +19,12 @@ pub enum TuiViewportPosition {
     RowsFromTop(usize),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TuiViewportVerticalAlignment {
+    Top,
+    BottomWhenAtEnd,
+}
+
 /// Shared storage for a caller-owned viewport position.
 #[derive(Clone)]
 pub struct TuiViewportedListState(Rc<RefCell<TuiViewportPosition>>);
@@ -109,6 +115,7 @@ where
     visible_elements: Vec<VisibleElement>,
     content_height: usize,
     size: TuiSize,
+    vertical_alignment: TuiViewportVerticalAlignment,
 }
 
 impl<Content> TuiViewportedList<Content>
@@ -123,7 +130,16 @@ where
             visible_elements: Vec::new(),
             content_height: 0,
             size: TuiSize::ZERO,
+            vertical_alignment: TuiViewportVerticalAlignment::Top,
         }
+    }
+
+    pub fn with_vertical_alignment(
+        mut self,
+        vertical_alignment: TuiViewportVerticalAlignment,
+    ) -> Self {
+        self.vertical_alignment = vertical_alignment;
+        self
     }
 
     fn set_position(&mut self, position: TuiViewportPosition) {
@@ -196,6 +212,17 @@ where
             self.viewport_content(requested_scroll_top, viewport_height, available_width, app);
 
         self.content_height = content.content_height;
+        let bottom_alignment_offset =
+            if matches!(
+                self.vertical_alignment,
+                TuiViewportVerticalAlignment::BottomWhenAtEnd
+            ) && matches!(self.state.position(), TuiViewportPosition::End)
+                && content.content_height < viewport_height_rows
+            {
+                viewport_height_rows.saturating_sub(content.content_height)
+            } else {
+                0
+            };
 
         let viewport_bottom = scroll_top.saturating_add(viewport_height_rows);
         for item in content.items {
@@ -213,7 +240,9 @@ where
                 continue;
             }
 
-            let viewport_y = visible_top.saturating_sub(scroll_top);
+            let viewport_y = visible_top
+                .saturating_sub(scroll_top)
+                .saturating_add(bottom_alignment_offset);
             let viewport_origin_y = visible_top.saturating_sub(item_top);
             let height = visible_bottom.saturating_sub(visible_top);
             let viewport_y = viewport_y.min(usize::from(u16::MAX)) as u16;

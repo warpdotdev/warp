@@ -18,7 +18,8 @@ use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};
 use warpui_core::{AddWindowOptions, AppContext, Entity, ModelHandle, SingletonEntity, ViewHandle};
 
-use crate::RootTuiView;
+use crate::root_view::RootTuiView;
+use crate::terminal_session_view::TuiTerminalSessionView;
 
 /// Holds the live TUI session for the app's lifetime.
 struct TuiSession {
@@ -47,7 +48,8 @@ pub fn run() -> Result<()> {
 /// driver. Registered as a singleton so the session lives for the app lifetime.
 fn init(ctx: &mut AppContext) {
     let banner = ctx.add_model(|_| BannerState::default());
-    let manager = LocalTtyTerminalManager::<RootTuiView>::create_tui_model(
+    let mut root_for_driver = None;
+    let manager = LocalTtyTerminalManager::<TuiTerminalSessionView>::create_tui_model(
         std::env::current_dir().ok(),
         HashMap::<OsString, OsString>::from_iter(std::env::vars_os()),
         IsSharedSessionCreator::No,
@@ -58,23 +60,40 @@ fn init(ctx: &mut AppContext) {
         None,
         ctx,
         |surface_init, ctx| {
-            let (_, surface) = ctx.add_tui_window(
+            let mut terminal_session_for_manager = None;
+            let (window_id, root) = ctx.add_tui_window(
                 AddWindowOptions {
                     window_style: WindowStyle::NotStealFocus,
                     ..Default::default()
                 },
-                |ctx| RootTuiView::new(surface_init, ctx),
+                |ctx| {
+                    let terminal_session = ctx.add_typed_action_tui_view(|ctx| {
+                        TuiTerminalSessionView::new(surface_init, ctx)
+                    });
+                    terminal_session_for_manager = Some(terminal_session.clone());
+                    RootTuiView::new(terminal_session)
+                },
             );
+            let surface = terminal_session_for_manager
+                .expect("root view construction should create a terminal session surface");
+            root_for_driver = Some((window_id, root));
             TerminalSurfaceResult {
                 surface,
-                post_wire: |_manager: &mut LocalTtyTerminalManager<RootTuiView>,
-                            _surface: &ViewHandle<RootTuiView>,
+                post_wire: |_manager: &mut LocalTtyTerminalManager<TuiTerminalSessionView>,
+                            _surface: &ViewHandle<TuiTerminalSessionView>,
                             _ctx: &mut AppContext| {},
             }
         },
     );
-    let window_id = manager.surface.window_id(ctx);
-    match spawn_tui_driver(ctx, window_id, manager.surface) {
+    let Some((window_id, root)) = root_for_driver else {
+        log::error!("failed to create TUI root view");
+        ctx.terminate_app(
+            TerminationMode::ForceTerminate,
+            Some(Err(anyhow::anyhow!("failed to create TUI root view"))),
+        );
+        return;
+    };
+    match spawn_tui_driver(ctx, window_id, root) {
         Ok(driver) => {
             ctx.add_singleton_model(|_| TuiSession {
                 _driver: driver,

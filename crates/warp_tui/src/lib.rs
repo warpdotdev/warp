@@ -16,9 +16,8 @@ mod ui;
 mod conversation_model;
 mod conversation_selection;
 mod grid_render;
-#[allow(dead_code)]
-mod prompt_stream;
 mod terminal_block;
+mod terminal_session_view;
 mod transcript_view;
 mod tui_block_list_viewport_source;
 

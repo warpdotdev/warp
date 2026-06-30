@@ -3,12 +3,12 @@
 This PR builds the first production-shaped conversation transcript view for Warp's TUI. It proves the transcript container and canonical ordering path with two intentionally simple block renderers:
 - an agent block that renders user input and streamed plain-text agent output
 - a terminal block that renders command/input and streamed terminal output
-Bare `warp-tui` launches a real TUI root column containing an editor-backed input view above the transcript view. Submitting the input sends a prompt to the surface's conversation, streaming the response into the transcript as an agent block. The existing `--prompt` one-shot stdout path remains unchanged.
+Bare `warp-tui` launches a real login-gated TUI root. Once authenticated, the root delegates to an authenticated terminal session view containing an editor-backed input docked at the bottom and a transcript above it. Submitting the input sends a prompt to the surface's conversation, streaming the response into the transcript as an agent block.
 
 Rich block content and interactive block affordances are outside this PR. Those features must extend the block-render boundary established here rather than alter the transcript container or introduce a TUI-specific blocklist.
 The generalized, content-agnostic TUI viewport this transcript renders into (the virtualized list, scroll/anchor model, height reconciliation, and wheel/event plumbing) is a dependency provided by the downstack branch and specified in [`specs/tui-viewport/TECH.md`](../tui-viewport/TECH.md). This spec covers only the terminal-backed transcript built on top of it.
 
-The existing TUI conversation-streaming stack already routes prompts through the production AI controller and exposes terminal-surface-filtered presentation events. `crates/warp_tui/src/conversation_model.rs` deliberately contains no transcript widgets; `crates/warp_tui/src/prompt_stream.rs` is a one-shot stdout adapter, not the interactive transcript presentation layer. The foundational selection, request, and terminal-surface ownership decisions remain as documented in [`specs/conversation-streaming-for-tui/TECH.md`](../conversation-streaming-for-tui/TECH.md).
+The existing TUI conversation-streaming stack already routes prompts through the production AI controller and exposes terminal-surface-filtered presentation events. `crates/warp_tui/src/conversation_model.rs` deliberately contains no transcript widgets. The foundational selection, request, and terminal-surface ownership decisions remain as documented in [`specs/conversation-streaming-for-tui/TECH.md`](../conversation-streaming-for-tui/TECH.md).
 
 WarpUI already has a TUI-specific element/view/presenter stack. [`TuiElement`](https://github.com/warpdotdev/warp/blob/e36e8ddf823d6a25a5225251a7db60698f5da74d/crates/warpui_core/src/elements/tui/mod.rs#L96-L140) defines the normal layout, rendering, presentation, event, and cursor lifecycle, while [`TuiPresenter`](https://github.com/warpdotdev/warp/blob/e36e8ddf823d6a25a5225251a7db60698f5da74d/crates/warpui_core/src/presenter/tui.rs#L81-L208) retains laid-out trees and records child-view embeddings. The transcript must return normal visible `TuiElement` trees so this lifecycle remains intact; it must not use a context-free raw-buffer row renderer.
 
@@ -17,17 +17,17 @@ WarpUI already has a TUI-specific element/view/presenter stack. [`TuiElement`](h
 The TUI transcript will use this existing order. It will not own a second transcript order or introduce a `TUIBlocklistElement`.
 ## Proposed changes
 ### TUI transcript composition root
-Change the no-prompt TUI frontend callback in `crates/warp_tui/src/lib.rs`: after app-side authentication, bare `warp-tui` starts a real TUI session instead of printing the authenticated user ID and exiting. `warp-tui --prompt ...` continues using the existing one-shot `PromptStreamSurface` stdout behavior.
+Change the no-prompt TUI frontend callback in `crates/warp_tui/src/lib.rs`: after app-side authentication, bare `warp-tui` starts a real TUI session instead of printing the authenticated user ID and exiting.
 
-Add a root TUI view whose rendered tree is an input view above the transcript:
+Add a root TUI view that owns login branching only. When logged in, it renders a `TuiTerminalSessionView` child. The authenticated session view renders a transcript above a bordered bottom input:
 ```rust
 TuiColumn::new()
-    .with_child(Box::new(TuiChildView::new(&input_view)))
-    .with_child(Box::new(TuiChildView::new(&transcript_view)))
+    .flex_child(TuiChildView::new(&transcript_view))
+    .child(bordered_input)
 ```
-The input is laid out first at its content height; the transcript is last so it greedily fills the remaining rows and owns scrolling.
+The transcript fills remaining rows above the input. Short transcript content is bottom-aligned so it grows upward from the input; once content reaches the top of the transcript region, the existing viewport scrolling behavior takes over. The bordered input uses the real layout width minus a small horizontal inset, not a fixed input width.
 
-The root is also the `TerminalSurface` driven by the normal local terminal manager so its transcript reads the same `TerminalModel` that receives shell output. Keep the manager, root view, and TUI runtime/driver alive in a TUI-session singleton.
+`TuiTerminalSessionView` is the `TerminalSurface` driven by the normal local terminal manager, so its transcript reads the same `TerminalModel` that receives shell output. `RootTuiView` remains only the login-gated app shell. Keep the manager, root view, and TUI runtime/driver alive in a TUI-session singleton.
 
 The current WarpUI TUI runtime has a blocking `TuiRuntime`, but the `warp_tui` frontend callback runs inside the shared app event loop. Add an invalidation-driven headless driver entry point under `crates/warpui_core/src/runtime/` that:
 - enters and restores raw mode plus the alternate screen through an owned guard
@@ -38,8 +38,8 @@ The current WarpUI TUI runtime has a blocking `TuiRuntime`, but the `warp_tui` f
 This is runtime plumbing for the real TUI composition root, not transcript-specific behavior.
 
 ### Interactive input hookup
-The root embeds the editor-backed [`TuiInputView`](../../crates/warp_tui/src/input/view.rs) (a `warp::editor::CodeEditorModel` in char-cell mode) as the first column child. The root subscribes to its `TuiInputViewEvent::Submitted`; on submit it trims the text and, when non-empty, calls `TuiConversationModel::send_prompt`, which streams the response into the transcript as an agent block. `TuiInputView::submit` already clears the editor buffer, so the input resets after each send.
-The input view drives agent prompts only. Running shell commands from the TUI is future work, so the root emits no PTY intents; terminal-block rendering is exercised by tests that drive `TerminalModel` directly rather than by interactive input.
+`TuiTerminalSessionView` embeds the editor-backed [`TuiInputView`](../../crates/warp_tui/src/input/view.rs) (a `warp::editor::CodeEditorModel` in char-cell mode) as the fixed bottom child. It subscribes to `TuiInputViewEvent::Submitted`; on submit it trims the text and, when non-empty, calls `TuiConversationModel::send_prompt`, which streams the response into the transcript as an agent block. `TuiInputView::submit` already clears the editor buffer, so the input resets after each send.
+The input view drives agent prompts only. Running shell commands from the TUI is future work, so the terminal session view emits no PTY intents; terminal-block rendering is exercised by tests that drive `TerminalModel` directly rather than by interactive input.
 
 ### TUI block-list viewport source
 Add a `TuiBlockListViewportSource` adapter under `crates/warp_tui/src/` over the canonical `TerminalModel::BlockList` sum tree.
@@ -65,7 +65,7 @@ The adapter uses one scoped sum-tree traversal to seek and walk ordered entries.
 Small public `BlockList` helpers may be added where required to seek rich-content positions and read/update dirty rich-content height state. The `warp_tui` crate accesses those helpers and other app-owned model types only through the narrow `warp::tui_export` boundary.
 
 ### Transcript view and exchange lifecycle
-Add a TUI transcript view under `crates/warp_tui/src/` that owns the generalized viewport state and the terminal-history integration. The root TUI view embeds it as the lower column child beneath the input view in this PR. It subscribes to terminal-surface-scoped `BlocklistAIHistoryEvent`s and mirrors the existing GUI model-level lifecycle:
+Add a TUI transcript view under `crates/warp_tui/src/` that owns the generalized viewport state and the terminal-history integration. The terminal session view embeds it as the flex child above the bottom input in this PR. It subscribes to terminal-surface-scoped `BlocklistAIHistoryEvent`s and mirrors the existing GUI model-level lifecycle:
 - `AppendedExchange` creates a simple TUI agent block view and inserts one `RichContentItem` into the canonical `BlockList`.
 - `UpdatedStreamingExchange` marks the corresponding canonical rich-content item dirty and notifies the transcript.
 - `ReassignedExchange` updates the block's conversation association.
@@ -79,6 +79,7 @@ let source = TuiBlockListViewportSource::new(
     self.agent_blocks.clone(),
 );
 TuiViewportedList::new(self.viewport.clone(), source)
+    .with_vertical_alignment(TuiViewportVerticalAlignment::BottomWhenAtEnd)
 ```
 
 ### Simple terminal block
@@ -95,13 +96,14 @@ The block calculates its full logical height at the actual width, reports it for
 ## End-to-end flow
 ```mermaid
 flowchart TD
-  Init["bare warp-tui"] --> Root["TUI root column<br/>input + transcript"]
+  Init["bare warp-tui"] --> Root["RootTuiView<br/>login shell"]
   Root --> Driver["Invalidation-driven<br/>TUI driver"]
-  Root --> Input["TuiInputView<br/>editor-backed"]
+  Root --> Session["TuiTerminalSessionView<br/>TerminalSurface"]
+  Session --> Input["TuiInputView<br/>bottom bordered"]
   Input -->|submit prompt| Conversation["TuiConversationModel"]
   Conversation --> History
   History["BlocklistAIHistoryEvent"] --> Transcript["TUI transcript view"]
-  Root --> Transcript
+  Session --> Transcript
   TerminalModel --> BlockList["TerminalModel::BlockList<br/>canonical SumTree"]
   Transcript -->|append/update/remove agent rich content| BlockList
   BlockList --> Index["TuiBlockListViewportSource<br/>scoped cursor"]
@@ -132,16 +134,17 @@ Use `warpui::App::test` and `TuiPresenter` to verify the real transcript view:
 - follow-bottom remains pinned while streaming and an anchored viewport remains stable
 - terminal output and agent output update without rebuilding off-screen items
 - resize reflows agent text, updates rich-content height, and stabilizes the current frame
-- the root column embeds the input view and transcript through the real child-view lifecycle
+- the root delegates logged-in rendering to `TuiTerminalSessionView`
+- the terminal session view embeds the bottom input and transcript through the real child-view lifecycle
+- short transcript content is bottom-aligned above the bordered input
 - a submitted input-view prompt produces a streamed agent block in canonical `BlockList` order
 
 ### Manual validation
-- Run bare `cargo run -p warp_tui`; verify it enters the alternate screen and displays the input view above the transcript.
+- Run bare `cargo run -p warp_tui`; verify it enters the alternate screen and displays a bordered input docked at the bottom, with the transcript above it.
 - Type a prompt and press Enter; verify the input clears and an agent block with streamed plain-text output appears.
 - Create enough blocks to overflow the screen, then use the mouse wheel; verify the transcript preserves its anchor away from the bottom and resumes following after scrolling back to the end.
 - Resize the terminal; verify the transcript reflows and preserves/follows its anchor as appropriate.
 - Exit with Ctrl-C; verify the alternate screen and terminal mode restore cleanly.
-- Run `cargo run -p warp_tui -- --prompt "Reply with exactly: hello from tui"`; verify the existing one-shot stdout path remains unchanged.
 
 Run:
 - `./script/format`
