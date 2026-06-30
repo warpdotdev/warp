@@ -16497,6 +16497,25 @@ impl TerminalView {
                         })
                         .unwrap_or_default()
                     }
+                    GridHighlightedLink::Hyperlink { uri, .. } => {
+                        // OSC 8 hyperlink right-click. "Copy link" copies the
+                        // URI verbatim; "Open link" dispatches through
+                        // `OpenGridLink`.
+                        vec![
+                            MenuItemFields::new("Open link")
+                                .with_on_select_action(TerminalAction::OpenGridLink(
+                                    highlighted_link.clone(),
+                                ))
+                                .into_item(),
+                            MenuItemFields::new("Copy link")
+                                .with_on_select_action(TerminalAction::ContextMenu(
+                                    ContextMenuAction::CopyUrl {
+                                        url_content: uri.clone(),
+                                    },
+                                ))
+                                .into_item(),
+                        ]
+                    }
                 }
             }
             (
@@ -18261,9 +18280,16 @@ impl TerminalView {
                 }
             }
             GridHighlightedLink::Url(url) if url.contains(position) => {
-                let model = self.model.lock();
+                let uri = self
+                    .model
+                    .lock()
+                    .link_at_range(url, RespectObfuscatedSecrets::No);
                 ctx.notify();
-                ctx.open_url(&model.link_at_range(url, RespectObfuscatedSecrets::No));
+                ctx.open_url(&uri);
+            }
+            GridHighlightedLink::Hyperlink { link, uri } if link.contains(position) => {
+                ctx.notify();
+                ctx.open_url(uri);
             }
             _ => (),
         }
