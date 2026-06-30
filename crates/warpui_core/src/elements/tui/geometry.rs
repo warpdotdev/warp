@@ -136,6 +136,21 @@ impl TuiRectExt for TuiRect {
     }
 }
 
+/// Helpers for [`TuiPoint`] (a terminal cell position) beyond what ratatui's
+/// `Position` provides.
+pub trait TuiPointExt {
+    /// Whether `self` and `other` are the same cell or immediate neighbours
+    /// (Chebyshev distance <= 1). Handy for tolerating small pointer jitter,
+    /// e.g. when detecting multi-clicks.
+    fn is_adjacent(&self, other: TuiPoint) -> bool;
+}
+
+impl TuiPointExt for TuiPoint {
+    fn is_adjacent(&self, other: TuiPoint) -> bool {
+        self.x.abs_diff(other.x) <= 1 && self.y.abs_diff(other.y) <= 1
+    }
+}
+
 #[cfg(test)]
 #[path = "geometry_tests.rs"]
 mod tests;

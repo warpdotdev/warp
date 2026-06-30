@@ -47,7 +47,7 @@ pub use event::{
     TuiDispatchEventResult, TuiEvent, TuiEventContext, TuiEventDispatchResult, TuiScrollDelta,
 };
 pub use event_handler::TuiEventHandler;
-pub use geometry::{TuiConstraint, TuiPoint, TuiRect, TuiRectExt, TuiSize};
+pub use geometry::{TuiConstraint, TuiPoint, TuiPointExt, TuiRect, TuiRectExt, TuiSize};
 pub use parent::TuiParentElement;
 pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use text::TuiText;

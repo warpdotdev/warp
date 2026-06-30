@@ -68,3 +68,16 @@ fn contains_point_uses_half_open_cell_bounds() {
     assert!(!rect.contains_point(TuiPoint::new(1, 3)));
     assert!(!rect.contains_point(TuiPoint::new(2, 2)));
 }
+
+#[test]
+fn is_adjacent_uses_chebyshev_distance() {
+    let p = TuiPoint::new(5, 5);
+    // The same cell and all eight neighbours are adjacent.
+    assert!(p.is_adjacent(p));
+    assert!(p.is_adjacent(TuiPoint::new(6, 6)));
+    assert!(p.is_adjacent(TuiPoint::new(4, 4)));
+    assert!(p.is_adjacent(TuiPoint::new(5, 6)));
+    // Two cells away on either axis is not adjacent.
+    assert!(!p.is_adjacent(TuiPoint::new(7, 5)));
+    assert!(!p.is_adjacent(TuiPoint::new(5, 7)));
+}

@@ -9,7 +9,7 @@ use ratatui::crossterm::event::{
     MouseEvent, MouseEventKind,
 };
 
-use crate::elements::tui::{TuiEvent, TuiPoint, TuiScrollDelta};
+use crate::elements::tui::{TuiEvent, TuiPoint, TuiPointExt, TuiScrollDelta};
 use crate::event::{KeyEventDetails, ModifiersState};
 use crate::keymap::Keystroke;
 
@@ -234,7 +234,7 @@ impl ClickTracker {
             Some(last)
                 if last.button == button
                     && now.duration_since(last.at) <= MULTI_CLICK_INTERVAL
-                    && is_adjacent(last.position, position) =>
+                    && last.position.is_adjacent(position) =>
             {
                 // Wrap 3 -> 1 so a fourth fast click starts a fresh cycle.
                 last.count % 3 + 1
@@ -249,12 +249,6 @@ impl ClickTracker {
         });
         count
     }
-}
-
-/// Whether two cells are the same or immediate neighbours (Chebyshev distance
-/// <= 1), tolerating slight pointer jitter between the clicks of a multi-click.
-fn is_adjacent(a: TuiPoint, b: TuiPoint) -> bool {
-    a.x.abs_diff(b.x) <= 1 && a.y.abs_diff(b.y) <= 1
 }
 
 #[cfg(test)]

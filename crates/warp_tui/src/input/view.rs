@@ -775,27 +775,43 @@ impl TuiInputElement {
         self.selected_spans = selected_spans;
     }
 
-    /// Maps a terminal cell `position` to a 1-based buffer [`CharOffset`].
+    /// Maps a terminal cell `position` to the 1-based buffer [`CharOffset`] under
+    /// it (the gap the cursor should move to for a click/drag at that cell).
     ///
-    /// Points outside the input's vertical bounds are intentionally *not*
-    /// clamped to the viewport: a point above the input maps toward row 0 and a
-    /// point below it maps past the last visible row (bounded by the buffer's
-    /// last visual row), so a drag that leaves the input drives auto-scroll.
+    /// The mouse reports an absolute terminal cell, so getting to a buffer offset
+    /// crosses three coordinate spaces:
+    ///   1. screen cell (`position`) -> row/col relative to the input's `area`,
+    ///   2. + `scroll_offset` -> the buffer's *visual* row (undoes scrolling),
+    ///   3. (visual row, col) -> char offset via the char-cell soft-wrap map.
+    ///
+    /// Points outside the input's vertical bounds are intentionally *not* clamped
+    /// to the viewport: a point above the input maps toward row 0 and a point
+    /// below it maps past the last visible row (bounded by the buffer's last
+    /// visual row), so a drag that leaves the input drives auto-scroll.
     fn offset_at(&self, position: TuiPoint, area: TuiRect, app: &AppContext) -> CharOffset {
         let inner = self.model.as_ref(app);
         let render = inner.render_state().as_ref(app);
 
-        // Buffer-relative visual row. Signed math keeps a point above `area`
-        // (smaller `y`) mapping above the current scroll offset.
+        // Step 1: row of the pointer within the input, where 0 is the input's top
+        // row. Signed so a point *above* the input (`position.y < area.y`) stays
+        // negative instead of wrapping around at 0.
         let row_in_view = i64::from(position.y) - i64::from(area.y);
+        // Step 2: the input shows buffer visual rows starting at `scroll_offset`,
+        // so the buffer row under the pointer is `scroll_offset + row_in_view`
+        // (floored at the first row).
         let visual_row = (i64::from(self.scroll_offset) + row_in_view).max(0) as u32;
+        // ...and capped at the last real visual row, so a drag below the text
+        // resolves to the buffer's end rather than past it.
         let last_row = render.max_line().as_u32().max(1).saturating_sub(1);
         let visual_row = visual_row.min(last_row);
 
+        // Column within that row, in display cells (0 is the input's left edge).
         let col = position.x.saturating_sub(area.x);
+
+        // Step 3: resolve (visual_row, col) to a char offset. The soft-wrap map
+        // clamps the column to the row's end and is 0-based, while the buffer
+        // uses 1-based gap offsets (see the kill-range helpers), so re-add 1.
         let point = SoftWrapPoint::new(visual_row, ColumnUnit::Chars(col));
-        // The char-cell soft-wrap API is 0-based; the buffer uses 1-based gap
-        // offsets (see the kill-range helpers), so re-add 1.
         let zero_based = render.softwrap_point_to_offset(point);
         CharOffset::from(zero_based.as_usize() + 1)
     }
