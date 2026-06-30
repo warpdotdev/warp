@@ -140,7 +140,7 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             ctx.notify_view_observers(self.window_id, view_id);
         }
 
-        for action in event_ctx.take_typed_actions().into_iter().rev() {
+        for action in event_ctx.take_typed_actions() {
             // Dispatch through the shared responder chain (the origin view's
             // ancestors), so an action raised inside an embedded child view
             // bubbles to ancestor handlers.
