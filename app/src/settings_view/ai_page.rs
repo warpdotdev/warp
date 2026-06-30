@@ -9413,18 +9413,29 @@ impl SettingsWidget for CustomModelRoutersWidget {
         let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
         let header_color = styles::header_font_color(is_any_ai_enabled, app);
 
-        // Header row: "Custom Model Routers" + add button
+        // Group the title and description in the left column so the description
+        // does not flow under the button on the right.
+        let title_and_description = warpui::elements::Shrinkable::new(
+            1.,
+            Flex::column()
+                .with_child(
+                    build_sub_header(appearance, "Custom Routers", Some(header_color)).finish(),
+                )
+                .with_child(render_ai_setting_description(
+                    "Automatically route tasks to specific models based on task complexity or custom rules. Custom routers will appear in your model selector menu.",
+                    is_any_ai_enabled,
+                    app,
+                ))
+                .finish(),
+        )
+        .finish();
+
+        // Header row: title+description on the left, add button on the right
         let header_row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                warpui::elements::Shrinkable::new(
-                    1.,
-                    build_sub_header(appearance, "Custom Routers", Some(header_color)).finish(),
-                )
-                .finish(),
-            )
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(title_and_description)
             .with_child({
                 #[cfg(feature = "local_fs")]
                 {
@@ -9445,12 +9456,7 @@ impl SettingsWidget for CustomModelRoutersWidget {
                 Container::new(header_row)
                     .with_padding_bottom(HEADER_PADDING)
                     .finish(),
-            )
-            .with_child(render_ai_setting_description(
-                "Automatically route tasks to specific models based on task complexity or custom rules. Custom routers will appear in your model selector menu.",
-                is_any_ai_enabled,
-                app,
-            ));
+            );
 
         // Error cards and router summary cards (local_fs only)
         #[cfg(feature = "local_fs")]
