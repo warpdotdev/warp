@@ -37,7 +37,7 @@ use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
-use super::queued_query::{QueuedQueryId, QueuedQueryModel};
+use super::queued_query::{QueuedQuery, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin};
 use super::{BlocklistAIInputModel, ResponseStreamId};
 use crate::ai::agent::api::{self, ServerConversationToken};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
@@ -1167,6 +1167,35 @@ impl BlocklistAIController {
             log::error!("Viewers should never attempt to send queries directly");
         }
 
+        // If a user query is submitted while an agent-requested run_shell_command action is still
+        // pending (snapshot not yet fired), queue it as LrcAutoQueue instead of sending immediately.
+        // This gives the same queue-until-command-completes behavior as submitting after the snapshot,
+        // and eliminates the race where CliAgentUserQuery would arrive before the LRC snapshot and
+        // produce duplicate tool_result blocks for the same tool_use ID (provider 400 errors).
+        if !skip_running_command_detection {
+            let pending_action_id = {
+                let terminal_model = self.terminal_model.lock();
+                get_running_command(&terminal_model)
+                    .and_then(|rc| rc.requested_command_id.clone())
+            };
+            if let Some(action_id) = pending_action_id {
+                if self
+                    .action_model
+                    .as_ref(ctx)
+                    .is_shell_command_action_pending(&action_id, conversation_id)
+                {
+                    QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.append(
+                            conversation_id,
+                            QueuedQuery::new(query, QueuedQueryOrigin::LrcAutoQueue),
+                            ctx,
+                        );
+                    });
+                    return;
+                }
+            }
+        }
+
         // Ensure we capture all pending context blocks before promoting and attaching them to the conversation.
         let context_block_ids = self
             .context_model
@@ -1191,27 +1220,6 @@ impl BlocklistAIController {
                 get_running_command(&terminal_model)
             } else {
                 None
-            };
-
-            // If this is an agent-requested command whose action_result_future is still pending
-            // (the snapshot has not yet fired), abandon the action without sending its result and
-            // proceed as a plain UserQuery. The server synthesizes the cancel via
-            // cancelledResultsForIncompleteToolCallsInLastResponse.
-            //
-            // This prevents the race where CliAgentUserQuery triggers both an auto-cancel of
-            // run_shell_command AND a CLI subagent spawn, which later produces duplicate
-            // tool_result blocks for the same tool_use ID (causing provider 400 errors).
-            let running_command_opt = if let Some(ref rc) = running_command_opt {
-                if let Some(action_id) = rc.requested_command_id.clone() {
-                    let abandoned = self.action_model.update(ctx, |model, ctx| {
-                        model.abandon_shell_command_action(conversation_id, &action_id, ctx)
-                    });
-                    if abandoned { None } else { running_command_opt }
-                } else {
-                    running_command_opt
-                }
-            } else {
-                running_command_opt
             };
 
             let (task_id, running_command) = if let Some(running_command) = running_command_opt {
