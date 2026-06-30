@@ -10,7 +10,7 @@ mod linux;
 #[cfg(target_os = "windows")]
 mod windows;
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::{DerefMut, Range};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -203,6 +203,17 @@ pub struct TextLayoutSystem {
     loaded_font_ids_since_last_raster: RwLock<Vec<FontId>>,
     #[cfg(not(target_os = "windows"))]
     fallback_fonts: DashMap<FontId, Vec<FontId>>,
+
+    /// Per-font counter of rasterization failures (e.g., skrifa rejecting
+    /// corrupted glyph outlines). Incremented for non-zero glyph IDs when
+    /// swash cannot rasterize them. When the threshold is reached, the
+    /// font is marked as corrupted and removed from the database.
+    #[cfg_attr(feature = "fontkit-rasterizer", allow(dead_code))]
+    raster_failures: RwLock<HashMap<FontId, u32>>,
+    /// Set of fonts whose glyf tables have been found corrupted at runtime.
+    /// Rasterization short-circuits for these fonts, returning empty bounds.
+    #[cfg_attr(feature = "fontkit-rasterizer", allow(dead_code))]
+    corrupted_fonts: RwLock<HashSet<FontId>>,
 }
 
 pub struct FontDB {
@@ -307,6 +318,8 @@ impl TextLayoutSystem {
             fallback_fonts: Default::default(),
             #[cfg(feature = "fontkit-rasterizer")]
             loaded_font_ids_since_last_raster: Default::default(),
+            raster_failures: Default::default(),
+            corrupted_fonts: Default::default(),
         }
     }
 
@@ -480,29 +493,39 @@ impl TextLayoutSystem {
             FontData::Path { path, index, .. } => (fontdb::Source::File(path), index),
         };
 
-        let fontdb_ids = self.font_store.write().db_mut().load_font_source(source);
+        let mut fontdb_ids = self.font_store.write().db_mut().load_font_source(source);
 
         // Only for file-based fonts: reuse fontdb's mmap'd data to check for
         // corrupted glyf tables (reserved bit 7 on simple glyph flags).
-        // Corrupted fonts are removed from the database immediately so they
+        // Corrupted faces are removed from the database immediately so they
         // cannot be matched by future font fallback queries.
         if let Some(ref path) = pre_loaded_path {
-            if let Some(&first_id) = fontdb_ids.first() {
+            let mut corrupted_ids = Vec::new();
+            for &id in &fontdb_ids {
                 let is_corrupted = self
                     .font_store
                     .read()
                     .db()
-                    .with_face_data(first_id, |data, face_index| {
+                    .with_face_data(id, |data, face_index| {
                         Self::has_reserved_bit7_in_glyph_flags(data, face_index)
                     })
                     .unwrap_or(false);
 
                 if is_corrupted {
-                    for &id in &fontdb_ids {
-                        self.font_store.write().db_mut().remove_face(id);
-                    }
-                    bail!("Font {path:?} has corrupted glyf table (reserved bit 7 set on simple glyph flags)")
+                    corrupted_ids.push(id);
                 }
+            }
+
+            for &id in &corrupted_ids {
+                self.font_store.write().db_mut().remove_face(id);
+            }
+
+            if !corrupted_ids.is_empty() {
+                fontdb_ids.retain(|id| !corrupted_ids.contains(id));
+                log::warn!(
+                    "Removed {} corrupted face(s) from {path:?} (reserved bit 7 set on simple glyph flags)",
+                    corrupted_ids.len()
+                );
             }
         }
 
@@ -543,6 +566,42 @@ impl TextLayoutSystem {
 
         font_id_to_return
             .ok_or_else(|| anyhow!("Requested index for the font handle was unable to be loaded"))
+    }
+
+    /// Returns true if this font has been confirmed corrupted at runtime.
+    /// Rasterization callers should short-circuit and return empty bounds.
+    #[cfg_attr(feature = "fontkit-rasterizer", allow(dead_code))]
+    fn is_corrupted(&self, font_id: FontId) -> bool {
+        self.corrupted_fonts.read().contains(&font_id)
+    }
+
+    /// Increments the rasterization failure counter for this font.
+    /// When the threshold is exceeded, the font is removed from fontdb
+    /// so future font fallback queries skip it.
+    #[cfg_attr(feature = "fontkit-rasterizer", allow(dead_code))]
+    fn mark_font_corrupted(&self, font_id: FontId) {
+        const MAX_RASTER_FAILURES: u32 = 3;
+
+        {
+            let mut failures = self.raster_failures.write();
+            let count = failures.entry(font_id).or_insert(0);
+            *count += 1;
+            if *count < MAX_RASTER_FAILURES {
+                return;
+            }
+        }
+
+        if !self.corrupted_fonts.write().insert(font_id) {
+            return;
+        }
+
+        if let Some(&internal_id) = self.font_id_map.read().get_by_left(&font_id) {
+            self.font_store.write().db_mut().remove_face(internal_id);
+            log::warn!(
+                "Font (FontId {font_id:?}, fontdb face {internal_id}) marked as corrupted \
+                 after {MAX_RASTER_FAILURES} rasterization failures",
+            );
+        }
     }
 
     /// Checks whether reserved bit 7 is set on simple glyph coordinate flags.
