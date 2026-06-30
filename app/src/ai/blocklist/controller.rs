@@ -2706,14 +2706,16 @@ impl BlocklistAIController {
 
         // If there was no in-flight stream to attach the error to (e.g. the agent
         // ran `exit` and no follow-up request was in flight), set the terminal
-        // `Error` status directly with the shell-exit message.
+        // `Error` status directly, recording the structured shell-exit error so
+        // status consumers (Oz task sync and the ambient SDK driver) classify it
+        // as FAILED rather than a generic ERROR.
         if !had_in_flight_stream {
             history_model.update(ctx, |history_model, ctx| {
-                history_model.update_conversation_status_with_error_message(
+                history_model.update_conversation_status_with_error(
                     terminal_surface_id,
                     conversation_id,
                     ConversationStatus::Error,
-                    Some(RenderableAIError::AgentExitedShell.to_string()),
+                    Some(RenderableAIError::AgentExitedShell),
                     ctx,
                 );
             });

@@ -735,7 +735,7 @@ impl RenderableAIError {
         "Warp lost connection while receiving the agent response. This is usually temporary.";
     /// User-facing message shown when an agent-issued command exits the shell.
     pub const AGENT_EXITED_SHELL_MESSAGE: &'static str =
-        "The shell exited while the agent was running a command, so the run could not continue.";
+        "The shell exited while the agent was running a command, so the run could not continue. Ensure the agent is not asked to run commands or source scripts that can exit the shell.";
     /// Creates a transient network error. `kind` is the structured cause (including the raw API
     /// error where one exists), preserved so user reports can disambiguate the different causes
     /// behind the shared user-facing copy.
@@ -785,6 +785,19 @@ impl RenderableAIError {
     /// aggressive behavior so developers still see every transport failure.
     pub fn should_suppress_during_recovery(&self) -> bool {
         self.will_attempt_resume() && !ChannelState::channel().is_dogfood()
+    }
+
+    /// Constructs a generic [`RenderableAIError::Other`] from a message.
+    /// `is_user_error` selects the task classification (true → FAILED, false →
+    /// ERROR). The resume/network flags are false: this is for terminal,
+    /// out-of-band errors that are not auto-resumed.
+    pub fn other(error_message: impl Into<String>, is_user_error: bool) -> Self {
+        Self::Other {
+            error_message: error_message.into(),
+            will_attempt_resume: false,
+            waiting_for_network: false,
+            is_user_error,
+        }
     }
 }
 

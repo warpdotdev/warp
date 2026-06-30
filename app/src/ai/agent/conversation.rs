@@ -212,8 +212,12 @@ pub struct AIConversation {
     code_review: Option<CodeReview>,
 
     status: ConversationStatus,
-    /// Optional detail for the current error status.
-    status_error_message: Option<String>,
+    /// Structured error backing the current `Error`/`TransientError` status. The
+    /// single source of truth for both the human-readable message (via `Display`)
+    /// and the FAILED-vs-ERROR classification (via `classify_renderable_error`),
+    /// used by status consumers like the Oz task sync model and the ambient SDK
+    /// driver.
+    status_error: Option<RenderableAIError>,
 
     /// Tracks whether the code review has been opened at least once for this conversation.
     has_opened_code_review: bool,
@@ -350,7 +354,7 @@ impl AIConversation {
             is_cli_agent_transcript,
             todo_lists: vec![],
             status: ConversationStatus::InProgress,
-            status_error_message: None,
+            status_error: None,
             has_opened_code_review: false,
             conversation_usage_metadata: ConversationUsageMetadata::default(),
             server_conversation_token: None,
@@ -585,7 +589,7 @@ impl AIConversation {
             is_cli_agent_transcript: false,
             task_store,
             status,
-            status_error_message: None,
+            status_error: None,
             todo_lists,
             // TODO(alokedesai): Support session restoration for code review comments.
             code_review: None,
@@ -885,11 +889,11 @@ impl AIConversation {
         self.status = status;
     }
 
-    /// Test-only setter for the status error message, used to exercise
-    /// the `status_error_message` fallback in `map_conversation_status`.
+    /// Test-only setter for the structured status error, used to exercise the
+    /// `status_error` classification path in `map_conversation_status`.
     #[cfg(test)]
-    pub(crate) fn set_status_error_message_for_test(&mut self, msg: Option<String>) {
-        self.status_error_message = msg;
+    pub(crate) fn set_status_error_for_test(&mut self, error: Option<RenderableAIError>) {
+        self.status_error = error;
     }
 
     /// Test-only helper: appends an exchange to the root task so status-derivation
@@ -900,8 +904,17 @@ impl AIConversation {
             .modify_root_task(|root_task| root_task.append_exchange(exchange));
     }
 
-    pub fn status_error_message(&self) -> Option<&str> {
-        self.status_error_message.as_deref()
+    /// The human-readable message for the current error status, derived from the
+    /// structured `status_error`.
+    pub fn status_error_message(&self) -> Option<String> {
+        self.status_error.as_ref().map(|error| error.to_string())
+    }
+
+    /// The structured error backing the current `Error`/`TransientError` status.
+    /// Status consumers use it to classify the failure (e.g. FAILED vs ERROR) and
+    /// to render the message.
+    pub fn status_error(&self) -> Option<&RenderableAIError> {
+        self.status_error.as_ref()
     }
 
     pub fn update_status(
@@ -910,21 +923,27 @@ impl AIConversation {
         terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        self.update_status_with_error_message(status, None, terminal_surface_id, ctx);
+        self.update_status_with_error(status, None, terminal_surface_id, ctx);
     }
 
-    pub fn update_status_with_error_message(
+    /// Updates the conversation status, recording the structured `error` when the
+    /// status is `Error`/`TransientError` (and clearing it otherwise). The error is
+    /// the single source of truth for both the status message and the
+    /// FAILED-vs-ERROR classification used by status consumers (Oz task sync, the
+    /// ambient SDK driver), so callers should pass a structured error rather than a
+    /// bare string — wrap free-form text via [`RenderableAIError::other`].
+    pub fn update_status_with_error(
         &mut self,
         status: ConversationStatus,
-        error_message: Option<String>,
+        error: Option<RenderableAIError>,
         terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        self.status_error_message = if matches!(
+        self.status_error = if matches!(
             &status,
             ConversationStatus::Error | ConversationStatus::TransientError
         ) {
-            error_message.filter(|message| !message.trim().is_empty())
+            error
         } else {
             None
         };
@@ -2304,12 +2323,7 @@ impl AIConversation {
         } else {
             ConversationStatus::Error
         };
-        self.update_status_with_error_message(
-            status,
-            Some(error.to_string()),
-            terminal_surface_id,
-            ctx,
-        );
+        self.update_status_with_error(status, Some(error), terminal_surface_id, ctx);
         Ok(())
     }
 

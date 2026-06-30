@@ -329,11 +329,11 @@ fn map_conversation_status_error_classifies_agent_exited_shell() {
     );
 }
 
-/// When the terminal `Error` status carries a conversation-level message but no
-/// structured exchange error (the out-of-band fallback path), the mapping
-/// surfaces that message instead of the generic note.
+/// Driving the real `update_status_with_error` setter (via the history model)
+/// records the structured error so `map_conversation_status` classifies it —
+/// here a shell-exit failure reports FAILED with the shell-exit message.
 #[test]
-fn map_conversation_status_error_surfaces_status_error_message() {
+fn map_conversation_status_error_classifies_status_error_via_setter() {
     App::test((), |mut app| async move {
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
@@ -347,9 +347,9 @@ fn map_conversation_status_error_surfaces_status_error_message() {
             let conv = model
                 .conversation_mut(&conversation_id)
                 .expect("conversation was just restored");
-            conv.update_status_with_error_message(
+            conv.update_status_with_error(
                 ConversationStatus::Error,
-                Some(RenderableAIError::AGENT_EXITED_SHELL_MESSAGE.to_string()),
+                Some(RenderableAIError::AgentExitedShell),
                 terminal_view_id,
                 ctx,
             );
@@ -359,29 +359,45 @@ fn map_conversation_status_error_surfaces_status_error_message() {
             let conv = model.conversation(&conversation_id).unwrap();
             assert_update(
                 map_conversation_status(conv),
-                AgentTaskState::Error,
-                None,
+                AgentTaskState::Failed,
+                Some(PlatformErrorCode::InvalidRequest),
                 Some("shell exited"),
             );
         });
     });
 }
 
-/// When the conversation has an `Error` status with no exchange error but a
-/// `status_error_message` (e.g. from a pre-spawn quota failure where no stream
-/// arrives), the real message is used instead of the generic fallback.
+/// An out-of-band `status_error` with `is_user_error: false` (e.g. a child-launch
+/// or skill-resolution failure) classifies as ERROR and surfaces its message.
 #[test]
-fn map_conversation_status_error_uses_status_error_message_when_no_exchange_error() {
+fn map_conversation_status_error_classifies_status_error_other_as_error() {
     let mut conversation = AIConversation::new(false, false);
     conversation.set_status_for_test(ConversationStatus::Error);
-    conversation.set_status_error_message_for_test(Some(
-        "Out of credits. Upgrade your Warp plan to continue running cloud agents.".into(),
-    ));
+    conversation.set_status_error_for_test(Some(RenderableAIError::other(
+        "Out of credits. Upgrade your Warp plan to continue running cloud agents.",
+        false,
+    )));
     assert_update(
         map_conversation_status(&conversation),
         AgentTaskState::Error,
-        None,
+        Some(PlatformErrorCode::InternalError),
         Some("Out of credits"),
+    );
+}
+
+/// An out-of-band `status_error` with no exchange (the shell-exit-with-no-stream
+/// path) classifies via the structured error — FAILED with the shell-exit code —
+/// not the generic ERROR fallback.
+#[test]
+fn map_conversation_status_error_classifies_status_error() {
+    let mut conversation = AIConversation::new(false, false);
+    conversation.set_status_for_test(ConversationStatus::Error);
+    conversation.set_status_error_for_test(Some(RenderableAIError::AgentExitedShell));
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::InvalidRequest),
+        Some("shell exited"),
     );
 }
 
