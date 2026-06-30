@@ -1515,11 +1515,6 @@ impl TryFrom<StartRecordingResult> for api::request::input::tool_call_result::Re
                                 settings: Some(api::start_recording_result::CaptureSettings {
                                     width_px: started.width_px,
                                     height_px: started.height_px,
-                                    frame_rate: started.frame_rate,
-                                }),
-                                limits: Some(api::start_recording_result::Limits {
-                                    max_duration: started.max_duration.map(duration_to_proto),
-                                    max_size_bytes: started.max_size_bytes.unwrap_or_default(),
                                 }),
                             },
                         )),
