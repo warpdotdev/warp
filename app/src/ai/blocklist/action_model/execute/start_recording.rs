@@ -62,16 +62,18 @@ impl StartRecordingExecutor {
         ActionExecution::new_async(
             async move {
                 let recorder = computer_use::create_recorder();
+                // Fall back to the recorder's defaults when the server omits a value:
+                // frame rate 0 means unspecified, and absent limits would otherwise
+                // leave the capture unbounded.
+                let defaults = computer_use::RecordingConfig::default();
                 let config = computer_use::RecordingConfig {
-                    // A frame rate of 0 means the server did not specify one;
-                    // fall back to the recorder's default in that case.
                     frame_rate: if frame_rate > 0 {
                         frame_rate
                     } else {
-                        computer_use::RecordingConfig::default().frame_rate
+                        defaults.frame_rate
                     },
-                    max_duration,
-                    max_size_bytes,
+                    max_duration: max_duration.or(defaults.max_duration),
+                    max_size_bytes: max_size_bytes.or(defaults.max_size_bytes),
                 };
                 recorder.start(config).await
             },
