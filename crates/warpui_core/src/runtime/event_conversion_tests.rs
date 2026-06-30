@@ -4,7 +4,7 @@ use ratatui::crossterm::event::{
 };
 
 use super::crossterm_event_to_tui_event;
-use crate::elements::tui::TuiEvent;
+use crate::elements::tui::{TuiEvent, TuiPoint};
 use crate::keymap::Keystroke;
 
 fn key(code: KeyCode, modifiers: KeyModifiers) -> Option<TuiEvent> {
@@ -113,7 +113,7 @@ fn vertical_mouse_wheel_maps_to_cell_position_and_scroll_delta() {
         panic!("expected ScrollWheel");
     };
 
-    assert_eq!(position, (7, 3));
+    assert_eq!(position, TuiPoint::new(7, 3));
     assert_eq!(delta, (0, 1));
     assert!(!precise);
     assert!(modifiers.shift);
@@ -145,7 +145,7 @@ fn mouse_buttons_map_to_tui_mouse_down_events() {
     else {
         panic!("expected LeftMouseDown");
     };
-    assert_eq!(position, (7, 3));
+    assert_eq!(position, TuiPoint::new(7, 3));
     assert!(modifiers.ctrl);
     assert_eq!(click_count, 1);
     assert!(!is_first_mouse);
@@ -161,7 +161,7 @@ fn mouse_buttons_map_to_tui_mouse_down_events() {
     else {
         panic!("expected MiddleMouseDown");
     };
-    assert_eq!(position, (7, 3));
+    assert_eq!(position, TuiPoint::new(7, 3));
     assert!(modifiers.cmd);
     assert!(modifiers.shift);
     assert_eq!(click_count, 1);
@@ -191,7 +191,7 @@ fn left_mouse_up_and_drag_map_to_tui_mouse_events() {
     else {
         panic!("expected LeftMouseUp");
     };
-    assert_eq!(position, (7, 3));
+    assert_eq!(position, TuiPoint::new(7, 3));
     assert!(modifiers.alt);
 
     let Some(TuiEvent::LeftMouseDragged {
@@ -204,7 +204,7 @@ fn left_mouse_up_and_drag_map_to_tui_mouse_events() {
     else {
         panic!("expected LeftMouseDragged");
     };
-    assert_eq!(position, (7, 3));
+    assert_eq!(position, TuiPoint::new(7, 3));
     assert!(modifiers.ctrl);
 }
 
@@ -222,7 +222,7 @@ fn mouse_moved_maps_to_tui_mouse_moved_event() {
         panic!("expected MouseMoved");
     };
 
-    assert_eq!(position, (7, 3));
+    assert_eq!(position, TuiPoint::new(7, 3));
     assert!(modifiers.cmd);
     assert!(modifiers.shift);
     assert!(!is_synthetic);

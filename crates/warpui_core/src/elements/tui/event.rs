@@ -147,6 +147,7 @@ impl TuiEventContext {
         self.app_updates.insert(origin_view_id);
     }
 
+    /// Drains app updates after dispatch so each origin view is notified once.
     pub(crate) fn take_app_updates(&mut self) -> HashSet<EntityId> {
         std::mem::take(&mut self.app_updates)
     }

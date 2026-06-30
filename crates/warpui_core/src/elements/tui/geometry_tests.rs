@@ -61,10 +61,10 @@ fn right_and_bottom_saturate() {
 fn contains_point_uses_half_open_cell_bounds() {
     let rect = TuiRect::new(2, 3, 4, 5);
 
-    assert!(rect.contains_point((2, 3)));
-    assert!(rect.contains_point((5, 7)));
-    assert!(!rect.contains_point((6, 7)));
-    assert!(!rect.contains_point((5, 8)));
-    assert!(!rect.contains_point((1, 3)));
-    assert!(!rect.contains_point((2, 2)));
+    assert!(rect.contains_point(TuiPoint::new(2, 3)));
+    assert!(rect.contains_point(TuiPoint::new(5, 7)));
+    assert!(!rect.contains_point(TuiPoint::new(6, 7)));
+    assert!(!rect.contains_point(TuiPoint::new(5, 8)));
+    assert!(!rect.contains_point(TuiPoint::new(1, 3)));
+    assert!(!rect.contains_point(TuiPoint::new(2, 2)));
 }

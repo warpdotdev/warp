@@ -4,7 +4,7 @@ use std::rc::Rc;
 use super::TuiClipped;
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiRect, TuiSize, TuiText,
+    TuiLayoutContext, TuiPoint, TuiRect, TuiSize, TuiText,
 };
 use crate::event::{KeyEventDetails, ModifiersState};
 use crate::keymap::Keystroke;
@@ -23,7 +23,7 @@ fn render_to_lines(element: &mut dyn TuiElement, size: TuiSize) -> Vec<String> {
 
 #[test]
 fn renders_from_the_requested_logical_row() {
-    let mut clipped = TuiClipped::new(TuiText::new("a\nb\nc").truncate()).with_skip_top_rows(1);
+    let mut clipped = TuiClipped::new(TuiText::new("a\nb\nc").truncate()).with_hidden_top_rows(1);
 
     assert_eq!(
         render_to_lines(&mut clipped, TuiSize::new(3, 2)),
@@ -32,11 +32,11 @@ fn renders_from_the_requested_logical_row() {
 }
 
 #[test]
-fn layout_preserves_child_width_and_reports_height_after_skipping_top_rows() {
+fn layout_preserves_child_width_and_reports_height_after_hiding_top_rows() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
             let mut clipped =
-                TuiClipped::new(TuiText::new("a\nb\nc").truncate()).with_skip_top_rows(1);
+                TuiClipped::new(TuiText::new("a\nb\nc").truncate()).with_hidden_top_rows(1);
             let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
@@ -72,7 +72,7 @@ impl TuiElement for CursorElement {
 
 #[test]
 fn cursor_position_is_shifted_into_the_visible_window() {
-    let clipped = TuiClipped::new(CursorElement { cursor: (0, 2) }).with_skip_top_rows(1);
+    let clipped = TuiClipped::new(CursorElement { cursor: (0, 2) }).with_hidden_top_rows(1);
     let mut rendered_views = EntityIdMap::default();
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -86,7 +86,7 @@ fn cursor_position_is_shifted_into_the_visible_window() {
 
 #[test]
 fn cursor_position_above_the_visible_window_is_hidden() {
-    let clipped = TuiClipped::new(CursorElement { cursor: (0, 0) }).with_skip_top_rows(1);
+    let clipped = TuiClipped::new(CursorElement { cursor: (0, 0) }).with_hidden_top_rows(1);
     let mut rendered_views = EntityIdMap::default();
     let mut ctx = TuiLayoutContext {
         rendered_views: &mut rendered_views,
@@ -112,7 +112,7 @@ impl TuiElement for DispatchRecorder {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        // Claim 3 rows so skipping 1 top row leaves a 2-row visible window.
+        // Claim 3 rows so hiding 1 top row leaves a 2-row visible window.
         constraint.clamp(TuiSize::new(1, 3))
     }
 
@@ -133,7 +133,7 @@ impl TuiElement for DispatchRecorder {
 
 fn left_mouse_down(x: u16, y: u16) -> TuiEvent {
     TuiEvent::LeftMouseDown {
-        position: (x, y),
+        position: TuiPoint::new(x, y),
         modifiers: ModifiersState::default(),
         click_count: 1,
         is_first_mouse: false,
@@ -149,7 +149,7 @@ fn dispatch_translates_mouse_event_to_full_logical_area() {
                 seen_area: seen_area.clone(),
                 handle: true,
             })
-            .with_skip_top_rows(1);
+            .with_hidden_top_rows(1);
             let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
@@ -175,7 +175,7 @@ fn dispatch_filters_mouse_events_outside_visible_window() {
                 seen_area: seen_area.clone(),
                 handle: true,
             })
-            .with_skip_top_rows(1);
+            .with_hidden_top_rows(1);
             let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,
@@ -203,7 +203,7 @@ fn dispatch_forwards_non_positional_events_without_filtering() {
                 seen_area: seen_area.clone(),
                 handle: true,
             })
-            .with_skip_top_rows(1);
+            .with_hidden_top_rows(1);
             let mut rendered_views = EntityIdMap::default();
             let mut ctx = TuiLayoutContext {
                 rendered_views: &mut rendered_views,

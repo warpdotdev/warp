@@ -7,7 +7,7 @@ use super::{
 };
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiRect, TuiScrollable, TuiSize, TuiText,
+    TuiLayoutContext, TuiPoint, TuiRect, TuiScrollable, TuiSize, TuiText,
 };
 use crate::event::ModifiersState;
 use crate::{App, AppContext, EntityId, EntityIdMap};
@@ -108,7 +108,7 @@ fn wheel_with_notify_count(
         let mut event_ctx = TuiEventContext::default();
         event_ctx.set_origin_view(Some(EntityId::new()));
         let event = TuiEvent::ScrollWheel {
-            position: (0, 0),
+            position: TuiPoint::new(0, 0),
             delta: (0, delta_y as isize),
             precise: false,
             modifiers: ModifiersState::default(),
@@ -123,7 +123,7 @@ fn request_includes_scroll_top_height_and_width() {
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 3), fake_item(2, 3)]);
         let requests = content.requests.clone();
-        let state = TuiViewportedListState::at_end();
+        let state = TuiViewportedListState::new_at_end();
         state.scroll_to_rows_from_top(2);
         let mut viewport = viewport_with_state(state, content);
 
@@ -144,7 +144,7 @@ fn request_includes_scroll_top_height_and_width() {
 fn end_position_renders_only_the_visible_item_rows() {
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 3), fake_item(2, 3), fake_item(3, 3)]);
-        let mut viewport = viewport_with_state(TuiViewportedListState::at_end(), content);
+        let mut viewport = viewport_with_state(TuiViewportedListState::new_at_end(), content);
 
         let lines = render_viewport(&app, &mut viewport, TuiSize::new(8, 4));
 
@@ -158,7 +158,7 @@ fn end_position_renders_only_the_visible_item_rows() {
 fn rows_from_top_position_starts_at_the_requested_absolute_row() {
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 3), fake_item(2, 3), fake_item(3, 3)]);
-        let state = TuiViewportedListState::at_end();
+        let state = TuiViewportedListState::new_at_end();
         state.scroll_to_rows_from_top(1);
         let mut viewport = viewport_with_state(state, content);
 
@@ -175,7 +175,7 @@ fn rows_from_top_position_starts_at_the_requested_absolute_row() {
 fn rows_from_top_past_content_clamps_to_end() {
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 1), fake_item(2, 1)]);
-        let state = TuiViewportedListState::at_end();
+        let state = TuiViewportedListState::new_at_end();
         state.scroll_to_rows_from_top(99);
         let mut viewport = viewport_with_state(state.clone(), content);
 
@@ -190,7 +190,7 @@ fn rows_from_top_past_content_clamps_to_end() {
 fn scrolling_up_clamps_to_the_top_without_snapping_to_bottom() {
     App::test((), |app| async move {
         let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
-        let state = TuiViewportedListState::at_end();
+        let state = TuiViewportedListState::new_at_end();
         let mut viewport = TuiScrollable::new(viewport_with_state(state.clone(), content));
         let size = TuiSize::new(8, 4);
 
@@ -215,7 +215,7 @@ fn scrolling_up_clamps_to_the_top_without_snapping_to_bottom() {
 fn scrolling_down_pins_to_bottom_without_overscrolling() {
     App::test((), |app| async move {
         let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
-        let state = TuiViewportedListState::at_end();
+        let state = TuiViewportedListState::new_at_end();
         let mut viewport = TuiScrollable::new(viewport_with_state(state.clone(), content));
         let size = TuiSize::new(8, 4);
 
@@ -244,7 +244,7 @@ fn scrolling_down_pins_to_bottom_without_overscrolling() {
 fn scrolling_is_a_noop_when_all_content_fits() {
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 1), fake_item(2, 1)]);
-        let state = TuiViewportedListState::at_end();
+        let state = TuiViewportedListState::new_at_end();
         let mut viewport = TuiScrollable::new(viewport_with_state(state.clone(), content));
         let size = TuiSize::new(8, 4);
 
@@ -260,7 +260,7 @@ fn scrolling_is_a_noop_when_all_content_fits() {
 fn scrolling_notifies_the_view_when_scroll_state_changes() {
     App::test((), |app| async move {
         let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
-        let state = TuiViewportedListState::at_end();
+        let state = TuiViewportedListState::new_at_end();
         let mut viewport = TuiScrollable::new(viewport_with_state(state, content));
         let size = TuiSize::new(8, 4);
 
@@ -276,7 +276,7 @@ fn scrolling_notifies_the_view_when_scroll_state_changes() {
 fn propagating_scrollable_returns_unhandled_when_scroll_state_does_not_change() {
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 1), fake_item(2, 1)]);
-        let state = TuiViewportedListState::at_end();
+        let state = TuiViewportedListState::new_at_end();
         let mut viewport = TuiScrollable::new(viewport_with_state(state.clone(), content))
             .with_propagate_mousewheel_if_not_handled(true);
         let size = TuiSize::new(8, 4);
@@ -339,7 +339,7 @@ fn single_element_viewport(
     position: TuiViewportPosition,
     element: impl TuiElement + 'static,
 ) -> TuiViewportedList<SingleElementContent> {
-    let state = TuiViewportedListState::at_end();
+    let state = TuiViewportedListState::new_at_end();
     state.set_position(position);
     TuiViewportedList::new(
         state,
@@ -421,7 +421,7 @@ fn dispatch_filters_mouse_events_outside_visible_window() {
             viewport.layout(TuiConstraint::tight(TuiSize::new(3, 2)), &mut ctx, app_ctx);
 
             let event = TuiEvent::LeftMouseDown {
-                position: (0, 2),
+                position: TuiPoint::new(0, 2),
                 modifiers: ModifiersState::default(),
                 click_count: 1,
                 is_first_mouse: false,

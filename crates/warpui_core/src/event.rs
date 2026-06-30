@@ -213,26 +213,6 @@ pub enum Event {
 }
 
 impl Event {
-    /// Returns the position carried by pointer-like events.
-    pub fn position(&self) -> Option<Vector2F> {
-        match self {
-            Self::ScrollWheel { position, .. }
-            | Self::LeftMouseDown { position, .. }
-            | Self::LeftMouseUp { position, .. }
-            | Self::LeftMouseDragged { position, .. }
-            | Self::MiddleMouseDown { position, .. }
-            | Self::RightMouseDown { position, .. }
-            | Self::ForwardMouseDown { position, .. }
-            | Self::BackMouseDown { position, .. }
-            | Self::MouseMoved { position, .. } => Some(*position),
-            Self::ModifierStateChanged { mouse_position, .. } => Some(*mouse_position),
-            Self::DragAndDropFiles { location, .. } | Self::DragFiles { location } => {
-                Some(*location)
-            }
-            _ => None,
-        }
-    }
-
     /// Returns the mouse-down position of the event,
     /// iff the event is one of the many `*MouseDown` events.
     pub fn mouse_down_position(&self) -> Option<Vector2F> {
@@ -278,8 +258,29 @@ impl InBoundsExt for Event {
         // This trait is meant to check whether the Self is within the bounds,
         // however in this implementation Self is Event that may not always be related to the
         // mouse - so for all such cases, lets just return true.
-        self.position()
-            .is_none_or(|position| bounds.contains_point(position))
+        match self {
+            Event::ScrollWheel { position, .. }
+            | Event::LeftMouseDown { position, .. }
+            | Event::LeftMouseUp { position, .. }
+            | Event::LeftMouseDragged { position, .. }
+            | Event::MiddleMouseDown { position, .. }
+            | Event::RightMouseDown { position, .. }
+            | Event::ForwardMouseDown { position, .. }
+            | Event::BackMouseDown { position, .. }
+            | Event::MouseMoved { position, .. } => bounds.contains_point(*position),
+            Event::ModifierStateChanged { mouse_position, .. } => {
+                bounds.contains_point(*mouse_position)
+            }
+            Event::DragAndDropFiles { location, .. } | Event::DragFiles { location } => {
+                bounds.contains_point(*location)
+            }
+            Event::KeyDown { .. }
+            | Event::ModifierKeyChanged { .. }
+            | Event::TypedCharacters { .. }
+            | Event::DragFileExit
+            | Event::SetMarkedText { .. }
+            | Event::ClearMarkedText => true,
+        }
     }
 }
 

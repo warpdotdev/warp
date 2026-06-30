@@ -10,10 +10,7 @@
 //! against. [`TuiRectExt`] adds the few slicing helpers the hand-rolled
 //! column/container layout needs that ratatui's `Rect` does not provide.
 
-pub use ratatui::layout::{Rect as TuiRect, Size as TuiSize};
-
-/// A terminal cell coordinate `(column, row)`.
-pub type TuiPoint = (u16, u16);
+pub use ratatui::layout::{Position as TuiPoint, Rect as TuiRect, Size as TuiSize};
 
 /// A layout constraint: an element handed a `TuiConstraint` must return a
 /// [`TuiSize`] with `min.width <= width <= max.width` and
@@ -132,8 +129,10 @@ impl TuiRectExt for TuiRect {
     }
 
     fn contains_point(self, position: TuiPoint) -> bool {
-        let (x, y) = position;
-        x >= self.x && x < self.right() && y >= self.y && y < self.bottom()
+        position.x >= self.x
+            && position.x < self.right()
+            && position.y >= self.y
+            && position.y < self.bottom()
     }
 }
 

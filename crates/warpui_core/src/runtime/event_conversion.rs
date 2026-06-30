@@ -29,7 +29,7 @@ impl TryFrom<MouseEvent> for TuiEvent {
     type Error = ();
 
     fn try_from(event: MouseEvent) -> Result<Self, Self::Error> {
-        let position = (event.column, event.row);
+        let position = TuiPoint::new(event.column, event.row);
         let modifiers = modifiers_state(event.modifiers);
 
         match event.kind {

@@ -162,7 +162,7 @@ impl ViewportDemoView {
         Self {
             items: Rc::new(RefCell::new(initial_items())),
             last_width: Rc::new(Cell::new(None)),
-            viewport: TuiViewportedListState::at_end(),
+            viewport: TuiViewportedListState::new_at_end(),
             quit,
         }
     }
