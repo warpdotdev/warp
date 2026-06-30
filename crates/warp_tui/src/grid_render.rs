@@ -1,4 +1,6 @@
-//! Terminal-grid snapshot rendering for simple TUI terminal blocks.
+//! Terminal-grid snapshots rendered as normal TUI elements.
+
+use std::ops::Range;
 use warp::tui_export::{BlockGrid, TerminalColorList};
 use warp_terminal::model::ansi::Color;
 use warp_terminal::model::grid::cell::{Cell, Flags};
@@ -9,9 +11,8 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::AppContext;
 
-/// A terminal-grid cell copied out of the terminal-model lock.
 #[derive(Clone)]
-pub(super) struct TuiGridCell {
+struct TerminalCellSnapshot {
     symbol: String,
     style: TuiStyle,
 }
@@ -20,19 +21,49 @@ pub(super) struct TuiGridCell {
 #[path = "grid_render_tests.rs"]
 mod tests;
 
-/// Visible terminal-grid rows copied out of the terminal-model lock.
-pub(super) struct TuiGridRows {
-    rows: Vec<Vec<TuiGridCell>>,
+/// Renderable terminal-grid rows copied out of the terminal-model lock.
+pub(super) struct TerminalGridSnapshot {
+    rows: Vec<Vec<TerminalCellSnapshot>>,
 }
 
-impl TuiGridRows {
-    /// Creates a renderable row snapshot.
-    pub(super) fn new(rows: Vec<Vec<TuiGridCell>>) -> Self {
-        Self { rows }
+impl TerminalGridSnapshot {
+    /// Creates an empty grid snapshot.
+    pub(super) fn empty() -> Self {
+        Self { rows: Vec::new() }
+    }
+
+    /// Appends displayed rows from a terminal block grid.
+    pub(super) fn append_displayed_rows(
+        &mut self,
+        block_grid: &BlockGrid,
+        displayed_rows: Range<usize>,
+        max_width: u16,
+        colors: &TerminalColorList,
+    ) {
+        let grid = block_grid.grid_handler();
+        let end = displayed_rows.end.min(block_grid.len_displayed());
+        self.rows.extend(
+            (displayed_rows.start.min(end)..end).filter_map(|displayed_row| {
+                let original_row =
+                    grid.maybe_translate_row_from_displayed_to_original(displayed_row);
+                let row = grid.row(original_row)?;
+                Some(
+                    (0..grid.columns().min(usize::from(max_width)))
+                        .map(|column| {
+                            let cell = &row[column];
+                            TerminalCellSnapshot {
+                                symbol: sanitized_symbol(cell),
+                                style: cell_to_style(cell, colors),
+                            }
+                        })
+                        .collect(),
+                )
+            }),
+        );
     }
 }
 
-impl TuiElement for TuiGridRows {
+impl TuiElement for TerminalGridSnapshot {
     fn layout(
         &mut self,
         constraint: TuiConstraint,
@@ -55,34 +86,6 @@ impl TuiElement for TuiGridRows {
             }
         }
     }
-}
-
-/// Copies a displayed-row range from a terminal block grid.
-pub(super) fn snapshot_block_grid_rows(
-    block_grid: &BlockGrid,
-    rows: std::ops::Range<usize>,
-    width: u16,
-    colors: &TerminalColorList,
-) -> Vec<Vec<TuiGridCell>> {
-    let grid = block_grid.grid_handler();
-    let end = rows.end.min(block_grid.len_displayed());
-    (rows.start.min(end)..end)
-        .filter_map(|displayed_row| {
-            let original_row = grid.maybe_translate_row_from_displayed_to_original(displayed_row);
-            let row = grid.row(original_row)?;
-            Some(
-                (0..grid.columns().min(usize::from(width)))
-                    .map(|column| {
-                        let cell = &row[column];
-                        TuiGridCell {
-                            symbol: sanitized_symbol(cell),
-                            style: cell_to_style(cell, colors),
-                        }
-                    })
-                    .collect(),
-            )
-        })
-        .collect()
 }
 
 fn cell_to_color(color: &Color, colors: &TerminalColorList) -> TuiColor {
