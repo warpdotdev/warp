@@ -1,29 +1,24 @@
 //! Simple visible-row terminal block rendering for the TUI transcript.
 
-use std::ops::Range;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{BlockId, TerminalModel};
-use warpui_core::elements::tui::RenderedViewportItem;
+use warpui_core::elements::tui::TuiElement;
 
 use super::grid_render::{snapshot_block_grid_rows, TuiGridRows};
 
-/// Renders the requested logical rows of a terminal block.
+/// Renders a full terminal block for viewport clipping.
 pub(super) fn render_terminal_block(
     model: &Arc<FairMutex<TerminalModel>>,
     block_id: &BlockId,
-    visible_rows: Range<usize>,
     width: u16,
-) -> RenderedViewportItem {
+) -> Box<dyn TuiElement> {
     let rows = {
         let model = model.lock();
         let colors = model.colors();
         let Some(block) = model.block_list().block_with_id(block_id) else {
-            return RenderedViewportItem {
-                element: Box::new(TuiGridRows::new(Vec::new())),
-                measured_full_height: None,
-            };
+            return Box::new(TuiGridRows::new(Vec::new()));
         };
 
         let prompt_rows = if block.should_hide_command_grid() {
@@ -37,32 +32,23 @@ pub(super) fn render_terminal_block(
             block.output_grid().len_displayed()
         };
         let mut rows = Vec::new();
-        if visible_rows.start < prompt_rows {
+        if prompt_rows > 0 {
             rows.extend(snapshot_block_grid_rows(
                 block.prompt_and_command_grid(),
-                visible_rows.start..visible_rows.end.min(prompt_rows),
+                0..prompt_rows,
                 width,
                 &colors,
             ));
         }
-        let output_start = visible_rows.start.saturating_sub(prompt_rows);
-        let output_end = visible_rows
-            .end
-            .saturating_sub(prompt_rows)
-            .min(output_rows);
-        if output_start < output_end {
+        if output_rows > 0 {
             rows.extend(snapshot_block_grid_rows(
                 block.output_grid(),
-                output_start..output_end,
+                0..output_rows,
                 width,
                 &colors,
             ));
         }
         rows
     };
-
-    RenderedViewportItem {
-        element: Box::new(TuiGridRows::new(rows)),
-        measured_full_height: None,
-    }
+    Box::new(TuiGridRows::new(rows))
 }

@@ -6,7 +6,6 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{BlockHeightItem, RichContentItem, RichContentType, TerminalModel};
 use warpui::EntityId;
-use warpui_core::elements::tui::{TuiViewportIndex, TuiViewportIndexPosition};
 
 use super::{block_rows, AgentBlockRegistry, TerminalHistoryIndex, TerminalHistoryItemId};
 
@@ -28,14 +27,7 @@ fn terminal_history_index_uses_canonical_block_list_order() {
         Rc::new(RefCell::new(HashSet::new())),
     );
 
-    let actual = index.with_cursor(TuiViewportIndexPosition::Start, |cursor| {
-        let mut items = Vec::new();
-        while let Some(item) = cursor.item() {
-            items.push(item.id);
-            cursor.next();
-        }
-        items
-    });
+    let actual = index.item_ids_for_test();
 
     assert_eq!(actual, expected);
 }

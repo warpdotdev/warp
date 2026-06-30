@@ -5,12 +5,11 @@ use warp::tui_export::{
     AIAgentExchangeId, AIConversationId, BlockHeightItem, BlocklistAIHistoryModel, TerminalModel,
 };
 use warpui::event::ModifiersState;
-use warpui::geometry::vector::Vector2F;
 use warpui::platform::WindowStyle;
-use warpui::{AddWindowOptions, App, EntityId, EntityIdMap, Event, TuiView};
+use warpui::{AddWindowOptions, App, EntityId, EntityIdMap, TuiView};
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext, TuiRect,
-    TuiSize,
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiRect, TuiSize,
 };
 use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
@@ -129,7 +128,7 @@ fn transcript_view_scrolls_only_with_the_mouse_wheel() {
 
         let bottom = render_element(&app, element.as_mut(), area);
         assert!(transcript.read(&app, |view, _| view.viewport.is_at_end()));
-        let page_up = Event::KeyDown {
+        let page_up = TuiEvent::KeyDown {
             keystroke: Keystroke {
                 key: "pageup".to_owned(),
                 ..Default::default()
@@ -141,12 +140,12 @@ fn transcript_view_scrolls_only_with_the_mouse_wheel() {
         assert!(!dispatch_event(&app, element.as_mut(), area, &page_up));
         assert_eq!(render_element(&app, element.as_mut(), area), bottom);
 
-        assert!(dispatch_scroll(&app, element.as_mut(), area, 1.0));
+        assert!(dispatch_scroll(&app, element.as_mut(), area, 1));
         let scrolled = render_element(&app, element.as_mut(), area);
         assert_ne!(scrolled, bottom);
         assert!(!transcript.read(&app, |view, _| view.viewport.is_at_end()));
         for _ in 0..8 {
-            dispatch_scroll(&app, element.as_mut(), area, -1.0);
+            dispatch_scroll(&app, element.as_mut(), area, -1);
         }
         assert_eq!(render_element(&app, element.as_mut(), area), bottom);
         assert!(transcript.read(&app, |view, _| view.viewport.is_at_end()));
@@ -172,14 +171,14 @@ fn render_element(app: &App, element: &mut dyn TuiElement, area: TuiRect) -> Vec
 }
 
 /// Dispatches a vertical wheel movement to a retained TUI element.
-fn dispatch_scroll(app: &App, element: &mut dyn TuiElement, area: TuiRect, delta_y: f32) -> bool {
+fn dispatch_scroll(app: &App, element: &mut dyn TuiElement, area: TuiRect, delta_y: isize) -> bool {
     dispatch_event(
         app,
         element,
         area,
-        &Event::ScrollWheel {
-            position: Vector2F::new(f32::from(area.x), f32::from(area.y)),
-            delta: Vector2F::new(0.0, delta_y),
+        &TuiEvent::ScrollWheel {
+            position: (area.x, area.y),
+            delta: (0, delta_y),
             precise: false,
             modifiers: ModifiersState::default(),
         },
@@ -187,7 +186,12 @@ fn dispatch_scroll(app: &App, element: &mut dyn TuiElement, area: TuiRect, delta
 }
 
 /// Dispatches an event to a retained TUI element.
-fn dispatch_event(app: &App, element: &mut dyn TuiElement, area: TuiRect, event: &Event) -> bool {
+fn dispatch_event(
+    app: &App,
+    element: &mut dyn TuiElement,
+    area: TuiRect,
+    event: &TuiEvent,
+) -> bool {
     app.read(|app| {
         let mut rendered_views = EntityIdMap::default();
         let mut layout_ctx = TuiLayoutContext {

@@ -8,9 +8,7 @@ use warp::tui_export::{
     TerminalSurfaceInit,
 };
 use warp::{TuiLoginModel, TuiLoginPhase};
-use warpui_core::elements::tui::{
-    TuiChildView, TuiColumn, TuiElement, TuiParentElement, TuiText,
-};
+use warpui_core::elements::tui::{TuiChildView, TuiColumn, TuiElement, TuiParentElement, TuiText};
 use warpui_core::{
     keymap, AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TuiView, TypedActionView,
     ViewContext, ViewHandle,

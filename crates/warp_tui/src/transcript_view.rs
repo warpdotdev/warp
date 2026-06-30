@@ -11,17 +11,15 @@ use warp::tui_export::{
     BlocklistAIHistoryModel, RichContentItem, RichContentType, TerminalModel,
 };
 use warpui_core::elements::tui::{
-    TuiElement, TuiScrollable, TuiViewportHandle, TuiViewportedList, ViewportRenderRequest,
+    TuiElement, TuiScrollable, TuiViewportedList, TuiViewportedListState,
 };
 use warpui_core::{
     AppContext, Entity, EntityId, SingletonEntity, TuiView, TypedActionView, ViewContext,
 };
 
 use super::agent_block::TuiAgentBlockView;
-use super::terminal_block::render_terminal_block;
 use super::terminal_history_index::{
-    AgentBlockRegistration, AgentBlockRegistry, TerminalHistoryIndex, TerminalHistoryItem,
-    TerminalHistoryItemId,
+    AgentBlockRegistration, AgentBlockRegistry, TerminalHistoryIndex,
 };
 
 /// TUI transcript view over one terminal surface's canonical block-list order.
@@ -30,7 +28,7 @@ pub(super) struct TuiTranscriptView {
     model: Arc<FairMutex<TerminalModel>>,
     agent_blocks: AgentBlockRegistry,
     dirty_agent_blocks: Rc<RefCell<HashSet<EntityId>>>,
-    viewport: TuiViewportHandle<TerminalHistoryItemId>,
+    viewport: TuiViewportedListState,
 }
 
 impl TuiTranscriptView {
@@ -49,7 +47,7 @@ impl TuiTranscriptView {
             model,
             agent_blocks: Rc::new(RefCell::new(HashMap::new())),
             dirty_agent_blocks: Rc::new(RefCell::new(HashSet::new())),
-            viewport: TuiViewportHandle::at_end(),
+            viewport: TuiViewportedListState::at_end(),
         }
     }
 
@@ -243,22 +241,9 @@ impl TuiView for TuiTranscriptView {
             self.agent_blocks.clone(),
             self.dirty_agent_blocks.clone(),
         );
-        let model = self.model.clone();
-        let position = self.viewport.position();
-        let viewport = self.viewport.clone();
         Box::new(TuiScrollable::new(TuiViewportedList::new(
-            position,
+            self.viewport.clone(),
             index,
-            move |request: ViewportRenderRequest<TerminalHistoryItem>, app| match request.item {
-                TerminalHistoryItem::TerminalBlock { block_id } => {
-                    render_terminal_block(&model, &block_id, request.visible_rows, request.width)
-                }
-                TerminalHistoryItem::AgentBlock { registration } => registration
-                    .view
-                    .as_ref(app)
-                    .render_visible_rows(request.visible_rows, request.width, app),
-            },
-            move |position| viewport.set_position(position),
         )))
     }
 }
