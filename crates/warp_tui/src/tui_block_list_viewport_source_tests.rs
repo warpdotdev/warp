@@ -13,7 +13,7 @@ use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, EntityId, EntityIdMap};
 use warpui_core::elements::tui::{
     TuiConstraint, TuiElement, TuiLayoutContext, TuiSize, TuiText, TuiViewportWindow,
-    TuiViewportedElement,
+    TuiViewportedElement, TuiViewportedList, TuiViewportedListState,
 };
 use warpui_core::{App, AppContext, Entity, TuiView, TypedActionView, ViewContext};
 
@@ -115,7 +115,7 @@ fn tui_agent_rich_content_stays_visible_without_gui_agent_view_state() {
 }
 
 #[test]
-fn tui_agent_rich_content_remeasures_visible_height_when_width_changes() {
+fn tui_agent_rich_content_updates_visible_height_from_viewport_layout() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
@@ -168,8 +168,21 @@ fn tui_agent_rich_content_remeasures_visible_height_when_width_changes() {
         });
         let expected_height =
             app.read(|app| agent_block.as_ref(app).desired_height(80, app) as f64);
+        assert_eq!(content.content_height, 4);
+        assert_eq!(rich_content_height(&terminal_model, view_id), Some(4.0));
 
-        assert_eq!(content.content_height, expected_height as usize);
+        let mut viewport = TuiViewportedList::new(TuiViewportedListState::new_at_end(), source);
+        app.read(|app| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut layout_ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            viewport.layout(
+                TuiConstraint::tight(TuiSize::new(80, 10)),
+                &mut layout_ctx,
+                app,
+            );
+        });
         assert_eq!(
             rich_content_height(&terminal_model, view_id),
             Some(expected_height)

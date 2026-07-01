@@ -39,8 +39,9 @@ pub use crate::terminal::local_tty::{
 pub use crate::terminal::model::block::{Block, BlockId};
 pub use crate::terminal::model::blockgrid::BlockGrid;
 pub use crate::terminal::model::blocks::{
-    BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
+    BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
 };
+pub use crate::terminal::model_events::ModelEvent;
 pub use crate::terminal::model::rich_content::RichContentType;
 pub use crate::terminal::model::session::active_session::ActiveSession;
 pub use crate::terminal::model::terminal_model::BlockIndex;

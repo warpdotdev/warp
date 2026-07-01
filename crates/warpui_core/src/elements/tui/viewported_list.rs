@@ -11,7 +11,7 @@ use super::{
     TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPresentationContext, TuiRect, TuiScrollableElement, TuiSize,
 };
-use crate::AppContext;
+use crate::{AppContext, EntityId};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TuiViewportPosition {
@@ -76,7 +76,16 @@ pub struct TuiViewportWindow {
 pub struct TuiVisibleViewportItem {
     /// Absolute content-space row where this child starts.
     pub origin_y: usize,
+    /// Optional source-owned identity for reconciling measured height after layout.
+    pub measured_height_id: Option<EntityId>,
     pub element: Box<dyn TuiElement>,
+}
+
+/// A visible item's full height as measured by normal TUI layout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TuiMeasuredViewportItemHeight {
+    pub item_id: EntityId,
+    pub height: u16,
 }
 
 /// The content returned for a viewport window.
@@ -98,6 +107,15 @@ pub trait TuiViewportedElement {
         available_width: u16,
         app: &AppContext,
     ) -> TuiViewportContent;
+
+    /// Reconciles visible item heights measured by the normal layout pass.
+    fn update_visible_item_heights(
+        &self,
+        _measured_heights: &[TuiMeasuredViewportItemHeight],
+        _app: &AppContext,
+    ) -> bool {
+        false
+    }
 }
 
 struct VisibleElement {
@@ -205,7 +223,6 @@ where
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) {
-        self.visible_elements.clear();
         let viewport_height = constraint.max.height;
         let viewport_height_rows = usize::from(viewport_height);
         let available_width = constraint.max.width;
@@ -214,7 +231,39 @@ where
             self.viewport_content(requested_scroll_top, viewport_height, available_width, app);
 
         self.content_height = content.content_height;
+        let measured_heights = self.layout_viewport_content(
+            scroll_top,
+            viewport_height_rows,
+            available_width,
+            content,
+            ctx,
+            app,
+        );
+        if self.content.update_visible_item_heights(&measured_heights, app) {
+            let (scroll_top, content) =
+                self.viewport_content(requested_scroll_top, viewport_height, available_width, app);
+            self.content_height = content.content_height;
+            self.layout_viewport_content(
+                scroll_top,
+                viewport_height_rows,
+                available_width,
+                content,
+                ctx,
+                app,
+            );
+        }
+    }
 
+    fn layout_viewport_content(
+        &mut self,
+        scroll_top: usize,
+        viewport_height_rows: usize,
+        available_width: u16,
+        content: TuiViewportContent,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> Vec<TuiMeasuredViewportItemHeight> {
+        self.visible_elements.clear();
         let bottom_alignment_offset =
             if matches!(
                 self.vertical_alignment,
@@ -228,13 +277,21 @@ where
             };
 
         let viewport_bottom = scroll_top.saturating_add(viewport_height_rows);
+        let mut measured_heights = Vec::new();
         for item in content.items {
+            let measured_height_id = item.measured_height_id;
             let mut element = item.element;
             let full_size = element.layout(
                 TuiConstraint::loose(TuiSize::new(available_width, u16::MAX)),
                 ctx,
                 app,
             );
+            if let Some(item_id) = measured_height_id {
+                measured_heights.push(TuiMeasuredViewportItemHeight {
+                    item_id,
+                    height: full_size.height,
+                });
+            }
             let item_top = item.origin_y;
             let item_bottom = item_top.saturating_add(usize::from(full_size.height));
             let visible_top = item_top.max(scroll_top);
@@ -257,6 +314,7 @@ where
                 element,
             });
         }
+        measured_heights
     }
 
     /// Scrolls the viewport by `rows` (negative = toward the top), clamping at

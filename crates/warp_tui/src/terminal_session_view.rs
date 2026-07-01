@@ -5,13 +5,13 @@ use warp::tui_export::{
     ActiveSession, AgentViewEntryOrigin, Appearance, BlocklistAIActionModel,
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel, ConversationSelection,
     ConversationSelectionHandle, GetRelevantFilesController, PtyIntent, PtyIntentEvent,
-    TerminalSurface, TerminalSurfaceInit,
+    ModelEvent, TerminalSurface, TerminalSurfaceInit,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     Color, TuiChildView, TuiColumn, TuiConstrainedBox, TuiContainer, TuiElement, TuiStyle,
 };
-use warpui_core::elements::Fill as GuiFill;
+use warpui_core::elements::Fill;
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
@@ -26,7 +26,7 @@ const MAX_INPUT_TEXT_ROWS: u16 = 6;
 const BORDER_ROWS: u16 = 2;
 const SESSION_PADDING: u16 = 2;
 
-/// This surface emits no PTY intents; commands are driven only by the spawned shell.
+/// This TUI surface does not emit direct PTY intents.
 pub(crate) enum TuiTerminalSessionEvent {}
 
 impl PtyIntentEvent for TuiTerminalSessionEvent {
@@ -112,7 +112,19 @@ impl TuiTerminalSessionView {
             view.handle_submitted_prompt(event, ctx);
         });
 
-        ctx.subscribe_to_model(&model_events, |_, _, _, ctx| ctx.notify());
+        ctx.subscribe_to_model(&model_events, |_, _, event, ctx| match event {
+            ModelEvent::BlockCompleted(_)
+            | ModelEvent::AfterBlockStarted { .. }
+            | ModelEvent::BlockMetadataReceived(_)
+            | ModelEvent::BlockWorkingDirectoryUpdated(_)
+            | ModelEvent::BackgroundBlockStarted
+            | ModelEvent::TerminalClear
+            | ModelEvent::PromptUpdated
+            | ModelEvent::Typeahead
+            | ModelEvent::Handler(_)
+            | ModelEvent::FinishUpdate(_) => ctx.notify(),
+            _ => {}
+        });
         ctx.spawn_stream_local(wakeups_rx, |_, _, ctx| ctx.notify(), |_, _| {});
         ctx.focus_self();
 
@@ -147,7 +159,7 @@ impl TuiTerminalSessionView {
         {
             Some(conversation_id) => conversation_id,
             None => match self.conversation_selection.update(ctx, |selection, ctx| {
-                selection.try_start_new_conversation(AgentViewEntryOrigin::Cli, ctx)
+                selection.try_start_new_conversation(AgentViewEntryOrigin::Tui, ctx)
             }) {
                 Ok(conversation_id) => conversation_id,
                 Err(error) => {
@@ -163,8 +175,8 @@ impl TuiTerminalSessionView {
 
     fn render_session(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let theme = Appearance::as_ref(app).theme();
-        let border_color: Color = GuiFill::from(theme.tui_transcript_accent_color()).into();
-        let background: Color = GuiFill::from(theme.tui_transcript_background()).into();
+        let border_color: Color = Fill::from(theme.terminal_colors().normal.cyan).into();
+        let background: Color = theme.surface_1().into();
         let input_box = TuiConstrainedBox::new(
             TuiContainer::new(TuiChildView::new(&self.input_view))
                 .with_border_style(TuiStyle::default().fg(border_color)),

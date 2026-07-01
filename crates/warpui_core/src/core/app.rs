@@ -1105,9 +1105,10 @@ impl AppContext {
 
     /// Subscribes to a GUI or TUI [`ViewHandle`] for emitted events.
     ///
-    /// This is bounded by [`Entity`] rather than [`View`](crate::View) because
-    /// TUI views implement [`TuiView`](crate::TuiView), not GUI `View`. The
-    /// [`ViewHandle`] parameter still limits callers to actual view instances.
+    /// The [`ViewHandle`] parameter is the proof that `S` is a view: callers can
+    /// only obtain one through GUI or TUI view creation APIs. The generic bound
+    /// stays at [`Entity`] so this can accept both GUI [`View`](crate::View) and
+    /// TUI [`TuiView`](crate::TuiView) instances while still accessing `S::Event`.
     pub fn subscribe_to_view<S, F>(&mut self, handle: &ViewHandle<S>, mut callback: F)
     where
         S: Entity,

@@ -357,37 +357,6 @@ impl WarpTheme {
         internal_colors::neutral_6(self)
     }
 
-    /// Background for the dark-mode TUI transcript terminal surface.
-    pub fn tui_transcript_background(&self) -> Fill {
-        self.surface_1()
-    }
-
-    /// Text color for submitted prompts in the TUI transcript.
-    pub fn tui_transcript_prompt_text_color(&self) -> Fill {
-        self.foreground()
-    }
-
-    /// Accent color for TUI transcript prompt glyphs and input borders.
-    pub fn tui_transcript_accent_color(&self) -> Fill {
-        Fill::from(self.terminal_colors().normal.cyan)
-    }
-
-    /// Background for submitted prompt rows in the TUI transcript.
-    pub fn tui_transcript_prompt_background(&self) -> Fill {
-        self.background()
-            .blend(&self.tui_transcript_accent_color().with_opacity(10))
-            .blend(&self.tui_transcript_accent_color().with_opacity(10))
-    }
-
-    /// Primary agent output text color for the TUI transcript.
-    pub fn tui_transcript_output_text_color(&self) -> Fill {
-        Fill::from(self.terminal_colors().normal.white)
-    }
-
-    /// Secondary/status text color for the TUI transcript.
-    pub fn tui_transcript_secondary_text_color(&self) -> Fill {
-        Fill::from(self.terminal_colors().bright.black)
-    }
 }
 
 // ANSI color blends

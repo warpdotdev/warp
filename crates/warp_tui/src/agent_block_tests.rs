@@ -10,7 +10,7 @@ use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     Color, Modifier, TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize,
 };
-use warpui_core::elements::Fill as GuiFill;
+use warpui_core::elements::Fill;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, EntityIdMap, ViewContext};
 
@@ -22,7 +22,7 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
         app.add_singleton_model(|_| Appearance::mock());
         app.read(|app_ctx| {
             let sections = vec![
-                TuiAgentBlockSection::Input("hello".to_owned()),
+                TuiAgentBlockSection::Input(vec!["hello".to_owned()]),
                 TuiAgentBlockSection::PlainText("one\ntwo\nthree".to_owned()),
             ];
             assert_eq!(desired_height_for_sections(&sections, 20, app_ctx), 6);
@@ -88,7 +88,7 @@ fn simple_agent_block_reflows_height_at_narrow_width() {
         app.add_singleton_model(|_| Appearance::mock());
         app.read(|app_ctx| {
             let sections = vec![
-                TuiAgentBlockSection::Input("hello world".to_owned()),
+                TuiAgentBlockSection::Input(vec!["hello world".to_owned()]),
                 TuiAgentBlockSection::PlainText("streamed output".to_owned()),
             ];
 
@@ -101,22 +101,27 @@ fn simple_agent_block_reflows_height_at_narrow_width() {
 
 fn expected_prompt_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    GuiFill::from(theme.tui_transcript_prompt_text_color()).into()
+    theme.foreground().into()
 }
 
 fn expected_input_background(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    GuiFill::from(theme.tui_transcript_prompt_background()).into()
+    let accent = Fill::from(theme.terminal_colors().normal.cyan);
+    theme
+        .background()
+        .blend(&accent.with_opacity(10))
+        .blend(&accent.with_opacity(10))
+        .into()
 }
 
 fn expected_output_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    GuiFill::from(theme.tui_transcript_output_text_color()).into()
+    Fill::from(theme.terminal_colors().normal.white).into()
 }
 
 fn expected_transcript_background(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    GuiFill::from(theme.tui_transcript_background()).into()
+    theme.surface_1().into()
 }
 
 #[test]
@@ -137,7 +142,7 @@ fn agent_block_extracts_input_and_plain_text_from_model() {
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
-                    TuiAgentBlockSection::Input("hello".to_owned()),
+                    TuiAgentBlockSection::Input(vec!["hello".to_owned()]),
                     TuiAgentBlockSection::PlainText("one".to_owned()),
                     TuiAgentBlockSection::PlainText("two".to_owned()),
                 ]
@@ -145,6 +150,7 @@ fn agent_block_extracts_input_and_plain_text_from_model() {
         });
     });
 }
+
 
 #[test]
 fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {

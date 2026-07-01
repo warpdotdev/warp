@@ -52,6 +52,18 @@ pub(crate) fn login_placeholder(
     centered(content)
 }
 
+/// Placeholder shown between login completion and terminal session creation.
+pub(crate) fn terminal_starting() -> Box<dyn TuiElement> {
+    let dim = TuiStyle::default().add_modifier(Modifier::DIM);
+    centered(
+        TuiColumn::new().child(
+            TuiText::new("Starting terminal…")
+                .with_style(dim)
+                .truncate(),
+        ),
+    )
+}
+
 /// Placeholder shown when login fails; the user can quit with `Ctrl-C`.
 pub(crate) fn login_failed(message: &str) -> Box<dyn TuiElement> {
     let dim = TuiStyle::default().add_modifier(Modifier::DIM);

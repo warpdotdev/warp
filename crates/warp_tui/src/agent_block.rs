@@ -7,7 +7,7 @@ use warpui_core::elements::tui::{
     Color, Modifier, TuiColumn, TuiConstraint, TuiContainer, TuiElement, TuiLayoutContext,
     TuiParentElement, TuiSize, TuiStyle, TuiText,
 };
-use warpui_core::elements::Fill as GuiFill;
+use warpui_core::elements::Fill;
 use warpui_core::{AppContext, Entity, EntityIdMap, TuiView};
 
 const INPUT_PREFIX: &str = "≫ ";
@@ -17,11 +17,14 @@ const BLOCK_BOTTOM_PADDING_ROWS: u16 = 1;
 /// Renderable pieces of an agent block; this will grow as we add tool calls and other sub-elements.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum TuiAgentBlockSection {
-    Input(String),
+    Input(Vec<String>),
     PlainText(String),
 }
 
-/// A simple TUI block backed by one agent exchange.
+/// A thin TUI rich-content view adapter backed by one agent exchange.
+///
+/// The rendering logic is mostly section extraction, but the shared block list
+/// stores rich content by view id, so this remains a registered view.
 pub(super) struct TuiAgentBlockView {
     model: Rc<dyn AIBlockModel<View = Self>>,
 }
@@ -59,16 +62,15 @@ impl TuiAgentBlockView {
     /// Extracts this exchange's visible input/output into logical render sections.
     fn sections(&self, app: &AppContext) -> Vec<TuiAgentBlockSection> {
         let mut sections = Vec::new();
-        // Match the GUI block prompt text: displayable input queries separated by newlines.
-        let input = self
+        let input_lines = self
             .model
             .inputs_to_render(app)
             .iter()
             .filter_map(|input| input.display_query())
-            .collect::<Vec<_>>()
-            .join("\n");
-        if !input.is_empty() {
-            sections.push(TuiAgentBlockSection::Input(input));
+            .flat_map(display_input_lines)
+            .collect::<Vec<_>>();
+        if input_lines.iter().any(|line| !line.is_empty()) {
+            sections.push(TuiAgentBlockSection::Input(input_lines));
         }
 
         if let Some(output) = self.model.status(app).output_to_render() {
@@ -96,7 +98,7 @@ impl TuiAgentBlockView {
     /// Builds the generic TUI element tree for logical render sections.
     fn render_sections(sections: &[TuiAgentBlockSection], app: &AppContext) -> Box<dyn TuiElement> {
         let theme = Appearance::as_ref(app).theme();
-        let background: Color = GuiFill::from(theme.tui_transcript_background()).into();
+        let background: Color = theme.surface_1().into();
         let mut column = TuiColumn::new();
         let mut should_gap_before_next = false;
         for section in sections {
@@ -116,32 +118,42 @@ impl TuiAgentBlockView {
     }
 }
 
+/// Splits an agent input query into display lines while preserving blank lines.
+fn display_input_lines(query: &str) -> impl Iterator<Item = String> + '_ {
+    query.split('\n').map(str::to_owned)
+}
 /// Converts one logical section into a renderable TUI element.
 impl TuiAgentBlockSection {
     fn render_element(&self, top_padding: u16, app: &AppContext) -> Box<dyn TuiElement> {
         let theme = Appearance::as_ref(app).theme();
         match self {
-            Self::Input(text) => {
-                let text_color: Color =
-                    GuiFill::from(theme.tui_transcript_prompt_text_color()).into();
-                let background: Color =
-                    GuiFill::from(theme.tui_transcript_prompt_background()).into();
-                Box::new(
-                    TuiContainer::new(
-                        TuiText::new(format!("{INPUT_PREFIX}{text}")).with_style(
+            Self::Input(lines) => {
+                let text_color: Color = theme.foreground().into();
+                let accent = Fill::from(theme.terminal_colors().normal.cyan);
+                let background: Color = theme
+                    .background()
+                    .blend(&accent.with_opacity(10))
+                    .blend(&accent.with_opacity(10))
+                    .into();
+                let mut column = TuiColumn::new();
+                for line in lines {
+                    column = column.child(
+                        TuiText::new(format!("{INPUT_PREFIX}{line}")).with_style(
                             TuiStyle::default()
                                 .fg(text_color)
                                 .bg(background)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                    )
+                    );
+                }
+                Box::new(
+                    TuiContainer::new(column)
                     .with_background(background)
                     .with_padding_top(top_padding),
                 )
             }
             Self::PlainText(text) => {
-                let text_color: Color =
-                    GuiFill::from(theme.tui_transcript_output_text_color()).into();
+                let text_color: Color = Fill::from(theme.terminal_colors().normal.white).into();
                 Box::new(
                     TuiContainer::new(
                         TuiText::new(text.clone()).with_style(TuiStyle::default().fg(text_color)),
@@ -153,9 +165,6 @@ impl TuiAgentBlockSection {
     }
 }
 
-#[cfg(test)]
-#[path = "agent_block_tests.rs"]
-mod tests;
 
 /// Registers the view with the TUI runtime.
 impl Entity for TuiAgentBlockView {
@@ -172,3 +181,7 @@ impl TuiView for TuiAgentBlockView {
         self.render_element(app)
     }
 }
+
+#[cfg(test)]
+#[path = "agent_block_tests.rs"]
+mod tests;

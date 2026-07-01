@@ -1,9 +1,8 @@
 //! The headless `warp-tui` front-end's session bootstrap.
 //!
 //! [`run`] boots the real headless Warp app via [`warp::run_tui`]. Once shared
-//! initialization is done, the mount built here starts the transcript-capable
-//! TUI session and keeps both the TUI driver and terminal manager alive for the
-//! app's lifetime.
+//! initialization is done, the mount built here starts the TUI driver and
+//! defers creating the transcript-capable terminal session until login.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -14,6 +13,7 @@ use warp::tui_export::{
     tui_dark_theme, Appearance, BannerState, IsSharedSessionCreator, LocalTtyTerminalManager,
     TerminalManagerTrait, TerminalSurfaceResult,
 };
+use warp::{TuiLoginModel, TuiLoginPhase};
 use warpui::SingletonEntity;
 use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::{spawn_tui_driver, TuiDriverHandle};
@@ -22,10 +22,11 @@ use warpui_core::{AddWindowOptions, AppContext, Entity, ModelHandle, ViewHandle}
 use crate::root_view::RootTuiView;
 use crate::terminal_session_view::TuiTerminalSessionView;
 
-/// Holds the live TUI session for the app's lifetime.
+/// Holds the live TUI driver and, after login, the terminal manager.
 struct TuiSession {
-    _driver: TuiDriverHandle,
-    _manager: ModelHandle<Box<dyn TerminalManagerTrait>>,
+    #[expect(dead_code, reason = "keeps the TUI driver alive for the TUI session")]
+    driver: TuiDriverHandle,
+    manager: Option<ModelHandle<Box<dyn TerminalManagerTrait>>>,
 }
 
 impl Entity for TuiSession {
@@ -45,8 +46,7 @@ pub fn run() -> Result<()> {
     warp::run_tui(Box::new(init))
 }
 
-/// Creates the transcript root surface and starts the headless draw + input
-/// driver. Registered as a singleton so the session lives for the app lifetime.
+/// Creates the login-gated TUI root and starts the headless draw + input driver.
 fn init(ctx: &mut AppContext) {
     // The current TUI transcript design is dark-mode-only. Keep this scoped to
     // the TUI process by overriding the already-initialized Appearance theme at
@@ -56,35 +56,70 @@ fn init(ctx: &mut AppContext) {
     });
 
     let banner = ctx.add_model(|_| BannerState::default());
-    let mut root_for_driver = None;
+    let (window_id, root) = ctx.add_tui_window(
+        AddWindowOptions {
+            window_style: WindowStyle::NotStealFocus,
+            ..Default::default()
+        },
+        |_| RootTuiView::new(),
+    );
+    match spawn_tui_driver(ctx, window_id, root.clone()) {
+        Ok(driver) => {
+            let session = ctx.add_singleton_model(|_| TuiSession {
+                driver,
+                manager: None,
+            });
+            let session_for_login = session.clone();
+            let root_for_login = root.clone();
+            let banner_for_login = banner.clone();
+            let login_model = TuiLoginModel::handle(ctx);
+            ctx.subscribe_to_model(&login_model, move |_, _, ctx| {
+                if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
+                    ensure_terminal_session_after_login(
+                        &session_for_login,
+                        &root_for_login,
+                        &banner_for_login,
+                        ctx,
+                    );
+                }
+            });
+            if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
+                ensure_terminal_session_after_login(&session, &root, &banner, ctx);
+            }
+        }
+        Err(error) => {
+            log::error!("failed to start transcript TUI: {error}");
+            ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error.into())));
+        }
+    }
+}
+
+/// Creates and retains the terminal manager after login.
+fn ensure_terminal_session_after_login(
+    session: &ModelHandle<TuiSession>,
+    root: &ViewHandle<RootTuiView>,
+    banner: &ModelHandle<BannerState>,
+    ctx: &mut AppContext,
+) {
+    if session.read(ctx, |session, _| session.manager.is_some()) {
+        return;
+    }
+
+    let root = root.clone();
     let manager = LocalTtyTerminalManager::<TuiTerminalSessionView>::create_tui_model(
         std::env::current_dir().ok(),
         HashMap::<OsString, OsString>::from_iter(std::env::vars_os()),
         IsSharedSessionCreator::No,
         None,
-        banner,
+        banner.clone(),
         Vector2F::new(120., 24.),
         None,
         None,
         ctx,
-        |surface_init, ctx| {
-            let mut terminal_session_for_manager = None;
-            let (window_id, root) = ctx.add_tui_window(
-                AddWindowOptions {
-                    window_style: WindowStyle::NotStealFocus,
-                    ..Default::default()
-                },
-                |ctx| {
-                    let terminal_session = ctx.add_typed_action_tui_view(|ctx| {
-                        TuiTerminalSessionView::new(surface_init, ctx)
-                    });
-                    terminal_session_for_manager = Some(terminal_session.clone());
-                    RootTuiView::new(terminal_session)
-                },
-            );
-            let surface = terminal_session_for_manager
-                .expect("root view construction should create a terminal session surface");
-            root_for_driver = Some((window_id, root));
+        move |surface_init, ctx| {
+            let surface = root.update(ctx, |root, ctx| {
+                root.ensure_terminal_session(surface_init, ctx)
+            });
             TerminalSurfaceResult {
                 surface,
                 post_wire: |_manager: &mut LocalTtyTerminalManager<TuiTerminalSessionView>,
@@ -93,24 +128,8 @@ fn init(ctx: &mut AppContext) {
             }
         },
     );
-    let Some((window_id, root)) = root_for_driver else {
-        log::error!("failed to create TUI root view");
-        ctx.terminate_app(
-            TerminationMode::ForceTerminate,
-            Some(Err(anyhow::anyhow!("failed to create TUI root view"))),
-        );
-        return;
-    };
-    match spawn_tui_driver(ctx, window_id, root) {
-        Ok(driver) => {
-            ctx.add_singleton_model(|_| TuiSession {
-                _driver: driver,
-                _manager: manager.manager,
-            });
-        }
-        Err(error) => {
-            log::error!("failed to start transcript TUI: {error}");
-            ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error.into())));
-        }
-    }
+    session.update(ctx, |session, ctx| {
+        session.manager = Some(manager.manager);
+        ctx.notify();
+    });
 }

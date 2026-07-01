@@ -9,17 +9,18 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use sum_tree::SeekBias;
 use warp::tui_export::{
-    AIAgentExchangeId, AIConversationId, Block, BlockHeightItem, BlockHeightSummary, BlockId,
-    BlockList, TerminalModel, TotalIndex,
+    AIAgentExchangeId, AIConversationId, Block, BlockHeight, BlockHeightItem, BlockHeightSummary,
+    BlockId, BlockList, TerminalModel, TotalIndex,
 };
 use warpui::{EntityId, ViewHandle};
 use warpui_core::elements::tui::{
-    TuiElement, TuiViewportContent, TuiViewportWindow, TuiViewportedElement, TuiVisibleViewportItem,
+    TuiElement, TuiMeasuredViewportItemHeight, TuiViewportContent, TuiViewportWindow,
+    TuiViewportedElement, TuiVisibleViewportItem,
 };
 use warpui_core::{AppContext, TuiView};
 
 use super::agent_block::TuiAgentBlockView;
-use super::terminal_block::render_terminal_block_rows;
+use super::terminal_block::TerminalBlockRowsElement;
 
 /// A registered TUI agent block and its canonical exchange identity.
 #[derive(Clone)]
@@ -95,30 +96,6 @@ impl TuiBlockListViewportSource {
             })
             .collect()
     }
-
-    /// Measures visible agent blocks whose cached height no longer matches the current width.
-    fn measured_visible_agent_heights(
-        &self,
-        descriptors: &[TuiBlockListVisibleItemDescriptor],
-        width: u16,
-        app: &AppContext,
-    ) -> HashMap<EntityId, f64> {
-        descriptors
-            .iter()
-            .filter_map(|descriptor| {
-                let TuiBlockListVisibleItem::AgentBlock { registration } = &descriptor.item else {
-                    return None;
-                };
-                let height = registration
-                    .view
-                    .as_ref(app)
-                    .desired_height(width, app)
-                    .max(1);
-                (height != descriptor.height).then_some((registration.view.id(), height as f64))
-            })
-            .collect()
-    }
-
     fn visible_item_descriptors(
         &self,
         window: TuiViewportWindow,
@@ -130,13 +107,23 @@ impl TuiBlockListViewportSource {
             .scroll_top
             .saturating_add(usize::from(window.viewport_height));
         let mut descriptors = Vec::new();
-        let mut content_height = 0usize;
+        let content_height = block_list
+            .block_heights()
+            .summary()
+            .height
+            .as_f64()
+            .ceil()
+            .max(0.0) as usize;
         let mut cursor = block_list
             .block_heights()
-            .cursor::<TotalIndex, BlockHeightSummary>();
-        cursor.seek(&TotalIndex(0), SeekBias::Right);
+            .cursor::<BlockHeight, BlockHeightSummary>();
+        cursor.seek_clamped(&BlockHeight::from(window.scroll_top as f64), SeekBias::Right);
 
         while let Some(item) = cursor.item() {
+            let item_top = cursor.start().height.as_f64().floor().max(0.0) as usize;
+            if item_top >= viewport_bottom {
+                break;
+            }
             let descriptor = match item {
                 BlockHeightItem::Block(_) => {
                     let block = block_list.block_at(cursor.start().block_count.into());
@@ -172,7 +159,6 @@ impl TuiBlockListViewportSource {
             };
 
             if let Some((height, item)) = descriptor {
-                let item_top = content_height;
                 let item_bottom = item_top.saturating_add(height);
                 if item_bottom > window.scroll_top && item_top < viewport_bottom {
                     descriptors.push(TuiBlockListVisibleItemDescriptor {
@@ -181,7 +167,6 @@ impl TuiBlockListViewportSource {
                         item,
                     });
                 }
-                content_height = item_bottom;
             }
             cursor.next();
         }
@@ -259,13 +244,7 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
         let height_updates =
             self.measured_dirty_agent_heights(dirty_rich_content_items, available_width, app);
         self.apply_height_updates(&height_updates);
-        let (mut content_height, mut descriptors) = self.visible_item_descriptors(window);
-        let height_updates =
-            self.measured_visible_agent_heights(&descriptors, available_width, app);
-        if !height_updates.is_empty() {
-            self.apply_height_updates(&height_updates);
-            (content_height, descriptors) = self.visible_item_descriptors(window);
-        }
+        let (content_height, descriptors) = self.visible_item_descriptors(window);
         let items = descriptors
             .into_iter()
             .map(|descriptor| descriptor.render(&self.model, window, available_width, app))
@@ -275,6 +254,37 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
             content_height,
             items,
         }
+    }
+
+    fn update_visible_item_heights(
+        &self,
+        measured_heights: &[TuiMeasuredViewportItemHeight],
+        _app: &AppContext,
+    ) -> bool {
+        if measured_heights.is_empty() {
+            return false;
+        }
+
+        let mut model = self.model.lock();
+        let cell_height_px = f64::from(model.block_list().size().cell_height_px().as_f32());
+        let height_updates = measured_heights
+            .iter()
+            .filter_map(|measured_height| {
+                let measured_height_rows = f64::from(measured_height.height.max(1));
+                let current_height_rows =
+                    rich_content_height_rows(model.block_list(), measured_height.item_id)?;
+                (f64::abs(measured_height_rows - current_height_rows) > 0.01)
+                    .then_some((measured_height.item_id, measured_height_rows * cell_height_px))
+            })
+            .collect::<HashMap<_, _>>();
+        if height_updates.is_empty() {
+            return false;
+        }
+
+        model
+            .block_list_mut()
+            .update_rich_content_heights(&height_updates);
+        true
     }
 }
 
@@ -287,13 +297,13 @@ impl TuiBlockListVisibleItemDescriptor {
         app: &AppContext,
     ) -> TuiVisibleViewportItem {
         let visible_rows = self.visible_rows(window);
-        let origin_y = if matches!(&self.item, TuiBlockListVisibleItem::TerminalBlock { .. }) {
-            self.origin_y.saturating_add(visible_rows.start)
-        } else {
-            self.origin_y
+        let measured_height_id = match &self.item {
+            TuiBlockListVisibleItem::AgentBlock { registration } => Some(registration.view.id()),
+            TuiBlockListVisibleItem::TerminalBlock { .. } => None,
         };
         TuiVisibleViewportItem {
-            origin_y,
+            origin_y: self.origin_y,
+            measured_height_id,
             element: self.item.render(model, visible_rows, available_width, app),
         }
     }
@@ -320,9 +330,12 @@ impl TuiBlockListVisibleItem {
         app: &AppContext,
     ) -> Box<dyn TuiElement> {
         match self {
-            Self::TerminalBlock { block_id } => {
-                render_terminal_block_rows(model, &block_id, visible_rows, width)
-            }
+            Self::TerminalBlock { block_id } => Box::new(TerminalBlockRowsElement::new(
+                model.clone(),
+                block_id,
+                visible_rows,
+                width,
+            )),
             Self::AgentBlock { registration } => registration.view.as_ref(app).render(app),
         }
     }
@@ -343,6 +356,23 @@ fn block_rows(block: &Block, block_list: &BlockList) -> Option<usize> {
         block.output_grid().len_displayed()
     };
     (prompt_rows + output_rows > 0).then_some(prompt_rows + output_rows)
+}
+
+fn rich_content_height_rows(block_list: &BlockList, view_id: EntityId) -> Option<f64> {
+    block_list
+        .block_heights()
+        .cursor::<(), ()>()
+        .find_map(|item| match item {
+            BlockHeightItem::RichContent(item) if item.view_id == view_id => {
+                Some(item.last_laid_out_height.as_f64())
+            }
+            BlockHeightItem::Block(_)
+            | BlockHeightItem::RichContent(_)
+            | BlockHeightItem::Gap(_)
+            | BlockHeightItem::RestoredBlockSeparator { .. }
+            | BlockHeightItem::InlineBanner { .. }
+            | BlockHeightItem::SubshellSeparator { .. } => None,
+        })
 }
 
 #[cfg(test)]
