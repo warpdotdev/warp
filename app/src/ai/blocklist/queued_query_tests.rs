@@ -1013,7 +1013,10 @@ fn unlock_pending_lrc_rows_no_ops_when_no_pending_rows() {
         // No RowUnlocked event when nothing was transitioned.
         assert!(events.borrow().is_empty());
         model.read(&app, |m, _| {
-            assert_eq!(m.queue(conv)[0].origin(), QueuedQueryOrigin::QueueSlashCommand);
+            assert_eq!(
+                m.queue(conv)[0].origin(),
+                QueuedQueryOrigin::QueueSlashCommand
+            );
         });
     });
 }

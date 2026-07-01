@@ -13901,7 +13901,8 @@ impl Input {
             let pending_action_id = {
                 let terminal_model = self.model.lock();
                 let active_block = terminal_model.block_list().active_block();
-                if active_block.is_active_and_long_running() && !active_block.is_agent_monitoring() {
+                if active_block.is_active_and_long_running() && !active_block.is_agent_monitoring()
+                {
                     active_block.requested_command_action_id().cloned()
                 } else {
                     None
