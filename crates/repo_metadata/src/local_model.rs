@@ -586,6 +586,9 @@ impl LocalRepoMetadataModel {
         for (repo_path, repo_scoped_update) in repo_updates {
             if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(&repo_path) {
                 let repo_path_clone = repo_path.clone();
+                // `gitignores` is an `Arc<Vec<Gitignore>>`, so this is a cheap
+                // refcount bump rather than a deep copy of the compiled regexes,
+                // even though a watcher event can fire very frequently.
                 let gitignores_clone = state.gitignores.clone();
                 let force_included_paths = self.force_included_paths.clone();
                 let standing_query_definitions = self.standing_query_definitions.clone();
@@ -983,7 +986,10 @@ impl LocalRepoMetadataModel {
             return Err(RepoMetadataError::RepoNotFound(repo_root.to_string()));
         };
 
-        let mut gitignores = state.gitignores.clone();
+        // `load_at_path` accumulates gitignores into this vec as it descends, so
+        // clone the inner `Vec` (not just the `Arc`). This deep copy only happens
+        // on explicit directory expansion, not on the hot watcher-event path.
+        let mut gitignores = state.gitignores.as_ref().clone();
         state
             .entry
             .load_at_path(dir_path, &mut gitignores)
