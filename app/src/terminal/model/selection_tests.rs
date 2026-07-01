@@ -356,3 +356,60 @@ fn test_selection_rotate_down() {
         None
     );
 }
+
+#[test]
+fn test_selection_range_contains_cell_covers_full_variable_width_span() {
+    // Regression test: SelectionRange::contains_cell (queried with the
+    // BASE cell's point -- the only scope this function has ever
+    // supported, before or after this change) previously only checked the
+    // legacy Flags::WIDE_CHAR boolean and a single trailing spacer cell,
+    // correct only for a fixed CJK width=2 span. It must now cover ALL
+    // trailing spacer cells of a measured Indic cluster (span up to 8),
+    // using Cell::span() instead.
+    //
+    // Note: as of this writing `contains_cell` has no real callers in the
+    // codebase (verified via grep) -- this test locks in correct behavior
+    // for whenever it is used, generalizing its existing scope rather than
+    // inventing a new one (e.g. it has never supported being queried
+    // directly at a spacer cell's own point).
+    let mut grid = grid_handler(2, 10);
+    grid.grid_storage_mut()[0][2].set_span(5);
+    for col in 3..7 {
+        grid.grid_storage_mut()[0][col]
+            .flags_mut()
+            .insert(crate::terminal::model::cell::Flags::WIDE_CHAR_SPACER);
+    }
+
+    // A selection that covers only the trailing spacer at col 5 (not the
+    // base, and not via `self.contains(point)` when queried at the base)
+    // should still be found when querying at the base cell's point (col 2).
+    let range = SelectionRange {
+        start: Point::new(0, 5),
+        end: Point::new(0, 5),
+        is_reversed: false,
+    };
+    assert!(
+        range.contains_cell(
+            grid.grid_storage(),
+            Point::new(0, 2),
+            Point::new(0, 0),
+            CursorShape::Beam,
+        ),
+        "base cell should report as contained since its span (cols 2-6) \
+         overlaps the selection at col 5"
+    );
+
+    // A selection that ends just before the span (col 1) must NOT
+    // consider the base cell contained.
+    let range_before = SelectionRange {
+        start: Point::new(0, 0),
+        end: Point::new(0, 1),
+        is_reversed: false,
+    };
+    assert!(!range_before.contains_cell(
+        grid.grid_storage(),
+        Point::new(0, 2),
+        Point::new(0, 0),
+        CursorShape::Beam,
+    ));
+}

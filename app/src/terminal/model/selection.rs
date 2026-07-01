@@ -190,16 +190,23 @@ impl SelectionRange {
 
         let cell = &grid[point];
 
-        // Check if wide char's spacers are selected.
-        if cell.flags().contains(Flags::WIDE_CHAR) {
-            let prev = point.wrapping_sub(num_cols, 1);
-            let next = point.wrapping_add(num_cols, 1);
+        // Check if a wide/Indic cluster's spacer cells are selected. Uses
+        // `cell.span()` (not the legacy `Flags::WIDE_CHAR` boolean, which
+        // `Cell::set_span` only keeps in sync for span == 2) so this covers
+        // any span 1-8, not just the fixed CJK width=2 case.
+        let span = cell.span();
+        if span > 1 {
+            // Check every trailing spacer cell in the span, not just the
+            // single next cell.
+            for offset in 1..span as usize {
+                if self.contains(point.wrapping_add(num_cols, offset)) {
+                    return true;
+                }
+            }
 
-            // Check trailing spacer.
-            self.contains(next)
-                // Check line-wrapping, leading spacer.
-                || (grid[prev].flags().contains(Flags::LEADING_WIDE_CHAR_SPACER)
-                && self.contains(prev))
+            // Check line-wrapping, leading spacer.
+            let prev = point.wrapping_sub(num_cols, 1);
+            grid[prev].flags().contains(Flags::LEADING_WIDE_CHAR_SPACER) && self.contains(prev)
         } else {
             false
         }

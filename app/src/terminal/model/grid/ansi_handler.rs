@@ -1628,39 +1628,54 @@ impl GridHandler {
         });
     }
 
-    /// Resets both halves of a wide character pair when `col` is at the
+    /// If `col` is part of a wide/Indic cluster (either its base cell or
+    /// any of its trailing spacers), returns `(base_col, span)` for that
+    /// cluster. Otherwise `None`. Used to generalize the wide-char boundary
+    /// reset functions below from a fixed 2-cell pair to any span 1-8.
+    fn find_cluster_span(grid_row: &[Cell], col: usize) -> Option<(usize, usize)> {
+        if grid_row[col].flags.contains(Flags::WIDE_CHAR) {
+            return Some((col, grid_row[col].span() as usize));
+        }
+        if grid_row[col].flags.contains(Flags::WIDE_CHAR_SPACER) {
+            let mut base = col;
+            while base > 0 && grid_row[base].flags.contains(Flags::WIDE_CHAR_SPACER) {
+                base -= 1;
+            }
+            if grid_row[base].flags.contains(Flags::WIDE_CHAR) {
+                return Some((base, grid_row[base].span() as usize));
+            }
+        }
+        None
+    }
+
+    /// Resets every cell of a wide/Indic cluster when `col` is at the
     /// **start** of an operation's range (i.e., `col` itself is about to be
-    /// overwritten).  Handles both WIDE_CHAR_SPACER (resets the preceding
-    /// WIDE_CHAR) and WIDE_CHAR (resets the following spacer).
+    /// overwritten). Handles `col` landing on either the cluster's base or
+    /// any of its spacers.
     fn reset_wide_char_at_start_boundary(&mut self, row: usize, col: usize, bg: Color) {
-        let num_cols = self.columns();
         let grid_row = &mut self.grid[row][..];
 
-        if grid_row[col].flags.contains(Flags::WIDE_CHAR_SPACER) && col > 0 {
-            // Reset the spacer and its WIDE_CHAR partner.
-            grid_row[col] = bg.into();
-            grid_row[col - 1] = bg.into();
-        }
-
-        if grid_row[col].flags.contains(Flags::WIDE_CHAR) && col + 1 < num_cols {
-            // Reset the WIDE_CHAR and its spacer partner.
-            grid_row[col] = bg.into();
-            grid_row[col + 1] = bg.into();
+        if let Some((base, span)) = Self::find_cluster_span(grid_row, col) {
+            for c in base..(base + span).min(grid_row.len()) {
+                grid_row[c] = bg.into();
+            }
         }
     }
 
-    /// Resets a wide character pair when `col` is at the **end** of an
+    /// Resets a wide/Indic cluster when `col` is at the **end** of an
     /// operation's range (i.e., `col` is the first cell just past the range).
-    /// Only handles WIDE_CHAR_SPACER, because a WIDE_CHAR at `col` means the
-    /// entire pair is outside the range and should be left intact.
+    /// Only handles `col` landing on a spacer, because `col` landing on a
+    /// cluster's base cell means the entire cluster is outside the range
+    /// and should be left intact.
     fn reset_wide_char_at_end_boundary(&mut self, row: usize, col: usize, bg: Color) {
         let grid_row = &mut self.grid[row][..];
 
-        if grid_row[col].flags.contains(Flags::WIDE_CHAR_SPACER) && col > 0 {
-            // The spacer's WIDE_CHAR partner is inside the operation's range
-            // and is being cleared, so reset the spacer too.
-            grid_row[col] = bg.into();
-            grid_row[col - 1] = bg.into();
+        if grid_row[col].flags.contains(Flags::WIDE_CHAR_SPACER) {
+            if let Some((base, span)) = Self::find_cluster_span(grid_row, col) {
+                for c in base..(base + span).min(grid_row.len()) {
+                    grid_row[c] = bg.into();
+                }
+            }
         }
     }
 
@@ -1703,13 +1718,14 @@ impl GridHandler {
                 }
             }
 
-            // Reset the other half of the wide char pair.
-            if cell_flags.contains(Flags::WIDE_CHAR_SPACER) && col > 0 {
-                self.grid[row][col] = bg.into();
-                self.grid[row][col - 1] = bg.into();
-            } else if cell_flags.contains(Flags::WIDE_CHAR) && col + 1 < num_cols {
-                self.grid[row][col] = bg.into();
-                self.grid[row][col + 1] = bg.into();
+            // Reset every cell of the existing wide/Indic cluster that
+            // `col` overlaps (its base or any spacer) -- generalizes the
+            // fixed 2-cell-pair reset to any span 1-8.
+            let grid_row = &mut self.grid[row][..];
+            if let Some((base, span)) = Self::find_cluster_span(grid_row, col) {
+                for c in base..(base + span).min(grid_row.len()) {
+                    grid_row[c] = bg.into();
+                }
             }
         }
 

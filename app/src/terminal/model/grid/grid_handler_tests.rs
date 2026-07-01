@@ -2651,3 +2651,33 @@ fn test_indic_cluster_wraps_to_next_line_when_it_does_not_fit() {
     assert_eq!(wrapped_cell.span(), 4);
     assert_eq!(wrapped_cell.raw_content(), CharOrStr::Str("క్షి"));
 }
+
+#[test]
+fn test_bounds_to_string_snaps_back_to_base_of_variable_width_span() {
+    // Regression test: the entry-point snap in line_to_string previously
+    // stepped back exactly one cell when the range's start landed on a
+    // spacer -- correct only for a fixed CJK width=2 span. For a span > 2,
+    // stepping back once still lands on another spacer, never reaching the
+    // actual base cell, silently dropping that cluster's text from the
+    // output. Must now walk all the way back to the base.
+    let mut grid = grid_with_fixed_width_measurer(2, 10);
+    feed(&mut grid, "aక్షిbb");
+    // "a" (col0), "క్షి" (4-codepoint cluster, base col1 span4, spacers
+    // cols2-4), "b","b" (cols5,6).
+
+    // Start the range at col3 -- the THIRD cell of the 4-wide span (a
+    // spacer, not the base, and not adjacent to it either).
+    let result = grid.bounds_to_string(
+        Point::new(0, 3),
+        Point::new(0, 6),
+        false,
+        RespectObfuscatedSecrets::No,
+        false,
+        RespectDisplayedOutput::No,
+    );
+    assert_eq!(
+        result, "క్షిbb",
+        "the full cluster text must be included even though the range \
+         started mid-span, not just adjacent to the base"
+    );
+}

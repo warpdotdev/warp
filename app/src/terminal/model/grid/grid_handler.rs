@@ -1000,10 +1000,16 @@ impl GridHandler {
         let grid_row = self.row(row)?;
         let row_length = min(grid_row.line_length(), cols.end + 1);
 
-        // Include wide char when trailing spacer is selected.
-        if grid_row
-            .get(cols.start)
-            .is_some_and(|cell| cell.flags.contains(Flags::WIDE_CHAR_SPACER))
+        // Include the base cell when a trailing spacer is selected. Walks
+        // all the way back to the base (not just one cell), since a
+        // measured Indic cluster's span can be > 2 -- stepping back by
+        // exactly one cell only reaches another spacer for spans > 2,
+        // never the actual base, which would silently drop that cluster's
+        // text from the output.
+        while cols.start > 0
+            && grid_row
+                .get(cols.start)
+                .is_some_and(|cell| cell.flags.contains(Flags::WIDE_CHAR_SPACER))
         {
             cols.start -= 1;
         }
@@ -1089,7 +1095,11 @@ impl GridHandler {
         {
             if let Some(row) = self.row(row - 1) {
                 if let Some(cell) = row.get(0) {
-                    text.push(cell.c);
+                    // Push the full cluster (base char + any zero-width
+                    // continuations, e.g. a measured Indic cluster's
+                    // combining marks), not just the base codepoint --
+                    // `cell.c` alone would silently drop them.
+                    text.push_char_or_str(cell.content_for_display());
                 }
             }
         }
