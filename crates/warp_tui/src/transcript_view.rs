@@ -123,18 +123,27 @@ impl TuiTranscriptView {
         }
     }
 
+    /// Returns the view id of the agent block rendering `exchange_id`, if any.
+    fn view_id_for_exchange(
+        &self,
+        exchange_id: AIAgentExchangeId,
+        ctx: &AppContext,
+    ) -> Option<EntityId> {
+        self.agent_blocks
+            .borrow()
+            .iter()
+            .find_map(|(view_id, view)| {
+                (view.as_ref(ctx).exchange_id() == exchange_id).then_some(*view_id)
+            })
+    }
+
     fn insert_agent_block(
         &mut self,
         conversation_id: AIConversationId,
         exchange_id: AIAgentExchangeId,
         ctx: &mut ViewContext<Self>,
     ) {
-        if self
-            .agent_blocks
-            .borrow()
-            .values()
-            .any(|view| view.as_ref(ctx).exchange_id() == exchange_id)
-        {
+        if self.view_id_for_exchange(exchange_id, ctx).is_some() {
             return;
         }
 
@@ -164,14 +173,7 @@ impl TuiTranscriptView {
     }
 
     fn mark_exchange_dirty(&mut self, exchange_id: AIAgentExchangeId, ctx: &mut ViewContext<Self>) {
-        let view_id = self
-            .agent_blocks
-            .borrow()
-            .iter()
-            .find_map(|(view_id, view)| {
-                (view.as_ref(ctx).exchange_id() == exchange_id).then_some(*view_id)
-            });
-        if let Some(view_id) = view_id {
+        if let Some(view_id) = self.view_id_for_exchange(exchange_id, ctx) {
             self.model
                 .lock()
                 .block_list_mut()
@@ -186,14 +188,10 @@ impl TuiTranscriptView {
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
-        let agent_block = self
-            .agent_blocks
-            .borrow()
-            .iter()
-            .find_map(|(view_id, view)| {
-                (view.as_ref(ctx).exchange_id() == exchange_id).then_some((*view_id, view.clone()))
-            });
-        let Some((view_id, agent_block)) = agent_block else {
+        let Some(view_id) = self.view_id_for_exchange(exchange_id, ctx) else {
+            return;
+        };
+        let Some(agent_block) = self.agent_blocks.borrow().get(&view_id).cloned() else {
             return;
         };
         let Ok(block_model) = AIBlockModelImpl::<TuiAgentBlockView>::new(

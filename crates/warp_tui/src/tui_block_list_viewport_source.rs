@@ -70,7 +70,7 @@ impl TuiBlockListViewportSource {
         dirty_rich_content_items: HashSet<EntityId>,
         width: u16,
         app: &AppContext,
-    ) -> HashMap<EntityId, f64> {
+    ) -> HashMap<EntityId, BlockHeight> {
         let agent_blocks = self.agent_blocks.borrow();
         dirty_rich_content_items
             .into_iter()
@@ -78,7 +78,7 @@ impl TuiBlockListViewportSource {
                 let view = agent_blocks.get(&view_id)?;
                 Some((
                     view_id,
-                    view.as_ref(app).desired_height(width, app).max(1) as f64,
+                    BlockHeight::from(view.as_ref(app).desired_height(width, app).max(1) as f64),
                 ))
             })
             .collect()
@@ -164,21 +164,6 @@ impl TuiBlockListViewportSource {
         (content_height, visible_items)
     }
 
-    fn apply_height_updates(&self, height_updates: &HashMap<EntityId, f64>) {
-        if height_updates.is_empty() {
-            return;
-        }
-        let mut model = self.model.lock();
-        let cell_height_px = f64::from(model.block_list().size().cell_height_px().as_f32());
-        let height_updates = height_updates
-            .iter()
-            .map(|(view_id, height)| (*view_id, height * cell_height_px))
-            .collect::<HashMap<_, _>>();
-        model
-            .block_list_mut()
-            .update_rich_content_heights(&height_updates);
-    }
-
     #[cfg(test)]
     pub(super) fn item_ids_for_test(&self) -> Vec<TuiBlockListViewportItemId> {
         let model = self.model.lock();
@@ -231,9 +216,10 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
             .lock()
             .block_list_mut()
             .take_dirty_rich_content_items();
-        let height_updates =
+        let dirty_heights =
             self.measured_dirty_agent_heights(dirty_rich_content_items, available_width, app);
-        self.apply_height_updates(&height_updates);
+        write_line_heights(&mut self.model.lock(), &dirty_heights);
+
         let (content_height, visible_items) = self.visible_items_in_window(window);
         let items = visible_items
             .into_iter()
@@ -256,32 +242,30 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
         }
 
         let mut model = self.model.lock();
-        let cell_height_px = f64::from(model.block_list().size().cell_height_px().as_f32());
+
+        // Gather the current heights of just the measured items in a single tree
+        // walk, so the change guard below never rescans the whole list per item.
+        let measured_ids = measured_heights
+            .iter()
+            .map(|measured_height| measured_height.item_id)
+            .collect::<HashSet<_>>();
+        let mut current_heights = HashMap::new();
+        for item in model.block_list().block_heights().cursor::<(), ()>() {
+            if let BlockHeightItem::RichContent(item) = item {
+                if measured_ids.contains(&item.view_id) {
+                    current_heights.insert(item.view_id, item.last_laid_out_height.as_f64());
+                }
+            }
+        }
+
         let height_updates = measured_heights
             .iter()
             .filter_map(|measured_height| {
                 let measured_height_rows = f64::from(measured_height.height.max(1));
-                let current_height_rows = model
-                    .block_list()
-                    .block_heights()
-                    .cursor::<(), ()>()
-                    .find_map(|item| match item {
-                        BlockHeightItem::RichContent(item)
-                            if item.view_id == measured_height.item_id =>
-                        {
-                            Some(item.last_laid_out_height.as_f64())
-                        }
-                        BlockHeightItem::Block(_)
-                        | BlockHeightItem::RichContent(_)
-                        | BlockHeightItem::Gap(_)
-                        | BlockHeightItem::RestoredBlockSeparator { .. }
-                        | BlockHeightItem::InlineBanner { .. }
-                        | BlockHeightItem::SubshellSeparator { .. } => None,
-                    })?;
-
+                let current_height_rows = *current_heights.get(&measured_height.item_id)?;
                 (f64::abs(measured_height_rows - current_height_rows) > 0.01).then_some((
                     measured_height.item_id,
-                    measured_height_rows * cell_height_px,
+                    BlockHeight::from(measured_height_rows),
                 ))
             })
             .collect::<HashMap<_, _>>();
@@ -289,10 +273,19 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
             return false;
         }
 
+        write_line_heights(&mut model, &height_updates);
+        true
+    }
+}
+
+/// Writes measured rich-content heights back to the canonical block list. Heights
+/// are already in the block list's native line unit (one line per terminal row),
+/// so no pixel round-trip is needed.
+fn write_line_heights(model: &mut TerminalModel, line_heights: &HashMap<EntityId, BlockHeight>) {
+    if !line_heights.is_empty() {
         model
             .block_list_mut()
-            .update_rich_content_heights(&height_updates);
-        true
+            .update_rich_content_heights_in_lines(line_heights);
     }
 }
 

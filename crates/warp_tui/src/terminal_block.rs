@@ -21,6 +21,7 @@ pub(super) struct TerminalBlockVisibleRowsElement {
     visible_rows: Range<usize>,
     width: u16,
 }
+
 impl TerminalBlockVisibleRowsElement {
     /// Creates a terminal block element for a visible row window.
     pub(super) fn new(

@@ -70,7 +70,7 @@ impl TuiTerminalSessionView {
                 ctx,
             )
         });
-        let input_model = ctx.add_model(|ctx| {
+        let ai_input_model = ctx.add_model(|ctx| {
             BlocklistAIInputModel::new(
                 model.clone(),
                 conversation_selection.clone(),
@@ -92,7 +92,7 @@ impl TuiTerminalSessionView {
         });
         let ai_controller = ctx.add_model(|ctx| {
             BlocklistAIController::new(
-                input_model,
+                ai_input_model,
                 context_model,
                 conversation_selection.clone(),
                 action_model,
@@ -105,9 +105,10 @@ impl TuiTerminalSessionView {
         let transcript = ctx.add_typed_action_tui_view(|ctx| {
             TuiTranscriptView::new(terminal_surface_id, model.clone(), ctx)
         });
-        let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
+        let input_editor_model =
+            ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
         let input_view =
-            ctx.add_typed_action_tui_view(move |ctx| TuiInputView::new(input_model, ctx));
+            ctx.add_typed_action_tui_view(move |ctx| TuiInputView::new(input_editor_model, ctx));
         ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
             TuiInputViewEvent::Submitted(prompt) => {
                 let prompt = prompt.trim().to_owned();
