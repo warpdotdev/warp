@@ -13,8 +13,7 @@ use warp::tui_export::TotalIndex;
 use warp::tui_export::{BlockHeight, BlockHeightItem, BlockHeightSummary, BlockId, TerminalModel};
 use warpui::{EntityId, ViewHandle};
 use warpui_core::elements::tui::{
-    TuiElement, TuiMeasuredViewportItemHeight, TuiViewportContent, TuiViewportWindow,
-    TuiViewportedElement, TuiVisibleViewportItem,
+    TuiElement, TuiViewportContent, TuiViewportWindow, TuiViewportedElement, TuiVisibleViewportItem,
 };
 use warpui_core::{AppContext, TuiView};
 
@@ -22,6 +21,11 @@ use super::agent_block::TuiAgentBlockView;
 use super::terminal_block::{should_render_terminal_block, TerminalBlockVisibleRowsElement};
 
 pub(super) type AgentBlockRegistry = Rc<RefCell<HashMap<EntityId, ViewHandle<TuiAgentBlockView>>>>;
+
+/// Extra rows above and below the viewport whose non-dirty agent blocks are
+/// re-measured each frame, so near-off-screen reflow (e.g. a width change) is
+/// reflected before windowing. Mirrors the GUI blocklist's overhang pass.
+const OVERHANG_ROWS: usize = 20;
 
 /// Stable identities used by TUI block-list viewport tests.
 #[cfg(test)]
@@ -62,14 +66,55 @@ impl TuiBlockListViewportSource {
         }
     }
 
-    fn measured_dirty_agent_heights(
+    /// Collects the agent-block view ids to measure this frame: the drained
+    /// dirty set (measured wherever they sit) plus every non-dirty agent block
+    /// whose row range intersects the viewport window padded by [`OVERHANG_ROWS`].
+    /// The overhang band catches reflow of near-off-screen blocks that were
+    /// never dirtied, so their heights are fresh before the window is computed.
+    fn agent_heights_to_measure(&self, window: TuiViewportWindow) -> HashSet<EntityId> {
+        let mut model = self.model.lock();
+        let mut view_ids = model.block_list_mut().take_dirty_rich_content_items();
+
+        let agent_blocks = self.agent_blocks.borrow();
+        let block_list = model.block_list();
+        let band_top = window.scroll_top.saturating_sub(OVERHANG_ROWS);
+        let band_bottom = window
+            .scroll_top
+            .saturating_add(usize::from(window.viewport_height))
+            .saturating_add(OVERHANG_ROWS);
+        let mut cursor = block_list
+            .block_heights()
+            .cursor::<BlockHeight, BlockHeightSummary>();
+        cursor.seek_clamped(&BlockHeight::from(band_top as f64), SeekBias::Left);
+        while let Some(item) = cursor.item() {
+            let item_top = cursor.start().height.as_f64().floor().max(0.0) as usize;
+            if item_top >= band_bottom {
+                break;
+            }
+            let item_bottom = item_top.saturating_add(item.height().as_f64().ceil() as usize);
+            if item_bottom > band_top {
+                if let BlockHeightItem::RichContent(rich_content) = item {
+                    if !rich_content.should_hide && agent_blocks.contains_key(&rich_content.view_id)
+                    {
+                        view_ids.insert(rich_content.view_id);
+                    }
+                }
+            }
+            cursor.next();
+        }
+        view_ids
+    }
+
+    /// Measures each agent block's wrapped height at `width`, returning heights
+    /// in the block list's native line unit.
+    fn measured_agent_heights(
         &self,
-        dirty_rich_content_items: HashSet<EntityId>,
+        view_ids: HashSet<EntityId>,
         width: u16,
         app: &AppContext,
     ) -> HashMap<EntityId, BlockHeight> {
         let agent_blocks = self.agent_blocks.borrow();
-        dirty_rich_content_items
+        view_ids
             .into_iter()
             .filter_map(|view_id| {
                 let view = agent_blocks.get(&view_id)?;
@@ -222,14 +267,11 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
         available_width: u16,
         app: &AppContext,
     ) -> TuiViewportContent {
-        let dirty_rich_content_items = self
-            .model
-            .lock()
-            .block_list_mut()
-            .take_dirty_rich_content_items();
-        let dirty_heights =
-            self.measured_dirty_agent_heights(dirty_rich_content_items, available_width, app);
-        self.write_line_heights(&dirty_heights);
+        // Refresh cached heights before windowing: the dirty set plus a band of
+        // near-off-screen agent blocks (see `agent_heights_to_measure`).
+        let view_ids_to_measure = self.agent_heights_to_measure(window);
+        let heights = self.measured_agent_heights(view_ids_to_measure, available_width, app);
+        self.write_line_heights(&heights);
 
         let (content_height, visible_items) = self.visible_items_in_window(window);
         let items = visible_items
@@ -241,54 +283,6 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
             content_height,
             items,
         }
-    }
-
-    fn update_visible_item_heights(
-        &self,
-        measured_heights: &[TuiMeasuredViewportItemHeight],
-        _app: &AppContext,
-    ) -> bool {
-        if measured_heights.is_empty() {
-            return false;
-        }
-
-        let height_updates = {
-            let model = self.model.lock();
-
-            // Gather the current heights of just the measured items in a single
-            // tree walk, so the change guard below never rescans the whole list
-            // per item.
-            let measured_ids = measured_heights
-                .iter()
-                .map(|measured_height| measured_height.item_id)
-                .collect::<HashSet<_>>();
-            let mut current_heights = HashMap::new();
-            for item in model.block_list().block_heights().cursor::<(), ()>() {
-                if let BlockHeightItem::RichContent(item) = item {
-                    if measured_ids.contains(&item.view_id) {
-                        current_heights.insert(item.view_id, item.last_laid_out_height.as_f64());
-                    }
-                }
-            }
-
-            measured_heights
-                .iter()
-                .filter_map(|measured_height| {
-                    let measured_height_rows = f64::from(measured_height.height.max(1));
-                    let current_height_rows = *current_heights.get(&measured_height.item_id)?;
-                    (f64::abs(measured_height_rows - current_height_rows) > 0.01).then_some((
-                        measured_height.item_id,
-                        BlockHeight::from(measured_height_rows),
-                    ))
-                })
-                .collect::<HashMap<_, _>>()
-        };
-        if height_updates.is_empty() {
-            return false;
-        }
-
-        self.write_line_heights(&height_updates);
-        true
     }
 }
 
@@ -312,10 +306,6 @@ impl TuiBlockListVisibleItem {
         available_width: u16,
         app: &AppContext,
     ) -> TuiVisibleViewportItem {
-        let measured_height_id = match &self.kind {
-            TuiBlockListVisibleItemKind::AgentBlock(view) => Some(view.id()),
-            TuiBlockListVisibleItemKind::TerminalBlock(_) => None,
-        };
         let visible_rows = self.visible_rows(window);
         // Terminal blocks get pre-sliced below; rich content stays whole and lets `TuiClipped`
         // handle any partial visibility.
@@ -327,7 +317,6 @@ impl TuiBlockListVisibleItem {
         };
         TuiVisibleViewportItem {
             origin_y,
-            measured_height_id,
             element: self.render_element(model, visible_rows, available_width, app),
         }
     }

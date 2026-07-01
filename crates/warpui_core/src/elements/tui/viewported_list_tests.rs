@@ -55,7 +55,6 @@ impl TuiViewportedElement for FakeContent {
             if item_bottom > window.scroll_top && item_top < viewport_bottom {
                 visible_items.push(TuiVisibleViewportItem {
                     origin_y: item_top,
-                    measured_height_id: None,
                     element: Box::new(TuiText::new(item.lines.join("\n")).truncate()),
                 });
             }
@@ -392,7 +391,6 @@ impl TuiViewportedElement for SingleElementContent {
             content_height: 3,
             items: vec![TuiVisibleViewportItem {
                 origin_y: 0,
-                measured_height_id: None,
                 element: self
                     .element
                     .borrow_mut()

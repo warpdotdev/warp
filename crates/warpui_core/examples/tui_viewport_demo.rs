@@ -123,7 +123,6 @@ impl TuiViewportedElement for DemoViewportContent {
             if item_bottom > window.scroll_top && item_top < viewport_bottom {
                 visible_items.push(TuiVisibleViewportItem {
                     origin_y: item_top,
-                    measured_height_id: None,
                     element: render_item(item),
                 });
             }
