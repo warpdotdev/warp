@@ -1,24 +1,29 @@
 //! An agent block in the TUI transcript: one exchange rendered as the user's
 //! submitted input followed by the agent's response.
+//!
+//! This module owns section extraction ([`TuiAIBlock::sections`]) and
+//! composition ([`TuiAIBlock::render_element`]); the per-section render
+//! functions live in [`crate::agent_block_sections`].
 use std::rc::Rc;
+use std::time::Duration;
 
 use warp::tui_export::{
-    AIAgentAction, AIAgentExchangeId, AIAgentOutputMessageType, AIAgentTextSection, AIBlockModel,
-    AIConversationId, Appearance,
+    AIAgentAction, AIAgentExchangeId, AIAgentOutputMessageType, AIAgentText, AIAgentTextSection,
+    AIBlockModel, AIConversationId, MessageId,
 };
-use warp_core::ui::color::blend::Blend;
-// `ThemeFill` is the theme-layer color (it supports blend/opacity); `Fill` below
-// is the element-layer color it converts into on its way to a terminal cell.
-use warp_core::ui::theme::Fill as ThemeFill;
-use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    Modifier, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiParentElement,
-    TuiSize, TuiStyle, TuiText,
+    TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiSize,
 };
-use warpui_core::elements::Fill;
 use warpui_core::{AppContext, Entity, EntityIdMap, TuiView};
 
-const INPUT_PREFIX: &str = "≫ ";
+use crate::agent_block_sections::{
+    render_input_section, render_plain_text_section, render_thinking_section,
+    render_tool_call_section, ThinkingOverrides,
+};
+
+/// Bottom padding (rows) applied beneath every rendered section, giving
+/// uniform spacing between sections and after the last one.
+const BLOCK_BOTTOM_PADDING: u16 = 1;
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -27,6 +32,12 @@ enum TuiAIBlockSection {
     PlainText(String),
     /// A lightweight status row standing in for an agent tool call.
     ToolCall(Box<AIAgentAction>),
+    /// A reasoning ("thinking") segment, rendered as a collapsible block.
+    Thinking {
+        message_id: MessageId,
+        finished_duration: Option<Duration>,
+        body: String,
+    },
 }
 
 /// A thin TUI rich-content view adapter backed by one agent exchange.
@@ -37,6 +48,8 @@ pub(super) struct TuiAIBlock {
     conversation_id: AIConversationId,
     exchange_id: AIAgentExchangeId,
     model: Rc<dyn AIBlockModel<View = Self>>,
+    /// Manual collapse overrides for this exchange's thinking blocks.
+    thinking_overrides: ThinkingOverrides,
 }
 
 /// Extracts model state into renderable agent block sections.
@@ -51,6 +64,7 @@ impl TuiAIBlock {
             conversation_id,
             exchange_id,
             model,
+            thinking_overrides: Default::default(),
         }
     }
 
@@ -92,7 +106,8 @@ impl TuiAIBlock {
         )
     }
 
-    /// Extracts this exchange's visible input/output into logical render sections.
+    /// Extracts this exchange's visible input/output into logical render sections,
+    /// preserving message order so reasoning interleaves with plain-text output.
     fn sections(&self, app: &AppContext) -> Vec<TuiAIBlockSection> {
         let mut sections = Vec::new();
         let input = self
@@ -112,23 +127,27 @@ impl TuiAIBlock {
             for message in &output.messages {
                 match &message.message {
                     AIAgentOutputMessageType::Text(text) => {
-                        sections.extend(text.sections.iter().filter_map(|section| {
-                            match section {
-                                AIAgentTextSection::PlainText { text } => (!text.text().is_empty())
-                                    .then(|| TuiAIBlockSection::PlainText(text.text().to_owned())),
-                                // Add item variants here as the TUI learns to render richer sections.
-                                AIAgentTextSection::Code { .. }
-                                | AIAgentTextSection::Table { .. }
-                                | AIAgentTextSection::Image { .. }
-                                | AIAgentTextSection::MermaidDiagram { .. } => None,
-                            }
-                        }));
+                        sections.extend(
+                            plain_text_sections(text)
+                                .filter(|line| !line.is_empty())
+                                .map(|line| TuiAIBlockSection::PlainText(line.to_owned())),
+                        );
                     }
                     AIAgentOutputMessageType::Action(action) => {
                         sections.push(TuiAIBlockSection::ToolCall(Box::new(action.clone())));
                     }
-                    AIAgentOutputMessageType::Reasoning { .. }
-                    | AIAgentOutputMessageType::Summarization { .. }
+                    AIAgentOutputMessageType::Reasoning {
+                        text,
+                        finished_duration,
+                    } => {
+                        sections.push(TuiAIBlockSection::Thinking {
+                            message_id: message.id.clone(),
+                            finished_duration: *finished_duration,
+                            body: reasoning_body(text),
+                        });
+                    }
+                    // Other message kinds are not rendered by the TUI transcript yet.
+                    AIAgentOutputMessageType::Summarization { .. }
                     | AIAgentOutputMessageType::Subagent(_)
                     | AIAgentOutputMessageType::TodoOperation(_)
                     | AIAgentOutputMessageType::WebSearch(_)
@@ -146,94 +165,53 @@ impl TuiAIBlock {
         sections
     }
 
-    /// Builds this block's generic TUI element tree.
+    /// Builds this block's generic TUI element tree: every section's element,
+    /// each wrapped with uniform bottom padding.
     fn render_element(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        let sections = self.sections(app);
-
         let mut column = TuiFlex::column();
-        for (index, section) in sections.iter().enumerate() {
-            // Output is many sections (one per text section), so top padding is
-            // applied only to the section right after the input, giving a single
-            // gap at the input→output boundary rather than before every line.
-            let follows_input = index
-                .checked_sub(1)
-                .is_some_and(|prev| matches!(sections[prev], TuiAIBlockSection::Input(_)));
-            column = column.with_child(section.render_element(u16::from(follows_input), app));
+        for section in &self.sections(app) {
+            let element = match section {
+                TuiAIBlockSection::Input(text) => render_input_section(text, app),
+                TuiAIBlockSection::PlainText(text) => render_plain_text_section(text, app),
+                TuiAIBlockSection::ToolCall(_) => render_tool_call_section(app),
+                TuiAIBlockSection::Thinking {
+                    message_id,
+                    finished_duration,
+                    body,
+                } => render_thinking_section(
+                    &self.thinking_overrides,
+                    message_id,
+                    *finished_duration,
+                    body,
+                    app,
+                ),
+            };
+            column = column.child(
+                TuiContainer::new(element)
+                    .with_padding_bottom(BLOCK_BOTTOM_PADDING)
+                    .finish(),
+            );
         }
-
-        // No background of its own: the block shows the terminal's background,
-        // matching the Figma where only the input line is highlighted.
-        TuiContainer::new(column)
-            .with_padding_bottom(u16::from(!sections.is_empty()))
-            .finish()
+        column.finish()
     }
 }
 
-/// Converts one logical section into a renderable TUI element.
-impl TuiAIBlockSection {
-    fn render_element(&self, top_padding: u16, app: &AppContext) -> Box<dyn TuiElement> {
-        let theme = Appearance::as_ref(app).theme();
-        match self {
-            Self::Input(text) => {
-                let text_color = Fill::from(theme.foreground()).into();
-                let accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
-                let background = Fill::from(
-                    theme
-                        .background()
-                        .blend(&accent.with_opacity(10))
-                        .blend(&accent.with_opacity(10)),
-                )
-                .into();
-                // Only the first line carries the `≫` prompt marker; continuation
-                // lines are indented to the marker's width so they align beneath it.
-                let mut column = TuiFlex::column();
-                for (index, line) in text.split('\n').enumerate() {
-                    let line_text = if index == 0 {
-                        format!("{INPUT_PREFIX}{line}")
-                    } else {
-                        format!("{}{line}", " ".repeat(INPUT_PREFIX.chars().count()))
-                    };
-                    column = column.child(
-                        TuiText::new(line_text)
-                            .with_style(
-                                TuiStyle::default()
-                                    .fg(text_color)
-                                    .bg(background)
-                                    .add_modifier(Modifier::BOLD),
-                            )
-                            .finish(),
-                    );
-                }
-                TuiContainer::new(column)
-                    .with_background(background)
-                    .with_padding_top(top_padding)
-                    .finish()
-            }
-            Self::PlainText(text) => {
-                let text_color =
-                    Fill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into();
-                TuiContainer::new(
-                    TuiText::new(text.clone()).with_style(TuiStyle::default().fg(text_color)),
-                )
-                .with_padding_top(top_padding)
-                .finish()
-            }
-            Self::ToolCall(_action) => {
-                // TODO: add richer rendering for each tool call type. This is just a rendering stub to build off of.
-                let text_color =
-                    Fill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into();
-                TuiContainer::new(
-                    TuiText::new("executed a tool call").with_style(
-                        TuiStyle::default()
-                            .fg(text_color)
-                            .add_modifier(Modifier::DIM),
-                    ),
-                )
-                .with_padding_top(top_padding)
-                .finish()
-            }
-        }
-    }
+/// Yields the plain-text strings of `text`'s sections, skipping section kinds
+/// the TUI does not render yet.
+fn plain_text_sections(text: &AIAgentText) -> impl Iterator<Item = &str> {
+    text.sections.iter().filter_map(|section| match section {
+        AIAgentTextSection::PlainText { text } => Some(text.text()),
+        // Add item variants here as the TUI learns to render richer sections.
+        AIAgentTextSection::Code { .. }
+        | AIAgentTextSection::Table { .. }
+        | AIAgentTextSection::Image { .. }
+        | AIAgentTextSection::MermaidDiagram { .. } => None,
+    })
+}
+
+/// Joins a reasoning message's plain-text sections into a single body string.
+fn reasoning_body(text: &AIAgentText) -> String {
+    plain_text_sections(text).collect::<Vec<_>>().join("\n")
 }
 
 /// Registers the view with the TUI runtime.

@@ -1,0 +1,50 @@
+# TUI Thinking Blocks — Tech Spec
+Implements the behavior in [`PRODUCT.md`](./PRODUCT.md). References are pinned to commit `375878c2c331e8912a9a458249da0ae3ca35e45d`.
+## Context
+The TUI transcript renders agent exchanges but drops reasoning. We add reasoning rendering by extending the generic TUI element layer (click handling on `TuiEventHandler`, a `tui_collapsible` compose function) so the thinking block is a composition of primitives rather than a bespoke element.
+- [`crates/warp_tui/src/transcript_view.rs`](https://github.com/warpdotdev/warp/blob/375878c2c331e8912a9a458249da0ae3ca35e45d/crates/warp_tui/src/transcript_view.rs) — owns a `TuiViewportedList` over `TuiBlockListViewportSource`; each agent exchange is a `TuiAIBlock` view in a registry.
+- [`crates/warp_tui/src/agent_block.rs (24-145)`](https://github.com/warpdotdev/warp/blob/375878c2c331e8912a9a458249da0ae3ca35e45d/crates/warp_tui/src/agent_block.rs#L24-L145) — `TuiAIBlockSection` (`Input`/`PlainText`), `sections()` (uses `text_from_agent_output()`, so reasoning is dropped), `render_element()`, and `desired_height()`.
+- [`crates/warp_tui/src/tui_block_list_viewport_source.rs (74-140)`](https://github.com/warpdotdev/warp/blob/375878c2c331e8912a9a458249da0ae3ca35e45d/crates/warp_tui/src/tui_block_list_viewport_source.rs#L74-L140) — re-measures every on-screen agent block each frame (viewport + overhang), so a height change from collapse/expand reflows on the next redraw with only a `notify()`.
+- [`crates/warp_tui/src/tui_block_list_viewport_source.rs:337`](https://github.com/warpdotdev/warp/blob/375878c2c331e8912a9a458249da0ae3ca35e45d/crates/warp_tui/src/tui_block_list_viewport_source.rs#L337) — agent blocks render inline via `view.as_ref(app).render(app)` (not as `TuiChildView`), so events/`notify()` inside a block attribute to the transcript (root) view.
+- [`app/src/ai/agent/mod.rs:1717`](https://github.com/warpdotdev/warp/blob/375878c2c331e8912a9a458249da0ae3ca35e45d/app/src/ai/agent/mod.rs#L1717) — `AIAgentOutputMessageType::Reasoning { text, finished_duration: Option<Duration> }`; `finished_duration` is `None` while streaming, `Some` when done. `AIAgentOutput.messages` is public and ordered.
+- [`app/src/ai/blocklist/block/view_impl/common.rs:690`](https://github.com/warpdotdev/warp/blob/375878c2c331e8912a9a458249da0ae3ca35e45d/app/src/ai/blocklist/block/view_impl/common.rs#L690) — GUI `format_elapsed_seconds` (pluralization reference; moved to `warp_core::time_format` and shared by both the GUI and the TUI).
+- [`app/src/ai/blocklist/block.rs (720-858)`](https://github.com/warpdotdev/warp/blob/375878c2c331e8912a9a458249da0ae3ca35e45d/app/src/ai/blocklist/block.rs#L720-L858) — GUI `CollapsibleElementState`: the collapse/auto-collapse/manual-toggle semantics to mirror (minus the display-mode gating, deferred here).
+- [`crates/warpui_core/src/elements/tui/mod.rs (40-58)`](https://github.com/warpdotdev/warp/blob/375878c2c331e8912a9a458249da0ae3ca35e45d/crates/warpui_core/src/elements/tui/mod.rs#L40-L58) — element exports.
+- [`crates/warpui_core/src/elements/tui/event_handler.rs`](https://github.com/warpdotdev/warp/blob/375878c2c331e8912a9a458249da0ae3ca35e45d/crates/warpui_core/src/elements/tui/event_handler.rs) — `TuiEventHandler`, the wrap-one-child, offer-to-child-first callback element (key-only at the pinned commit; click handling is added here).
+- [`app/src/ai/blocklist/block.rs:955`](https://github.com/warpdotdev/warp/blob/375878c2c331e8912a9a458249da0ae3ca35e45d/app/src/ai/blocklist/block.rs#L955) — GUI `AIBlock.collapsible_block_states: HashMap<MessageId, CollapsibleElementState>`: prior art for the block view owning per-reasoning-message UI state keyed by `MessageId`.
+- [`app/src/tui_export.rs`](https://github.com/warpdotdev/warp/blob/375878c2c331e8912a9a458249da0ae3ca35e45d/app/src/tui_export.rs) — public app surface for `warp_tui`; already exports `AIAgentOutput{,Message,MessageType}`, `AIAgentText`, `AIAgentTextSection`, `MessageId`.
+## Proposed changes
+### 1. Click handling on `TuiEventHandler`
+`crates/warpui_core/src/elements/tui/event_handler.rs`. Alongside `.on_key(...)`, `TuiEventHandler` gains `.on_click(FnMut(&mut TuiEventContext, &AppContext))`: `dispatch_event` offers the event to the child first, and if unhandled and the event is `TuiEvent::LeftMouseDown` with `position` inside `area`, runs the click callback and returns handled. No hover-state tracking, cursor, delays, or other click variants yet (no TUI `MouseStateHandle` exists); these can be added later. A delegating `impl TuiElement for Box<dyn TuiElement>` is added to `elements/tui/mod.rs` so boxed element trees compose directly as children.
+### 2. `tui_collapsible` compose function (new)
+`crates/warpui_core/src/elements/tui/collapsible.rs`, exported from `elements/tui/mod.rs`. `tui_collapsible(collapsed, label, header_style, body, on_toggle) -> Box<dyn TuiElement>` is a plain function composing existing primitives — not an element type and owning no state (the caller owns `collapsed`). It builds a `TuiColumn`:
+- Header row: a `TuiText` of the label + a space + a chevron (right-triangle collapsed, down-triangle expanded), wrapped in a `TuiEventHandler` whose `on_click` invokes the caller's `on_toggle`.
+- Body: the caller's body element, added as a second child only when `!collapsed`.
+### 3. Reasoning extraction (`agent_block.rs`)
+Add a `Thinking { message_id: MessageId, finished_duration: Option<Duration>, body: String }` variant to `TuiAIBlockSection`. `sections()` iterates `output.messages` in order:
+- `Text` → `PlainText` sections (unchanged behavior).
+- `Reasoning` → a `Thinking` section whose `body` joins the reasoning's `PlainText` sections with newlines (other section kinds skipped, matching plaintext-only handling; the `plain_text_sections()` filter is shared between `Text` extraction and `reasoning_body()`). A reasoning message with an empty body still yields a `Thinking` section (Behavior 15). Reasoning is always shown in this version — the display-mode gating is deferred.
+`sections()` is a pure read; no state is mutated during extraction or layout. Each section kind renders via its own pure `render_*_section` function in `crates/warp_tui/src/agent_block_sections.rs`, dispatched from a single exhaustive match in `render_element()`.
+### 4. Derived collapse state (`agent_block_sections.rs`)
+`ThinkingOverrides` (a `Rc<RefCell<HashMap<MessageId, bool>>>` of manual overrides, defined alongside the thinking renderer and held by `TuiAIBlock`) follows the GUI's block-owned, `MessageId`-keyed state-map pattern (`AIBlock.collapsible_block_states`). Collapsed is fully derived — `overrides.get(id).copied().unwrap_or(finished)`:
+- No override recorded: expanded while streaming (`finished == false`), collapsed once finished. This reproduces auto-collapse-on-finish without tracking the finish transition.
+- Toggle records `!collapsed` as a permanent override, so a manual toggle wins over the finished default in both directions (Behaviors 8/10).
+### 5. Render thinking via `tui_collapsible` (`agent_block_sections.rs`)
+`render_thinking_section` builds the collapsible for a reasoning message:
+- Header text `Thinking...` when `finished_duration` is `None`, else `format!("Thought for {}", format_elapsed_seconds(dur))` using `warp_core::time_format::format_elapsed_seconds` (shared with the GUI).
+- `collapsed` derived from `ThinkingOverrides`; body = reasoning text indented four cells via container left-padding, wrapped, bright-black (`theme.terminal_colors().bright.black` via `Fill::from(..).into()`).
+- `on_toggle`: capture a clone of the overrides + the `MessageId`; record `!collapsed`, then `event_ctx.notify()`. On-screen re-measure handles the height change; no dirty-marking needed.
+Spacing is owned by the composer: `render_element` wraps every section's element in a container with one row of bottom padding (`BLOCK_BOTTOM_PADDING`), giving uniform gaps between all sections — including thinking blocks (see PRODUCT.md behavior 17). Section renderers do not apply their own inter-section spacing.
+## Testing and validation
+Unit tests, run via `cargo nextest run -p warpui_core`, `cargo nextest run -p warp_tui`, and `cargo nextest run -p warp_core time_format`.
+- `crates/warpui_core/src/elements/tui/event_handler_tests.rs`: `LeftMouseDown` inside `area` runs `on_click`; outside does not; a child that handles the event pre-empts `on_click`. (Behavior 9)
+- `crates/warpui_core/src/elements/tui/collapsible_tests.rs`: header rendered with the state's chevron; body rendered only when expanded; clicking the header invokes `on_toggle`; clicking the body does not. (Behavior 2, 5, 9)
+- Extend `crates/warp_tui/src/agent_block_tests.rs`:
+  - Collapsed derivation from `finished`; manual overrides win and are independent per message. (Behavior 8, 10, 14)
+  - Streaming reasoning yields a `Thinking` section with header `Thinking...` and the body present/expanded. (Behavior 3, 6, 15)
+  - Finished reasoning renders collapsed with header `Thought for N seconds` and correct pluralization. (Behavior 4, 8, 13)
+  - A click on the header row records a manual override. (Behavior 9, 10)
+  - Reasoning interleaves with plain-text sections in message order. (Behavior 1); multiple reasoning blocks render independent collapse state. (Behavior 14)
+Manual verification via the TUI dev binary (`script/run-tui`): observe `Thinking...` with expanded body while streaming, auto-collapse to `Thought for N seconds` on finish, and click-to-toggle in both states. (Behavior 6–9, 12). Run `./script/format` and `cargo clippy` (per `AGENTS.md`) before a PR.
+## Parallelization
+Not beneficial. The element-layer changes, reasoning extraction, and rendering are tightly coupled and all edited within `agent_block.rs` plus two small files in one crate; splitting across agents would create merge contention on `elements/tui/mod.rs` and `agent_block.rs` for no wall-clock gain. Implement sequentially: elements (1–2) → extraction/state/render (3–5) → tests.
