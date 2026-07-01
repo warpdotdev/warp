@@ -7,6 +7,11 @@ use crate::context_chips::git_branch_on_click::GitBranchOnClickValue;
 use crate::context_chips::{github_pr_display_text_from_url, ContextChipKind};
 use crate::ui_components::icons::Icon;
 
+// AWS-profile-command rendering is tested in
+// `crate::terminal::input::tests::renders_set_aws_profile_prompt_chip_command_*`
+// alongside the other `PromptChipShellCommand` variants — the per-shell
+// quoting lives in `render_prompt_chip_shell_command`, not here.
+
 #[test]
 fn test_github_pr_display_text_from_url() {
     assert_eq!(

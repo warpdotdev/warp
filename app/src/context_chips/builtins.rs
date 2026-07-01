@@ -253,6 +253,83 @@ pub fn kubernetes_current_context() -> ShellCommandGenerator {
     )
 }
 
+/// Generator function that shows the active AWS profile, sourced from the
+/// shell's precmd-reported environment (so it tracks `export AWS_PROFILE=...`
+/// changes in the user's interactive shell).
+pub fn aws_profile(ctx: &GeneratorContext) -> Option<ChipValue> {
+    let value = ctx
+        .current_environment
+        .aws_profile()
+        .cloned()
+        .unwrap_or_else(|| "default".to_string());
+    Some(ChipValue::Text(value))
+}
+
+/// Generator function that lists all AWS profiles defined in `~/.aws/config`
+/// and `~/.aws/credentials`. Used by the AWS profile chip's selector menu.
+pub fn aws_profiles_list() -> ShellCommandGenerator {
+    // Strips the `[profile X]` and `[X]` headers from the AWS config files,
+    // dedupes, and emits one profile per line. Missing files are tolerated.
+    //
+    // The `--` after each `sed` script is required: env-controlled file paths
+    // could begin with `-`, which sed would otherwise parse as an option.
+    const SH_COMMAND: &str = r#"{ \
+        [ -f "${AWS_CONFIG_FILE:-$HOME/.aws/config}" ] && \
+            sed -n -e 's/^\[profile \(.*\)\]$/\1/p' -e 's/^\[\(default\)\]$/\1/p' -- \
+                "${AWS_CONFIG_FILE:-$HOME/.aws/config}"; \
+        [ -f "${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials}" ] && \
+            sed -n 's/^\[\([^]]*\)\]$/\1/p' -- \
+                "${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials}"; \
+    } | awk 'NF && !seen[$0]++'"#;
+
+    // Fish does not support POSIX `${VAR:-fallback}` parameter expansion, so
+    // we resolve the env-controlled paths up front using fish's own syntax.
+    const FISH_COMMAND: &str = r#"set -l _aws_cfg "$HOME/.aws/config"
+test -n "$AWS_CONFIG_FILE"; and set _aws_cfg "$AWS_CONFIG_FILE"
+set -l _aws_crd "$HOME/.aws/credentials"
+test -n "$AWS_SHARED_CREDENTIALS_FILE"; and set _aws_crd "$AWS_SHARED_CREDENTIALS_FILE"
+begin
+    test -f "$_aws_cfg"; and sed -n -e 's/^\[profile \(.*\)\]$/\1/p' -e 's/^\[\(default\)\]$/\1/p' -- "$_aws_cfg"
+    test -f "$_aws_crd"; and sed -n 's/^\[\([^]]*\)\]$/\1/p' -- "$_aws_crd"
+end | awk 'NF && !seen[$0]++'"#;
+
+    // PowerShell parses config and credentials separately to match the POSIX
+    // and fish behavior: in `~/.aws/config` only `[profile X]` and `[default]`
+    // are profiles (other sections like `[sso-session ...]` or `[services ...]`
+    // are config blocks, not profiles), while every `[X]` in `~/.aws/credentials`
+    // is a profile.
+    const PWSH_COMMAND: &str = r#"
+        $cfg = if ($env:AWS_CONFIG_FILE) { $env:AWS_CONFIG_FILE } else { "$HOME\.aws\config" }
+        $crd = if ($env:AWS_SHARED_CREDENTIALS_FILE) { $env:AWS_SHARED_CREDENTIALS_FILE } else { "$HOME\.aws\credentials" }
+        $seen = @{}
+        if (Test-Path $cfg) {
+            Get-Content $cfg | ForEach-Object {
+                $name = $null
+                if ($_ -match '^\[profile (.+)\]$') { $name = $Matches[1] }
+                elseif ($_ -match '^\[(default)\]$') { $name = $Matches[1] }
+                if ($name -and -not $seen.ContainsKey($name)) { $seen[$name] = $true; $name }
+            }
+        }
+        if (Test-Path $crd) {
+            Get-Content $crd | ForEach-Object {
+                if ($_ -match '^\[(.+)\]$') {
+                    $name = $Matches[1]
+                    if (-not $seen.ContainsKey($name)) { $seen[$name] = $true; $name }
+                }
+            }
+        }
+    "#;
+
+    let command = ShellCommand::shell_specific([
+        (ShellType::PowerShell, PWSH_COMMAND.to_string()),
+        (ShellType::Bash, SH_COMMAND.to_string()),
+        (ShellType::Zsh, SH_COMMAND.to_string()),
+        (ShellType::Fish, FISH_COMMAND.to_string()),
+    ]);
+
+    ShellCommandGenerator::new(command, None)
+}
+
 /// Generator function that shows the current svn "branch".
 /// Since svn uses directories for different branches and tags,
 /// we take the latest directory of the working copy as the branch/tag name.

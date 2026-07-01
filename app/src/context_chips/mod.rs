@@ -190,6 +190,7 @@ pub enum ContextChipKind {
     GitDiffStats,
     GithubPullRequest,
     KubernetesContext,
+    AwsProfile,
     SvnBranch,
     SvnDirtyItems,
     // This is for backwards compatibility with the old "RemoteLogin" chip.
@@ -334,6 +335,38 @@ impl ContextChipKind {
                 None,
                 RefreshConfig::OnDemandOnly,
             )),
+            Self::AwsProfile => Some(ContextChip::context_aware_with_shell_on_click(
+                "AWS Profile",
+                builtins::aws_profile,
+                builtins::aws_profiles_list(),
+                RefreshConfig::OnDemandOnly,
+                ChipRuntimePolicy::new(
+                    std::iter::empty::<&str>(),
+                    false,
+                    None,
+                    [
+                        ChipFingerprintInput::SessionId,
+                        ChipFingerprintInput::AwsProfile,
+                        // `ExternalCommandsState` flips from `Unknown` to `Known` once the
+                        // session has finished bootstrapping. Including it here forces the
+                        // on-click profile-list shell command to be re-fetched after
+                        // bootstrap, which avoids leaving an empty picker when the chip
+                        // first renders before the session is ready (e.g. immediately
+                        // after opening Warp, before `AWS_PROFILE` is set).
+                        ChipFingerprintInput::ExternalCommandsState,
+                        // Re-fetch the profile list after the user runs an `aws` /
+                        // `aws-vault` / `aws configure` command, so newly-added profiles
+                        // appear in the picker without needing to restart the session.
+                        ChipFingerprintInput::InvalidatingCommandCount,
+                    ],
+                )
+                .with_invalidate_on_commands([
+                    "aws",
+                    "aws-vault",
+                    "aws-profile",
+                    "aws2",
+                ]),
+            )),
             Self::SvnBranch => Some(ContextChip::shell_builtin(
                 "Svn Branch",
                 builtins::svn_branch_context(),
@@ -412,6 +445,7 @@ impl ContextChipKind {
             Self::Time24 => ChipValue::Text("15:48".to_string()),
             Self::Custom { .. } => ChipValue::Text("custom chip".to_string()),
             Self::KubernetesContext => ChipValue::Text("kube-context".to_string()),
+            Self::AwsProfile => ChipValue::Text("default".to_string()),
             Self::SvnBranch => ChipValue::Text("svn-feature-branch".to_string()),
             Self::SvnDirtyItems => ChipValue::Text("3".to_string()),
             Self::Ssh => ChipValue::Text("alice@127.0.0.1".to_string()),
@@ -445,6 +479,7 @@ impl ContextChipKind {
             Self::Time12 => prompt_colors.input_prompt_time,
             Self::Time24 => prompt_colors.input_prompt_time,
             Self::KubernetesContext => prompt_colors.input_prompt_kubernetes,
+            Self::AwsProfile => prompt_colors.input_prompt_aws,
             Self::SvnBranch => prompt_colors.input_prompt_branch,
             Self::SvnDirtyItems => prompt_colors.input_prompt_svn,
             Self::Ssh => prompt_colors.input_prompt_ssh,
@@ -480,6 +515,7 @@ impl ContextChipKind {
             Self::ShellGitBranch | Self::GitBranchStatus => format!("git:({text})"),
             Self::GithubPullRequest => github_pr_display_text_from_url(&text).unwrap_or(text),
             Self::KubernetesContext => format!("⎈ {text}"),
+            Self::AwsProfile => format!("☁ {text}"),
             Self::SvnBranch => format!("svn:({text})"),
             Self::SvnDirtyItems => format!("±{text}"),
             _ => text,
@@ -522,6 +558,29 @@ impl ContextChipKind {
                 })
             }
 
+            Self::AwsProfile => {
+                // Only AWS-specific CLIs trigger the chip. Cloud-agnostic
+                // tools like `terraform` / `tofu` / `cdk` / `serverless` /
+                // `pulumi` are intentionally excluded — including them would
+                // surface the AWS profile when the user is actually working
+                // against GCP or Azure.
+                const AWS_COMMANDS: [&str; 6] = [
+                    "aws",
+                    "aws-vault",
+                    "awslocal",
+                    "sam",     // AWS SAM CLI
+                    "eksctl",  // AWS EKS
+                    "copilot", // AWS Copilot (ECS/App Runner)
+                ];
+
+                command.split_whitespace().next().is_some_and(|first_word| {
+                    AWS_COMMANDS.contains(&first_word)
+                        || aliases
+                            .get(first_word)
+                            .is_some_and(|expanded| AWS_COMMANDS.contains(&expanded.as_str()))
+                })
+            }
+
             // All other chips unconditionally render
             _ => true,
         }
@@ -542,6 +601,7 @@ impl ContextChipKind {
             Self::GitDiffStats | Self::SvnDirtyItems => Some(Icon::File),
             Self::GithubPullRequest => Some(Icon::Github),
             Self::KubernetesContext => Some(Icon::Globe),
+            Self::AwsProfile => Some(Icon::Cloud),
             Self::AgentPlanAndTodoList => Some(Icon::CheckSkinny),
             Self::Custom { .. } => None,
         }
@@ -577,6 +637,7 @@ pub fn available_chips() -> Vec<ContextChipKind> {
         ContextChipKind::CondaEnvironment,
         ContextChipKind::NodeVersion,
         ContextChipKind::KubernetesContext,
+        ContextChipKind::AwsProfile,
         ContextChipKind::SvnBranch,
         ContextChipKind::SvnDirtyItems,
     ]);
@@ -703,6 +764,21 @@ pub fn render_text_from_kind(
                     styles.value_color
                 } else {
                     prompt_colors.input_prompt_kubernetes
+                },
+                if is_in_agent_view {
+                    styles.font_properties
+                } else {
+                    Properties::default().weight(Weight::Thin)
+                },
+            );
+        }
+        ContextChipKind::AwsProfile => {
+            text.add_text_with_highlights(
+                "☁ ",
+                if is_in_agent_view {
+                    styles.value_color
+                } else {
+                    prompt_colors.input_prompt_aws
                 },
                 if is_in_agent_view {
                     styles.font_properties

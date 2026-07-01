@@ -286,6 +286,7 @@ pub struct Block {
     virtual_env: Option<String>,
     conda_env: Option<String>,
     node_version: Option<String>,
+    aws_profile: Option<String>,
     exit_code: ExitCode,
     session_id: Option<SessionId>,
     rprompt: Option<String>,
@@ -974,6 +975,7 @@ impl Block {
             virtual_env: None,
             conda_env: None,
             node_version: None,
+            aws_profile: None,
             rprompt: None,
             background_executor,
             event_proxy,
@@ -2736,6 +2738,10 @@ impl Block {
         self.node_version.as_ref()
     }
 
+    pub fn aws_profile(&self) -> Option<&String> {
+        self.aws_profile.as_ref()
+    }
+
     #[cfg(feature = "integration_tests")]
     pub fn prompt_to_string(&self) -> String {
         self.header_grid.prompt_to_string()
@@ -3339,6 +3345,7 @@ impl ansi::Handler for Block {
         self.virtual_env = data.virtual_env;
         self.conda_env = data.conda_env;
         self.node_version = data.node_version;
+        self.aws_profile = data.aws_profile;
         self.session_id = data.session_id.map(Into::into);
         self.rprompt.clone_from(&data.rprompt);
 
