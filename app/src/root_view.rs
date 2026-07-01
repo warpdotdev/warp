@@ -1004,8 +1004,6 @@ fn workspace_action_for_open_settings(args: &OpenSettingsArgs) -> WorkspaceActio
     }
 }
 
-/// Opens a new window for a `warp://settings` deeplink (bare, `?q=`, or
-/// `?widget=`), mapping the [`OpenSettingsArgs`] variant to its workspace action.
 fn open_settings_in_new_window(args: &OpenSettingsArgs, ctx: &mut AppContext) {
     let action = workspace_action_for_open_settings(args);
     let root_handle = open_new_window_get_handles(None, ctx).1;
