@@ -26,6 +26,7 @@ use crate::{AppContext, EntityId, EntityIdMap};
 mod buffer;
 mod child_view;
 mod clipped;
+mod color;
 mod column;
 mod constrained_box;
 mod container;
@@ -52,8 +53,8 @@ pub use parent::TuiParentElement;
 pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use text::TuiText;
 pub use viewported_list::{
-    TuiViewportContent, TuiViewportPosition, TuiViewportWindow, TuiViewportedElement,
-    TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
+    TuiViewportContent, TuiViewportPosition, TuiViewportVerticalAlignment, TuiViewportWindow,
+    TuiViewportedElement, TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
 };
 
 /// Carries the pre-rendered per-view element map through the layout pass,
@@ -154,6 +155,16 @@ pub trait TuiElement {
         _app: &AppContext,
     ) -> bool {
         false
+    }
+
+    /// Boxes this element as a trait object, mirroring the GUI `Element::finish`
+    /// convenience so element trees can be terminated with `.finish()` rather
+    /// than an explicit `Box::new`.
+    fn finish(self) -> Box<dyn TuiElement>
+    where
+        Self: 'static + Sized,
+    {
+        Box::new(self)
     }
 }
 

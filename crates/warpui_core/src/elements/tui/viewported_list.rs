@@ -19,6 +19,14 @@ pub enum TuiViewportPosition {
     RowsFromTop(usize),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TuiViewportVerticalAlignment {
+    /// Render content from the top of the viewport.
+    Top,
+    /// Dock short content to the bottom while following the end, so transcripts grow upward.
+    GrowFromBottom,
+}
+
 /// Shared storage for a caller-owned viewport position.
 #[derive(Clone)]
 pub struct TuiViewportedListState(Rc<RefCell<TuiViewportPosition>>);
@@ -109,6 +117,7 @@ where
     visible_elements: Vec<VisibleElement>,
     content_height: usize,
     size: TuiSize,
+    vertical_alignment: TuiViewportVerticalAlignment,
 }
 
 impl<Content> TuiViewportedList<Content>
@@ -123,7 +132,16 @@ where
             visible_elements: Vec::new(),
             content_height: 0,
             size: TuiSize::ZERO,
+            vertical_alignment: TuiViewportVerticalAlignment::Top,
         }
+    }
+
+    pub fn with_vertical_alignment(
+        mut self,
+        vertical_alignment: TuiViewportVerticalAlignment,
+    ) -> Self {
+        self.vertical_alignment = vertical_alignment;
+        self
     }
 
     fn set_position(&mut self, position: TuiViewportPosition) {
@@ -187,7 +205,6 @@ where
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) {
-        self.visible_elements.clear();
         let viewport_height = constraint.max.height;
         let viewport_height_rows = usize::from(viewport_height);
         let available_width = constraint.max.width;
@@ -196,6 +213,37 @@ where
             self.viewport_content(requested_scroll_top, viewport_height, available_width, app);
 
         self.content_height = content.content_height;
+        self.layout_viewport_content(
+            scroll_top,
+            viewport_height_rows,
+            available_width,
+            content,
+            ctx,
+            app,
+        );
+    }
+
+    fn layout_viewport_content(
+        &mut self,
+        scroll_top: usize,
+        viewport_height_rows: usize,
+        available_width: u16,
+        content: TuiViewportContent,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) {
+        self.visible_elements.clear();
+        let bottom_alignment_offset =
+            if matches!(
+                self.vertical_alignment,
+                TuiViewportVerticalAlignment::GrowFromBottom
+            ) && matches!(self.state.position(), TuiViewportPosition::End)
+                && content.content_height < viewport_height_rows
+            {
+                viewport_height_rows.saturating_sub(content.content_height)
+            } else {
+                0
+            };
 
         let viewport_bottom = scroll_top.saturating_add(viewport_height_rows);
         for item in content.items {
@@ -213,7 +261,9 @@ where
                 continue;
             }
 
-            let viewport_y = visible_top.saturating_sub(scroll_top);
+            let viewport_y = visible_top
+                .saturating_sub(scroll_top)
+                .saturating_add(bottom_alignment_offset);
             let viewport_origin_y = visible_top.saturating_sub(item_top);
             let height = visible_bottom.saturating_sub(visible_top);
             let viewport_y = viewport_y.min(usize::from(u16::MAX)) as u16;

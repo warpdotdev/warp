@@ -36,6 +36,28 @@ fn padding_offsets_the_child() {
 }
 
 #[test]
+fn directional_padding_offsets_the_child() {
+    let container = TuiContainer::new(TuiText::new("X"))
+        .with_padding_left(2)
+        .with_padding_top(1);
+    assert_eq!(
+        render_to_lines(&container, TuiSize::new(3, 2)),
+        vec!["   ", "  X"],
+    );
+}
+
+#[test]
+fn axis_padding_offsets_the_child() {
+    let container = TuiContainer::new(TuiText::new("X"))
+        .with_padding_x(1)
+        .with_padding_y(1);
+    assert_eq!(
+        render_to_lines(&container, TuiSize::new(3, 3)),
+        vec!["   ", " X ", "   "],
+    );
+}
+
+#[test]
 fn border_frames_the_child() {
     let container = TuiContainer::new(TuiText::new("X")).with_border();
     assert_eq!(

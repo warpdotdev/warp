@@ -1103,10 +1103,15 @@ impl AppContext {
             });
     }
 
-    /// Subscribes to a [`ViewHandle`] for changes, calling `callback` with the emitted event whenever the view is invalidated.
+    /// Subscribes to a GUI or TUI [`ViewHandle`] for emitted events.
+    ///
+    /// The [`ViewHandle`] parameter is the proof that `S` is a view: callers can
+    /// only obtain one through GUI or TUI view creation APIs. The generic bound
+    /// stays at [`Entity`] so this can accept both GUI [`View`](crate::View) and
+    /// TUI [`TuiView`](crate::TuiView) instances while still accessing `S::Event`.
     pub fn subscribe_to_view<S, F>(&mut self, handle: &ViewHandle<S>, mut callback: F)
     where
-        S: View,
+        S: Entity,
         S::Event: 'static,
         F: 'static + FnMut(ViewHandle<S>, &S::Event, &mut AppContext),
     {
@@ -3476,6 +3481,11 @@ impl AppContext {
         }
     }
 
+    /// Fires each invalidated window's [`Self::on_window_invalidated`] callback.
+    /// Normally run at the end of [`Self::flush_effects`], but also called
+    /// directly to imperatively trigger a redraw after work that doesn't flush
+    /// app effects (e.g. the repaint tasks in this file, and the TUI driver's
+    /// input handling).
     fn update_windows(&mut self) {
         let invalidated_window_ids = self
             .window_invalidations

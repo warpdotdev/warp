@@ -2,9 +2,8 @@
 //! constituents, like [`Block`]s and [`BlockList`]s for use
 //! in unit tests.
 //!
-//! Note that the example code in the documentation of this module
-//! is marked as no_run only  because it's currently not possible
-//! to reference `#[cfg(test)]` symbols from doctests.
+//! The example code in this module's documentation is marked `no_run`: it is
+//! compiled to keep the examples correct, but not executed.
 
 use std::collections::HashMap;
 use std::io::sink;
@@ -136,7 +135,9 @@ fn block_padding() -> BlockPadding {
 ///     .with_terminal_events_tx(events_tx)
 ///     .build();
 ///
-/// let block = SerializedBlock::new_for_test("test".into(), "test".into());
+/// // `.into()` produces the `SerializedBlockListItem` that `with_restored_blocks`
+/// // expects; its type lives in a private module so it can't be named directly.
+/// let block = SerializedBlock::new_for_test("test".into(), "test".into()).into();
 ///
 /// let block_list = TestBlockListBuilder::new()
 ///     .with_channel_event_proxy(channel_event_proxy)

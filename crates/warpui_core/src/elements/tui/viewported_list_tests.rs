@@ -2,8 +2,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use super::{
-    TuiViewportContent, TuiViewportPosition, TuiViewportWindow, TuiViewportedElement,
-    TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
+    TuiViewportContent, TuiViewportPosition, TuiViewportVerticalAlignment, TuiViewportWindow,
+    TuiViewportedElement, TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
 };
 use crate::elements::tui::{
     TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
@@ -264,6 +264,56 @@ fn scrolling_is_a_noop_when_all_content_fits() {
         render_viewport(&app, &mut viewport, size);
         assert!(wheel(&app, &mut viewport, size, 1.0));
         assert!(state.is_at_end());
+    });
+}
+
+#[test]
+fn default_alignment_starts_short_content_at_the_top() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![fake_item(1, 1), fake_item(2, 1)]);
+        let mut viewport = viewport_with_state(TuiViewportedListState::new_at_end(), content);
+
+        let lines = render_viewport(&app, &mut viewport, TuiSize::new(8, 4));
+
+        assert_eq!(&lines[0][..3], "1:0");
+        assert_eq!(&lines[1][..3], "2:0");
+        assert_eq!(lines[2].trim(), "");
+        assert_eq!(lines[3].trim(), "");
+    });
+}
+
+#[test]
+fn grow_from_bottom_docks_short_content_at_the_bottom() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![fake_item(1, 1), fake_item(2, 1)]);
+        let state = TuiViewportedListState::new_at_end();
+        let mut viewport = viewport_with_state(state, content)
+            .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
+
+        let lines = render_viewport(&app, &mut viewport, TuiSize::new(8, 4));
+
+        assert_eq!(lines[0].trim(), "");
+        assert_eq!(lines[1].trim(), "");
+        assert_eq!(&lines[2][..3], "1:0");
+        assert_eq!(&lines[3][..3], "2:0");
+    });
+}
+
+#[test]
+fn grow_from_bottom_does_not_offset_rows_from_top() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![fake_item(1, 1), fake_item(2, 1)]);
+        let state = TuiViewportedListState::new_at_end();
+        state.scroll_to_rows_from_top(0);
+        let mut viewport = viewport_with_state(state, content)
+            .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom);
+
+        let lines = render_viewport(&app, &mut viewport, TuiSize::new(8, 4));
+
+        assert_eq!(&lines[0][..3], "1:0");
+        assert_eq!(&lines[1][..3], "2:0");
+        assert_eq!(lines[2].trim(), "");
+        assert_eq!(lines[3].trim(), "");
     });
 }
 

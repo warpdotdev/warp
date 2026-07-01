@@ -34,7 +34,7 @@ pub mod secrets;
 pub mod selection;
 pub mod session;
 pub mod terminal_model;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 pub mod test_utils;
 
 pub use secrets::{

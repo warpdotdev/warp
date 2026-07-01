@@ -1,10 +1,15 @@
 //! [`TuiContainer`]: a single-child decorator that adds a background fill, an
-//! optional box-drawing border, and uniform padding around its child.
+//! optional box-drawing border, and padding around its child.
 //!
 //! # Construction
 //! Wrap a child with [`TuiContainer::new`] and layer decorations:
 //! - [`with_padding`](TuiContainer::with_padding): cells of empty space on every
 //!   side, inside any border.
+//! - [`with_padding_x`](TuiContainer::with_padding_x) /
+//!   [`with_padding_y`](TuiContainer::with_padding_y): cells of empty space on
+//!   one axis.
+//! - [`with_padding_top`](TuiContainer::with_padding_top) and sibling side
+//!   methods: cells of empty space on one side.
 //! - [`with_border`](TuiContainer::with_border) /
 //!   [`with_border_style`](TuiContainer::with_border_style): a one-cell box-drawn
 //!   frame.
@@ -12,32 +17,52 @@
 //!   behind the border and padding.
 //!
 //! # Layout policy
-//! The child is inset on every side by `border (0 or 1) + padding`. The
-//! container reports its child's size grown by that inset on both axes (clamped
-//! to the constraint), so the child occupies exactly the area left inside the
-//! frame and padding.
+//! The child is inset on every side by `border (0 or 1) + side padding`. The
+//! container reports its child's size grown by those insets (clamped to the
+//! constraint), so the child occupies exactly the area left inside the frame and
+//! padding.
 
 use ratatui::style::Color;
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiRectExt, TuiSize, TuiStyle,
+    TuiPresentationContext, TuiRect, TuiSize, TuiStyle,
 };
 use crate::AppContext;
 
 pub struct TuiContainer {
     child: Box<dyn TuiElement>,
-    padding: u16,
+    padding: TuiPadding,
     border: bool,
     border_style: TuiStyle,
     background: Option<Color>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TuiPadding {
+    top: u16,
+    right: u16,
+    bottom: u16,
+    left: u16,
+}
+
+impl TuiPadding {
+    /// Creates equal padding on every side.
+    fn uniform(padding: u16) -> Self {
+        Self {
+            top: padding,
+            right: padding,
+            bottom: padding,
+            left: padding,
+        }
+    }
 }
 
 impl TuiContainer {
     pub fn new(child: impl TuiElement + 'static) -> Self {
         Self {
             child: Box::new(child),
-            padding: 0,
+            padding: TuiPadding::default(),
             border: false,
             border_style: TuiStyle::default(),
             background: None,
@@ -45,7 +70,45 @@ impl TuiContainer {
     }
 
     pub fn with_padding(mut self, padding: u16) -> Self {
-        self.padding = padding;
+        self.padding = TuiPadding::uniform(padding);
+        self
+    }
+
+    /// Sets horizontal padding on both left and right sides.
+    pub fn with_padding_x(mut self, padding: u16) -> Self {
+        self.padding.left = padding;
+        self.padding.right = padding;
+        self
+    }
+
+    /// Sets vertical padding on both top and bottom sides.
+    pub fn with_padding_y(mut self, padding: u16) -> Self {
+        self.padding.top = padding;
+        self.padding.bottom = padding;
+        self
+    }
+
+    /// Sets padding above the child.
+    pub fn with_padding_top(mut self, padding: u16) -> Self {
+        self.padding.top = padding;
+        self
+    }
+
+    /// Sets padding to the right of the child.
+    pub fn with_padding_right(mut self, padding: u16) -> Self {
+        self.padding.right = padding;
+        self
+    }
+
+    /// Sets padding below the child.
+    pub fn with_padding_bottom(mut self, padding: u16) -> Self {
+        self.padding.bottom = padding;
+        self
+    }
+
+    /// Sets padding to the left of the child.
+    pub fn with_padding_left(mut self, padding: u16) -> Self {
+        self.padding.left = padding;
         self
     }
 
@@ -65,9 +128,48 @@ impl TuiContainer {
         self
     }
 
-    /// The number of cells the child is inset on each side.
-    fn inset(&self) -> u16 {
-        u16::from(self.border) + self.padding
+    /// The child inset from the left edge.
+    fn left_inset(&self) -> u16 {
+        u16::from(self.border).saturating_add(self.padding.left)
+    }
+
+    /// The child inset from the right edge.
+    fn right_inset(&self) -> u16 {
+        u16::from(self.border).saturating_add(self.padding.right)
+    }
+
+    /// The child inset from the top edge.
+    fn top_inset(&self) -> u16 {
+        u16::from(self.border).saturating_add(self.padding.top)
+    }
+
+    /// The child inset from the bottom edge.
+    fn bottom_inset(&self) -> u16 {
+        u16::from(self.border).saturating_add(self.padding.bottom)
+    }
+
+    /// The total horizontal space reserved by border and padding.
+    fn horizontal_inset(&self) -> u16 {
+        self.left_inset().saturating_add(self.right_inset())
+    }
+
+    /// The total vertical space reserved by border and padding.
+    fn vertical_inset(&self) -> u16 {
+        self.top_inset().saturating_add(self.bottom_inset())
+    }
+
+    /// The area available to the child after border and padding.
+    fn child_area(&self, area: TuiRect) -> TuiRect {
+        let left = self.left_inset().min(area.width);
+        let top = self.top_inset().min(area.height);
+        let right = self.right_inset().min(area.width.saturating_sub(left));
+        let bottom = self.bottom_inset().min(area.height.saturating_sub(top));
+        TuiRect::new(
+            area.x.saturating_add(left),
+            area.y.saturating_add(top),
+            area.width.saturating_sub(left).saturating_sub(right),
+            area.height.saturating_sub(top).saturating_sub(bottom),
+        )
     }
 
     /// The style used to paint border glyphs, inheriting the background fill so
@@ -88,15 +190,14 @@ impl TuiElement for TuiContainer {
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> TuiSize {
-        let total = self.inset().saturating_mul(2);
         let inner_max = TuiSize::new(
-            constraint.max.width.saturating_sub(total),
-            constraint.max.height.saturating_sub(total),
+            constraint.max.width.saturating_sub(self.horizontal_inset()),
+            constraint.max.height.saturating_sub(self.vertical_inset()),
         );
         let inner = self.child.layout(TuiConstraint::loose(inner_max), ctx, app);
         let size = TuiSize::new(
-            inner.width.saturating_add(total),
-            inner.height.saturating_add(total),
+            inner.width.saturating_add(self.horizontal_inset()),
+            inner.height.saturating_add(self.vertical_inset()),
         );
         constraint.clamp(size)
     }
@@ -114,7 +215,7 @@ impl TuiElement for TuiContainer {
             draw_border(area, buffer, self.painted_border_style());
         }
 
-        self.child.render(area.inset(self.inset()), buffer, ctx);
+        self.child.render(self.child_area(area), buffer, ctx);
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -123,13 +224,15 @@ impl TuiElement for TuiContainer {
 
     fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
         // `cursor_position` is reported relative to `area`'s origin, but the
-        // child is laid out inside the inset rect and reports relative to that
-        // inset origin. Add the inset back so the cursor lands inside the
-        // border/padding instead of at the frame's top-left corner.
-        let inset = self.inset();
-        self.child
-            .cursor_position(area.inset(inset), ctx)
-            .map(|(cx, cy)| (cx.saturating_add(inset), cy.saturating_add(inset)))
+        // child reports relative to the child area. Add the child-area offset
+        // back so the cursor lands inside the border/padding.
+        let child_area = self.child_area(area);
+        self.child.cursor_position(child_area, ctx).map(|(cx, cy)| {
+            (
+                child_area.x.saturating_sub(area.x).saturating_add(cx),
+                child_area.y.saturating_sub(area.y).saturating_add(cy),
+            )
+        })
     }
 
     fn dispatch_event(
@@ -144,7 +247,7 @@ impl TuiElement for TuiContainer {
             return false;
         }
         self.child
-            .dispatch_event(event, area.inset(self.inset()), event_ctx, ctx, app)
+            .dispatch_event(event, self.child_area(area), event_ctx, ctx, app)
     }
 }
 

@@ -151,6 +151,7 @@ fn hex_encoded_json_dcs(payload: &str) -> Vec<u8> {
     bytes.push(0x9c);
     bytes
 }
+
 fn command_finished_and_precmd(terminal: &mut TerminalModel) {
     let completion_metadata = CompletionMetadata::default();
     terminal.command_finished(CommandFinishedValue {
@@ -869,6 +870,45 @@ fn test_exit_alt_screen_on_command_finished() {
 }
 
 #[test]
+fn precmd_and_preexec_remain_noops_while_the_alt_screen_is_active() {
+    let mut terminal = TerminalModel::mock(None, None);
+    let active_block_id = terminal.active_block_id().clone();
+    let active_block_state = terminal.block_list().active_block().state();
+    let active_block_started = terminal.block_list().active_block().started();
+    terminal.enter_alt_screen(true);
+
+    terminal.precmd_with_completion_metadata(PrecmdValue {
+        completion_metadata: CompletionMetadata::default(),
+        prompt_metadata: PromptMetadata {
+            pwd: Some("/unexpected".to_owned()),
+            ..Default::default()
+        },
+    });
+    terminal.preexec(PreexecValue {
+        command: "unexpected".to_owned(),
+        session_id: None,
+    });
+
+    assert_eq!(terminal.active_block_id(), &active_block_id);
+    assert_eq!(
+        terminal.block_list().active_block().state(),
+        active_block_state
+    );
+    assert_eq!(
+        terminal.block_list().active_block().started(),
+        active_block_started
+    );
+    assert_ne!(
+        terminal
+            .block_list()
+            .active_block()
+            .pwd()
+            .map(String::as_str),
+        Some("/unexpected")
+    );
+}
+
+#[test]
 fn test_unset_bracketed_paste_mode_on_command_finished() {
     let mut terminal: TerminalModel = TerminalModel::mock(None, None);
 
@@ -885,6 +925,114 @@ fn test_unset_bracketed_paste_mode_on_command_finished() {
     assert!(!terminal.is_term_mode_set(TermMode::BRACKETED_PASTE));
 }
 
+#[test]
+fn normal_lifecycle_pipeline_emits_completion_and_prompt_side_effects_once() {
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(event_tx)
+        .build();
+    let mut terminal = TerminalModel::mock(None, Some(event_proxy));
+    while event_rx.try_recv().is_ok() {}
+
+    let (ordered_tx, ordered_rx) = async_channel::unbounded();
+    terminal.set_ordered_terminal_events_for_shared_session_tx(ordered_tx);
+
+    let completed_block_id = terminal.active_block_id().clone();
+    let next_block_id = BlockId::new();
+    let completion_metadata = CompletionMetadata {
+        exit_code: ExitCode::from(7),
+        next_block_id: next_block_id.clone(),
+    };
+    terminal.start_command_execution();
+    terminal.preexec(PreexecValue {
+        command: "false".to_owned(),
+        session_id: None,
+    });
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: completion_metadata.clone(),
+        session_id: None,
+    });
+    terminal.precmd_with_completion_metadata(PrecmdValue {
+        completion_metadata,
+        prompt_metadata: PromptMetadata {
+            pwd: Some("/normal-lifecycle".to_owned()),
+            ..Default::default()
+        },
+    });
+
+    let completed_block = terminal
+        .block_list()
+        .block_with_id(&completed_block_id)
+        .expect("The completed block should remain in the block list.");
+    assert_eq!(completed_block.state(), BlockState::DoneWithExecution);
+    assert_eq!(completed_block.exit_code(), ExitCode::from(7));
+    assert_eq!(terminal.active_block_id(), &next_block_id);
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
+            .pwd()
+            .map(String::as_str),
+        Some("/normal-lifecycle")
+    );
+
+    let events: Vec<_> = std::iter::from_fn(|| event_rx.try_recv().ok()).collect();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::BlockCompleted(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::AfterBlockCompleted(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::BlockMetadataReceived(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::Handler(HandlerEvent::Preexec)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    Event::Handler(HandlerEvent::CommandFinished {
+                        command_type: CommandType::User
+                    })
+                )
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::Handler(HandlerEvent::Precmd { .. })))
+            .count(),
+        1
+    );
+
+    assert!(matches!(
+        ordered_rx.try_recv(),
+        Ok(OrderedTerminalEventType::CommandExecutionFinished { .. })
+    ));
+    assert!(ordered_rx.try_recv().is_err());
+}
 #[test]
 fn test_alt_screen_selection_tracks_scroll() {
     let mut terminal: TerminalModel = TerminalModel::mock(None, None);
