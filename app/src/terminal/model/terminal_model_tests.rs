@@ -151,6 +151,7 @@ fn hex_encoded_json_dcs(payload: &str) -> Vec<u8> {
     bytes.push(0x9c);
     bytes
 }
+
 fn command_finished_and_precmd(terminal: &mut TerminalModel) {
     let completion_metadata = CompletionMetadata::default();
     terminal.command_finished(CommandFinishedValue {
@@ -876,7 +877,7 @@ fn precmd_and_preexec_remain_noops_while_the_alt_screen_is_active() {
     let active_block_started = terminal.block_list().active_block().started();
     terminal.enter_alt_screen(true);
 
-    terminal.precmd(PrecmdValue {
+    terminal.precmd_with_completion_metadata(PrecmdValue {
         completion_metadata: CompletionMetadata::default(),
         prompt_metadata: PromptMetadata {
             pwd: Some("/unexpected".to_owned()),
@@ -951,7 +952,7 @@ fn normal_lifecycle_pipeline_emits_completion_and_prompt_side_effects_once() {
         completion_metadata: completion_metadata.clone(),
         session_id: None,
     });
-    terminal.precmd(PrecmdValue {
+    terminal.precmd_with_completion_metadata(PrecmdValue {
         completion_metadata,
         prompt_metadata: PromptMetadata {
             pwd: Some("/normal-lifecycle".to_owned()),
