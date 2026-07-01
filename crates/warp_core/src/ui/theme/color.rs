@@ -356,7 +356,6 @@ impl WarpTheme {
     pub fn tooltip_background(&self) -> ColorU {
         internal_colors::neutral_6(self)
     }
-
 }
 
 // ANSI color blends

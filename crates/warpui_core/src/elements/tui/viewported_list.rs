@@ -239,7 +239,10 @@ where
             ctx,
             app,
         );
-        if self.content.update_visible_item_heights(&measured_heights, app) {
+        if self
+            .content
+            .update_visible_item_heights(&measured_heights, app)
+        {
             let (scroll_top, content) =
                 self.viewport_content(requested_scroll_top, viewport_height, available_width, app);
             self.content_height = content.content_height;

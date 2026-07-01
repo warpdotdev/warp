@@ -18,8 +18,7 @@ use warpui_core::elements::tui::{
 use warpui_core::{App, AppContext, Entity, TuiView, TypedActionView, ViewContext};
 
 use super::{
-    block_rows, AgentBlockRegistration, AgentBlockRegistry, TuiBlockListViewportItemId,
-    TuiBlockListViewportSource,
+    block_rows, AgentBlockRegistry, TuiBlockListViewportItemId, TuiBlockListViewportSource,
 };
 use crate::agent_block::TuiAgentBlockView;
 
@@ -67,7 +66,7 @@ fn tui_block_list_viewport_source_slices_terminal_blocks_to_visible_rows() {
 
             assert_eq!(content.items.len(), 1);
             let mut item = content.items.into_iter().next().unwrap();
-            assert_eq!(item.origin_y, 1);
+            assert_eq!(item.origin_y, 0);
 
             let mut rendered_views = EntityIdMap::default();
             let mut layout_ctx = TuiLayoutContext {
@@ -78,7 +77,7 @@ fn tui_block_list_viewport_source_slices_terminal_blocks_to_visible_rows() {
                 &mut layout_ctx,
                 app,
             );
-            assert_eq!(size.height, 1);
+            assert_eq!(size.height, 4);
         });
     });
 }
@@ -129,9 +128,13 @@ fn tui_agent_rich_content_updates_visible_height_from_viewport_layout() {
                 |_| TestHostView,
             );
             ctx.add_tui_view(window_id, |_| {
-                TuiAgentBlockView::new(Rc::new(QueryAgentBlockModel {
-                    inputs: vec![query_input("hello world from rust")],
-                }))
+                TuiAgentBlockView::new(
+                    AIConversationId::new(),
+                    AIAgentExchangeId::new(),
+                    Rc::new(QueryAgentBlockModel {
+                        inputs: vec![query_input("hello world from rust")],
+                    }),
+                )
             })
         });
         let view_id = agent_block.id();
@@ -146,14 +149,9 @@ fn tui_agent_rich_content_updates_visible_height_from_viewport_layout() {
                 .block_list_mut()
                 .update_rich_content_heights(&HashMap::from([(view_id, 4.0)]));
         }
-        agent_blocks.borrow_mut().insert(
-            view_id,
-            AgentBlockRegistration {
-                view: agent_block.clone(),
-                conversation_id: AIConversationId::new(),
-                exchange_id: AIAgentExchangeId::new(),
-            },
-        );
+        agent_blocks
+            .borrow_mut()
+            .insert(view_id, agent_block.clone());
         let source = TuiBlockListViewportSource::new(terminal_model.clone(), agent_blocks);
 
         let content = app.read(|app| {

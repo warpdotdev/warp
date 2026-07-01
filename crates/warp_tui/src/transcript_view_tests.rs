@@ -20,7 +20,6 @@ use warpui_core::{AppContext, ViewContext};
 
 use super::TuiTranscriptView;
 use crate::agent_block::TuiAgentBlockView;
-use crate::tui_block_list_viewport_source::AgentBlockRegistration;
 
 #[test]
 fn transcript_view_renders_terminal_blocks_from_canonical_order() {
@@ -116,17 +115,17 @@ fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
         let exchange_id = AIAgentExchangeId::new();
 
         transcript.update(&mut app, |view, ctx| {
-            let agent_block =
-                ctx.add_tui_view(|_| TuiAgentBlockView::new(Rc::new(EmptyAgentBlockModel)));
-            let agent_block_id = agent_block.id();
-            view.agent_blocks.borrow_mut().insert(
-                agent_block_id,
-                AgentBlockRegistration {
-                    view: agent_block,
-                    conversation_id: original_conversation_id,
+            let agent_block = ctx.add_tui_view(|_| {
+                TuiAgentBlockView::new(
+                    original_conversation_id,
                     exchange_id,
-                },
-            );
+                    Rc::new(EmptyAgentBlockModel),
+                )
+            });
+            let agent_block_id = agent_block.id();
+            view.agent_blocks
+                .borrow_mut()
+                .insert(agent_block_id, agent_block);
             view.model.lock().block_list_mut().append_rich_content(
                 RichContentItem::new(Some(RichContentType::AIBlock), agent_block_id, None, false),
                 false,
@@ -150,13 +149,16 @@ fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
             take_dirty_rich_content_items(&terminal_model).contains(&agent_block_id),
             "streaming updates should dirty canonical rich content"
         );
-        transcript.read(&app, |view, _| {
-            let registrations = view.agent_blocks.borrow();
-            let registration = registrations
+        transcript.read(&app, |view, app| {
+            let agent_blocks = view.agent_blocks.borrow();
+            let agent_block = agent_blocks
                 .values()
                 .next()
-                .expect("agent block should remain registered");
-            assert_eq!(registration.conversation_id, original_conversation_id);
+                .expect("agent block should remain tracked");
+            assert_eq!(
+                agent_block.as_ref(app).conversation_id(),
+                original_conversation_id
+            );
         });
         assert_eq!(rich_content_count(&terminal_model), 1);
 

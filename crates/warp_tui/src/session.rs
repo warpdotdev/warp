@@ -10,7 +10,7 @@ use std::ffi::OsString;
 use anyhow::Result;
 use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
-    tui_dark_theme, Appearance, BannerState, IsSharedSessionCreator, LocalTtyTerminalManager,
+    dark_theme, Appearance, BannerState, IsSharedSessionCreator, LocalTtyTerminalManager,
     TerminalManagerTrait, TerminalSurfaceResult,
 };
 use warp::{TuiLoginModel, TuiLoginPhase};
@@ -52,7 +52,7 @@ fn init(ctx: &mut AppContext) {
     // the TUI process by overriding the already-initialized Appearance theme at
     // mount time, without changing normal GUI theme selection or font settings.
     Appearance::handle(ctx).update(ctx, |appearance, ctx| {
-        appearance.set_theme(tui_dark_theme(), ctx);
+        appearance.set_theme(dark_theme(), ctx);
     });
 
     let banner = ctx.add_model(|_| BannerState::default());
@@ -75,7 +75,7 @@ fn init(ctx: &mut AppContext) {
             let login_model = TuiLoginModel::handle(ctx);
             ctx.subscribe_to_model(&login_model, move |_, _, ctx| {
                 if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
-                    ensure_terminal_session_after_login(
+                    create_terminal_session_after_login(
                         &session_for_login,
                         &root_for_login,
                         &banner_for_login,
@@ -84,7 +84,7 @@ fn init(ctx: &mut AppContext) {
                 }
             });
             if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
-                ensure_terminal_session_after_login(&session, &root, &banner, ctx);
+                create_terminal_session_after_login(&session, &root, &banner, ctx);
             }
         }
         Err(error) => {
@@ -95,7 +95,7 @@ fn init(ctx: &mut AppContext) {
 }
 
 /// Creates and retains the terminal manager after login.
-fn ensure_terminal_session_after_login(
+fn create_terminal_session_after_login(
     session: &ModelHandle<TuiSession>,
     root: &ViewHandle<RootTuiView>,
     banner: &ModelHandle<BannerState>,
@@ -128,6 +128,7 @@ fn ensure_terminal_session_after_login(
             }
         },
     );
+
     session.update(ctx, |session, ctx| {
         session.manager = Some(manager.manager);
         ctx.notify();

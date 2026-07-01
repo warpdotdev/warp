@@ -21,6 +21,7 @@ pub(super) struct TerminalBlockRowsElement {
     rows: Range<usize>,
     width: u16,
 }
+
 impl TerminalBlockRowsElement {
     /// Creates a terminal block rows element.
     pub(super) fn new(
@@ -60,6 +61,7 @@ impl TuiElement for TerminalBlockRowsElement {
         let Some(block) = model.block_list().block_with_id(&self.block_id) else {
             return;
         };
+
         let prompt_rows = if block.should_hide_command_grid() {
             0
         } else {
@@ -70,6 +72,7 @@ impl TuiElement for TerminalBlockRowsElement {
         } else {
             block.output_grid().len_displayed()
         };
+
         let total_rows = prompt_rows.saturating_add(output_rows);
         let rows = self.rows.start.min(total_rows)..self.rows.end.min(total_rows);
         let max_width = self.width.min(area.width);
@@ -85,6 +88,7 @@ impl TuiElement for TerminalBlockRowsElement {
                 &mut y,
             );
         }
+
         if rows.end > prompt_rows {
             render_displayed_rows(
                 block.output_grid(),
@@ -120,8 +124,7 @@ fn render_displayed_rows(
         };
         for column in 0..grid.columns().min(usize::from(max_width)) {
             let cell = &row[column];
-            if let Some(buffer_cell) = buffer.cell_mut((area.x.saturating_add(column as u16), *y))
-            {
+            if let Some(buffer_cell) = buffer.cell_mut((area.x.saturating_add(column as u16), *y)) {
                 buffer_cell
                     .set_symbol(&sanitized_symbol(cell))
                     .set_style(cell_to_style(cell, colors));

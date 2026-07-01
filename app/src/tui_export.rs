@@ -41,10 +41,10 @@ pub use crate::terminal::model::blockgrid::BlockGrid;
 pub use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
 };
-pub use crate::terminal::model_events::ModelEvent;
 pub use crate::terminal::model::rich_content::RichContentType;
 pub use crate::terminal::model::session::active_session::ActiveSession;
 pub use crate::terminal::model::terminal_model::BlockIndex;
+pub use crate::terminal::model_events::ModelEvent;
 pub use crate::terminal::shared_session::IsSharedSessionCreator;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::ExecuteCommandEvent;
@@ -52,4 +52,4 @@ pub use crate::terminal::{
     PtyIntent, PtyIntentEvent, ShellLaunchData, TerminalManager as TerminalManagerTrait,
     TerminalModel, TerminalSurface,
 };
-pub use crate::themes::default_themes::tui_dark_theme;
+pub use crate::themes::default_themes::dark_theme;

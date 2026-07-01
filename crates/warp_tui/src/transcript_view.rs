@@ -20,9 +20,7 @@ use warpui_core::{
 };
 
 use super::agent_block::TuiAgentBlockView;
-use super::tui_block_list_viewport_source::{
-    AgentBlockRegistration, AgentBlockRegistry, TuiBlockListViewportSource,
-};
+use super::tui_block_list_viewport_source::{AgentBlockRegistry, TuiBlockListViewportSource};
 
 /// TUI transcript view over one terminal surface's canonical block-list order.
 pub(super) struct TuiTranscriptView {
@@ -63,6 +61,7 @@ impl TuiTranscriptView {
         {
             return;
         }
+
         match event {
             BlocklistAIHistoryEvent::AppendedExchange {
                 exchange_id,
@@ -117,7 +116,7 @@ impl TuiTranscriptView {
             .agent_blocks
             .borrow()
             .values()
-            .any(|registration| registration.exchange_id == exchange_id)
+            .any(|view| view.as_ref(ctx).exchange_id() == exchange_id)
         {
             return;
         }
@@ -134,17 +133,12 @@ impl TuiTranscriptView {
             );
             return;
         };
+
         let block_model = Rc::new(block_model);
-        let view = ctx.add_tui_view(|_| TuiAgentBlockView::new(block_model));
+        let view =
+            ctx.add_tui_view(|_| TuiAgentBlockView::new(conversation_id, exchange_id, block_model));
         let view_id = view.id();
-        self.agent_blocks.borrow_mut().insert(
-            view_id,
-            AgentBlockRegistration {
-                view,
-                conversation_id,
-                exchange_id,
-            },
-        );
+        self.agent_blocks.borrow_mut().insert(view_id, view);
         self.model.lock().block_list_mut().append_rich_content(
             RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
             false,
@@ -157,8 +151,8 @@ impl TuiTranscriptView {
             .agent_blocks
             .borrow()
             .iter()
-            .find_map(|(view_id, registration)| {
-                (registration.exchange_id == exchange_id).then_some(*view_id)
+            .find_map(|(view_id, view)| {
+                (view.as_ref(ctx).exchange_id() == exchange_id).then_some(*view_id)
             });
         if let Some(view_id) = view_id {
             self.model
@@ -175,11 +169,14 @@ impl TuiTranscriptView {
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
-        let mut agent_blocks = self.agent_blocks.borrow_mut();
-        let registration = agent_blocks.iter_mut().find_map(|(view_id, registration)| {
-            (registration.exchange_id == exchange_id).then_some((*view_id, registration))
-        });
-        let Some((view_id, registration)) = registration else {
+        let agent_block = self
+            .agent_blocks
+            .borrow()
+            .iter()
+            .find_map(|(view_id, view)| {
+                (view.as_ref(ctx).exchange_id() == exchange_id).then_some((*view_id, view.clone()))
+            });
+        let Some((view_id, agent_block)) = agent_block else {
             return;
         };
         let Ok(block_model) = AIBlockModelImpl::<TuiAgentBlockView>::new(
@@ -194,10 +191,9 @@ impl TuiTranscriptView {
             );
             return;
         };
-        registration.conversation_id = conversation_id;
-        registration
-            .view
-            .update(ctx, |view, _| view.set_model(Rc::new(block_model)));
+        agent_block.update(ctx, |view, _| {
+            view.replace_model(conversation_id, Rc::new(block_model))
+        });
         self.model
             .lock()
             .block_list_mut()
@@ -214,8 +210,8 @@ impl TuiTranscriptView {
             .agent_blocks
             .borrow()
             .iter()
-            .filter_map(|(view_id, registration)| {
-                (registration.conversation_id == conversation_id).then_some(*view_id)
+            .filter_map(|(view_id, view)| {
+                (view.as_ref(ctx).conversation_id() == conversation_id).then_some(*view_id)
             })
             .collect::<Vec<_>>();
         for view_id in view_ids {

@@ -1,18 +1,18 @@
 use std::rc::Rc;
 
 use warp::tui_export::{
-    AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText,
-    AIAgentTextSection, AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType,
-    Appearance, LLMId, MessageId, OutputStatusUpdateCallback, ServerOutputId, Shared,
-    UserQueryMode,
+    AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType,
+    AIAgentText, AIAgentTextSection, AIBlockModel, AIBlockOutputStatus, AIConversationId,
+    AIRequestType, Appearance, LLMId, MessageId, OutputStatusUpdateCallback, ServerOutputId,
+    Shared, UserQueryMode,
 };
+use warp_core::ui::color::blend::Blend;
+use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::SingletonEntity;
-use warpui_core::elements::tui::{
-    Color, Modifier, TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiRect, TuiSize,
-};
-use warpui_core::elements::Fill;
+use warpui_core::elements::tui::{Color, Modifier, TuiBufferExt, TuiRect};
+use warpui_core::elements::Fill as CoreFill;
 use warpui_core::presenter::tui::TuiPresenter;
-use warpui_core::{App, AppContext, EntityIdMap, ViewContext};
+use warpui_core::{App, AppContext, ViewContext};
 
 use super::{TuiAgentBlockSection, TuiAgentBlockView};
 
@@ -21,15 +21,17 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         app.read(|app_ctx| {
-            let sections = vec![
-                TuiAgentBlockSection::Input(vec!["hello".to_owned()]),
-                TuiAgentBlockSection::PlainText("one\ntwo\nthree".to_owned()),
-            ];
-            assert_eq!(desired_height_for_sections(&sections, 20, app_ctx), 6);
+            let block = test_agent_block(FakeAgentBlockModel {
+                inputs: vec![query_input("hello")],
+                status: complete_output(vec![AIAgentTextSection::PlainText {
+                    text: "one\ntwo\nthree".to_owned().into(),
+                }]),
+            });
+            assert_eq!(block.desired_height(20, app_ctx), 6);
 
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
-                TuiAgentBlockView::render_sections(&sections, app_ctx),
+                block.render_element(app_ctx),
                 TuiRect::new(0, 0, 20, 6),
                 app_ctx,
             );
@@ -60,40 +62,20 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
     });
 }
 
-/// Measures generic agent-block sections at a target width.
-fn desired_height_for_sections(
-    sections: &[TuiAgentBlockSection],
-    width: u16,
-    app: &AppContext,
-) -> usize {
-    let mut rendered_views = EntityIdMap::default();
-    let mut ctx = TuiLayoutContext {
-        rendered_views: &mut rendered_views,
-    };
-    let mut element = TuiAgentBlockView::render_sections(sections, app);
-    usize::from(
-        element
-            .layout(
-                TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
-                &mut ctx,
-                app,
-            )
-            .height,
-    )
-}
-
 #[test]
 fn simple_agent_block_reflows_height_at_narrow_width() {
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         app.read(|app_ctx| {
-            let sections = vec![
-                TuiAgentBlockSection::Input(vec!["hello world".to_owned()]),
-                TuiAgentBlockSection::PlainText("streamed output".to_owned()),
-            ];
+            let block = test_agent_block(FakeAgentBlockModel {
+                inputs: vec![query_input("hello world")],
+                status: complete_output(vec![AIAgentTextSection::PlainText {
+                    text: "streamed output".to_owned().into(),
+                }]),
+            });
 
-            let wide = desired_height_for_sections(&sections, 40, app_ctx);
-            let narrow = desired_height_for_sections(&sections, 6, app_ctx);
+            let wide = block.desired_height(40, app_ctx);
+            let narrow = block.desired_height(6, app_ctx);
             assert!(narrow > wide, "narrow text should occupy more logical rows");
         });
     });
@@ -101,34 +83,36 @@ fn simple_agent_block_reflows_height_at_narrow_width() {
 
 fn expected_prompt_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    theme.foreground().into()
+    CoreFill::from(theme.foreground()).into()
 }
 
 fn expected_input_background(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    let accent = Fill::from(theme.terminal_colors().normal.cyan);
-    theme
-        .background()
-        .blend(&accent.with_opacity(10))
-        .blend(&accent.with_opacity(10))
-        .into()
+    let accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
+    CoreFill::from(
+        theme
+            .background()
+            .blend(&accent.with_opacity(10))
+            .blend(&accent.with_opacity(10)),
+    )
+    .into()
 }
 
 fn expected_output_text_color(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    Fill::from(theme.terminal_colors().normal.white).into()
+    CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into()
 }
 
 fn expected_transcript_background(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
-    theme.surface_1().into()
+    CoreFill::from(theme.surface_1()).into()
 }
 
 #[test]
 fn agent_block_extracts_input_and_plain_text_from_model() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
-            let block = TuiAgentBlockView::new(Rc::new(FakeAgentBlockModel {
+            let block = test_agent_block(FakeAgentBlockModel {
                 inputs: vec![query_input("hello")],
                 status: complete_output(vec![
                     AIAgentTextSection::PlainText {
@@ -138,7 +122,7 @@ fn agent_block_extracts_input_and_plain_text_from_model() {
                         text: "two".to_owned().into(),
                     },
                 ]),
-            }));
+            });
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
@@ -151,12 +135,11 @@ fn agent_block_extracts_input_and_plain_text_from_model() {
     });
 }
 
-
 #[test]
 fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
-            let block = TuiAgentBlockView::new(Rc::new(FakeAgentBlockModel {
+            let block = test_agent_block(FakeAgentBlockModel {
                 inputs: Vec::new(),
                 status: complete_output(vec![
                     AIAgentTextSection::Code {
@@ -168,7 +151,7 @@ fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {
                         text: "visible".to_owned().into(),
                     },
                 ]),
-            }));
+            });
 
             assert_eq!(
                 block.sections(app_ctx),
@@ -181,6 +164,15 @@ fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {
 struct FakeAgentBlockModel {
     inputs: Vec<AIAgentInput>,
     status: AIBlockOutputStatus,
+}
+
+/// Builds an agent block with fresh test identity.
+fn test_agent_block(model: FakeAgentBlockModel) -> TuiAgentBlockView {
+    TuiAgentBlockView::new(
+        AIConversationId::new(),
+        AIAgentExchangeId::new(),
+        Rc::new(model),
+    )
 }
 
 impl AIBlockModel for FakeAgentBlockModel {

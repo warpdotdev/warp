@@ -4,14 +4,15 @@ use warp::editor::CodeEditorModel;
 use warp::tui_export::{
     ActiveSession, AgentViewEntryOrigin, Appearance, BlocklistAIActionModel,
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel, ConversationSelection,
-    ConversationSelectionHandle, GetRelevantFilesController, PtyIntent, PtyIntentEvent,
-    ModelEvent, TerminalSurface, TerminalSurfaceInit,
+    ConversationSelectionHandle, GetRelevantFilesController, ModelEvent, PtyIntent, PtyIntentEvent,
+    TerminalSurface, TerminalSurfaceInit,
 };
+use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     Color, TuiChildView, TuiColumn, TuiConstrainedBox, TuiContainer, TuiElement, TuiStyle,
 };
-use warpui_core::elements::Fill;
+use warpui_core::elements::Fill as CoreFill;
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
@@ -53,6 +54,7 @@ impl TuiTerminalSessionView {
             wakeups_rx,
             ..
         } = surface_init;
+
         let terminal_surface_id: EntityId = ctx.view_id();
         let active_session =
             ctx.add_model(|ctx| ActiveSession::new(sessions.clone(), model_events.clone(), ctx));
@@ -144,6 +146,7 @@ impl TuiTerminalSessionView {
                 if prompt.is_empty() {
                     return;
                 }
+
                 self.send_prompt(prompt, ctx);
                 ctx.notify();
             }
@@ -175,13 +178,15 @@ impl TuiTerminalSessionView {
 
     fn render_session(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let theme = Appearance::as_ref(app).theme();
-        let border_color: Color = Fill::from(theme.terminal_colors().normal.cyan).into();
-        let background: Color = theme.surface_1().into();
+        let border_color: Color =
+            CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.cyan)).into();
+        let background: Color = CoreFill::from(theme.surface_1()).into();
         let input_box = TuiConstrainedBox::new(
             TuiContainer::new(TuiChildView::new(&self.input_view))
                 .with_border_style(TuiStyle::default().fg(border_color)),
         )
         .with_max_rows(MAX_INPUT_TEXT_ROWS + BORDER_ROWS);
+
         Box::new(
             TuiContainer::new(
                 TuiColumn::new()

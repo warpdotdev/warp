@@ -31,6 +31,7 @@ impl RootTuiView {
         if let Some(terminal_session) = &self.terminal_session {
             return terminal_session.clone();
         }
+
         let terminal_session =
             ctx.add_typed_action_tui_view(|ctx| TuiTerminalSessionView::new(surface_init, ctx));
         self.terminal_session = Some(terminal_session.clone());
@@ -77,6 +78,7 @@ impl TuiView for RootTuiView {
     }
 
     fn keymap_context(&self, _ctx: &AppContext) -> keymap::Context {
+        // Propagate focus context into the input view so keystrokes reach it.
         let mut context = keymap::Context::default();
         context.set.insert("RootTuiView");
         context

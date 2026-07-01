@@ -272,19 +272,6 @@ pub fn dark_theme() -> WarpTheme {
     )
 }
 
-pub fn tui_dark_theme() -> WarpTheme {
-    WarpTheme::new(
-        Fill::Solid(ColorU::from_u32(0x050505FF)),
-        ColorU::from_u32(0xffffffff),
-        Fill::Solid(ColorU::from_u32(0x19AAD8FF)),
-        None,
-        Some(Details::Darker),
-        dark_mode_colors(),
-        None,
-        Some("TUI Dark".to_string()),
-    )
-}
-
 pub fn light_theme() -> WarpTheme {
     WarpTheme::new(
         Fill::Solid(ColorU::white()),
