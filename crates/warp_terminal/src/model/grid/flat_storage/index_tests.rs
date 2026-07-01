@@ -290,6 +290,60 @@ fn test_cell_type() {
     assert_eq!(storage.cell_type(2, 2), Some(CellType::WideCharSpacer));
 }
 
+#[test]
+fn test_cell_type_at_offset_for_span_wider_than_two() {
+    // Regression test for the variable-width-cell rewrite: cell_type_at_offset
+    // previously assumed a fixed 2-wide alternation (offset % 2), which only
+    // gave correct answers for cell_width == 2. A run of two 4-wide graphemes
+    // occupies columns [0..8): grapheme 0 spans [0..4), grapheme 1 spans
+    // [4..8). Only the first column of each grapheme's own span is WideChar;
+    // the rest are spacers.
+    let run = GraphemeRun {
+        count: NonZeroU16::new(2).unwrap(),
+        info: GraphemeInfo {
+            cell_width: 4,
+            utf8_bytes: NonZeroU16::new(4).unwrap(),
+        },
+    };
+
+    assert_eq!(run.cell_type_at_offset(0), Some(CellType::WideChar));
+    assert_eq!(run.cell_type_at_offset(1), Some(CellType::WideCharSpacer));
+    assert_eq!(run.cell_type_at_offset(2), Some(CellType::WideCharSpacer));
+    assert_eq!(run.cell_type_at_offset(3), Some(CellType::WideCharSpacer));
+    // Second grapheme in the run starts at offset 4 -- must be WideChar
+    // again, not a spacer (this is exactly what the old `% 2` logic got
+    // wrong for any width other than 2).
+    assert_eq!(run.cell_type_at_offset(4), Some(CellType::WideChar));
+    assert_eq!(run.cell_type_at_offset(5), Some(CellType::WideCharSpacer));
+    assert_eq!(run.cell_type_at_offset(6), Some(CellType::WideCharSpacer));
+    assert_eq!(run.cell_type_at_offset(7), Some(CellType::WideCharSpacer));
+}
+
+#[test]
+fn process_grapheme_info_accepts_full_span_range_up_to_eight() {
+    // Regression test: the debug_assert cap was raised from <= 2 to <= 8 to
+    // match Cell::set_span's 3-bit encoding limit. Widths 3 through 8 must
+    // not panic.
+    for cell_width in 3u8..=8 {
+        let mut index = Index::new(20, None);
+        let mut builder = EntryBuilder::new();
+        builder.process_grapheme_info(
+            GraphemeInfo {
+                cell_width,
+                utf8_bytes: NonZeroU16::new(4).unwrap(),
+            },
+            &mut index,
+        );
+        // No panic is the assertion here; also sanity-check the builder
+        // tracked the expected number of occupied cells.
+        assert_eq!(
+            builder.num_cells, cell_width as usize,
+            "expected {cell_width} occupied cells after processing one grapheme of that width"
+        );
+        builder.append_to_index_if_nonempty(&mut index);
+    }
+}
+
 mod offset_point_conversion {
     use super::*;
 

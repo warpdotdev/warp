@@ -41,7 +41,7 @@ impl<'a> Grapheme<'a> {
 
     /// Constructs a new [`Grapheme`] from a [`Cell`].
     pub fn new_from_cell(cell: &'a Cell) -> Self {
-        let cell_width = 1 + cell.flags().contains(cell::Flags::WIDE_CHAR) as u8;
+        let cell_width = cell.span();
 
         let content = cell.raw_content();
         let utf8_bytes = match content {

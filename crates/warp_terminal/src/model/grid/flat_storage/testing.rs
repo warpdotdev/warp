@@ -28,7 +28,16 @@ pub fn assert_rows_equal(actual: &[Row], expected: &[Row]) {
                 assert_eq!(actual.fg, expected.fg, "Expected ({row_idx}, {col_idx}) to have fg {:?} but got {:?}", expected.fg, actual.fg);
                 assert_eq!(actual.bg, expected.bg, "Expected ({row_idx}, {col_idx}) to have bg {:?} but got {:?}", expected.bg, actual.bg);
 
-                assert_eq!(actual.flags(), expected.flags(), "Expected ({row_idx}, {col_idx}) to have flags {:?} but got {:?}", expected.flags(), actual.flags());
+                // Compare span (Cell::span, which falls back to the legacy
+                // WIDE_CHAR flag) separately from the remaining flags: tests
+                // that hand-build an "expected" row via the legacy
+                // `flags.insert(Flags::WIDE_CHAR)` pattern carry the same
+                // semantic span as one built via `set_span`, but not
+                // necessarily the same raw bits (only `set_span` populates
+                // the span field), so a raw `Flags` equality would spuriously
+                // fail on the newly-added span bits.
+                assert_eq!(actual.span(), expected.span(), "Expected ({row_idx}, {col_idx}) to have span {} but got {}", expected.span(), actual.span());
+                assert_eq!(actual.flags_ignoring_span(), expected.flags_ignoring_span(), "Expected ({row_idx}, {col_idx}) to have flags {:?} but got {:?}", expected.flags(), actual.flags());
 
                 // TODO(vorporeal): Check CellExtra::end_of_prompt.
             }

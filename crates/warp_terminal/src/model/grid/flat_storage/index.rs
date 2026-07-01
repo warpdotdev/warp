@@ -513,8 +513,8 @@ impl EntryBuilder {
             return;
         }
         debug_assert!(
-            info.cell_width <= 2,
-            "graphemes should not be more than two cells wide, but encountered one with width {}",
+            info.cell_width <= 8,
+            "graphemes should not be more than 8 cells wide (Cell::span's encoding limit), but encountered one with width {}",
             info.cell_width
         );
 
@@ -666,7 +666,13 @@ impl GraphemeRun {
                 "cannot compute cell type for offset {offset} in run that spans {} columns",
                 self.cols()
             );
-            if offset.is_multiple_of(2) {
+            // Each grapheme in this run occupies `cell_width` consecutive
+            // columns; `offset` is the position within the RUN, so map it to
+            // a position within its own grapheme's span first. Only the
+            // first column of that span (base cell) is WideChar; every other
+            // column in the span is a spacer. (Previously assumed a fixed
+            // 2-wide alternation, which was only correct for cell_width==2.)
+            if offset % self.info.cell_width as usize == 0 {
                 Some(CellType::WideChar)
             } else {
                 Some(CellType::WideCharSpacer)

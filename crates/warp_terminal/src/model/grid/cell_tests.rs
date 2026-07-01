@@ -100,3 +100,50 @@ fn push_zerowidth_seeds_base_char_on_first_push() {
     cell.push_zerowidth('\u{0301}', /* log_long_grapheme_warnings */ true);
     assert_eq!(cell.raw_content(), CharOrStr::Str("x\u{0301}"));
 }
+
+#[test]
+fn span_round_trips_for_all_valid_values() {
+    for span in 1u8..=8 {
+        let mut cell = Cell::default();
+        cell.set_span(span);
+        assert_eq!(cell.span(), span, "span {span} did not round-trip");
+    }
+}
+
+#[test]
+fn span_defaults_to_one_on_fresh_cell() {
+    assert_eq!(Cell::default().span(), 1);
+}
+
+#[test]
+fn set_span_keeps_wide_char_flag_in_sync() {
+    // Every existing CJK consumer reads the boolean WIDE_CHAR flag directly;
+    // it must stay set exactly when span == 2, and cleared otherwise, so
+    // those consumers keep working unmodified during the transition to
+    // span-aware code.
+    let mut cell = Cell::default();
+
+    cell.set_span(2);
+    assert!(cell.flags().contains(Flags::WIDE_CHAR));
+
+    cell.set_span(1);
+    assert!(!cell.flags().contains(Flags::WIDE_CHAR));
+
+    cell.set_span(4);
+    assert!(!cell.flags().contains(Flags::WIDE_CHAR));
+
+    cell.set_span(2);
+    assert!(cell.flags().contains(Flags::WIDE_CHAR));
+}
+
+#[test]
+fn set_span_does_not_disturb_unrelated_flags() {
+    let mut cell = Cell::default();
+    cell.flags_mut().insert(Flags::BOLD | Flags::UNDERLINE);
+
+    cell.set_span(5);
+
+    assert_eq!(cell.span(), 5);
+    assert!(cell.flags().contains(Flags::BOLD));
+    assert!(cell.flags().contains(Flags::UNDERLINE));
+}

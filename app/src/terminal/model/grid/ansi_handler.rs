@@ -298,7 +298,7 @@ impl ansi::Handler for GridHandler {
             }
 
             // Write full width glyph to current cursor cell.
-            self.write_at_cursor(c).flags.insert(Flags::WIDE_CHAR);
+            self.write_at_cursor(c).set_span(2);
 
             // Write spacer to cell following the wide glyph.
             self.move_cursor_forward(|cursor| {

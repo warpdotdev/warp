@@ -125,11 +125,16 @@ impl Iterator for RowIterator<'_> {
                 _ => {}
             }
 
-            // If the grapheme takes up two cells, mark the following cell as
-            // a spacer.
-            if cell_width == 2 {
-                row[idx].flags.insert(Flags::WIDE_CHAR);
-                row[idx + 1].flags.insert(Flags::WIDE_CHAR_SPACER);
+            // If the grapheme takes up more than one cell, record its span
+            // on the base cell and mark every trailing cell in its span as
+            // a spacer. (Previously only handled cell_width == 2, marking a
+            // single following cell; generalized here to any span 1..=8 —
+            // see Cell::set_span.)
+            if cell_width > 1 {
+                row[idx].set_span(cell_width);
+                for offset in 1..cell_width as usize {
+                    row[idx + offset].flags.insert(Flags::WIDE_CHAR_SPACER);
+                }
             }
 
             current_offset += grapheme.len();

@@ -328,6 +328,70 @@ impl Cell {
         &mut self.flags
     }
 
+    /// Returns the number of terminal cells (including this one) occupied by
+    /// this cell's grapheme cluster: 1 for a normal cell, up to 8 for a
+    /// wide/Indic cluster. Encoded in the top 3 bits (13-15) of [`Flags`],
+    /// which are otherwise unused — this keeps `Cell` at its documented
+    /// 24-byte layout (see the struct doc comment).
+    ///
+    /// `Flags::WIDE_CHAR` is kept in sync for span == 2 (see [`Self::set_span`])
+    /// so every pre-existing consumer that reads the boolean CJK flag
+    /// continues to work unmodified. The reverse must also hold: code that
+    /// still sets `WIDE_CHAR` directly (without going through `set_span`,
+    /// e.g. existing tests that build a `Cell` by hand) leaves the span
+    /// bits at 0 — so if they're unset, fall back to the boolean flag
+    /// rather than reporting a bare cell as span 1.
+    #[inline]
+    pub fn span(&self) -> u8 {
+        let encoded = (((self.flags.bits() >> Self::SPAN_SHIFT) & Self::SPAN_MASK_BITS) + 1) as u8;
+        if encoded > 1 {
+            encoded
+        } else if self.flags.contains(Flags::WIDE_CHAR) {
+            2
+        } else {
+            1
+        }
+    }
+
+    /// Sets this cell's span (see [`Self::span`]). `span` must be in `1..=8`.
+    #[inline]
+    pub fn set_span(&mut self, span: u8) {
+        debug_assert!(
+            (1..=8).contains(&span),
+            "Cell span must be 1..=8, got {span}"
+        );
+        let cleared = self.flags.bits() & !(Self::SPAN_MASK_BITS << Self::SPAN_SHIFT);
+        let encoded = ((span - 1) as u16 & Self::SPAN_MASK_BITS) << Self::SPAN_SHIFT;
+        self.flags = Flags::from_bits_retain(cleared | encoded);
+        // Backward compat: WIDE_CHAR is the boolean flag every existing CJK
+        // consumer already reads; keep it set exactly when span == 2.
+        if span == 2 {
+            self.flags.insert(Flags::WIDE_CHAR);
+        } else {
+            self.flags.remove(Flags::WIDE_CHAR);
+        }
+    }
+
+    /// Returns this cell's flags with the span encoding (bits 13-15)
+    /// cleared. Useful for tests/diagnostics that compare flags built via
+    /// the legacy direct-flag pattern (e.g. `flags.insert(Flags::WIDE_CHAR)`)
+    /// against flags produced via [`Self::set_span`] — the two carry the
+    /// same *semantic* information but not necessarily the same bits, since
+    /// only `set_span` populates the span field. Compare span separately
+    /// via [`Self::span`].
+    #[inline]
+    pub fn flags_ignoring_span(&self) -> Flags {
+        Flags::from_bits_retain(self.flags.bits() & !(Self::SPAN_MASK_BITS << Self::SPAN_SHIFT))
+    }
+
+    /// Bit width of the span encoding (3 bits -> values 0..=7, biased by +1
+    /// to represent span 1..=8).
+    const SPAN_MASK_BITS: u16 = 0b111;
+    /// Starting bit position (13) of the span encoding within [`Flags`]'s
+    /// 16 bits; bits 13-15 are unused by any named flag (see the bitflags
+    /// block above, which tops out at `HAS_CURSOR` = bit 12).
+    const SPAN_SHIFT: u16 = 13;
+
     #[inline]
     pub(crate) fn reset(&mut self, template: &Self) {
         *self = Cell {
