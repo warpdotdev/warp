@@ -48,6 +48,7 @@ fn create_start_agent_tool_call_message(
     prompt: &str,
 ) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: String::new(),

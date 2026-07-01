@@ -2149,6 +2149,30 @@ impl AIBlock {
                 .entry(citation.clone())
                 .or_default();
         }
+        // Also register handles for memory citations derived from fetched_memories,
+        // which are synthesized at render time and never go through output.citations.
+        // Only register for the first exchange since that's the only one that shows them.
+        if let Some(conversation) = self.model.conversation(ctx) {
+            let is_first_exchange = conversation
+                .first_exchange()
+                .map(|e| Some(e.id) == self.model.exchange_id(ctx))
+                .unwrap_or(false);
+            if is_first_exchange {
+                for memory in conversation.fetched_memories() {
+                    if memory.memory_store_id.is_empty() || memory.memory_id.is_empty() {
+                        continue;
+                    }
+                    self.state_handles
+                        .footer_citation_chip_handles
+                        .entry(AIAgentCitation::AgentMemory {
+                            memory_store_id: memory.memory_store_id.clone(),
+                            memory_id: memory.memory_id.clone(),
+                            content: memory.content.clone(),
+                        })
+                        .or_default();
+                }
+            }
+        }
 
         // Register element state for reasoning messages and track summarization timing.
         for message in &output.messages {

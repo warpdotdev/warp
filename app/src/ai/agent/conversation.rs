@@ -635,6 +635,7 @@ impl AIConversation {
                 task.reassign_exchange_ids();
             });
         }
+        self.task_store.rebuild_exchange_id_index();
     }
 
     pub fn is_viewing_shared_session(&self) -> bool {
@@ -1210,6 +1211,28 @@ impl AIConversation {
         self.task_store.all_linearized_messages()
     }
 
+    /// Returns the memories the server fetched for this conversation, in the order they first
+    /// appeared across messages (server-side rank order within each message). Re-fetched
+    /// memories are deduped by `(memory_store_id, memory_id)`: the first appearance keeps its
+    /// position while the entry's content/source are updated to the latest occurrence.
+    pub fn fetched_memories(&self) -> Vec<api::message::FetchedMemory> {
+        let mut memories: Vec<api::message::FetchedMemory> = Vec::new();
+        let mut index_by_id: HashMap<(String, String), usize> = HashMap::new();
+        for message in self.task_store.all_linearized_messages() {
+            for memory in &message.fetched_memories {
+                let key = (memory.memory_store_id.clone(), memory.memory_id.clone());
+                match index_by_id.get(&key) {
+                    Some(index) => memories[*index] = memory.clone(),
+                    None => {
+                        index_by_id.insert(key, memories.len());
+                        memories.push(memory.clone());
+                    }
+                }
+            }
+        }
+        memories
+    }
+
     /// Returns all the tasks in this conversation.
     ///
     /// Note that until we've fully migrated to the multi-agent endpoint, in reality, each
@@ -1466,12 +1489,7 @@ impl AIConversation {
 
     #[cfg_attr(target_family = "wasm", allow(unused))]
     pub fn exchange_with_id(&self, exchange_id: AIAgentExchangeId) -> Option<&AIAgentExchange> {
-        for task in self.task_store.tasks() {
-            if let Some(exchange) = task.exchanges().find(|exchange| exchange.id == exchange_id) {
-                return Some(exchange);
-            }
-        }
-        None
+        self.task_store.exchange_by_id(exchange_id)
     }
 
     /// Returns the exchange that preceded the exchange with the given id, if there is one.

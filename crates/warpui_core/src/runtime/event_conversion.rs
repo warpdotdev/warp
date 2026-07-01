@@ -1,12 +1,15 @@
 //! Conversion from raw crossterm input events to the
 //! [`TuiEvent`](crate::elements::tui::TuiEvent) vocabulary.
 
+use std::time::Duration;
+
+use instant::Instant;
 use ratatui::crossterm::event::{
     Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
     MouseEvent, MouseEventKind,
 };
 
-use crate::elements::tui::{TuiEvent, TuiPoint, TuiScrollDelta};
+use crate::elements::tui::{TuiEvent, TuiPoint, TuiPointExt, TuiScrollDelta};
 use crate::event::{KeyEventDetails, ModifiersState};
 use crate::keymap::Keystroke;
 
@@ -163,6 +166,88 @@ fn key_without_modifiers(code: KeyCode) -> Option<String> {
     match code {
         KeyCode::Char(char) => Some(char.to_lowercase().to_string()),
         _ => None,
+    }
+}
+
+/// Maximum delay between consecutive presses of the same button for them to
+/// count as part of the same multi-click (double/triple). Roughly the standard
+/// desktop double-click window.
+const MULTI_CLICK_INTERVAL: Duration = Duration::from_millis(400);
+
+/// The pointer button a [`ClickTracker`] is tracking a multi-click run for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClickButton {
+    Left,
+    Middle,
+    Right,
+}
+
+/// Synthesizes multi-click counts for mouse presses.
+///
+/// crossterm only reports raw button presses, so the `*MouseDown` events arrive
+/// with `click_count: 1`. This tracker remembers the previous press and, when
+/// the next one is the **same button**, lands within [`MULTI_CLICK_INTERVAL`],
+/// and on (or within one cell of) the same position, escalates the count
+/// `1 -> 2 -> 3` before wrapping back to `1`. Anything else — a different
+/// button, a slower press, or a press elsewhere — resets to a single click.
+/// This mirrors the GUI, where the OS supplies a click count for every button.
+#[derive(Default)]
+pub(crate) struct ClickTracker {
+    last: Option<LastClick>,
+}
+
+#[derive(Clone, Copy)]
+struct LastClick {
+    button: ClickButton,
+    at: Instant,
+    position: TuiPoint,
+    count: u32,
+}
+
+impl ClickTracker {
+    /// Fills in the synthesized `click_count` on any mouse-down event, leaving
+    /// non-button events (scroll, move, up, drag) untouched.
+    pub(crate) fn annotate(&mut self, event: &mut TuiEvent, now: Instant) {
+        let (button, position, click_count) = match event {
+            TuiEvent::LeftMouseDown {
+                position,
+                click_count,
+                ..
+            } => (ClickButton::Left, *position, click_count),
+            TuiEvent::MiddleMouseDown {
+                position,
+                click_count,
+                ..
+            } => (ClickButton::Middle, *position, click_count),
+            TuiEvent::RightMouseDown {
+                position,
+                click_count,
+                ..
+            } => (ClickButton::Right, *position, click_count),
+            _ => return,
+        };
+        *click_count = self.register(button, position, now);
+    }
+
+    fn register(&mut self, button: ClickButton, position: TuiPoint, now: Instant) -> u32 {
+        let count = match self.last {
+            Some(last)
+                if last.button == button
+                    && now.duration_since(last.at) <= MULTI_CLICK_INTERVAL
+                    && last.position.is_adjacent(position) =>
+            {
+                // Wrap 3 -> 1 so a fourth fast click starts a fresh cycle.
+                last.count % 3 + 1
+            }
+            _ => 1,
+        };
+        self.last = Some(LastClick {
+            button,
+            at: now,
+            position,
+            count,
+        });
+        count
     }
 }
 

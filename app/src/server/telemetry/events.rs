@@ -990,6 +990,12 @@ pub enum AgentModeCitation {
         #[serde(skip_serializing)]
         url: String,
     },
+    /// A fetched memory surfaced as a citation so we can track whether memory-backed
+    /// responses are shown to users and whether users open those memory citations.
+    AgentMemory {
+        memory_store_id: String,
+        memory_id: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

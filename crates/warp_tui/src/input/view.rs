@@ -24,17 +24,21 @@ use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::render::model::{
-    char_cell_display_width, char_cell_line_gap_position, char_cell_line_row_starts,
+    char_cell_display_width, char_cell_line_gap_position, char_cell_line_row_starts, ColumnUnit,
+    SoftWrapPoint,
 };
 use warp_editor::selection::TextUnit;
 use warpui_core::elements::tui::{
     Modifier, TuiBuffer, TuiColumn, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiParentElement, TuiRect, TuiSize, TuiStyle, TuiText,
+    TuiLayoutContext, TuiParentElement, TuiPoint, TuiRect, TuiRectExt, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, ViewContext};
 
 use super::kill_buffer::KillBuffer;
+
+/// Logical rows scrolled per mouse-wheel notch (matches `TuiScrollable`).
+const WHEEL_STEP: isize = 2;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // View events
@@ -110,6 +114,21 @@ pub enum TuiInputAction {
     Undo,
     /// Redo (`Ctrl+Shift+Z`).
     Redo,
+    /// Place the cursor / begin a character selection at `offset` (single click).
+    SelectionStartAt { offset: CharOffset },
+    /// Extend the active selection's head to `offset` (shift-click).
+    SelectionExtendTo { offset: CharOffset },
+    /// Select the word at `offset` (double click).
+    SelectWordAt { offset: CharOffset },
+    /// Select the line at `offset` (triple click).
+    SelectLineAt { offset: CharOffset },
+    /// Update the in-progress drag selection to `offset` (mouse drag).
+    SelectionUpdateTo { offset: CharOffset },
+    /// Finish the in-progress drag selection (mouse up).
+    SelectionEnd,
+    /// Scroll the viewport by `rows` visual rows without moving the cursor
+    /// (negative scrolls toward the top). Driven by the mouse wheel.
+    Scroll { rows: isize },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,6 +145,9 @@ pub struct TuiInputView {
     scroll_offset: u32,
     /// Maximum number of visible rows before the input scrolls.
     max_visible_rows: u32,
+    /// Whether a mouse drag-selection is in progress (set on mouse-down, cleared
+    /// on mouse-up). Mirrors the GUI editor's `is_selecting`.
+    is_selecting: bool,
 }
 
 impl Entity for TuiInputView {
@@ -150,12 +172,44 @@ impl TuiInputView {
             kill_buffer: KillBuffer::default(),
             scroll_offset: 0,
             max_visible_rows: 6,
+            is_selecting: false,
         }
     }
 
     /// Returns a handle to the backing [`CodeEditorModel`].
     pub fn model(&self) -> &ModelHandle<CodeEditorModel> {
         &self.model
+    }
+
+    /// Builds the concrete `TuiInputElement` for this frame. `render` wraps it in
+    /// a `Box`; tests construct it directly to exercise mouse dispatch.
+    ///
+    /// Only width-independent state is gathered here; width-dependent layout (row
+    /// wrapping, cursor placement, selection spans) happens later in
+    /// `TuiInputElement::layout`, the first point that knows the terminal width.
+    fn render_element(&self, ctx: &AppContext) -> TuiInputElement {
+        let text = self.plain_text(ctx);
+        let cursor_offset = self.cursor_offset(ctx);
+        let sel_char_range = self.selection_range(ctx).map(|r| {
+            let start = r.start.as_usize().saturating_sub(1);
+            let end = r.end.as_usize().saturating_sub(1);
+            (start, end)
+        });
+
+        TuiInputElement {
+            model: self.model.clone(),
+            text,
+            cursor_offset,
+            sel_char_range,
+            scroll_offset: self.scroll_offset,
+            max_visible_rows: self.max_visible_rows,
+            is_selecting: self.is_selecting,
+            column: TuiColumn::new(),
+            cursor_col: 0,
+            cursor_row_in_view: 0,
+            cursor_visible: false,
+            selected_spans: Vec::new(),
+        }
     }
 }
 
@@ -165,30 +219,7 @@ impl TuiView for TuiInputView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        // Gather width-independent state. Width-dependent layout (row wrapping,
-        // cursor placement, selection spans) is deferred to
-        // `TuiInputElement::layout`, the first point that knows the terminal
-        // width (from the layout constraint).
-        let text = self.plain_text(ctx);
-        let cursor_offset = self.cursor_offset(ctx);
-        let sel_char_range = self.selection_range(ctx).map(|r| {
-            let start = r.start.as_usize().saturating_sub(1);
-            let end = r.end.as_usize().saturating_sub(1);
-            (start, end)
-        });
-
-        Box::new(TuiInputElement {
-            model: self.model.clone(),
-            text,
-            cursor_offset,
-            sel_char_range,
-            scroll_offset: self.scroll_offset,
-            max_visible_rows: self.max_visible_rows,
-            column: TuiColumn::new(),
-            cursor_col: 0,
-            cursor_row_in_view: 0,
-            selected_spans: Vec::new(),
-        })
+        Box::new(self.render_element(ctx))
     }
 }
 
@@ -316,6 +347,44 @@ impl TypedActionView for TuiInputView {
             TuiInputAction::Redo => {
                 self.model.update(ctx, |m, ctx| m.redo(ctx));
             }
+            TuiInputAction::SelectionStartAt { offset } => {
+                self.is_selecting = true;
+                self.model
+                    .update(ctx, |m, ctx| m.select_at(*offset, false, ctx));
+            }
+            TuiInputAction::SelectionExtendTo { offset } => {
+                self.model
+                    .update(ctx, |m, ctx| m.set_last_selection_head(*offset, ctx));
+            }
+            TuiInputAction::SelectWordAt { offset } => {
+                self.is_selecting = true;
+                self.model
+                    .update(ctx, |m, ctx| m.select_word_at(*offset, false, ctx));
+            }
+            TuiInputAction::SelectLineAt { offset } => {
+                self.is_selecting = true;
+                self.model
+                    .update(ctx, |m, ctx| m.select_line_at(*offset, false, ctx));
+            }
+            TuiInputAction::SelectionUpdateTo { offset } => {
+                if self.is_selecting {
+                    self.model
+                        .update(ctx, |m, ctx| m.update_pending_selection(*offset, ctx));
+                }
+            }
+            TuiInputAction::SelectionEnd => {
+                if self.is_selecting {
+                    self.is_selecting = false;
+                    self.model.update(ctx, |m, ctx| m.end_selection(ctx));
+                }
+            }
+            TuiInputAction::Scroll { rows } => {
+                // Wheel scrolling moves the viewport only; it must NOT snap back
+                // to the cursor, so it returns early (skipping `scroll_to_cursor`).
+                self.scroll_by(*rows, ctx);
+                ctx.notify();
+                return;
+            }
         }
 
         let visible_rows = cmp::min(self.visual_line_count(ctx), self.max_visible_rows);
@@ -405,6 +474,17 @@ impl TuiInputView {
         } else if cursor_row >= self.scroll_offset + visible_rows {
             self.scroll_offset = cursor_row.saturating_sub(visible_rows - 1);
         }
+    }
+
+    /// Scrolls the viewport by `rows` visual rows (negative scrolls toward the
+    /// top), clamped to `[0, max_scroll]`. Independent of the cursor, so callers
+    /// must not follow it with `scroll_to_cursor`.
+    fn scroll_by(&mut self, rows: isize, ctx: &AppContext) {
+        let lines = self.visual_line_count(ctx);
+        let visible_rows = cmp::min(lines, self.max_visible_rows).max(1);
+        let max_scroll = lines.saturating_sub(visible_rows) as isize;
+        let new_offset = (self.scroll_offset as isize + rows).clamp(0, max_scroll);
+        self.scroll_offset = new_offset as u32;
     }
 
     // ── Submit ────────────────────────────────────────────────────────────────
@@ -612,12 +692,18 @@ struct TuiInputElement {
     scroll_offset: u32,
     /// Maximum number of visible rows before the input scrolls.
     max_visible_rows: u32,
+    /// Whether a mouse drag-selection is in progress (captured from the view at
+    /// render time); gates drag/up handling in `dispatch_event`.
+    is_selecting: bool,
     /// Visible rows, built during `layout`.
     column: TuiColumn,
     /// The cursor's 0-based column within the visible area (set during `layout`).
     cursor_col: u16,
     /// The cursor's 0-based row within the visible area (set during `layout`).
     cursor_row_in_view: u16,
+    /// Whether the cursor's visual row falls within the scrolled viewport; when
+    /// false (e.g. after wheel-scrolling away) no terminal cursor is drawn.
+    cursor_visible: bool,
     /// Selected spans `(row_in_view, start_col, exclusive_end_col)` (set during `layout`).
     selected_spans: Vec<(u16, u16, u16)>,
 }
@@ -629,6 +715,8 @@ impl TuiInputElement {
         let (cursor_visual_row, cursor_col) =
             char_cell_cursor_pos(&self.text, self.cursor_offset, terminal_width);
         let cursor_row_in_view = cursor_visual_row.saturating_sub(self.scroll_offset);
+        let cursor_visible = cursor_visual_row >= self.scroll_offset
+            && cursor_visual_row < self.scroll_offset + visible_rows;
 
         let rows_with_offsets = build_visual_rows_with_offsets(&self.text, terminal_width);
         let visible_start = self.scroll_offset as usize;
@@ -683,7 +771,102 @@ impl TuiInputElement {
         self.column = column;
         self.cursor_col = cursor_col as u16;
         self.cursor_row_in_view = cursor_row_in_view as u16;
+        self.cursor_visible = cursor_visible;
         self.selected_spans = selected_spans;
+    }
+
+    /// Maps a terminal cell `position` to the 1-based buffer [`CharOffset`] under
+    /// it (the gap the cursor should move to for a click/drag at that cell).
+    ///
+    /// The mouse reports an absolute terminal cell, so getting to a buffer offset
+    /// crosses three coordinate spaces:
+    ///   1. screen cell (`position`) -> row/col relative to the input's `area`,
+    ///   2. + `scroll_offset` -> the buffer's *visual* row (undoes scrolling),
+    ///   3. (visual row, col) -> char offset via the char-cell soft-wrap map.
+    ///
+    /// Points outside the input's vertical bounds are intentionally *not* clamped
+    /// to the viewport: a point above the input maps toward row 0 and a point
+    /// below it maps past the last visible row (bounded by the buffer's last
+    /// visual row), so a drag that leaves the input drives auto-scroll.
+    fn offset_at(&self, position: TuiPoint, area: TuiRect, app: &AppContext) -> CharOffset {
+        let inner = self.model.as_ref(app);
+        let render = inner.render_state().as_ref(app);
+
+        // Step 1: row of the pointer within the input, where 0 is the input's top
+        // row. Signed so a point *above* the input (`position.y < area.y`) stays
+        // negative instead of wrapping around at 0.
+        let row_in_view = i64::from(position.y) - i64::from(area.y);
+        // Step 2: the input shows buffer visual rows starting at `scroll_offset`,
+        // so the buffer row under the pointer is `scroll_offset + row_in_view`
+        // (floored at the first row).
+        let visual_row = (i64::from(self.scroll_offset) + row_in_view).max(0) as u32;
+        // ...and capped at the last real visual row, so a drag below the text
+        // resolves to the buffer's end rather than past it.
+        let last_row = render.max_line().as_u32().max(1).saturating_sub(1);
+        let visual_row = visual_row.min(last_row);
+
+        // Column within that row, in display cells (0 is the input's left edge).
+        let col = position.x.saturating_sub(area.x);
+
+        // Step 3: resolve (visual_row, col) to a char offset. The soft-wrap map
+        // clamps the column to the row's end and is 0-based, while the buffer
+        // uses 1-based gap offsets (see the kill-range helpers), so re-add 1.
+        let point = SoftWrapPoint::new(visual_row, ColumnUnit::Chars(col));
+        let zero_based = render.softwrap_point_to_offset(point);
+        CharOffset::from(zero_based.as_usize() + 1)
+    }
+
+    /// Maps a mouse `event` to the [`TuiInputAction`] it should dispatch, or
+    /// `None` when the event should be ignored (a press outside the input, a
+    /// drag/up with no selection in progress, or a non-mouse event).
+    ///
+    /// Mirrors the GUI's `left_mouse_down`/`dragged`/`up` mapping: click count 1
+    /// starts a selection (shift extends), 2 selects a word, 3 selects a line;
+    /// drag updates the pending selection and up ends it.
+    fn mouse_action(
+        &self,
+        event: &TuiEvent,
+        area: TuiRect,
+        app: &AppContext,
+    ) -> Option<TuiInputAction> {
+        match event {
+            TuiEvent::LeftMouseDown {
+                position,
+                modifiers,
+                click_count,
+                is_first_mouse,
+            } => {
+                // The focus-bringing first click has no matching mouse-up, and a
+                // press outside the input must not start a selection.
+                if *is_first_mouse || !area.contains_point(*position) {
+                    return None;
+                }
+                let offset = self.offset_at(*position, area, app);
+                Some(match *click_count {
+                    0 | 1 if modifiers.shift => TuiInputAction::SelectionExtendTo { offset },
+                    0 | 1 => TuiInputAction::SelectionStartAt { offset },
+                    2 => TuiInputAction::SelectWordAt { offset },
+                    _ => TuiInputAction::SelectLineAt { offset },
+                })
+            }
+            // Drags continue even outside the input's bounds (drag-to-scroll),
+            // but only while a selection that began inside it is active.
+            TuiEvent::LeftMouseDragged { position, .. } if self.is_selecting => {
+                Some(TuiInputAction::SelectionUpdateTo {
+                    offset: self.offset_at(*position, area, app),
+                })
+            }
+            TuiEvent::LeftMouseUp { .. } if self.is_selecting => Some(TuiInputAction::SelectionEnd),
+            // Mouse wheel over the input scrolls the viewport (cursor unmoved).
+            TuiEvent::ScrollWheel {
+                position, delta, ..
+            } if area.contains_point(*position) => Some(TuiInputAction::Scroll {
+                // crossterm reports ScrollUp as +1 row / ScrollDown as -1; negate
+                // so wheel-up scrolls toward the top (matches `TuiScrollable`).
+                rows: -(delta.1 * WHEEL_STEP),
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -728,7 +911,10 @@ impl TuiElement for TuiInputElement {
     }
 
     fn cursor_position(&self, area: TuiRect, _ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
-        if self.cursor_col >= area.width || self.cursor_row_in_view >= area.height {
+        if !self.cursor_visible
+            || self.cursor_col >= area.width
+            || self.cursor_row_in_view >= area.height
+        {
             return None;
         }
         Some((self.cursor_col, self.cursor_row_in_view))
@@ -743,6 +929,11 @@ impl TuiElement for TuiInputElement {
         app: &AppContext,
     ) -> bool {
         if self.column.dispatch_event(event, area, event_ctx, ctx, app) {
+            return true;
+        }
+
+        if let Some(action) = self.mouse_action(event, area, app) {
+            event_ctx.dispatch_typed_action(action);
             return true;
         }
 

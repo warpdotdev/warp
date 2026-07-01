@@ -976,8 +976,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
-    #[cfg(target_os = "macos")]
-    FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     FeatureFlag::DragTabsToWindows,
@@ -1087,7 +1085,6 @@ impl FeatureFlag {
             GitOperationsInCodeReview => Some(
                 "Enables commit, push, and create-PR actions directly from the code review panel.",
             ),
-            GroupedTabs => Some("Enables organizing tabs into named, collapsible groups."),
             AsyncFind => Some(
                 "Runs terminal find on a background thread to keep the UI responsive while searching large outputs.",
             ),

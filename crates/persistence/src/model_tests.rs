@@ -11,6 +11,7 @@ fn parentless_task(id: &str, message_count: usize) -> api::Task {
         dependencies: None,
         messages: (0..message_count)
             .map(|i| api::Message {
+                fetched_memories: vec![],
                 id: format!("{id}-msg-{i}"),
                 task_id: id.to_string(),
                 server_message_data: String::new(),

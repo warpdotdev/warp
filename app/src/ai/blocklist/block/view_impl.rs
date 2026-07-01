@@ -678,6 +678,15 @@ pub fn render_citation(
             let name = url.clone();
             (Some(icon), name)
         }
+        AIAgentCitation::AgentMemory { content, .. } => {
+            let icon = Icon::Cognition.to_warpui_icon(theme.foreground()).finish();
+            let name = if content.is_empty() {
+                String::from("Memory")
+            } else {
+                content.clone()
+            };
+            (Some(icon), name)
+        }
     };
 
     // Shorten the name to 30 chars.

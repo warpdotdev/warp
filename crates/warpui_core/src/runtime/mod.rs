@@ -27,6 +27,7 @@ use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
 
+use instant::Instant;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyModifiers,
@@ -45,6 +46,7 @@ mod event_conversion;
 mod renderer;
 
 pub use event_conversion::crossterm_event_to_tui_event;
+use event_conversion::ClickTracker;
 pub use renderer::TuiFrameRenderer;
 
 /// The host terminal the runtime draws to and reads input from. Abstracted so
@@ -71,6 +73,9 @@ struct TuiScreen<T, R: TuiTerminal> {
     presenter: TuiPresenter,
     renderer: TuiFrameRenderer,
     terminal: R,
+    /// Synthesizes multi-click counts for left mouse presses, which crossterm
+    /// does not report.
+    click_tracker: ClickTracker,
 }
 
 impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
@@ -81,6 +86,7 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             presenter: TuiPresenter::new(),
             renderer: TuiFrameRenderer::new(),
             terminal,
+            click_tracker: ClickTracker::default(),
         }
     }
 
@@ -101,6 +107,15 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         let frame = self.presenter.present(ctx, &self.root_view, area);
         let mut writer = self.terminal.writer();
         self.renderer.draw(&mut writer, &frame.buffer, frame.cursor)
+    }
+
+    /// Converts a raw crossterm event into the TUI vocabulary, annotating left
+    /// mouse-down events with a synthesized multi-click count (crossterm only
+    /// reports raw presses). Returns `None` for events with no TUI equivalent.
+    fn convert_event(&mut self, event: CrosstermEvent) -> Option<TuiEvent> {
+        let mut tui_event = crossterm_event_to_tui_event(event)?;
+        self.click_tracker.annotate(&mut tui_event, Instant::now());
+        Some(tui_event)
     }
 
     /// Dispatches a converted input event into the cached element tree, returning
@@ -258,8 +273,8 @@ where
         match event {
             CrosstermEvent::Resize(_, _) => self.dirty.set(true),
             event => {
-                if let Some(tui_event) = crossterm_event_to_tui_event(event) {
-                    let screen = &mut self.screen;
+                let screen = &mut self.screen;
+                if let Some(tui_event) = screen.convert_event(event) {
                     let handled = app.update(|ctx| screen.dispatch_event(ctx, &tui_event));
                     if handled {
                         self.dirty.set(true);
@@ -442,8 +457,9 @@ pub fn spawn_tui_driver<T: TuiView>(
                 match event {
                     CrosstermEvent::Resize(_, _) => ctx.invalidate_all_views(),
                     event => {
-                        if let Some(tui_event) = crossterm_event_to_tui_event(event) {
-                            screen.borrow_mut().dispatch_event(ctx, &tui_event);
+                        let mut screen = screen.borrow_mut();
+                        if let Some(tui_event) = screen.convert_event(event) {
+                            screen.dispatch_event(ctx, &tui_event);
                         }
                     }
                 }

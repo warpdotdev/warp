@@ -663,6 +663,7 @@ default = [
     "vertical_tabs",
     "vertical_tabs_summary_mode",
     "tab_configs",
+    "grouped_tabs",
     "agent_harness",
     "hoa_onboarding_flow",
     "hoa_remote_control",

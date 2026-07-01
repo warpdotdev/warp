@@ -128,6 +128,7 @@ fn ai_conversation_new_restored_preserves_last_event_sequence() {
     let task = api::Task {
         id: "root".to_string(),
         messages: vec![api::Message {
+            fetched_memories: vec![],
             id: "m1".to_string(),
             task_id: "root".to_string(),
             server_message_data: String::new(),
