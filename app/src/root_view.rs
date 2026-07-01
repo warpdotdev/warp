@@ -2842,9 +2842,6 @@ impl RootView {
         true
     }
 
-    /// Handles a `warp://settings` deeplink (bare, `?q=`, or `?widget=`) in an
-    /// existing window, mapping the [`OpenSettingsArgs`] variant to its
-    /// workspace action.
     pub fn open_settings_in_existing_window(
         &mut self,
         args: &OpenSettingsArgs,
