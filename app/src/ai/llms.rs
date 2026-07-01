@@ -5,6 +5,7 @@ use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndp
 pub use ai::LLMId;
 use parking_lot::FairMutex;
 use serde::{de, Deserialize, Serialize};
+use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
 use warp_core::user_preferences::GetUserPreferences;
 use warp_multi_agent_api as api;

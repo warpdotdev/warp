@@ -689,7 +689,6 @@ default = [
     "handoff_cloud_cloud",
     "remote_codebase_indexing",
     "solo_user_byok",
-    "custom_inference_endpoints",
     "custom_model_routers",
     "supergrok",
     "billing_and_usage_page_v2",
@@ -1007,7 +1006,6 @@ hoa_notifications = []
 open_code_notifications = []
 transfer_control_tool = []
 skip_firebase_anonymous_user = []
-custom_inference_endpoints = []
 custom_model_routers = []
 solo_user_byok = []
 billing_and_usage_page_v2 = []

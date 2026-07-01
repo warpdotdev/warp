@@ -289,9 +289,8 @@ impl RequestParams {
             geap_binding,
         );
         let is_custom_inference_enabled = user_workspaces.is_custom_inference_enabled(app);
-        let custom_model_providers = 
-                api_key_manager.custom_model_providers_for_request(is_custom_inference_enabled)
-            .flatten();
+        let custom_model_providers =
+            api_key_manager.custom_model_providers_for_request(is_custom_inference_enabled);
         let custom_model_routers = FeatureFlag::CustomModelRouters.is_enabled().then(|| {
             LLMPreferences::as_ref(app).custom_model_routers_for_request(
                 &request_input.model_id,
@@ -300,6 +299,7 @@ impl RequestParams {
         });
         let allow_use_of_warp_credits = *AISettings::as_ref(app).can_use_warp_credits_for_fallback;
 
+        let app_execution_mode = AppExecutionMode::as_ref(app);
         let autonomy_level = if app_execution_mode.is_autonomous() {
             warp_multi_agent_api::AutonomyLevel::Unsupervised
         } else {
