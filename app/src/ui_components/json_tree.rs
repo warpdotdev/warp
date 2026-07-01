@@ -213,7 +213,7 @@ pub fn format_number(n: &serde_json::Number) -> String {
 /// - `colors`       — pre-resolved theme colors.
 /// - `on_toggle`    — called with the path of a clicked collapsible node.
 /// - `on_copy_json` — called with the path and value when "Copy JSON" is
-///                    activated via right-click on a row.
+///   activated via right-click on a row.
 /// - `appearance`   — provides font families and sizes.
 pub fn render_json_tree(
     root: &serde_json::Value,

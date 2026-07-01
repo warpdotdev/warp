@@ -273,8 +273,8 @@ fn path_segments_hash_and_eq_correctly() {
     map.insert(path_key.clone(), true);
     map.insert(path_idx.clone(), false);
 
-    assert_eq!(map[&path_key], true);
-    assert_eq!(map[&path_idx], false);
+    assert!(map[&path_key]);
+    assert!(!map[&path_idx]);
 
     // A different path does not collide.
     let path_other = vec![PathSegment::Key("bar".to_string())];
