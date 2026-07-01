@@ -311,26 +311,47 @@ pub fn app_group_container_path() -> Option<PathBuf> {
 pub fn bundled_resources_dir() -> Option<PathBuf> {
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            crate::macos::get_bundle_path().ok()
-                .map(|bundle_path| {
-                    PathBuf::from(bundle_path)
-                        .join("Contents")
-                        .join("Resources")
-                })
+            // The GUI app ships resources inside `<App>.app/Contents/Resources`,
+            // resolved via NSBundle. Standalone console binaries (e.g. the
+            // `warp_tui` build) are not packaged in an `.app`, so when the
+            // NSBundle-derived directory is absent we fall back to a `resources/`
+            // directory next to the executable — matching Linux/Windows and the
+            // remote-server daemon layout, where the tarball ships `resources/`
+            // as a sibling of the binary.
+            let bundle_resources = crate::macos::get_bundle_path().ok().map(|bundle_path| {
+                PathBuf::from(bundle_path)
+                    .join("Contents")
+                    .join("Resources")
+            });
+            match bundle_resources {
+                Some(dir) if dir.is_dir() => Some(dir),
+                _ => exe_relative_resources_dir(),
+            }
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-            std::env::current_exe()
-                .ok()
-                .and_then(|executable| std::fs::canonicalize(executable).ok())
-                .and_then(|executable| executable.parent().map(|parent| parent.join("resources")))
+            exe_relative_resources_dir()
         } else if #[cfg(target_os = "windows")] {
-            std::env::current_exe()
-                .ok()
-                .and_then(|executable| std::fs::canonicalize(executable).ok())
-                .and_then(|executable| executable.parent().map(|parent| parent.join("resources")))
+            exe_relative_resources_dir()
         } else {
             None
         }
     }
+}
+
+/// Returns a `resources/` directory located next to the current executable.
+///
+/// Used directly on Linux/Windows, and as the standalone-binary fallback on
+/// macOS (see [`bundled_resources_dir`]).
+#[cfg(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
+fn exe_relative_resources_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|executable| std::fs::canonicalize(executable).ok())
+        .and_then(|executable| executable.parent().map(|parent| parent.join("resources")))
 }
 
 #[cfg(all(test, feature = "local_fs"))]
