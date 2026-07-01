@@ -174,6 +174,8 @@ impl RenderableAction {
         let mut has_header = false;
         let mut content = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         if let Some(header) = self.header {
+            let header =
+                header.with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(7.)));
             content.add_child(Clipped::new(header.render(app)).finish());
             has_header = true;
         }
@@ -193,7 +195,7 @@ impl RenderableAction {
                     .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
                     .with_vertical_padding(4.)
                     .with_background(theme.surface_1())
-                    .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
+                    .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(7.)))
                     .finish(),
             );
         }
