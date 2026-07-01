@@ -471,7 +471,6 @@ bundled_skills = []
 supergrok = []
 gemini_enterprise = []
 agent_mode = []
-agent_mode_computer_use = []
 agent_mode_debug = []
 agent_mode_primary_xml = []
 agent_mode_pre_plan_xml = []
@@ -614,7 +613,6 @@ default = [
     "cloud_mode",
     "cloud_mode_from_local_session",
     "cloud_mode_image_context",
-    "agent_mode_computer_use",
     "oz_platform_skills",
     "oz_identity_federation",
     "sync_ambient_plans",

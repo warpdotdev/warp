@@ -326,10 +326,9 @@ impl RequestParams {
             .and_then(|s| s.parse().ok())
             .unwrap_or_default();
         let is_ambient_agent = conversation.ambient_agent_task_id.is_some();
-        let computer_use_enabled = FeatureFlag::AgentModeComputerUse.is_enabled()
-            && BlocklistAIPermissions::as_ref(app)
-                .get_computer_use_setting(app, terminal_view_id)
-                .is_enabled()
+        let computer_use_enabled = BlocklistAIPermissions::as_ref(app)
+            .get_computer_use_setting(app, terminal_view_id)
+            .is_enabled()
             && computer_use::is_supported_on_current_platform()
             && (FeatureFlag::LocalComputerUse.is_enabled() || is_ambient_agent);
         let ask_user_question_enabled = BlocklistAIPermissions::as_ref(app)

@@ -569,9 +569,6 @@ pub enum FeatureFlag {
     /// Enables agent tips displayed below the warping indicator in Agent Mode.
     AgentTips,
 
-    /// Allows agent mode to use computer use tools.
-    AgentModeComputerUse,
-
     /// Enables computer use functionality in local clients.
     LocalComputerUse,
 

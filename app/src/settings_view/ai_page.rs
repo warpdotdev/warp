@@ -2806,9 +2806,7 @@ impl AISettingsPageView {
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
-                if FeatureFlag::AgentModeComputerUse.is_enabled() {
-                    widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
-                }
+                widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
             }
             Some(AISubpage::WarpAgent) => {
                 // Oz page: global toggle + Active AI + Input + Other
@@ -2850,9 +2848,7 @@ impl AISettingsPageView {
                 }
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
-                if FeatureFlag::AgentModeComputerUse.is_enabled() {
-                    widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
-                }
+                widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
             }
             Some(AISubpage::Profiles) => {
                 if !FeatureFlag::UsageBasedPricing.is_enabled() {

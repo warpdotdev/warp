@@ -5833,9 +5833,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::CloudAgentCapacityModalUpgradeClicked => {
                 EnablementState::Flag(FeatureFlag::CloudMode)
             }
-            Self::ComputerUseApproved | Self::ComputerUseCancelled => {
-                EnablementState::Flag(FeatureFlag::AgentModeComputerUse)
-            }
+            Self::ComputerUseApproved | Self::ComputerUseCancelled => EnablementState::Always,
             Self::FreeTierLimitHitInterstitialDisplayed { .. } => EnablementState::Always,
             Self::FreeTierLimitHitInterstitialUpgradeButtonClicked { .. } => {
                 EnablementState::Always
