@@ -2936,7 +2936,7 @@ impl Block {
     pub(super) fn apply_precmd(&mut self, data: PromptMetadata) {
         record_trace_event!("command_execution:block:precmd");
         let is_after_in_band_command = data.was_sent_after_in_band_command();
-        self.header_grid.legacy_precmd(data.clone());
+        self.header_grid.prompt_only_precmd(data.clone());
 
         self.state = BlockState::BeforeExecution;
         self.pwd = data.pwd;
