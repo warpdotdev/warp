@@ -3237,6 +3237,12 @@ impl AIConversation {
         self.todo_lists.last()
     }
 
+    /// Returns the current code review state for this conversation, if any
+    /// comments have ever been sent to the agent.
+    pub fn code_review(&self) -> Option<&CodeReview> {
+        self.code_review.as_ref()
+    }
+
     pub fn active_todo(&self) -> Option<&AIAgentTodo> {
         self.active_todo_list()
             .and_then(|todo_list| todo_list.in_progress_item())

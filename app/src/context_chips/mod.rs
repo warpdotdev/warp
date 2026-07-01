@@ -199,6 +199,9 @@ pub enum ContextChipKind {
     Subshell,
     /// A chip that shows the plan and todo list for the current conversation.
     AgentPlanAndTodoList,
+    /// A chip that shows code review comment resolution progress (resolved /
+    /// total) for the current conversation, and lists the comments in a popup.
+    CodeReviewComments,
 }
 
 impl ContextChipKind {
@@ -361,12 +364,17 @@ impl ContextChipKind {
                 |_| Some(ChipValue::Text(String::new())),
                 RefreshConfig::OnDemandOnly,
             )),
+            Self::CodeReviewComments => Some(ContextChip::builtin(
+                "Code Review Comments",
+                |_| Some(ChipValue::Text(String::new())),
+                RefreshConfig::OnDemandOnly,
+            )),
         }
     }
 
     /// Whether the context chip has a copyable value.
     pub fn is_copyable(&self) -> bool {
-        !matches!(self, Self::AgentPlanAndTodoList)
+        !matches!(self, Self::AgentPlanAndTodoList | Self::CodeReviewComments)
     }
 
     /// Returns a generator to be used for the first fetch of
@@ -417,6 +425,7 @@ impl ContextChipKind {
             Self::Ssh => ChipValue::Text("alice@127.0.0.1".to_string()),
             Self::Subshell => ChipValue::Text("bash".to_string()),
             Self::AgentPlanAndTodoList => ChipValue::Text("Plan and Todo List".to_string()),
+            Self::CodeReviewComments => ChipValue::Text("Code Review Comments".to_string()),
         }
     }
 
@@ -450,6 +459,7 @@ impl ContextChipKind {
             Self::Ssh => prompt_colors.input_prompt_ssh,
             Self::Subshell => prompt_colors.input_prompt_subshell,
             Self::AgentPlanAndTodoList => prompt_colors.input_prompt_agent_mode_hint,
+            Self::CodeReviewComments => prompt_colors.input_prompt_agent_mode_hint,
             Self::Custom { .. } => ColorU::new(255, 255, 255, 255),
         };
 
@@ -543,6 +553,7 @@ impl ContextChipKind {
             Self::GithubPullRequest => Some(Icon::Github),
             Self::KubernetesContext => Some(Icon::Globe),
             Self::AgentPlanAndTodoList => Some(Icon::CheckSkinny),
+            Self::CodeReviewComments => Some(Icon::MessageChatSquare),
             Self::Custom { .. } => None,
         }
     }
@@ -552,6 +563,11 @@ impl ContextChipKind {
 pub fn agent_footer_available_chips() -> Vec<ContextChipKind> {
     let mut chips = available_chips();
     chips.push(ContextChipKind::AgentPlanAndTodoList);
+    // Opt-in chip: offered in the footer configurator only when the flag is on,
+    // and never added to the default left/right selections.
+    if FeatureFlag::CodeReviewCommentsChip.is_enabled() {
+        chips.push(ContextChipKind::CodeReviewComments);
+    }
     chips
 }
 

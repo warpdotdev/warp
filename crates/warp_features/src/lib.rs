@@ -905,6 +905,11 @@ pub enum FeatureFlag {
     /// Enables the `--runner` flag on `run-cloud`, which overrides an agent's
     /// compute (docker image, instance shape, setup commands) by runner ID.
     CloudRunners,
+
+    /// A context chip in the agent view input that shows code review comment
+    /// resolution progress (resolved / total) and lists the comments in a popup.
+    /// Opt-in: not shown in the footer by default.
+    CodeReviewCommentsChip,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -976,6 +981,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
+    FeatureFlag::CodeReviewCommentsChip,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

@@ -48,6 +48,24 @@ impl ReviewComment {
                 .unwrap_or_else(|| "Review Comment".to_string()),
         }
     }
+
+    /// A one-line summary of the comment used for compact list rows.
+    ///
+    /// This shows the actual comment text (rather than its file/line location),
+    /// collapsing any internal whitespace/newlines into single spaces so it renders
+    /// on a single line, and hard-truncating to `max_chars` with an ellipsis as a
+    /// defensive bound. Falls back to [`Self::title`] when the comment has no body.
+    pub fn summary(&self, max_chars: usize) -> String {
+        let collapsed = self
+            .content
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if collapsed.is_empty() {
+            return self.title();
+        }
+        crate::util::truncation::truncate_from_end(&collapsed, max_chars)
+    }
 }
 
 impl From<crate::code_review::comments::AttachedReviewComment> for ReviewComment {
@@ -100,3 +118,7 @@ pub struct ReviewDiff {
     pub file_path: Option<LocalOrRemotePath>,
     pub line_number: Option<usize>,
 }
+
+#[cfg(test)]
+#[path = "comment_tests.rs"]
+mod tests;
