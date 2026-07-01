@@ -1588,10 +1588,17 @@ impl GridHandler {
         });
     }
 
-    /// Determines if the rendered cursor is on a wide character, accounting for marked text.
-    pub fn is_cursor_on_wide_char(&self) -> bool {
+    /// Returns how many cells wide the cursor's current cell is (1 for a
+    /// normal char, up to 8 for a wide/measured Indic cluster), accounting
+    /// for marked text.
+    pub fn cursor_cell_span(&self) -> u8 {
         let cursor_render_point = self.cursor_render_point();
-        self.cell_type(cursor_render_point) == Some(CellType::WideChar)
+        if self.cell_type(cursor_render_point) != Some(CellType::WideChar) {
+            return 1;
+        }
+        self.row(cursor_render_point.row)
+            .and_then(|row| row.get(cursor_render_point.col).map(|cell| cell.span()))
+            .unwrap_or(1)
     }
 
     /// Updates the active [`Cursor`] using the provided `update_cursor_fn`.

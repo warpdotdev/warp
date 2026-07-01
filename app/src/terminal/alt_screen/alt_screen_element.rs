@@ -773,7 +773,7 @@ impl Element for AltScreenElement {
             grid_renderer::render_cursor(
                 &self.grid_render_params,
                 grid.cursor_render_point(),
-                grid.is_cursor_on_wide_char(),
+                grid.cursor_cell_span(),
                 model.alt_screen().cursor_style(),
                 padding_x,
                 adjusted_grid_origin,

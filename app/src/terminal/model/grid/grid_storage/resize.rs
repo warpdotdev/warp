@@ -164,7 +164,13 @@ impl GridStorage {
             let len = min(row.len(), num_wrapped);
 
             // Insert leading spacer when there's not enough room for reflowing wide char.
-            let mut cells = if row[len - 1].flags().contains(Flags::WIDE_CHAR) {
+            //
+            // Checks `span() > 1` (not the legacy `Flags::WIDE_CHAR`
+            // boolean, which `Cell::set_span` only keeps in sync for
+            // span == 2) so this correctly detects any measured Indic
+            // cluster's base landing at the reflow boundary, not just a
+            // fixed CJK width=2 char.
+            let mut cells = if row[len - 1].span() > 1 {
                 num_wrapped -= 1;
 
                 let mut cells = row.front_split_off(len - 1);
@@ -363,7 +369,12 @@ impl GridStorage {
                 };
 
                 // Insert spacer if a wide char would be wrapped into the last column.
-                if row.len() >= columns && row[columns - 1].flags().contains(Flags::WIDE_CHAR) {
+                //
+                // Checks `span() > 1` (not the legacy `Flags::WIDE_CHAR`
+                // boolean) so this correctly detects any measured Indic
+                // cluster's base at the new column boundary, not just a
+                // fixed CJK width=2 char.
+                if row.len() >= columns && row[columns - 1].span() > 1 {
                     let mut spacer = Cell::default();
                     spacer.flags_mut().insert(Flags::LEADING_WIDE_CHAR_SPACER);
 

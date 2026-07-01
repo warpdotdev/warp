@@ -7,6 +7,7 @@ use super::*;
 use crate::features::FeatureFlag;
 use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::cell::{Cell, Flags};
+use crate::terminal::model::char_or_str::CharOrStr;
 use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::{Point, VisiblePoint, VisibleRow};
 use crate::terminal::model::secrets::ObfuscateSecrets;
@@ -1232,6 +1233,88 @@ fn test_empty_row_with_leading_wide_char_spacer_resize_panic() {
     // a panic where we failed to compute the content offset for the cursor, as flat
     // storage would have one too few rows, and the cursor position would be out of bounds.
     grid.resize(SizeInfo::new_without_font_metrics(2, 4));
+}
+
+/// Reports a span equal to a cluster's codepoint count -- used to get a
+/// deterministic, real (not just 1 or 2) multi-cell span through the real
+/// `ansi::Handler::input()` buffering path, without depending on macOS-only
+/// Core Text shaping.
+struct FixedWidthMeasurer;
+
+impl crate::terminal::model::grid::ClusterWidthMeasurer for FixedWidthMeasurer {
+    fn measure_cells(&self, cluster: &str, _cell_width_px: f32) -> u8 {
+        (cluster.chars().count() as u8).clamp(1, 8)
+    }
+}
+
+/// Regression test for the resize/reflow rewrite: `grow_cols`/`shrink_cols`
+/// previously detected a wide char's base cell at the reflow boundary by
+/// checking the legacy `Flags::WIDE_CHAR` boolean, which `Cell::set_span`
+/// only keeps in sync for span == 2. A real measured Indic cluster (span
+/// > 2) landing at the boundary would have been silently split from its
+/// own spacer cells -- corrupting the cluster across the two rows -- since
+/// the old check would never fire for it. This confirms the whole cluster
+/// reflows together (via `span() > 1`) for both growing and shrinking.
+#[test]
+fn test_resize_reflows_variable_width_span_as_one_unit_not_split() {
+    let mut grid = GridHandler::new_for_test_with_measurer(
+        2,
+        6,
+        std::sync::Arc::new(FixedWidthMeasurer),
+    );
+
+    // "క్షి" is a real 4-codepoint Indic cluster (క + ్ + ష + ి); the
+    // FixedWidthMeasurer reports span 4 for it. Fill columns 0-2 with 'a's,
+    // then the cluster: it doesn't fit in the remaining 3 columns of a
+    // 6-column row (needs cols 3-6, only 3-5 exist), so it should already
+    // wrap whole onto row 1 during input, matching the existing
+    // LEADING_WIDE_CHAR_SPACER wrap mechanism.
+    for c in "aaa".chars() {
+        grid.input(c);
+    }
+    for c in "క్షి".chars() {
+        grid.input(c);
+    }
+    grid.input('X'); // Flush the buffered cluster.
+
+    let row0 = grid.row(0).expect("row 0 should exist");
+    assert!(
+        row0.get(3)
+            .is_some_and(|cell| cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)),
+        "the cluster shouldn't fit in row 0's remaining 3 columns, so col 3 \
+         should hold a wrap placeholder"
+    );
+    let row1 = grid.row(1).expect("row 1 should exist");
+    let base = row1.get(0).expect("row 1 should have the wrapped cluster");
+    assert_eq!(base.span(), 4, "the whole cluster should have wrapped together");
+    assert_eq!(base.raw_content(), CharOrStr::Str("క్షి"));
+
+    // Now shrink the grid down to 5 columns (still >= the cluster's own
+    // span of 4, so it CAN fit within one row -- shrinking narrower than
+    // the widest already-stored cluster is a known, out-of-scope edge case
+    // for this rewrite; see the plan's Phase 4.6 execution log). The
+    // cluster should reflow whole rather than being split mid-cluster.
+    grid.resize(SizeInfo::new_without_font_metrics(3, 5));
+
+    // Find whichever row now holds the cluster's base cell and confirm the
+    // full cluster (span=4, all 4 characters) is intact -- not truncated
+    // or split across rows.
+    let mut found_intact_cluster = false;
+    for row_idx in 0..grid.total_rows() {
+        let Some(row) = grid.row(row_idx) else {
+            continue;
+        };
+        if let Some(cell) = row.get(0) {
+            if cell.span() == 4 && cell.raw_content() == CharOrStr::Str("క్షి") {
+                found_intact_cluster = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        found_intact_cluster,
+        "the 4-wide cluster must survive the shrink intact (as one unit), not split"
+    );
 }
 
 fn cell(c: char) -> Cell {

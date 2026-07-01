@@ -1474,11 +1474,7 @@ fn render_grid_with_ligatures<'a>(
                 .flags
                 .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
             {
-                let actual_cell_size = if cell.flags.intersects(Flags::WIDE_CHAR) {
-                    cell_size * vec2f(2., 1.)
-                } else {
-                    cell_size
-                };
+                let actual_cell_size = cell_size * vec2f(cell.span() as f32, 1.);
                 if let Some(secret_content) = handle_secret_redaction(
                     cell,
                     &cell_type,
@@ -1776,12 +1772,9 @@ fn render_cell_glyph(
     row_indic_scale: f32,
     ctx: &mut PaintContext,
 ) {
-    let cell_size = if cell.flags().intersects(Flags::WIDE_CHAR) {
-        // WIDE_CHAR takes up two cells.
-        Vector2F::new(cell_size.x() * 2., cell_size.y())
-    } else {
-        cell_size
-    };
+    // A cluster's base cell occupies `span()` cells (1 for a normal char, up
+    // to 8 for a wide/measured Indic cluster) -- not just a fixed 2.
+    let cell_size = Vector2F::new(cell_size.x() * cell.span() as f32, cell_size.y());
 
     let mut cell_content = cell.content_for_display();
 
@@ -2623,11 +2616,7 @@ fn calculate_cell_decorations(
         None
     };
 
-    let actual_cell_size = if cell.flags.intersects(Flags::WIDE_CHAR) {
-        cell_size * vec2f(2., 1.)
-    } else {
-        cell_size
-    };
+    let actual_cell_size = cell_size * vec2f(cell.span() as f32, 1.);
     decoration_rect_data.map(|(thickness, y, color)| DecorationData {
         origin: grid_origin + glyph_offset + vec2f(0., y - thickness),
         size: vec2f(actual_cell_size.x(), thickness),
@@ -2666,7 +2655,7 @@ fn calculate_cursor_origin(
 pub fn render_cursor(
     grid_render_params: &GridRenderParams,
     cursor_point: Point,
-    is_cursor_on_wide_char: bool,
+    cursor_cell_span: u8,
     cursor_style: CursorStyle,
     padding_x: Pixels,
     grid_origin: Vector2F,
@@ -2681,11 +2670,9 @@ pub fn render_cursor(
         + grid_render_params.cell_size * vec2f(cursor_point.col as f32, cursor_point.row as f32);
 
     let cursor_top_origin = calculate_cursor_origin(grid_render_params, line_top_origin, ctx);
-    let cell_width = if is_cursor_on_wide_char {
-        grid_render_params.cell_size.x() * 2.
-    } else {
-        grid_render_params.cell_size.x()
-    };
+    // `cursor_cell_span` is 1 for a normal char, up to 8 for a wide/measured
+    // Indic cluster -- not just a fixed 2.
+    let cell_width = grid_render_params.cell_size.x() * cursor_cell_span as f32;
     let cursor_block_size = vec2f(
         cell_width,
         grid_render_params.font_size * DEFAULT_UI_LINE_HEIGHT_RATIO,

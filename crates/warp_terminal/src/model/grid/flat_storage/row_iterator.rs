@@ -130,9 +130,20 @@ impl Iterator for RowIterator<'_> {
             // a spacer. (Previously only handled cell_width == 2, marking a
             // single following cell; generalized here to any span 1..=8 —
             // see Cell::set_span.)
+            //
+            // Defensive bound: a row can be narrower than a grapheme's
+            // stored span if the terminal was resized narrower than the
+            // widest cluster already in scrollback (an extreme edge case,
+            // not expected in practice, and not fully handled by this
+            // rewrite -- see the Telugu variable-width-cell plan's Phase
+            // 4.6 log). Rather than panic indexing past the row's end,
+            // clamp the span so materialization degrades (the cluster may
+            // render with fewer spacer cells than measured) instead of
+            // crashing.
             if cell_width > 1 {
-                row[idx].set_span(cell_width);
-                for offset in 1..cell_width as usize {
+                let clamped_width = cell_width.min((row.len() - idx) as u8);
+                row[idx].set_span(clamped_width);
+                for offset in 1..clamped_width as usize {
                     row[idx + offset].flags.insert(Flags::WIDE_CHAR_SPACER);
                 }
             }

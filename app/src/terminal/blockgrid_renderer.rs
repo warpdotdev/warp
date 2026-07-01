@@ -164,17 +164,17 @@ impl BlockGrid {
         app: &AppContext,
     ) {
         let cursor_style = self.cursor_style();
-        let (cursor_display_point, is_cursor_on_wide_char, cursor_style, cursor_hint_text) =
+        let (cursor_display_point, cursor_cell_span, cursor_style, cursor_hint_text) =
             match self.cursor_display_point() {
                 Some(CursorDisplayPoint::Visible(cursor_display_point)) => (
                     cursor_display_point,
-                    self.grid_handler().is_cursor_on_wide_char(),
+                    self.grid_handler().cursor_cell_span(),
                     cursor_style,
                     cursor_hint_text,
                 ),
                 Some(CursorDisplayPoint::HiddenCache(cursor_display_point)) => (
                     cursor_display_point,
-                    false,
+                    1,
                     CursorStyle {
                         shape: CursorShape::Hidden,
                         ..cursor_style
@@ -187,7 +187,7 @@ impl BlockGrid {
         render_cursor(
             grid_render_params,
             cursor_display_point,
-            is_cursor_on_wide_char,
+            cursor_cell_span,
             cursor_style,
             grid_render_params.size_info.padding_x_px(),
             grid_origin,
