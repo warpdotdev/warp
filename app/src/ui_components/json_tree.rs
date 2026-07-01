@@ -19,6 +19,18 @@ use warpui::{Element, EventContext};
 use crate::appearance::Appearance;
 
 // ---------------------------------------------------------------------------
+// Callback type aliases
+// ---------------------------------------------------------------------------
+
+/// Callback invoked when a collapsible container node is toggled.
+pub type ToggleFn = dyn Fn(&mut EventContext, Vec<PathSegment>, usize) + Send + Sync;
+/// Callback invoked when a long-string value is toggled.
+pub type ToggleStringFn = dyn Fn(&mut EventContext, Vec<PathSegment>) + Send + Sync;
+/// Callback invoked when "Copy JSON" is activated via right-click on a row.
+pub type CopyJsonFn =
+    dyn Fn(&mut EventContext, Vec<PathSegment>, serde_json::Value, String) + Send + Sync;
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -229,26 +241,24 @@ pub fn format_number(n: &serde_json::Number) -> String {
 /// - `state`              — current expansion state; queried on every render.
 /// - `colors`             — pre-resolved theme colors.
 /// - `position_id_prefix` — stable prefix for per-row `SavePosition` IDs used to
-///                          anchor the right-click context menu to the clicked row.
-///                          Must be unique per tree instance in the same window.
+///   anchor the right-click context menu to the clicked row.
+///   Must be unique per tree instance in the same window.
 /// - `on_toggle`          — called with the event context and path of a clicked
-///                          collapsible node. The caller should dispatch an action
-///                          (e.g. `ctx.dispatch_typed_action(...)`) to update state.
+///   collapsible node; dispatch an action to update state.
 /// - `on_copy_json`       — called with the event context, path, value, and the
 ///   anchor position ID of the row when "Copy JSON" is activated via right-click.
 ///   The anchor ID can be used to position a context menu below the clicked row.
 /// - `appearance`         — provides font families and sizes.
+#[allow(clippy::too_many_arguments)]
 pub fn render_json_tree(
     root: &serde_json::Value,
     root_label: Option<&str>,
     state: &JsonTreeState,
     colors: &JsonTreeColors,
     position_id_prefix: &str,
-    on_toggle: Arc<dyn Fn(&mut EventContext, Vec<PathSegment>, usize) + Send + Sync>,
-    on_toggle_string: Arc<dyn Fn(&mut EventContext, Vec<PathSegment>) + Send + Sync>,
-    on_copy_json: Arc<
-        dyn Fn(&mut EventContext, Vec<PathSegment>, serde_json::Value, String) + Send + Sync,
-    >,
+    on_toggle: Arc<ToggleFn>,
+    on_toggle_string: Arc<ToggleStringFn>,
+    on_copy_json: Arc<CopyJsonFn>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let font_family = appearance.ui_font_family();
@@ -296,11 +306,9 @@ fn render_value(
     state: &JsonTreeState,
     colors: &JsonTreeColors,
     position_id_prefix: &str,
-    on_toggle: &Arc<dyn Fn(&mut EventContext, Vec<PathSegment>, usize) + Send + Sync>,
-    on_toggle_string: &Arc<dyn Fn(&mut EventContext, Vec<PathSegment>) + Send + Sync>,
-    on_copy_json: &Arc<
-        dyn Fn(&mut EventContext, Vec<PathSegment>, serde_json::Value, String) + Send + Sync,
-    >,
+    on_toggle: &Arc<ToggleFn>,
+    on_toggle_string: &Arc<ToggleStringFn>,
+    on_copy_json: &Arc<CopyJsonFn>,
     font_family: warpui::fonts::FamilyId,
     column: &mut Flex,
 ) {
@@ -505,10 +513,8 @@ fn render_long_string_row(
     state: &JsonTreeState,
     colors: &JsonTreeColors,
     position_id_prefix: &str,
-    on_toggle_string: &Arc<dyn Fn(&mut EventContext, Vec<PathSegment>) + Send + Sync>,
-    on_copy_json: &Arc<
-        dyn Fn(&mut EventContext, Vec<PathSegment>, serde_json::Value, String) + Send + Sync,
-    >,
+    on_toggle_string: &Arc<ToggleStringFn>,
+    on_copy_json: &Arc<CopyJsonFn>,
     font_family: warpui::fonts::FamilyId,
     column: &mut Flex,
 ) {
@@ -615,10 +621,8 @@ fn render_container_node(
     state: &JsonTreeState,
     colors: &JsonTreeColors,
     position_id_prefix: &str,
-    on_toggle: &Arc<dyn Fn(&mut EventContext, Vec<PathSegment>, usize) + Send + Sync>,
-    on_copy_json: &Arc<
-        dyn Fn(&mut EventContext, Vec<PathSegment>, serde_json::Value, String) + Send + Sync,
-    >,
+    on_toggle: &Arc<ToggleFn>,
+    on_copy_json: &Arc<CopyJsonFn>,
     font_family: warpui::fonts::FamilyId,
     column: &mut Flex,
 ) {
@@ -727,9 +731,7 @@ fn render_scalar_row(
     state: &JsonTreeState,
     colors: &JsonTreeColors,
     position_id_prefix: &str,
-    on_copy_json: &Arc<
-        dyn Fn(&mut EventContext, Vec<PathSegment>, serde_json::Value, String) + Send + Sync,
-    >,
+    on_copy_json: &Arc<CopyJsonFn>,
     font_family: warpui::fonts::FamilyId,
     column: &mut Flex,
 ) {

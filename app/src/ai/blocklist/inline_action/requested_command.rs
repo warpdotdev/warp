@@ -63,7 +63,8 @@ use crate::terminal::model::block::Block;
 use crate::terminal::TerminalModel;
 use crate::ui_components::blended_colors;
 use crate::ui_components::json_tree::{
-    render_json_tree, JsonTreeColors, JsonTreeState, PathSegment, TREE_FONT_SIZE,
+    render_json_tree, CopyJsonFn, JsonTreeColors, JsonTreeState, PathSegment, ToggleFn,
+    ToggleStringFn, TREE_FONT_SIZE,
 };
 use crate::util::bindings::keybinding_name_to_keystroke;
 use crate::view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme};
@@ -1465,10 +1466,6 @@ impl RequestedCommandView {
             .get_action_status(&self.action_id)
             .is_some_and(|status| status.is_blocked())
     }
-
-    fn get_mcp_section_position_id(prefix: &str) -> String {
-        format!("RequestedCommandView-{prefix}-mcp-section")
-    }
 }
 
 pub(crate) fn header_message_for_user_take_over_reason(
@@ -1596,28 +1593,20 @@ impl View for RequestedCommandView {
                 // Request section: show the tree if args are known, or a placeholder.
                 let request_section: Box<dyn Element> = if let Some(mcp_request) = &self.mcp_request
                 {
-                    let on_toggle_req: Arc<
-                        dyn Fn(&mut EventContext, Vec<PathSegment>, usize) + Send + Sync,
-                    > = Arc::new(|ctx, path, _depth| {
+                    let on_toggle_req: Arc<ToggleFn> = Arc::new(|ctx, path, _depth| {
                         ctx.dispatch_typed_action(RequestedCommandViewAction::ToggleJsonNode {
                             path,
                             tree: McpTree::Request,
                         });
                     });
-                    let on_copy_req: Arc<
-                        dyn Fn(&mut EventContext, Vec<PathSegment>, serde_json::Value, String)
-                            + Send
-                            + Sync,
-                    > = Arc::new(|ctx, _path, value, anchor_id| {
+                    let on_copy_req: Arc<CopyJsonFn> = Arc::new(|ctx, _path, value, anchor_id| {
                         let json_text = serde_json::to_string_pretty(&value).unwrap_or_default();
                         ctx.dispatch_typed_action(RequestedCommandViewAction::ShowMcpContextMenu {
                             json_text,
                             anchor_id,
                         });
                     });
-                    let on_toggle_string_req: Arc<
-                        dyn Fn(&mut EventContext, Vec<PathSegment>) + Send + Sync,
-                    > = Arc::new(|ctx, path| {
+                    let on_toggle_string_req: Arc<ToggleStringFn> = Arc::new(|ctx, path| {
                         ctx.dispatch_typed_action(RequestedCommandViewAction::ToggleJsonString {
                             path,
                             tree: McpTree::Request,
@@ -1667,9 +1656,7 @@ impl View for RequestedCommandView {
                     let renderable = mcp_result_to_renderable(result);
                     let response_element: Box<dyn Element> = match renderable {
                         McpRenderable::Tree(value) => {
-                            let on_toggle_resp: Arc<
-                                dyn Fn(&mut EventContext, Vec<PathSegment>, usize) + Send + Sync,
-                            > = Arc::new(|ctx, path, _depth| {
+                            let on_toggle_resp: Arc<ToggleFn> = Arc::new(|ctx, path, _depth| {
                                 ctx.dispatch_typed_action(
                                     RequestedCommandViewAction::ToggleJsonNode {
                                         path,
@@ -1677,34 +1664,26 @@ impl View for RequestedCommandView {
                                     },
                                 );
                             });
-                            let on_copy_resp: Arc<
-                                dyn Fn(
-                                        &mut EventContext,
-                                        Vec<PathSegment>,
-                                        serde_json::Value,
-                                        String,
-                                    ) + Send
-                                    + Sync,
-                            > = Arc::new(|ctx, _path, value, anchor_id| {
-                                let json_text =
-                                    serde_json::to_string_pretty(&value).unwrap_or_default();
-                                ctx.dispatch_typed_action(
-                                    RequestedCommandViewAction::ShowMcpContextMenu {
-                                        json_text,
-                                        anchor_id,
-                                    },
-                                );
-                            });
-                            let on_toggle_string_resp: Arc<
-                                dyn Fn(&mut EventContext, Vec<PathSegment>) + Send + Sync,
-                            > = Arc::new(|ctx, path| {
-                                ctx.dispatch_typed_action(
-                                    RequestedCommandViewAction::ToggleJsonString {
-                                        path,
-                                        tree: McpTree::Response,
-                                    },
-                                );
-                            });
+                            let on_copy_resp: Arc<CopyJsonFn> =
+                                Arc::new(|ctx, _path, value, anchor_id| {
+                                    let json_text =
+                                        serde_json::to_string_pretty(&value).unwrap_or_default();
+                                    ctx.dispatch_typed_action(
+                                        RequestedCommandViewAction::ShowMcpContextMenu {
+                                            json_text,
+                                            anchor_id,
+                                        },
+                                    );
+                                });
+                            let on_toggle_string_resp: Arc<ToggleStringFn> =
+                                Arc::new(|ctx, path| {
+                                    ctx.dispatch_typed_action(
+                                        RequestedCommandViewAction::ToggleJsonString {
+                                            path,
+                                            tree: McpTree::Response,
+                                        },
+                                    );
+                                });
                             render_json_tree(
                                 &value,
                                 Some("Response"),
