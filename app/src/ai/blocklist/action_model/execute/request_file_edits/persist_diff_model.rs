@@ -417,3 +417,7 @@ fn inserted_content_range(start: usize, content: &str) -> Option<Range<usize>> {
     let line_count = content.lines().count();
     (line_count > 0).then_some(start..start + line_count)
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "persist_diff_model_tests.rs"]
+mod tests;
