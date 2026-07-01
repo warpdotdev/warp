@@ -235,7 +235,9 @@ use crate::ai::blocklist::block::{AIBlockAction, FinishReason};
 use crate::ai::blocklist::codebase_index_speedbump_banner::{
     CodebaseIndexSpeedbumpBannerAction, CodebaseIndexSpeedbumpBannerState, VisibilityState,
 };
-use crate::ai::blocklist::inline_action::code_diff_view::{CodeDiffView, FileDiff};
+use crate::ai::blocklist::diff_storage::DiffStorageView;
+use crate::ai::blocklist::diff_types::FileDiff;
+use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
 use crate::ai::blocklist::model::{
     AIBlockModel, AIBlockModelHelper, AIBlockModelImpl, AIBlockOutputStatus,
 };
@@ -15404,11 +15406,14 @@ impl TerminalView {
         ctx.subscribe_to_view(&diff_view, move |me, view, event, ctx| {
             match event {
                 CodeDiffViewEvent::TryAccept => {
-                    view.update(ctx, |diff_view, ctx| {
-                        diff_view.accept_and_save(ctx);
+                    // Persist the accepted (possibly edited) passive suggestion
+                    // through the shared DiffStorageView flow. The result isn't
+                    // surfaced to the LLM on this path; failed writes surface
+                    // per-file toasts from the view's save subscriptions.
+                    let _save_future = view.update(ctx, |diff_view, ctx| {
+                        diff_view.send_malformed_line_telemetry(ctx);
+                        DiffStorageView::accept_and_save(diff_view, ctx)
                     });
-                }
-                CodeDiffViewEvent::SavedAcceptedDiffs { .. } => {
                     ctx.notify();
                 }
                 CodeDiffViewEvent::CancelPassive => {

@@ -18,7 +18,7 @@ use super::editor::view::{CodeEditorEvent, CodeEditorView};
 use super::editor::NavBarBehavior;
 use super::DiffResult;
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::blocklist::inline_action::code_diff_view::DiffSessionType;
+use crate::ai::blocklist::diff_types::DiffSessionType;
 use crate::editor::InteractionState;
 
 pub enum InlineDiffViewEvent {
@@ -31,6 +31,7 @@ pub enum InlineDiffViewEvent {
     FailedToSave {
         error: Rc<FileSaveError>,
     },
+    /// The result diff for an accepted edit has been computed by the editor.
     DiffAccepted {
         diff: Rc<DiffResult>,
     },
@@ -216,6 +217,8 @@ impl InlineDiffView {
         });
     }
 
+    /// Saves the current editor content through `FileModel`; completion arrives
+    /// as `FileSaved` / `FailedToSave`.
     #[cfg(not(target_family = "wasm"))]
     fn save_content(&self, ctx: &mut ViewContext<Self>) {
         let Some(file_id) = self.backing_file_id else {
@@ -231,6 +234,27 @@ impl InlineDiffView {
                 error: Rc::new(err),
             });
         }
+    }
+
+    /// Accepts the diff: computes the result diff (delivered via
+    /// [`InlineDiffViewEvent::DiffAccepted`]) and saves the editor content to
+    /// the backing file. No-op when no file is registered (WASM / restored
+    /// conversations).
+    pub fn accept_and_save_diff(&self, ctx: &mut ViewContext<Self>) {
+        if self.backing_file_id.is_none() {
+            return;
+        }
+
+        // Compute the result diff (arrives via CodeEditorEvent::UnifiedDiffComputed).
+        if let Some(file_path) = &self.file_path {
+            let file_name = file_path.to_string();
+            self.editor.update(ctx, |editor, ctx| {
+                editor.retrieve_unified_diff(file_name, ctx)
+            });
+        }
+        // Save the current editor content to disk.
+        #[cfg(not(target_family = "wasm"))]
+        self.save_content(ctx);
     }
 }
 
@@ -275,24 +299,6 @@ impl DiffViewer for InlineDiffView {
             editor.set_show_nav_bar(mode.show_nav_bar());
             editor.set_nav_bar_behavior(NavBarBehavior::NotClosable, ctx);
         });
-    }
-
-    fn accept_and_save_diff(&self, ctx: &mut ViewContext<Self>) {
-        // No-op when no file is registered (WASM / restored conversations).
-        if self.backing_file_id.is_none() {
-            return;
-        }
-
-        // Compute the unified diff (result arrives via CodeEditorEvent::UnifiedDiffComputed).
-        if let Some(file_path) = &self.file_path {
-            let file_name = file_path.to_string();
-            self.editor.update(ctx, |editor, ctx| {
-                editor.retrieve_unified_diff(file_name, ctx)
-            });
-        }
-        // Save the current editor content to disk.
-        #[cfg(not(target_family = "wasm"))]
-        self.save_content(ctx);
     }
 
     fn restore_diff_base(&mut self, _ctx: &mut ViewContext<Self>) -> Result<(), String> {

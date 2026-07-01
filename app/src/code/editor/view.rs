@@ -101,6 +101,8 @@ pub enum CodeEditorEvent {
     ContentChanged {
         origin: EditOrigin,
     },
+    /// Emitted when a unified diff computation completes, carrying the computed
+    /// result diff.
     UnifiedDiffComputed(Rc<DiffResult>),
     SelectionChanged,
     SelectionStart,

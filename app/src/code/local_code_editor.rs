@@ -2079,22 +2079,6 @@ impl DiffViewer for LocalCodeEditorView {
         self.was_edited
     }
 
-    /// Automatically accept and save this diff. Unlike [`Self::accept_diff`] and [`Self::save_local`], this
-    /// waits for the initial file contents to be loaded.
-    fn accept_and_save_diff(&self, ctx: &mut ViewContext<Self>) {
-        ctx.spawn(self.file_loaded.wait(), move |me, _, ctx| {
-            me.accept_diff(ctx);
-            if let Err(err) = me.save_local(ctx) {
-                log::error!("{err:?}");
-                if let ImmediateSaveError::FailedToSave(err) = err {
-                    ctx.emit(LocalCodeEditorEvent::FailedToSave {
-                        error: Rc::new(err),
-                    });
-                }
-            }
-        });
-    }
-
     fn reject_diff(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.emit(LocalCodeEditorEvent::DiffRejected);
     }

@@ -152,8 +152,6 @@ where
             .update(ctx, |editor, ctx| editor.navigate_previous_diff_hunk(ctx));
     }
 
-    fn accept_and_save_diff(&self, _ctx: &mut ViewContext<Self>) {}
-
     fn reject_diff(&mut self, _ctx: &mut ViewContext<Self>) {}
 
     fn restore_diff_base(&mut self, _ctx: &mut ViewContext<Self>) -> Result<(), String> {
