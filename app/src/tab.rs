@@ -213,7 +213,7 @@ impl TabData {
     /// True when this tab's top-level name is not shown because it is a member of
     /// a tab group rendered in vertical-tabs Panes view. In that layout the group
     /// owns the container and only individual pane names are displayed, so
-    /// tab-level rename/reset should not be possible. 
+    /// tab-level rename/reset should not be possible.
     pub fn tab_name_hidden_in_grouped_pane_view(&self, ctx: &AppContext) -> bool {
         self.group_id.is_some()
             && uses_vertical_tabs(ctx)
