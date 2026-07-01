@@ -157,6 +157,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::McpServer,
         #[cfg(feature = "mcp_debugging_ids")]
         FeatureFlag::McpDebuggingIds,
+        #[cfg(feature = "mcp_prompts_list")]
+        FeatureFlag::McpPromptsList,
         #[cfg(feature = "markdown_tables")]
         FeatureFlag::MarkdownTables,
         #[cfg(feature = "blocklist_markdown_table_rendering")]
