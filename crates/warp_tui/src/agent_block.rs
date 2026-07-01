@@ -160,10 +160,17 @@ impl TuiAgentBlockSection {
                         .blend(&accent.with_opacity(10)),
                 )
                 .into();
+                // Only the first line carries the `≫` prompt marker; continuation
+                // lines are indented to the marker's width so they align beneath it.
                 let mut column = TuiColumn::new();
-                for line in lines {
+                for (index, line) in lines.iter().enumerate() {
+                    let text = if index == 0 {
+                        format!("{INPUT_PREFIX}{line}")
+                    } else {
+                        format!("{}{line}", " ".repeat(INPUT_PREFIX.chars().count()))
+                    };
                     column = column.child(
-                        TuiText::new(format!("{INPUT_PREFIX}{line}")).with_style(
+                        TuiText::new(text).with_style(
                             TuiStyle::default()
                                 .fg(text_color)
                                 .bg(background)
