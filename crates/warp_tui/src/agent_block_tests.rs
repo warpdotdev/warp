@@ -190,6 +190,100 @@ fn agent_block_renders_tool_calls_in_message_order() {
 }
 
 #[test]
+fn agent_block_renders_multiple_tool_calls_in_order() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let first = test_action("action-1");
+            let second = test_action("action-2");
+            let block = test_agent_block(FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    action_message("message-1", first.clone()),
+                    action_message("message-2", second.clone()),
+                ]),
+            });
+
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    TuiAIBlockSection::ToolCall(Box::new(first)),
+                    TuiAIBlockSection::ToolCall(Box::new(second)),
+                ]
+            );
+
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                block.render_element(app_ctx),
+                TuiRect::new(0, 0, 40, 3),
+                app_ctx,
+            );
+            assert_eq!(
+                frame
+                    .buffer
+                    .to_lines()
+                    .into_iter()
+                    .map(|line| line.trim_end().to_owned())
+                    .collect::<Vec<_>>(),
+                vec!["executed a tool call", "executed a tool call", ""],
+            );
+        });
+    });
+}
+
+#[test]
+fn agent_block_desired_height_accounts_for_tool_call_stub() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let block = test_agent_block(FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![action_message(
+                    "message-1",
+                    test_action("action-1"),
+                )]),
+            });
+            // One tool-call stub line plus the block's bottom padding row.
+            assert_eq!(block.desired_height(40, app_ctx), 2);
+        });
+    });
+}
+
+#[test]
+fn agent_block_ignores_unsupported_message_variants() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let block = test_agent_block(FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    text_message(
+                        "message-1",
+                        vec![AIAgentTextSection::PlainText {
+                            text: "before".to_owned().into(),
+                        }],
+                    ),
+                    reasoning_message("message-2"),
+                    text_message(
+                        "message-3",
+                        vec![AIAgentTextSection::PlainText {
+                            text: "after".to_owned().into(),
+                        }],
+                    ),
+                ]),
+            });
+
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    TuiAIBlockSection::PlainText("after".to_owned()),
+                ]
+            );
+        });
+    });
+}
+
+#[test]
 fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
@@ -297,6 +391,22 @@ fn action_message(id: &str, action: AIAgentAction) -> AIAgentOutputMessage {
     AIAgentOutputMessage {
         id: MessageId::new(id.to_owned()),
         message: AIAgentOutputMessageType::Action(action),
+        citations: Vec::new(),
+    }
+}
+
+/// Builds a reasoning output message (an unsupported variant for the TUI).
+fn reasoning_message(id: &str) -> AIAgentOutputMessage {
+    AIAgentOutputMessage {
+        id: MessageId::new(id.to_owned()),
+        message: AIAgentOutputMessageType::Reasoning {
+            text: AIAgentText {
+                sections: vec![AIAgentTextSection::PlainText {
+                    text: "thinking".to_owned().into(),
+                }],
+            },
+            finished_duration: None,
+        },
         citations: Vec::new(),
     }
 }

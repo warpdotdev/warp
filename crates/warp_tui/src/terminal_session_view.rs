@@ -5,12 +5,12 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::editor::CodeEditorModel;
 use warp::tui_export::{
-    AIAgentPtyWriteMode, AIConversationAutoexecuteMode, ActiveSession, AgentInteractionMetadata,
-    AgentViewEntryOrigin, Appearance, BlocklistAIActionModel, BlocklistAIContextModel,
-    BlocklistAIController, BlocklistAIHistoryModel, BlocklistAIInputModel, CommandExecutionSource,
-    ConversationSelection, ConversationSelectionHandle, ExecuteCommandEvent,
-    GetRelevantFilesController, ModelEvent, PtyIntent, PtyIntentEvent, ShellCommandExecutorEvent,
-    TerminalModel, TerminalSurface, TerminalSurfaceInit,
+    AIAgentPtyWriteMode, ActiveSession, AgentInteractionMetadata, AgentViewEntryOrigin, Appearance,
+    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIHistoryModel, BlocklistAIInputModel, CommandExecutionSource, ConversationSelection,
+    ConversationSelectionHandle, ExecuteCommandEvent, GetRelevantFilesController, ModelEvent,
+    PtyIntent, PtyIntentEvent, ShellCommandExecutorEvent, TerminalModel, TerminalSurface,
+    TerminalSurfaceInit,
 };
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::SingletonEntity;
@@ -74,11 +74,8 @@ impl TuiTerminalSessionView {
         let active_session =
             ctx.add_model(|ctx| ActiveSession::new(sessions.clone(), model_events.clone(), ctx));
         let conversation_selection = ctx.add_model(|ctx| {
-            Box::new(TuiConversationSelection::new(
-                terminal_surface_id,
-                AIConversationAutoexecuteMode::RunToCompletion,
-                ctx,
-            )) as Box<dyn ConversationSelection>
+            Box::new(TuiConversationSelection::new(terminal_surface_id, ctx))
+                as Box<dyn ConversationSelection>
         });
         let context_model = ctx.add_model(|ctx| {
             BlocklistAIContextModel::new(

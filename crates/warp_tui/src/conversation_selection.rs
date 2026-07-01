@@ -8,7 +8,6 @@ use warpui::{AppContext, EntityId, ModelContext, SingletonEntity};
 /// TUI-owned next-prompt conversation selection.
 pub(super) struct TuiConversationSelection {
     terminal_surface_id: EntityId,
-    default_autoexecute_override: AIConversationAutoexecuteMode,
     pending_query_state: PendingQueryState,
 }
 
@@ -16,7 +15,6 @@ impl TuiConversationSelection {
     /// Creates TUI conversation selection for a terminal surface.
     pub(super) fn new(
         terminal_surface_id: EntityId,
-        autoexecute_override: AIConversationAutoexecuteMode,
         ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
     ) -> Self {
         ctx.subscribe_to_model(
@@ -27,19 +25,12 @@ impl TuiConversationSelection {
         // TODO: Implement actual permissions once settings are in place and there is a UI for permissions requests.
         // For now, we just always set fast-forward to on.
         let pending_query_state = PendingQueryState::New {
-            autoexecute_override,
+            autoexecute_override: AIConversationAutoexecuteMode::RunToCompletion,
         };
 
         Self {
             terminal_surface_id,
-            default_autoexecute_override: autoexecute_override,
             pending_query_state,
-        }
-    }
-    /// Returns the configured new-conversation state for this TUI surface.
-    fn default_new_conversation_state(&self) -> PendingQueryState {
-        PendingQueryState::New {
-            autoexecute_override: self.default_autoexecute_override,
         }
     }
 
@@ -128,7 +119,15 @@ impl ConversationSelection for TuiConversationSelection {
         ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
     ) {
         let previous_conversation_id = self.selected_id();
-        self.set_pending_query_state(self.default_new_conversation_state(), ctx);
+        // TODO: Implement actual permissions once settings are in place and there is a UI for permissions requests.
+        // For now, we just always set fast-forward to on.
+        self.set_pending_query_state(
+            PendingQueryState::New {
+                autoexecute_override: AIConversationAutoexecuteMode::RunToCompletion,
+            },
+            ctx,
+        );
+
         if let Some(previous_conversation_id) = previous_conversation_id {
             Self::emit_deactivated(previous_conversation_id, false, ctx);
         }
