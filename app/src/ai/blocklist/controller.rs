@@ -542,6 +542,11 @@ impl BlocklistAIController {
                         );
                     });
                 }
+                // Unlock any pending-LRC row so it isn't left locked if the action
+                // completes without triggering a follow-up request.
+                QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.unlock_pending_lrc_rows(*conversation_id, ctx);
+                });
                 return;
             }
             me.send_follow_up_for_conversation(*conversation_id, ctx);

@@ -511,14 +511,16 @@ impl QueuedQueryModel {
         let Some(state) = self.queues.get_mut(&conversation_id) else {
             return;
         };
-        let ids_to_remove: Vec<QueuedQueryId> = state
-            .queue
-            .iter()
-            .filter(|row| row.origin == QueuedQueryOrigin::PendingLrcAutoQueue)
-            .map(|row| row.id)
-            .collect();
-        for query_id in ids_to_remove {
-            state.queue.retain(|row| row.id != query_id);
+        let mut removed_ids = Vec::new();
+        state.queue.retain(|row| {
+            if row.origin == QueuedQueryOrigin::PendingLrcAutoQueue {
+                removed_ids.push(row.id);
+                false
+            } else {
+                true
+            }
+        });
+        for query_id in removed_ids {
             ctx.emit(QueuedQueryEvent::Removed {
                 conversation_id,
                 query_id,
