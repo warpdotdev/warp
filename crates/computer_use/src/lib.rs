@@ -69,8 +69,13 @@ pub fn enumerate_windows() -> Vec<WindowInfo> {
     }
 }
 
-/// Experimental: lists on-screen windows (number, owner PID/name, layer, bounds) to help map a
-/// target window back to its owning process. macOS only.
+/// Experimental: lists on-screen windows as a formatted diagnostic string. macOS only.
+///
+/// Unlike [`enumerate_windows`], which returns slim [`WindowInfo`] records for window selection
+/// and wire serialization, this function returns richer data including window bounds, formatted
+/// as a human-readable table for CLI debugging. The two use separate types intentionally:
+/// [`WindowInfo`] is kept wire-safe and bounds-free; the diagnostic output carries bounds that
+/// are not part of the API representation.
 #[cfg(macos)]
 pub fn experimental_list_windows() -> Result<String, String> {
     Ok(imp::list_windows())

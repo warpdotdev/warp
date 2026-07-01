@@ -38,22 +38,6 @@ fn post_target_for(target: Target) -> PostTarget {
     }
 }
 
-/// Activates the target window so background keyboard events are accepted, resolving it by id.
-///
-/// Mouse actions activate the target window lazily from the event location (see
-/// [`mouse::Mouse`]), but keyboard actions carry no location, so a keyboard-only interaction
-/// with a background window would otherwise never trigger activation and the first key events
-/// could be dropped or routed to the wrong window. Activation is idempotent per window, so
-/// calling this before each keyboard action is cheap and does not re-send the activation primer.
-fn activate_window_for_keyboard(target: Target) {
-    let Target::Window { window_id, pid } = target else {
-        return;
-    };
-    if let Some(info) = window::window_by_id(window_id) {
-        activation::ensure_activated(pid as libc::pid_t, &info);
-    }
-}
-
 /// Returns a copy of `action` with its coordinates remapped for the given target.
 ///
 /// For a `Window` target the incoming coordinates are window-local pixels in the captured window
@@ -177,7 +161,7 @@ impl super::Actor for Actor {
             // owning process for a window action (without raising it or moving the cursor).
             let post_target = post_target_for(target);
             self.mouse.set_target(post_target);
-            self.keyboard.set_target(post_target);
+            self.keyboard.set_target(target);
 
             // For a window target, translate window-local coordinates through the containing
             // display's point mapping.
@@ -201,11 +185,9 @@ impl super::Actor for Actor {
                     self.mouse.scroll(direction, distance)?;
                 }
                 Action::TypeText { text } => {
-                    activate_window_for_keyboard(target);
                     self.keyboard.type_text(text)?;
                 }
                 Action::KeyDown { key } => {
-                    activate_window_for_keyboard(target);
                     self.keyboard.key_down(key)?;
                 }
                 Action::KeyUp { key } => {

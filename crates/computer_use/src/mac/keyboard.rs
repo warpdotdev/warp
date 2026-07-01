@@ -2,16 +2,22 @@ use std::collections::HashMap;
 
 use objc2_core_graphics::{CGEvent, CGEventFlags, CGEventSource, CGEventSourceStateID, CGKeyCode};
 
-use super::keycode_cache;
 use super::post::PostTarget;
-use crate::Key;
+use super::{activation, keycode_cache, window};
+use crate::{Key, Target};
 
 /// Manages keyboard state and posts keyboard events to the system.
 pub struct Keyboard {
     /// Cache of character-to-keycode mappings for the current keyboard layout.
     cache: HashMap<char, CGKeyCode>,
     /// Where synthesized events are delivered.
-    target: PostTarget,
+    post_target: PostTarget,
+    /// The window id and pid of the current window target, used to activate the window before
+    /// keyboard events are posted. `None` when targeting the HID tap (screen/frontmost behavior).
+    ///
+    /// Mouse events activate the target window lazily from the event location; keyboard events
+    /// carry no coordinates, so activation must be triggered explicitly here instead.
+    window_context: Option<(u32, libc::pid_t)>,
     /// The currently-held modifier flags, accumulated from modifier key-down/up events.
     ///
     /// Synthetic modifier key events posted via `CGEventPostToPid` do not update the session's
@@ -25,15 +31,23 @@ impl Keyboard {
     pub fn new(target: PostTarget) -> Self {
         Self {
             cache: keycode_cache::build_cache(),
-            target,
+            post_target: target,
+            window_context: None,
             current_flags: CGEventFlags::empty(),
         }
     }
 
     /// Sets where subsequent synthesized key events are delivered. Called per-action so typing
     /// can be routed to a specific background process.
-    pub fn set_target(&mut self, target: PostTarget) {
-        self.target = target;
+    pub fn set_target(&mut self, target: Target) {
+        self.post_target = match target {
+            Target::Screen => PostTarget::HidTap,
+            Target::Window { pid, .. } => PostTarget::Pid(pid as libc::pid_t),
+        };
+        self.window_context = match target {
+            Target::Window { window_id, pid } => Some((window_id, pid as libc::pid_t)),
+            Target::Screen => None,
+        };
     }
 
     /// Sends a key down event for the given key.
@@ -41,27 +55,32 @@ impl Keyboard {
     /// If the key is a modifier, its mask is folded into the held-modifier flags first so the
     /// key-down itself carries the now-active modifier; the flags are then stamped on the event.
     pub fn key_down(&mut self, key: &Key) -> Result<(), String> {
+        self.ensure_window_activated();
         let keycode = self.resolve_keycode(key)?;
         if let Some(mask) = modifier_mask(keycode) {
             self.current_flags |= mask;
         }
-        post_key_event(keycode, true, self.current_flags, self.target)
+        post_key_event(keycode, true, self.current_flags, self.post_target)
     }
 
     /// Sends a key up event for the given key.
     ///
     /// If the key is a modifier, its mask is removed from the held-modifier flags so the key-up
     /// reflects the modifier being released; the updated flags are then stamped on the event.
+    ///
+    /// Activation is not triggered here: `KeyUp` always follows a `KeyDown` that already
+    /// activated the window, and a lone `KeyUp` with no prior `KeyDown` is a no-op regardless.
     pub fn key_up(&mut self, key: &Key) -> Result<(), String> {
         let keycode = self.resolve_keycode(key)?;
         if let Some(mask) = modifier_mask(keycode) {
             self.current_flags &= !mask;
         }
-        post_key_event(keycode, false, self.current_flags, self.target)
+        post_key_event(keycode, false, self.current_flags, self.post_target)
     }
 
     /// Simulates typing text by sending Quartz events.
     pub fn type_text(&self, text: &str) -> Result<(), String> {
+        self.ensure_window_activated();
         let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState);
 
         // Send one character at a time for better compatibility with various applications.
@@ -71,10 +90,25 @@ impl Keyboard {
             //
             // TODO(vorporeal): when sending an ASCII character, send it using virtual key codes
             // for better compatibility.
-            type_unicode_char(ch, source.as_deref(), self.target)?;
+            type_unicode_char(ch, source.as_deref(), self.post_target)?;
         }
 
         Ok(())
+    }
+
+    /// Ensures the target window is activated before keyboard events are posted.
+    ///
+    /// Mouse events activate the target window lazily from the event location (see
+    /// [`super::mouse::Mouse`]); keyboard events carry no coordinates, so activation must be
+    /// triggered here instead. The call is idempotent per `(pid, window)` pair, so calling it
+    /// before each keyboard event is cheap and never re-sends the activation primer.
+    fn ensure_window_activated(&self) {
+        let Some((window_id, pid)) = self.window_context else {
+            return;
+        };
+        if let Some(info) = window::window_by_id(window_id) {
+            activation::ensure_activated(pid, &info);
+        }
     }
 
     /// Resolves a Key to a CGKeyCode.
