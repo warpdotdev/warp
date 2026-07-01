@@ -235,9 +235,8 @@ pub fn format_number(n: &serde_json::Number) -> String {
 ///                          collapsible node. The caller should dispatch an action
 ///                          (e.g. `ctx.dispatch_typed_action(...)`) to update state.
 /// - `on_copy_json`       — called with the event context, path, value, and the
-///                          anchor position ID of the row when "Copy JSON" is
-///                          activated via right-click. The anchor ID can be used to
-///                          position a context menu below the right-clicked row.
+///   anchor position ID of the row when "Copy JSON" is activated via right-click.
+///   The anchor ID can be used to position a context menu below the clicked row.
 /// - `appearance`         — provides font families and sizes.
 pub fn render_json_tree(
     root: &serde_json::Value,
