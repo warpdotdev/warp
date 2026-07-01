@@ -32,6 +32,7 @@ define_settings_group!(NativePreferenceSettings, settings: [
         supported_platforms: SupportedPlatforms::WEB,
         // Once setting sync is enabled we should sync this to the cloud
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "UserNativePreference",
         toml_path: "general.user_native_preference",
@@ -42,6 +43,7 @@ define_settings_group!(NativePreferenceSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::WEB,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
 ]);
