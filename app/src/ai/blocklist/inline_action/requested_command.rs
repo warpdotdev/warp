@@ -175,6 +175,8 @@ pub fn init(app: &mut AppContext) {
 
 /// Structured representation of an MCP tool call request, held so the
 /// detail view can render it as a JSON tree rather than a flat string.
+// Fields are consumed by the MCP tree-rendering layer.
+#[allow(dead_code)]
 pub struct McpRequest {
     pub name: String,
     pub args: serde_json::Value,
@@ -185,6 +187,8 @@ pub struct McpRequest {
 /// Converts the raw result (which may carry text content, structured JSON, an
 /// error message, or a cancellation signal) into a form the tree-rendering
 /// layer can act on without further conditionals.
+// Consumed by the MCP tree-rendering layer.
+#[allow(dead_code)]
 pub(crate) enum McpRenderable {
     Tree(serde_json::Value),
     Error(String),
@@ -196,6 +200,8 @@ pub(crate) enum McpRenderable {
 /// Prefers `structured_content` when present; otherwise tries to parse joined
 /// text content as JSON; falls back to wrapping the raw text as a JSON
 /// string value so the tree renderer always receives a `serde_json::Value`.
+// Called by the MCP tree-rendering layer.
+#[allow(dead_code)]
 pub(crate) fn mcp_result_to_renderable(result: &CallMCPToolResult) -> McpRenderable {
     match result {
         CallMCPToolResult::Success { result } => {
