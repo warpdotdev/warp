@@ -91,6 +91,7 @@ pub fn init(app: &mut AppContext) {
     view::launch_modal::oz_launch::init(app);
     view::openwarp_launch_modal::init(app);
     view::orchestration_launch_modal::init(app);
+    view::feature_intro_modal::init(app);
     view::auto_handoff_sleep_modal::init(app);
     view::cloud_agent_capacity_modal::init(app);
     view::codex_modal::init(app);
@@ -217,6 +218,18 @@ pub fn init(app: &mut AppContext) {
                     "workspace:reset_orchestration_launch_modal_state",
                     "[Debug] Reset Orchestration Launch Modal State",
                     WorkspaceAction::ResetOrchestrationLaunchModalState,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
+                    "workspace:open_feature_intro_modal",
+                    "[Debug] Open Feature Intro Modal",
+                    WorkspaceAction::OpenFeatureIntroModal,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
+                    "workspace:reset_feature_intro_modal_state",
+                    "[Debug] Reset Feature Intro Modal State",
+                    WorkspaceAction::ResetFeatureIntroModalState,
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(

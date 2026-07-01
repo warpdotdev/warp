@@ -1,7 +1,10 @@
 use futures::FutureExt;
 use warpui::{App, SingletonEntity};
 
-use super::{free_ai_removal_modal_decision, FreeAiRemovalModalDecision, OneTimeModalModel};
+use super::{
+    free_ai_removal_modal_decision, AISettings, FeatureFlag, FeatureIntroId,
+    FreeAiRemovalModalDecision, OneTimeModalModel, FEATURE_INTROS,
+};
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspaces::workspace::CustomerType;
 
@@ -211,4 +214,83 @@ fn test_free_ai_removal_modal_decision_matrix() {
             case.name,
         );
     }
+}
+
+#[test]
+fn feature_intro_triggers_for_enabled_unseen_feature() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |_, ctx| {
+            let _flag = FeatureFlag::CustomModelRouterIntro.override_enabled(true);
+            let key = FeatureIntroId::CustomModelRouter.as_key();
+
+            OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                assert!(!AISettings::as_ref(ctx).is_feature_intro_seen(key));
+
+                let shown = model.check_and_trigger_feature_intro_modal(ctx);
+
+                // The feature is marked seen up front, whether or not it is shown on
+                // the current channel.
+                assert!(AISettings::as_ref(ctx).is_feature_intro_seen(key));
+                if shown {
+                    assert_eq!(
+                        model.active_feature_intro,
+                        Some(FeatureIntroId::CustomModelRouter)
+                    );
+                }
+
+                // It is shown at most once: a second check is a no-op.
+                assert!(!model.check_and_trigger_feature_intro_modal(ctx));
+            });
+        });
+    });
+}
+
+#[test]
+fn feature_intro_skipped_when_flag_disabled() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |_, ctx| {
+            // No override: the per-feature flag defaults to disabled in tests.
+            let key = FeatureIntroId::CustomModelRouter.as_key();
+
+            OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                assert!(!model.check_and_trigger_feature_intro_modal(ctx));
+                assert_eq!(model.active_feature_intro, None);
+                // A disabled feature is left unmarked so it can still show once enabled.
+                assert!(!AISettings::as_ref(ctx).is_feature_intro_seen(key));
+            });
+        });
+    });
+}
+
+#[test]
+fn feature_intro_skipped_when_all_seen() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |_, ctx| {
+            let _flag = FeatureFlag::CustomModelRouterIntro.override_enabled(true);
+
+            OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                // Mirror the new-user pre-dismissal: mark every registered intro seen.
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    for intro in FEATURE_INTROS {
+                        settings.mark_feature_intro_seen(intro.id.as_key(), ctx);
+                    }
+                });
+                for intro in FEATURE_INTROS {
+                    assert!(AISettings::as_ref(ctx).is_feature_intro_seen(intro.id.as_key()));
+                }
+
+                assert!(!model.check_and_trigger_feature_intro_modal(ctx));
+                assert_eq!(model.active_feature_intro, None);
+            });
+        });
+    });
 }

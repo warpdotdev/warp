@@ -901,6 +901,11 @@ pub enum FeatureFlag {
     /// Enables the `--runner` flag on `run-cloud`, which overrides an agent's
     /// compute (docker image, instance shape, setup commands) by runner ID.
     CloudRunners,
+
+    /// Enables the one-time "custom model router" feature-intro popover. This is
+    /// the first feature announced through the reusable feature-intro framework
+    /// (see `FEATURE_INTROS`); each registry entry is gated by its own flag.
+    CustomModelRouterIntro,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -971,6 +976,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
+    FeatureFlag::CustomModelRouterIntro,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

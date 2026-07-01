@@ -8,6 +8,7 @@ use warp_util::sync::Condition;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 
 use super::hoa_onboarding;
+use super::view::feature_intro_modal::{FeatureIntroId, FEATURE_INTROS};
 use super::view::free_ai_removal_modal::{
     FreeAiRemovalModalTelemetryEvent, FreeAiRemovalModalVariant,
 };
@@ -50,6 +51,11 @@ pub struct OneTimeModalModel {
     is_free_ai_removal_modal_open: bool,
     /// Whether the HOA onboarding flow is currently being shown.
     is_hoa_onboarding_open: bool,
+    /// The feature-intro popover currently being shown, if any. Unlike the other
+    /// one-time modals this is a non-blocking bottom-right popover, so it is
+    /// intentionally excluded from `is_any_modal_open` (which suppresses terminal
+    /// focus stealing) to keep the terminal usable while it is visible.
+    active_feature_intro: Option<FeatureIntroId>,
     /// Whether the initial one-time modal checks have run. The seen markers are
     /// cloud-synced settings, so event-driven re-checks must wait for the initial
     /// cloud preferences load to avoid acting on stale values.
@@ -128,6 +134,11 @@ impl OneTimeModalModel {
                     {
                         log::warn!("Failed to mark orchestration launch modal as dismissed: {e}");
                     }
+                    // New signups shouldn't see feature-intro popovers on their second
+                    // startup, so pre-mark every registered feature intro as seen.
+                    for intro in FEATURE_INTROS {
+                        settings.mark_feature_intro_seen(intro.id.as_key(), ctx);
+                    }
                 });
                 // Accounts created after the removal of free AI go through the new
                 // onboarding and are treated as already-noticed (no modal).
@@ -157,6 +168,7 @@ impl OneTimeModalModel {
             auto_handoff_sleep_modal_closed,
             is_free_ai_removal_modal_open: false,
             is_hoa_onboarding_open: false,
+            active_feature_intro: None,
             has_completed_initial_modal_checks: false,
             has_fetched_workspaces: false,
             target_window_id: None,
@@ -192,6 +204,39 @@ impl OneTimeModalModel {
 
     pub fn mark_orchestration_launch_modal_dismissed(&mut self, ctx: &mut ModelContext<Self>) {
         self.set_orchestration_launch_modal_open(false, ctx);
+    }
+
+    /// Returns the feature-intro popover currently being shown, if any.
+    pub fn active_feature_intro(&self) -> Option<FeatureIntroId> {
+        if self.target_window_id.is_some() {
+            self.active_feature_intro
+        } else {
+            None
+        }
+    }
+
+    pub fn mark_feature_intro_dismissed(&mut self, ctx: &mut ModelContext<Self>) {
+        self.set_active_feature_intro(None, ctx);
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn force_open_feature_intro(&mut self, id: FeatureIntroId, ctx: &mut ModelContext<Self>) {
+        self.set_active_feature_intro(Some(id), ctx);
+    }
+
+    fn set_active_feature_intro(
+        &mut self,
+        intro: Option<FeatureIntroId>,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        if self.active_feature_intro != intro {
+            self.active_feature_intro = intro;
+            ctx.emit(OneTimeModalEvent::VisibilityChanged {
+                is_open: intro.is_some(),
+            });
+            return true;
+        }
+        false
     }
 
     /// Returns whether the auto-handoff sleep discoverability modal is currently open.
@@ -375,6 +420,10 @@ impl OneTimeModalModel {
             return;
         }
 
+        if self.check_and_trigger_feature_intro_modal(ctx) {
+            return;
+        }
+
         if self.check_and_trigger_hoa_onboarding(ctx) {
             return;
         }
@@ -412,7 +461,10 @@ impl OneTimeModalModel {
     /// Re-evaluates the free-AI-removal notice outside the initial startup check, e.g.
     /// when workspace billing data arrives after startup.
     fn maybe_recheck_free_ai_removal_modal(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.has_completed_initial_modal_checks || self.is_any_modal_open() {
+        if !self.has_completed_initial_modal_checks
+            || self.is_any_modal_open()
+            || self.active_feature_intro.is_some()
+        {
             return;
         }
         self.check_and_trigger_free_ai_removal_modal(ctx);
@@ -594,6 +646,32 @@ impl OneTimeModalModel {
 
         let should_show = !matches!(ChannelState::channel(), Channel::Integration);
         self.set_orchestration_launch_modal_open(should_show, ctx);
+        should_show
+    }
+
+    fn check_and_trigger_feature_intro_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        // Show the first registered feature intro whose flag is enabled and that the
+        // user hasn't seen yet (see `FEATURE_INTROS`).
+        let next_id = FEATURE_INTROS
+            .iter()
+            .find(|intro| {
+                intro.flag.is_enabled()
+                    && !AISettings::as_ref(ctx).is_feature_intro_seen(intro.id.as_key())
+            })
+            .map(|intro| intro.id);
+        let Some(id) = next_id else {
+            return false;
+        };
+
+        // Mark it seen up front so it shows at most once, even if suppressed below.
+        AISettings::handle(ctx).update(ctx, |settings, ctx| {
+            settings.mark_feature_intro_seen(id.as_key(), ctx);
+        });
+
+        let should_show = !matches!(ChannelState::channel(), Channel::Integration);
+        if should_show {
+            self.set_active_feature_intro(Some(id), ctx);
+        }
         should_show
     }
 
