@@ -293,6 +293,7 @@ fn get_arborium_highlight_query(lang: &str) -> Option<&str> {
         "xml" => Some(arborium::lang_xml::HIGHLIGHTS_QUERY),
         "vue" => Some(&arborium::lang_vue::HIGHLIGHTS_QUERY),
         "dockerfile" => Some(arborium::lang_dockerfile::HIGHLIGHTS_QUERY),
+        "markdown" => Some(arborium::lang_markdown::HIGHLIGHTS_QUERY),
         _ => None,
     }
 }
@@ -315,19 +316,9 @@ fn load_language(lang: &str) -> Option<Language> {
         })
         .collect();
 
-    // Prefer a Warp-authored highlight query bundled alongside the grammar, falling back to
-    // arborium's. This lets a grammar opt into a custom query when arborium's upstream one uses
-    // capture names that Warp's color mapping doesn't recognize, which would otherwise render
-    // uncolored.
-    let highlights_query_path = [lang, "highlights.scm"].join("\\");
-    let highlight_query = match load_query(&highlights_query_path, &grammar) {
-        Some(query) => query,
-        None => {
-            let highlight_query_str = get_arborium_highlight_query(lang)?;
-            Query::new(&grammar, highlight_query_str)
-                .expect("arborium highlight query should be valid")
-        }
-    };
+    let highlight_query_str = get_arborium_highlight_query(lang)?;
+    let highlight_query = Query::new(&grammar, highlight_query_str)
+        .expect("arborium highlight query should be valid");
 
     let indents_query_path = [lang, "indents.scm"].join("\\");
     let indents_query = load_query(&indents_query_path, &grammar);
