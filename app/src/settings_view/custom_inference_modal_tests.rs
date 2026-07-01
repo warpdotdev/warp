@@ -1,11 +1,9 @@
-use std::collections::HashSet;
-
 use ai::api_keys::CustomEndpointModel;
 use pathfinder_geometry::vector::vec2f;
 use warpui::platform::WindowStyle;
 use warpui::scene::Scene;
 use warpui::units::Pixels;
-use warpui::{App, Presenter, WindowInvalidation};
+use warpui::{App, EntityIdSet, Presenter, WindowInvalidation};
 
 use super::*;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
@@ -61,7 +59,7 @@ fn modal_resizes_with_window_and_added_models() {
         let body = modal.read(&app, |modal, _| modal.body().clone());
         let mut presenter = Presenter::new(window_id);
         let invalidation = WindowInvalidation {
-            updated: HashSet::from([
+            updated: EntityIdSet::from_iter([
                 app.root_view_id(window_id).expect("root view should exist"),
                 body.id(),
             ]),
@@ -159,7 +157,7 @@ fn action_row_remains_fixed_when_form_scrolls() {
         });
         let body = modal.read(&app, |modal, _| modal.body().clone());
         let invalidation = WindowInvalidation {
-            updated: HashSet::from([
+            updated: EntityIdSet::from_iter([
                 app.root_view_id(window_id).expect("root view should exist"),
                 body.id(),
             ]),
