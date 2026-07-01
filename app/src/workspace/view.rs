@@ -20001,7 +20001,11 @@ impl Workspace {
             let inner = build_inner(name, show_header_pin);
             // Lay the pin over the row when pinned (here, only a pinned group
             // mid-rename); otherwise use the bare row.
-            let full = if show_header_pin { with_pin(inner) } else { inner };
+            let full = if show_header_pin {
+                with_pin(inner)
+            } else {
+                inner
+            };
             SizeConstraintSwitch::new(
                 full,
                 vec![(
