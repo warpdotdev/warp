@@ -3393,6 +3393,26 @@ impl ansi::Handler for Block {
         self.state = BlockState::Executing;
         self.is_for_in_band_command = is_for_in_band_command;
 
+        // Enable trailing-blank-row trimming on the output grid so the block's
+        // displayed height tracks actual rendered content rather than the
+        // monotonic `max_cursor_point` watermark. Without this, inline
+        // interactive readline-style prompts (e.g. `aws configure`, REPLs that
+        // use `\r\x1b[K` to redraw the input line) can grow the block height
+        // past their visible content. In `PinnedToBottom` layouts this leaves
+        // a large blank area above the input and detaches the visible cursor
+        // from the pinned bottom command line — see issue #10144.
+        //
+        // Note: alt-screen programs (vim, top, less, etc.) take over their
+        // own grid and do not display the output grid in the blocklist, so
+        // turning trim on here is harmless for them. CLI-agent sessions
+        // already enable this from their session-start handler in
+        // `view.rs::handle_cli_agent_sessions_event`; this call is idempotent
+        // and the second `set_track_content_length(true)` is a no-op (the
+        // eager backward scan recomputes the already-correct value).
+        if FeatureFlag::TrimTrailingBlankLines.is_enabled() {
+            self.output_grid.set_trim_trailing_blank_rows(true);
+        }
+
         self.wakeup_after_delay();
     }
 
