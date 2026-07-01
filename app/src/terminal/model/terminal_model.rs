@@ -520,6 +520,14 @@ pub struct TerminalModel {
     /// bootstrap init scripts. Used to validate DCS hook integrity: hooks
     /// carrying an unrecognized session_id are rejected.
     registered_session_ids: HashSet<SessionId>,
+
+    /// Held while a foreground command is executing in this terminal. Acquired in
+    /// `on_command_started` (called from the PTY controller on real command writes only,
+    /// not from EOT / non-command writes) and dropped in the `command_finished` ANSI
+    /// handler. Short commands acquire and release within milliseconds and never block
+    /// sleep in practice; long-running commands hold for their full lifetime. Mirrors
+    /// the Agent Mode pattern in `warp_multi_agent_client`. See issue #9056.
+    running_command_sleep_guard: Option<prevent_sleep::Guard>,
 }
 
 #[derive(Clone, Debug)]
@@ -1089,6 +1097,7 @@ impl TerminalModel {
             // Start mid-way through the u32 range to avoid collisions
             next_kitty_image_id: 2147483647,
             registered_session_ids: HashSet::new(),
+            running_command_sleep_guard: None,
         }
     }
 
@@ -1638,6 +1647,18 @@ impl TerminalModel {
     /// the user's behalf, we consider the active block started.
     pub fn start_command_execution(&mut self) {
         self.block_list.start_active_block();
+    }
+
+    /// Called by the PTY controller after a real command write (User / AI / SharedSession /
+    /// EnvVarCollection) — distinct from `start_command_execution`, which is also fired by
+    /// non-command writes like EOT and which therefore can't be trusted to be paired with a
+    /// matching `command_finished`. Holds a `PreventUserIdleSystemSleep` assertion for the
+    /// duration of the command. RAII (Drop) releases it when `command_finished` clears the
+    /// field. Replaces any prior guard so a missed finish doesn't permanently stack assertions.
+    /// See issue #9056.
+    pub fn on_command_started(&mut self) {
+        self.running_command_sleep_guard =
+            Some(prevent_sleep::prevent_sleep("Terminal command in-progress"));
     }
 
     pub fn start_command_execution_from_env_var_collection(
@@ -2694,6 +2715,12 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn command_finished(&mut self, data: CommandFinishedValue) {
+        // Release the sleep guard acquired in `start_command_execution`. Done
+        // before the rest of the handler so the system is free to idle as soon
+        // as the command is observed finished, even if downstream work below
+        // takes a moment.
+        self.running_command_sleep_guard = None;
+
         // If we ssh from a doesn't-understand-bracketed-paste shell into one
         // that enables it, then get disconnected, we'll be stuck in a state
         // of bracketed paste being enabled, but the local shell doesn't know

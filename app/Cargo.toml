@@ -168,6 +168,7 @@ persistence.workspace = true
 pin-project.workspace = true
 plist = "1"
 pprof = { workspace = true, optional = true, features = ["protobuf-codec"] }
+prevent_sleep.workspace = true
 prost.workspace = true
 prost-types.workspace = true
 qrcode.workspace = true
