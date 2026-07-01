@@ -2681,3 +2681,43 @@ fn test_bounds_to_string_snaps_back_to_base_of_variable_width_span() {
          started mid-span, not just adjacent to the base"
     );
 }
+
+#[test]
+fn test_real_telugu_sentence_clusters_correctly() {
+    // A real, full Telugu sentence (multiple words, mixed conjunct and
+    // vowel-sign clusters), verifying every cluster boundary matches
+    // proper akshara segmentation -- not just the synthetic single-word
+    // tests above. Written while diagnosing a real rendering bug (see
+    // the plan's Phase 6 execution log): this test proved the clustering
+    // logic itself was already correct, which correctly pointed the
+    // investigation at the render layer instead.
+    let word = "ప్రభుత్వం అందరికీ విద్యను అందించాలి";
+    let mut grid = grid_with_fixed_width_measurer(3, 60);
+    feed(&mut grid, word);
+
+    let mut col = 0;
+    let mut clusters = Vec::new();
+    while col < grid.columns() {
+        let cell = &grid.grid_storage()[VisibleRow(0)][col];
+        if cell.c == crate::terminal::model::cell::DEFAULT_CHAR {
+            break;
+        }
+        clusters.push(cell.raw_content().to_string());
+        col += cell.span().max(1) as usize;
+    }
+
+    let reassembled: String = clusters.concat();
+    assert_eq!(
+        reassembled, word,
+        "reassembling every cluster's text should reproduce the original sentence"
+    );
+    // Every syllable boundary in this sentence: ప్ర|భు|త్వం [space]
+    // అం|ద|రి|కీ [space] వి|ద్య|ను [space] అం|దిం|చా|లి
+    assert_eq!(
+        clusters,
+        vec![
+            "ప్ర", "భు", "త్వం", " ", "అం", "ద", "రి", "కీ", " ", "వి", "ద్య", "ను", " ", "అం",
+            "దిం", "చా", "లి"
+        ]
+    );
+}

@@ -56,6 +56,16 @@ pub(super) struct State {
     pub cell_width: usize,
     pub cell_height: usize,
 
+    /// Full-precision cell width in pixels, matching exactly what the
+    /// renderer's `cell_size.x()` uses. Deliberately kept separate from
+    /// `cell_width` (a truncated `usize`, used for the existing
+    /// integer column/pixel math elsewhere in this file): truncating this
+    /// value before passing it to `ClusterWidthMeasurer` would
+    /// systematically overestimate the cells a cluster needs, producing a
+    /// visible gap after every cluster once rendered at the renderer's
+    /// true (untruncated) cell width.
+    pub cell_width_px: f32,
+
     /// Mode flags.
     pub mode: TermMode,
 
@@ -141,6 +151,7 @@ impl State {
 
         Self {
             cell_width: size_info.cell_width_px.as_f32() as usize,
+            cell_width_px: size_info.cell_width_px.as_f32(),
             cell_height: size_info.cell_height_px.as_f32() as usize,
             mode: Default::default(),
             tabs,
@@ -1486,10 +1497,9 @@ impl GridHandler {
         let Some(pending) = self.ansi_handler_state.pending_indic_cluster.take() else {
             return;
         };
-        let cell_width_px = self.ansi_handler_state.cell_width as f32;
         let span = self
             .cluster_measurer
-            .measure_cells(&pending.text, cell_width_px)
+            .measure_cells(&pending.text, self.ansi_handler_state.cell_width_px)
             .clamp(1, 8);
         self.write_grapheme_cluster(&pending.text, span as usize);
     }
