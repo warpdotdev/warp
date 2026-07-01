@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use chrono::Local;
 pub(crate) use execute::{
-    apply_edits, coerce_integer_args, FileReadResult, MalformedFinalLineProxyEvent,
+    apply_edits, coerce_integer_args, read_local_file_for_diff, MalformedFinalLineProxyEvent,
 };
 #[cfg(test)]
 pub(crate) use execute::{compose_run_agents_child_prompt, run_agents_to_start_agent_mode};

@@ -35,7 +35,7 @@ pub(super) mod view_util;
 pub use action_model::BlocklistAIActionModel;
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{
-    apply_edits, read_local_file_context, BlocklistAIActionEvent, FileReadResult,
+    apply_edits, read_local_file_context, read_local_file_for_diff, BlocklistAIActionEvent,
     ReadFileContextResult, RequestFileEditsFormatKind, ShellCommandExecutor,
     ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
     StartAgentRequestId,

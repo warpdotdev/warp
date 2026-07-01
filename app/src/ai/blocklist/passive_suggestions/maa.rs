@@ -18,7 +18,7 @@ use crate::ai::agent::{
 use crate::ai::block_context::BlockContext;
 use crate::ai::blocklist::inline_action::code_diff_view::FileDiff;
 use crate::ai::blocklist::{
-    apply_edits, BlocklistAIHistoryModel, FileReadResult, RequestFileEditsFormatKind,
+    apply_edits, read_local_file_for_diff, BlocklistAIHistoryModel, RequestFileEditsFormatKind,
     SessionContext,
 };
 use crate::ai::paths::host_native_absolute_path;
@@ -257,9 +257,7 @@ impl PassiveSuggestionsModel {
                                     background_executor,
                                     auth_state,
                                     true,
-                                    |path| async move {
-                                        FileReadResult::from(std::fs::read_to_string(path))
-                                    },
+                                    |path| async move { read_local_file_for_diff(&path) },
                                 )
                                 .await
                             },

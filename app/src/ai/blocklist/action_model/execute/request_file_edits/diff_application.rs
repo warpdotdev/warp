@@ -48,6 +48,37 @@ impl From<std::io::Result<String>> for FileReadResult {
     }
 }
 
+/// Per-file byte limit for diff application (10 MB).
+///
+/// Files larger than this are not read into memory for diff application. Reading
+/// an arbitrarily large file into a `String` and then loading it into an inline
+/// diff editor buffer — which re-materializes the entire buffer text on every
+/// content change — can balloon memory usage into the tens of gigabytes. The
+/// remote diff path already enforces this same limit via the read-file RPC;
+/// [`read_local_file_for_diff`] keeps the local path consistent.
+pub(crate) const MAX_DIFF_READ_BYTES: u32 = 10_000_000;
+
+/// Reads a local file for diff application, enforcing [`MAX_DIFF_READ_BYTES`].
+///
+/// Oversized files yield [`FileReadResult::ReadError`] so the offending file's
+/// diff is skipped (and surfaced to the model as a read failure) instead of
+/// reading gigabytes into memory and loading the content into an inline diff
+/// editor. The metadata pre-check avoids allocating the file contents at all in
+/// the common case of a regular file that is too large.
+pub(crate) fn read_local_file_for_diff(path: &str) -> FileReadResult {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.len() > u64::from(MAX_DIFF_READ_BYTES) => {
+            FileReadResult::ReadError(format!(
+                "File exceeds the {MAX_DIFF_READ_BYTES}-byte limit for diff application \
+                 and cannot be applied safely."
+            ))
+        }
+        Ok(_) => FileReadResult::from(std::fs::read_to_string(path)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => FileReadResult::NotFound,
+        Err(err) => FileReadResult::ReadError(format!("{err:#}")),
+    }
+}
+
 /// Errors that can occur while applying a diff.
 #[derive(Debug)]
 pub(crate) enum DiffApplicationError {
