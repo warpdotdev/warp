@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use warp_multi_agent_api as api;
 
 use super::task::helper::{MessageExt, ToolCallExt};
 use super::task::{Task, TaskId};
-use super::{AIAgentExchange, AIAgentExchangeId, AIAgentOutputMessageType};
+use super::{AIAgentExchange, AIAgentExchangeId, AIAgentOutputMessageType, MessageId};
 use crate::ai::agent::{AIAgentContext, AIAgentInput};
 use crate::ai::skills::SkillDescriptor;
 
@@ -303,6 +303,75 @@ impl TaskStore {
         let task = self.tasks.remove(task_id)?;
         self.rebuild_linearized_refs_index();
         Some(task)
+    }
+
+    /// Removes the given message ids from the source of every non-root task.
+    ///
+    /// Used by conversation rewind: summarization (`MoveMessagesToNewTask`)
+    /// relocates rewound root messages into a subtask while the root exchange's
+    /// `added_message_ids` still reference them, so a root-only removal would
+    /// leave them to be re-sent. Removing source messages does not change the
+    /// exchange index, so no rebuild is required.
+    pub fn remove_messages_from_non_root_tasks(&mut self, message_ids: &HashSet<MessageId>) {
+        if message_ids.is_empty() {
+            return;
+        }
+        let root_task_id = self.root_task_id.clone();
+        for (task_id, task) in self.tasks.iter_mut() {
+            if *task_id == root_task_id {
+                continue;
+            }
+            task.remove_messages(message_ids);
+        }
+    }
+
+    /// Removes every non-root task that is no longer reachable from the root by
+    /// following sub-agent tool calls (transitively).
+    ///
+    /// Used after a rewind truncation to drop orphaned subtasks (whose spawning
+    /// sub-agent tool call was removed) and straddle subtasks (whose call we
+    /// stripped because its result was rewound). Sub-agents whose call survives
+    /// in the root remain reachable and are kept, preserving valid history.
+    pub fn prune_unreachable_subtasks(&mut self) {
+        let reachable = self.reachable_task_ids();
+        let to_remove: Vec<TaskId> = self
+            .tasks
+            .keys()
+            .filter(|id| **id != self.root_task_id && !reachable.contains(*id))
+            .cloned()
+            .collect();
+        if to_remove.is_empty() {
+            return;
+        }
+        for id in &to_remove {
+            self.tasks.remove(id);
+        }
+        self.rebuild_linearized_refs_index();
+    }
+
+    /// Computes the set of task ids reachable from the root task by following
+    /// sub-agent tool calls in task sources (transitively). Unlike
+    /// `compute_active_task_ids`, a sub-agent's subtask stays reachable even
+    /// after its result arrives, so finished sub-agents remain part of history.
+    fn reachable_task_ids(&self) -> HashSet<TaskId> {
+        let mut reachable: HashSet<TaskId> = HashSet::new();
+        let mut queue = vec![self.root_task_id.clone()];
+        while let Some(task_id) = queue.pop() {
+            if !reachable.insert(task_id.clone()) {
+                continue;
+            }
+            let Some(task) = self.tasks.get(&task_id) else {
+                continue;
+            };
+            for message in task.messages() {
+                if let Some(subagent) = message.tool_call().and_then(|tc| tc.subagent()) {
+                    if !subagent.task_id.is_empty() {
+                        queue.push(TaskId::new(subagent.task_id.clone()));
+                    }
+                }
+            }
+        }
+        reachable
     }
 
     fn lookup_exchange(&self, r: &ExchangeRef) -> Option<&AIAgentExchange> {
