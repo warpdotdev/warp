@@ -160,11 +160,25 @@ pub struct SecretRedactionState {
     // on a secret to open the tooltip, this secret should remain highlighted and the tooltip in place
     // even if we hover over other secrets.
     secret_location_open_tooltip: Option<SecretLocation>,
+
+    // Per-view-unique save-position id used to anchor the secret tooltip overlay. Unique per AI
+    // block so that multiple blocks' tooltips don't collide on a single shared anchor id.
+    tooltip_position_id: String,
 }
 
 impl SecretRedactionState {
     pub fn open_tooltip_location(&self) -> Option<&SecretLocation> {
         self.secret_location_open_tooltip.as_ref()
+    }
+
+    /// Returns the per-view save-position id used to anchor this block's secret tooltip overlay,
+    /// falling back to the shared constant if one hasn't been set yet.
+    pub(crate) fn resolved_tooltip_position_id(&self) -> String {
+        if self.tooltip_position_id.is_empty() {
+            super::RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID.to_owned()
+        } else {
+            self.tooltip_position_id.clone()
+        }
     }
 
     pub fn hovered_location(&self) -> Option<&SecretLocation> {
@@ -220,7 +234,9 @@ impl SecretRedactionState {
         &mut self,
         location: &TextLocation,
         secret_range: &SecretRange,
+        position_id: String,
     ) -> Option<&mut Secret> {
+        self.tooltip_position_id = position_id;
         self.secret_location_open_tooltip = Some(SecretLocation {
             secret_range: secret_range.clone(),
             location: *location,

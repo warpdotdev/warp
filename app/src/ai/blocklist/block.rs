@@ -218,6 +218,20 @@ const AUTO_EXPAND_REQUESTED_COMMAND_DELAY: std::time::Duration =
 pub const RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID: &str =
     "ai_block:rich_content_secret_first_char_position";
 
+/// Builds a per-view-unique save-position id for a rich-content link tooltip, so that tooltips in
+/// different AI blocks don't collide on a single shared anchor id. Sharing one global id caused the
+/// tooltip to fail to position (and therefore not appear) in multi-block conversations.
+fn rich_content_link_tooltip_position_id(view_id: &EntityId) -> String {
+    let base = RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID;
+    format!("{base}_{view_id}")
+}
+
+/// Builds a per-view-unique save-position id for a rich-content secret tooltip.
+fn rich_content_secret_tooltip_position_id(view_id: &EntityId) -> String {
+    let base = RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID;
+    format!("{base}_{view_id}")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct UserAvatarInfo {
     display_name: String,
@@ -5146,13 +5160,15 @@ impl AIBlock {
                 target_override: self.detected_file_path_target_override(absolute_path),
             },
         };
+        let position_id = rich_content_link_tooltip_position_id(&ctx.view_id());
+        self.detected_links_state.tooltip_position_id = position_id.clone();
         self.detected_links_state.link_location_open_tooltip = Some(LinkLocation {
             link_range: link_range.clone(),
             location: *location,
         });
         ctx.emit(AIBlockEvent::ShowLinkTooltip(RichContentLinkTooltipInfo {
             link: rich_content_link,
-            position_id: RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID.to_owned(),
+            position_id,
         }));
     }
 
@@ -5162,15 +5178,17 @@ impl AIBlock {
         secret_range: &SecretRange,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(hoverable_secret) = self
-            .secret_redaction_state
-            .show_secret_tooltip(location, secret_range)
-        {
+        let position_id = rich_content_secret_tooltip_position_id(&ctx.view_id());
+        if let Some(hoverable_secret) = self.secret_redaction_state.show_secret_tooltip(
+            location,
+            secret_range,
+            position_id.clone(),
+        ) {
             ctx.emit(AIBlockEvent::ShowSecretTooltip(
                 RichContentSecretTooltipInfo {
                     secret: hoverable_secret.secret.clone(),
                     is_obfuscated: hoverable_secret.is_obfuscated,
-                    position_id: RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID.to_owned(),
+                    position_id,
                     secret_range: secret_range.clone(),
                     location: *location,
                     view_id: ctx.view_id(),

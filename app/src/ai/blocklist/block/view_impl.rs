@@ -58,14 +58,13 @@ use super::secret_redaction::SecretRedactionState;
 use super::{
     attachment_names, AIBlock, AIBlockAction, TextLocation,
     DISPATCHED_REQUESTED_EDIT_KEYMAP_CONTEXT, HAS_PENDING_ACTION,
-    RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID,
 };
 use crate::ai::agent::{AIAgentCitation, AIAgentInput};
 use crate::ai::blocklist::block::view_impl::comments::address_comment_chips;
 use crate::ai::blocklist::block::view_impl::header::{
     render_overflow_menu_button, OVERFLOW_BUTTON_SIZE,
 };
-use crate::ai::blocklist::block::{DetectedLinksState, RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID};
+use crate::ai::blocklist::block::DetectedLinksState;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
 use crate::ai::blocklist::model::AIBlockModelHelper;
@@ -175,7 +174,7 @@ fn add_highlights_to_text(
         if open_secret_tooltip.location == location {
             text_element = text_element.with_saved_char_position(
                 open_secret_tooltip.secret_range.char_range.start,
-                RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID.to_owned(),
+                secret_redaction_state.resolved_tooltip_position_id(),
             );
         }
     }
@@ -258,7 +257,7 @@ fn add_highlights_to_text(
                 }
                 text_element = text_element.with_saved_char_position(
                     open_link_tooltip.link_range.start,
-                    RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID.to_owned(),
+                    detected_links_state.resolved_tooltip_position_id(),
                 );
             }
         }
@@ -511,7 +510,7 @@ pub(crate) fn add_highlights_to_rich_text(
                     formatted_text_element = formatted_text_element.with_saved_glyph_position(
                         open_link_tooltip.link_range.start,
                         i,
-                        RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID.to_owned(),
+                        detected_links_state.resolved_tooltip_position_id(),
                     );
                 }
             }
@@ -522,7 +521,7 @@ pub(crate) fn add_highlights_to_rich_text(
                 formatted_text_element = formatted_text_element.with_saved_glyph_position(
                     open_secret_tooltip.secret_range.char_range.start,
                     i,
-                    RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID.to_owned(),
+                    secret_redaction_state.resolved_tooltip_position_id(),
                 );
                 if !is_selecting {
                     let highlight_indices = open_secret_tooltip
