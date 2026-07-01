@@ -894,29 +894,16 @@ impl TerminalManager {
                     return;
                 };
                 let is_ambient_agent = model.lock().is_shared_ambient_agent_session();
-                if is_ambient_agent {
-                    if !Self::end_current_ambient_session(
-                        &view,
-                        model.clone(),
-                        &current_network,
-                        &network,
-                        ctx,
-                    ) {
-                        return;
-                    }
-                    // Non-owner viewers (read-only) won't get a follow-up
-                    // session; owners may handoff via
-                    // `attach_execution_session` (same `TerminalManager`,
-                    // same orchestrator `task_id`), so keep their model.
-                    let is_owner = view.read(ctx, |terminal_view, app| {
-                        terminal_view.owned_ambient_agent_task_id(app).is_some()
-                    });
-                    if !is_owner {
-                        Self::stop_orchestration_polling(&orchestration_viewer_model, ctx);
-                    }
-                } else {
-                    Self::stop_orchestration_polling(&orchestration_viewer_model, ctx);
-                    Self::shared_session_ended(&view, model.clone(), ctx);
+                if !Self::handle_viewer_session_end(
+                    &view,
+                    model.clone(),
+                    &current_network,
+                    &network,
+                    &orchestration_viewer_model,
+                    is_ambient_agent,
+                    ctx,
+                ) {
+                    return;
                 }
                 view.update(ctx, |terminal_view, ctx| {
                     let reason_string = session_ended_reason_string(reason);
@@ -948,10 +935,23 @@ impl TerminalManager {
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
                 };
-                // Viewer has been removed and will not re-attach; stop the
-                // children-polling background work.
-                Self::stop_orchestration_polling(&orchestration_viewer_model, ctx);
-                Self::shared_session_ended(&view, model.clone(), ctx);
+                // Viewer access was removed and the network will not re-attach.
+                // Ambient agent panes route through the resumable
+                // execution-ended path (clearing the now-dead live session) so
+                // an owner can still start a cloud follow-up; non-ambient
+                // viewers fall back to the generic finished-viewer teardown.
+                let is_ambient_agent = model.lock().is_shared_ambient_agent_session();
+                if !Self::handle_viewer_session_end(
+                    &view,
+                    model.clone(),
+                    &current_network,
+                    &network,
+                    &orchestration_viewer_model,
+                    is_ambient_agent,
+                    ctx,
+                ) {
+                    return;
+                }
                 view.update(ctx, |terminal_view, ctx| {
                     let reason_string = viewer_removed_reason_string(reason);
                     terminal_view.show_persistent_toast(reason_string, ToastFlavor::Error, ctx);
@@ -979,17 +979,35 @@ impl TerminalManager {
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
                 };
-                // Reconnection has been abandoned; stop the children-polling
-                // background work.
-                Self::stop_orchestration_polling(&orchestration_viewer_model, ctx);
-                Self::shared_session_ended(&view, model.clone(), ctx);
-                view.update(ctx, |terminal_view, ctx| {
-                    terminal_view.show_persistent_toast(
-                        "Failed to reconnect. Please try again later.".to_owned(),
-                        ToastFlavor::Error,
-                        ctx,
-                    );
-                });
+                // Reconnection has been abandoned. Ambient agent panes route
+                // through the resumable execution-ended path (which clears the
+                // stale live-session state so an owner can start a cloud
+                // follow-up); non-ambient viewers fall back to the generic
+                // finished-viewer teardown.
+                let is_ambient_agent = model.lock().is_shared_ambient_agent_session();
+                if !Self::handle_viewer_session_end(
+                    &view,
+                    model.clone(),
+                    &current_network,
+                    &network,
+                    &orchestration_viewer_model,
+                    is_ambient_agent,
+                    ctx,
+                ) {
+                    return;
+                }
+                // Ambient panes surface the resumable tombstone / follow-up
+                // input instead, so the generic "please try again" toast (which
+                // implies a retryable transport error) would be misleading.
+                if !is_ambient_agent {
+                    view.update(ctx, |terminal_view, ctx| {
+                        terminal_view.show_persistent_toast(
+                            "Failed to reconnect. Please try again later.".to_owned(),
+                            ToastFlavor::Error,
+                            ctx,
+                        );
+                    });
+                }
             }
             NetworkEvent::SharerActivePromptUpdated(active_prompt_update) => {
                 Self::handle_active_prompt_update(
@@ -1703,6 +1721,57 @@ impl TerminalManager {
         }
         // `handle` drops here, releasing the per-pane viewer model.
         drop(handle);
+    }
+
+    /// Common teardown for the viewer session-end network events
+    /// (`SessionEnded`, `ViewerRemoved`, `FailedToReconnect`).
+    ///
+    /// Ambient agent panes route through [`Self::end_current_ambient_session`],
+    /// which clears the live `active_execution_session_id`, records the ended
+    /// session, and surfaces the resumable tombstone / follow-up input — so a
+    /// session lost via reconnect failure or access removal lands in the same
+    /// editable post-run state as a clean `SessionEnded`, rather than leaving a
+    /// stale "session is live" gate that misroutes follow-ups to a local agent.
+    /// Non-ambient panes use the generic [`Self::shared_session_ended`]
+    /// finished-viewer teardown (which cancels in-progress conversations).
+    ///
+    /// Returns `false` when an ambient end was ignored because the ended network
+    /// is no longer the current one (a stale event); callers should bail without
+    /// surfacing an end-of-session toast.
+    fn handle_viewer_session_end(
+        terminal_view: &ViewHandle<TerminalView>,
+        model: Arc<FairMutex<TerminalModel>>,
+        current_network: &Arc<FairMutex<Option<ModelHandle<Network>>>>,
+        ended_network: &ModelHandle<Network>,
+        orchestration_viewer_model: &Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
+        is_ambient_agent: bool,
+        ctx: &mut AppContext,
+    ) -> bool {
+        if is_ambient_agent {
+            if !Self::end_current_ambient_session(
+                terminal_view,
+                model,
+                current_network,
+                ended_network,
+                ctx,
+            ) {
+                return false;
+            }
+            // Non-owner viewers (read-only) won't get a follow-up session;
+            // owners may handoff via `attach_execution_session` (same
+            // `TerminalManager`, same orchestrator `task_id`), so keep their
+            // model.
+            let is_owner = terminal_view.read(ctx, |terminal_view, app| {
+                terminal_view.owned_ambient_agent_task_id(app).is_some()
+            });
+            if !is_owner {
+                Self::stop_orchestration_polling(orchestration_viewer_model, ctx);
+            }
+        } else {
+            Self::stop_orchestration_polling(orchestration_viewer_model, ctx);
+            Self::shared_session_ended(terminal_view, model, ctx);
+        }
+        true
     }
 
     fn shared_session_ended(

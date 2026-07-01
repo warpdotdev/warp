@@ -21,10 +21,12 @@
 //!   [`add_child`](TuiParentElement::add_child) /
 //!   [`add_children`](TuiParentElement::add_children).
 
-use crate::{AppContext, EntityId, EntityIdMap, Event};
+use crate::{AppContext, EntityId, EntityIdMap};
 
 mod buffer;
 mod child_view;
+mod clipped;
+mod color;
 mod column;
 mod constrained_box;
 mod container;
@@ -32,18 +34,28 @@ mod event;
 mod event_handler;
 mod geometry;
 mod parent;
+mod scrollable;
 mod text;
+mod viewported_list;
 
 pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiStyle};
 pub use child_view::TuiChildView;
+pub use clipped::TuiClipped;
 pub use column::TuiColumn;
 pub use constrained_box::TuiConstrainedBox;
 pub use container::TuiContainer;
-pub use event::{TuiDispatchEventResult, TuiEventContext, TuiEventDispatchResult};
+pub use event::{
+    TuiDispatchEventResult, TuiEvent, TuiEventContext, TuiEventDispatchResult, TuiScrollDelta,
+};
 pub use event_handler::TuiEventHandler;
-pub use geometry::{TuiConstraint, TuiRect, TuiRectExt, TuiSize};
+pub use geometry::{TuiConstraint, TuiPoint, TuiPointExt, TuiRect, TuiRectExt, TuiSize};
 pub use parent::TuiParentElement;
+pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use text::TuiText;
+pub use viewported_list::{
+    TuiViewportContent, TuiViewportPosition, TuiViewportVerticalAlignment, TuiViewportWindow,
+    TuiViewportedElement, TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
+};
 
 /// Carries the pre-rendered per-view element map through the layout pass,
 /// mirroring the GUI's `LayoutContext`. [`TuiChildView`] uses it to look up
@@ -128,7 +140,7 @@ pub trait TuiElement {
     fn present(&mut self, _ctx: &mut TuiPresentationContext<'_>) {}
 
     /// Offers `event` to this element within `area`, returning `true` if it was
-    /// handled. `event_ctx` collects deferred app updates and typed actions;
+    /// handled. `event_ctx` collects app updates and typed actions;
     /// `ctx` carries the presenter's pre-rendered view map so [`TuiChildView`]
     /// can look up and dispatch into its child; `app` provides read access to
     /// the shared core during dispatch.
@@ -136,13 +148,23 @@ pub trait TuiElement {
     /// [`TuiChildView`]: crate::elements::tui::TuiChildView
     fn dispatch_event(
         &mut self,
-        _event: &Event,
+        _event: &TuiEvent,
         _area: TuiRect,
         _event_ctx: &mut TuiEventContext,
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> bool {
         false
+    }
+
+    /// Boxes this element as a trait object, mirroring the GUI `Element::finish`
+    /// convenience so element trees can be terminated with `.finish()` rather
+    /// than an explicit `Box::new`.
+    fn finish(self) -> Box<dyn TuiElement>
+    where
+        Self: 'static + Sized,
+    {
+        Box::new(self)
     }
 }
 

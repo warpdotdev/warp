@@ -575,6 +575,10 @@ pub enum FeatureFlag {
     /// Enables computer use functionality in local clients.
     LocalComputerUse,
 
+    /// Enables background, per-window computer use: driving a specific window directly without
+    /// raising it or moving the cursor.  Currently only supported on macOS.
+    BackgroundComputerUse,
+
     /// Enables team API key creation in the API key management UI.
     TeamApiKeys,
 
@@ -967,6 +971,8 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
     FeatureFlag::PromptCacheExpiryWarning,
+    FeatureFlag::PinnedTabs,
+    FeatureFlag::BackgroundComputerUse,
     FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
@@ -975,8 +981,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
-    #[cfg(target_os = "macos")]
-    FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     FeatureFlag::DragTabsToWindows,
@@ -1087,7 +1091,6 @@ impl FeatureFlag {
             GitOperationsInCodeReview => Some(
                 "Enables commit, push, and create-PR actions directly from the code review panel.",
             ),
-            GroupedTabs => Some("Enables organizing tabs into named, collapsible groups."),
             PinnedTabs => Some("Enables pinning individual tabs and tab groups to the front of the tab bar."),
             AsyncFind => Some(
                 "Runs terminal find on a background thread to keep the UI responsive while searching large outputs.",

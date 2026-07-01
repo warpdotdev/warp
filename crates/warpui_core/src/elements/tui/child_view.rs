@@ -17,12 +17,12 @@
 //!   the action origin for the duration of the subtree's dispatch.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPresentationContext, TuiRect, TuiSize,
 };
 #[cfg(test)]
 use crate::EntityIdMap;
-use crate::{AppContext, EntityId, Event, TuiView, ViewHandle};
+use crate::{AppContext, EntityId, TuiView, ViewHandle};
 
 /// Embeds a registered [`TuiView`] as a node in the element tree, mirroring
 /// the GUI's `ChildView` design: the child element is never cached in this
@@ -97,7 +97,7 @@ impl TuiElement for TuiChildView {
 
     fn dispatch_event(
         &mut self,
-        event: &Event,
+        event: &TuiEvent,
         area: TuiRect,
         event_ctx: &mut TuiEventContext,
         ctx: &mut TuiLayoutContext,

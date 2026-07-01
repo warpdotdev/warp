@@ -36,13 +36,17 @@ path = "src/bin/stable.rs"
 anyhow.workspace = true
 log.workspace = true
 num-traits.workspace = true
+parking_lot.workspace = true
+pathfinder_color.workspace = true
 pathfinder_geometry.workspace = true
 string-offset.workspace = true
+sum_tree.workspace = true
 vec1.workspace = true
 warp = { workspace = true, features = ["tui"] }
 warp_channel_config.workspace = true
 warp_core.workspace = true
 warp_editor.workspace = true
+warp_terminal.workspace = true
 warpui.workspace = true
 warpui_core = { workspace = true, features = ["tui"] }
 
@@ -52,6 +56,8 @@ warpui_core = { workspace = true, features = ["tui"] }
 warp_core = { workspace = true, features = ["test-util"] }
 # Process-level worker-dispatch regression test.
 command.workspace = true
+pathfinder_color.workspace = true
+warp = { workspace = true, features = ["tui", "test-util"] }
 
 [[example]]
 name = "tui_input_demo"

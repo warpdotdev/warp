@@ -27,6 +27,7 @@ use crate::ai::blocklist::{
     QueuedQueryOrigin, ResponseStreamId,
 };
 use crate::features::FeatureFlag;
+use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::server_api::ai::SpawnAgentRequest;
 use crate::terminal::input::{Event as InputEvent, Input};
 use crate::terminal::shared_session::SharedSessionStatus;
@@ -1038,6 +1039,77 @@ fn lrc_finish_commits_edited_lrc_row_before_sending() {
     });
 }
 
+#[test]
+fn lrc_finish_queued_compact_and_sends_followup_after_summary() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
+        let _summarization = FeatureFlag::SummarizationConversationCommand.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.ai_context_model
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx),
+                None
+            );
+        });
+
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new_with_attachments(
+                    format!("{} follow up", commands::COMPACT_AND.name),
+                    QueuedQueryOrigin::LrcAutoQueue,
+                    vec![image_attachment("queued-context.png")],
+                ),
+                ctx,
+            );
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.send_lrc_queued_prompts(conversation_id, ctx);
+        });
+
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].text(), "follow up");
+            assert_eq!(queue[0].origin(), QueuedQueryOrigin::CompactAndSlashCommand);
+            assert_eq!(queue[0].attachments().len(), 1);
+        });
+
+        let ai_query_count = Rc::new(RefCell::new(0));
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let ai_query_count_for_subscription = ai_query_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &InputEvent, _| {
+                if matches!(event, InputEvent::ExecuteAIQuery) {
+                    *ai_query_count_for_subscription.borrow_mut() += 1;
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+        });
+
+        assert_eq!(*ai_query_count.borrow(), 1);
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
 #[test]
 fn complete_drain_with_empty_queue_returns_none() {
     with_singleton(|mut app, model, conv| {

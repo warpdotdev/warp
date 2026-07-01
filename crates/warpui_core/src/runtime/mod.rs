@@ -12,7 +12,7 @@
 //! alternate screen (restored on drop) and subscribes to the window's
 //! invalidation signal; [`run_until`](TuiRuntime::run_until) then repeatedly
 //! redraws when dirty and polls crossterm for input, converting each event with
-//! [`crossterm_event_to_warp_event`] and dispatching it — first through the
+//! [`crossterm_event_to_tui_event`] and dispatching it — first through the
 //! shared keymap (the focused view's responder chain, exactly like the GUI
 //! window event path), then through the rendered element tree.
 //!
@@ -27,6 +27,7 @@ use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
 
+use instant::Instant;
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyModifiers,
@@ -34,17 +35,18 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 
-use crate::elements::tui::{TuiEventContext, TuiLayoutContext, TuiRect, TuiSize};
+use crate::elements::tui::{TuiEvent, TuiEventContext, TuiLayoutContext, TuiRect, TuiSize};
 use crate::platform::TerminationMode;
 use crate::presenter::tui::TuiPresenter;
 use crate::r#async::block_on;
 use crate::r#async::executor::ForegroundTask;
-use crate::{App, AppContext, Event, TuiView, ViewHandle, WindowId};
+use crate::{App, AppContext, TuiView, ViewHandle, WindowId};
 
 mod event_conversion;
 mod renderer;
 
-pub use event_conversion::crossterm_event_to_warp_event;
+pub use event_conversion::crossterm_event_to_tui_event;
+use event_conversion::ClickTracker;
 pub use renderer::TuiFrameRenderer;
 
 /// The host terminal the runtime draws to and reads input from. Abstracted so
@@ -71,6 +73,9 @@ struct TuiScreen<T, R: TuiTerminal> {
     presenter: TuiPresenter,
     renderer: TuiFrameRenderer,
     terminal: R,
+    /// Synthesizes multi-click counts for left mouse presses, which crossterm
+    /// does not report.
+    click_tracker: ClickTracker,
 }
 
 impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
@@ -81,6 +86,7 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             presenter: TuiPresenter::new(),
             renderer: TuiFrameRenderer::new(),
             terminal,
+            click_tracker: ClickTracker::default(),
         }
     }
 
@@ -103,21 +109,25 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         self.renderer.draw(&mut writer, &frame.buffer, frame.cursor)
     }
 
+    /// Converts a raw crossterm event into the TUI vocabulary, annotating left
+    /// mouse-down events with a synthesized multi-click count (crossterm only
+    /// reports raw presses). Returns `None` for events with no TUI equivalent.
+    fn convert_event(&mut self, event: CrosstermEvent) -> Option<TuiEvent> {
+        let mut tui_event = crossterm_event_to_tui_event(event)?;
+        self.click_tracker.annotate(&mut tui_event, Instant::now());
+        Some(tui_event)
+    }
+
     /// Dispatches a converted input event into the cached element tree, returning
     /// whether it was handled. Uses the last rendered element tree cached by the
     /// presenter (the same tree that was painted), with a `TuiLayoutContext` so
     /// `TuiChildView` can resolve its child from `rendered_views`.
-    fn dispatch_event(&mut self, ctx: &mut AppContext, event: &Event) -> bool {
+    fn dispatch_event(&mut self, ctx: &mut AppContext, event: &TuiEvent) -> bool {
         // Keymap pass (GUI parity): offer a keystroke to the focused view's
         // responder chain first, exactly like the GUI window event path.
-        if let Event::KeyDown {
-            keystroke,
-            is_composing,
-            ..
-        } = event
-        {
+        if let Some((keystroke, is_composing)) = event.key_down() {
             let responder_chain = ctx.get_responder_chain(self.window_id);
-            match ctx.dispatch_keystroke(self.window_id, &responder_chain, keystroke, *is_composing)
+            match ctx.dispatch_keystroke(self.window_id, &responder_chain, keystroke, is_composing)
             {
                 Ok(true) => return true,
                 Ok(false) => {}
@@ -140,9 +150,11 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         };
         let handled = element.dispatch_event(event, area, &mut event_ctx, &mut layout_ctx, ctx);
 
-        for update in event_ctx.take_updates() {
-            update(ctx);
+        let notified = event_ctx.take_notified();
+        for view_id in notified {
+            ctx.notify_view_observers(self.window_id, view_id);
         }
+
         for action in event_ctx.take_typed_actions() {
             // Dispatch through the shared responder chain (the origin view's
             // ancestors), so an action raised inside an embedded child view
@@ -261,9 +273,9 @@ where
         match event {
             CrosstermEvent::Resize(_, _) => self.dirty.set(true),
             event => {
-                if let Some(warp_event) = crossterm_event_to_warp_event(event) {
-                    let screen = &mut self.screen;
-                    let handled = app.update(|ctx| screen.dispatch_event(ctx, &warp_event));
+                let screen = &mut self.screen;
+                if let Some(tui_event) = screen.convert_event(event) {
+                    let handled = app.update(|ctx| screen.dispatch_event(ctx, &tui_event));
                     if handled {
                         self.dirty.set(true);
                     }
@@ -445,8 +457,9 @@ pub fn spawn_tui_driver<T: TuiView>(
                 match event {
                     CrosstermEvent::Resize(_, _) => ctx.invalidate_all_views(),
                     event => {
-                        if let Some(warp_event) = crossterm_event_to_warp_event(event) {
-                            screen.borrow_mut().dispatch_event(ctx, &warp_event);
+                        let mut screen = screen.borrow_mut();
+                        if let Some(tui_event) = screen.convert_event(event) {
+                            screen.dispatch_event(ctx, &tui_event);
                         }
                     }
                 }

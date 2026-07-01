@@ -13,6 +13,7 @@ use super::{
 use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
+use crate::ai::blocklist::orchestration_topology::has_local_orchestrated_children;
 use crate::settings::AISettings;
 use crate::system::{SystemStats, SystemStatsEvent};
 use crate::terminal::view::TerminalView;
@@ -26,6 +27,7 @@ pub(crate) enum AutoCloudHandoffSkipReason {
     MissingServerConversationToken,
     SharedSessionViewer,
     CloudHandoffUnavailable,
+    OrchestratorWithLocalChildren,
     AlreadyAttempted,
     NoFocusedConversation,
     TerminalNotFound { terminal_view_id: EntityId },
@@ -42,6 +44,10 @@ pub(crate) struct AutoCloudHandoffEligibility {
     pub(crate) is_viewing_shared_session: bool,
     pub(crate) can_handoff_to_cloud: bool,
     pub(crate) already_attempted: bool,
+    /// True when the focused conversation is an orchestrator with at least one
+    /// active local child agent. Handing such a session off to the cloud would
+    /// fork only the parent and orphan its local children, so we skip it.
+    pub(crate) has_local_orchestrated_children: bool,
 }
 
 impl AutoCloudHandoffEligibility {
@@ -49,6 +55,7 @@ impl AutoCloudHandoffEligibility {
         conversation: &AIConversation,
         can_handoff_to_cloud: bool,
         already_attempted: bool,
+        has_local_orchestrated_children: bool,
     ) -> Self {
         Self {
             is_empty: conversation.is_empty(),
@@ -57,6 +64,7 @@ impl AutoCloudHandoffEligibility {
             is_viewing_shared_session: conversation.is_viewing_shared_session(),
             can_handoff_to_cloud,
             already_attempted,
+            has_local_orchestrated_children,
         }
     }
 
@@ -72,6 +80,9 @@ impl AutoCloudHandoffEligibility {
         }
         if !self.is_in_progress {
             return Some(AutoCloudHandoffSkipReason::NotInProgress);
+        }
+        if self.has_local_orchestrated_children {
+            return Some(AutoCloudHandoffSkipReason::OrchestratorWithLocalChildren);
         }
         if !self.has_server_conversation_token {
             return Some(AutoCloudHandoffSkipReason::MissingServerConversationToken);
@@ -316,6 +327,7 @@ impl AutoCloudHandoffController {
             conversation,
             can_handoff_to_cloud,
             self.attempted_conversation_ids.contains(&conversation_id),
+            has_local_orchestrated_children(history, conversation_id),
         )
         .skip_reason()
         {

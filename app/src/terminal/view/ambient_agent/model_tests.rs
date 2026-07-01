@@ -100,6 +100,67 @@ fn add_model(app: &mut App) -> warpui::ModelHandle<AmbientAgentViewModel> {
     app.add_model(|ctx| AmbientAgentViewModel::new(EntityId::new(), ctx))
 }
 
+#[test]
+fn record_ambient_execution_ended_clears_active_session_and_enables_followup() {
+    // REMOTE-2017: once the live execution session ends, the ambient pane must
+    // drop `active_execution_session_id` so a follow-up routes to a cloud
+    // handoff (`is_ready_for_cloud_followup_prompt`) instead of a local agent.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+        let session_id = SessionId::new();
+        let task = "11111111-1111-1111-1111-111111111111"
+            .parse::<AmbientAgentTaskId>()
+            .expect("hardcoded task id parses");
+
+        model.update(&mut app, |model, _ctx| {
+            model.task_id = Some(task);
+            model.status = Status::AgentRunning;
+            model.active_execution_session_id = Some(session_id);
+            // A live execution session is attached, so no cloud follow-up yet.
+            assert!(!model.is_ready_for_cloud_followup_prompt());
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.record_ambient_execution_ended(session_id, ctx);
+        });
+
+        model.read(&app, |model, _| {
+            assert_eq!(model.active_execution_session_id, None);
+            assert_eq!(model.last_ended_execution_session_id, Some(session_id));
+            assert!(
+                model.is_ready_for_cloud_followup_prompt(),
+                "after the live execution session ends the pane should accept a cloud follow-up"
+            );
+        });
+    });
+}
+
+#[test]
+fn record_ambient_execution_ended_keeps_active_session_when_id_differs() {
+    // A teardown signal for a different (stale) session must not clear the live
+    // session for the one currently attached.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+        let live_session_id = SessionId::new();
+        let other_session_id = SessionId::new();
+
+        model.update(&mut app, |model, ctx| {
+            model.active_execution_session_id = Some(live_session_id);
+            model.record_ambient_execution_ended(other_session_id, ctx);
+        });
+
+        model.read(&app, |model, _| {
+            assert_eq!(model.active_execution_session_id, Some(live_session_id));
+            assert_eq!(
+                model.last_ended_execution_session_id,
+                Some(other_session_id)
+            );
+        });
+    });
+}
+
 fn retry_request(prompt: impl Into<String>) -> SpawnAgentRequest {
     SpawnAgentRequest {
         prompt: Some(prompt.into()),

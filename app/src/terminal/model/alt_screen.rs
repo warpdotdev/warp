@@ -623,7 +623,7 @@ impl ansi::Handler for AltScreen {
 
     fn command_finished(&mut self, _: CommandFinishedValue) {}
 
-    fn precmd(&mut self, _: PrecmdValue) {}
+    fn precmd_with_completion_metadata(&mut self, _: PrecmdValue) {}
 
     fn preexec(&mut self, _: PreexecValue) {}
 

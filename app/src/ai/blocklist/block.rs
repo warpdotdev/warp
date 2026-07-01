@@ -2079,7 +2079,13 @@ impl AIBlock {
                     } else {
                         format!("MCP Tool: {name} ({display_input})")
                     };
-                    self.handle_mcp_tool_stream_update(action_id, &command_text, ctx);
+                    self.handle_mcp_tool_stream_update(
+                        action_id,
+                        &command_text,
+                        name.to_string(),
+                        display_input,
+                        ctx,
+                    );
                 }
                 AIAgentAction {
                     id: action_id,
@@ -2148,6 +2154,30 @@ impl AIBlock {
                 .footer_citation_chip_handles
                 .entry(citation.clone())
                 .or_default();
+        }
+        // Also register handles for memory citations derived from fetched_memories,
+        // which are synthesized at render time and never go through output.citations.
+        // Only register for the first exchange since that's the only one that shows them.
+        if let Some(conversation) = self.model.conversation(ctx) {
+            let is_first_exchange = conversation
+                .first_exchange()
+                .map(|e| Some(e.id) == self.model.exchange_id(ctx))
+                .unwrap_or(false);
+            if is_first_exchange {
+                for memory in conversation.fetched_memories() {
+                    if memory.memory_store_id.is_empty() || memory.memory_id.is_empty() {
+                        continue;
+                    }
+                    self.state_handles
+                        .footer_citation_chip_handles
+                        .entry(AIAgentCitation::AgentMemory {
+                            memory_store_id: memory.memory_store_id.clone(),
+                            memory_id: memory.memory_id.clone(),
+                            content: memory.content.clone(),
+                        })
+                        .or_default();
+                }
+            }
         }
 
         // Register element state for reasoning messages and track summarization timing.
@@ -3526,12 +3556,15 @@ impl AIBlock {
         &mut self,
         action_id: &AIAgentActionId,
         command_text: &str,
+        mcp_name: String,
+        mcp_args: serde_json::Value,
         ctx: &mut ViewContext<Self>,
     ) {
         match self.requested_mcp_tools.get_mut(action_id) {
             Some(requested_mcp_tool) => {
                 requested_mcp_tool.view.update(ctx, |view, ctx| {
                     view.apply_streamed_update(command_text, ctx);
+                    view.update_mcp_request(mcp_name, mcp_args);
                     ctx.notify();
                 });
             }
@@ -3552,6 +3585,7 @@ impl AIBlock {
                         ctx,
                     );
                     view.apply_streamed_update(command_text, ctx);
+                    view.update_mcp_request(mcp_name, mcp_args);
                     view
                 });
                 let action_id_clone = action_id.clone();

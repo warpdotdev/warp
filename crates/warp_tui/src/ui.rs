@@ -4,12 +4,11 @@ use warpui_core::elements::tui::{Modifier, TuiColumn, TuiElement, TuiStyle, TuiT
 
 /// Vertically centers `content` by padding above and below with flex spacers.
 pub(crate) fn centered(content: TuiColumn) -> Box<dyn TuiElement> {
-    Box::new(
-        TuiColumn::new()
-            .flex_child(TuiColumn::new())
-            .child(content)
-            .flex_child(TuiColumn::new()),
-    )
+    TuiColumn::new()
+        .flex_child(TuiColumn::new())
+        .child(content)
+        .flex_child(TuiColumn::new())
+        .finish()
 }
 
 /// Placeholder shown while the user completes device-authorization login. The
@@ -50,6 +49,18 @@ pub(crate) fn login_placeholder(
         }
     }
     centered(content)
+}
+
+/// Placeholder shown between login completion and terminal session creation.
+pub(crate) fn terminal_starting() -> Box<dyn TuiElement> {
+    let dim = TuiStyle::default().add_modifier(Modifier::DIM);
+    centered(
+        TuiColumn::new().child(
+            TuiText::new("Starting terminal…")
+                .with_style(dim)
+                .truncate(),
+        ),
+    )
 }
 
 /// Placeholder shown when login fails; the user can quit with `Ctrl-C`.

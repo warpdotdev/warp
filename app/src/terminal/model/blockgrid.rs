@@ -952,7 +952,7 @@ impl ansi::Handler for BlockGrid {
         self.ansi_handler().text_area_size_chars(writer);
     }
 
-    fn precmd(&mut self, _: PrecmdValue) {
+    fn precmd_with_completion_metadata(&mut self, _: PrecmdValue) {
         unreachable!("Handled at block layer");
     }
 

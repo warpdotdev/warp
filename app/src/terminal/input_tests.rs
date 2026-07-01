@@ -88,7 +88,7 @@ use crate::terminal::input::slash_commands::SlashCommandsEvent;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::local_tty::shell::ShellStarter;
-use crate::terminal::model::ansi::{Handler, PrecmdValue};
+use crate::terminal::model::ansi::{Handler, PromptMetadata};
 use crate::terminal::model::block::{BlockId, SerializedBlock};
 use crate::terminal::model::blocks::{insert_block, BlockListPoint};
 use crate::terminal::model::grid::Dimensions as _;
@@ -461,7 +461,7 @@ pub fn simulate_directory_for_completion<A, S>(
         let block_metadata = BlockMetadata::new(Some(session_id), Some(directory.clone()));
         let block_index = {
             let mut model = terminal.model.lock();
-            model.block_list_mut().precmd(PrecmdValue {
+            model.block_list_mut().prompt_only_precmd(PromptMetadata {
                 pwd: Some(directory.clone()),
                 session_id: Some(session_id.into()),
                 ..Default::default()
@@ -1771,6 +1771,77 @@ fn prompt_submission_auto_queues_during_agent_requested_lrc() {
     });
 }
 
+/// LRC queued prompts do not fire on command finish while the conversation still has an active
+/// subagent. They fire when history shows the subagent has handed back to the main agent.
+#[test]
+fn lrc_queued_prompts_wait_while_subagent_is_active() {
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let conversation_id = simulate_agent_requested_lrc(&mut app, &terminal);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id());
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_agent(/* ensure_input_is_focused */ false, ctx);
+            input.replace_buffer_content("/compact-and test", ctx);
+            input.input_enter(ctx);
+        });
+        let active_block_id = terminal.read(&app, |view, _| {
+            view.model.lock().block_list().active_block().id().clone()
+        });
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history
+                .conversation_mut(&conversation_id)
+                .expect("conversation should exist")
+                .create_optimistic_cli_subagent_task_for_test(&active_block_id);
+            ctx.notify();
+        });
+
+        let ai_query_count = Rc::new(RefCell::new(0));
+        let ai_query_count_for_subscription = ai_query_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &super::Event, _| {
+                if matches!(event, super::Event::ExecuteAIQuery) {
+                    *ai_query_count_for_subscription.borrow_mut() += 1;
+                }
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.send_lrc_queued_prompts(conversation_id, ctx);
+        });
+
+        assert_eq!(*ai_query_count.borrow(), 0);
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].text(), "/compact-and test");
+            assert_eq!(queue[0].origin(), QueuedQueryOrigin::LrcAutoQueue);
+        });
+
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+            history
+                .conversation_mut(&conversation_id)
+                .expect("conversation should exist")
+                .clear_optimistic_cli_subagent_task_for_test();
+            history.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].text(), "test");
+            assert_eq!(queue[0].origin(), QueuedQueryOrigin::CompactAndSlashCommand);
+        });
+    });
+}
 /// If the conversation already has queued rows, LRC submissions append as regular queued rows
 /// when the current queue head is not LRC-queued, so command-finish delivery never jumps it.
 #[test]
@@ -4137,6 +4208,8 @@ fn test_new_conversation_input_trigger_remains_single_step_in_non_empty_agent_vi
                 None,
                 SlashCommandTrigger::input(),
                 /*is_queued_prompt*/ false,
+                None,
+                None,
                 ctx,
             );
             assert!(handled);
@@ -4174,6 +4247,8 @@ fn test_create_docker_sandbox_slash_command_executes_and_clears_buffer() {
                 None,
                 SlashCommandTrigger::input(),
                 /*is_queued_prompt*/ false,
+                None,
+                None,
                 ctx,
             );
             assert!(handled);

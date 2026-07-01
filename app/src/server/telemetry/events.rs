@@ -990,6 +990,12 @@ pub enum AgentModeCitation {
         #[serde(skip_serializing)]
         url: String,
     },
+    /// A fetched memory surfaced as a citation so we can track whether memory-backed
+    /// responses are shown to users and whether users open those memory citations.
+    AgentMemory {
+        memory_store_id: String,
+        memory_id: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -1090,6 +1096,7 @@ pub enum TelemetryAgentViewEntryOrigin {
     InlineCodeReview,
     AmbientAgent,
     Cli,
+    Tui,
     ImageAdded,
     SlashCommand,
     CodeReviewContext,
@@ -1142,6 +1149,7 @@ impl From<AgentViewEntryOrigin> for TelemetryAgentViewEntryOrigin {
             AgentViewEntryOrigin::CloudAgent => Self::AmbientAgent,
             AgentViewEntryOrigin::ThirdPartyCloudAgent => Self::ThirdPartyCloudAgent,
             AgentViewEntryOrigin::Cli => Self::Cli,
+            AgentViewEntryOrigin::Tui => Self::Tui,
             AgentViewEntryOrigin::ImageAdded => Self::ImageAdded,
             AgentViewEntryOrigin::SlashCommand { .. } => Self::SlashCommand,
             AgentViewEntryOrigin::CodeReviewContext => Self::CodeReviewContext,

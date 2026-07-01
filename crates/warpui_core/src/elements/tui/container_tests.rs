@@ -5,12 +5,12 @@ use ratatui::style::Color;
 
 use super::TuiContainer;
 use crate::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEventContext,
+    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
     TuiEventHandler, TuiLayoutContext, TuiPresentationContext, TuiRect, TuiSize, TuiText,
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
-use crate::{App, AppContext, EntityId, EntityIdMap, Event};
+use crate::{App, AppContext, EntityId, EntityIdMap};
 
 fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
     let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
@@ -29,6 +29,28 @@ fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
 #[test]
 fn padding_offsets_the_child() {
     let container = TuiContainer::new(TuiText::new("X")).with_padding(1);
+    assert_eq!(
+        render_to_lines(&container, TuiSize::new(3, 3)),
+        vec!["   ", " X ", "   "],
+    );
+}
+
+#[test]
+fn directional_padding_offsets_the_child() {
+    let container = TuiContainer::new(TuiText::new("X"))
+        .with_padding_left(2)
+        .with_padding_top(1);
+    assert_eq!(
+        render_to_lines(&container, TuiSize::new(3, 2)),
+        vec!["   ", "  X"],
+    );
+}
+
+#[test]
+fn axis_padding_offsets_the_child() {
+    let container = TuiContainer::new(TuiText::new("X"))
+        .with_padding_x(1)
+        .with_padding_y(1);
     assert_eq!(
         render_to_lines(&container, TuiSize::new(3, 3)),
         vec!["   ", " X ", "   "],
@@ -121,7 +143,7 @@ fn dispatch_event_forwards_to_the_child_inside_the_inset() {
             .with_border()
             .with_padding(1);
 
-            let event = Event::KeyDown {
+            let event = TuiEvent::KeyDown {
                 keystroke: Keystroke {
                     key: "enter".to_owned(),
                     ..Default::default()

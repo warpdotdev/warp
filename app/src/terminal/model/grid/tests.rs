@@ -1234,6 +1234,49 @@ fn test_empty_row_with_leading_wide_char_spacer_resize_panic() {
     grid.resize(SizeInfo::new_without_font_metrics(2, 4));
 }
 
+#[test]
+fn test_shrink_cols_reflow_preserves_split_wide_char_as_wrapped_content() {
+    let mut grid = GridStorage::new(2, 6, 0, ObfuscateSecrets::No);
+    let mut wide_char = cell('Ｗ');
+    wide_char.flags.insert(Flags::WIDE_CHAR);
+    let mut spacer = Cell::default();
+    spacer.flags.insert(Flags::WIDE_CHAR_SPACER);
+
+    grid.set_stored_rows(
+        vec![
+            row::Row::new(6),
+            row::Row::from_vec(
+                vec![
+                    cell('a'),
+                    cell('b'),
+                    cell('c'),
+                    cell('d'),
+                    wide_char,
+                    spacer,
+                ],
+                6,
+            ),
+        ],
+        2,
+        6,
+    );
+
+    grid.resize(true, 2, 5, false);
+
+    let retained_boundary = &grid[VisibleRow(0)][4];
+    assert!(retained_boundary
+        .flags
+        .contains(Flags::LEADING_WIDE_CHAR_SPACER));
+    assert!(!retained_boundary.flags.contains(Flags::WIDE_CHAR));
+
+    let wrapped_wide_char = &grid[VisibleRow(1)][0];
+    assert_eq!(wrapped_wide_char.c, 'Ｗ');
+    assert!(wrapped_wide_char.flags.contains(Flags::WIDE_CHAR));
+    assert!(grid[VisibleRow(1)][1]
+        .flags
+        .contains(Flags::WIDE_CHAR_SPACER));
+}
+
 fn cell(c: char) -> Cell {
     let mut cell = Cell::default();
     cell.c = c;

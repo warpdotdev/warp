@@ -57,6 +57,7 @@ use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::model::block::Block;
 use crate::terminal::TerminalModel;
 use crate::ui_components::blended_colors;
+use crate::ui_components::json_tree::{JsonTreeState, PathSegment};
 use crate::util::bindings::keybinding_name_to_keystroke;
 use crate::view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme};
 use crate::view_components::compactible_action_button::{
@@ -172,6 +173,71 @@ pub fn init(app: &mut AppContext) {
     )]);
 }
 
+/// Structured representation of an MCP tool call request, held so the
+/// detail view can render it as a JSON tree rather than a flat string.
+// Fields are consumed by the MCP tree-rendering layer.
+#[allow(dead_code)]
+pub struct McpRequest {
+    pub name: String,
+    pub args: serde_json::Value,
+}
+
+/// The normalized, renderable form of a `CallMCPToolResult`.
+///
+/// Converts the raw result (which may carry text content, structured JSON, an
+/// error message, or a cancellation signal) into a form the tree-rendering
+/// layer can act on without further conditionals.
+// Consumed by the MCP tree-rendering layer.
+#[allow(dead_code)]
+pub(crate) enum McpRenderable {
+    Tree(serde_json::Value),
+    Error(String),
+    Cancelled,
+}
+
+/// Normalizes a `CallMCPToolResult` into a `McpRenderable` for display.
+///
+/// Prefers `structured_content` when present; otherwise tries to parse joined
+/// text content as JSON; falls back to wrapping the raw text as a JSON
+/// string value so the tree renderer always receives a `serde_json::Value`.
+// Called by the MCP tree-rendering layer.
+#[allow(dead_code)]
+pub(crate) fn mcp_result_to_renderable(result: &CallMCPToolResult) -> McpRenderable {
+    match result {
+        CallMCPToolResult::Success { result } => {
+            if let Some(v) = &result.structured_content {
+                return McpRenderable::Tree(v.clone());
+            }
+            let text = result
+                .content
+                .iter()
+                .filter_map(|c| {
+                    if let rmcp::model::RawContent::Text(t) = &c.raw {
+                        Some(t.text.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                McpRenderable::Tree(v)
+            } else {
+                McpRenderable::Tree(serde_json::Value::String(text))
+            }
+        }
+        CallMCPToolResult::Error(e) => McpRenderable::Error(e.clone()),
+        CallMCPToolResult::Cancelled => McpRenderable::Cancelled,
+    }
+}
+
+/// Identifies which of the two JSON trees (request or response) an action targets.
+#[derive(Debug, Clone)]
+pub enum McpTree {
+    Request,
+    Response,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestedActionViewType {
     Command,
@@ -212,6 +278,18 @@ pub enum RequestedCommandViewAction {
     ToggleExpanded,
     OpenActiveAgentProfileEditor,
     SelectText,
+    /// Toggle the expanded/collapsed state of an object or array node in the
+    /// MCP request or response JSON tree.
+    ToggleJsonNode {
+        path: Vec<PathSegment>,
+        tree: McpTree,
+    },
+    /// Toggle the expanded/collapsed state of a long string value in the MCP
+    /// request or response JSON tree.
+    ToggleJsonString {
+        path: Vec<PathSegment>,
+        tree: McpTree,
+    },
 }
 
 pub struct RequestedCommandView {
@@ -257,6 +335,14 @@ pub struct RequestedCommandView {
     // Selection support for MCP tool call detail text
     mcp_content_selection_handle: SelectionHandle,
     mcp_content_selected_text: Arc<std::sync::RwLock<Option<String>>>,
+
+    // Structured request data and per-tree expansion state for JSON tree rendering.
+    // `mcp_request` is populated from the stream as soon as the tool name
+    // and arguments are known. Separate states ensure request-tree paths start
+    // at depth 0 and are not confused with response-tree paths.
+    mcp_request: Option<McpRequest>,
+    mcp_request_tree_state: JsonTreeState,
+    mcp_response_tree_state: JsonTreeState,
 }
 
 impl RequestedCommandView {
@@ -491,6 +577,9 @@ impl RequestedCommandView {
             ai_block_view_id,
             mcp_content_selection_handle: SelectionHandle::default(),
             mcp_content_selected_text: Arc::new(std::sync::RwLock::new(None)),
+            mcp_request: None,
+            mcp_request_tree_state: Default::default(),
+            mcp_response_tree_state: Default::default(),
         }
     }
 
@@ -990,6 +1079,14 @@ impl RequestedCommandView {
                 editor.clear_selection(ctx);
             });
         }
+    }
+
+    /// Stores the structured MCP tool request data for JSON tree rendering.
+    ///
+    /// Called each time a stream update arrives so the view always reflects
+    /// the latest known arguments.
+    pub(crate) fn update_mcp_request(&mut self, name: String, args: serde_json::Value) {
+        self.mcp_request = Some(McpRequest { name, args });
     }
 
     /// Extracts the tool name from MCP tool command text, removing parameters.
@@ -1651,6 +1748,21 @@ impl TypedActionView for RequestedCommandView {
             }
             RequestedCommandViewAction::SelectText => {
                 ctx.emit(RequestedCommandViewEvent::TextSelected);
+            }
+            RequestedCommandViewAction::ToggleJsonNode { path, tree } => {
+                let depth = path.len();
+                match tree {
+                    McpTree::Request => self.mcp_request_tree_state.toggle(path, depth),
+                    McpTree::Response => self.mcp_response_tree_state.toggle(path, depth),
+                }
+                ctx.notify();
+            }
+            RequestedCommandViewAction::ToggleJsonString { path, tree } => {
+                match tree {
+                    McpTree::Request => self.mcp_request_tree_state.toggle_string(path),
+                    McpTree::Response => self.mcp_response_tree_state.toggle_string(path),
+                }
+                ctx.notify();
             }
         }
     }

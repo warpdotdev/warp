@@ -99,15 +99,45 @@ pub enum CancellationReason {
     // The user deleted the conversation while it was in progress.
     Deleted,
 
-    /// The long-running command completed while the agent was still streaming.
+    /// The long-running command completed while the agent was still streaming a response started via inline agent view.
     /// This should be treated as a successful completion, not a cancellation.
-    OptimisticCLISubagentCompletion,
+    /// Note this is only used for inline agent view (user starting an agent to monitor an already running command),
+    /// not when CLI subagent monitors a requested command.
+    CommandFinishedDuringInlineAgentView,
 
     /// The user manually took control of a long-running command away from the agent.
     /// The agent conversation is still in progress — it will resume after the command
     /// finishes or once the user hands control back. The stream is cancelled only to
     /// stop the CLI subagent monitoring loop, not to end the conversation.
     CLISubagentUserTakeover,
+
+    /// An agent-issued command caused the shell process to exit (e.g. it ran
+    /// `exit`, or ran a failing command after enabling `set -e`). The in-flight
+    /// stream/actions are cancelled to stop work, but the conversation is
+    /// finalized as a terminal `Error` (with a shell-exit message) by the
+    /// controller rather than reported as a user cancellation.
+    AgentExitedShell,
+}
+
+/// How a [`CancellationReason`] maps to the conversation's resulting status.
+/// This is the single source of truth consumed by the stream- and
+/// action-cancellation machinery; see [`CancellationReason::conversation_outcome`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CancellationOutcome {
+    /// Leave the conversation `InProgress`; it will continue on its own (a
+    /// follow-up request or a resumed long-running command) without further user
+    /// input.
+    KeepInProgress,
+    /// Finalize the conversation as a successful completion (`Success`).
+    Succeeded,
+    /// Finalize the conversation as a user cancellation (`Cancelled`).
+    Cancelled,
+    /// Terminal, but a dedicated path (not the cancellation machinery) writes the
+    /// status — the cancellation is only a stop signal and must not stamp a status.
+    /// Currently used for shell exit, which is finalized as `Error` by
+    /// `fail_conversation_due_to_shell_exit`. Unlike `KeepInProgress`, the
+    /// conversation is ending; only the status write is suppressed.
+    FinalizedExternally,
 }
 
 impl Display for CancellationReason {
@@ -119,11 +149,14 @@ impl Display for CancellationReason {
             CancellationReason::UserCommandExecuted => write!(f, "user command execution"),
             CancellationReason::Reverted => write!(f, "revert"),
             CancellationReason::Deleted => write!(f, "deleted"),
-            CancellationReason::OptimisticCLISubagentCompletion => {
+            CancellationReason::CommandFinishedDuringInlineAgentView => {
                 write!(f, "LRC command completed")
             }
             CancellationReason::CLISubagentUserTakeover => {
                 write!(f, "CLI subagent user takeover")
+            }
+            CancellationReason::AgentExitedShell => {
+                write!(f, "agent command exited the shell")
             }
         }
     }
@@ -149,21 +182,36 @@ impl CancellationReason {
         matches!(self, CancellationReason::Reverted)
     }
 
-    pub fn is_lrc_command_completed(&self) -> bool {
-        matches!(self, CancellationReason::OptimisticCLISubagentCompletion)
-    }
-
-    /// Returns true when the stream was cancelled because the user took manual
-    /// control of the long-running command. The conversation remains in progress
-    /// and the ambient agent task should not be reported as cancelled.
-    pub fn is_cli_subagent_user_takeover(&self) -> bool {
-        matches!(self, CancellationReason::CLISubagentUserTakeover)
-    }
-
-    /// Returns true when the stream cancellation should NOT transition the
-    /// conversation status away from InProgress.
-    pub fn should_preserve_in_progress_status(&self) -> bool {
-        self.is_follow_up_for_same_conversation() || self.is_cli_subagent_user_takeover()
+    /// How a cancellation reason maps to the
+    /// conversation's resulting status. Every site that finalizes a cancelled
+    /// stream or action consults this instead of re-deriving the disposition,
+    /// so the reason -> status mapping lives in one exhaustive place.
+    /// Note that sometimes the action result is treated as authoritative for determining
+    /// conversation status even when there is a cancellation reason (taking priority over this)
+    pub fn conversation_outcome(&self) -> CancellationOutcome {
+        match self {
+            // The conversation continues without further user input (a follow-up
+            // request or a resumed long-running command drives it forward), so
+            // its status must stay InProgress.
+            CancellationReason::FollowUpSubmitted {
+                is_for_same_conversation: true,
+            }
+            | CancellationReason::CLISubagentUserTakeover => CancellationOutcome::KeepInProgress,
+            // A long-running command finishing (optimistically) or a revert are
+            // successful completions rather than cancellations.
+            CancellationReason::CommandFinishedDuringInlineAgentView
+            | CancellationReason::Reverted => CancellationOutcome::Succeeded,
+            // The shell died under the agent; a dedicated path finalizes this as a
+            // terminal `Error`, so the cancellation machinery must not stamp a status.
+            CancellationReason::AgentExitedShell => CancellationOutcome::FinalizedExternally,
+            CancellationReason::ManuallyCancelled
+            | CancellationReason::AutomaticCloudHandoff
+            | CancellationReason::UserCommandExecuted
+            | CancellationReason::Deleted
+            | CancellationReason::FollowUpSubmitted {
+                is_for_same_conversation: false,
+            } => CancellationOutcome::Cancelled,
+        }
     }
 }
 
@@ -676,11 +724,18 @@ pub enum RenderableAIError {
         /// blocked due to fraud, plan restriction). Maps the task to FAILED state instead of ERROR.
         is_user_error: bool,
     },
+    /// An agent-issued command caused the shell process to exit, so the run
+    /// cannot continue. Surfaced as a terminal failure (FAILED) rather than a
+    /// user cancellation.
+    AgentExitedShell,
 }
 
 impl RenderableAIError {
     const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
         "Warp lost connection while receiving the agent response. This is usually temporary.";
+    /// User-facing message shown when an agent-issued command exits the shell.
+    pub const AGENT_EXITED_SHELL_MESSAGE: &'static str =
+        "The shell exited while the agent was running a command, so the run could not continue. Ensure the agent is not asked to run commands or source scripts that can exit the shell.";
     /// Creates a transient network error. `kind` is the structured cause (including the raw API
     /// error where one exists), preserved so user reports can disambiguate the different causes
     /// behind the shared user-facing copy.
@@ -730,6 +785,19 @@ impl RenderableAIError {
     /// aggressive behavior so developers still see every transport failure.
     pub fn should_suppress_during_recovery(&self) -> bool {
         self.will_attempt_resume() && !ChannelState::channel().is_dogfood()
+    }
+
+    /// Constructs a generic [`RenderableAIError::Other`] from a message.
+    /// `is_user_error` selects the task classification (true → FAILED, false →
+    /// ERROR). The resume/network flags are false: this is for terminal,
+    /// out-of-band errors that are not auto-resumed.
+    pub fn other(error_message: impl Into<String>, is_user_error: bool) -> Self {
+        Self::Other {
+            error_message: error_message.into(),
+            will_attempt_resume: false,
+            waiting_for_network: false,
+            is_user_error,
+        }
     }
 }
 
@@ -838,6 +906,7 @@ impl Display for RenderableAIError {
                 )
             }
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
+            Self::AgentExitedShell => write!(f, "{}", Self::AGENT_EXITED_SHELL_MESSAGE),
         }
     }
 }

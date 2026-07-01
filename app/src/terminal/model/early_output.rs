@@ -423,8 +423,16 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
         );
     }
 
-    fn precmd(&mut self, _data: ansi::PrecmdValue) {
-        panic!("Called EarlyOutput::precmd handler method instead of Block::precmd");
+    fn precmd_with_completion_metadata(&mut self, _data: ansi::PrecmdValue) {
+        panic!(
+            "Called EarlyOutput::precmd_with_completion_metadata handler method instead of Block::precmd_with_completion_metadata"
+        );
+    }
+
+    fn prompt_only_precmd(&mut self, _data: ansi::PromptMetadata) {
+        panic!(
+            "Called EarlyOutput::prompt_only_precmd handler method instead of Block::prompt_only_precmd"
+        );
     }
 
     /*

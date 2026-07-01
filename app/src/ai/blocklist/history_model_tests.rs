@@ -72,6 +72,7 @@ fn create_user_query_message(
     query: &str,
 ) -> warp_multi_agent_api::Message {
     warp_multi_agent_api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: task_id.to_string(),
         server_message_data: String::new(),
