@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use enum_iterator::{cardinality, Sequence};
+use enum_iterator::{Sequence, cardinality};
 #[cfg(feature = "test-util")]
 pub use overrides::{get_overrides, set_overrides};
 
@@ -512,10 +512,6 @@ pub enum FeatureFlag {
     /// Enables v2 of the context window usage UI.
     ContextWindowUsageV2,
 
-    /// Dev-only: enables the expandable per-segment context window usage
-    /// breakdown in the conversation usage card.
-    ContextWindowUsageBreakdown,
-
     /// Enables global search
     GlobalSearch,
 
@@ -712,11 +708,6 @@ pub enum FeatureFlag {
     /// Uses a parent-family ancestor stream for owner-side orchestrator event delivery.
     OwnerOrchestrationAncestorStreamer,
 
-    /// On `wait_for_events`, confirms parent status against the server and
-    /// registers an orchestrator for the owner-side ancestor stream so it
-    /// receives events for children created out-of-band (Oz CLI / web API).
-    WaitForEventsParentRegistration,
-
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
     PendingUserQueryIndicator,
@@ -894,17 +885,10 @@ pub enum FeatureFlag {
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
 
-    /// Gates the custom model router feature, which allows users to define
-    /// their own model routers.
-    CustomModelRouters,
-
-    /// Shows a warning in the agent view when the active conversation's
-    /// provider-side prompt cache has expired.
-    PromptCacheExpiryWarning,
-
-    /// Enables the `--runner` flag on `run-cloud`, which overrides an agent's
-    /// compute (docker image, instance shape, setup commands) by runner ID.
-    CloudRunners,
+    /// Renders MCP tool-call request and response JSON as an interactive
+    /// collapsible tree with typed colors and per-row Copy JSON, instead of
+    /// a flat pretty-printed blob.
+    McpJsonTreeView,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -962,6 +946,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::EditableMarkdownMermaid,
     FeatureFlag::CodeReviewScrollPreservation,
     FeatureFlag::RememberFastForwardState,
+    FeatureFlag::CodexPlugin,
     FeatureFlag::GeminiNotifications,
     FeatureFlag::LocalDockerSandbox,
     #[cfg(not(windows))]
@@ -976,14 +961,15 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
+    FeatureFlag::McpJsonTreeView,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
+    #[cfg(target_os = "macos")]
+    FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    FeatureFlag::DragTabsToWindows,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
@@ -999,6 +985,8 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    FeatureFlag::DragTabsToWindows,
 ];
 
 /// Flags that we want to allow to switch at runtime (assuming RuntimeFeatureFlags is set)
@@ -1090,6 +1078,7 @@ impl FeatureFlag {
             GitOperationsInCodeReview => Some(
                 "Enables commit, push, and create-PR actions directly from the code review panel.",
             ),
+            GroupedTabs => Some("Enables organizing tabs into named, collapsible groups."),
             AsyncFind => Some(
                 "Runs terminal find on a background thread to keep the UI responsive while searching large outputs.",
             ),

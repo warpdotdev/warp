@@ -1272,7 +1272,7 @@ impl AIBlock {
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
                 if event
-                    .terminal_surface_id()
+                    .terminal_view_id()
                     .is_none_or(|id| id == me.terminal_view_id)
                 {
                     match event {
@@ -1734,13 +1734,10 @@ impl AIBlock {
                         for source in image_sources {
                             resolved_image_sources.insert(
                                 source.clone(),
-                                Some(
-                                    resolve_asset_source_relative_to_directory(
-                                        &source,
-                                        cwd.as_deref().map(Path::new),
-                                    )
-                                    .with_local_file_content_version(),
-                                ),
+                                Some(resolve_asset_source_relative_to_directory(
+                                    &source,
+                                    cwd.as_deref().map(Path::new),
+                                )),
                             );
                         }
 
@@ -2082,7 +2079,6 @@ impl AIBlock {
                     self.handle_mcp_tool_stream_update(
                         action_id,
                         &command_text,
-                        name.to_string(),
                         display_input,
                         ctx,
                     );
@@ -2154,30 +2150,6 @@ impl AIBlock {
                 .footer_citation_chip_handles
                 .entry(citation.clone())
                 .or_default();
-        }
-        // Also register handles for memory citations derived from fetched_memories,
-        // which are synthesized at render time and never go through output.citations.
-        // Only register for the first exchange since that's the only one that shows them.
-        if let Some(conversation) = self.model.conversation(ctx) {
-            let is_first_exchange = conversation
-                .first_exchange()
-                .map(|e| Some(e.id) == self.model.exchange_id(ctx))
-                .unwrap_or(false);
-            if is_first_exchange {
-                for memory in conversation.fetched_memories() {
-                    if memory.memory_store_id.is_empty() || memory.memory_id.is_empty() {
-                        continue;
-                    }
-                    self.state_handles
-                        .footer_citation_chip_handles
-                        .entry(AIAgentCitation::AgentMemory {
-                            memory_store_id: memory.memory_store_id.clone(),
-                            memory_id: memory.memory_id.clone(),
-                            content: memory.content.clone(),
-                        })
-                        .or_default();
-                }
-            }
         }
 
         // Register element state for reasoning messages and track summarization timing.
@@ -3471,7 +3443,6 @@ impl AIBlock {
                         ctx,
                     );
                 });
-                self.yield_requested_action_focus_if_focused(&view, ctx);
                 ctx.notify();
             }
             RequestedCommandViewEvent::EnableAutoexecuteMode => {
@@ -3479,7 +3450,6 @@ impl AIBlock {
             }
             RequestedCommandViewEvent::Rejected => {
                 self.cancel_action(action_id, ctx);
-                self.yield_requested_action_focus_if_focused(&view, ctx);
             }
             RequestedCommandViewEvent::UpdatedExpansionState { is_expanded } => {
                 // We only care about expansion state updates when the command
@@ -3556,7 +3526,6 @@ impl AIBlock {
         &mut self,
         action_id: &AIAgentActionId,
         command_text: &str,
-        mcp_name: String,
         mcp_args: serde_json::Value,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -3564,7 +3533,7 @@ impl AIBlock {
             Some(requested_mcp_tool) => {
                 requested_mcp_tool.view.update(ctx, |view, ctx| {
                     view.apply_streamed_update(command_text, ctx);
-                    view.update_mcp_request(mcp_name, mcp_args);
+                    view.update_mcp_request(mcp_args);
                     ctx.notify();
                 });
             }
@@ -3585,7 +3554,7 @@ impl AIBlock {
                         ctx,
                     );
                     view.apply_streamed_update(command_text, ctx);
-                    view.update_mcp_request(mcp_name, mcp_args);
+                    view.update_mcp_request(mcp_args);
                     view
                 });
                 let action_id_clone = action_id.clone();
@@ -3615,12 +3584,10 @@ impl AIBlock {
                 self.action_model.update(ctx, |action_model, ctx| {
                     action_model.execute_action(action_id, self.client_ids.conversation_id, ctx);
                 });
-                self.yield_requested_action_focus_if_focused(&view, ctx);
                 ctx.notify();
             }
             RequestedCommandViewEvent::Rejected => {
                 self.cancel_action(action_id, ctx);
-                self.yield_requested_action_focus_if_focused(&view, ctx);
             }
             RequestedCommandViewEvent::TextSelected => {
                 // If there's an ongoing text selection, clear all other selections within the
@@ -4794,15 +4761,6 @@ impl AIBlock {
         });
     }
 
-    fn yield_requested_action_focus_if_focused(
-        &self,
-        view: &ViewHandle<RequestedCommandView>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if view.is_self_or_child_focused(ctx) {
-            ctx.emit(AIBlockEvent::FocusTerminal);
-        }
-    }
     /// Tries to focus the AI block or one of its parts, if applicable.
     /// If the block doesn't need to be focused, focus is yielded
     /// back to the owning [`TerminalView`].
@@ -4934,32 +4892,6 @@ impl AIBlock {
                     .find_map(|comment| comment.rich_text_editor.as_ref(ctx).selected_text(ctx))
             })
             .or_else(|| self.selected_text.read().clone())
-            .filter(|selection| !selection.is_empty())
-    }
-
-    /// Test-only helper to set the block-level text selection, which is normally
-    /// written by the `SelectableArea` selection callback during a drag.
-    #[cfg(any(test, feature = "integration_tests"))]
-    pub fn set_block_level_selected_text_for_test(&self, text: Option<String>) {
-        *self.selected_text.write() = text;
-    }
-
-    /// Test-only helper that simulates a block-level text selection in this AI
-    /// block: it writes the selected text and emits the same
-    /// [`AIBlockEvent::SelectionChanged`] signal that
-    /// [`AIBlockAction::SelectText`] does, so the terminal view mirrors it into
-    /// the model's rich content selection (which the copy/insert paths read).
-    ///
-    /// This lets integration tests exercise the in-AI-block copy path without
-    /// depending on layout-sensitive pixel coordinates.
-    #[cfg(any(test, feature = "integration_tests"))]
-    pub fn simulate_text_selection_for_test(
-        &mut self,
-        text: Option<String>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        *self.selected_text.write() = text;
-        ctx.emit(AIBlockEvent::SelectionChanged);
     }
 
     /// Start a selection at the top left corner of the block's SelectableArea.
@@ -6019,12 +5951,6 @@ pub enum AIBlockEvent {
     /// important because selecting across multiple blocks only supports text selections at the
     /// `AIBlock` level.
     ChildViewTextSelected,
-    /// Emitted when the `AIBlock`'s own (block-level) text selection state may
-    /// have changed. The terminal view uses this to keep the model's record of
-    /// which rich content block has an active selection in sync, so copy/insert
-    /// paths can find the selected text. Rich content selections are not tied to
-    /// the point-based model selection, so this signal is required.
-    SelectionChanged,
     CopiedEmptyText,
     OpenSettings,
     #[cfg(feature = "local_fs")]
@@ -6291,10 +6217,6 @@ impl TypedActionView for AIBlock {
                 // If we have a selection, we should use the default cursor, even if it's over a link.
                 ctx.reset_cursor();
                 self.dismiss_ai_tooltips(ctx);
-                // Notify the terminal view so it can keep the model's record of which rich
-                // content block has an active selection in sync (rich content selections are
-                // not tied to the point-based model selection used for regular blocks).
-                ctx.emit(AIBlockEvent::SelectionChanged);
             }
             AIBlockAction::CopyAIBlockCodeSnippet(text) => {
                 ctx.clipboard()
