@@ -3,11 +3,9 @@ mod diff_application;
 mod telemetry;
 
 use std::collections::HashMap;
-use std::fs;
-use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use ai::diff_validation::{AIRequestedCodeDiff, DiffDelta, DiffType};
+use ai::diff_validation::AIRequestedCodeDiff;
 use apply_diff_model::ApplyDiffModel;
 use diff_application::DiffApplicationError;
 pub(crate) use diff_application::{apply_edits, FileReadResult};
@@ -15,7 +13,6 @@ use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use itertools::Itertools;
-use similar::{DiffOp, TextDiff};
 pub(crate) use telemetry::MalformedFinalLineProxyEvent;
 #[allow(unused_imports)]
 pub use telemetry::{EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent};
@@ -40,7 +37,6 @@ use crate::ai::blocklist::inline_action::code_diff_view::{
 };
 use crate::ai::blocklist::{BlocklistAIPermissions, RequestedEditResolution};
 use crate::ai::paths::host_native_absolute_path;
-use crate::code::DiffResult;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::SessionType;
 use crate::{safe_warn, BlocklistAIHistoryModel};
@@ -50,8 +46,6 @@ pub struct RequestFileEditsExecutor {
     active_session: ModelHandle<ActiveSession>,
     apply_diff_model: ModelHandle<ApplyDiffModel>,
     diff_views: HashMap<AIAgentActionId, ViewHandle<CodeDiffView>>,
-    /// Prepared diffs keyed by action ID, used by non-GUI run-to-completion surfaces.
-    prepared_diffs: HashMap<AIAgentActionId, Vec<FileDiff>>,
     /// Set of action IDs where diff application failed.
     diff_application_failures: HashMap<AIAgentActionId, Vec1<DiffApplicationError>>,
     terminal_view_id: EntityId,
@@ -68,7 +62,6 @@ impl RequestFileEditsExecutor {
             active_session,
             apply_diff_model,
             diff_views: HashMap::new(),
-            prepared_diffs: HashMap::new(),
             diff_application_failures: HashMap::new(),
             terminal_view_id,
         }
@@ -153,6 +146,14 @@ impl RequestFileEditsExecutor {
             return ActionExecution::InvalidAction;
         };
 
+        // TODO(surface-agnostic-file-edit-execution): non-GUI surfaces (e.g. the TUI) have no
+        // CodeDiffView, so file-edit tool calls are not executable here yet. The stacked
+        // surface-agnostic refactor routes execution through a shared PersistDiffModel instead.
+        let Some(diff_view) = self.diff_views.get(id) else {
+            log::warn!("Tried to execute a RequestFileEdits action without a diff view");
+            return ActionExecution::NotReady;
+        };
+
         // If diff application failed, early exit.
         if let Some(errors) = self.diff_application_failures.remove(id) {
             return ActionExecution::Sync(AIAgentActionResultType::RequestFileEdits(
@@ -161,16 +162,6 @@ impl RequestFileEditsExecutor {
                 },
             ));
         }
-
-        let Some(diff_view) = self.diff_views.get(id) else {
-            let Some(prepared_diffs) = self.prepared_diffs.remove(id) else {
-                log::warn!("Tried to execute a RequestFileEdits action without prepared diffs");
-                return ActionExecution::NotReady;
-            };
-            return ActionExecution::Sync(AIAgentActionResultType::RequestFileEdits(
-                save_prepared_diffs(prepared_diffs),
-            ));
-        };
 
         let identifiers = self
             .generate_ai_identifiers(&input.conversation_id, id, ctx)
@@ -329,6 +320,13 @@ impl RequestFileEditsExecutor {
     ) {
         tx.send(()).ok();
 
+        let Some(diff_view) = self.diff_views.get(&id) else {
+            log::warn!(
+                "Tried to apply diffs for a RequestFileEdits action without a corresponding diff view"
+            );
+            return;
+        };
+
         let applied_diffs = match applied_diffs {
             Ok(diffs) if !diffs.is_empty() => diffs,
             Ok(_) => {
@@ -367,23 +365,19 @@ impl RequestFileEditsExecutor {
             diffs.push(file_diff);
         }
 
-        self.prepared_diffs.insert(id.clone(), diffs.clone());
+        // Set the session type on the diff view so save/delete/create routes
+        // through the correct FileModel backend.
+        let diff_session_type = match self.active_session.as_ref(ctx).session_type(ctx) {
+            Some(SessionType::WarpifiedRemote {
+                host_id: Some(host_id),
+            }) => DiffSessionType::Remote(host_id.clone()),
+            _ => DiffSessionType::Local,
+        };
 
-        if let Some(diff_view) = self.diff_views.get(&id) {
-            // Set the session type on the diff view so save/delete/create routes
-            // through the correct FileModel backend.
-            let diff_session_type = match self.active_session.as_ref(ctx).session_type(ctx) {
-                Some(SessionType::WarpifiedRemote {
-                    host_id: Some(host_id),
-                }) => DiffSessionType::Remote(host_id.clone()),
-                _ => DiffSessionType::Local,
-            };
-
-            diff_view.update(ctx, |diff_view, ctx| {
-                diff_view.set_diff_session_type(diff_session_type);
-                diff_view.set_candidate_diffs(diffs, ctx);
-            });
-        }
+        diff_view.update(ctx, |diff_view, ctx| {
+            diff_view.set_diff_session_type(diff_session_type);
+            diff_view.set_candidate_diffs(diffs, ctx);
+        });
     }
 
     fn generate_ai_identifiers(
@@ -479,185 +473,6 @@ fn updated_file_contexts_from_editor_buffers(
         .collect()
 }
 
-/// Saves prepared diffs without requiring a GUI review view.
-fn save_prepared_diffs(prepared_diffs: Vec<FileDiff>) -> RequestFileEditsResult {
-    let mut combined_diff = DiffResult::default();
-    let mut updated_files = Vec::new();
-    let mut deleted_files = Vec::new();
-    let mut content_map = HashMap::new();
-
-    for diff in prepared_diffs {
-        match save_prepared_diff(diff) {
-            Ok(saved) => {
-                combined_diff += &saved.diff;
-                if let Some(content) = saved.content {
-                    content_map.insert(saved.file_location.name.clone(), content);
-                    updated_files.push((saved.file_location, false));
-                }
-                deleted_files.extend(saved.deleted_files);
-            }
-            Err(error) => {
-                return RequestFileEditsResult::DiffApplicationFailed { error };
-            }
-        }
-    }
-
-    RequestFileEditsResult::Success {
-        diff: combined_diff.unified_diff,
-        updated_files: updated_file_contexts_from_editor_buffers(&updated_files, &content_map),
-        deleted_files,
-        lines_added: combined_diff.lines_added,
-        lines_removed: combined_diff.lines_removed,
-    }
-}
-
-struct SavedPreparedDiff {
-    diff: DiffResult,
-    file_location: FileLocations,
-    content: Option<String>,
-    deleted_files: Vec<String>,
-}
-
-fn save_prepared_diff(diff: FileDiff) -> Result<SavedPreparedDiff, String> {
-    let path = diff.file_path();
-    let mut deleted_files = Vec::new();
-    let (target_path, next_content) = match &diff.diff_type {
-        DiffType::Create { delta } => (path.clone(), delta.insertion.clone()),
-        DiffType::Update { deltas, rename } => {
-            let target_path = rename
-                .as_ref()
-                .map(|rename| rename.to_string_lossy().to_string())
-                .unwrap_or_else(|| path.clone());
-            let next_content = apply_deltas_to_content(&diff.base.content, deltas)?;
-            if target_path != path {
-                deleted_files.push(path.clone());
-            }
-            (target_path, next_content)
-        }
-        DiffType::Delete { .. } => {
-            fs::remove_file(&path).map_err(|error| format!("Failed to delete {path}: {error}"))?;
-            return Ok(SavedPreparedDiff {
-                diff: diff_result(&diff.base.content, "", &path),
-                file_location: FileLocations {
-                    name: path.clone(),
-                    lines: vec![],
-                },
-                content: None,
-                deleted_files: vec![path],
-            });
-        }
-    };
-
-    if let Some(parent) = Path::new(&target_path).parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("Failed to create parent directory {parent:?}: {error}"))?;
-    }
-    fs::write(&target_path, &next_content)
-        .map_err(|error| format!("Failed to write {target_path}: {error}"))?;
-    if target_path != path {
-        fs::remove_file(&path).map_err(|error| format!("Failed to remove {path}: {error}"))?;
-    }
-
-    Ok(SavedPreparedDiff {
-        diff: diff_result(&diff.base.content, &next_content, &target_path),
-        file_location: FileLocations {
-            name: target_path,
-            lines: changed_lines_for_headless_result(&diff.diff_type),
-        },
-        content: Some(next_content),
-        deleted_files,
-    })
-}
-
-fn apply_deltas_to_content(content: &str, deltas: &[DiffDelta]) -> Result<String, String> {
-    let mut lines = split_lines_preserving_newlines(content);
-    let mut deltas = deltas.to_vec();
-    deltas.sort_by_key(|delta| delta.replacement_line_range.start);
-
-    for delta in deltas.into_iter().rev() {
-        let start = delta.replacement_line_range.start.saturating_sub(1);
-        let end = delta.replacement_line_range.end.saturating_sub(1);
-        if start > lines.len() || end > lines.len() || start > end {
-            return Err(format!(
-                "Diff range {:?} is out of bounds for file with {} lines",
-                delta.replacement_line_range,
-                lines.len()
-            ));
-        }
-        let replacement = split_lines_preserving_newlines(&delta.insertion);
-        lines.splice(start..end, replacement);
-    }
-
-    Ok(lines.concat())
-}
-
-fn split_lines_preserving_newlines(content: &str) -> Vec<String> {
-    if content.is_empty() {
-        Vec::new()
-    } else {
-        content.split_inclusive('\n').map(str::to_string).collect()
-    }
-}
-
-fn diff_result(before: &str, after: &str, file_name: &str) -> DiffResult {
-    if before == after {
-        return DiffResult::default();
-    }
-
-    let text_diff = TextDiff::from_lines(before, after);
-    let mut lines_added = 0;
-    let mut lines_removed = 0;
-    for op in text_diff.ops() {
-        match op {
-            DiffOp::Equal { .. } => {}
-            DiffOp::Delete { old_len, .. } => lines_removed += old_len,
-            DiffOp::Insert { new_len, .. } => lines_added += new_len,
-            DiffOp::Replace {
-                old_len, new_len, ..
-            } => {
-                lines_removed += old_len;
-                lines_added += new_len;
-            }
-        }
-    }
-
-    DiffResult {
-        unified_diff: text_diff
-            .unified_diff()
-            .context_radius(3)
-            .header(file_name, file_name)
-            .missing_newline_hint(false)
-            .to_string(),
-        lines_added,
-        lines_removed,
-    }
-}
-
-fn changed_lines_for_headless_result(diff_type: &DiffType) -> Vec<Range<usize>> {
-    match diff_type {
-        DiffType::Create { delta } => inserted_content_range(1, &delta.insertion)
-            .into_iter()
-            .collect(),
-        DiffType::Update { deltas, .. } => deltas
-            .iter()
-            .filter_map(changed_line_range_for_delta)
-            .collect(),
-        DiffType::Delete { .. } => vec![],
-    }
-}
-
-fn changed_line_range_for_delta(delta: &DiffDelta) -> Option<Range<usize>> {
-    let replacement_range = &delta.replacement_line_range;
-    if replacement_range.start == replacement_range.end {
-        return inserted_content_range(replacement_range.start.max(1), &delta.insertion);
-    }
-    Some(replacement_range.clone())
-}
-
-fn inserted_content_range(start: usize, content: &str) -> Option<Range<usize>> {
-    let line_count = content.lines().count();
-    (line_count > 0).then_some(start..start + line_count)
-}
 fn clamp_to_file_context_range_start(file_location: &mut FileLocations) {
     for range in &mut file_location.lines {
         range.start = range.start.max(1);

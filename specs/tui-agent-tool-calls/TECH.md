@@ -120,14 +120,9 @@ Subscribe `TuiTerminalSessionView` to `action_model.as_ref(ctx).shell_command_ex
 - `ShellCommandExecutorEvent::WriteToPty { input, mode }` into `TuiTerminalSessionEvent::WriteAgentInput`.
 - `CancelExecution` and `TransferControlToUser { .. }` as no-ops for the first pass.
 The command event should use `CommandExecutionSource::AI` and `AgentInteractionMetadata::new_hidden(action_id, conversation_id)`. The conversation ID should be looked up with `BlocklistAIHistoryModel::conversation_id_for_action(action_id, ctx.view_id())`, and the active session ID should come from the current terminal model active block.
-### Shared headless file-edit execution
-`RequestFileEdits` currently depends on a GUI `CodeDiffView`: without a registered diff view, `RequestFileEditsExecutor::execute` returns `NotReady`. The TUI should not create a GUI diff view just to make file-edit tool calls executable.
-Add a shared, non-GUI fallback inside `RequestFileEditsExecutor`:
-- During `preprocess_action`, if diff application succeeds and no `CodeDiffView` is registered, store prepared diffs by `AIAgentActionId`.
-- During `execute`, prefer the existing GUI `CodeDiffView` path when a view is registered.
-- If no view is registered but prepared diffs exist, save those diffs through the same local/remote file backend semantics used by the GUI path and return `RequestFileEditsResult::Success`.
-- If preprocessing failed, return `RequestFileEditsResult::DiffApplicationFailed` so the LLM can recover in a follow-up.
-This is not a TUI renderer concern. It belongs in the shared executor so future headless or non-GUI surfaces can execute file edits without depending on GUI views.
+### Headless file-edit execution (deferred)
+`RequestFileEdits` renders in the transcript like other tool calls, but it is not executed on non-GUI surfaces in this branch: `RequestFileEditsExecutor::execute` still requires a registered GUI `CodeDiffView` and returns `NotReady` otherwise (`app/src/ai/blocklist/action_model/execute/request_file_edits.rs`).
+Making file edits executable without a GUI review view is handled in the stacked `surface-agnostic-file-edit-execution` follow-up, which routes both surfaces through a shared, non-GUI `PersistDiffModel`. This branch deliberately adds no headless persistence path.
 ### Public TUI export boundary
 Extend `app/src/tui_export.rs` only for types that `warp_tui` must name directly:
 - `AIAgentAction`, `AIAgentActionId`, `AIAgentActionType`, and `TaskId` for the `ToolCall` section variant and test fixtures.
@@ -149,10 +144,7 @@ Keep transcript dirty/reflow tests focused on `UpdatedStreamingExchange`; no act
 Add shell bridge tests:
 - `TuiTerminalSessionEvent::WriteAgentInput` maps to `PtyIntent::WriteAgentInput`.
 - The `ExecuteCommand` → `PtyIntent::ExecuteCommand` branch and the shell-executor event translation are covered by compilation only, because constructing an `ExecuteCommandEvent` requires `SessionId`, which is intentionally not exported through `tui_export` for this feature. Add direct tests for these when a session-id test seam is available.
-Add or port `RequestFileEditsExecutor` tests for the no-`CodeDiffView` path:
-- Prepared diff success saves files and returns `RequestFileEditsResult::Success`.
-- Save failure returns `DiffApplicationFailed`.
-- Preprocessing failure returns `DiffApplicationFailed`.
+File-edit execution is out of scope for this branch (deferred to the stacked follow-up), so no `RequestFileEditsExecutor` persistence tests are added here.
 Run targeted tests first:
 ```bash
 cargo test -p warp_tui agent_block
@@ -166,15 +158,14 @@ Then run formatting and the standard Rust validation for touched crates:
 cargo clippy --workspace --all-targets --all-features --tests -- -D warnings
 ```
 ## Parallelization
-Do not use child agents for the implementation. The work is tightly coupled across one TUI surface, one render adapter, shared executor exports, and one shared executor fallback. Splitting implementation across worktrees would create more merge overhead than wall-clock savings.
+Do not use child agents for the implementation. The work is tightly coupled across one TUI surface, one render adapter, and shared executor exports. Splitting implementation across worktrees would create more merge overhead than wall-clock savings.
 The implementation sequence should be:
 ```mermaid
 flowchart LR
   A["TUI exports"] --> B["Ordered TUI render adapter"]
   B --> C["Autoexecute selection constructor"]
   C --> D["Shell PTY bridge"]
-  D --> E["Headless file-edit fallback"]
-  E --> F["Targeted tests"]
+  D --> F["Targeted tests"]
   F --> G["Format + clippy"]
 ```
-The shell bridge and file-edit fallback can be reviewed as separate conceptual units, but they should land in one branch because the user-facing feature is one TUI tool-call execution path.
+The shell bridge lands in this branch; headless file-edit execution is a separate stacked follow-up because it primarily refactors GUI persistence rather than the TUI transcript path.
