@@ -53,30 +53,56 @@ esac
 BINARY_NAME="warp-tui-$CHANNEL"
 URL="$DOWNLOAD_URL?os=macos&arch=$ARCH&channel=$CHANNEL"
 
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+# Stage the download + extraction next to the final install dir so an existing,
+# working install is only touched once the new build has been fully downloaded,
+# extracted, and validated. Staging on the same filesystem as $INSTALL_DIR keeps
+# the final swap a quick rename. Mirrors the Oz CLI installer.
+PARENT_DIR="$(dirname "$INSTALL_DIR")"
+mkdir -p "$PARENT_DIR"
+STAGING_DIR="$(mktemp -d "$PARENT_DIR/.warp-tui-install.XXXXXX")"
+trap 'rm -rf "$STAGING_DIR"' EXIT
 
 echo "Downloading Warp TUI ($CHANNEL, macos/$ARCH)..."
-if ! curl -fSL "$URL" -o "$TMP_DIR/warp-tui.tar.gz"; then
+if ! curl -fSL "$URL" -o "$STAGING_DIR/warp-tui.tar.gz"; then
     err "failed to download the Warp TUI. The dev channel is internal-only; ensure you have access."
 fi
 
-echo "Unpacking to $INSTALL_DIR..."
+echo "Unpacking..."
 # The tarball contains the renamed binary (`warp-tui-<channel>`) plus a sibling
 # `resources/` tree. The binary resolves `resources/` relative to its own
 # location at runtime, so they must be installed together.
-rm -rf "$INSTALL_DIR"
-mkdir -p "$INSTALL_DIR"
-tar xzf "$TMP_DIR/warp-tui.tar.gz" -C "$INSTALL_DIR"
+PAYLOAD_DIR="$STAGING_DIR/payload"
+mkdir -p "$PAYLOAD_DIR"
+tar xzf "$STAGING_DIR/warp-tui.tar.gz" -C "$PAYLOAD_DIR"
 
-if [[ ! -f "$INSTALL_DIR/$BINARY_NAME" ]]; then
+# Validate the payload before replacing any existing install.
+if [[ ! -f "$PAYLOAD_DIR/$BINARY_NAME" ]]; then
     err "downloaded archive did not contain expected binary '$BINARY_NAME'."
 fi
-chmod +x "$INSTALL_DIR/$BINARY_NAME"
+if [[ ! -d "$PAYLOAD_DIR/resources" ]]; then
+    err "downloaded archive did not contain the expected 'resources/' directory."
+fi
+chmod +x "$PAYLOAD_DIR/$BINARY_NAME"
 
 # Standalone (non-app-bundle) binaries can't have a notarization ticket stapled,
 # so clear any Gatekeeper quarantine attribute to avoid a first-run prompt.
-xattr -dr com.apple.quarantine "$INSTALL_DIR" 2>/dev/null || true
+xattr -dr com.apple.quarantine "$PAYLOAD_DIR" 2>/dev/null || true
+
+# Swap the validated payload into place. Both moves are same-filesystem renames,
+# and the previous install is only removed after the new one is in place; if the
+# swap fails, the previous install is restored.
+echo "Installing to $INSTALL_DIR..."
+rm -rf "$INSTALL_DIR.old"
+if [[ -e "$INSTALL_DIR" ]]; then
+    mv "$INSTALL_DIR" "$INSTALL_DIR.old"
+fi
+if ! mv "$PAYLOAD_DIR" "$INSTALL_DIR"; then
+    if [[ -e "$INSTALL_DIR.old" ]]; then
+        mv "$INSTALL_DIR.old" "$INSTALL_DIR"
+    fi
+    err "failed to install the Warp TUI into $INSTALL_DIR."
+fi
+rm -rf "$INSTALL_DIR.old"
 
 echo "Linking $BIN_DIR/warp-tui..."
 mkdir -p "$BIN_DIR"
