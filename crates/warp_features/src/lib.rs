@@ -512,6 +512,10 @@ pub enum FeatureFlag {
     /// Enables v2 of the context window usage UI.
     ContextWindowUsageV2,
 
+    /// Dev-only: enables the expandable per-segment context window usage
+    /// breakdown in the conversation usage card.
+    ContextWindowUsageBreakdown,
+
     /// Enables global search
     GlobalSearch,
 
@@ -570,6 +574,10 @@ pub enum FeatureFlag {
 
     /// Enables computer use functionality in local clients.
     LocalComputerUse,
+
+    /// Enables background, per-window computer use: driving a specific window directly without
+    /// raising it or moving the cursor.  Currently only supported on macOS.
+    BackgroundComputerUse,
 
     /// Enables team API key creation in the API key management UI.
     TeamApiKeys,
@@ -703,6 +711,11 @@ pub enum FeatureFlag {
 
     /// Uses a parent-family ancestor stream for owner-side orchestrator event delivery.
     OwnerOrchestrationAncestorStreamer,
+
+    /// On `wait_for_events`, confirms parent status against the server and
+    /// registers an orchestrator for the owner-side ancestor stream so it
+    /// receives events for children created out-of-band (Oz CLI / web API).
+    WaitForEventsParentRegistration,
 
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
@@ -875,6 +888,23 @@ pub enum FeatureFlag {
     /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
+
+    /// Gates the custom model router feature, which allows users to define
+    /// their own model routers.
+    CustomModelRouters,
+
+    /// Shows a warning in the agent view when the active conversation's
+    /// provider-side prompt cache has expired.
+    PromptCacheExpiryWarning,
+
+    /// Enables the `--runner` flag on `run-cloud`, which overrides an agent's
+    /// compute (docker image, instance shape, setup commands) by runner ID.
+    CloudRunners,
+
+    /// Renders MCP tool-call request and response JSON as an interactive
+    /// collapsible tree with typed colors and per-row Copy JSON, instead of
+    /// a flat pretty-printed blob.
+    McpJsonTreeView,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -932,24 +962,29 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::EditableMarkdownMermaid,
     FeatureFlag::CodeReviewScrollPreservation,
     FeatureFlag::RememberFastForwardState,
-    FeatureFlag::CodexPlugin,
     FeatureFlag::GeminiNotifications,
     FeatureFlag::LocalDockerSandbox,
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::RemoteCodebaseIndexing,
-    FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
+    FeatureFlag::PromptCacheExpiryWarning,
+    FeatureFlag::PinnedTabs,
+    FeatureFlag::BackgroundComputerUse,
+    FeatureFlag::ContextWindowUsageBreakdown,
+    FeatureFlag::CloudRunners,
+    FeatureFlag::WaitForEventsParentRegistration,
+    FeatureFlag::McpJsonTreeView,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
-    #[cfg(target_os = "macos")]
+    FeatureFlag::AsyncFind,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     FeatureFlag::DragTabsToWindows,
-    FeatureFlag::GroupedTabs,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
@@ -1056,7 +1091,9 @@ impl FeatureFlag {
             GitOperationsInCodeReview => Some(
                 "Enables commit, push, and create-PR actions directly from the code review panel.",
             ),
-            GroupedTabs => Some("Enables organizing tabs into named, collapsible groups."),
+            AsyncFind => Some(
+                "Runs terminal find on a background thread to keep the UI responsive while searching large outputs.",
+            ),
             _ => None,
         }
     }

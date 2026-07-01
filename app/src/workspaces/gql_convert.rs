@@ -247,6 +247,7 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             token_usage: models,
             tool_usage_metadata: tool,
             context_window_usage,
+            context_window_segments,
             ..
         } = (&gql.usage_metadata).into();
         ConversationUsageInfo {
@@ -256,6 +257,7 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             tool_calls: tool.total_tool_calls(),
             models,
             context_window_usage,
+            context_window_segments,
             files_changed: tool.apply_file_diff_stats.files_changed,
             lines_added: tool.apply_file_diff_stats.lines_added,
             lines_removed: tool.apply_file_diff_stats.lines_removed,

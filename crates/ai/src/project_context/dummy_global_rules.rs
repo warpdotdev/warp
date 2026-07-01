@@ -18,8 +18,4 @@ impl GlobalRules {
     pub(crate) fn paths(&self) -> impl Iterator<Item = LocalOrRemotePath> + '_ {
         std::iter::empty()
     }
-
-    pub(crate) fn first_rule_parent(&self) -> Option<LocalOrRemotePath> {
-        None
-    }
 }

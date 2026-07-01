@@ -113,6 +113,8 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                 crate::ai::ambient_agents::AgentConfigSnapshot {
                     name: None,
                     environment_id,
+                    // TODO(REMOTE-1936): support --runner for scheduled agents.
+                    runner_id: None,
                     model_id: args.model.model.clone(),
                     base_prompt: None,
                     mcp_servers: cli_mcp_servers,

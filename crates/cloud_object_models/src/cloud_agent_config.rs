@@ -34,6 +34,7 @@ impl AgentConfig {
         AgentConfigSnapshot {
             name: Some(self.name.clone()),
             environment_id: None,
+            runner_id: None,
             model_id: self.base_model_id.clone(),
             base_prompt: self.base_prompt.clone(),
             mcp_servers: self.mcp_servers.clone().map(|m| m.into_iter().collect()),

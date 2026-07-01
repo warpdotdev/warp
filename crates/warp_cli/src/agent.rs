@@ -255,6 +255,22 @@ pub enum AgentCommand {
     Skills(ListAgentSkillsArgs),
 }
 
+impl AgentCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            AgentCommand::Run(_) => "agent run",
+            AgentCommand::RunCloud(_) => "agent run-cloud",
+            AgentCommand::Profile(_) => "agent profile",
+            AgentCommand::List(_) => "agent list",
+            AgentCommand::Get(_) => "agent get",
+            AgentCommand::Create(_) => "agent create",
+            AgentCommand::Update(_) => "agent update",
+            AgentCommand::Delete(_) => "agent delete",
+            AgentCommand::Skills(_) => "agent skills",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 #[command(
     visible_alias = "r",
@@ -404,6 +420,9 @@ pub struct RunAgentArgs {
         conflicts_with_all = ["prompt", "saved_prompt", "file"]
     )]
     pub skip_initial_turn: bool,
+
+    #[arg(long = "configure-git-credentials-with-github", hide = true, requires_all = ["task_id"])]
+    pub configure_git_credentials_with_github: bool,
 }
 
 impl RunAgentArgs {
@@ -483,6 +502,12 @@ pub struct RunCloudArgs {
     /// The environment to run this ambient agent in.
     #[command(flatten)]
     pub environment: EnvironmentCreateArgs,
+
+    /// Runner to use for this agent's compute (docker image, instance size,
+    /// setup commands), identified by ID. Overrides the environment's default runner.
+    #[arg(long = "runner", value_name = "ID")]
+    pub runner: Option<String>,
+
     /// Open the agent's session in Warp once it's available.
     #[arg(long = "open")]
     pub open: bool,

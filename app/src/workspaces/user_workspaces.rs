@@ -158,22 +158,23 @@ impl UserWorkspaces {
         current_workspace_uid: Option<WorkspaceUid>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&ServerExperiments::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&ServerExperiments::handle(ctx), |me, _, event, ctx| {
             let ServerExperimentsEvent::ExperimentsUpdated = event;
             me.update_session_sharing_enablement(ctx);
         });
 
-        ctx.subscribe_to_model(&CodeSettings::handle(ctx), |_, code_settings_event, ctx| {
-            match code_settings_event {
+        ctx.subscribe_to_model(
+            &CodeSettings::handle(ctx),
+            |_, _, code_settings_event, ctx| match code_settings_event {
                 CodeSettingsChangedEvent::CodebaseContextEnabled { .. }
                 | CodeSettingsChangedEvent::AutoIndexingEnabled { .. } => {
                     ctx.emit(UserWorkspacesEvent::CodebaseContextEnablementChanged);
                 }
                 _ => {}
-            }
-        });
+            },
+        );
 
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, ai_settings_event, ctx| {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, ai_settings_event, ctx| {
             if let AISettingsChangedEvent::IsAnyAIEnabled { .. } = ai_settings_event {
                 ctx.emit(UserWorkspacesEvent::CodebaseContextEnablementChanged);
             }

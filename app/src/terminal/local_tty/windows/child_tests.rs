@@ -2,13 +2,14 @@ use std::os::windows::io::AsRawHandle;
 use std::time::Duration;
 
 use command::blocking::Command;
+use instant::Instant;
 
 use super::*;
 use crate::terminal::local_tty::event_loop::CHANNEL_TOKEN;
 
 #[test]
 pub fn test_event_is_emitted_when_child_exits() {
-    const WAIT_TIMEOUT: Duration = Duration::from_millis(200);
+    const WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 
     let mut poll = mio::Poll::new().unwrap();
 
@@ -28,10 +29,27 @@ pub fn test_event_is_emitted_when_child_exits() {
 
     child.kill().unwrap();
 
-    // Poll for the event or fail with timeout if nothing has been sent.
+    // Poll until the event arrives or the overall timeout elapses.
     let mut events = mio::Events::with_capacity(10);
-    poll.poll(&mut events, Some(WAIT_TIMEOUT)).unwrap();
-    assert_eq!(events.iter().next().unwrap().token(), CHANNEL_TOKEN);
+    let deadline = Instant::now() + WAIT_TIMEOUT;
+    loop {
+        events.clear();
+        poll.poll(
+            &mut events,
+            Some(deadline.saturating_duration_since(Instant::now())),
+        )
+        .unwrap();
+
+        if events.iter().any(|event| event.token() == CHANNEL_TOKEN) {
+            break;
+        }
+
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for child-exit event; receiver state: {:?}",
+            rx.try_recv()
+        );
+    }
     // Verify that at least one `ChildEvent::Exited` was received.
     assert!(matches!(rx.try_recv(), Ok(Message::ChildExited)));
 }

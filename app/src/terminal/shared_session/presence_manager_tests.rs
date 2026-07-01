@@ -9,7 +9,9 @@ use warp_core::command::ExitCode;
 use warpui::App;
 
 use crate::auth::UserUid;
-use crate::terminal::model::ansi::{CommandFinishedValue, Handler};
+use crate::terminal::model::ansi::{
+    CommandFinishedValue, CompletionMetadata, Handler, PrecmdValue, PromptMetadata,
+};
 use crate::terminal::model::blocks::BlockList;
 use crate::terminal::model::test_utils::TestBlockListBuilder;
 use crate::terminal::shared_session::presence_manager::{PresenceManager, PRESET_COLORS};
@@ -309,12 +311,18 @@ fn block_list_for_test(max_block_index: usize) -> BlockList {
 
     // Block 0 already exists as part of creating the blocklist
     for i in 1..max_block_index {
-        block_list.command_finished(CommandFinishedValue {
+        let completion_metadata = CompletionMetadata {
             exit_code: ExitCode::from(0),
             next_block_id: i.to_string().into(),
+        };
+        block_list.command_finished(CommandFinishedValue {
+            completion_metadata: completion_metadata.clone(),
             session_id: None,
         });
-        block_list.precmd(Default::default());
+        block_list.precmd_with_completion_metadata(PrecmdValue {
+            completion_metadata,
+            prompt_metadata: PromptMetadata::default(),
+        });
     }
     block_list
 }

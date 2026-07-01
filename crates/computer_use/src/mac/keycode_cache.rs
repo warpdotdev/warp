@@ -4,13 +4,14 @@
 //! The translation depends on the current keyboard layout.
 //!
 //! The Carbon APIs used for translation (`TISCopyCurrentKeyboardInputSource`,
-//! `UCKeyTranslate`) are not thread-safe, so we build the cache on the main thread
-//! using GCD dispatch.
+//! `UCKeyTranslate`) are not thread-safe, so all cache builds are serialized through a
+//! process-wide mutex. This matters because concurrent computer-use agents can build the cache
+//! from different worker threads at the same time.
 
 use std::collections::HashMap;
 use std::ptr::NonNull;
+use std::sync::Mutex;
 
-use dispatch2::run_on_main;
 use objc2_core_foundation::{CFData, CFRetained, CFString, CFType};
 use objc2_core_graphics::CGKeyCode;
 
@@ -59,14 +60,20 @@ const SHIFT_MODIFIER: u32 = 1 << 1;
 
 /// Builds a character-to-keycode cache for the current keyboard layout.
 ///
-/// This function dispatches to the main thread to call Carbon APIs safely.
+/// The Carbon translation APIs are not thread-safe, so the build is serialized through a
+/// process-wide mutex. The work runs on the calling thread rather than being dispatched to the
+/// main thread: in the headless `agent run` CLI the main thread never services the GCD main
+/// queue, so a synchronous main-queue dispatch would deadlock.
 /// TODO(QUALITY-271): Store the modifier keys as well.
 pub fn build_cache() -> HashMap<char, CGKeyCode> {
-    run_on_main(|_| build_cache_on_main_thread())
+    static BUILD_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = BUILD_LOCK.lock().unwrap();
+    build_cache_locked()
 }
 
-/// Builds the cache on the main thread where Carbon APIs are safe to call.
-fn build_cache_on_main_thread() -> HashMap<char, CGKeyCode> {
+/// Builds the cache while the process-wide build lock is held, serializing access to the
+/// non-thread-safe Carbon APIs.
+fn build_cache_locked() -> HashMap<char, CGKeyCode> {
     let mut cache = HashMap::new();
 
     // Get the keyboard layout data.

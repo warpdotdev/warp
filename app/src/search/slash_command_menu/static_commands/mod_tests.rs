@@ -162,28 +162,48 @@ fn codebase_context_requirement_not_satisfied_when_disabled() {
     assert!(!session.contains(command));
 }
 
-// --- CLOUD_AGENT_V2 flag tests ---
+// --- CLOUD_AGENT flag tests ---
 #[test]
-fn cloud_agent_v2_required_command_satisfied_in_v2_session() {
-    let command =
-        Availability::AGENT_VIEW | Availability::AI_ENABLED | Availability::CLOUD_AGENT_V2;
+fn cloud_agent_required_command_satisfied_in_cloud_agent_session() {
+    let command = Availability::AGENT_VIEW | Availability::AI_ENABLED | Availability::CLOUD_AGENT;
 
-    // V2 cloud-mode composing input has AGENT_VIEW + AI_ENABLED + CLOUD_AGENT_V2 set.
-    let session =
-        Availability::AGENT_VIEW | Availability::AI_ENABLED | Availability::CLOUD_AGENT_V2;
+    let session = Availability::AGENT_VIEW | Availability::AI_ENABLED | Availability::CLOUD_AGENT;
     assert!(session.contains(command));
 }
 
 #[test]
-fn cloud_agent_v2_required_command_not_satisfied_outside_v2() {
+fn cloud_agent_required_command_not_satisfied_outside_cloud_agent_session() {
+    let command = Availability::AGENT_VIEW | Availability::AI_ENABLED | Availability::CLOUD_AGENT;
+
+    let session =
+        Availability::AGENT_VIEW | Availability::AI_ENABLED | Availability::NOT_CLOUD_AGENT;
+    assert!(!session.contains(command));
+}
+
+// --- CLOUD_MODE_V2_COMPOSER flag tests ---
+#[test]
+fn cloud_mode_v2_composer_required_command_satisfied_in_v2_composer_session() {
     let command =
-        Availability::AGENT_VIEW | Availability::AI_ENABLED | Availability::CLOUD_AGENT_V2;
+        Availability::AGENT_VIEW | Availability::AI_ENABLED | Availability::CLOUD_MODE_V2_COMPOSER;
+    // V2 cloud-mode composing input has AGENT_VIEW + AI_ENABLED + CLOUD_AGENT +
+    // CLOUD_MODE_V2_COMPOSER set.
+    let session = Availability::AGENT_VIEW
+        | Availability::AI_ENABLED
+        | Availability::CLOUD_AGENT
+        | Availability::CLOUD_MODE_V2_COMPOSER;
+    assert!(session.contains(command));
+}
+
+#[test]
+fn cloud_mode_v2_composer_required_command_not_satisfied_outside_v2_composer() {
+    let command =
+        Availability::AGENT_VIEW | Availability::AI_ENABLED | Availability::CLOUD_MODE_V2_COMPOSER;
 
     // A regular agent view session without the V2 bit must not match.
     let session = Availability::AGENT_VIEW | Availability::AI_ENABLED;
     assert!(!session.contains(command));
 
-    // Local-mode agent view (NOT_CLOUD_AGENT instead of CLOUD_AGENT_V2) must not match either.
+    // Local-mode agent view (NOT_CLOUD_AGENT instead of CLOUD_MODE_V2_COMPOSER) must not match either.
     let session =
         Availability::AGENT_VIEW | Availability::AI_ENABLED | Availability::NOT_CLOUD_AGENT;
     assert!(!session.contains(command));

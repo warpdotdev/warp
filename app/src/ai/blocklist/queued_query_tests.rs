@@ -220,7 +220,7 @@ fn queue_next_prompt_toggle_defaults_false_and_emits_event() {
     with_model(|mut app, model, events| {
         let conv = AIConversationId::new();
         model.read(&app, |model, _| {
-            assert!(!model.is_queue_next_prompt_enabled(conv));
+            assert!(!model.is_queue_next_prompt_toggle_enabled(conv));
         });
 
         model.update(&mut app, |model, ctx| {
@@ -228,7 +228,7 @@ fn queue_next_prompt_toggle_defaults_false_and_emits_event() {
         });
 
         model.read(&app, |model, _| {
-            assert!(model.is_queue_next_prompt_enabled(conv));
+            assert!(model.is_queue_next_prompt_toggle_enabled(conv));
         });
 
         let evts = events.borrow();
@@ -248,8 +248,99 @@ fn toggle_state_is_isolated_per_conversation() {
 
         model.update(&mut app, |m, ctx| m.toggle_queue_next_prompt(conv_a, ctx));
         model.read(&app, |m, _| {
-            assert!(m.is_queue_next_prompt_enabled(conv_a));
-            assert!(!m.is_queue_next_prompt_enabled(conv_b));
+            assert!(m.is_queue_next_prompt_toggle_enabled(conv_a));
+            assert!(!m.is_queue_next_prompt_toggle_enabled(conv_b));
+        });
+    });
+}
+
+#[test]
+fn lrc_auto_queue_enables_queueing_by_default() {
+    // While an eligible LRC is active, queueing is on even though the conversation
+    // has no persistent override; outside the LRC it is off.
+    with_model(|app, model, _events| {
+        let conv = AIConversationId::new();
+        model.read(&app, |m, _| {
+            assert!(m.is_queue_next_prompt_enabled_during_lrc(conv));
+            assert!(!m.is_queue_next_prompt_toggle_enabled(conv));
+        });
+    });
+}
+
+#[test]
+fn lrc_toggle_flips_only_the_lrc_override() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+
+        // Toggle off during the LRC: only the LRC-scoped state flips; the persistent
+        // per-conversation state is untouched.
+        model.update(&mut app, |m, ctx| {
+            m.toggle_queue_next_prompt_during_lrc(conv, ctx)
+        });
+        model.read(&app, |m, _| {
+            assert!(!m.is_queue_next_prompt_enabled_during_lrc(conv));
+            assert!(!m.is_queue_next_prompt_toggle_enabled(conv));
+        });
+
+        // Toggling back on re-enables for the remainder of the command.
+        model.update(&mut app, |m, ctx| {
+            m.toggle_queue_next_prompt_during_lrc(conv, ctx)
+        });
+        model.read(&app, |m, _| {
+            assert!(m.is_queue_next_prompt_enabled_during_lrc(conv));
+        });
+
+        let evts = events.borrow();
+        assert_eq!(evts.len(), 2);
+        assert!(evts.iter().all(|e| matches!(
+            e,
+            QueuedQueryEvent::QueueNextPromptToggled { conversation_id } if *conversation_id == conv
+        )));
+    });
+}
+
+#[test]
+fn clearing_lrc_override_restores_auto_queue_for_the_next_command() {
+    // The LRC override is cleared when the command ends, so the next eligible LRC
+    // auto-enables again. Clearing an existing override emits a toggle event; clearing
+    // when none exists does not.
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+
+        model.update(&mut app, |m, ctx| {
+            m.toggle_queue_next_prompt_during_lrc(conv, ctx)
+        });
+        model.update(&mut app, |m, ctx| {
+            m.clear_queue_next_lrc_prompt_override(conv, ctx)
+        });
+        model.read(&app, |m, _| {
+            assert!(m.is_queue_next_prompt_enabled_during_lrc(conv));
+        });
+        assert_eq!(events.borrow().len(), 2);
+
+        model.update(&mut app, |m, ctx| {
+            m.clear_queue_next_lrc_prompt_override(conv, ctx)
+        });
+        assert_eq!(events.borrow().len(), 2);
+    });
+}
+
+#[test]
+fn lrc_toggle_leaves_persistent_toggle_state_intact() {
+    // A conversation already in queue mode keeps that state after the LRC ends, regardless
+    // of toggles made during the command.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+
+        model.update(&mut app, |m, ctx| m.toggle_queue_next_prompt(conv, ctx));
+        model.update(&mut app, |m, ctx| {
+            m.toggle_queue_next_prompt_during_lrc(conv, ctx)
+        });
+
+        model.read(&app, |m, _| {
+            assert!(!m.is_queue_next_prompt_enabled_during_lrc(conv));
+            // After the LRC ends, the persistent toggle still applies.
+            assert!(m.is_queue_next_prompt_toggle_enabled(conv));
         });
     });
 }
@@ -636,7 +727,7 @@ fn delete_conversation_drops_only_that_conversation_state() {
 
         model.read(&app, |m, _| {
             assert!(!m.has_queue(conv_a));
-            assert!(!m.is_queue_next_prompt_enabled(conv_a));
+            assert!(!m.is_queue_next_prompt_toggle_enabled(conv_a));
             let b = m.queue(conv_b);
             assert_eq!(b.len(), 1);
             assert_eq!(b[0].text(), "b1");
@@ -808,8 +899,8 @@ fn delete_conversation_clears_in_flight_command() {
 }
 
 #[test]
-fn clear_conversations_in_terminal_view_drops_every_listed_conversation() {
-    // ClearedConversationsInTerminalView with multiple ids must drop each listed conversation's queue.
+fn clear_conversations_for_terminal_surface_drops_every_listed_conversation() {
+    // ClearedConversationsForTerminalSurface with multiple ids must drop each listed conversation's queue.
     with_model(|mut app, model, _events| {
         let history = BlocklistAIHistoryModel::handle(&app);
         let terminal_view_id = warpui::EntityId::new();
@@ -823,7 +914,7 @@ fn clear_conversations_in_terminal_view_drops_every_listed_conversation() {
         append_user(&model, &mut app, conv_b, "b1");
 
         history.update(&mut app, |h, ctx| {
-            h.clear_conversations_in_terminal_view(terminal_view_id, ctx)
+            h.clear_conversations_for_terminal_surface(terminal_view_id, ctx)
         });
 
         model.read(&app, |m, _| {

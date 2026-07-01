@@ -126,8 +126,11 @@ impl PromptDisplay {
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
-                if let BlocklistAIHistoryEvent::UpdatedTodoList { terminal_view_id } = event {
-                    if *terminal_view_id != me.terminal_view_id {
+                if let BlocklistAIHistoryEvent::UpdatedTodoList {
+                    terminal_surface_id,
+                } = event
+                {
+                    if *terminal_surface_id != me.terminal_view_id {
                         return;
                     }
                     ctx.notify();
@@ -170,12 +173,7 @@ impl PromptDisplay {
             || new_chips.iter().enumerate().any(|(i, chip_result)| {
                 let existing_chip = &self.display_chips[i];
                 existing_chip.read(ctx, |chip, _| {
-                    chip.text()
-                        != chip_result
-                            .value
-                            .as_ref()
-                            .map(|v| v.to_string())
-                            .unwrap_or_default()
+                    chip.value() != chip_result.value.as_ref()
                         || chip.chip_kind() != &chip_result.kind
                         || chip.on_click_values() != chip_result.on_click_values.as_slice()
                 })

@@ -3,8 +3,11 @@ use warp_core::SessionId;
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::App;
 
-use super::{HostRequestError, PendingHostRequest, RemoteServerManager, RipgrepSearchParams};
-use crate::proto::{host_scoped_request, ClientMessage, WriteFile};
+use super::{
+    HostRequestError, PendingHostRequest, RemoteServerManager, RemoteServerManagerEvent,
+    RipgrepSearchParams,
+};
+use crate::proto::{host_scoped_request, ClientMessage, RemoteAgentContextSnapshot, WriteFile};
 use crate::protocol::RequestId;
 use crate::HostId;
 
@@ -42,6 +45,41 @@ fn abort_host_request_removes_pending_request_and_resolves_caller() {
             result_rx.await.expect("manager should resolve caller"),
             Err(HostRequestError::Aborted)
         ));
+    });
+}
+
+#[test]
+fn remote_agent_context_snapshot_is_a_host_scoped_manager_event() {
+    let host_id = HostId::new("test-host".to_string());
+    let event = RemoteServerManagerEvent::RemoteAgentContextSnapshot {
+        host_id,
+        snapshot: RemoteAgentContextSnapshot {
+            revision: 1,
+            home_dir: "/home/user".to_string(),
+            skills: Vec::new(),
+            global_rules: Vec::new(),
+        },
+    };
+    assert!(event.session_id().is_none());
+}
+
+#[test]
+fn remote_agent_context_snapshot_revisions_are_deduplicated_per_host() {
+    App::test((), |mut app| async move {
+        let manager = app.add_model(RemoteServerManager::new);
+        let host_id = HostId::new("test-host".to_string());
+        let other_host_id = HostId::new("other-host".to_string());
+
+        manager.update(&mut app, |manager, ctx| {
+            assert!(manager.accept_remote_agent_context_snapshot_revision(&host_id, 2));
+            assert!(!manager.accept_remote_agent_context_snapshot_revision(&host_id, 2));
+            assert!(!manager.accept_remote_agent_context_snapshot_revision(&host_id, 1));
+            assert!(manager.accept_remote_agent_context_snapshot_revision(&host_id, 3));
+            assert!(manager.accept_remote_agent_context_snapshot_revision(&other_host_id, 1));
+
+            manager.handle_host_disconnected(&host_id, ctx);
+            assert!(manager.accept_remote_agent_context_snapshot_revision(&host_id, 3));
+        });
     });
 }
 

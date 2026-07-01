@@ -42,6 +42,7 @@ fn create_conversation_metadata(
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
+            context_window_segments: Vec::new(),
         },
         metadata: create_mock_server_metadata(),
         creator: None,

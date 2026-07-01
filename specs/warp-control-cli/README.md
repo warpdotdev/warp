@@ -35,7 +35,7 @@ Installer helper creation and release-artifact wiring still need a later packagi
 Use matching app and CLI bits from the same branch or release artifact so the protocol version and action catalog agree.
 1. Start Warp and leave at least one window open.
 2. Open **Settings > Scripting**. Local control is enabled by default on internal dogfood builds and disabled by default on public channels (Stable, Preview, OSS). Verify that the Scripting toggle is set to **Enabled**, and enable it if needed. Enabling scripting allows for programmatic and agentic control of Warp; refer to the docs for more info.
-3. Confirm that the local-control server registered the running process:
+3. Confirm that the local-control server registered the running same-channel process:
    ```bash
    warpctrl instance list
    ```
@@ -45,11 +45,11 @@ Use matching app and CLI bits from the same branch or release artifact so the pr
    warpctrl app version
    warpctrl surface list
    ```
-5. If exactly one compatible instance is listed, create a new terminal tab:
+5. If exactly one compatible same-channel instance is listed, create a new terminal tab:
    ```bash
    warpctrl tab create
    ```
-6. If multiple compatible instances are listed, copy the desired `instance_id` and target it explicitly:
+6. If multiple compatible same-channel instances are listed, copy the desired `instance_id` and target it explicitly:
    ```bash
    warpctrl app ping --instance <instance_id>
    warpctrl app version --instance <instance_id>
@@ -64,6 +64,7 @@ Expected failures:
 - `warpctrl instance list` with no running compatible app: exits zero with an empty list;
 - a command that needs a selected app when no compatible app is running: exits non-zero with a no-instance error;
 - multiple ambiguous instances: exits non-zero and asks for `--instance`;
+- an explicit instance or PID from another channel: exits non-zero with a no-instance error;
 - unsupported app build or stale discovery record: exits non-zero with a protocol, stale-target, or transport error;
 ## Security model
 The local-control protocol is designed for same-user scripting, not cross-user or network access. The trust boundary is the local user account.
@@ -71,7 +72,8 @@ The local-control protocol is designed for same-user scripting, not cross-user o
 - **Brokered scoped credentials.** Discovery records contain instance metadata, loopback control-endpoint information, and an instance-bound Unix-domain-socket broker reference when Scripting is enabled. The broker authenticates the connecting OS user with kernel peer credentials before decoding the credential request or issuing an action-scoped credential. Records do not contain bearer tokens or reusable full-access credentials.
 - **Short-lived grants.** `warpctrl` requests an action-scoped credential over the owner-authenticated broker socket for the selected instance, then presents that credential to `/v1/control`. Grants are instance-bound, expired entries are pruned, and the in-memory grant set is capped. Missing, invalid, expired, revoked, or wrong-instance credentials are rejected before request decoding. After decoding identifies the requested action, insufficient-scope credentials are rejected before selector resolution or handler dispatch.
 - **Protected local state.** The authoritative Scripting setting uses platform secure storage, never imports a value from ordinary or private preferences, and defaults to enabled only on internal dogfood channels (disabled by default on public channels). On POSIX platforms, discovery records and broker sockets use owner-only permissions. On Windows, local-control publication remains disabled until equivalent ACL and broker protections are implemented.
-- **Stale-record pruning.** On each `instance list` or implicit discovery call, records whose PID is no longer alive are deleted automatically. Candidates are also health-probed and accepted only when the live app reports the expected instance identity.
+- **Channel-scoped discovery.** Each channel-specific CLI considers only records from its own Warp channel. Listing, implicit selection, and explicit instance or PID selection cannot target another channel.
+- **Stale-record pruning.** On each `instance list` or implicit discovery call, same-channel records whose PID is no longer alive are deleted automatically. Candidates are also health-probed and accepted only when the live app reports the expected instance identity.
 - **No CORS.** The control endpoints do not set permissive CORS headers, so browser-origin JavaScript cannot read responses even if it guesses the port. The credential requirement provides a second layer since browsers cannot read the brokered credential material.
 ```mermaid
 sequenceDiagram

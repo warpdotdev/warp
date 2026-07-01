@@ -659,7 +659,7 @@ fn test_resolve_asset_source_relative_to_directory_uses_base_directory() {
         resolve_asset_source_relative_to_directory("diagram.png", Some(Path::new("/tmp/session")));
 
     match asset_source {
-        AssetSource::LocalFile { path } => {
+        AssetSource::LocalFile { path, .. } => {
             assert_eq!(Path::new(&path), Path::new("/tmp/session/diagram.png"));
         }
         source => panic!("expected local file asset source, got {source:?}"),

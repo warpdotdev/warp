@@ -91,7 +91,7 @@ pub fn insert_block_with_prompt(
     command: &str,
     output: &str,
 ) -> BlockIndex {
-    block_list.precmd(PrecmdValue {
+    block_list.prompt_only_precmd(PromptMetadata {
         ps1: Some(hex::encode(prompt)),
         honor_ps1: Some(true),
         ..Default::default()
@@ -120,10 +120,48 @@ pub fn insert_block_with_prompt(
 /// Calling `command_finished` is all that's necessary for tests that only
 /// advance the block list and check the state (e.g. like the length of the
 /// block list, the bootstrapped state). Tests that check for messages sent to the
-/// view need to also call `precmd`.
+/// view need to also call `precmd_with_completion_metadata`.
 pub fn command_finished_and_precmd(block_list: &mut BlockList) {
-    block_list.command_finished(Default::default());
-    block_list.precmd(Default::default());
+    let completion_metadata = ansi::CompletionMetadata::default();
+    block_list.command_finished(CommandFinishedValue {
+        completion_metadata: completion_metadata.clone(),
+        ..Default::default()
+    });
+    block_list.precmd_with_completion_metadata(PrecmdValue {
+        completion_metadata,
+        prompt_metadata: PromptMetadata::default(),
+    });
+}
+
+#[test]
+fn classifies_next_block_ids_relative_to_the_active_block() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let previous_active_id = block_list.active_block_id().clone();
+    let next_block_id = BlockId::new();
+
+    assert_eq!(
+        block_list.classify_next_block_id(&previous_active_id),
+        NextBlockIdDisposition::ActiveDuplicate
+    );
+    assert_eq!(
+        block_list.classify_next_block_id(&next_block_id),
+        NextBlockIdDisposition::Novel
+    );
+
+    block_list.complete_active_block_and_advance(ansi::CompletionMetadata {
+        exit_code: 0.into(),
+        next_block_id: next_block_id.clone(),
+    });
+
+    assert_eq!(
+        block_list.classify_next_block_id(&previous_active_id),
+        NextBlockIdDisposition::ExistingCollision
+    );
+    assert_eq!(
+        block_list.classify_next_block_id(&next_block_id),
+        NextBlockIdDisposition::ActiveDuplicate
+    );
 }
 fn drain_terminal_events(events_rx: &async_channel::Receiver<Event>) -> Vec<Event> {
     let mut events = Vec::new();

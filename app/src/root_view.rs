@@ -86,7 +86,7 @@ use crate::terminal::shell::ShellType;
 use crate::terminal::view::{cell_size_and_padding, TerminalAction};
 use crate::themes::onboarding_theme_picker_themes;
 use crate::themes::theme::{AnsiColorIdentifier, Blend, Fill, ThemeKind, WarpThemeConfig};
-use crate::uri::OpenMCPSettingsArgs;
+use crate::uri::{OpenMCPSettingsArgs, OpenSettingsArgs};
 use crate::util::bindings::{self, is_binding_pty_compliant};
 use crate::util::traffic_lights::{traffic_light_data, TrafficLightData, TrafficLightMouseStates};
 use crate::view_components::DismissibleToast;
@@ -385,6 +385,15 @@ pub fn init(app: &mut AppContext) {
     app.add_action(
         "root_view:open_settings_page_in_existing_window",
         RootView::open_settings_page_in_existing_window,
+    );
+
+    app.add_global_action(
+        "root_view:open_settings_in_new_window",
+        open_settings_in_new_window,
+    );
+    app.add_action(
+        "root_view:open_settings_in_existing_window",
+        RootView::open_settings_in_existing_window,
     );
 
     app.add_global_action(
@@ -976,6 +985,34 @@ fn open_settings_page_in_new_window(section: &SettingsSection, ctx: &mut AppCont
                 workspace_view_handle.id(),
                 &WorkspaceAction::ShowSettingsPage(*section),
             );
+        }
+    });
+}
+
+/// Maps a `warp://settings` deeplink to the workspace action that opens it.
+fn workspace_action_for_open_settings(args: &OpenSettingsArgs) -> WorkspaceAction {
+    match args {
+        OpenSettingsArgs::Default => WorkspaceAction::ShowSettings,
+        OpenSettingsArgs::Search { query } => WorkspaceAction::ShowSettingsPageWithSearch {
+            search_query: query.clone(),
+            section: None,
+        },
+        OpenSettingsArgs::Widget { page, widget_id } => WorkspaceAction::ScrollToSettingsWidget {
+            page: *page,
+            widget_id,
+        },
+    }
+}
+
+fn open_settings_in_new_window(args: &OpenSettingsArgs, ctx: &mut AppContext) {
+    let action = workspace_action_for_open_settings(args);
+    let root_handle = open_new_window_get_handles(None, ctx).1;
+    root_handle.update(ctx, |root_view, ctx| {
+        if let AuthOnboardingState::Terminal(workspace_view_handle) =
+            &root_view.auth_onboarding_state
+        {
+            let window_id = ctx.window_id();
+            ctx.dispatch_typed_action_for_view(window_id, workspace_view_handle.id(), &action);
         }
     });
 }
@@ -2059,8 +2096,9 @@ impl RootView {
                 };
                 let workspace = target.to_workspace(ctx);
                 // User opted out of login: apply locally (no cloud race).
+                // Skipping leaves the user without an account, so AI is disabled.
                 if let Some(selected_settings) = self.pending_post_auth_onboarding_settings.take() {
-                    apply_onboarding_settings(&selected_settings, ctx);
+                    apply_onboarding_settings(&selected_settings, false, ctx);
                 }
                 self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
@@ -2130,30 +2168,36 @@ impl RootView {
                         .theme()
                         .name()
                         .unwrap_or_else(|| "Dark".to_string());
-                    let (use_vertical_tabs, intention) = match selected_settings {
-                        SelectedSettings::AgentDrivenDevelopment {
-                            ui_customization, ..
-                        } => (
-                            ui_customization
-                                .as_ref()
-                                .map(|c| c.use_vertical_tabs)
-                                .unwrap_or(true),
-                            OnboardingIntention::AgentDrivenDevelopment,
-                        ),
-                        SelectedSettings::Terminal {
-                            ui_customization, ..
-                        } => (
-                            ui_customization
-                                .as_ref()
-                                .map(|c| c.use_vertical_tabs)
-                                .unwrap_or(false),
-                            OnboardingIntention::Terminal,
-                        ),
-                    };
+                    let (use_vertical_tabs, intention, uses_third_party_agents) =
+                        match selected_settings {
+                            SelectedSettings::AgentDrivenDevelopment {
+                                ui_customization,
+                                agent_settings,
+                                ..
+                            } => (
+                                ui_customization
+                                    .as_ref()
+                                    .map(|c| c.use_vertical_tabs)
+                                    .unwrap_or(true),
+                                OnboardingIntention::AgentDrivenDevelopment,
+                                agent_settings.disable_oz,
+                            ),
+                            SelectedSettings::Terminal {
+                                ui_customization, ..
+                            } => (
+                                ui_customization
+                                    .as_ref()
+                                    .map(|c| c.use_vertical_tabs)
+                                    .unwrap_or(false),
+                                OnboardingIntention::Terminal,
+                                false,
+                            ),
+                        };
 
                     let login_slide_view = ctx.add_typed_action_view(|ctx| {
                         LoginSlideView::new(
                             ai_enabled,
+                            uses_third_party_agents,
                             &theme_name,
                             use_vertical_tabs,
                             intention,
@@ -2177,7 +2221,7 @@ impl RootView {
                     return;
                 }
 
-                apply_onboarding_settings(selected_settings, ctx);
+                apply_onboarding_settings(selected_settings, is_logged_in, ctx);
 
                 if is_logged_in {
                     AuthManager::handle(ctx)
@@ -2276,6 +2320,8 @@ impl RootView {
                 let login_slide_view = ctx.add_typed_action_view(|ctx| {
                     LoginSlideView::new(
                         ai_enabled,
+                        // Terminal intention is never the third-party-agent path.
+                        false,
                         &theme_name,
                         use_vertical_tabs,
                         OnboardingIntention::Terminal,
@@ -2324,6 +2370,9 @@ impl RootView {
                 let login_slide_view = ctx.add_typed_action_view(|ctx| {
                     LoginSlideView::new(
                         ai_enabled,
+                        // No agent setup choice has been made yet; default to the
+                        // Warp Agent login screen rather than the third-party copy.
+                        false,
                         &theme_name,
                         use_vertical_tabs,
                         // Existing-user login from the welcome slide happens before the user
@@ -2791,6 +2840,22 @@ impl RootView {
         true
     }
 
+    pub fn open_settings_in_existing_window(
+        &mut self,
+        args: &OpenSettingsArgs,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let window_id = ctx.window_id();
+        if let AuthOnboardingState::Terminal(handle) = &self.auth_onboarding_state {
+            let action = workspace_action_for_open_settings(args);
+            ctx.dispatch_typed_action_for_view(window_id, handle.id(), &action);
+            ctx.windows().show_window_and_focus_app(window_id);
+        } else {
+            log::error!("Auth not complete before trying to open settings");
+        }
+        true
+    }
+
     /// Opens the MCP servers settings page in an existing window, optionally triggering auto-install.
     /// Waits for `initial_load_complete` before opening so gallery data is available for autoinstall.
     pub fn open_mcp_settings_in_existing_window(
@@ -2967,7 +3032,8 @@ impl RootView {
                     if let Some(selected_settings) =
                         self.pending_post_auth_onboarding_settings.take()
                     {
-                        apply_onboarding_settings(&selected_settings, ctx);
+                        // Skipped login → no account → AI disabled.
+                        apply_onboarding_settings(&selected_settings, false, ctx);
                     }
                     self.auth_onboarding_state = AuthOnboardingState::Terminal(workspace);
                     ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
@@ -3172,7 +3238,8 @@ impl RootView {
         let Some(selected_settings) = self.pending_post_auth_onboarding_settings.take() else {
             return;
         };
-        apply_onboarding_settings(&selected_settings, ctx);
+        // Reached only after a successful login, so the user has an account.
+        apply_onboarding_settings(&selected_settings, true, ctx);
     }
 
     /// If onboarding stored a pending tutorial (because login was required first),

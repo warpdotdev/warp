@@ -337,7 +337,7 @@ impl GlobalBufferModel {
         if FeatureFlag::SshRemoteServer.is_enabled() {
             use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
             let mgr = RemoteServerManager::handle(_ctx);
-            _ctx.subscribe_to_model(&mgr, |me, event, ctx| match event {
+            _ctx.subscribe_to_model(&mgr, |me, _, event, ctx| match event {
                 RemoteServerManagerEvent::BufferUpdated {
                     host_id,
                     path,
@@ -676,7 +676,12 @@ impl GlobalBufferModel {
     }
 
     #[cfg(feature = "local_fs")]
-    fn handle_file_model_events(&mut self, event: &FileModelEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_file_model_events(
+        &mut self,
+        _: ModelHandle<FileModel>,
+        event: &FileModelEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             FileModelEvent::FileLoaded {
                 content,
@@ -1062,7 +1067,7 @@ impl GlobalBufferModel {
 
         // Subscribe to buffer events for LSP sync.
         let path_clone = path.clone();
-        ctx.subscribe_to_model(&buffer, move |me, event, ctx| {
+        ctx.subscribe_to_model(&buffer, move |me, _, event, ctx| {
             use warp_editor::content::buffer::BufferEvent;
 
             let Some(state) = me.buffers.get(&file_id) else {
@@ -1201,7 +1206,7 @@ impl GlobalBufferModel {
         });
 
         let path_clone = path.to_path_buf();
-        ctx.subscribe_to_model(&buffer, move |me, event, ctx| {
+        ctx.subscribe_to_model(&buffer, move |me, _, event, ctx| {
             use warp_editor::content::buffer::BufferEvent;
 
             let Some(state) = me.buffers.get(&file_id) else {
@@ -1496,6 +1501,7 @@ impl GlobalBufferModel {
     #[cfg(feature = "local_fs")]
     fn handle_lsp_manager_events(
         &mut self,
+        _: ModelHandle<LspManagerModel>,
         event: &LspManagerModelEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1684,7 +1690,7 @@ impl GlobalBufferModel {
         if let Some(client) = &client_for_sub {
             let client = client.clone();
             let path_for_edit = path_str.clone();
-            ctx.subscribe_to_model(&buffer, move |me, event, ctx| {
+            ctx.subscribe_to_model(&buffer, move |me, _, event, ctx| {
                 use warp_editor::content::buffer::BufferEvent;
                 if let BufferEvent::ContentChanged { delta, origin, .. } = event {
                     // Skip server-originated changes to prevent echo loop.

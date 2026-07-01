@@ -50,7 +50,8 @@ use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentActionTypeDiscriminants, AIAgentExchange, AIAgentInput,
-    CancellationReason, CreateDocumentsResult, EditDocumentsResult, RequestCommandOutputResult,
+    CancellationOutcome, CancellationReason, CreateDocumentsResult, EditDocumentsResult,
+    RequestCommandOutputResult,
 };
 use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
@@ -262,7 +263,7 @@ impl BlocklistAIActionModel {
                 ctx,
             )
         });
-        ctx.subscribe_to_model(&executor, move |me, event, ctx| match event {
+        ctx.subscribe_to_model(&executor, move |me, _, event, ctx| match event {
             BlocklistAIActionExecutorEvent::ExecutingAction { action_id } => {
                 ctx.emit(BlocklistAIActionEvent::ExecutingAction(action_id.clone()));
             }
@@ -1218,7 +1219,7 @@ impl BlocklistAIActionModel {
         }
 
         let Some(conversation_id) = found_conversation_id else {
-            debug_assert!(false, "Expected action to be requested command.");
+            log::warn!("Ignoring acceptance for non-pending requested command: {action_id:?}");
             return;
         };
 
@@ -1290,8 +1291,17 @@ impl BlocklistAIActionModel {
             .get(&conversation_id)
             .is_none_or(|actions| actions.is_empty())
         {
-            if !cancellation_reason.is_some_and(|r| r.should_preserve_in_progress_status()) {
+            // Only a `Cancelled` outcome stamps a status here. The other outcomes are
+            // owned elsewhere: `KeepInProgress` / `Succeeded` and `FinalizedExternally`
+            // are finalized by the controller or a dedicated path, and a normal
+            // completion (no cancellation reason) is resolved by the controller's
+            // follow-up handling. Stamping here for any of those would clobber the real
+            // status and message.
+            if cancellation_reason
+                .is_some_and(|r| matches!(r.conversation_outcome(), CancellationOutcome::Cancelled))
+            {
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    // Treat action result as authoritative for determining status.
                     let status = if self
                         .finished_action_results
                         .get(&conversation_id)
