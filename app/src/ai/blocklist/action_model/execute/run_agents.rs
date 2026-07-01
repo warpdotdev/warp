@@ -27,13 +27,16 @@ use crate::ai::agent::{
     StartAgentExecutionMode,
 };
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
-use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
+use crate::ai::blocklist::inline_action::orchestration_controls::{
+    resolve_cloud_agent_fallback_model_id, unavailable_model_reason, OrchestrationEditState,
+};
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::document::plan_publication::{
     prepare_plan_publications, wait_for_plan_publications,
 };
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
+use crate::settings::{AISettings, CloudAgentInvalidModelBehavior};
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
 /// this window (e.g. binary not found, server error), the slot is failed
@@ -174,6 +177,44 @@ impl RunAgentsExecutor {
             log::warn!("RunAgentsExecutor: validation failure: {error}");
             let _ = sender.try_send(RunAgentsResult::Failure { error });
             return receiver;
+        }
+
+        // Pre-flight model check: mirror the server's pre-spawn model validation
+        // (warp-server `AddTask`) so we fail fast (or auto-select) rather than
+        // dispatching children the server would reject. The model_id/harness_type
+        // are already resolved from any approved config upstream, so this sees
+        // the final run-wide values.
+        let mut request = request;
+        let is_local = !request.execution_mode.is_remote();
+        if let Some(reason) =
+            unavailable_model_reason(&request.model_id, &request.harness_type, is_local, ctx)
+        {
+            match AISettings::as_ref(ctx).cloud_agent_invalid_model_behavior {
+                CloudAgentInvalidModelBehavior::Block => {
+                    log::warn!("RunAgentsExecutor: unavailable model: {reason}");
+                    let _ = sender.try_send(RunAgentsResult::Failure { error: reason });
+                    return receiver;
+                }
+                CloudAgentInvalidModelBehavior::AutoSelect => {
+                    // Substitute the configured fallback (or Oz default) only when
+                    // it's valid for this run target; otherwise inherit the default
+                    // (empty). This avoids handing an Oz model id to a non-Oz
+                    // harness. Mirrors `maybe_auto_select_valid_model`.
+                    let fallback = resolve_cloud_agent_fallback_model_id(ctx);
+                    request.model_id = if unavailable_model_reason(
+                        &fallback,
+                        &request.harness_type,
+                        is_local,
+                        ctx,
+                    )
+                    .is_none()
+                    {
+                        fallback
+                    } else {
+                        String::new()
+                    };
+                }
+            }
         }
         let pending_plan_publications = prepare_plan_publications(parent_conversation_id, ctx);
 

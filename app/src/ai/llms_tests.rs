@@ -239,6 +239,7 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
         base_llm_for_terminal_view: HashMap::new(),
         custom_llms: build_custom_llm_infos(&keys),
         custom_model_routers: Vec::new(),
+        server_models_loaded: false,
     };
 
     assert_eq!(

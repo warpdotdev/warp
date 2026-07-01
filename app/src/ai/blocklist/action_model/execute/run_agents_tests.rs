@@ -19,13 +19,16 @@ use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentSaveStatus};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::RunAgentsPermission;
+use crate::ai::llms::{LLMPreferences, ModelsByFeature};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::appearance::Appearance;
+use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::SyncId;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::PrivacySettings;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
@@ -592,6 +595,153 @@ fn set_run_agents_permission(app: &mut App, permission: RunAgentsPermission) {
     AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
         let profile_id = *profiles.active_profile(None, ctx).id();
         profiles.set_run_agents(profile_id, permission, ctx);
+    });
+}
+
+/// Registers `LLMPreferences` (and its deps) with the agent-mode catalog marked
+/// as server-loaded. The default catalog only contains the `auto` model, so any
+/// non-`auto` model id is treated as unavailable for cloud/Oz runs.
+fn seed_loaded_llm_catalog(app: &mut App) {
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    app.add_singleton_model(AuthManager::new_for_test);
+    let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+    llm_preferences.update(app, |preferences, ctx| {
+        preferences.update_feature_model_choices(Ok(ModelsByFeature::default()), ctx);
+    });
+}
+
+fn set_invalid_model_behavior(app: &mut App, behavior: CloudAgentInvalidModelBehavior) {
+    AISettings::handle(app).update(app, |settings, ctx| {
+        settings
+            .cloud_agent_invalid_model_behavior
+            .set_value(behavior, ctx)
+            .expect("setting invalid-model behavior should succeed");
+    });
+}
+
+fn remote_oz_request(model_id: &str) -> RunAgentsRequest {
+    let AIAgentActionType::RunAgents(mut request) = remote_run_agents_action("oz").action else {
+        panic!("expected run_agents action");
+    };
+    request.model_id = model_id.to_string();
+    request
+}
+
+#[test]
+fn dispatch_blocks_cloud_invalid_model_and_dispatches_no_children() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        seed_loaded_llm_catalog(&mut app);
+        let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+        let action_id = AIAgentActionId::from("run-agents-action".to_string());
+        let request = remote_oz_request("gpt-nonexistent");
+
+        let receiver = state.executor.update(&mut app, |executor, ctx| {
+            executor.dispatch_prepared_run_agents(
+                action_id.clone(),
+                request,
+                state.conversation_id,
+                ctx,
+            )
+        });
+
+        let result = receiver
+            .try_recv()
+            .expect("blocked invalid model should fail synchronously");
+        let RunAgentsResult::Failure { error } = result else {
+            panic!("expected Failure result for blocked invalid model");
+        };
+        assert!(
+            error.contains("gpt-nonexistent"),
+            "error should name the model: {error}"
+        );
+        state.executor.read(&app, |executor, _ctx| {
+            assert!(!executor.is_pending(&action_id));
+        });
+        captured.read(&app, |captured, _ctx| {
+            assert!(captured.0.is_empty());
+        });
+    });
+}
+
+#[test]
+fn dispatch_auto_selects_cloud_invalid_model_and_proceeds() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        seed_loaded_llm_catalog(&mut app);
+        set_invalid_model_behavior(&mut app, CloudAgentInvalidModelBehavior::AutoSelect);
+        let action_id = AIAgentActionId::from("run-agents-action".to_string());
+        let request = remote_oz_request("gpt-nonexistent");
+
+        let receiver = state.executor.update(&mut app, |executor, ctx| {
+            executor.dispatch_prepared_run_agents(
+                action_id.clone(),
+                request,
+                state.conversation_id,
+                ctx,
+            )
+        });
+
+        assert!(
+            receiver.try_recv().is_err(),
+            "auto-select should proceed rather than fail synchronously"
+        );
+        state.executor.read(&app, |executor, _ctx| {
+            assert!(executor.is_pending(&action_id));
+        });
+    });
+}
+
+#[test]
+fn dispatch_allows_empty_model_and_proceeds() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let action_id = AIAgentActionId::from("run-agents-action".to_string());
+        let request = remote_oz_request("");
+
+        let receiver = state.executor.update(&mut app, |executor, ctx| {
+            executor.dispatch_prepared_run_agents(
+                action_id.clone(),
+                request,
+                state.conversation_id,
+                ctx,
+            )
+        });
+
+        assert!(
+            receiver.try_recv().is_err(),
+            "unset model should proceed rather than fail synchronously"
+        );
+        state.executor.read(&app, |executor, _ctx| {
+            assert!(executor.is_pending(&action_id));
+        });
+    });
+}
+
+#[test]
+fn dispatch_allows_auto_model_and_proceeds() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        seed_loaded_llm_catalog(&mut app);
+        let action_id = AIAgentActionId::from("run-agents-action".to_string());
+        let request = remote_oz_request("auto");
+
+        let receiver = state.executor.update(&mut app, |executor, ctx| {
+            executor.dispatch_prepared_run_agents(
+                action_id.clone(),
+                request,
+                state.conversation_id,
+                ctx,
+            )
+        });
+
+        assert!(
+            receiver.try_recv().is_err(),
+            "auto model should proceed rather than fail synchronously"
+        );
+        state.executor.read(&app, |executor, _ctx| {
+            assert!(executor.is_pending(&action_id));
+        });
     });
 }
 

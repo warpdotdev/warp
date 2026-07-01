@@ -25,6 +25,9 @@ use crate::ai::ambient_agents::{
 use crate::ai::blocklist::handoff::touched_repos::TouchedWorkspace;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
+use crate::ai::blocklist::inline_action::orchestration_controls::{
+    resolve_cloud_agent_fallback_model_id, unavailable_model_reason,
+};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::execution_profiles::{
@@ -44,7 +47,7 @@ use crate::server::server_api::ai::{
 use crate::server::server_api::{
     AIApiError, ClientError, CloudAgentCapacityError, ServerApiProvider,
 };
-use crate::settings::PrivacySettings;
+use crate::settings::{AISettings, CloudAgentInvalidModelBehavior, PrivacySettings};
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
 use crate::terminal::CLIAgent;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -1282,6 +1285,41 @@ impl AmbientAgentViewModel {
     /// handoff snapshot has settled, without re-running the UI transition that
     /// [`Self::queue_handoff_auto_submit`] already performed.
     fn start_spawn_stream(&mut self, mut request: SpawnAgentRequest, ctx: &mut ModelContext<Self>) {
+        // Pre-spawn cloud model gate: mirror the orchestration model validation
+        // for single cloud-agent launches (initial spawn + local-to-cloud
+        // handoff, which both route through here). Only the Oz base model is
+        // validated; non-Oz harnesses manage their own model catalogs. Under
+        // Block, surface a failure and don't spawn; under auto-select, substitute
+        // a valid fallback model.
+        let is_oz_cloud = request.config.as_ref().is_none_or(|c| c.harness.is_none());
+        if is_oz_cloud {
+            let model_id = request
+                .config
+                .as_ref()
+                .and_then(|c| c.model_id.clone())
+                .unwrap_or_default();
+            if let Some(reason) = unavailable_model_reason(&model_id, "oz", false, ctx) {
+                let behavior = AISettings::as_ref(ctx).cloud_agent_invalid_model_behavior;
+                match behavior {
+                    CloudAgentInvalidModelBehavior::Block => {
+                        self.handle_spawn_error(reason, ctx);
+                        return;
+                    }
+                    CloudAgentInvalidModelBehavior::AutoSelect => {
+                        let fallback = resolve_cloud_agent_fallback_model_id(ctx);
+                        let substitute =
+                            if unavailable_model_reason(&fallback, "oz", false, ctx).is_none() {
+                                (!fallback.is_empty()).then_some(fallback)
+                            } else {
+                                None
+                            };
+                        if let Some(config) = request.config.as_mut() {
+                            config.model_id = substitute;
+                        }
+                    }
+                }
+            }
+        }
         request.interactive = Some(true);
         self.request = Some(request.clone());
         self.source = None;
@@ -1297,6 +1335,11 @@ impl AmbientAgentViewModel {
     /// Spawn an ambient agent given `request`.
     fn spawn_internal(&mut self, request: SpawnAgentRequest, ctx: &mut ModelContext<Self>) {
         self.start_spawn_stream(request, ctx);
+        // If the pre-spawn model gate blocked the run, it already transitioned to
+        // Failed; don't overwrite that with WaitingForSession.
+        if matches!(self.status, Status::Failed { .. }) {
+            return;
+        }
         self.status = Status::WaitingForSession {
             progress: AgentProgress::new(),
             kind: SessionStartupKind::InitialRun,

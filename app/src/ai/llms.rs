@@ -590,11 +590,17 @@ pub struct LLMPreferences {
     custom_llms: Vec<LLMInfo>,
     /// All custom model routers, including both local and cloud-backed.
     custom_model_routers: Vec<CustomModelRouter>,
+    /// Whether the agent-mode catalog has been populated from the server (vs.
+    /// the built-in defaults). Used to fail open on cloud model validation
+    /// before the first `get_feature_model_choices` response.
+    server_models_loaded: bool,
 }
 
 impl LLMPreferences {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        let models_by_feature = get_cached_models(ctx).unwrap_or_default();
+        let cached_models = get_cached_models(ctx);
+        let server_models_loaded = cached_models.is_some();
+        let models_by_feature = cached_models.unwrap_or_default();
 
         ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, _, event, ctx| {
             if let NetworkStatusEvent::NetworkStatusChanged {
@@ -655,6 +661,7 @@ impl LLMPreferences {
             base_llm_for_terminal_view,
             custom_llms,
             custom_model_routers: Vec::new(),
+            server_models_loaded,
         };
 
         // Seed from any already-loaded local config (the async load emits
@@ -782,6 +789,63 @@ impl LLMPreferences {
             })
             .chain(self.custom_llm_choices(app))
             .chain(self.custom_router_choices())
+    }
+
+    /// Returns true when `id` is a model Oz accepts for cloud agent tasks.
+    ///
+    /// Checks the *raw* server-provided agent-mode catalog
+    /// (`models_by_feature.agent_mode`) — the same set the server validates
+    /// against in `AddTask` — and intentionally excludes client-only
+    /// augmentation (custom-endpoint LLMs and local custom routers), which are
+    /// only runnable for local sessions. Cloud-backed custom routers remain
+    /// valid because the server includes them in the agent-mode catalog.
+    /// Models with a disable reason are treated as unavailable, mirroring the
+    /// server's access check.
+    pub fn is_oz_cloud_agent_model_available(&self, id: &str) -> bool {
+        self.models_by_feature
+            .agent_mode
+            .choices
+            .iter()
+            .any(|llm| llm.id.as_str() == id && llm.disable_reason.is_none())
+    }
+
+    /// The enabled Oz cloud agent-mode models, for building the orchestration
+    /// fallback-model picker. Uses the *raw* server catalog (excludes local-only
+    /// custom endpoints/routers) so only models valid for cloud agents appear.
+    pub fn oz_cloud_agent_models(&self) -> Vec<&LLMInfo> {
+        self.models_by_feature
+            .agent_mode
+            .choices
+            .iter()
+            .filter(|llm| llm.disable_reason.is_none())
+            .collect()
+    }
+
+    /// A small sample of currently-available Oz cloud agent-mode model ids, for
+    /// building actionable "try one of these" error messages.
+    pub fn oz_cloud_agent_model_suggestions(&self, limit: usize) -> Vec<String> {
+        self.models_by_feature
+            .agent_mode
+            .choices
+            .iter()
+            .filter(|llm| llm.disable_reason.is_none())
+            .map(|llm| llm.id.to_string())
+            .take(limit)
+            .collect()
+    }
+
+    /// The default agent-mode model id from the raw server catalog, used as the
+    /// fallback when auto-selecting a valid model for cloud orchestration. The
+    /// server guarantees this default is enabled.
+    pub fn oz_cloud_default_agent_model_id(&self) -> String {
+        self.models_by_feature.agent_mode.default_id.to_string()
+    }
+
+    /// Whether the agent-mode catalog has been populated from the server (vs.
+    /// the built-in defaults). Cloud model validation should fail open until
+    /// this is true.
+    pub fn oz_cloud_agent_model_catalog_loaded(&self) -> bool {
+        self.server_models_loaded
     }
 
     /// Returns the set of LLMs available for coding.
@@ -1385,6 +1449,10 @@ impl LLMPreferences {
     }
 
     fn on_server_update(&mut self, update: ModelsByFeature, ctx: &mut ModelContext<Self>) {
+        // Mark the catalog as server-populated so cloud model validation can
+        // stop failing open.
+        self.server_models_loaded = true;
+
         let has_existing_persisted_config = get_cached_models(ctx).is_some();
 
         let old = std::mem::replace(&mut self.models_by_feature, update);

@@ -23182,6 +23182,17 @@ impl Workspace {
             }
         }
 
+        match ai_settings.cloud_agent_invalid_model_behavior {
+            crate::settings::CloudAgentInvalidModelBehavior::Block => {
+                context.set.insert(flags::CLOUD_AGENT_INVALID_MODEL_BLOCK);
+            }
+            crate::settings::CloudAgentInvalidModelBehavior::AutoSelect => {
+                context
+                    .set
+                    .insert(flags::CLOUD_AGENT_INVALID_MODEL_AUTO_SELECT);
+            }
+        }
+
         match ai_settings.default_prompt_submission_mode {
             crate::settings::PromptSubmissionMode::Interrupt => {
                 context.set.insert(flags::PROMPT_SUBMISSION_INTERRUPT);
