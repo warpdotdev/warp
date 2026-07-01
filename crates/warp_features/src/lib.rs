@@ -901,6 +901,10 @@ pub enum FeatureFlag {
     /// Enables the `--runner` flag on `run-cloud`, which overrides an agent's
     /// compute (docker image, instance shape, setup commands) by runner ID.
     CloudRunners,
+
+    /// Gates the fixed right utility panel (Passwords and Bookmarks modules),
+    /// mutually exclusive with the Code Review right panel. Off by default.
+    RightUtilityPanel,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
