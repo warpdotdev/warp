@@ -17,30 +17,33 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
 ### Defining a custom server
 
 1. Users can declare one or more custom language servers in their Warp settings file under a new `[[editor.language_servers]]` array-of-tables. Each entry has these fields:
-   - `name` (string, required) — A unique identifier for this server within the user's settings, e.g. `"ruby-lsp"`. Used in UI surfaces (e.g. the footer "Enable {name}" button) and log output. The per-server cache directory's path component is derived from a hash of `name` rather than from `name` directly (see invariant 5's `{{cache_dir}}`), which decouples the cache-dir path from any platform-specific path-segment constraints. **Constraints:** 1–64 characters, drawn from `[A-Za-z0-9._-]` (ASCII letters, digits, dot, underscore, hyphen). Must not be `.` or `..`, must not start with `.` or `-`, and must not be empty. Uniqueness and reserved-name checks are **case-insensitive** (ASCII fold). Reserved names are the five built-in binary display names: `rust-analyzer`, `gopls`, `pyright-langserver`, `typescript-language-server`, `clangd` — the strings the footer "Enable {name}" button shows for built-in servers. The reservation exists solely to prevent footer-label ambiguity (two "Enable rust-analyzer" buttons for two different servers in the same workspace, which can happen when a custom targets a filetype the built-in doesn't claim). SQLite key collisions are not at issue because the table has a `kind` discriminator column. Cache-dir collisions are not at issue because the path is hashed. The reservation list is sourced from `LSPServerType::binary_name()` so adding a built-in automatically extends it. Names violating any of these constraints are settings errors per invariant 23.
+   - `name` (string, required) — A unique identifier for this server within the user's settings, e.g. `"ruby-lsp"`. Used in UI surfaces (e.g. the footer "Enable {name}" button) and log output. The per-server cache directory's path component is derived from a hash of `name` rather than from `name` directly (see invariant 5's `{{workspace_cache_dir}}`), which decouples the cache-dir path from any platform-specific path-segment constraints. **Constraints:** 1–64 characters, drawn from `[A-Za-z0-9._-]` (ASCII letters, digits, dot, underscore, hyphen). Must not be `.` or `..`, must not start with `.` or `-`, and must not be empty. Uniqueness is **case-insensitive** (ASCII fold). A custom entry **may** reuse a built-in server's name (e.g. `rust-analyzer`) — there are no reserved names. Reusing a built-in's display name is itself an override: a custom entry whose `name` case-insensitively matches a built-in server's display name **replaces that built-in entirely** (see invariant 3). Because the custom always wins that conflict, one workspace never surfaces a duplicate "Enable {name}" affordance. Names violating the character/length constraints are settings errors per invariant 23.
    - `command` (string, required) — Path to the server binary. Must be **either** an absolute path (after `~`/`~/` home expansion per invariant 5) **or** a bare name with no path separators (`/` or `\`), which will be resolved against the user's `PATH`. "Absolute" is platform-specific: on Unix, starts with `/`. On Windows, starts with a drive letter followed by `\` or `/` (e.g. `C:\bin\server`, `C:/bin/server`) **or** is a UNC path (`\\server\share\path` or `//server/share/path`). Windows root-relative paths (`\path`, `/path` without a drive) are **not** considered absolute — they depend on the current drive at exec time, which is exactly the cwd-dependent resolution this rule is preventing. **Relative paths containing separators (e.g. `./server`, `bin/server`, `..\\server`, Windows `\server`) are rejected** as settings errors per invariant 23 — these forms would otherwise resolve directly against the spawned process's cwd (the workspace root, per invariant 16). For the PATH-based residual case (`$PATH` containing relative entries), see invariant 16.
    - `args` (array of strings, optional, defaults to `[]`) — Arguments passed to `command` on launch.
-   - `filetypes` (array of inline tables, required, non-empty) — Patterns that claim files for this server. Each array entry is an inline table `{ pattern = "...", language_id = "..." }` where `pattern` is required and `language_id` is optional. The LSP `languageId` Warp sends for matched files is the entry's `language_id` when provided; otherwise it defaults to the matched file's lowercase extension, or to the file's literal basename when there is no extension. Use an explicit `language_id` to override the default, both for servers that expect the LSP-standard identifier (e.g. `{ pattern = "*.rb", language_id = "ruby" }`, `{ pattern = "*.sh", language_id = "shellscript" }`) and for servers that speak multiple languageIds (e.g. `{ pattern = "*.ts", language_id = "typescript" }` and `{ pattern = "*.tsx", language_id = "typescriptreact" }` in the same entry). The `pattern` field takes one of two syntactic forms:
+   - `filetypes` (array of strings, required, non-empty) — Patterns that claim files for this server, e.g. `["*.rb", "*.rake", "Gemfile"]`. The LSP `languageId` Warp sends for a matched file is derived automatically (see invariant 33) — there is no per-entry language-id field — from Warp's built-in extension → language-id table when the extension is known, otherwise the file's lowercase extension, otherwise its literal basename. Each entry is a string in one of two syntactic forms:
      - **Glob** — contains any of `*`, `?`, or `[` (e.g. `"*.rb"`, `"*.rake"`, `"Dockerfile.*"`). Matched against the file's basename only (not the full path) using POSIX-style glob semantics — the syntax accepted by Rust's [`glob` crate `Pattern`](https://docs.rs/glob/latest/glob/struct.Pattern.html), which is a strict subset of POSIX.1-2017 §2.13 Pattern Matching Notation. Supported metacharacters are `*` (any sequence of characters except path separators), `?` (any single character), `[abc]` / `[!abc]` (character class / negated class), and `[a-z]` (ranges). Glob matching is case-insensitive — `"*.rb"` matches both `foo.rb` and `FOO.RB`. Brace alternation (`{a,b}`) and double-star recursion (`**`) are **not** supported in v1, since matching is basename-only.
      - **Literal basename** — any pattern that contains none of `*`, `?`, or `[` (e.g. `"Gemfile"`, `"Rakefile"`, `".bashrc"`). Matches files whose basename equals it exactly, case-sensitively. To match files by extension, write a glob (`"*.rb"`, `"*.ts"`); a bare token like `"rb"` is **not** treated as an extension match — it is a literal basename match against a file literally named `rb`.
    - `env` (table of string → string, optional, defaults to `{}`) — Extra environment variables merged into the server process's environment on launch.
    - `initialization_options` (arbitrary TOML value, optional) — Sent as the `initializationOptions` field of the LSP `initialize` request. Warp does not restructure the value's shape; per invariant 5, string leaves go through placeholder substitution before send, while non-string values pass through unchanged.
 
-2. `name` must be unique across all entries in `[[editor.language_servers]]`. Two entries with the same `name` are a settings error; see invariant 23. Uniqueness is **case-insensitive**: `ruby-lsp` and `Ruby-LSP` are duplicates and produce a settings error. This is a UX rule: distinct-but-case-confusable names produce indistinguishable footer labels ("Enable ruby-lsp" vs. "Enable Ruby-LSP") and log entries, and case-insensitive uniqueness eliminates that ambiguity at validation time. Cache-dir collisions are not at issue because the cache-dir path component is hashed (see invariant 5's `{{cache_dir}}`).
+2. `name` must be unique across all entries in `[[editor.language_servers]]`. Two entries with the same `name` are a settings error; see invariant 23. Uniqueness is **case-insensitive**: `ruby-lsp` and `Ruby-LSP` are duplicates and produce a settings error. This is a UX rule: distinct-but-case-confusable names produce indistinguishable footer labels ("Enable ruby-lsp" vs. "Enable Ruby-LSP") and log entries, and case-insensitive uniqueness eliminates that ambiguity at validation time. Cache-dir collisions are not at issue because the cache-dir path component is hashed (see invariant 5's `{{workspace_cache_dir}}`).
 
-3. Custom server entries override built-in servers when their `filetypes` overlap with a built-in language. For example, an entry with `filetypes = [{ pattern = "*.rs" }]` replaces the built-in `rust-analyzer` mapping for `.rs` files for that user. Removing the custom entry restores the built-in mapping with no further action.
+3. Custom server entries always take precedence over built-in servers; on any conflict, the custom wins. Override happens two ways:
+   - **By filetype** — when a custom entry's `filetypes` overlap a built-in language, the custom handles those files. For example, an entry with `filetypes = ["*.rs"]` replaces the built-in `rust-analyzer` for `.rs` files. A built-in that serves several filetypes still handles the ones the custom does not claim (e.g. a custom claiming only `*.c` leaves the built-in clangd serving `.cpp`, `.h`, and the rest).
+   - **By name** — when a custom entry's `name` case-insensitively matches a built-in server's display name (`rust-analyzer`, `gopls`, `pyright-langserver`, `typescript-language-server`, `clangd`), the custom **replaces that built-in server entirely**: the built-in is suppressed for all of its filetypes, and the custom's `filetypes` define what is served. This is the explicit "I am replacing this server" gesture, so the user is responsible for declaring the filetypes they want covered.
 
-4. When multiple custom entries' `filetypes` patterns could match the same opened file, the first entry in source order in the settings file wins. Built-in language→server mappings are only consulted if no custom entry matches. Overlap between entries is not a settings error — order is the disambiguator.
+   Removing the custom entry restores the built-in with no further action in either case.
+
+4. When multiple custom entries' `filetypes` patterns could match the same opened file, the last matching entry in source order in the settings file wins — a later entry overrides an earlier one, so appending an entry supersedes a previous definition. Built-in language→server mappings are only consulted if no custom entry matches — and a built-in whose display name is taken by a custom entry (invariant 3, by name) is never consulted at all. Overlap between entries is not a settings error — order is the disambiguator.
 
 ### Placeholder substitution
 
 5. The string values of `command`, each entry of `args`, each value of `env`, and every string leaf inside `initialization_options` undergo template substitution at launch time. Non-string values (numbers, booleans, arrays, tables) inside `initialization_options` pass through unchanged; only their string children are substituted. Substitution uses the same `{{name}}` template syntax as Warp's tab configs and MCP server rendering, so the convention is consistent across Warp settings files. The following placeholders are recognized:
    - `{{workspace_root}}` — Absolute path to the resolved workspace root (see invariant 12).
-   - `{{workspace_slug}}` — A short stable identifier derived from `{{workspace_root}}`, safe to use as a directory name. The same workspace root produces the same slug across launches. The slug is a deterministic truncated hash of the workspace root; in practice two different workspace roots produce different slugs, but collisions are theoretically possible (see tech.md for the implementation and the accepted collision bound).
-   - `{{cache_dir}}` — A per-server, per-user cache directory owned by Warp (under the OS cache dir). The path component identifying this server is a deterministic hash of the entry's `name` — the same SHA-256-prefix shape used for `workspace_slug` — so that the cache-dir path is always a safe segment on every supported platform regardless of what characters `name` contains. The hash is stable across launches; the same `name` always produces the same path. Warp creates the directory before launch. Suitable as a parent for server scratch state.
+   - `{{workspace_cache_dir}}` — A per-server, **per-workspace** cache directory owned by Warp (under the OS cache dir), unique to the combination of this server's `name` and the resolved workspace root. The user does not compose this path — Warp guarantees it is distinct for each (server, workspace) pair, so opening the same server in two workspaces never collides (this is exactly what servers like Eclipse JDT-LS require of their `-data` directory). The path is built from a deterministic hash of the entry's `name` and a deterministic hash of the workspace root (each a SHA-256 prefix), so it is always a safe path segment on every supported platform regardless of what characters `name` contains, and it is stable across launches — the same `name` in the same workspace always resolves to the same directory. Warp creates the directory before launch. Suitable as a parent for, or directly as, the server's per-workspace scratch/data state.
    - `{{env_VAR}}` — The value of environment variable `VAR` in Warp's process environment at launch time. The `env_` prefix is used because the template parser only accepts alphanumeric characters, `-`, and `_` in placeholder names; `{{env_HOME}}` expands to the value of `$HOME`. An undefined variable expands to the empty string and is logged.
 
-6. Substitution is single-pass within a string: a substituted value containing `{{...}}` syntax is not re-expanded. Unknown placeholders (`{{...}}` patterns that do not match any name above) expand to themselves verbatim and are logged once per launch. Whitespace inside the braces invalidates the placeholder, so `{{ workspace_root }}` is not expanded. A single `{` or `}` is ordinary text. There is no in-Warp escape for the recognized placeholder set — if a user needs to emit a literal string that exactly matches `{{workspace_root}}`, `{{workspace_slug}}`, `{{cache_dir}}`, or `{{env_VAR}}` into the spawned process's args, they must produce it via the consuming tool rather than via the settings file.
+6. Substitution is single-pass within a string: a substituted value containing `{{...}}` syntax is not re-expanded. Unknown placeholders (`{{...}}` patterns that do not match any name above) expand to themselves verbatim and are logged once per launch. Whitespace inside the braces invalidates the placeholder, so `{{ workspace_root }}` is not expanded. A single `{` or `}` is ordinary text. There is no in-Warp escape for the recognized placeholder set — if a user needs to emit a literal string that exactly matches `{{workspace_root}}`, `{{workspace_cache_dir}}`, or `{{env_VAR}}` into the spawned process's args, they must produce it via the consuming tool rather than via the settings file.
 
    In addition to `{{...}}` placeholders, a leading `~` or `~/` at the start of any substituted string expands to the current user's home directory. `~` is expanded only at the very beginning of a value; embedded `~` characters (e.g. `/opt/~/bin`) are passed through unchanged. Other-user home expansion (`~someuser/...`) is not supported. `~` expansion is needed because Warp spawns the server with a direct OS `exec`, not through a shell — without it, `command = "~/bin/lsp-server"` would fail with "no such file or directory."
 
@@ -52,7 +55,7 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
 
 9. When the user opens a file in the Warp editor, server resolution proceeds as:
    - If the file matches a built-in language and no custom entry overrides it, behavior is unchanged from today.
-   - If the file matches exactly one custom entry's `filetypes` (or matches multiple, with first-in-source-order winning per invariant 4), that custom server is the candidate for this file.
+   - If the file matches exactly one custom entry's `filetypes` (or matches multiple, with the last-in-source-order entry winning per invariant 4), that custom server is the candidate for this file.
    - If the file matches no entry (built-in or custom), the footer surfaces the same "Language support is unavailable for this file type" state it shows today. No new footer affordance, link, or affordance text is introduced by this feature.
 
 10. The footer's visible behavior, copy, and interaction model are unchanged from today. Custom servers participate in every existing footer surface — status indicator, install progress, the per-workspace Enable button, error messages — via the same code paths built-in servers use. The only difference is that the server's display name and status come from a custom entry instead of a built-in `LSPServerType`.
@@ -98,16 +101,15 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
    - An entry with empty `filetypes`.
    - An entry missing `name` or `command`.
    - An entry whose `name` violates the constraints in invariant 1.
-   - An entry whose `name` matches a reserved built-in binary display name, case-insensitive: `rust-analyzer`, `gopls`, `pyright-langserver`, `typescript-language-server`, `clangd`.
    - An entry whose `command`, after `~`/`~/` home-directory expansion, is neither absolute nor a bare name (per invariant 1's `command` rule — Unix `/`-rooted, Windows drive-letter or UNC; root-relative `\path` rejected).
-   - An inline-table entry in `filetypes` missing `pattern`.
-   - An entry in `filetypes` whose `pattern` field fails to compile as a valid shell-style glob.
+   - A `filetypes` entry that is not a non-empty string.
+   - A `filetypes` glob entry that fails to compile as a valid shell-style glob.
 
    When any entry is invalid, the entire `[[editor.language_servers]]` setting fails to load — no **new** custom servers are launched until the file is fixed (already-running servers keep running per invariant 19) — and the existing settings-error banner surfaces `editor.language_servers` as an invalid value. This matches how every other array-valued setting in Warp behaves (e.g. `agents.profiles.agent_mode_command_execution_allowlist`). Per-entry reasons (which entry, which field) are written to the log so users can investigate when the banner alone isn't enough. The settings file itself is not auto-edited.
 
 24. Unknown fields on an `[[editor.language_servers]]` entry are ignored with a warning logged but no in-app notification. This leaves room to add fields without breaking existing settings files.
 
-25. Warp generates a JSON Schema for the `[[editor.language_servers]]` array as part of the existing build-time settings schema artifact. The schema is consumed by **external editors that support TOML schema validation** (e.g. editing `settings.toml` in another editor via a TOML language server) and by Warp's in-app docs page. The schema describes every field above with descriptions and required/optional markers, and enumerates the recognized `{{...}}` placeholders (`{{workspace_root}}`, `{{workspace_slug}}`, `{{cache_dir}}`, `{{env_VAR}}`) and the leading-`~`/`~/` home-directory expansion. Warp's in-app `settings.toml` text view is not schema-aware in v1; schema-driven autocomplete inside Warp is a separate follow-up.
+25. Warp generates a JSON Schema for the `[[editor.language_servers]]` array as part of the existing build-time settings schema artifact. The schema is consumed by **external editors that support TOML schema validation** (e.g. editing `settings.toml` in another editor via a TOML language server) and by Warp's in-app docs page. The schema describes every field above with descriptions and required/optional markers, and enumerates the recognized `{{...}}` placeholders (`{{workspace_root}}`, `{{workspace_cache_dir}}`, `{{env_VAR}}`) and the leading-`~`/`~/` home-directory expansion. Warp's in-app `settings.toml` text view is not schema-aware in v1; schema-driven autocomplete inside Warp is a separate follow-up.
 
 ### Non-goals
 
@@ -127,7 +129,11 @@ Warp's editor today only attaches an LSP client for five built-in languages (Rus
 
 32. **Log redaction.** When Warp logs custom-server launch information (substituted `command`, `args`, `env` values, and string leaves of `initialization_options`), values that match Warp's existing secret-redaction patterns (`app/src/settings/privacy.rs::CustomSecretRegex`) are redacted before being written. This applies to both the substituted output and the raw descriptor values, and applies at every log level. Users who reference `{{env_VAR}}` placeholders get the same redaction protection as elsewhere in Warp; raw `env` *values* in `settings.toml` are also redacted on launch logging.
 
-   The following are **logged verbatim** (not passed through secret redaction): descriptor `name`, `env` *keys*, `workspace_slug` (a SHA-256-derived hex string with no PII), the resolved `workspace_root` absolute path, and the per-server `cache_dir` absolute path. `workspace_root` and `cache_dir` are absolute filesystem paths and may contain usernames, company names, or private repository names — for example, `/Users/alice/work/acme-internal-repo` — and Warp does **not** treat these as secret-redaction targets. This matches Warp's existing log behavior for built-in language servers (`crates/lsp/src/config.rs::command_and_params` and the LSP log filenames in `app/src/code/lsp_logs.rs`, both of which include workspace-derived paths verbatim today). `CustomSecretRegex` matches token-shaped secrets, not arbitrary PII; users who consider workspace paths sensitive in their environment must filter or redact their log files before sharing them, just as they would for any other Warp log output.
+   The following are **logged verbatim** (not passed through secret redaction): descriptor `name`, `env` *keys*, the resolved `workspace_root` absolute path, and the per-server, per-workspace `workspace_cache_dir` absolute path. `workspace_root` and `workspace_cache_dir` are absolute filesystem paths and may contain usernames, company names, or private repository names — for example, `/Users/alice/work/acme-internal-repo` — and Warp does **not** treat these as secret-redaction targets. This matches Warp's existing log behavior for built-in language servers (`crates/lsp/src/config.rs::command_and_params` and the LSP log filenames in `app/src/code/lsp_logs.rs`, both of which include workspace-derived paths verbatim today). `CustomSecretRegex` matches token-shaped secrets, not arbitrary PII; users who consider workspace paths sensitive in their environment must filter or redact their log files before sharing them, just as they would for any other Warp log output.
+
+### Built-in language identifier table
+
+33. Warp ships a built-in mapping from file extension (and select literal basenames) to LSP `languageId`, following the language identifier set VS Code defines. This table is **independent of the five built-in servers** — it is data, not server dispatch — and covers the common languages (e.g. Ruby, Lua, Zig, Bash, TOML, YAML, Terraform, Kotlin, Swift, Elixir, Haskell, OCaml, JSON, Dockerfile; not an exhaustive list). It is the **sole** source of the `languageId` Warp sends for a matched file: when the file's extension is in the table, that id is used; otherwise Warp falls back to the file's lowercase extension, then its literal basename. A custom server has **no** per-entry `language_id` field — the id always comes from this table. Expanding the table to cover a newly popular language is a **data-only change**: it does not require adding a built-in server or touching the custom-server pipeline, and it is the single place a missing or wrong `languageId` is fixed for every server, built-in and custom alike. Per-file-type configuration (overriding the id for one pattern, or other per-pattern options) is intentionally out of scope for this feature; if Warp adds it later, it will be a separate, cross-feature configuration mechanism rather than a field on `[[editor.language_servers]]`.
 
 ## Worked example: Eclipse JDT Language Server (Java)
 
@@ -147,9 +153,9 @@ args = [
   "--add-opens", "java.base/java.lang=ALL-UNNAMED",
   "-jar", "/opt/jdtls/plugins/org.eclipse.equinox.launcher_1.6.500.v20230717-2134.jar",
   "-configuration", "/opt/jdtls/config_mac_arm",
-  "-data", "{{cache_dir}}/workspaces/{{workspace_slug}}",
+  "-data", "{{workspace_cache_dir}}",
 ]
-filetypes = [{ pattern = "*.java" }]
+filetypes = ["*.java"]
 initialization_options.settings.java.import.gradle.enabled = true
 initialization_options.settings.java.import.maven.enabled = true
 ```
@@ -158,7 +164,7 @@ All of `name`, `command`, `args`, `filetypes`, and `initialization_options` are 
 
 Key observations:
 
-- `{{workspace_slug}}` makes each workspace's `-data` directory unique, which JDTLS requires; without per-workspace substitution, opening a second Java workspace would fail with a lock error.
+- `{{workspace_cache_dir}}` is already unique per (server, workspace), which is exactly what JDTLS's `-data` directory requires — opening a second Java workspace gets its own data directory with no extra configuration, so there is no lock conflict.
 - The platform-specific `-configuration` path is hardcoded by the user; cross-platform settings sync is out of scope for v1 (see invariant 20's neighborhood — no `{{os}}`/`{{arch}}` placeholders are part of v1's minimum set).
 - The launcher jar filename is timestamp-versioned. Upgrading JDTLS requires the user to update the path in `args`. This stays the user's responsibility — Warp will not add JDTLS-specific auto-discovery; v1 of this feature does not grow the built-in server list, and out-of-the-box install support for non-built-in servers is a non-goal (invariant 26).
 - The inner `settings` key in `initialization_options.settings.java.import...` is a JDTLS-specific payload convention, not a Warp field. JDTLS reads its Java-language configuration from a nested `settings` object inside the LSP `initializationOptions` payload, which is the shape vscode-java, coc-java, and nvim-jdtls all send. The TOML above produces this JSON on the wire in the `initialize` request:
@@ -173,76 +179,61 @@ Key observations:
 
 ## Worked examples: overriding a built-in server
 
-A user who wants to override one of the five built-in servers — to change its `args`, point at a different binary, or supply `initialization_options` the built-in does not expose — writes an `[[editor.language_servers]]` entry whose `filetypes` overlap the built-in language. Per invariant 3, the custom entry replaces the built-in for those filetypes; removing the entry restores the built-in.
+A user who wants to override one of the five built-in servers — to change its `args`, point at a different binary, or supply `initialization_options` the built-in does not expose — writes an `[[editor.language_servers]]` entry that reuses the built-in's name. Per invariant 3 (by name), the custom entry replaces that built-in entirely; removing the entry restores the built-in.
 
-The five examples below show what an equivalent override looks like for each built-in server. They are not changes Warp ships — Warp continues to launch the built-ins through their existing code paths. The examples exist so a user can copy one as a starting point and modify it. They assume the relevant binary is on `PATH`; a node-wrapped install (`command = "node"`, `args = ["<path>/server.js", "--stdio"]`) is the alternative shape for the Node.js-based servers (pyright, typescript-language-server) and works identically. Each example uses a `my-<binary>` `name` because the binary display names (`rust-analyzer`, `gopls`, `pyright-langserver`, `typescript-language-server`, `clangd`) are reserved per invariant 1; the user can rename it to anything that satisfies the constraints.
+The five examples below show what an equivalent override looks like for each built-in server. They are not changes Warp ships — Warp continues to launch the built-ins through their existing code paths. The examples exist so a user can copy one as a starting point and modify it. They assume the relevant binary is on `PATH`; a node-wrapped install (`command = "node"`, `args = ["<path>/server.js", "--stdio"]`) is the alternative shape for the Node.js-based servers (pyright, typescript-language-server) and works identically. Each example gives the entry the **same `name` as the built-in** so it replaces that built-in entirely (invariant 3, by name) — names are not reserved (invariant 1), and the entry's `filetypes` define what the replacement serves. The `languageId` Warp sends for each extension comes from its built-in extension → language-id table (invariant 33); there is no per-entry `language_id` field.
 
 ### Overriding rust-analyzer
 
 ```toml
 [[editor.language_servers]]
-name = "my-rust-analyzer"
+name = "rust-analyzer"
 command = "rust-analyzer"
-filetypes = [{ pattern = "*.rs", language_id = "rust" }]
+filetypes = ["*.rs"]
 ```
 
 ### Overriding gopls
 
 ```toml
 [[editor.language_servers]]
-name = "my-gopls"
+name = "gopls"
 command = "gopls"
-filetypes = [{ pattern = "*.go", language_id = "go" }]
+filetypes = ["*.go"]
 ```
 
 ### Overriding pyright
 
 ```toml
 [[editor.language_servers]]
-name = "my-pyright"
+name = "pyright-langserver"
 command = "pyright-langserver"
 args = ["--stdio"]
-filetypes = [{ pattern = "*.py", language_id = "python" }]
+filetypes = ["*.py"]
 ```
 
 ### Overriding typescript-language-server
 
 ```toml
 [[editor.language_servers]]
-name = "my-typescript-language-server"
+name = "typescript-language-server"
 command = "typescript-language-server"
 args = ["--stdio"]
-filetypes = [
-  { pattern = "*.ts",  language_id = "typescript" },
-  { pattern = "*.tsx", language_id = "typescriptreact" },
-  { pattern = "*.js",  language_id = "javascript" },
-  { pattern = "*.jsx", language_id = "javascriptreact" },
-  { pattern = "*.mjs", language_id = "javascript" },
-  { pattern = "*.cjs", language_id = "javascript" },
-]
+filetypes = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"]
 ```
 
 ### Overriding clangd
 
 ```toml
 [[editor.language_servers]]
-name = "my-clangd"
+name = "clangd"
 command = "clangd"
-filetypes = [
-  { pattern = "*.c",   language_id = "c" },
-  { pattern = "*.cc",  language_id = "cpp" },
-  { pattern = "*.cpp", language_id = "cpp" },
-  { pattern = "*.cxx", language_id = "cpp" },
-  { pattern = "*.h",   language_id = "cpp" },
-  { pattern = "*.hh",  language_id = "cpp" },
-  { pattern = "*.hpp", language_id = "cpp" },
-  { pattern = "*.hxx", language_id = "cpp" },
-]
+filetypes = ["*.c", "*.cc", "*.cpp", "*.cxx", "*.h", "*.hh", "*.hpp", "*.hxx"]
 ```
 
 Notes on these examples:
 
+- **Pyright's entry `name` is `pyright-langserver`, not `pyright`.** To override a built-in *by name*, the entry's `name` must match that built-in's display name exactly (invariant 3, by name), and a built-in's display name is its server **binary** name — the string the footer's "Enable {name}" button already shows. For the other four, the product name and the binary name are the same (`rust-analyzer`, `gopls`, `clangd`, `typescript-language-server`), so this distinction is invisible. Pyright is the exception: the product is called "pyright," but its language-server executable is `pyright-langserver`, so that binary name is what Warp's built-in uses and what a custom entry must reuse to replace it *by name*. (Since this example claims `*.py` — pyright's only filetype — an entry named anything else with `filetypes = ["*.py"]` would still take over Python by *filetype* override; reusing the binary name is what makes it a by-*name* replacement and keeps the footer's "Enable" label identical to the built-in's.) Pyright also needs `args = ["--stdio"]` to speak LSP over stdin/stdout, the same as `typescript-language-server`; `rust-analyzer`, `gopls`, and `clangd` default to stdio and need no such flag.
 - Globs match case-insensitively (invariant 1), so `*.c` and `*.h` cover the uppercase variants (`.C`, `.H`) already, no separate entries needed.
-- clangd treats `.h` as C++ today (`config.rs:50-54`) because `.h` is genuinely ambiguous; the example above preserves that choice. A user who works in C-heavy codebases can override by editing their entry to map `h` → `c`.
-- The TypeScript LSP entry shows the multi-extension/multi-languageId case that motivated the inline-table `filetypes` shape. The same server process handles all six extensions, with each one announced to the server with the correct `languageId`.
+- The built-in extension → language-id table (invariant 33) resolves each extension automatically. `.h` is genuinely ambiguous (C vs. C++); the table picks one default for it, and changing how `.h` is classified is a data-only change to that table (invariant 33), applied uniformly for every server — there is no per-entry override.
+- The TypeScript LSP entry shows a single server process handling six extensions; the built-in table announces each one to the server with the correct `languageId` (`typescript`, `typescriptreact`, `javascript`, `javascriptreact`) automatically.
 - None of the built-in servers need `initialization_options`, `env`, or placeholder substitution to function. Users who want to tune behavior (e.g. `cargo.features = "all"` for rust-analyzer) add fields as needed to their override entry.
