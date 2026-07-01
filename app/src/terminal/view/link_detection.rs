@@ -20,7 +20,7 @@ cfg_if::cfg_if! {
             terminal::model::session::{SessionId, SessionType},
             terminal::ShellLaunchData,
             util::file::{FileLink, absolute_path_if_valid, ShellPathType},
-            util::openable_file_type::{is_markdown_file, FileTarget},
+            util::openable_file_type::FileTarget,
         };
         use std::path::PathBuf;
         use warp_util::remote_path::RemotePath;
@@ -42,6 +42,12 @@ const PREFIXES_TO_REMOVE: [&str; 2] = ["a/", "b/"];
 const SUFFIXES_TO_REMOVE: [&str; 1] = ["@"];
 
 #[cfg(feature = "local_fs")]
+const MARKDOWN_EXTENSIONS: [&str; 2] = ["md", "markdown"];
+
+#[cfg(feature = "local_fs")]
+const MARKDOWN_FILE_NAMES: [&str; 3] = ["README", "CHANGELOG", "LICENSE"];
+
+#[cfg(feature = "local_fs")]
 #[derive(Clone)]
 enum FileLinkScanContext {
     Local {
@@ -52,6 +58,42 @@ enum FileLinkScanContext {
         working_directory: String,
         host_id: warp_core::HostId,
     },
+}
+
+#[cfg(feature = "local_fs")]
+fn is_standardized_markdown_file(path: &StandardizedPath) -> bool {
+    match path.extension() {
+        Some(extension) => MARKDOWN_EXTENSIONS
+            .iter()
+            .any(|markdown_extension| extension.eq_ignore_ascii_case(markdown_extension)),
+        None => path.file_name().is_some_and(|file_name| {
+            MARKDOWN_FILE_NAMES
+                .iter()
+                .any(|markdown_file_name| file_name.eq_ignore_ascii_case(markdown_file_name))
+        }),
+    }
+}
+
+#[cfg(feature = "local_fs")]
+fn remote_markdown_location(
+    clean_path_result: &CleanPathResult,
+    working_directory: &str,
+    host_id: &warp_core::HostId,
+) -> Option<LocalOrRemotePath> {
+    let standardized = StandardizedPath::try_new(&clean_path_result.path)
+        .or_else(|_| {
+            StandardizedPath::try_new(working_directory)
+                .map(|working_directory| working_directory.join(&clean_path_result.path))
+        })
+        .ok()?;
+    if !is_standardized_markdown_file(&standardized) {
+        return None;
+    }
+
+    Some(LocalOrRemotePath::Remote(RemotePath::new(
+        host_id.clone(),
+        standardized,
+    )))
 }
 
 /// Highlighted link within a terminal model grid.
@@ -686,24 +728,7 @@ impl super::TerminalView {
             FileLinkScanContext::RemoteMarkdown {
                 working_directory,
                 host_id,
-            } => {
-                if !is_markdown_file(std::path::Path::new(&clean_path_result.path)) {
-                    return None;
-                }
-
-                let path = std::path::Path::new(&clean_path_result.path);
-                let absolute_path = if path.is_absolute() {
-                    path.to_path_buf()
-                } else {
-                    PathBuf::from(working_directory).join(path)
-                };
-                let standardized =
-                    StandardizedPath::try_new(absolute_path.to_string_lossy().as_ref()).ok()?;
-                Some(LocalOrRemotePath::Remote(RemotePath::new(
-                    host_id.clone(),
-                    standardized,
-                )))
-            }
+            } => remote_markdown_location(clean_path_result, working_directory, host_id),
         }
     }
 
@@ -746,5 +771,92 @@ impl super::TerminalView {
             ctx.set_cursor_shape(Cursor::PointingHand);
             ctx.notify();
         }
+    }
+}
+
+#[cfg(all(test, feature = "local_fs"))]
+mod tests {
+    use super::*;
+
+    fn remote_markdown_path(raw_path: &str, working_directory: &str) -> Option<String> {
+        let host_id = warp_core::HostId::new("test-host".to_string());
+        let clean_path_result = CleanPathResult {
+            path: raw_path.to_string(),
+            line_and_column_num: None,
+        };
+        let scan_context = FileLinkScanContext::RemoteMarkdown {
+            working_directory: working_directory.to_string(),
+            host_id: host_id.clone(),
+        };
+
+        let location = super::super::TerminalView::valid_file_link_location(
+            &clean_path_result,
+            &scan_context,
+        )?;
+        match location {
+            LocalOrRemotePath::Remote(remote) => {
+                assert_eq!(remote.host_id, host_id);
+                Some(remote.path.as_str().to_string())
+            }
+            LocalOrRemotePath::Local(_) => None,
+        }
+    }
+
+    #[test]
+    fn remote_markdown_absolute_unix_path_is_not_joined_to_pwd() {
+        assert_eq!(
+            remote_markdown_path("/home/alice/repo/README.md", "/tmp/current").as_deref(),
+            Some("/home/alice/repo/README.md")
+        );
+    }
+
+    #[test]
+    fn remote_markdown_absolute_windows_path_is_not_joined_to_pwd() {
+        assert_eq!(
+            remote_markdown_path(r"D:\Users\alice\docs\README.md", r"C:\Users\alice\repo")
+                .as_deref(),
+            Some(r"D:\Users\alice\docs\README.md")
+        );
+    }
+
+    #[test]
+    fn remote_markdown_relative_unix_path_uses_remote_pwd() {
+        assert_eq!(
+            remote_markdown_path("docs/README.md", "/home/alice/repo").as_deref(),
+            Some("/home/alice/repo/docs/README.md")
+        );
+    }
+
+    #[test]
+    fn remote_markdown_relative_windows_path_uses_remote_pwd() {
+        assert_eq!(
+            remote_markdown_path(r"..\README.md", r"C:\Users\alice\repo\docs").as_deref(),
+            Some(r"C:\Users\alice\repo\README.md")
+        );
+    }
+
+    #[test]
+    fn remote_markdown_extensionless_windows_file_name_is_detected() {
+        assert_eq!(
+            remote_markdown_path(r"C:\Users\alice\repo\README", r"C:\Users\alice\repo").as_deref(),
+            Some(r"C:\Users\alice\repo\README")
+        );
+    }
+
+    #[test]
+    fn remote_markdown_extensionless_unix_file_name_is_detected() {
+        assert_eq!(
+            remote_markdown_path("/home/alice/repo/CHANGELOG", "/home/alice/repo").as_deref(),
+            Some("/home/alice/repo/CHANGELOG")
+        );
+    }
+
+    #[test]
+    fn remote_markdown_non_markdown_path_is_ignored() {
+        assert_eq!(
+            remote_markdown_path("src/main.rs", "/home/alice/repo"),
+            None
+        );
+        assert_eq!(remote_markdown_path("notes.txt", "/home/alice/repo"), None);
     }
 }
