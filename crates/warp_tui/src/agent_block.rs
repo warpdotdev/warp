@@ -21,8 +21,8 @@ const INPUT_PREFIX: &str = "≫ ";
 
 /// Renderable pieces of an agent block; this will grow as we add tool calls and other sub-elements.
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum TuiAgentBlockSection {
-    Input(Vec<String>),
+enum TuiAIBlockSection {
+    Input(String),
     PlainText(String),
 }
 
@@ -30,14 +30,14 @@ enum TuiAgentBlockSection {
 ///
 /// The rendering logic is mostly section extraction, but the shared block list
 /// stores rich content by view id, so this remains a registered view.
-pub(super) struct TuiAgentBlockView {
+pub(super) struct TuiAIBlock {
     conversation_id: AIConversationId,
     exchange_id: AIAgentExchangeId,
     model: Rc<dyn AIBlockModel<View = Self>>,
 }
 
 /// Extracts model state into renderable agent block sections.
-impl TuiAgentBlockView {
+impl TuiAIBlock {
     /// Creates a simple exchange-backed agent block.
     pub(super) fn new(
         conversation_id: AIConversationId,
@@ -90,17 +90,17 @@ impl TuiAgentBlockView {
     }
 
     /// Extracts this exchange's visible input/output into logical render sections.
-    fn sections(&self, app: &AppContext) -> Vec<TuiAgentBlockSection> {
+    fn sections(&self, app: &AppContext) -> Vec<TuiAIBlockSection> {
         let mut sections = Vec::new();
-        let input_lines = self
+        let input = self
             .model
             .inputs_to_render(app)
             .iter()
             .filter_map(|input| input.display_query())
-            .flat_map(|query| query.split('\n').map(str::to_owned).collect::<Vec<_>>())
-            .collect::<Vec<_>>();
-        if input_lines.iter().any(|line| !line.is_empty()) {
-            sections.push(TuiAgentBlockSection::Input(input_lines));
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !input.is_empty() {
+            sections.push(TuiAIBlockSection::Input(input));
         }
 
         if let Some(output) = self.model.status(app).output_to_render() {
@@ -108,7 +108,7 @@ impl TuiAgentBlockView {
             sections.extend(output.text_from_agent_output().flat_map(|text| {
                 text.sections.iter().filter_map(|section| match section {
                     AIAgentTextSection::PlainText { text } => (!text.text().is_empty())
-                        .then(|| TuiAgentBlockSection::PlainText(text.text().to_owned())),
+                        .then(|| TuiAIBlockSection::PlainText(text.text().to_owned())),
                     // Add item variants here as the TUI learns to render richer sections.
                     AIAgentTextSection::Code { .. }
                     | AIAgentTextSection::Table { .. }
@@ -123,7 +123,6 @@ impl TuiAgentBlockView {
 
     /// Builds this block's generic TUI element tree.
     fn render_element(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        let theme = Appearance::as_ref(app).theme();
         let sections = self.sections(app);
 
         let mut column = TuiColumn::new();
@@ -133,24 +132,24 @@ impl TuiAgentBlockView {
             // gap at the input→output boundary rather than before every line.
             let follows_input = index
                 .checked_sub(1)
-                .is_some_and(|prev| matches!(sections[prev], TuiAgentBlockSection::Input(_)));
+                .is_some_and(|prev| matches!(sections[prev], TuiAIBlockSection::Input(_)));
             column = column.with_child(section.render_element(u16::from(follows_input), app));
         }
 
-        Box::new(
-            TuiContainer::new(column)
-                .with_background(Fill::from(theme.surface_1()).into())
-                .with_padding_bottom(u16::from(!sections.is_empty())),
-        )
+        // No background of its own: the block shows the terminal's background,
+        // matching the Figma where only the input line is highlighted.
+        TuiContainer::new(column)
+            .with_padding_bottom(u16::from(!sections.is_empty()))
+            .finish()
     }
 }
 
 /// Converts one logical section into a renderable TUI element.
-impl TuiAgentBlockSection {
+impl TuiAIBlockSection {
     fn render_element(&self, top_padding: u16, app: &AppContext) -> Box<dyn TuiElement> {
         let theme = Appearance::as_ref(app).theme();
         match self {
-            Self::Input(lines) => {
+            Self::Input(text) => {
                 let text_color = Fill::from(theme.foreground()).into();
                 let accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
                 let background = Fill::from(
@@ -163,14 +162,14 @@ impl TuiAgentBlockSection {
                 // Only the first line carries the `≫` prompt marker; continuation
                 // lines are indented to the marker's width so they align beneath it.
                 let mut column = TuiColumn::new();
-                for (index, line) in lines.iter().enumerate() {
-                    let text = if index == 0 {
+                for (index, line) in text.split('\n').enumerate() {
+                    let line_text = if index == 0 {
                         format!("{INPUT_PREFIX}{line}")
                     } else {
                         format!("{}{line}", " ".repeat(INPUT_PREFIX.chars().count()))
                     };
                     column = column.child(
-                        TuiText::new(text).with_style(
+                        TuiText::new(line_text).with_style(
                             TuiStyle::default()
                                 .fg(text_color)
                                 .bg(background)
@@ -178,35 +177,33 @@ impl TuiAgentBlockSection {
                         ),
                     );
                 }
-                Box::new(
-                    TuiContainer::new(column)
-                        .with_background(background)
-                        .with_padding_top(top_padding),
-                )
+                TuiContainer::new(column)
+                    .with_background(background)
+                    .with_padding_top(top_padding)
+                    .finish()
             }
             Self::PlainText(text) => {
                 let text_color =
                     Fill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into();
-                Box::new(
-                    TuiContainer::new(
-                        TuiText::new(text.clone()).with_style(TuiStyle::default().fg(text_color)),
-                    )
-                    .with_padding_top(top_padding),
+                TuiContainer::new(
+                    TuiText::new(text.clone()).with_style(TuiStyle::default().fg(text_color)),
                 )
+                .with_padding_top(top_padding)
+                .finish()
             }
         }
     }
 }
 
 /// Registers the view with the TUI runtime.
-impl Entity for TuiAgentBlockView {
+impl Entity for TuiAIBlock {
     type Event = ();
 }
 
 /// Renders the model-backed block as a TUI element.
-impl TuiView for TuiAgentBlockView {
+impl TuiView for TuiAIBlock {
     fn ui_name() -> &'static str {
-        "TuiAgentBlockView"
+        "TuiAIBlock"
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {

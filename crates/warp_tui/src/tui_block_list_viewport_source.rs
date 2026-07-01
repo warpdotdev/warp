@@ -17,10 +17,10 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::{AppContext, TuiView};
 
-use super::agent_block::TuiAgentBlockView;
+use super::agent_block::TuiAIBlock;
 use super::terminal_block::{should_render_terminal_block, TerminalBlockVisibleRowsElement};
 
-pub(super) type AgentBlockRegistry = Rc<RefCell<HashMap<EntityId, ViewHandle<TuiAgentBlockView>>>>;
+pub(super) type AgentBlockRegistry = Rc<RefCell<HashMap<EntityId, ViewHandle<TuiAIBlock>>>>;
 
 /// Extra rows above and below the viewport whose non-dirty agent blocks are
 /// re-measured each frame, so near-off-screen reflow (e.g. a width change) is
@@ -44,7 +44,7 @@ struct TuiBlockListVisibleItem {
 
 enum TuiBlockListVisibleItemKind {
     TerminalBlock(BlockId),
-    AgentBlock(ViewHandle<TuiAgentBlockView>),
+    AgentBlock(ViewHandle<TuiAIBlock>),
 }
 
 /// Adapts a terminal model's canonical block-list order for TUI viewporting.
@@ -331,12 +331,8 @@ impl TuiBlockListVisibleItem {
         match self.kind {
             TuiBlockListVisibleItemKind::TerminalBlock(block_id) => {
                 debug_assert!(visible_rows.end <= self.height);
-                Box::new(TerminalBlockVisibleRowsElement::new(
-                    model.clone(),
-                    block_id,
-                    visible_rows,
-                    width,
-                ))
+                TerminalBlockVisibleRowsElement::new(model.clone(), block_id, visible_rows, width)
+                    .finish()
             }
             TuiBlockListVisibleItemKind::AgentBlock(view) => view.as_ref(app).render(app),
         }

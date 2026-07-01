@@ -18,7 +18,7 @@ use warpui_core::elements::tui::{
 use warpui_core::{App, AppContext, Entity, TuiView, TypedActionView, ViewContext};
 
 use super::{AgentBlockRegistry, TuiBlockListViewportItemId, TuiBlockListViewportSource};
-use crate::agent_block::TuiAgentBlockView;
+use crate::agent_block::TuiAIBlock;
 use crate::terminal_block::should_render_terminal_block;
 
 #[test]
@@ -175,7 +175,7 @@ fn seeded_agent_block_source(
 ) -> (
     TuiBlockListViewportSource,
     Arc<FairMutex<TerminalModel>>,
-    ViewHandle<TuiAgentBlockView>,
+    ViewHandle<TuiAIBlock>,
 ) {
     let mut model = TerminalModel::mock(None, None);
     if preceding_rows > 0 {
@@ -223,9 +223,9 @@ fn request_top_window(
     })
 }
 
-/// Adds a `TuiAgentBlockView` backed by a single-query model in a fresh TUI
+/// Adds a `TuiAIBlock` backed by a single-query model in a fresh TUI
 /// window and returns its handle.
-fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAgentBlockView> {
+fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAIBlock> {
     let query = query.to_owned();
     app.update(|ctx| {
         let (window_id, _) = ctx.add_tui_window(
@@ -236,7 +236,7 @@ fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAgentBlockView> 
             |_| TestHostView,
         );
         ctx.add_tui_view(window_id, move |_| {
-            TuiAgentBlockView::new(
+            TuiAIBlock::new(
                 AIConversationId::new(),
                 AIAgentExchangeId::new(),
                 Rc::new(QueryAgentBlockModel {
@@ -272,7 +272,7 @@ impl TypedActionView for TestHostView {
 }
 
 impl AIBlockModel for QueryAgentBlockModel {
-    type View = TuiAgentBlockView;
+    type View = TuiAIBlock;
 
     fn status(&self, _app: &AppContext) -> AIBlockOutputStatus {
         AIBlockOutputStatus::Pending

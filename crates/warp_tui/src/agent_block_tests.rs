@@ -14,7 +14,7 @@ use warpui_core::elements::Fill as CoreFill;
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, ViewContext};
 
-use super::{TuiAgentBlockSection, TuiAgentBlockView};
+use super::{TuiAIBlock, TuiAIBlockSection};
 
 #[test]
 fn simple_agent_block_reports_full_height_and_renders_content() {
@@ -50,14 +50,10 @@ fn simple_agent_block_reports_full_height_and_renders_content() {
             assert_eq!(frame.buffer[(2, 0)].fg, expected_prompt_text_color(app_ctx));
             assert_eq!(frame.buffer[(19, 0)].bg, expected_input_background(app_ctx));
             assert_eq!(frame.buffer[(0, 2)].fg, expected_output_text_color(app_ctx));
-            assert_eq!(
-                frame.buffer[(0, 2)].bg,
-                expected_transcript_background(app_ctx)
-            );
-            assert_eq!(
-                frame.buffer[(19, 2)].bg,
-                expected_transcript_background(app_ctx)
-            );
+            // The block paints no background of its own, so output rows show the
+            // terminal's own background.
+            assert_eq!(frame.buffer[(0, 2)].bg, Color::Reset);
+            assert_eq!(frame.buffer[(19, 2)].bg, Color::Reset);
         });
     });
 }
@@ -103,11 +99,6 @@ fn expected_output_text_color(app: &AppContext) -> Color {
     CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into()
 }
 
-fn expected_transcript_background(app: &AppContext) -> Color {
-    let theme = Appearance::as_ref(app).theme();
-    CoreFill::from(theme.surface_1()).into()
-}
-
 #[test]
 fn agent_block_extracts_input_and_plain_text_from_model() {
     App::test((), |app| async move {
@@ -126,9 +117,9 @@ fn agent_block_extracts_input_and_plain_text_from_model() {
             assert_eq!(
                 block.sections(app_ctx),
                 vec![
-                    TuiAgentBlockSection::Input(vec!["hello".to_owned()]),
-                    TuiAgentBlockSection::PlainText("one".to_owned()),
-                    TuiAgentBlockSection::PlainText("two".to_owned()),
+                    TuiAIBlockSection::Input("hello".to_owned()),
+                    TuiAIBlockSection::PlainText("one".to_owned()),
+                    TuiAIBlockSection::PlainText("two".to_owned()),
                 ]
             );
         });
@@ -155,7 +146,7 @@ fn agent_block_omits_unsupported_sections_until_the_tui_can_render_them() {
 
             assert_eq!(
                 block.sections(app_ctx),
-                vec![TuiAgentBlockSection::PlainText("visible".to_owned())]
+                vec![TuiAIBlockSection::PlainText("visible".to_owned())]
             );
         });
     });
@@ -167,8 +158,8 @@ struct FakeAgentBlockModel {
 }
 
 /// Builds an agent block with fresh test identity.
-fn test_agent_block(model: FakeAgentBlockModel) -> TuiAgentBlockView {
-    TuiAgentBlockView::new(
+fn test_agent_block(model: FakeAgentBlockModel) -> TuiAIBlock {
+    TuiAIBlock::new(
         AIConversationId::new(),
         AIAgentExchangeId::new(),
         Rc::new(model),
@@ -176,7 +167,7 @@ fn test_agent_block(model: FakeAgentBlockModel) -> TuiAgentBlockView {
 }
 
 impl AIBlockModel for FakeAgentBlockModel {
-    type View = TuiAgentBlockView;
+    type View = TuiAIBlock;
 
     fn status(&self, _app: &AppContext) -> AIBlockOutputStatus {
         self.status.clone()

@@ -19,7 +19,7 @@ use warpui_core::{
     AppContext, Entity, EntityId, SingletonEntity, TuiView, TypedActionView, ViewContext,
 };
 
-use super::agent_block::TuiAgentBlockView;
+use super::agent_block::TuiAIBlock;
 use super::tui_block_list_viewport_source::{AgentBlockRegistry, TuiBlockListViewportSource};
 
 /// TUI transcript view over one terminal surface's canonical block-list order.
@@ -147,13 +147,9 @@ impl TuiTranscriptView {
             return;
         }
 
-        let Ok(block_model) = AIBlockModelImpl::<TuiAgentBlockView>::new(
-            exchange_id,
-            conversation_id,
-            false,
-            false,
-            ctx,
-        ) else {
+        let Ok(block_model) =
+            AIBlockModelImpl::<TuiAIBlock>::new(exchange_id, conversation_id, false, false, ctx)
+        else {
             log::warn!(
                 "Failed to create TUI model for AI block on AppendedExchange: {exchange_id:?}"
             );
@@ -161,8 +157,7 @@ impl TuiTranscriptView {
         };
 
         let block_model = Rc::new(block_model);
-        let view =
-            ctx.add_tui_view(|_| TuiAgentBlockView::new(conversation_id, exchange_id, block_model));
+        let view = ctx.add_tui_view(|_| TuiAIBlock::new(conversation_id, exchange_id, block_model));
         let view_id = view.id();
         self.agent_blocks.borrow_mut().insert(view_id, view);
         self.model.lock().block_list_mut().append_rich_content(
@@ -194,13 +189,9 @@ impl TuiTranscriptView {
         let Some(agent_block) = self.agent_blocks.borrow().get(&view_id).cloned() else {
             return;
         };
-        let Ok(block_model) = AIBlockModelImpl::<TuiAgentBlockView>::new(
-            exchange_id,
-            conversation_id,
-            false,
-            false,
-            ctx,
-        ) else {
+        let Ok(block_model) =
+            AIBlockModelImpl::<TuiAIBlock>::new(exchange_id, conversation_id, false, false, ctx)
+        else {
             log::warn!(
                 "Failed to create reassigned TUI model for AI block on ReassignedExchange: {exchange_id:?}"
             );
@@ -270,10 +261,11 @@ impl TuiView for TuiTranscriptView {
 
     fn render(&self, _app: &AppContext) -> Box<dyn TuiElement> {
         let source = TuiBlockListViewportSource::new(self.model.clone(), self.agent_blocks.clone());
-        Box::new(TuiScrollable::new(
+        TuiScrollable::new(
             TuiViewportedList::new(self.viewport.clone(), source)
                 .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom),
-        ))
+        )
+        .finish()
     }
 }
 

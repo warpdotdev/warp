@@ -186,22 +186,19 @@ impl TuiView for TuiTerminalSessionView {
         let theme = Appearance::as_ref(ctx).theme();
         let border_color: Color =
             CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.cyan)).into();
-        let background: Color = CoreFill::from(theme.surface_1()).into();
         let input_box = TuiConstrainedBox::new(
             TuiContainer::new(TuiChildView::new(&self.input_view))
                 .with_border_style(TuiStyle::default().fg(border_color)),
         )
         .with_max_rows(MAX_INPUT_TEXT_ROWS + 2);
 
-        Box::new(
-            TuiContainer::new(
-                TuiColumn::new()
-                    .flex_child(TuiChildView::new(&self.transcript))
-                    .child(input_box),
-            )
-            .with_background(background)
-            .with_padding(2),
+        TuiContainer::new(
+            TuiColumn::new()
+                .flex_child(TuiChildView::new(&self.transcript))
+                .child(input_box),
         )
+        .with_padding(2)
+        .finish()
     }
 }
 

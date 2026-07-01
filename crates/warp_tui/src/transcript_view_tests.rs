@@ -19,7 +19,7 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{AppContext, ViewContext};
 
 use super::TuiTranscriptView;
-use crate::agent_block::TuiAgentBlockView;
+use crate::agent_block::TuiAIBlock;
 
 #[test]
 fn transcript_view_renders_terminal_blocks_from_canonical_order() {
@@ -58,7 +58,7 @@ fn transcript_view_renders_terminal_blocks_from_canonical_order() {
 struct EmptyAgentBlockModel;
 
 impl AIBlockModel for EmptyAgentBlockModel {
-    type View = TuiAgentBlockView;
+    type View = TuiAIBlock;
 
     fn status(&self, _app: &AppContext) -> AIBlockOutputStatus {
         AIBlockOutputStatus::Pending
@@ -116,7 +116,7 @@ fn transcript_agent_block_lifecycle_updates_canonical_rich_content() {
 
         transcript.update(&mut app, |view, ctx| {
             let agent_block = ctx.add_tui_view(|_| {
-                TuiAgentBlockView::new(
+                TuiAIBlock::new(
                     original_conversation_id,
                     exchange_id,
                     Rc::new(EmptyAgentBlockModel),

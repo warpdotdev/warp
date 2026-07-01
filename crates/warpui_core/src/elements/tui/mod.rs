@@ -156,6 +156,16 @@ pub trait TuiElement {
     ) -> bool {
         false
     }
+
+    /// Boxes this element as a trait object, mirroring the GUI `Element::finish`
+    /// convenience so element trees can be terminated with `.finish()` rather
+    /// than an explicit `Box::new`.
+    fn finish(self) -> Box<dyn TuiElement>
+    where
+        Self: 'static + Sized,
+    {
+        Box::new(self)
+    }
 }
 
 /// A no-op leaf element: occupies no space and paints nothing. Used by tests

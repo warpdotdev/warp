@@ -11,15 +11,26 @@ use warpui_core::{
 use crate::terminal_session_view::TuiTerminalSessionView;
 use crate::ui::{login_failed, login_placeholder, terminal_starting};
 
+/// Whether the authenticated terminal session has been created yet. Mirrors the
+/// GUI root view's `AuthOnboardingState` split between the pre-session login gate
+/// and the live terminal session.
+enum RootTuiState {
+    /// Login gate: no terminal session exists yet. The placeholder shown is
+    /// chosen from the current [`TuiLoginPhase`].
+    Auth,
+    /// The authenticated terminal session.
+    Terminal(ViewHandle<TuiTerminalSessionView>),
+}
+
 /// The app-level TUI shell. It gates the authenticated terminal session on login state.
 pub struct RootTuiView {
-    terminal_session: Option<ViewHandle<TuiTerminalSessionView>>,
+    state: RootTuiState,
 }
 
 impl RootTuiView {
     pub(crate) fn new() -> Self {
         Self {
-            terminal_session: None,
+            state: RootTuiState::Auth,
         }
     }
     /// Creates the terminal child view once login has completed, or returns the
@@ -30,12 +41,12 @@ impl RootTuiView {
         surface_init: TerminalSurfaceInit,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<TuiTerminalSessionView> {
-        if let Some(terminal_session) = &self.terminal_session {
+        if let RootTuiState::Terminal(terminal_session) = &self.state {
             return terminal_session.clone();
         }
         let terminal_session =
             ctx.add_typed_action_tui_view(|ctx| TuiTerminalSessionView::new(surface_init, ctx));
-        self.terminal_session = Some(terminal_session.clone());
+        self.state = RootTuiState::Terminal(terminal_session.clone());
         terminal_session
     }
 }
@@ -49,32 +60,28 @@ impl TuiView for RootTuiView {
         "RootTuiView"
     }
 
-    fn child_view_ids(&self, ctx: &AppContext) -> Vec<EntityId> {
-        // The TUI runtime uses this for child focus and event routing.
-        match TuiLoginModel::as_ref(ctx).phase() {
-            TuiLoginPhase::LoggedIn => self
-                .terminal_session
-                .as_ref()
-                .map(|terminal_session| vec![terminal_session.id()])
-                .unwrap_or_default(),
-            TuiLoginPhase::AwaitingLogin { .. } | TuiLoginPhase::Failed { .. } => Vec::new(),
+    fn child_view_ids(&self, _ctx: &AppContext) -> Vec<EntityId> {
+        // The TUI runtime uses this for child focus and event routing; only the
+        // live terminal session participates.
+        match &self.state {
+            RootTuiState::Terminal(terminal_session) => vec![terminal_session.id()],
+            RootTuiState::Auth => Vec::new(),
         }
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        match TuiLoginModel::as_ref(ctx).phase() {
-            TuiLoginPhase::LoggedIn => {
-                if let Some(terminal_session) = &self.terminal_session {
-                    Box::new(TuiChildView::new(terminal_session))
-                } else {
-                    terminal_starting()
-                }
+        match &self.state {
+            RootTuiState::Terminal(terminal_session) => {
+                TuiChildView::new(terminal_session).finish()
             }
-            TuiLoginPhase::AwaitingLogin {
-                verification_uri,
-                user_code,
-            } => login_placeholder(verification_uri.as_deref(), user_code.as_deref()),
-            TuiLoginPhase::Failed { message } => login_failed(message.as_str()),
+            RootTuiState::Auth => match TuiLoginModel::as_ref(ctx).phase() {
+                TuiLoginPhase::LoggedIn => terminal_starting(),
+                TuiLoginPhase::AwaitingLogin {
+                    verification_uri,
+                    user_code,
+                } => login_placeholder(verification_uri.as_deref(), user_code.as_deref()),
+                TuiLoginPhase::Failed { message } => login_failed(message.as_str()),
+            },
         }
     }
 

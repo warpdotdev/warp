@@ -4,12 +4,11 @@ use warpui_core::elements::tui::{Modifier, TuiColumn, TuiElement, TuiStyle, TuiT
 
 /// Vertically centers `content` by padding above and below with flex spacers.
 pub(crate) fn centered(content: TuiColumn) -> Box<dyn TuiElement> {
-    Box::new(
-        TuiColumn::new()
-            .flex_child(TuiColumn::new())
-            .child(content)
-            .flex_child(TuiColumn::new()),
-    )
+    TuiColumn::new()
+        .flex_child(TuiColumn::new())
+        .child(content)
+        .flex_child(TuiColumn::new())
+        .finish()
 }
 
 /// Placeholder shown while the user completes device-authorization login. The
