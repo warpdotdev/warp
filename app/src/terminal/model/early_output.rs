@@ -429,6 +429,12 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
         );
     }
 
+    fn prompt_only_precmd(&mut self, _data: ansi::PromptMetadata) {
+        panic!(
+            "Called EarlyOutput::prompt_only_precmd handler method instead of Block::prompt_only_precmd"
+        );
+    }
+
     /*
      * Handler methods only relevant to background output.
      */
