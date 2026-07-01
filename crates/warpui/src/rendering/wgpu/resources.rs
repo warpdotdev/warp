@@ -502,7 +502,11 @@ fn is_intel_uhd_620_adapter_on_windows_with_vulkan_backend(
 /// Returns true if this is an Intel UHD Graphics 770 integrated GPU on Windows, using either the
 /// DX12 or Vulkan backend.
 ///
-/// TODO link public reports of bugs with this driver.
+/// This integrated GPU's drivers introduce severe latency/stutter in the present path.
+/// Public reports of latency/stutter bugs on Intel integrated GPU drivers (including the UHD 770):
+/// https://github.com/IGCIT/Intel-GPU-Community-Issue-Tracker-IGCIT/issues/1002
+/// https://github.com/libsdl-org/SDL/issues/5628
+/// See also https://github.com/warpdotdev/warp/issues/4856
 fn is_intel_uhd_770_adapter_on_windows(adapter_info: &wgpu::AdapterInfo) -> bool {
     cfg!(windows)
         && matches!(adapter_info.backend, Backend::Dx12 | Backend::Vulkan)
