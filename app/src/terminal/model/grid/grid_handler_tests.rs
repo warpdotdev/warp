@@ -2498,3 +2498,156 @@ fn test_full_grid_clear_resize_then_bounds_to_string_does_not_panic() {
         );
     }
 }
+
+/// Deterministic stand-in for `CoreTextClusterMeasurer` in tests: reports a
+/// span equal to the cluster's codepoint count (clamped to 1..=8), so tests
+/// can assert on a predictable multi-cell span without depending on real
+/// Core Text shaping (macOS-only, and not suitable for a portable unit test).
+struct FixedWidthMeasurer;
+
+impl ClusterWidthMeasurer for FixedWidthMeasurer {
+    fn measure_cells(&self, cluster: &str, _cell_width_px: f32) -> u8 {
+        (cluster.chars().count() as u8).clamp(1, 8)
+    }
+}
+
+fn grid_with_fixed_width_measurer(rows: usize, columns: usize) -> GridHandler {
+    GridHandler::new_for_test_with_measurer(rows, columns, Arc::new(FixedWidthMeasurer))
+}
+
+/// Feeds `text` through a real `ansi::Processor`, exactly like PTY bytes
+/// would arrive -- notably, this calls `on_finish_byte_processing` at the
+/// end, so a cluster that happens to end at the very end of `text` still
+/// gets flushed (unlike calling `grid.input(c)` directly in a loop, which
+/// stops without ever triggering that batch-end hook).
+fn feed(grid: &mut GridHandler, text: &str) {
+    let mut processor = crate::terminal::model::ansi::Processor::new();
+    processor.parse_bytes(grid, text.as_bytes(), &mut std::io::sink());
+}
+
+#[test]
+fn test_indic_virama_conjunct_gets_measured_span() {
+    // క్ష = క (KA) + ్ (virama) + ష (SSA) -- a 3-codepoint virama-conjunct
+    // cluster. FixedWidthMeasurer reports span 3 for it.
+    let mut grid = grid_with_fixed_width_measurer(2, 10);
+    feed(&mut grid, "క్ష");
+
+    let cell = &grid.grid_storage()[VisibleRow(0)][0];
+    assert_eq!(cell.span(), 3, "conjunct cluster should get a 3-cell span");
+    assert_eq!(cell.raw_content(), CharOrStr::Str("క్ష"));
+    assert!(grid.grid_storage()[VisibleRow(0)][1]
+        .flags()
+        .contains(Flags::WIDE_CHAR_SPACER));
+    assert!(grid.grid_storage()[VisibleRow(0)][2]
+        .flags()
+        .contains(Flags::WIDE_CHAR_SPACER));
+    // Cursor should have advanced past the full span.
+    assert_eq!(grid.cursor_point(), Point::new(0, 3));
+}
+
+#[test]
+fn test_indic_base_plus_vowel_sign_gets_measured_span() {
+    // కి = క (KA) + ి (vowel sign I) -- a 2-codepoint base+matra cluster.
+    let mut grid = grid_with_fixed_width_measurer(2, 10);
+    feed(&mut grid, "కి");
+
+    let cell = &grid.grid_storage()[VisibleRow(0)][0];
+    assert_eq!(cell.span(), 2);
+    assert_eq!(cell.raw_content(), CharOrStr::Str("కి"));
+    assert!(grid.grid_storage()[VisibleRow(0)][1]
+        .flags()
+        .contains(Flags::WIDE_CHAR_SPACER));
+    assert_eq!(grid.cursor_point(), Point::new(0, 2));
+}
+
+#[test]
+fn test_indic_cluster_flushes_before_ascii_char() {
+    // "కxy": Telugu base (1 codepoint, span 1) then two plain ASCII chars.
+    // The Indic char must not swallow the following ASCII input.
+    let mut grid = grid_with_fixed_width_measurer(2, 10);
+    feed(&mut grid, "కxy");
+
+    assert_eq!(
+        grid.grid_storage()[VisibleRow(0)][0].raw_content(),
+        CharOrStr::Char('క')
+    );
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][1].c, 'x');
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][2].c, 'y');
+}
+
+#[test]
+fn test_indic_cluster_flushes_at_end_of_batch() {
+    // A cluster that ends exactly at the end of a PTY-read batch must still
+    // be written (on_finish_byte_processing flushes it), not silently
+    // dropped just because no further character arrived to trigger the
+    // non-Indic flush path.
+    let mut grid = grid_with_fixed_width_measurer(2, 10);
+    feed(&mut grid, "క్ష");
+
+    let cell = &grid.grid_storage()[VisibleRow(0)][0];
+    assert_eq!(cell.span(), 3);
+    assert_eq!(cell.raw_content(), CharOrStr::Str("క్ష"));
+}
+
+#[test]
+fn test_indic_multiple_clusters_in_one_word_each_get_own_span() {
+    // ప్రభుత్వం ("government") is several independent syllables. Each
+    // syllable must get its OWN measured span -- the cluster boundary rule
+    // must not glue independent syllables together into one giant span,
+    // which would make cursor navigation jump the whole word at once.
+    let word = "ప్రభుత్వం";
+    let mut grid = grid_with_fixed_width_measurer(2, 20);
+    feed(&mut grid, word);
+
+    // Walk the row and collect (span, content) for each non-spacer cell.
+    let mut clusters = Vec::new();
+    let mut col = 0;
+    while col < grid.columns() {
+        let current_cell = &grid.grid_storage()[VisibleRow(0)][col];
+        if current_cell.c == crate::terminal::model::cell::DEFAULT_CHAR {
+            break;
+        }
+        let span = current_cell.span();
+        clusters.push((span, current_cell.raw_content().to_string()));
+        col += span as usize;
+    }
+
+    // The word should have decomposed into more than one cluster (not one
+    // giant span covering the whole word), and every cluster's measured
+    // span should match its own codepoint count.
+    assert!(
+        clusters.len() > 1,
+        "expected multiple independent clusters, got {clusters:?}"
+    );
+    for (span, text) in &clusters {
+        assert_eq!(
+            *span as usize,
+            text.chars().count(),
+            "cluster {text:?} span should match its own codepoint count"
+        );
+    }
+    // Reassembling every cluster's text should reproduce the original word.
+    let reassembled: String = clusters.iter().map(|(_, text)| text.as_str()).collect();
+    assert_eq!(reassembled, word);
+}
+
+#[test]
+fn test_indic_cluster_wraps_to_next_line_when_it_does_not_fit() {
+    // A 4-cell-wide cluster starting at column 8 of a 10-column grid does
+    // not fit (needs cols 8..12); it should wrap whole to the next line,
+    // not get truncated/split.
+    let mut grid = grid_with_fixed_width_measurer(3, 10);
+    // Fill columns 0..8, then feed a 4-codepoint cluster (క + ్ + ష + ి,
+    // conjunct + trailing vowel sign) which needs cols 8..12 -- doesn't fit.
+    feed(&mut grid, "aaaaaaaaక్షి");
+
+    // Row 0, cols 8-9 should NOT contain the cluster (it didn't fit) --
+    // a LEADING_WIDE_CHAR_SPACER placeholder should occupy col 8 instead.
+    assert!(grid.grid_storage()[VisibleRow(0)][8]
+        .flags()
+        .contains(Flags::LEADING_WIDE_CHAR_SPACER));
+    // The cluster should have wrapped whole onto row 1, starting at col 0.
+    let wrapped_cell = &grid.grid_storage()[VisibleRow(1)][0];
+    assert_eq!(wrapped_cell.span(), 4);
+    assert_eq!(wrapped_cell.raw_content(), CharOrStr::Str("క్షి"));
+}

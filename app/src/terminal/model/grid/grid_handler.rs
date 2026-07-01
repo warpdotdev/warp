@@ -522,6 +522,27 @@ impl GridHandler {
         )
     }
 
+    /// Like [`Self::new_for_test`], but with a caller-supplied
+    /// [`ClusterWidthMeasurer`] — for tests that need deterministic,
+    /// non-1 cluster widths without depending on real Core Text shaping
+    /// (which is macOS-only and not suitable for a portable unit test).
+    #[cfg(test)]
+    pub fn new_for_test_with_measurer(
+        rows: usize,
+        columns: usize,
+        cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
+    ) -> Self {
+        Self::new(
+            SizeInfo::new_without_font_metrics(rows, columns),
+            0,
+            ChannelEventListener::new_for_test(),
+            false,
+            ObfuscateSecrets::No,
+            PerformResetGridChecks::No,
+            cluster_measurer,
+        )
+    }
+
     #[cfg(test)]
     pub fn new_for_alt_screen_test(rows: usize, columns: usize) -> Self {
         Self::new(

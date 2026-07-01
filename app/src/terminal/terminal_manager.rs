@@ -36,10 +36,12 @@ pub(super) fn create_cluster_measurer(ctx: &mut AppContext) -> Arc<dyn ClusterWi
         if ctx.is_headless() {
             return Arc::new(NoopMeasurer);
         }
-        let family_id = Appearance::as_ref(ctx).monospace_font_family();
+        let appearance = Appearance::as_ref(ctx);
+        let family_id = appearance.monospace_font_family();
+        let font_size = appearance.monospace_font_size();
         let family_name = ctx.font_cache().load_family_name_from_id(family_id);
         if let Some(family_name) = family_name {
-            match CoreTextClusterMeasurer::new(&family_name, Default::default()) {
+            match CoreTextClusterMeasurer::new(&family_name, Default::default(), font_size) {
                 Ok(measurer) => return Arc::new(measurer),
                 Err(error) => {
                     log::warn!(

@@ -34,7 +34,7 @@ use crate::terminal::model::ansi::{
 };
 use crate::terminal::model::cell::{Cell, Flags};
 use crate::terminal::model::char_or_str::CharOrStr;
-use crate::terminal::model::indic::{is_in_indic_block, is_indic_virama};
+use crate::terminal::model::indic::{is_in_indic_block, is_indic_combining, is_indic_virama};
 use crate::terminal::model::grid::indexing::IndexRegion as _;
 use crate::terminal::model::grid::{grapheme_cursor, Dimensions as _};
 use crate::terminal::model::image_map::{ImagePlacementData, ImageType, StoredImageMetadata};
@@ -105,6 +105,21 @@ pub(super) struct State {
     /// `push` appends the new mode; `pop` truncates and restores
     /// the previous entry as the active mode.
     pub keyboard_mode_stack: BoundedVecDeque<KeyboardModes>,
+
+    /// An Indic grapheme cluster currently being assembled from consecutive
+    /// `input()` calls, not yet written to the grid. Buffering (rather than
+    /// writing each character immediately) is necessary because the cluster's
+    /// real cell span can't be measured until it's complete — see
+    /// `GridHandler::handle_indic_char`/`flush_pending_indic_cluster`.
+    pending_indic_cluster: Option<PendingIndicCluster>,
+}
+
+/// See [`State::pending_indic_cluster`].
+#[derive(Clone, Debug, Default)]
+struct PendingIndicCluster {
+    /// The base character plus every character appended to it so far.
+    /// Never empty once `Some(_)`.
+    text: String,
 }
 
 impl State {
@@ -142,6 +157,7 @@ impl State {
             pane_size: size_info.pane_size_px(),
             keyboard_mode: KeyboardModes::NO_MODE,
             keyboard_mode_stack: BoundedVecDeque::new(super::KEYBOARD_MODE_STACK_MAX_DEPTH),
+            pending_indic_cluster: None,
         }
     }
 }
@@ -191,13 +207,17 @@ impl ansi::Handler for GridHandler {
             return;
         };
 
-        // Layer B: fold virama-conjunct second consonants to width=0 so the
-        // cell allocation stays close to the font's natural advance width.
-        // A fixed uniform scale (see render_indic_cluster) then keeps all
-        // Telugu words at the same visual size without per-word variation.
-        let width = if width == 1 { self.indic_grapheme_width(c) } else { width };
-
-        let num_cols = self.columns();
+        // Indic grapheme clusters (base consonant + optional virama-conjunct
+        // consonants + optional vowel signs/anusvara/visarga) need to be
+        // measured as a whole before we know how many cells they need — see
+        // `handle_indic_char`. Buffer them instead of writing immediately;
+        // a non-Indic char (below) flushes whatever was pending first.
+        if is_in_indic_block(c) {
+            self.handle_indic_char(c);
+            return;
+        } else if self.ansi_handler_state.pending_indic_cluster.is_some() {
+            self.flush_pending_indic_cluster();
+        }
 
         // Handle zero-width characters.
         if width == 0 {
@@ -247,70 +267,11 @@ impl ansi::Handler for GridHandler {
             return;
         }
 
-        // Move cursor to next line.
-        if self.grid.cursor().input_needs_wrap {
-            self.wrapline();
-        }
-
-        // If in insert mode, first shift cells to the right.
-        if self.ansi_handler_state.mode.contains(TermMode::INSERT)
-            && self.grid.cursor().point.col + width < num_cols
-        {
-            let cursor_point = self.grid.cursor_point();
-            let col = self.grid.cursor().point.col;
-            let bg = self.grid.cursor().template.bg;
-
-            // Reset any wide char pair at the insertion point before the
-            // shift moves cells away (write_at_cursor's own start boundary
-            // check runs too late — after the shift).
-            self.reset_wide_char_at_start_boundary(cursor_point.row, col, bg);
-
-            // Reset any wide char pair straddling the push-off boundary.
-            // Cells at [num_cols - width, num_cols) are discarded by the
-            // shift.
-            let push_off = num_cols - width;
-            self.reset_wide_char_at_end_boundary(cursor_point.row, push_off, bg);
-
-            let row = &mut self.grid[cursor_point.row][..];
-
-            for col in (col..(num_cols - width)).rev() {
-                row.swap(col + width, col);
-            }
-        }
-
-        if width == 1 {
-            self.write_at_cursor(c);
-        } else {
-            if self.grid.cursor().point.col + 1 >= num_cols {
-                if self.ansi_handler_state.mode.contains(TermMode::LINE_WRAP) {
-                    // Insert placeholder before wide char if glyph does not fit in this row.
-                    self.write_at_cursor(cell::DEFAULT_CHAR)
-                        .flags
-                        .insert(Flags::LEADING_WIDE_CHAR_SPACER);
-                    self.wrapline();
-                } else {
-                    // Prevent out of bounds crash when linewrapping is disabled.
-                    self.move_cursor_forward(|cursor| {
-                        cursor.input_needs_wrap = true;
-                    });
-                    return;
-                }
-            }
-
-            // Write full width glyph to current cursor cell.
-            self.write_at_cursor(c).set_span(2);
-
-            // Write spacer to cell following the wide glyph.
-            self.move_cursor_forward(|cursor| {
-                cursor.point.col += 1;
-            });
-
-            self.write_at_cursor(cell::DEFAULT_CHAR)
-                .flags
-                .insert(Flags::WIDE_CHAR_SPACER);
-        }
-
-        self.advance_cursor_by_one_cell();
+        // `encode_utf8` writes into a stack buffer -- no heap allocation for
+        // the extremely hot single-char case (every plain ASCII/CJK write
+        // goes through this).
+        let mut buf = [0u8; 4];
+        self.write_grapheme_cluster(c.encode_utf8(&mut buf), width);
     }
 
     fn goto(&mut self, row: VisibleRow, column: usize) {
@@ -1227,6 +1188,12 @@ impl ansi::Handler for GridHandler {
     }
 
     fn on_finish_byte_processing(&mut self, _: &ansi::ProcessorInput<'_>) {
+        // Flush any Indic grapheme cluster still buffered from this batch --
+        // otherwise a cluster that happens to end exactly at a PTY-read
+        // boundary would never get written (the next byte, if any, arrives
+        // in a future call). See `handle_indic_char`.
+        self.flush_pending_indic_cluster();
+
         // Make sure the max cursor and dirty cell range are up-to-date.
         self.grid.update_max_cursor();
         self.update_dirty_cells_range();
@@ -1462,43 +1429,160 @@ impl ansi::Handler for GridHandler {
 
 /// Helper functions for the [`ansi::Handler`] implementation.
 impl GridHandler {
-    /// Returns 0 if `c` (a width-1 character) should attach to the previous
-    /// cell as part of an Indic grapheme cluster, or 1 if it should occupy its
-    /// own cell normally.
+    /// Handles one character of an Indic grapheme cluster (Devanagari
+    /// through Sinhala, U+0900-0DFF — see `is_in_indic_block`). Rather than
+    /// writing immediately, buffers the cluster in
+    /// `State::pending_indic_cluster` until it's complete, since the real
+    /// cell span can only be measured (via `ClusterWidthMeasurer`) once the
+    /// whole cluster is known — see `flush_pending_indic_cluster`.
     ///
-    fn indic_grapheme_width(&self, c: char) -> usize {
+    /// A character extends the pending cluster if it's a combining mark
+    /// (vowel sign/anusvara/visarga), a virama, or if the pending cluster's
+    /// last character was a virama (virama-conjunct: consonant + virama +
+    /// consonant forms one visual unit). Anything else starts a new
+    /// cluster, flushing whatever was pending first.
+    fn handle_indic_char(&mut self, c: char) {
+        let extends_pending = self
+            .ansi_handler_state
+            .pending_indic_cluster
+            .as_ref()
+            .is_some_and(|pending| {
+                is_indic_combining(c)
+                    || is_indic_virama(c)
+                    || pending.text.chars().last().is_some_and(is_indic_virama)
+            });
+
+        if extends_pending {
+            // Attach to what's already buffered -- no wrap check here, same
+            // as the existing zero-width-character attach semantics: the
+            // cluster's start position was already validated when the FIRST
+            // character in it was buffered.
+            if let Some(pending) = &mut self.ansi_handler_state.pending_indic_cluster {
+                pending.text.push(c);
+            }
+            return;
+        }
+
+        self.flush_pending_indic_cluster();
+
+        // Move cursor to next line if the previous write left it pending --
+        // mirrors `input()`'s own pre-write housekeeping, needed here since
+        // we're now starting a fresh cluster at a (possibly new) position.
         if self.grid.cursor().input_needs_wrap {
-            return 1;
+            self.wrapline();
         }
-        let col = self.grid.cursor().point.col;
-        if col == 0 {
-            return 1;
+
+        self.ansi_handler_state.pending_indic_cluster = Some(PendingIndicCluster {
+            text: c.to_string(),
+        });
+    }
+
+    /// Writes out and clears any pending Indic cluster (see
+    /// `handle_indic_char`), measuring its real cell span first. A no-op if
+    /// nothing is pending. Called whenever a non-Indic character arrives,
+    /// and at the end of every PTY-read batch (`on_finish_byte_processing`)
+    /// so a cluster can never be silently dropped if a read ends mid-cluster.
+    fn flush_pending_indic_cluster(&mut self) {
+        let Some(pending) = self.ansi_handler_state.pending_indic_cluster.take() else {
+            return;
+        };
+        let cell_width_px = self.ansi_handler_state.cell_width as f32;
+        let span = self
+            .cluster_measurer
+            .measure_cells(&pending.text, cell_width_px)
+            .clamp(1, 8);
+        self.write_grapheme_cluster(&pending.text, span as usize);
+    }
+
+    /// Writes `text` (one or more chars forming a single grapheme cluster --
+    /// a plain char, a CJK wide char, or a measured Indic cluster) at the
+    /// cursor, occupying `width` cells. `text`'s first char becomes the
+    /// cell's base character; any remaining chars are attached as zero-width
+    /// continuations (`Cell::push_zerowidth`). Handles line-wrap and
+    /// insert-mode cell-shifting identically regardless of `width` --
+    /// this generalizes what was previously separate width==1/width==2
+    /// branches inline in `input()`.
+    fn write_grapheme_cluster(&mut self, text: &str, width: usize) {
+        debug_assert!(!text.is_empty(), "grapheme cluster text must not be empty");
+        let num_cols = self.columns();
+
+        // Move cursor to next line.
+        if self.grid.cursor().input_needs_wrap {
+            self.wrapline();
         }
-        let row = self.grid.cursor_point().row;
-        let prev_col = col - 1;
-        let actual_prev_col = if self.grid[row][prev_col]
-            .flags
-            .contains(Flags::WIDE_CHAR_SPACER)
-            && prev_col > 0
+
+        // If in insert mode, first shift cells to the right.
+        if self.ansi_handler_state.mode.contains(TermMode::INSERT)
+            && self.grid.cursor().point.col + width < num_cols
         {
-            prev_col - 1
-        } else {
-            prev_col
-        };
-        let prev_cell = &self.grid[row][actual_prev_col];
-        let prev_last = match prev_cell.raw_content() {
-            CharOrStr::Str(s) => s.chars().last(),
-            CharOrStr::Char(ch) => Some(ch),
-        };
-        let Some(prev_last) = prev_last else {
-            return 1;
-        };
-        // Fold the consonant after a virama into the base cell so that each
-        // virama-conjunct cluster occupies one cell instead of two.
-        if is_indic_virama(prev_last) && is_in_indic_block(c) {
-            return 0;
+            let cursor_point = self.grid.cursor_point();
+            let col = self.grid.cursor().point.col;
+            let bg = self.grid.cursor().template.bg;
+
+            // Reset any wide char pair at the insertion point before the
+            // shift moves cells away (write_at_cursor's own start boundary
+            // check runs too late — after the shift).
+            self.reset_wide_char_at_start_boundary(cursor_point.row, col, bg);
+
+            // Reset any wide char pair straddling the push-off boundary.
+            // Cells at [num_cols - width, num_cols) are discarded by the
+            // shift.
+            let push_off = num_cols - width;
+            self.reset_wide_char_at_end_boundary(cursor_point.row, push_off, bg);
+
+            let row = &mut self.grid[cursor_point.row][..];
+
+            for col in (col..(num_cols - width)).rev() {
+                row.swap(col + width, col);
+            }
         }
-        1
+
+        if width == 1 {
+            let mut chars = text.chars();
+            // SAFETY: caller guarantees `text` is non-empty.
+            let base = chars.next().unwrap();
+            let cell = self.write_at_cursor(base);
+            for c in chars {
+                cell.push_zerowidth(c, /* log_long_grapheme_warnings */ true);
+            }
+        } else {
+            if self.grid.cursor().point.col + width > num_cols {
+                if self.ansi_handler_state.mode.contains(TermMode::LINE_WRAP) {
+                    // Insert placeholder before wide char if glyph does not fit in this row.
+                    self.write_at_cursor(cell::DEFAULT_CHAR)
+                        .flags
+                        .insert(Flags::LEADING_WIDE_CHAR_SPACER);
+                    self.wrapline();
+                } else {
+                    // Prevent out of bounds crash when linewrapping is disabled.
+                    self.move_cursor_forward(|cursor| {
+                        cursor.input_needs_wrap = true;
+                    });
+                    return;
+                }
+            }
+
+            let mut chars = text.chars();
+            // SAFETY: caller guarantees `text` is non-empty.
+            let base = chars.next().unwrap();
+            let cell = self.write_at_cursor(base);
+            for c in chars {
+                cell.push_zerowidth(c, /* log_long_grapheme_warnings */ true);
+            }
+            cell.set_span(width as u8);
+
+            // Write spacer to every remaining cell in the span.
+            for _ in 1..width {
+                self.move_cursor_forward(|cursor| {
+                    cursor.point.col += 1;
+                });
+                self.write_at_cursor(cell::DEFAULT_CHAR)
+                    .flags
+                    .insert(Flags::WIDE_CHAR_SPACER);
+            }
+        }
+
+        self.advance_cursor_by_one_cell();
     }
 
     /// Precondition: `c.width() == Some(1)`.
