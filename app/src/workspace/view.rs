@@ -24728,6 +24728,15 @@ impl TypedActionView for Workspace {
                 ctx.clipboard()
                     .write(ClipboardContent::plain_text(text.to_string()));
             }
+            CopyCurrentPath => {
+                let path = self
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .path_from_focused_pane(ctx);
+                if let Some(path) = path {
+                    ctx.clipboard().write(ClipboardContent::plain_text(path));
+                }
+            }
             DismissWorkspaceBanner(banner_type) => self.dismiss_workspace_banner(ctx, banner_type),
             DismissAIAssistantWarmWelcome => {
                 self.dismiss_ai_assistant_warm_welcome(ctx);
