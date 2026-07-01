@@ -1786,6 +1786,7 @@ impl AISettingsPageView {
                     left: 24.,
                     right: 24.,
                 }),
+                height: Some(520.),
                 ..Default::default()
             })
             .with_background_opacity(100)

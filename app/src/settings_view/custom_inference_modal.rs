@@ -4,12 +4,14 @@ use ::ai::api_keys::CustomEndpoint;
 use url::Url;
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
-    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Expanded, Flex, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+    Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Empty, Expanded, Fill, Flex, MainAxisSize, MouseStateHandle,
+    ParentElement, Radius, ScrollbarWidth, Text,
 };
 use warpui::fonts::FamilyId;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::units::Pixels;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -28,7 +30,11 @@ const INPUT_WIDTH: f32 = 480.;
 
 const MODEL_ROW_SPACING: f32 = 16.;
 const REMOVE_MODEL_BUTTON_COL_WIDTH: f32 = 32.;
-const MODEL_INPUT_WIDTH: f32 = (INPUT_WIDTH - MODEL_ROW_SPACING) / 2.;
+const FORM_SCROLLBAR_RESERVED_WIDTH: f32 = 12.;
+const MODEL_ROW_AVAILABLE_WIDTH: f32 =
+    INPUT_WIDTH + REMOVE_MODEL_BUTTON_COL_WIDTH - FORM_SCROLLBAR_RESERVED_WIDTH;
+const MODEL_INPUT_WIDTH: f32 =
+    (MODEL_ROW_AVAILABLE_WIDTH - MODEL_ROW_SPACING * 2. - REMOVE_MODEL_BUTTON_COL_WIDTH) / 2.;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CustomEndpointModalEvent {
@@ -75,6 +81,7 @@ pub struct CustomEndpointModal {
     cancel_button_mouse_state: MouseStateHandle,
     save_button_mouse_state: MouseStateHandle,
     add_model_button_mouse_state: MouseStateHandle,
+    form_scroll_state: ClippedScrollStateHandle,
     remove_endpoint_button: ViewHandle<ActionButton>,
     editing_index: Option<usize>,
     url_has_error: bool,
@@ -219,6 +226,7 @@ impl CustomEndpointModal {
             cancel_button_mouse_state: Default::default(),
             save_button_mouse_state: Default::default(),
             add_model_button_mouse_state: Default::default(),
+            form_scroll_state: Default::default(),
             remove_endpoint_button,
             editing_index,
             url_has_error,
@@ -287,6 +295,7 @@ impl CustomEndpointModal {
         editing_index: Option<usize>,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.form_scroll_state.scroll_to(Pixels::zero());
         self.editing_index = editing_index;
         self.endpoint_name_editor.update(ctx, |editor, ctx| {
             editor.set_buffer_text(endpoint.map(|e| e.name.as_str()).unwrap_or(""), ctx);
@@ -339,11 +348,13 @@ impl CustomEndpointModal {
     }
 
     pub fn on_open(&mut self, ctx: &mut ViewContext<Self>) {
+        self.form_scroll_state.scroll_to(Pixels::zero());
         ctx.focus(&self.endpoint_name_editor);
         ctx.notify();
     }
 
     pub fn on_close(&mut self, ctx: &mut ViewContext<Self>) {
+        self.form_scroll_state.scroll_to(Pixels::zero());
         self.endpoint_name_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
         });
@@ -641,10 +652,10 @@ impl View for CustomEndpointModal {
             ..Default::default()
         };
 
-        let mut column = Flex::column();
+        let mut content_column = Flex::column();
 
         // Description
-        column.add_child(
+        content_column.add_child(
             Container::new(
                 Text::new(
                     "Provide your endpoint details below. You can add as many models from the endpoint as you'd like and can also provide aliases for the model picker in your input.",
@@ -660,12 +671,12 @@ impl View for CustomEndpointModal {
         );
 
         // Endpoint name
-        column.add_child(
+        content_column.add_child(
             Container::new(label("Endpoint name"))
                 .with_margin_bottom(4.)
                 .finish(),
         );
-        column.add_child(
+        content_column.add_child(
             Container::new(
                 appearance
                     .ui_builder()
@@ -679,7 +690,7 @@ impl View for CustomEndpointModal {
         );
 
         // Endpoint URL
-        column.add_child(
+        content_column.add_child(
             Container::new(label("Endpoint URL"))
                 .with_margin_bottom(4.)
                 .finish(),
@@ -689,7 +700,7 @@ impl View for CustomEndpointModal {
         } else {
             theme.outline()
         };
-        column.add_child(
+        content_column.add_child(
             Container::new(
                 appearance
                     .ui_builder()
@@ -705,12 +716,12 @@ impl View for CustomEndpointModal {
         );
 
         // API key
-        column.add_child(
+        content_column.add_child(
             Container::new(label("API key"))
                 .with_margin_bottom(4.)
                 .finish(),
         );
-        column.add_child(
+        content_column.add_child(
             Container::new(
                 appearance
                     .ui_builder()
@@ -747,7 +758,7 @@ impl View for CustomEndpointModal {
             );
         }
 
-        column.add_child(
+        content_column.add_child(
             Container::new(model_labels.finish())
                 .with_margin_bottom(4.)
                 .finish(),
@@ -802,11 +813,11 @@ impl View for CustomEndpointModal {
             }
             let row = row.finish();
 
-            column.add_child(Container::new(row).with_margin_bottom(12.).finish());
+            content_column.add_child(Container::new(row).with_margin_bottom(12.).finish());
         }
 
         // + Add model button
-        column.add_child(
+        content_column.add_child(
             Container::new(
                 appearance
                     .ui_builder()
@@ -829,6 +840,18 @@ impl View for CustomEndpointModal {
             .with_margin_bottom(24.)
             .finish(),
         );
+
+        let scrollable_content = ClippedScrollable::vertical(
+            self.form_scroll_state.clone(),
+            content_column.finish(),
+            ScrollbarWidth::Auto,
+            theme.nonactive_ui_text_color().into(),
+            theme.active_ui_text_color().into(),
+            Fill::None,
+        )
+        .finish();
+
+        let mut column = Flex::column().with_child(Expanded::new(1., scrollable_content).finish());
 
         // Bottom buttons row
         let mut buttons_row = Flex::row()
@@ -884,7 +907,11 @@ impl View for CustomEndpointModal {
             .finish(),
         );
 
-        column.add_child(buttons_row.finish());
+        column.add_child(
+            Container::new(buttons_row.finish())
+                .with_margin_top(16.)
+                .finish(),
+        );
 
         column.finish()
     }
