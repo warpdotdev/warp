@@ -102,6 +102,8 @@ The spec-writing skills are sourced from [`warpdotdev/common-skills`](https://gi
 - `WARP_COMMON_SKILLS_INSTALL_TARGET=project ./script/bootstrap` and `WARP_COMMON_SKILLS_INSTALL_TARGET=global ./script/bootstrap` select the same targets non-interactively.
 - `./script/bootstrap --skip-common-skills` leaves common skills untouched if you are managing them separately.
 
+Warp also maintains a small set of internal skills in [`warpdotdev/warp-skills`](https://github.com/warpdotdev/warp-skills), pinned in [`warp-skills-lock.json`](warp-skills-lock.json). After the common-skills step, `./script/bootstrap` and `./script/run` optionally run `./script/resolve_common_skills install_warp_skills` to restore them into the same target as the common skills. This step is **optional and not required for external contributors**: it is best-effort and a no-op if you lack access to that repository, and you can always skip it with `./script/bootstrap --skip-warp-skills` or `WARP_SKIP_WARP_SKILLS_INSTALL=1`.
+
 To open a spec PR:
 
 1. Add `specs/GH<issue-number>/product.md` and `specs/GH<issue-number>/tech.md`. See [`specs/GH408/`](specs/GH408/), [`specs/GH1063/`](specs/GH1063/), and [`specs/GH1066/`](specs/GH1066/) for examples of well-structured specs, and browse the rest of [`specs/`](specs/) for more. After common skills are installed, the `/write-product-spec` and `/write-tech-spec` skills are available to scaffold these for you.

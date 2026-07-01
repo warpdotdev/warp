@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "skills": {
+    "agent-attribution": {
+      "source": "warpdotdev/warp-skills",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/agent-attribution/SKILL.md",
+      "computedHash": "814d656e0df26da1644cb629c09358de99d88eb1905a01107ed21724196b2ec6"
+    },
+    "brandalf": {
+      "source": "warpdotdev/warp-skills",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/brandalf/SKILL.md",
+      "computedHash": "44eccce975aeb4df325f0112602d4e3181c80cf7febe659367c524a18dd61da9"
+    },
+    "pr-walkthrough-local": {
+      "source": "warpdotdev/warp-skills",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/pr-walkthrough-local/SKILL.md",
+      "computedHash": "fc14030fe49a236815d2a54835bdd2c7d96b7aaf7f277fcb69b0aa9d44b31e60"
+    }
+  }
+}
