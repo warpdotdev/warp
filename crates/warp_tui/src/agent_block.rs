@@ -3,7 +3,8 @@
 use std::rc::Rc;
 
 use warp::tui_export::{
-    AIAgentExchangeId, AIAgentTextSection, AIBlockModel, AIConversationId, Appearance,
+    AIAgentAction, AIAgentExchangeId, AIAgentOutputMessageType, AIAgentTextSection, AIBlockModel,
+    AIConversationId, Appearance,
 };
 use warp_core::ui::color::blend::Blend;
 // `ThemeFill` is the theme-layer color (it supports blend/opacity); `Fill` below
@@ -19,11 +20,13 @@ use warpui_core::{AppContext, Entity, EntityIdMap, TuiView};
 
 const INPUT_PREFIX: &str = "≫ ";
 
-/// Renderable pieces of an agent block; this will grow as we add tool calls and other sub-elements.
+/// Renderable pieces of an agent block; this will grow as we render richer sections.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum TuiAIBlockSection {
     Input(String),
     PlainText(String),
+    /// A lightweight status row standing in for an agent tool call.
+    ToolCall(Box<AIAgentAction>),
 }
 
 /// A thin TUI rich-content view adapter backed by one agent exchange.
@@ -103,19 +106,39 @@ impl TuiAIBlock {
             sections.push(TuiAIBlockSection::Input(input));
         }
 
+        // Walk output messages in order so tool-call rows interleave with text.
         if let Some(output) = self.model.status(app).output_to_render() {
             let output = output.get();
-            sections.extend(output.text_from_agent_output().flat_map(|text| {
-                text.sections.iter().filter_map(|section| match section {
-                    AIAgentTextSection::PlainText { text } => (!text.text().is_empty())
-                        .then(|| TuiAIBlockSection::PlainText(text.text().to_owned())),
-                    // Add item variants here as the TUI learns to render richer sections.
-                    AIAgentTextSection::Code { .. }
-                    | AIAgentTextSection::Table { .. }
-                    | AIAgentTextSection::Image { .. }
-                    | AIAgentTextSection::MermaidDiagram { .. } => None,
-                })
-            }));
+            for message in &output.messages {
+                match &message.message {
+                    AIAgentOutputMessageType::Text(text) => {
+                        sections.extend(text.sections.iter().filter_map(|section| match section {
+                            AIAgentTextSection::PlainText { text } => (!text.text().is_empty())
+                                .then(|| TuiAIBlockSection::PlainText(text.text().to_owned())),
+                            // Add item variants here as the TUI learns to render richer sections.
+                            AIAgentTextSection::Code { .. }
+                            | AIAgentTextSection::Table { .. }
+                            | AIAgentTextSection::Image { .. }
+                            | AIAgentTextSection::MermaidDiagram { .. } => None,
+                        }));
+                    }
+                    AIAgentOutputMessageType::Action(action) => {
+                        sections.push(TuiAIBlockSection::ToolCall(Box::new(action.clone())));
+                    }
+                    AIAgentOutputMessageType::Reasoning { .. }
+                    | AIAgentOutputMessageType::Summarization { .. }
+                    | AIAgentOutputMessageType::Subagent(_)
+                    | AIAgentOutputMessageType::TodoOperation(_)
+                    | AIAgentOutputMessageType::WebSearch(_)
+                    | AIAgentOutputMessageType::WebFetch(_)
+                    | AIAgentOutputMessageType::CommentsAddressed { .. }
+                    | AIAgentOutputMessageType::DebugOutput { .. }
+                    | AIAgentOutputMessageType::ArtifactCreated(_)
+                    | AIAgentOutputMessageType::SkillInvoked(_)
+                    | AIAgentOutputMessageType::MessagesReceivedFromAgents { .. }
+                    | AIAgentOutputMessageType::EventsFromAgents { .. } => {}
+                }
+            }
         }
 
         sections
@@ -190,6 +213,18 @@ impl TuiAIBlockSection {
                 )
                 .with_padding_top(top_padding)
                 .finish()
+            }
+            Self::ToolCall(_action) => {
+                let text_color =
+                    Fill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into();
+                Box::new(
+                    TuiContainer::new(
+                        TuiText::new("executed a tool call").with_style(
+                            TuiStyle::default().fg(text_color).add_modifier(Modifier::DIM),
+                        ),
+                    )
+                    .with_padding_top(top_padding),
+                )
             }
         }
     }

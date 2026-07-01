@@ -6,7 +6,7 @@ Relevant code at `526ade4522df0e65f138c67dcbcb90f1a3ce63e9`:
 - [`crates/warp_tui/src/terminal_session_view.rs`](https://github.com/warpdotdev/warp/blob/526ade4522df0e65f138c67dcbcb90f1a3ce63e9/crates/warp_tui/src/terminal_session_view.rs) — constructs the production AI stack for the TUI surface: `ActiveSession`, `TuiConversationSelection`, `BlocklistAIContextModel`, `BlocklistAIInputModel`, `BlocklistAIActionModel`, and `BlocklistAIController`.
 - [`crates/warp_tui/src/transcript_view.rs`](https://github.com/warpdotdev/warp/blob/526ade4522df0e65f138c67dcbcb90f1a3ce63e9/crates/warp_tui/src/transcript_view.rs) — subscribes to `BlocklistAIHistoryModel`, creates `TuiAgentBlockView`s for visible exchanges, and appends them to `TerminalModel::BlockList` as `RichContentType::AIBlock`.
 - [`crates/warp_tui/src/tui_block_list_viewport_source.rs`](https://github.com/warpdotdev/warp/blob/526ade4522df0e65f138c67dcbcb90f1a3ce63e9/crates/warp_tui/src/tui_block_list_viewport_source.rs) — walks the canonical block-list sum tree, measures dirty rich-content views, updates cached heights, and renders terminal blocks plus TUI agent blocks.
-- [`crates/warp_tui/src/agent_block.rs`](https://github.com/warpdotdev/warp/blob/526ade4522df0e65f138c67dcbcb90f1a3ce63e9/crates/warp_tui/src/agent_block.rs) — currently derives `AgentBlockContent` from `output.text_from_agent_output()`, which only yields `AIAgentOutputMessageType::Text` and therefore drops action/tool-call messages.
+- [`crates/warp_tui/src/agent_block.rs`](https://github.com/warpdotdev/warp/blob/526ade4522df0e65f138c67dcbcb90f1a3ce63e9/crates/warp_tui/src/agent_block.rs) — currently derives `TuiAgentBlockSection`s from `output.text_from_agent_output()`, which only yields `AIAgentOutputMessageType::Text` and therefore drops action/tool-call messages.
 - [`app/src/ai/agent/mod.rs`](https://github.com/warpdotdev/warp/blob/526ade4522df0e65f138c67dcbcb90f1a3ce63e9/app/src/ai/agent/mod.rs) — defines `AIAgentOutput`, ordered `AIAgentOutputMessage`s, `AIAgentOutputMessageType::Action(AIAgentAction)`, and helper iterators such as `text_from_agent_output()` and `actions()`.
 - [`app/src/ai/blocklist/block/view_impl/output.rs`](https://github.com/warpdotdev/warp/blob/526ade4522df0e65f138c67dcbcb90f1a3ce63e9/app/src/ai/blocklist/block/view_impl/output.rs) — GUI AI block rendering loops over `output.messages` in order and delegates each message variant to the appropriate renderer.
 - [`app/src/ai/blocklist/controller.rs`](https://github.com/warpdotdev/warp/blob/526ade4522df0e65f138c67dcbcb90f1a3ce63e9/app/src/ai/blocklist/controller.rs) — when a response stream finishes, queues emitted actions through `BlocklistAIActionModel::queue_actions` and later sends completed action results back to the model.
@@ -32,59 +32,50 @@ The rendering path and the execution path share the same `AIAgentOutputMessageTy
 - Rendering derives a transcript item from the stored output message.
 - Execution is driven by `BlocklistAIController` and `BlocklistAIActionModel`.
 - Completed action results flow back to the LLM as `AIAgentInput::ActionResult`; the first TUI UI does not render those results.
-### Ordered message-to-item adapter
-Replace `TuiAgentBlockView::content`'s output extraction with an ordered adapter over `AIAgentOutput.messages`. The GUI AI block already follows this shape in `output.rs`: one ordered pass over messages, then variant-specific rendering. The TUI should match the ordering pattern without porting the GUI renderer.
+### Ordered message-to-section adapter
+Replace `TuiAgentBlockView::sections`' output extraction with an ordered pass over `AIAgentOutput.messages`. The GUI AI block already follows this shape in `output.rs`: one ordered pass over messages, then variant-specific rendering. The TUI matches the ordering pattern without porting the GUI renderer.
 ```mermaid
 flowchart LR
   Output["AIAgentOutput"] --> Messages["messages<br/>server order"]
-  Messages --> Adapter["TuiAgentBlockView::content"]
-  Adapter --> Input["Input(String)"]
-  Adapter --> Text["Message::PlainText(String)"]
-  Adapter --> Tool["Message::ToolCall(TuiToolCallItem)"]
-  Tool --> ToolRender["TuiToolCallItem::render"]
-  ToolRender --> Label["TuiText<br/>executed a tool call"]
-  Input --> Render["AgentBlockContent::render"]
+  Messages --> Adapter["TuiAgentBlockView::sections"]
+  Adapter --> Input["Input(Vec<String>)"]
+  Adapter --> Text["PlainText(String)"]
+  Adapter --> Tool["ToolCall(Box<AIAgentAction>)"]
+  Input --> Render["TuiAgentBlockSection::render_element"]
   Text --> Render
-  Label --> Render
+  Tool --> Render
+  Render --> Label["TuiText<br/>executed a tool call"]
 ```
-Use a two-level render model so the block stays extensible as more message types get TUI renderers:
+Use a flat section enum so the block stays extensible as more message types get TUI renderers:
 ```rust
-#[derive(Debug, Eq, PartialEq)]
-enum TuiAgentBlockItem {
-    Input(String),
-    Message(TuiAgentMessageItem),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-enum TuiAgentMessageItem {
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum TuiAgentBlockSection {
+    Input(Vec<String>),
     PlainText(String),
-    ToolCall(TuiToolCallItem),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-struct TuiToolCallItem {
-    action: AIAgentAction,
+    ToolCall(Box<AIAgentAction>),
 }
 ```
-`TuiToolCallItem` should carry the full `AIAgentAction` even though the first renderer ignores the fields. The item is derived render data, not durable UI state. Carrying the action now gives future renderers direct access to `id`, `task_id`, `requires_result`, and the concrete `AIAgentActionType` without changing the adapter API.
+The `ToolCall` variant carries the full `AIAgentAction` even though the first renderer ignores the fields. The section is derived render data, not durable UI state. Carrying the action now gives future renderers direct access to `id`, `task_id`, `requires_result`, and the concrete `AIAgentActionType` without changing the adapter API. `AIAgentAction` is large, so the variant is boxed to satisfy clippy's `large_enum_variant`.
 The adapter behavior should be:
-- `AIAgentInput::display_query()` values still become `TuiAgentBlockItem::Input`.
-- `AIAgentOutputMessageType::Text(AIAgentText { sections })` becomes one `Message(PlainText(...))` per non-empty `AIAgentTextSection::PlainText`.
-- `AIAgentOutputMessageType::Action(action)` becomes one `Message(ToolCall(TuiToolCallItem { action: action.clone() }))`.
+- `AIAgentInput::display_query()` values become `TuiAgentBlockSection::Input`, split into one entry per line.
+- `AIAgentOutputMessageType::Text(AIAgentText { sections })` becomes one `TuiAgentBlockSection::PlainText` per non-empty `AIAgentTextSection::PlainText`.
+- `AIAgentOutputMessageType::Action(action)` becomes one `TuiAgentBlockSection::ToolCall(Box::new(action.clone()))`.
 - Code, table, image, Mermaid, reasoning, summarization, todo, subagent, web, artifact, skill, message-bus, lifecycle-event, debug, and comments-addressed messages remain unsupported until the TUI has specific renderers for them.
-`TuiToolCallItem::render` should render exactly `executed a tool call`. The first implementation should not include the tool name, status, arguments, or result details.
+The `ToolCall` arm of `TuiAgentBlockSection::render_element` renders exactly `executed a tool call`. The first implementation does not include the tool name, status, arguments, or result details. The stub is styled as a muted status row (`theme.terminal_colors().bright.black` plus `Modifier::DIM`) so it reads as a tool-call event rather than blending into the agent's plain-text prose.
 ### State ownership
-Do not store a materialized `Vec<TuiAgentBlockItem>` on `TuiAgentBlockView`. Like the GUI AI block, durable state should be stored only when it represents interaction state that must survive renders.
-For this first renderer, `TuiAgentBlockView` only needs:
+Do not store a materialized `Vec<TuiAgentBlockSection>` on `TuiAgentBlockView`. Like the GUI AI block, durable state should be stored only when it represents interaction state that must survive renders.
+`TuiAgentBlockView` holds the exchange identity and backing model; sections are re-derived on each render:
 ```rust
 pub(super) struct TuiAgentBlockView {
+    conversation_id: AIConversationId,
+    exchange_id: AIAgentExchangeId,
     model: Rc<dyn AIBlockModel<View = Self>>,
 }
 ```
 Later stateful renderers can add maps keyed by stable IDs:
 - `MessageId` for collapsible reasoning, summarization, web, or todo sections.
 - `AIAgentActionId` for expandable or status-aware tool cards.
-Even when those maps exist, `output.messages` should remain the ordering source. The render adapter can consult state maps while deriving items, but it should not replace the ordered message pass with independently ordered per-type collections.
+Even when those maps exist, `output.messages` should remain the ordering source. The render adapter can consult state maps while deriving sections, but it should not replace the ordered message pass with independently ordered per-type collections.
 ### Redraw and height updates
 No action-model event subscription is needed for the static tool-call label. New action messages enter the exchange output through the existing response-stream/history path. `TuiTranscriptView::mark_exchange_dirty` already marks the owning rich-content view dirty on `UpdatedStreamingExchange`, and `TuiBlockListViewportSource` already measures dirty rich-content views and writes updated heights back to the terminal block list.
 ```mermaid
@@ -139,7 +130,7 @@ Add a shared, non-GUI fallback inside `RequestFileEditsExecutor`:
 This is not a TUI renderer concern. It belongs in the shared executor so future headless or non-GUI surfaces can execute file edits without depending on GUI views.
 ### Public TUI export boundary
 Extend `app/src/tui_export.rs` only for types that `warp_tui` must name directly:
-- `AIAgentAction`, `AIAgentActionId`, `AIAgentActionType`, and `TaskId` for `TuiToolCallItem` and test fixtures.
+- `AIAgentAction`, `AIAgentActionId`, `AIAgentActionType`, and `TaskId` for the `ToolCall` section variant and test fixtures.
 - `AIAgentPtyWriteMode`, `AgentInteractionMetadata`, and `ShellCommandExecutorEvent` for the PTY bridge.
 Do not export action status/result types for this feature. The static stub renderer does not need them.
 ### Boundaries and non-goals
@@ -150,15 +141,14 @@ Do not change canonical transcript ordering. Agent blocks remain `RichContentTyp
 ## Testing and validation
 Add unit tests in `crates/warp_tui/src/agent_block_tests.rs` for the ordered message adapter:
 - `Text -> Action -> Text` renders as text, `executed a tool call`, text in that order.
-- Multiple action messages render multiple `TuiToolCallItem` stub lines.
-- `TuiToolCallItem` preserves the action ID and action type in derived content even though rendering only emits the static label.
+- Multiple action messages render multiple `ToolCall` stub lines.
+- The `ToolCall` section preserves the action ID and action type in derived content even though rendering only emits the static label.
 - Unsupported text sections and unsupported message variants are ignored without disturbing adjacent supported items.
 - `desired_height` accounts for the tool-call stub line.
 Keep transcript dirty/reflow tests focused on `UpdatedStreamingExchange`; no action-model event dirtying test is needed for the static stub.
 Add shell bridge tests:
-- `TuiTerminalSessionEvent::ExecuteCommand` maps to `PtyIntent::ExecuteCommand`.
 - `TuiTerminalSessionEvent::WriteAgentInput` maps to `PtyIntent::WriteAgentInput`.
-- Shell executor event translation emits an AI-sourced `ExecuteCommandEvent` when an active session and owning conversation can be found.
+- The `ExecuteCommand` → `PtyIntent::ExecuteCommand` branch and the shell-executor event translation are covered by compilation only, because constructing an `ExecuteCommandEvent` requires `SessionId`, which is intentionally not exported through `tui_export` for this feature. Add direct tests for these when a session-id test seam is available.
 Add or port `RequestFileEditsExecutor` tests for the no-`CodeDiffView` path:
 - Prepared diff success saves files and returns `RequestFileEditsResult::Success`.
 - Save failure returns `DiffApplicationFailed`.

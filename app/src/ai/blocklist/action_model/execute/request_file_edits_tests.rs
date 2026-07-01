@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::fs;
 
-use ai::agent::action_result::AnyFileContent;
+use ai::agent::action_result::{AnyFileContent, RequestFileEditsResult};
 use ai::agent::FileLocations;
+use ai::diff_validation::{DiffDelta, DiffType};
 
-use super::updated_file_contexts_from_editor_buffers;
+use super::{save_prepared_diffs, updated_file_contexts_from_editor_buffers};
+use crate::ai::blocklist::inline_action::code_diff_view::FileDiff;
 
 #[test]
 fn updated_file_contexts_from_editor_buffers_returns_changed_lines_with_context() {
@@ -35,6 +38,94 @@ fn updated_file_contexts_from_editor_buffers_returns_changed_lines_with_context(
                 .collect::<Vec<_>>()
                 .join("\n")
         )
+    );
+}
+
+#[test]
+fn save_prepared_diffs_creates_file_without_code_diff_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("src").join("main.rs");
+    let path = path.to_string_lossy().to_string();
+
+    let result = save_prepared_diffs(vec![FileDiff::new(
+        String::new(),
+        path.clone(),
+        DiffType::creation("fn main() {}\n".to_owned()),
+    )]);
+
+    let RequestFileEditsResult::Success {
+        updated_files,
+        deleted_files,
+        lines_added,
+        lines_removed,
+        ..
+    } = result
+    else {
+        panic!("expected create diff to save successfully");
+    };
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), "fn main() {}\n");
+    assert_eq!(deleted_files, Vec::<String>::new());
+    assert_eq!(lines_added, 1);
+    assert_eq!(lines_removed, 0);
+    assert_eq!(updated_files.len(), 1);
+    assert_eq!(updated_files[0].file_context.file_name, path);
+}
+
+#[test]
+fn save_prepared_diffs_updates_file_without_code_diff_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("main.rs");
+    let path = path.to_string_lossy().to_string();
+    let original = "one\ntwo\nthree\n";
+    fs::write(&path, original).unwrap();
+
+    let result = save_prepared_diffs(vec![FileDiff::new(
+        original.to_owned(),
+        path.clone(),
+        DiffType::update(
+            vec![DiffDelta {
+                replacement_line_range: 2..3,
+                insertion: "TWO\n".to_owned(),
+            }],
+            None,
+        ),
+    )]);
+
+    let RequestFileEditsResult::Success {
+        updated_files,
+        lines_added,
+        lines_removed,
+        ..
+    } = result
+    else {
+        panic!("expected update diff to save successfully");
+    };
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), "one\nTWO\nthree\n");
+    assert_eq!(lines_added, 1);
+    assert_eq!(lines_removed, 1);
+    assert_eq!(updated_files.len(), 1);
+    assert_eq!(updated_files[0].file_context.file_name, path);
+}
+
+#[test]
+fn save_prepared_diffs_reports_save_failure_without_code_diff_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_string_lossy().to_string();
+
+    let result = save_prepared_diffs(vec![FileDiff::new(
+        String::new(),
+        path,
+        DiffType::creation("not a directory write\n".to_owned()),
+    )]);
+
+    let RequestFileEditsResult::DiffApplicationFailed { error } = result else {
+        panic!("expected save failure");
+    };
+    assert!(
+        error.contains("Failed to write"),
+        "unexpected error message: {error}"
     );
 }
 

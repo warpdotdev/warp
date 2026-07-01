@@ -8,30 +8,49 @@ use warpui::{AppContext, EntityId, ModelContext, SingletonEntity};
 /// TUI-owned next-prompt conversation selection.
 pub(super) struct TuiConversationSelection {
     terminal_surface_id: EntityId,
+    default_autoexecute_override: AIConversationAutoexecuteMode,
     pending_query_state: PendingQueryState,
 }
 
 impl TuiConversationSelection {
     /// Creates TUI conversation selection for a terminal surface.
+    #[cfg(test)]
     pub(super) fn new(
         terminal_surface_id: EntityId,
+        ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
+    ) -> Self {
+        let default_autoexecute_override =
+            if warp_core::execution_mode::AppExecutionMode::as_ref(ctx).is_sandboxed() {
+                AIConversationAutoexecuteMode::RunToCompletion
+            } else {
+                AIConversationAutoexecuteMode::RespectUserSettings
+            };
+        Self::new_with_autoexecute_override(terminal_surface_id, default_autoexecute_override, ctx)
+    }
+
+    /// Creates TUI conversation selection with an explicit new-conversation autoexecute mode.
+    pub(super) fn new_with_autoexecute_override(
+        terminal_surface_id: EntityId,
+        autoexecute_override: AIConversationAutoexecuteMode,
         ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
     ) -> Self {
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
             |selection, _, event, ctx| selection.handle_history_event(event, ctx),
         );
-        let pending_query_state =
-            if warp_core::execution_mode::AppExecutionMode::as_ref(ctx).is_sandboxed() {
-                PendingQueryState::New {
-                    autoexecute_override: AIConversationAutoexecuteMode::RunToCompletion,
-                }
-            } else {
-                PendingQueryState::default()
-            };
+        let pending_query_state = PendingQueryState::New {
+            autoexecute_override,
+        };
         Self {
             terminal_surface_id,
+            default_autoexecute_override: autoexecute_override,
             pending_query_state,
+        }
+    }
+    /// Returns the configured new-conversation state for this TUI surface.
+    fn default_new_conversation_state(&self) -> PendingQueryState {
+        PendingQueryState::New {
+            autoexecute_override: self.default_autoexecute_override,
         }
     }
 
@@ -120,7 +139,7 @@ impl ConversationSelection for TuiConversationSelection {
         ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
     ) {
         let previous_conversation_id = self.selected_id();
-        self.set_pending_query_state(PendingQueryState::default(), ctx);
+        self.set_pending_query_state(self.default_new_conversation_state(), ctx);
         if let Some(previous_conversation_id) = previous_conversation_id {
             Self::emit_deactivated(previous_conversation_id, false, ctx);
         }

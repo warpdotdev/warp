@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
 use warp::tui_export::{
-    AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType,
-    AIAgentText, AIAgentTextSection, AIBlockModel, AIBlockOutputStatus, AIConversationId,
-    AIRequestType, Appearance, LLMId, MessageId, OutputStatusUpdateCallback, ServerOutputId,
-    Shared, UserQueryMode,
+    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentInput,
+    AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText, AIAgentTextSection,
+    AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, Appearance, LLMId,
+    MessageId, OutputStatusUpdateCallback, ServerOutputId, Shared, TaskId, UserQueryMode,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
@@ -99,6 +99,11 @@ fn expected_output_text_color(app: &AppContext) -> Color {
     CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into()
 }
 
+fn expected_tool_call_text_color(app: &AppContext) -> Color {
+    let theme = Appearance::as_ref(app).theme();
+    CoreFill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into()
+}
+
 #[test]
 fn agent_block_extracts_input_and_plain_text_from_model() {
     App::test((), |app| async move {
@@ -122,6 +127,64 @@ fn agent_block_extracts_input_and_plain_text_from_model() {
                     TuiAIBlockSection::PlainText("two".to_owned()),
                 ]
             );
+        });
+    });
+}
+
+#[test]
+fn agent_block_renders_tool_calls_in_message_order() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let action = test_action("action-1");
+            let block = test_agent_block(FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    text_message(
+                        "message-1",
+                        vec![AIAgentTextSection::PlainText {
+                            text: "before".to_owned().into(),
+                        }],
+                    ),
+                    action_message("message-2", action.clone()),
+                    text_message(
+                        "message-3",
+                        vec![AIAgentTextSection::PlainText {
+                            text: "after".to_owned().into(),
+                        }],
+                    ),
+                ]),
+            });
+
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    TuiAIBlockSection::ToolCall(Box::new(action.clone())),
+                    TuiAIBlockSection::PlainText("after".to_owned()),
+                ]
+            );
+
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                block.render_element(app_ctx),
+                TuiRect::new(0, 0, 40, 4),
+                app_ctx,
+            );
+            assert_eq!(
+                frame
+                    .buffer
+                    .to_lines()
+                    .into_iter()
+                    .map(|line| line.trim_end().to_owned())
+                    .collect::<Vec<_>>(),
+                vec!["before", "executed a tool call", "after", ""],
+            );
+            assert_eq!(
+                frame.buffer[(0, 1)].fg,
+                expected_tool_call_text_color(app_ctx)
+            );
+            assert!(frame.buffer[(0, 1)].modifier.contains(Modifier::DIM));
         });
     });
 }
@@ -207,15 +270,44 @@ impl AIBlockModel for FakeAgentBlockModel {
 
 /// Builds a completed output status with one text message.
 fn complete_output(sections: Vec<AIAgentTextSection>) -> AIBlockOutputStatus {
+    complete_output_messages(vec![text_message("message-1", sections)])
+}
+
+/// Builds a completed output status from explicit output messages.
+fn complete_output_messages(messages: Vec<AIAgentOutputMessage>) -> AIBlockOutputStatus {
     AIBlockOutputStatus::Complete {
         output: Shared::new(AIAgentOutput {
-            messages: vec![AIAgentOutputMessage {
-                id: MessageId::new("message-1".to_owned()),
-                message: AIAgentOutputMessageType::Text(AIAgentText { sections }),
-                citations: Vec::new(),
-            }],
+            messages,
             ..Default::default()
         }),
+    }
+}
+
+/// Builds a text output message from plain-text sections.
+fn text_message(id: &str, sections: Vec<AIAgentTextSection>) -> AIAgentOutputMessage {
+    AIAgentOutputMessage {
+        id: MessageId::new(id.to_owned()),
+        message: AIAgentOutputMessageType::Text(AIAgentText { sections }),
+        citations: Vec::new(),
+    }
+}
+
+/// Builds an action (tool call) output message.
+fn action_message(id: &str, action: AIAgentAction) -> AIAgentOutputMessage {
+    AIAgentOutputMessage {
+        id: MessageId::new(id.to_owned()),
+        message: AIAgentOutputMessageType::Action(action),
+        citations: Vec::new(),
+    }
+}
+
+/// Builds a tool-call action for message-ordering tests.
+fn test_action(id: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from(id.to_owned()),
+        task_id: TaskId::new("task-1".to_owned()),
+        action: AIAgentActionType::InitProject,
+        requires_result: true,
     }
 }
 

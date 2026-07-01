@@ -4,8 +4,10 @@ pub use crate::ai::agent::api::ServerConversationToken;
 pub use crate::ai::agent::conversation::{
     AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
 };
+pub use crate::ai::agent::task::TaskId;
 pub use crate::ai::agent::{
-    AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType,
+    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentInput,
+    AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentPtyWriteMode,
     AIAgentText, AIAgentTextSection, MessageId, ServerOutputId, Shared, UserQueryMode,
 };
 pub use crate::ai::blocklist::agent_view::{
@@ -24,6 +26,7 @@ pub use crate::ai::blocklist::history_model::{
 };
 pub use crate::ai::blocklist::{
     BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel,
+    ShellCommandExecutor, ShellCommandExecutorEvent,
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::llms::LLMId;
@@ -36,7 +39,7 @@ pub use crate::terminal::local_tty::{
     TerminalManager as LocalTtyTerminalManager, TerminalManagerInit, TerminalSurfaceInit,
     TerminalSurfaceResult,
 };
-pub use crate::terminal::model::block::{Block, BlockId};
+pub use crate::terminal::model::block::{AgentInteractionMetadata, Block, BlockId};
 pub use crate::terminal::model::blockgrid::BlockGrid;
 pub use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
