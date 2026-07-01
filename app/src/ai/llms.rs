@@ -170,6 +170,11 @@ pub struct LLMContextWindow {
     pub max: u32,
     #[serde(default)]
     pub default_max: u32,
+    /// Input-token count above which the model's long-context pricing applies.
+    /// `None` when the model has no long-context pricing tier (including Auto
+    /// models, whose underlying model can vary).
+    #[serde(default)]
+    pub long_context_threshold: Option<u32>,
 }
 
 /// Metadata about an LLM.

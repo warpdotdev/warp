@@ -47,6 +47,7 @@ fn configurable_model(provider: LLMProvider) -> LLMInfo {
             min: 200_000,
             max: 1_000_000,
             default_max: 272_000,
+            long_context_threshold: None,
         },
     }
 }
@@ -265,6 +266,7 @@ fn openai_fixed_context_metadata_does_not_expose_control_or_warning() {
         min: 272_000,
         max: 272_000,
         default_max: 272_000,
+        long_context_threshold: None,
     };
     assert!(!has_configurable_context_window(&model, true));
     assert_context_window_limit_for_request(&model, Some(1_000_000), true, None);

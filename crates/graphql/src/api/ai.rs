@@ -167,6 +167,7 @@ pub struct ConversationUsage {
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct ConversationUsageMetadata {
     pub context_window_usage: f64,
+    pub total_input_tokens: i32,
     pub context_window_segments: Vec<ContextWindowSegment>,
     pub credits_spent: f64,
     pub platform_credits_spent: f64,

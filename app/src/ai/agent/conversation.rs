@@ -678,6 +678,12 @@ impl AIConversation {
         self.conversation_usage_metadata.context_window_usage
     }
 
+    /// Input tokens of the latest primary-agent LLM call in the latest
+    /// successfully persisted request that had Warp-charged or BYOK usage.
+    pub fn total_input_tokens(&self) -> u32 {
+        self.conversation_usage_metadata.total_input_tokens
+    }
+
     /// The per-segment breakdown of the context window (e.g. system prompt,
     /// tool definitions, conversation history). Scaled so the segments sum to
     /// `context_window_usage`. Empty when the server did not emit segments.
@@ -2005,6 +2011,13 @@ impl AIConversation {
         if let Some(usage_metadata) = usage_metadata {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
+            // 0 means this turn had no chargeable primary-agent call (failed,
+            // custom-endpoint-only, or old server), not a context reset. Keep the
+            // last known value, mirroring server-side merge semantics.
+            if usage_metadata.total_input_tokens != 0 {
+                self.conversation_usage_metadata.total_input_tokens =
+                    usage_metadata.total_input_tokens;
+            }
             self.conversation_usage_metadata.credits_spent = usage_metadata.credits_spent;
             self.conversation_usage_metadata.platform_credits_spent =
                 usage_metadata.platform_credits_spent;

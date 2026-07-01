@@ -3030,6 +3030,7 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmInfo> for LLMInfo
                 min: value.context_window.min.into(),
                 max: value.context_window.max.into(),
                 default_max: value.context_window.default.into(),
+                long_context_threshold: value.context_window.long_context_threshold.map(Into::into),
             },
         }
     }
@@ -3069,6 +3070,7 @@ impl From<warp_graphql::workspace::LlmInfo> for LLMInfo {
                 min: value.context_window.min.into(),
                 max: value.context_window.max.into(),
                 default_max: value.context_window.default.into(),
+                long_context_threshold: value.context_window.long_context_threshold.map(Into::into),
             },
         }
     }
@@ -3284,6 +3286,7 @@ fn convert_conversation_format(
 fn convert_usage_metadata(
     summarized: bool,
     context_window_usage: f64,
+    total_input_tokens: i32,
     credits_spent: f64,
     platform_credits_spent: f64,
     context_window_segments: &[warp_graphql::ai::ContextWindowSegment],
@@ -3291,6 +3294,7 @@ fn convert_usage_metadata(
     ConversationUsageMetadata {
         was_summarized: summarized,
         context_window_usage: context_window_usage as f32,
+        total_input_tokens: u32::try_from(total_input_tokens).unwrap_or_default(),
         credits_spent: credits_spent as f32,
         platform_credits_spent: platform_credits_spent as f32,
         credits_spent_for_last_block: None,
@@ -3307,6 +3311,7 @@ impl TryFrom<warp_graphql::ai::AIConversation> for ServerAIConversationMetadata 
         let usage = convert_usage_metadata(
             value.usage.usage_metadata.summarized,
             value.usage.usage_metadata.context_window_usage,
+            value.usage.usage_metadata.total_input_tokens,
             value.usage.usage_metadata.credits_spent,
             value.usage.usage_metadata.platform_credits_spent,
             &value.usage.usage_metadata.context_window_segments,
@@ -3354,6 +3359,7 @@ impl TryFrom<warp_graphql::queries::list_ai_conversations::AIConversationMetadat
         let usage = convert_usage_metadata(
             value.usage.usage_metadata.summarized,
             value.usage.usage_metadata.context_window_usage,
+            value.usage.usage_metadata.total_input_tokens,
             value.usage.usage_metadata.credits_spent,
             value.usage.usage_metadata.platform_credits_spent,
             &value.usage.usage_metadata.context_window_segments,

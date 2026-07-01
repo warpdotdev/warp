@@ -822,6 +822,12 @@ type ConversationUsageMetadata {
   contextWindowSegments: [ContextWindowSegment!]!
   contextWindowUsage: Float!
 
+  """
+  Input tokens of the latest primary-agent LLM call in the latest successfully
+  persisted request that had Warp-charged or BYOK usage; 0 otherwise.
+  """
+  totalInputTokens: Int!
+
   """The total number of inference credits spent so far in the conversation"""
   creditsSpent: Float!
 
@@ -2017,6 +2023,13 @@ type LlmContextWindow {
   When true, the client can pick a context window size in the range [min, max].
   """
   isConfigurable: Boolean!
+
+  """
+  Input-token count above which the model's long-context pricing applies.
+  Null when the model has no long-context pricing tier (including Auto models,
+  whose underlying model can vary).
+  """
+  longContextThreshold: Uint
 
   """
   Maximum context window size. The upper bound for any user override
