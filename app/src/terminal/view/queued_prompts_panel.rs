@@ -58,7 +58,7 @@ const INITIAL_CLOUD_MODE_PROMPT_TOOLTIP: &str = "The first cloud-mode prompt can
 const SEND_NOW_DURING_CLOUD_SETUP_TOOLTIP: &str =
     "Prompts cannot be sent until environment setup is complete.";
 const SEND_NOW_PENDING_LRC_TOOLTIP: &str =
-    "Will send when the command completes (waiting for output snapshot)";
+    "Prompts cannot be sent until full terminal use agent is initialized.";
 const SEND_NOW_TO_FULL_TERMINAL_USE_AGENT_TOOLTIP: &str = "Send to full terminal use agent";
 const SEND_NOW_AS_READ_ONLY_VIEWER_TOOLTIP: &str = "Read-only viewers cannot send prompts.";
 /// Suffix on rows auto-queued during an agent-requested long-running command, which fire
