@@ -2,8 +2,56 @@ use std::collections::HashMap;
 
 use ai::agent::action_result::AnyFileContent;
 use ai::agent::FileLocations;
+use ai::diff_validation::{DiffDelta, DiffType};
 
-use super::updated_file_contexts_from_editor_buffers;
+use super::{build_resolved_edits, updated_file_contexts_from_editor_buffers};
+use crate::ai::blocklist::diff_types::FileDiff;
+
+#[test]
+fn build_resolved_edits_applies_deltas_without_reviewed_content() {
+    // Headless/TUI path: no reviewed content, so final content is derived from deltas.
+    let base = "one\ntwo\nthree\n";
+    let diff = FileDiff::new(
+        base.to_owned(),
+        "/tmp/main.rs".to_owned(),
+        DiffType::update(
+            vec![DiffDelta {
+                replacement_line_range: 2..3,
+                insertion: "TWO\n".to_owned(),
+            }],
+            None,
+        ),
+    );
+
+    let resolved = build_resolved_edits(vec![diff], &HashMap::new()).unwrap();
+
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].path, "/tmp/main.rs");
+    assert_eq!(resolved[0].final_content, "one\nTWO\nthree\n");
+}
+
+#[test]
+fn build_resolved_edits_prefers_reviewed_content() {
+    // GUI path: reviewed content for a path overrides the delta-applied content.
+    let base = "one\ntwo\nthree\n";
+    let diff = FileDiff::new(
+        base.to_owned(),
+        "/tmp/main.rs".to_owned(),
+        DiffType::update(
+            vec![DiffDelta {
+                replacement_line_range: 2..3,
+                insertion: "TWO\n".to_owned(),
+            }],
+            None,
+        ),
+    );
+    let reviewed = HashMap::from([("/tmp/main.rs".to_owned(), "user edited\n".to_owned())]);
+
+    let resolved = build_resolved_edits(vec![diff], &reviewed).unwrap();
+
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].final_content, "user edited\n");
+}
 
 #[test]
 fn updated_file_contexts_from_editor_buffers_returns_changed_lines_with_context() {

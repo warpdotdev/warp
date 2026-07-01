@@ -15347,7 +15347,9 @@ impl TerminalView {
     ) {
         let action_id = AIAgentActionId::from(uuid::Uuid::new_v4().to_string());
         use crate::ai::agent::AIIdentifiers;
+        use crate::ai::blocklist::diff_types::DiffSessionType;
         use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffViewEvent;
+        use crate::ai::blocklist::{PersistDiffModel, ResolvedFileEdit};
 
         let identifiers = AIIdentifiers::default();
         let title_for_result = title.clone();
@@ -15370,9 +15372,13 @@ impl TerminalView {
             )
         });
 
+        // Keep a copy of the resolved diffs so the passive accept flow can persist them,
+        // and a shared persistence model to write them through on accept.
+        let persist_source_diffs = diffs.clone();
         diff_view.update(ctx, |view, ctx| {
             view.set_candidate_diffs(diffs, ctx);
         });
+        let persist_model = ctx.add_model(PersistDiffModel::new);
 
         let wrapper_view = {
             let diff_view_for_wrapper = diff_view.clone();
@@ -15395,11 +15401,33 @@ impl TerminalView {
         ctx.subscribe_to_view(&diff_view, move |me, view, event, ctx| {
             match event {
                 CodeDiffViewEvent::TryAccept => {
+                    // Persist the accepted (possibly edited) passive suggestion via the shared
+                    // PersistDiffModel. Passive suggestions are local and fire-and-forget here:
+                    // the write happens; the result isn't surfaced to the LLM on this path.
+                    let reviewed: std::collections::HashMap<String, String> = view
+                        .as_ref(ctx)
+                        .reviewed_file_contents(ctx)
+                        .into_iter()
+                        .collect();
                     view.update(ctx, |diff_view, ctx| {
-                        diff_view.accept_and_save(ctx);
+                        diff_view.send_malformed_line_telemetry(ctx);
                     });
-                }
-                CodeDiffViewEvent::SavedAcceptedDiffs { .. } => {
+                    let resolved: Vec<ResolvedFileEdit> = persist_source_diffs
+                        .iter()
+                        .map(|file_diff| ResolvedFileEdit {
+                            path: file_diff.file_path(),
+                            base_content: file_diff.base.content.clone(),
+                            op: file_diff.diff_type.clone(),
+                            final_content: reviewed
+                                .get(&file_diff.file_path())
+                                .cloned()
+                                .unwrap_or_default(),
+                        })
+                        .collect();
+                    let persist_future = persist_model.update(ctx, |model, ctx| {
+                        model.persist(resolved, DiffSessionType::Local, ctx)
+                    });
+                    ctx.spawn(persist_future, |_me, _result, _ctx| {});
                     ctx.notify();
                 }
                 CodeDiffViewEvent::CancelPassive => {

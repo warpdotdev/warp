@@ -6,6 +6,7 @@ pub mod code_block;
 mod context_model;
 mod controller;
 pub(crate) mod conversation_selection;
+pub(crate) mod diff_types;
 pub(crate) mod handoff;
 
 pub(crate) mod local_agent_task_sync_model;
@@ -34,9 +35,9 @@ pub(super) mod view_util;
 
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{
-    apply_edits, read_local_file_context, BlocklistAIActionEvent, FileReadResult,
-    ReadFileContextResult, RequestFileEditsFormatKind, StartAgentExecutor, StartAgentExecutorEvent,
-    StartAgentRequest, StartAgentRequestId,
+    apply_edits, read_local_file_context, BlocklistAIActionEvent, FileReadResult, PersistDiffModel,
+    ReadFileContextResult, RequestFileEditsFormatKind, ResolvedFileEdit, StartAgentExecutor,
+    StartAgentExecutorEvent, StartAgentRequest, StartAgentRequestId,
 };
 pub use action_model::{BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent};
 #[cfg(any(test, feature = "integration_tests"))]

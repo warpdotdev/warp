@@ -70,7 +70,10 @@ use warpui::{
 #[cfg(feature = "agent_mode_debug")]
 use self::code_diff_view::FileDiff;
 use self::model::{AIBlockModel, AIBlockModelHelper};
-use super::action_model::{AIActionStatus, BlocklistAIActionEvent, RequestFileEditsFormatKind};
+use super::action_model::{
+    AIActionStatus, BlocklistAIActionEvent, RequestFileEditsExecutor,
+    RequestFileEditsExecutorEvent, RequestFileEditsFormatKind,
+};
 use super::code_block::CodeSnippetButtonHandles;
 use super::controller::ClientIdentifiers;
 use super::inline_action::code_diff_view::{
@@ -3092,6 +3095,26 @@ impl AIBlock {
         });
     }
 
+    /// Feeds the executor's prepared diffs into a review `CodeDiffView` once they
+    /// have been resolved. Safe to call repeatedly; only feeds once.
+    fn feed_prepared_diffs_to_view(
+        executor: &ModelHandle<RequestFileEditsExecutor>,
+        action_id: &AIAgentActionId,
+        view: &ViewHandle<CodeDiffView>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !view.as_ref(ctx).is_pending_diffs_empty() {
+            return;
+        }
+        let Some((diffs, session_type)) = executor.as_ref(ctx).prepared_diffs(action_id) else {
+            return;
+        };
+        view.update(ctx, |view, ctx| {
+            view.set_diff_session_type(session_type);
+            view.set_candidate_diffs(diffs, ctx);
+        });
+    }
+
     fn handle_requested_edit_complete(
         &mut self,
         action_id: &AIAgentActionId,
@@ -3159,9 +3182,6 @@ impl AIBlock {
             .action_model
             .as_ref(ctx)
             .request_file_edits_executor(ctx);
-        executor.update(ctx, |executor, _| {
-            executor.register_requested_edits(action_id, &view);
-        });
 
         // If the diff is being viewed in a shared session (read-only mode), populate diffs from the payload.
         if self.action_model.as_ref(ctx).is_view_only() {
@@ -3174,12 +3194,32 @@ impl AIBlock {
             view.update(ctx, |diff_view, ctx| {
                 diff_view.set_candidate_diffs(file_diffs, ctx);
             });
+        } else {
+            // The executor resolves diffs asynchronously during preprocess. Feed them to the
+            // view now if already prepared, and subscribe to feed them once they are.
+            Self::feed_prepared_diffs_to_view(&executor, action_id, &view, ctx);
+            let feed_action_id = action_id.clone();
+            let feed_view = view.clone();
+            ctx.subscribe_to_model(&executor, move |_me, executor, event, ctx| {
+                let RequestFileEditsExecutorEvent::DiffsPrepared(prepared_id) = event;
+                if *prepared_id == feed_action_id {
+                    Self::feed_prepared_diffs_to_view(&executor, &feed_action_id, &feed_view, ctx);
+                }
+            });
         }
 
         let action_id_clone = action_id.clone();
         ctx.subscribe_to_view(&view, move |me, view, event, ctx| {
             match event {
                 CodeDiffViewEvent::TryAccept => {
+                    // Hand the (possibly edited) reviewed content to the executor before it
+                    // executes and persists the edits via `PersistDiffModel`.
+                    let reviewed = view.as_ref(ctx).reviewed_file_contents(ctx);
+                    view.update(ctx, |view, ctx| view.send_malformed_line_telemetry(ctx));
+                    let executor = me.action_model.as_ref(ctx).request_file_edits_executor(ctx);
+                    executor.update(ctx, |executor, _| {
+                        executor.set_reviewed_content(&action_id_clone, reviewed);
+                    });
                     me.action_model.update(ctx, |action_model, ctx| {
                         action_model.execute_action(
                             &action_id_clone,
@@ -3383,7 +3423,7 @@ impl AIBlock {
                     match action_status {
                         Some(AIActionStatus::Finished(result)) => {
                             if result.result.is_successful() {
-                                CodeDiffState::Accepted(None)
+                                CodeDiffState::Accepted
                             } else {
                                 // For other finished states, default to rejected
                                 CodeDiffState::Rejected
