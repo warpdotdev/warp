@@ -40,10 +40,32 @@ impl<'g> SelectionCursor<'g> {
         match self.cursor_state {
             CursorState::Valid if self.has_next() => {
                 self.increment_cursor();
-                // If the cursor is on top of a wide char, move it forward an
-                // extra cell.
-                if self.is_wide_char_or_spacer() {
-                    self.increment_cursor();
+                // Original behavior (verified against the real, pre-existing
+                // `test_select_left_select_right` test): after the single
+                // step above, if we landed on the BASE of a wide/Indic
+                // cluster, its span tells us exactly how many more cells to
+                // skip to reach that same cluster's last cell -- for the
+                // old fixed CJK width=2 case this is always exactly one more
+                // step, identical to what the original code did. If instead
+                // we landed on a SPACER (we started already partway through
+                // a cluster, e.g. right on its base cell), take exactly ONE
+                // more step -- matching the original code's literal
+                // single-conditional-step behavior exactly, rather than
+                // walking to the cluster's actual last cell. (A "smarter"
+                // walk-to-the-end here changes existing width=2 behavior in
+                // a way the real test catches -- see the plan's Phase 4
+                // execution log for the full trace.)
+                match self.grid.cell_type(self.pos) {
+                    Some(CellType::WideChar) => {
+                        let span = self.current_cell_span().unwrap_or(1);
+                        for _ in 1..span {
+                            self.increment_cursor();
+                        }
+                    }
+                    Some(CellType::WideCharSpacer) => {
+                        self.increment_cursor();
+                    }
+                    _ => {}
                 }
             }
             CursorState::Valid => {
@@ -61,9 +83,13 @@ impl<'g> SelectionCursor<'g> {
         match self.cursor_state {
             CursorState::Valid if self.has_prev() => {
                 self.decrement_cursor();
-                // If the cursor is on top of a wide char, move it backward an
-                // extra cell.
-                if self.is_wide_char_or_spacer() {
+                // Mirror of `move_forward`: moving backward should land on
+                // the cluster's FIRST (base) cell, not its last. If we
+                // landed on a spacer, keep decrementing while still inside
+                // spacer cells of the same cluster -- this naturally stops
+                // exactly on the base (`WideChar`, which does NOT match
+                // `WideCharSpacer`), regardless of span.
+                while matches!(self.grid.cell_type(self.pos), Some(CellType::WideCharSpacer)) {
                     self.decrement_cursor();
                 }
             }
@@ -133,13 +159,14 @@ impl<'g> SelectionCursor<'g> {
         }
     }
 
-    /// Returns whether the current cursor point is on top of a wide char
-    /// (either the first or second cell).
-    fn is_wide_char_or_spacer(&self) -> bool {
-        matches!(
-            self.grid.cell_type(self.pos),
-            Some(CellType::WideChar) | Some(CellType::WideCharSpacer)
-        )
+    /// Returns the span of the cell at the current position, if valid. Only
+    /// meaningful when that cell is a cluster's base (`CellType::WideChar`)
+    /// -- spacer cells don't carry span information themselves.
+    fn current_cell_span(&self) -> Option<u8> {
+        self.grid
+            .row(self.pos.row)?
+            .get(self.pos.col)
+            .map(|cell| cell.span())
     }
 
     /// Returns whether the current cursor point is valid (i.e.: is within the
