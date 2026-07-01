@@ -248,6 +248,39 @@ fn should_watch_descends_to_force_included_under_ignored_ancestor() {
     ));
 }
 
+#[cfg(unix)]
+#[test]
+fn should_watch_prunes_force_included_directory_symlink() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::create_dir_all(root.join(".agents/skills")).unwrap();
+    fs::create_dir_all(root.join("outside/result-target")).unwrap();
+    std::os::unix::fs::symlink(
+        root.join("outside/result-target"),
+        root.join(".agents/skills/result"),
+    )
+    .unwrap();
+
+    let gitignores = vec![gitignore_rooted(&root, "result\nresult/\n")];
+    let force_included = vec![std::path::PathBuf::from(".agents/skills")];
+
+    assert!(super::should_watch_repo_directory(
+        &root.join(".agents"),
+        &gitignores,
+        &force_included
+    ));
+    assert!(super::should_watch_repo_directory(
+        &root.join(".agents/skills"),
+        &gitignores,
+        &force_included
+    ));
+    assert!(!super::should_watch_repo_directory(
+        &root.join(".agents/skills/result"),
+        &gitignores,
+        &force_included
+    ));
+}
+
 #[test]
 fn should_watch_handles_nested_ignored_ancestor_with_deeper_force_included() {
     let temp_dir = tempfile::tempdir().unwrap();

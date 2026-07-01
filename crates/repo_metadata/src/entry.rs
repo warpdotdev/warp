@@ -988,6 +988,13 @@ pub fn should_watch_repo_directory(
         return should_watch_directory_in_git_path(path);
     }
 
+    // Match tree construction semantics: directory symlinks are not
+    // materialized as repo entries, and force-included symlink targets are
+    // watched separately via non-recursive target watches.
+    if path.is_symlink() && path.is_dir() {
+        return false;
+    }
+
     if matches_force_included_path(path, force_included_paths) {
         return true;
     }
