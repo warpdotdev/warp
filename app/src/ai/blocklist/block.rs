@@ -6293,12 +6293,21 @@ impl TypedActionView for AIBlock {
                 ctx.notify();
             }
             AIBlockAction::SelectText => {
-                // If there's an ongoing text selection, clear all other selections within the
-                // `AIBlock`'s view sub-hierarchy to ensure only one component has a selection at a time.
+                // A plain click (no drag) produces an empty selection, but the enclosing
+                // `SelectableArea` still dispatches `SelectText` for it. Only treat it as a real
+                // selection — and, crucially, only dismiss any open link/secret tooltip — when there
+                // is actually a non-empty selection. Otherwise a plain click on a link would
+                // immediately dismiss the very tooltip that same click just opened, so the tooltip
+                // never becomes visible.
+                let has_selection = self.selected_text.read().is_some();
+                // Clear all other selections within the `AIBlock`'s view sub-hierarchy to ensure
+                // only one component has a selection at a time.
                 self.clear_other_selections(None, ctx.window_id(), ctx);
                 // If we have a selection, we should use the default cursor, even if it's over a link.
                 ctx.reset_cursor();
-                self.dismiss_ai_tooltips(ctx);
+                if has_selection {
+                    self.dismiss_ai_tooltips(ctx);
+                }
                 // Notify the terminal view so it can keep the model's record of which rich
                 // content block has an active selection in sync (rich content selections are
                 // not tied to the point-based model selection used for regular blocks).
