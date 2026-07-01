@@ -1,6 +1,5 @@
-//! Agent blocks for the TUI transcript. Today this renders user input and
-//! streamed plain-text output; it is the seam intended to grow into a full
-//! rich AI block component (tool calls, code, tables, and other sub-elements).
+//! An agent block in the TUI transcript: one exchange rendered as the user's
+//! submitted input followed by the agent's response.
 use std::rc::Rc;
 
 use warp::tui_export::{
@@ -129,9 +128,9 @@ impl TuiAgentBlockView {
 
         let mut column = TuiColumn::new();
         for (index, section) in sections.iter().enumerate() {
-            // The single blank line between the submitted input and the output is
-            // the output's top padding (not the input's bottom padding), so the
-            // gap keeps the transcript background instead of the input highlight.
+            // Output is many sections (one per text section), so top padding is
+            // applied only to the section right after the input, giving a single
+            // gap at the input→output boundary rather than before every line.
             let follows_input = index
                 .checked_sub(1)
                 .is_some_and(|prev| matches!(sections[prev], TuiAgentBlockSection::Input(_)));
