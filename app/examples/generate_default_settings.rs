@@ -17,6 +17,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use settings::schema::SettingSchemaEntry;
+use settings::SettingsMode;
 use warp_core::features::{FeatureFlag, DEBUG_FLAGS, DOGFOOD_FLAGS, PREVIEW_FLAGS, RELEASE_FLAGS};
 use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
 use warpui_extras::user_preferences::UserPreferences as _;
@@ -60,6 +61,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     let mut channel = "dev";
+    let mut surface = "gui";
     let mut output_path: Option<PathBuf> = None;
     let mut i = 1;
     while i < args.len() {
@@ -68,6 +70,12 @@ fn main() {
                 i += 1;
                 if i < args.len() {
                     channel = &args[i];
+                }
+            }
+            "--surface" => {
+                i += 1;
+                if i < args.len() {
+                    surface = &args[i];
                 }
             }
             arg if !arg.starts_with('-') => {
@@ -87,6 +95,17 @@ fn main() {
     };
 
     let active_flags = active_flags_for_channel(channel);
+
+    // Only emit settings that apply to the target surface, so e.g. the TUI
+    // file excludes GUI-only keys. Defaults to the GUI surface.
+    let surface_mode = match surface {
+        "gui" => SettingsMode::Gui,
+        "tui" => SettingsMode::Tui,
+        other => {
+            eprintln!("Unknown surface '{other}', defaulting to gui");
+            SettingsMode::Gui
+        }
+    };
 
     // Generate a fresh document at `output_path`. If the file already exists
     // and contains invalid TOML, `TomlBackedUserPreferences::new` falls back
@@ -109,6 +128,11 @@ fn main() {
             if !active_flags.contains(&flag) {
                 continue;
             }
+        }
+
+        // Skip settings that don't apply to the target surface.
+        if !(entry.surfaces_fn)().includes(surface_mode) {
+            continue;
         }
 
         let default_json = (entry.file_default_value_fn)();

@@ -18,6 +18,7 @@ define_settings_group!(WorkflowAliases, settings: [
         default: vec![],
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
         storage_key: "WorkflowAliases",
     }

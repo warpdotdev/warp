@@ -6,10 +6,14 @@
 //! — when the user isn't logged in yet — drives the device-authorization login
 //! flow, flipping the model to [`TuiLoginPhase::LoggedIn`] when it completes.
 
+use settings::Setting as _;
 use warpui::{AppContext, Entity, SingletonEntity};
 
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
+use crate::global_resource_handles::GlobalResourceHandlesProvider;
+use crate::settings::AISettings;
+use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::TuiMountFn;
 
 /// Login state of the headless TUI, observed by the `warp_tui` root view to
@@ -52,6 +56,11 @@ impl SingletonEntity for TuiLoginModel {}
 /// Registers the [`TuiLoginModel`], mounts the TUI immediately, and runs the
 /// device-authorization login flow when the user isn't already logged in.
 pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
+    // Temporary end-to-end validation of the settings-file flow: log the parsed
+    // values on startup and on every hot reload. Not wired into agent behavior
+    // yet — it just proves the TUI reads and live-reloads its settings file.
+    init_settings_validation_logging(ctx);
+
     let logged_in = AuthStateProvider::as_ref(ctx).get().is_logged_in();
 
     let initial_phase = if logged_in {
@@ -118,4 +127,61 @@ fn set_login_phase(ctx: &mut AppContext, phase: TuiLoginPhase) {
         model.phase = phase;
         ctx.notify();
     });
+}
+
+/// Sets up the temporary end-to-end validation of the settings-file flow.
+///
+/// Logs a snapshot of the parsed settings on startup, then re-logs it on every
+/// settings-file reload (and logs any parse/validation errors). This is purely
+/// a validation aid — it does not change agent behavior.
+fn init_settings_validation_logging(ctx: &mut AppContext) {
+    if let Some(err) = &GlobalResourceHandlesProvider::as_ref(ctx)
+        .get()
+        .settings_file_error
+    {
+        log::warn!("[tui-settings] startup parse/validation error: {err}");
+    }
+    log_settings_snapshot("startup", ctx);
+
+    // The settings watcher (registered during `initialize_app`) reloads values
+    // into the in-memory models and then emits these events; re-log the
+    // refreshed snapshot so external file edits are observable in the log.
+    ctx.subscribe_to_model(&WarpConfig::handle(ctx), |_, event, ctx| match event {
+        WarpConfigUpdateEvent::SettingsErrorsCleared => {
+            log_settings_snapshot("reloaded", ctx);
+        }
+        WarpConfigUpdateEvent::SettingsErrors(err) => {
+            log::warn!("[tui-settings] reload error: {err}");
+            // On a whole-file parse error the in-memory values are retained;
+            // on per-key errors the offending keys fall back to defaults.
+            log_settings_snapshot("values in effect after reload error", ctx);
+        }
+        WarpConfigUpdateEvent::Themes
+        | WarpConfigUpdateEvent::LocalUserWorkflows
+        | WarpConfigUpdateEvent::LaunchConfigs
+        | WarpConfigUpdateEvent::TabConfigs
+        | WarpConfigUpdateEvent::TabConfigErrors(_)
+        | WarpConfigUpdateEvent::ModelConfigs
+        | WarpConfigUpdateEvent::ModelConfigErrors(_)
+        | WarpConfigUpdateEvent::Settings => {}
+    });
+}
+
+/// Logs the settings file path and the current values of the TUI-relevant
+/// agent settings.
+fn log_settings_snapshot(when: &str, ctx: &AppContext) {
+    let path = crate::settings::user_preferences_toml_file_path();
+    let ai = AISettings::as_ref(ctx);
+    log::info!(
+        "[tui-settings] {when}: file={} model={} is_any_ai_enabled={} \
+         agent_mode_coding_permissions={:?} agent_mode_execute_readonly_commands={} \
+         command_allowlist_len={} command_denylist_len={}",
+        path.display(),
+        ai.agent_model.value(),
+        *ai.is_any_ai_enabled.value(),
+        ai.agent_mode_coding_permissions.value(),
+        *ai.agent_mode_execute_read_only_commands.value(),
+        ai.agent_mode_command_execution_allowlist.value().len(),
+        ai.agent_mode_command_execution_denylist.value().len(),
+    );
 }

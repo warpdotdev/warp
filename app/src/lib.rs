@@ -450,6 +450,20 @@ impl LaunchMode {
         }
     }
 
+    /// The settings surface for this launch mode. The TUI front-end gets its
+    /// own settings file and local-only (non-cloud-synced) config; every other
+    /// mode uses the standard GUI settings surface.
+    fn settings_mode(&self) -> ::settings::SettingsMode {
+        match self {
+            LaunchMode::Tui { .. } => ::settings::SettingsMode::Tui,
+            LaunchMode::App { .. }
+            | LaunchMode::CommandLine { .. }
+            | LaunchMode::Test { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. } => ::settings::SettingsMode::Gui,
+        }
+    }
+
     fn take_test_driver(&mut self) -> Option<TestDriver> {
         match self {
             LaunchMode::Test { driver, .. } => driver.take(),
@@ -1017,6 +1031,11 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // start spawning any child processes.
     #[cfg(windows)]
     command::windows::init();
+
+    // Establish the settings surface (GUI vs TUI) before initializing
+    // preferences so the settings infra selects the right file name and
+    // cloud-sync behavior for this launch mode.
+    ::settings::set_settings_mode(launch_mode.settings_mode());
 
     let private_preferences = settings::init_private_user_preferences();
     let (public_preferences, startup_toml_parse_error) = settings::init_public_user_preferences();

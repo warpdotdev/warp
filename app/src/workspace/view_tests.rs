@@ -153,6 +153,7 @@ pub(crate) fn initialize_app(app: &mut App) {
         CloudPreferencesSyncer::new(
             false,                     // force_local_wins_on_startup
             std::path::PathBuf::new(), // unused in tests that don't exercise the hash path
+            true,                      // sync_enabled: cloud sync active in tests
             ctx,
         )
     });
