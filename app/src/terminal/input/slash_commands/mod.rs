@@ -365,6 +365,7 @@ impl Input {
     /// the agent was busy.
     ///
     /// Returns `true` if execution was 'handled' (whether or not it resulted in success or failure).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn execute_slash_command(
         &mut self,
         command: &StaticCommand,
