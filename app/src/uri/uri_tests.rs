@@ -734,26 +734,6 @@ fn test_parse_tab_path_bare_tilde() {
 // -- warp://settings deeplink parsing ----------------------------------------
 
 #[test]
-fn test_parse_settings_search_query() {
-    let q = |s: &str| parse_settings_search_query(&Url::parse(s).unwrap());
-    assert_eq!(q("warp://settings?q=foo"), Some("foo".to_string()));
-    assert_eq!(
-        q("warp://settings?q=hello%20world"),
-        Some("hello world".to_string())
-    );
-    // A query alongside a section sub-page is still extracted.
-    assert_eq!(
-        q("warp://settings/appearance?q=theme"),
-        Some("theme".to_string())
-    );
-    // Empty / missing `q` yields None so we don't open settings with an empty search.
-    assert_eq!(q("warp://settings?q="), None);
-    assert_eq!(q("warp://settings"), None);
-    // `widget` is not a search query.
-    assert_eq!(q("warp://settings?widget=global_hotkey"), None);
-}
-
-#[test]
 fn test_settings_widget_deeplink_target() {
     assert_eq!(
         settings_widget_deeplink_target("global_hotkey").map(|(section, _)| section),

@@ -427,7 +427,12 @@ impl UriHost {
                     maybe_simple_subpage => {
                         let simple_section =
                             maybe_simple_subpage.and_then(settings_section_for_simple_subpage);
-                        let search_query = parse_settings_search_query(url);
+                        // Pull the non-empty `q` search query out of the already
+                        // parsed pairs to pre-fill the settings search bar.
+                        let search_query = query_string
+                            .get("q")
+                            .map(|query| query.to_string())
+                            .filter(|query| !query.is_empty());
                         let widget_target = query_string
                             .get("widget")
                             .and_then(|slug| settings_widget_deeplink_target(slug));
@@ -1634,15 +1639,6 @@ fn settings_section_for_simple_subpage(subpage: &str) -> Option<SettingsSection>
         "warp_agent" => Some(SettingsSection::WarpAgent),
         _ => None,
     }
-}
-
-/// Extracts a non-empty `q` search query from a `warp://settings` deeplink.
-/// Used to pre-fill the settings search bar.
-fn parse_settings_search_query(url: &Url) -> Option<String> {
-    url.query_pairs()
-        .find(|(k, _)| k == "q")
-        .map(|(_, v)| v.into_owned())
-        .filter(|query| !query.is_empty())
 }
 
 /// Validates an incoming custom URI for security and returns the host.
