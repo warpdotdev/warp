@@ -13,6 +13,7 @@ fn new_alt_screen(size: SizeInfo) -> AltScreen {
         1_000, /* max_scroll_limit */
         ChannelEventListener::new_for_test(),
         ObfuscateSecrets::No,
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     )
 }
 

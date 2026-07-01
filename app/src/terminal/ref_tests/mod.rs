@@ -140,6 +140,7 @@ fn ref_test(dir: &Path) {
             display_name: ShellName::blank(),
             shell_type: ShellType::Bash,
         },
+        Arc::new(crate::terminal::model::grid::NoopMeasurer),
     );
     terminal.start_command_execution();
     // As an implementation detail of this test, we start this block as a background block, so

@@ -12,6 +12,7 @@ fn grid_handler(rows: usize, cols: usize) -> GridHandler {
         false,
         ObfuscateSecrets::No,
         PerformResetGridChecks::No,
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     )
 }
 

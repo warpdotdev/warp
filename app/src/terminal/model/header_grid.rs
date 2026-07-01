@@ -15,7 +15,7 @@ use super::blockgrid::BlockGrid;
 use super::bootstrap::BootstrapStage;
 use super::find::RegexDFAs;
 use super::grid::grid_handler::{PerformResetGridChecks, RegexIter};
-use super::grid::{Cursor, Dimensions as _, RespectDisplayedOutput};
+use super::grid::{ClusterWidthMeasurer, Cursor, Dimensions as _, RespectDisplayedOutput};
 use super::index::{Point, VisibleRow};
 use super::selection::ScrollDelta;
 use super::{ObfuscateSecrets, RespectObfuscatedSecrets};
@@ -144,6 +144,7 @@ impl HeaderGrid {
         should_scan_for_secrets: ObfuscateSecrets,
         honor_ps1: bool,
         perform_reset_grid_checks: PerformResetGridChecks,
+        cluster_measurer: std::sync::Arc<dyn ClusterWidthMeasurer>,
     ) -> Self {
         let prompt_grid = BlockGrid::new(
             sizes.size,
@@ -154,6 +155,7 @@ impl HeaderGrid {
             should_scan_for_secrets,
             // We ignore checking if we've received the Reset Grid OSC on the prompt grid.
             PerformResetGridChecks::No,
+            cluster_measurer.clone(),
         );
         let prompt_and_command_grid = BlockGrid::new(
             sizes.size,
@@ -161,6 +163,7 @@ impl HeaderGrid {
             event_proxy.clone(),
             should_scan_for_secrets,
             perform_reset_grid_checks,
+            cluster_measurer,
         );
         Self {
             prompt_grid,

@@ -24,6 +24,7 @@ use super::kitty::{
     KittyAction, KittyImage, KittyImageMetadata, KittyPixelDataFormat, KittyPlacementData,
     KittyTransmissionMedium, StoreAndDisplay, StoreOnly,
 };
+use super::grid::NoopMeasurer;
 use super::terminal_model::BlockIndex;
 use super::{ObfuscateSecrets, TerminalModel};
 use crate::ai::blocklist::SerializedBlockListItem;
@@ -196,6 +197,7 @@ impl<'a> TestBlockListBuilder<'a> {
             false, /* is_inverted */
             ObfuscateSecrets::No,
             false, /* is_telemetry_enabled */
+            Arc::new(NoopMeasurer),
         );
         // This is usually done by the terminal manager after constructing the blocklist,
         // but we have tests assuming the separator exists.
@@ -282,6 +284,7 @@ impl TestBlockBuilder {
             ObfuscateSecrets::No,
             false, /* is_telemetry_enabled */
             None,
+            Arc::new(NoopMeasurer),
         )
     }
 }

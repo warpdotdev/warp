@@ -417,6 +417,7 @@ fn test_basic_input_and_newline() {
         false,
         ObfuscateSecrets::No,
         PerformResetGridChecks::default(),
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     );
     grid.input('a');
     grid.linefeed();
@@ -447,6 +448,7 @@ fn test_empty_grid_bounds_to_string() {
         false,
         ObfuscateSecrets::No,
         PerformResetGridChecks::No,
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     );
     assert_eq!(
         grid_handler.bounds_to_string(
@@ -1459,6 +1461,7 @@ fn test_emoji_variation_selector() {
         ChannelEventListener::new_for_test(),
         ObfuscateSecrets::No,
         PerformResetGridChecks::default(),
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     );
 
     blockgrid.start();

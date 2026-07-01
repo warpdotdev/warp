@@ -31,7 +31,7 @@ use crate::terminal::model::ansi::{
 use crate::terminal::model::grid::grid_handler::{
     FragmentBoundary, GridHandler, Link, PerformResetGridChecks, PossiblePath, TermMode,
 };
-use crate::terminal::model::grid::{Dimensions, GridStorage};
+use crate::terminal::model::grid::{ClusterWidthMeasurer, Dimensions, GridStorage};
 use crate::terminal::model::index::{Point, Side, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
 use crate::terminal::model::secrets::ObfuscateSecrets;
@@ -71,6 +71,7 @@ impl AltScreen {
         max_scroll_limit: usize,
         event_proxy: ChannelEventListener,
         obfuscate_secrets: ObfuscateSecrets,
+        cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
     ) -> Self {
         let grid_handler = GridHandler::new(
             size_info,
@@ -79,6 +80,7 @@ impl AltScreen {
             true,
             obfuscate_secrets,
             PerformResetGridChecks::default(),
+            cluster_measurer,
         );
 
         AltScreen {

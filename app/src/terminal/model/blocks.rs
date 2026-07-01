@@ -48,7 +48,7 @@ use crate::terminal::model::ansi::{
 use crate::terminal::model::block::{AgentViewVisibility, Block, SerializedBlock};
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::bootstrap::BootstrapStage;
-use crate::terminal::model::grid::Dimensions;
+use crate::terminal::model::grid::{ClusterWidthMeasurer, Dimensions};
 use crate::terminal::model::index::{Point, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
 use crate::terminal::model::secrets::ObfuscateSecrets;
@@ -325,6 +325,11 @@ pub struct BlockList {
 
     obfuscate_secrets: ObfuscateSecrets,
 
+    /// Measures the real shaped width of Indic grapheme clusters for every
+    /// grid created by this block list (each new block's `Block::new` call
+    /// reuses this shared measurer). See `grid::ClusterWidthMeasurer`.
+    cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
+
     /// `true` if client-side telemetry for user-generated AI data is enabled.
     is_ai_ugc_telemetry_enabled: bool,
 
@@ -575,6 +580,7 @@ impl BlockList {
         is_inverted: bool,
         obfuscate_secrets: ObfuscateSecrets,
         is_ai_ugc_telemetry_enabled: bool,
+        cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
     ) -> Self {
         let mut block_list = Self::new_internal(
             sizes,
@@ -587,6 +593,7 @@ impl BlockList {
             is_inverted,
             obfuscate_secrets,
             is_ai_ugc_telemetry_enabled,
+            cluster_measurer,
         );
         block_list.initialize(restored_blocks);
         block_list
@@ -624,6 +631,7 @@ impl BlockList {
         is_inverted: bool,
         obfuscate_secrets: ObfuscateSecrets,
         is_ai_ugc_telemetry_enabled: bool,
+        cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
     ) -> Self {
         let bootstrap_stage = BootstrapStage::RestoreBlocks;
         let block_heights = SumTree::new();
@@ -657,6 +665,7 @@ impl BlockList {
             last_populated_precmd_payload: None,
             cached_prompt_data: None,
             obfuscate_secrets,
+            cluster_measurer,
             is_ai_ugc_telemetry_enabled,
             scroll_position_before_filter: None,
             is_inverted,
@@ -2644,6 +2653,7 @@ impl BlockList {
             self.obfuscate_secrets,
             self.is_ai_ugc_telemetry_enabled,
             self.agent_view_state.active_conversation_id(),
+            self.cluster_measurer.clone(),
         );
         if let Some(is_local) = restored_block_was_local {
             block.set_restored_block_was_local(is_local);
@@ -2698,6 +2708,7 @@ impl BlockList {
             self.obfuscate_secrets,
             self.is_ai_ugc_telemetry_enabled,
             None,
+            self.cluster_measurer.clone(),
         )
     }
 

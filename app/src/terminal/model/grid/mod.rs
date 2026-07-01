@@ -1,3 +1,4 @@
+pub mod cluster_measurer;
 mod displayed_output;
 pub mod grid_handler;
 mod grid_storage;
@@ -9,6 +10,7 @@ pub(super) mod grapheme_cursor;
 #[cfg(test)]
 mod tests;
 
+pub use cluster_measurer::{ClusterWidthMeasurer, NoopMeasurer};
 pub use displayed_output::RespectDisplayedOutput;
 pub use grid_storage::*;
 pub(super) use indexing::ConvertToAbsolute;

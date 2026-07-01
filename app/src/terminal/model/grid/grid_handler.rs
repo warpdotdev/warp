@@ -36,6 +36,11 @@ use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warp_util::path::CleanPathResult;
 use warpui::color::ColorU;
 
+use std::sync::Arc;
+
+use super::cluster_measurer::ClusterWidthMeasurer;
+#[cfg(test)]
+use super::cluster_measurer::NoopMeasurer;
 use super::displayed_output::DisplayedOutput;
 use super::grapheme_cursor::{self, GraphemeCursor};
 use super::row::Row;
@@ -433,6 +438,13 @@ pub struct GridHandler {
     /// This allows find to be updated less frequently than byte processing while still
     /// knowing exactly which rows have changed.
     find_dirty_rows_range: Option<RangeInclusive<usize>>,
+
+    /// Measures the real shaped width of Indic grapheme clusters so
+    /// `ansi_handler`'s input path can allocate the correct cell span
+    /// (`Cell::set_span`) instead of a fixed per-script guess. `Arc` so
+    /// cloning `GridHandler` (already `#[derive(Clone)]`) is cheap and every
+    /// clone shares the same underlying font database.
+    pub(super) cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
 }
 
 impl GridHandler {
@@ -443,6 +455,7 @@ impl GridHandler {
         is_alt_screen: bool,
         obfuscate_secrets: ObfuscateSecrets,
         perform_reset_grid_checks: PerformResetGridChecks,
+        cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
     ) -> Self {
         // We set the maximum scrollback for grid storage to zero, as the
         // scrollback is stored in flat storage _instead_.  `GridHandler`
@@ -483,6 +496,7 @@ impl GridHandler {
             track_content_length: false,
             full_grid_clear_behavior: FullGridClearBehavior::Scroll,
             find_dirty_rows_range: None,
+            cluster_measurer,
         }
     }
 
@@ -504,6 +518,7 @@ impl GridHandler {
             false,
             ObfuscateSecrets::No,
             PerformResetGridChecks::No,
+            Arc::new(NoopMeasurer),
         )
     }
 
@@ -516,6 +531,7 @@ impl GridHandler {
             true,
             ObfuscateSecrets::No,
             PerformResetGridChecks::No,
+            Arc::new(NoopMeasurer),
         )
     }
 
@@ -615,6 +631,7 @@ impl GridHandler {
             track_content_length: false,
             full_grid_clear_behavior: FullGridClearBehavior::Scroll,
             find_dirty_rows_range: None,
+            cluster_measurer: self.cluster_measurer.clone(),
         };
 
         // Scan the full grid for secrets.  This is less performant than

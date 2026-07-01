@@ -20,6 +20,7 @@ use crate::terminal::model::ansi::{
     PrecmdValue, PreexecValue, StandardCharset, TabulationClearMode,
 };
 use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks, RegexIter};
+use crate::terminal::model::grid::ClusterWidthMeasurer;
 use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::{Point, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
@@ -91,6 +92,7 @@ impl BlockGrid {
         event_proxy: ChannelEventListener,
         should_scan_for_secrets: ObfuscateSecrets,
         perform_reset_grid_checks: PerformResetGridChecks,
+        cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
     ) -> Self {
         let grid_handler = GridHandler::new(
             size_info,
@@ -99,6 +101,7 @@ impl BlockGrid {
             false,
             should_scan_for_secrets,
             perform_reset_grid_checks,
+            cluster_measurer,
         );
 
         BlockGrid {

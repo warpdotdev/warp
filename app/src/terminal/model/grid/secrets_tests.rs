@@ -27,6 +27,7 @@ fn empty_blockgrid(
         ChannelEventListener::new_for_test(),
         secret_obfuscation_mode,
         Default::default(),
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     )
 }
 

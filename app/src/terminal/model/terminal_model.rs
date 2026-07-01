@@ -65,7 +65,9 @@ use crate::terminal::model::completions::{
     ShellCompletion, ShellCompletionUpdate, ShellData as CompletionsShellData,
 };
 use crate::terminal::model::escape_sequences::ModeProvider;
-use crate::terminal::model::grid::IndexRegion;
+use crate::terminal::model::grid::{ClusterWidthMeasurer, IndexRegion};
+#[cfg(test)]
+use crate::terminal::model::grid::NoopMeasurer;
 use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::iterm_image::{ITermImage, ITermImageMetadata};
 use crate::terminal::model::secrets::ObfuscateSecrets;
@@ -976,6 +978,7 @@ impl TerminalModel {
                 display_name: ShellName::blank(),
                 shell_type: ShellType::Zsh,
             },
+            Arc::new(NoopMeasurer),
         );
 
         let session_id = 123.into();
@@ -1026,12 +1029,14 @@ impl TerminalModel {
         shell_state: ShellLaunchState,
         shared_session_status: SharedSessionStatus,
         is_dummy_cloud_mode_session: bool,
+        cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
     ) -> Self {
         let alt_screen = AltScreen::new(
             sizes.size,
             0, /* max_scroll_limit */
             event_proxy.clone(),
             obfuscate_secrets,
+            cluster_measurer.clone(),
         );
         let block_list = BlockList::new(
             restored_blocks,
@@ -1045,6 +1050,7 @@ impl TerminalModel {
             is_inverted,
             obfuscate_secrets,
             is_ai_ugc_telemetry_enabled,
+            cluster_measurer,
         );
 
         Self {
@@ -1109,6 +1115,7 @@ impl TerminalModel {
         is_ai_ugc_telemetry_enabled: bool,
         session_startup_path: Option<PathBuf>,
         shell_state: ShellLaunchState,
+        cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
     ) -> Self {
         Self::new_internal(
             restored_blocks,
@@ -1127,6 +1134,7 @@ impl TerminalModel {
             shell_state,
             SharedSessionStatus::NotShared,
             false,
+            cluster_measurer,
         )
     }
 
@@ -1141,6 +1149,7 @@ impl TerminalModel {
         honor_ps1: bool,
         is_inverted: bool,
         obfuscate_secrets: ObfuscateSecrets,
+        cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
     ) -> Self {
         Self::new_internal(
             None,
@@ -1164,6 +1173,7 @@ impl TerminalModel {
             },
             SharedSessionStatus::ViewPending,
             true,
+            cluster_measurer,
         )
     }
 
@@ -1177,6 +1187,7 @@ impl TerminalModel {
         honor_ps1: bool,
         is_inverted: bool,
         obfuscate_secrets: ObfuscateSecrets,
+        cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
     ) -> Self {
         Self::new_internal(
             None,
@@ -1200,6 +1211,7 @@ impl TerminalModel {
             },
             SharedSessionStatus::ViewPending,
             false,
+            cluster_measurer,
         )
     }
 
@@ -1214,6 +1226,7 @@ impl TerminalModel {
         honor_ps1: bool,
         is_inverted: bool,
         obfuscate_secrets: ObfuscateSecrets,
+        cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
     ) -> Self {
         Self::new_for_shared_session_viewer_internal(
             sizes,
@@ -1224,6 +1237,7 @@ impl TerminalModel {
             honor_ps1,
             is_inverted,
             obfuscate_secrets,
+            cluster_measurer,
         )
     }
 

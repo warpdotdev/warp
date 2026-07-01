@@ -59,7 +59,9 @@ use crate::terminal::shared_session::shared_handlers::{
     build_selected_conversation_update, ActiveRemoteUpdate, RemoteUpdateGuard,
 };
 use crate::terminal::shared_session::SharedSessionStatus;
-use crate::terminal::terminal_manager::{compute_block_size, terminal_colors_list};
+use crate::terminal::terminal_manager::{
+    compute_block_size, create_cluster_measurer, terminal_colors_list,
+};
 use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::view::ExecuteCommandEvent;
 use crate::terminal::{
@@ -230,6 +232,7 @@ impl TerminalManager {
 
         // TODO: use the sharer's size.
         let sizes = compute_block_size(initial_size, ctx);
+        let cluster_measurer = create_cluster_measurer(ctx);
 
         let model = if is_cloud_mode {
             TerminalModel::new_for_cloud_mode_shared_session_viewer(
@@ -244,6 +247,7 @@ impl TerminalManager {
                 // secret redaction rules but rather rely on the sharer obfuscating
                 // the contents before reaching us.
                 ObfuscateSecrets::No,
+                cluster_measurer,
             )
         } else {
             TerminalModel::new_for_shared_session_viewer(
@@ -258,6 +262,7 @@ impl TerminalManager {
                 // secret redaction rules but rather rely on the sharer obfuscating
                 // the contents before reaching us.
                 ObfuscateSecrets::No,
+                cluster_measurer,
             )
         };
 

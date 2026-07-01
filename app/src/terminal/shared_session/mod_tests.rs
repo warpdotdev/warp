@@ -72,6 +72,7 @@ pub fn terminal_model_for_viewer(event_proxy: ChannelEventListener) -> TerminalM
         false, /* honor_ps1 */
         false, /* is_inverted */
         ObfuscateSecrets::No,
+        Arc::new(crate::terminal::model::grid::NoopMeasurer),
     )
 }
 

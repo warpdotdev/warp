@@ -64,6 +64,7 @@ fn cloud_mode_deferred_terminal_model_starts_view_pending() {
         false,
         false,
         ObfuscateSecrets::No,
+        Arc::new(NoopMeasurer),
     );
 
     assert!(matches!(
@@ -110,6 +111,7 @@ fn generic_shared_session_viewer_model_starts_view_pending() {
         false,
         false,
         ObfuscateSecrets::No,
+        Arc::new(NoopMeasurer),
     );
 
     assert!(matches!(

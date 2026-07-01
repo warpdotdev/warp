@@ -6,7 +6,7 @@ use crate::terminal::model::ansi::{self, Handler};
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::cell::Flags;
 use crate::terminal::model::grid::grid_handler::PerformResetGridChecks;
-use crate::terminal::model::grid::Dimensions as _;
+use crate::terminal::model::grid::{Dimensions as _, NoopMeasurer};
 use crate::terminal::model::index::{VisiblePoint, VisibleRow};
 use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::SizeInfo;
@@ -58,6 +58,7 @@ pub fn mock_blockgrid(content: &str) -> BlockGrid {
         ChannelEventListener::new_for_test(),
         ObfuscateSecrets::No,
         PerformResetGridChecks::default(),
+        std::sync::Arc::new(NoopMeasurer),
     );
 
     blockgrid.start();

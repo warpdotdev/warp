@@ -21,6 +21,7 @@ pub fn test_finish_truncates_grid_basic() {
         ChannelEventListener::new_for_test(),
         ObfuscateSecrets::No,
         PerformResetGridChecks::default(),
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     );
 
     for c in "hello".chars() {
@@ -43,6 +44,7 @@ pub fn test_finish_truncates_grid_cursor_at_bottom() {
         ChannelEventListener::new_for_test(),
         ObfuscateSecrets::No,
         PerformResetGridChecks::default(),
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     );
 
     for _ in 0..300 {
@@ -67,6 +69,7 @@ pub fn test_resize_finished_block() {
         ChannelEventListener::new_for_test(),
         ObfuscateSecrets::No,
         PerformResetGridChecks::default(),
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     );
 
     for _ in 0..5 {
@@ -116,6 +119,7 @@ pub fn test_resize_finished_softwrapped_block() {
         ChannelEventListener::new_for_test(),
         ObfuscateSecrets::No,
         PerformResetGridChecks::default(),
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     );
 
     for _ in 0..5 {
@@ -165,6 +169,7 @@ pub fn test_trim_trailing_blank_rows_uses_active_floor_for_blank_started_grid() 
         ChannelEventListener::new_for_test(),
         ObfuscateSecrets::No,
         PerformResetGridChecks::default(),
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     );
 
     block_grid.start();
@@ -190,6 +195,7 @@ pub fn test_non_moving_kitty_image_keeps_finished_grid_visible() {
         ChannelEventListener::new_for_test(),
         ObfuscateSecrets::No,
         PerformResetGridChecks::default(),
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     );
     let mut metadata = test_utils::test_kitty_image_metadata_map(1);
     let mut action = test_utils::test_kitty_store_and_display_action(1, 1);
@@ -217,6 +223,7 @@ pub fn test_cursor_display_point_hidden_when_cursor_below_trimmed_content() {
         ChannelEventListener::new_for_test(),
         ObfuscateSecrets::No,
         PerformResetGridChecks::default(),
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     );
 
     block_grid.start();
@@ -252,6 +259,7 @@ pub fn test_cursor_display_point_not_clipped_when_trimming_disabled() {
         ChannelEventListener::new_for_test(),
         ObfuscateSecrets::No,
         PerformResetGridChecks::default(),
+        std::sync::Arc::new(crate::terminal::model::grid::NoopMeasurer),
     );
 
     block_grid.start();

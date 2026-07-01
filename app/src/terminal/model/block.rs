@@ -55,6 +55,7 @@ use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{self, PrecmdValue, PreexecValue, Processor};
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::grid::grid_handler::TermMode;
+use crate::terminal::model::grid::ClusterWidthMeasurer;
 use crate::terminal::model::index::{Point, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
 use crate::terminal::model::secrets::ObfuscateSecrets;
@@ -925,6 +926,7 @@ impl Block {
         should_scan_for_secrets: ObfuscateSecrets,
         is_ai_ugc_telemetry_enabled: bool,
         conversation_id: Option<AIConversationId>,
+        cluster_measurer: Arc<dyn ClusterWidthMeasurer>,
     ) -> Self {
         let perform_reset_grid_checks = if cfg!(windows) && bootstrap_stage.is_done() {
             PerformResetGridChecks::Yes
@@ -937,6 +939,7 @@ impl Block {
             should_scan_for_secrets,
             honor_ps1,
             perform_reset_grid_checks,
+            cluster_measurer.clone(),
         );
         let rprompt_grid = BlockGrid::new(
             sizes.size,
@@ -946,6 +949,7 @@ impl Block {
             event_proxy.clone(),
             should_scan_for_secrets,
             PerformResetGridChecks::No,
+            cluster_measurer.clone(),
         );
         let output_grid = BlockGrid::new(
             sizes.size,
@@ -953,6 +957,7 @@ impl Block {
             event_proxy.clone(),
             should_scan_for_secrets,
             perform_reset_grid_checks,
+            cluster_measurer,
         );
 
         Block {

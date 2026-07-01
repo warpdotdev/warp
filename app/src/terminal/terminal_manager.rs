@@ -9,6 +9,9 @@ use warpui::{AppContext, SingletonEntity};
 
 use super::event_listener::ChannelEventListener;
 use super::model::block::BlockSize;
+use super::model::grid::{ClusterWidthMeasurer, NoopMeasurer};
+#[cfg(target_os = "macos")]
+use super::model::grid::cluster_measurer::CoreTextClusterMeasurer;
 use super::safe_mode_settings::get_secret_obfuscation_mode;
 use super::session_settings::SessionSettings;
 use super::settings::TerminalSettings;
@@ -20,6 +23,40 @@ use crate::appearance::Appearance;
 use crate::pane_group::pane::DetachType;
 use crate::settings::{BlockVisibilitySettings, DebugSettings, InputModeSettings};
 use crate::PrivacySettings;
+
+/// Constructs the real Core Text-backed [`ClusterWidthMeasurer`] from the
+/// terminal's configured monospace font, falling back to a no-op measurer
+/// (every cluster reports as 1 cell, today's existing behavior) when
+/// headless, on a non-macOS platform, or if the font can't be resolved for
+/// any reason -- Indic shaping quality degrading gracefully is preferable
+/// to a hard failure constructing a terminal session.
+pub(super) fn create_cluster_measurer(ctx: &mut AppContext) -> Arc<dyn ClusterWidthMeasurer> {
+    #[cfg(target_os = "macos")]
+    {
+        if ctx.is_headless() {
+            return Arc::new(NoopMeasurer);
+        }
+        let family_id = Appearance::as_ref(ctx).monospace_font_family();
+        let family_name = ctx.font_cache().load_family_name_from_id(family_id);
+        if let Some(family_name) = family_name {
+            match CoreTextClusterMeasurer::new(&family_name, Default::default()) {
+                Ok(measurer) => return Arc::new(measurer),
+                Err(error) => {
+                    log::warn!(
+                        "Failed to construct Indic cluster width measurer for font \
+                         {family_name:?}, falling back to no-op (Telugu/Indic clusters will \
+                         render at 1 cell each): {error}"
+                    );
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = ctx;
+    }
+    Arc::new(NoopMeasurer)
+}
 
 pub trait TerminalManager: Any {
     /// Returns the backing terminal model.
@@ -98,6 +135,7 @@ pub(super) fn create_terminal_model(
     let obfuscate_secrets = get_secret_obfuscation_mode(ctx);
     let is_ai_ugc_telemetry_enabled =
         should_collect_ai_ugc_telemetry(ctx, PrivacySettings::as_ref(ctx).is_telemetry_enabled);
+    let cluster_measurer = create_cluster_measurer(ctx);
 
     TerminalModel::new(
         restored_blocks.map(|v| v.as_slice()),
@@ -114,6 +152,7 @@ pub(super) fn create_terminal_model(
         is_ai_ugc_telemetry_enabled,
         startup_directory,
         shell_state,
+        cluster_measurer,
     )
 }
 
