@@ -210,6 +210,21 @@ impl TabData {
         self.selected_color.resolve(self.default_directory_color)
     }
 
+    /// True when this tab's top-level name is not shown because it is a member of
+    /// a tab group rendered in vertical-tabs Panes view. In that layout the group
+    /// owns the container and only individual pane names are displayed, so
+    /// tab-level rename/reset should not be possible. 
+    pub fn tab_name_hidden_in_grouped_pane_view(&self, ctx: &AppContext) -> bool {
+        self.group_id.is_some()
+            && uses_vertical_tabs(ctx)
+            && matches!(
+                *TabSettings::as_ref(ctx)
+                    .vertical_tabs_display_granularity
+                    .value(),
+                VerticalTabsDisplayGranularity::Panes
+            )
+    }
+
     /// Returns the menu items for the context menu on right mouse click.
     #[allow(clippy::too_many_arguments)]
     pub fn menu_items(
@@ -470,20 +485,25 @@ impl TabData {
         let mut menu_items = vec![];
         let uses_vertical_tabs = uses_vertical_tabs(ctx);
 
-        // TODO add option to show the keybinding once we figure out a nice API to retrieve
-        // the actual keybinding (based on the user's preferences etc.)
-        menu_items.append(&mut vec![MenuItemFields::new("Rename tab")
-            .with_on_select_action(WorkspaceAction::RenameTab(index))
-            .into_item()]);
-        // Group together with rename option (note, resetting doesn't make
-        // sense unless you're able to rename a tab).
-        let title = self.pane_group.as_ref(ctx).custom_title(ctx);
-        if title.is_some() {
-            menu_items.push(
-                MenuItemFields::new("Reset tab name")
-                    .with_on_select_action(WorkspaceAction::ResetTabName(index))
-                    .into_item(),
-            );
+        // In Panes view the tab in a group has no visible top-level name (only pane
+        // rows are shown), so skip tab rename/reset and rely on the pane name
+        // items below instead.
+        if !self.tab_name_hidden_in_grouped_pane_view(ctx) {
+            // TODO add option to show the keybinding once we figure out a nice API to retrieve
+            // the actual keybinding (based on the user's preferences etc.)
+            menu_items.append(&mut vec![MenuItemFields::new("Rename tab")
+                .with_on_select_action(WorkspaceAction::RenameTab(index))
+                .into_item()]);
+            // Group together with rename option (note, resetting doesn't make
+            // sense unless you're able to rename a tab).
+            let title = self.pane_group.as_ref(ctx).custom_title(ctx);
+            if title.is_some() {
+                menu_items.push(
+                    MenuItemFields::new("Reset tab name")
+                        .with_on_select_action(WorkspaceAction::ResetTabName(index))
+                        .into_item(),
+                );
+            }
         }
         if let Some(pane_name_target) = pane_name_target {
             menu_items.extend(self.pane_name_menu_items(pane_name_target, ctx));
