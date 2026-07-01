@@ -356,7 +356,7 @@ use crate::tab::{
     color_picker_menu_items, tab_position_id, uses_vertical_tabs, ColorPickerTarget,
     NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor, TabBarState, TabComponent, TabData,
     TabTelemetryAction, COMPACT_TAB_WIDTH_THRESHOLD, MOVE_TO_GROUP_LABEL, TAB_BAR_BORDER_HEIGHT,
-    TAB_INDICATOR_HEIGHT, TAB_PIN_INDICATOR_ICON_SIZE,
+    TAB_INDICATOR_HEIGHT, TAB_PIN_INDICATOR_ICON_SIZE, TAB_PIN_VANISH_THRESHOLD,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
@@ -19746,12 +19746,6 @@ impl Workspace {
             }
         }
 
-        // Pinned + expanded: trailing pin indicator after the last member.
-        let group_pinned = FeatureFlag::PinnedTabs.is_enabled() && group.pinned;
-        if group_pinned && !is_collapsed {
-            row.add_child(render_horizontal_group_pin_indicator(appearance));
-        }
-
         if !is_collapsed {
             // Matching edge spacer after the last member. The trailing divider
             // lives inside this spacer's own flex slot (drawn at its right edge,
@@ -19895,55 +19889,55 @@ impl Workspace {
         let is_being_renamed = self
             .current_workspace_state
             .is_tab_group_being_renamed(group_id);
-        let name_element: Box<dyn Element> = if is_being_renamed {
-            ConstrainedBox::new(vertical_tabs::render_inline_tab_rename_editor(
-                &self.tab_group_rename_editor,
-                appearance,
-                ctx,
-            ))
-            .with_max_width(150.)
+        let title = group
+            .name
+            .clone()
+            .unwrap_or_else(|| "New Group".to_string());
+        let show_header_pin = FeatureFlag::PinnedTabs.is_enabled() && group.pinned;
+        let normal_right_pad = if is_collapsed { 8. } else { 9. };
+
+        let build_inner = |name: Box<dyn Element>, reserve_pin: bool| -> Box<dyn Element> {
+            // Equal padding on both sides when pinned so the icon + name stay
+            // centered.
+            let (left_pad, right_pad) = if reserve_pin {
+                (GROUP_HEADER_PIN_PADDING, GROUP_HEADER_PIN_PADDING)
+            } else {
+                (8., normal_right_pad)
+            };
+            Container::new(
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_main_axis_alignment(MainAxisAlignment::Center)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(6.)
+                    .with_child(render_group_member_icon_collage(
+                        &member_kinds,
+                        GROUP_ICON_COLLAGE_SIZE,
+                        appearance,
+                    ))
+                    .with_child(Shrinkable::new(1.0, name).finish())
+                    .finish(),
+            )
+            .with_padding_left(left_pad)
+            .with_padding_right(right_pad)
             .finish()
-        } else {
-            let title = group
-                .name
-                .clone()
-                .unwrap_or_else(|| "New Group".to_string());
-            // No inner cap: the name fills the header slot and fades like a tab
-            // title; the header's outer `ConstrainedBox` bounds the width and
-            // keeps the tab bar's unbounded measurement finite.
-            Text::new_inline(title, font_family, 12.)
-                .with_clip(ClipConfig::end())
-                .with_color(main_text_color.into())
-                .finish()
+        };
+        // Overlays the right-justified pin, like a regular tab's close/pin slot.
+        let with_pin = |inner: Box<dyn Element>| -> Box<dyn Element> {
+            let mut stack = Stack::new().with_child(inner);
+            stack.add_positioned_child(
+                render_horizontal_group_pin_indicator(appearance),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(-GROUP_HEADER_PIN_EDGE_GAP, 0.0),
+                    ParentOffsetBounds::ParentByPosition,
+                    ParentAnchor::MiddleRight,
+                    ChildAnchor::MiddleRight,
+                ),
+            );
+            stack.finish()
         };
 
-        // Full header: collage + name, with the horizontal padding inside it so
-        // the size switch below measures the full slot width, like a tab.
-        let mut full_row = Flex::row()
-            // Fill the slot and center the icon + title.
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(6.)
-            .with_child(render_group_member_icon_collage(
-                &member_kinds,
-                GROUP_ICON_COLLAGE_SIZE,
-                appearance,
-            ))
-            .with_child(Shrinkable::new(1.0, name_element).finish());
-        // Collapsed + pinned: pin indicator to the right of the name, where an
-        // ungrouped tab would show its close button. Expanded groups show the
-        // pin after their last member instead.
-        if FeatureFlag::PinnedTabs.is_enabled() && group.pinned && is_collapsed {
-            full_row.add_child(render_horizontal_group_pin_indicator(appearance));
-        }
-        let full_content = Container::new(full_row.finish())
-            .with_padding_left(8.)
-            .with_padding_right(if is_collapsed { 8. } else { 9. })
-            .finish();
-
-        // Compact header (narrow slot): just the collage at the tab's compact
-        // icon size, centered and clipped, like a tab dropping its title.
+        // Compact header: just the collage, like a tab dropping its title.
         let compact_content = Clipped::new(
             Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
@@ -19958,15 +19952,66 @@ impl Workspace {
         )
         .finish();
 
-        // Go compact at the same width as a tab, so headers and tabs shrink in step.
-        let content = SizeConstraintSwitch::new(
-            full_content,
-            vec![(
-                SizeConstraintCondition::WidthLessThan(COMPACT_TAB_WIDTH_THRESHOLD),
-                compact_content,
-            )],
-        )
-        .finish();
+        // Pinned group with a fixed name: show the pin, hide it as the header
+        // shrinks, then fall back to just the icon.
+        let content = if show_header_pin && !is_being_renamed {
+            let make_text = || {
+                Text::new_inline(title.clone(), font_family, 12.)
+                    .with_clip(ClipConfig::end())
+                    .with_color(main_text_color.into())
+                    .finish()
+            };
+            // A wide tab that group header that has space for the icon, title and pin.
+            let wide = with_pin(build_inner(make_text(), true));
+            let no_pin = build_inner(make_text(), false);
+            SizeConstraintSwitch::new(
+                // Enough room: name + pin.
+                wide,
+                vec![
+                    // Very narrow: icon only.
+                    (
+                        SizeConstraintCondition::WidthLessThan(COMPACT_TAB_WIDTH_THRESHOLD),
+                        compact_content,
+                    ),
+                    // Getting narrow: hide the pin.
+                    (
+                        SizeConstraintCondition::WidthLessThan(TAB_PIN_VANISH_THRESHOLD),
+                        no_pin,
+                    ),
+                ],
+            )
+            .finish()
+        } else {
+            let name: Box<dyn Element> = if is_being_renamed {
+                ConstrainedBox::new(vertical_tabs::render_inline_tab_rename_editor(
+                    &self.tab_group_rename_editor,
+                    appearance,
+                    ctx,
+                ))
+                .with_max_width(150.)
+                .finish()
+            } else {
+                Text::new_inline(title.clone(), font_family, 12.)
+                    .with_clip(ClipConfig::end())
+                    .with_color(main_text_color.into())
+                    .finish()
+            };
+            // The header row: icon collage + name. Reserve pin padding (both
+            // sides, so it stays centered) only when this header shows a pin.
+            let inner = build_inner(name, show_header_pin);
+            // Lay the pin over the row when pinned (here, only a pinned group
+            // mid-rename); otherwise use the bare row.
+            let full = if show_header_pin { with_pin(inner) } else { inner };
+            SizeConstraintSwitch::new(
+                full,
+                vec![(
+                    // Very narrow: icon only.
+                    SizeConstraintCondition::WidthLessThan(COMPACT_TAB_WIDTH_THRESHOLD),
+                    compact_content,
+                )],
+            )
+            .finish()
+        };
 
         let header_active_bg = internal_colors::fg_overlay_2(theme);
         let header_hover_bg = internal_colors::fg_overlay_1(theme);
@@ -28759,7 +28804,13 @@ fn should_reserve_traffic_light_space_in_tab_bar(side: TrafficLightSide) -> bool
 /// Total width/height of the collage area in the group header.
 const GROUP_ICON_COLLAGE_SIZE: f32 = 22.0;
 
-/// Renders the diagonal pin indicator shown on a pinned horizontal tab group:
+/// Gap between the pin overlay and the header's right edge.
+const GROUP_HEADER_PIN_EDGE_GAP: f32 = 8.0;
+
+/// Right padding reserving the pin's footprint so the name clips before it.
+const GROUP_HEADER_PIN_PADDING: f32 = GROUP_HEADER_PIN_EDGE_GAP + TAB_PIN_INDICATOR_ICON_SIZE;
+
+/// The diagonal pin indicator overlaid on a pinned group's header.
 /// trailing the members of an expanded group, or to the right of the name on a
 /// collapsed group's header.
 fn render_horizontal_group_pin_indicator(appearance: &Appearance) -> Box<dyn Element> {

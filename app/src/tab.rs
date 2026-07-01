@@ -102,6 +102,11 @@ const TAB_INDICATOR_SYNCED_COLOR: u32 = 0x4A93FFFF;
 pub(crate) const COMPACT_TAB_WIDTH_THRESHOLD: f32 = 42.0;
 // Horizontal inset for the tab close button
 const TAB_CLOSE_BUTTON_HORIZONTAL_INSET: f32 = 2.0;
+// Padding on each side of a pinned tab, reserving the pin's footprint so the title clips before it.
+const TAB_PINNED_CONTENT_HORIZONTAL_PADDING: f32 = 26.0;
+// Width below which a pinned tab/group header drops its idle pin (shared so both
+// vanish together), early enough that the pin never overlaps the centered title/icon.
+pub(crate) const TAB_PIN_VANISH_THRESHOLD: f32 = 70.0;
 
 /// Represents the user's manual tab-color selection state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1298,11 +1303,12 @@ impl<'a> TabComponent<'a> {
     }
 
     /// Renders the close-button slot for the tab: the close button when
-    /// hovered, a pin indicator when the tab is pinned, or an empty
+    /// hovered, a pin when pinned (unless the tab is too narrow), or an empty
     /// width-reserving placeholder otherwise.
     fn render_close_button_or_pin_icon(
         &self,
         background: Option<Fill>,
+        is_narrow: bool,
         is_hovered: bool,
     ) -> Box<dyn Element> {
         let should_render = {
@@ -1373,7 +1379,7 @@ impl<'a> TabComponent<'a> {
                     ctx.dispatch_typed_action(WorkspaceAction::CloseTab(tab_index))
                 })
                 .finish()
-        } else if self.show_pin_indicator() {
+        } else if !is_narrow && self.show_pin_indicator() {
             // Pinned: render the pin in the exact slot the close button uses so
             // hovering swaps icons in place without changing the layout.
             let theme = self.appearance.theme();
@@ -1626,7 +1632,7 @@ impl<'a> TabComponent<'a> {
             (bg, border)
         };
 
-        let full_tab_content = {
+        let build_full_content = |reserve_pin_space: bool| -> Box<dyn Element> {
             let mut flex_row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_main_axis_alignment(MainAxisAlignment::Center)
@@ -1642,7 +1648,15 @@ impl<'a> TabComponent<'a> {
                 )
                 .finish(),
             );
-            let mut container = Container::new(flex_row.finish()).with_horizontal_padding(8.);
+            // Equal padding on both sides so the title stays centered; the pin
+            // vanishes before it can reach the title.
+            let horizontal_padding = if reserve_pin_space {
+                TAB_PINNED_CONTENT_HORIZONTAL_PADDING
+            } else {
+                8.
+            };
+            let mut container =
+                Container::new(flex_row.finish()).with_horizontal_padding(horizontal_padding);
             // Pad inside the Stack so the close-button overlay (anchored to
             // the Stack) stays vertically centered within the visible pill.
             if self.grouped_member {
@@ -1738,11 +1752,13 @@ impl<'a> TabComponent<'a> {
                 )
             };
 
-        let build_close_button_overlay = |is_hovered: bool| {
+        let build_close_button_overlay = |is_narrow: bool, is_hovered: bool| {
             Container::new(
-                ConstrainedBox::new(
-                    self.render_close_button_or_pin_icon(Some(close_button_background), is_hovered),
-                )
+                ConstrainedBox::new(self.render_close_button_or_pin_icon(
+                    Some(close_button_background),
+                    is_narrow,
+                    is_hovered,
+                ))
                 .with_width(TAB_CLOSE_BUTTON_WIDTH)
                 .with_height(TAB_CLOSE_BUTTON_WIDTH)
                 .finish(),
@@ -1750,23 +1766,28 @@ impl<'a> TabComponent<'a> {
             .finish()
         };
 
-        let mut full_stack = Stack::new().with_child(full_tab_content);
-        full_stack.add_positioned_child(
-            build_close_button_overlay(is_hovered),
-            OffsetPositioning::offset_from_parent(
-                vec2f(horizontal_inset, 0.0),
-                ParentOffsetBounds::ParentByPosition,
-                parent_anchor,
-                child_anchor,
-            ),
-        );
+        let build_full_stack = |is_narrow: bool| {
+            let reserve_pin_space = self.show_pin_indicator() && !is_narrow;
+            let mut full_stack = Stack::new().with_child(build_full_content(reserve_pin_space));
+            full_stack.add_positioned_child(
+                build_close_button_overlay(is_narrow, is_hovered),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(horizontal_inset, 0.0),
+                    ParentOffsetBounds::ParentByPosition,
+                    parent_anchor,
+                    child_anchor,
+                ),
+            );
+            full_stack.finish()
+        };
 
         let mut compact_stack = Stack::new().with_child(compact_tab_content);
         // Only show the close button on the active tab for narrow width
         // to prevent accidental clicks
         if self.is_active_tab() {
             compact_stack.add_positioned_child(
-                build_close_button_overlay(is_hovered),
+                // Compact tabs are too narrow to show a pin icon.
+                build_close_button_overlay(true, is_hovered),
                 OffsetPositioning::offset_from_parent(
                     vec2f(horizontal_inset, 0.0),
                     ParentOffsetBounds::ParentByPosition,
@@ -1775,15 +1796,37 @@ impl<'a> TabComponent<'a> {
                 ),
             );
         }
+        let compact_stack = compact_stack.finish();
 
-        let stack = SizeConstraintSwitch::new(
-            full_stack.finish(),
-            vec![(
-                SizeConstraintCondition::WidthLessThan(COMPACT_TAB_WIDTH_THRESHOLD),
-                compact_stack.finish(),
-            )],
-        )
-        .finish();
+        let stack = if self.show_pin_indicator() {
+            // There are three cases here that conditionally render based on tab size:
+            // 1. The original tab container (displays tab name and pin icon if pinned)
+            // 2. A narrow tab container (hides pin icon)
+            // 3. A very narrow tab container (displays tab icon only)
+            SizeConstraintSwitch::new(
+                build_full_stack(false),
+                vec![
+                    (
+                        SizeConstraintCondition::WidthLessThan(COMPACT_TAB_WIDTH_THRESHOLD),
+                        compact_stack,
+                    ),
+                    (
+                        SizeConstraintCondition::WidthLessThan(TAB_PIN_VANISH_THRESHOLD),
+                        build_full_stack(true),
+                    ),
+                ],
+            )
+            .finish()
+        } else {
+            SizeConstraintSwitch::new(
+                build_full_stack(false),
+                vec![(
+                    SizeConstraintCondition::WidthLessThan(COMPACT_TAB_WIDTH_THRESHOLD),
+                    compact_stack,
+                )],
+            )
+            .finish()
+        };
 
         // Grouped member: inset rounded highlight, no side dividers. It still
         // gets its own drop target so a dragged pane can land at this member's
