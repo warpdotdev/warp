@@ -1697,22 +1697,38 @@ fn test_grid_rightmost_nonempty_cell() {
 
 /// Asserts that no orphaned WIDE_CHAR or WIDE_CHAR_SPACER flags exist in
 /// the visible row of a GridHandler.
-fn assert_no_orphaned_wide_chars(grid: &GridHandler, visible_row: VisibleRow) {
+/// Verifies every wide/Indic cluster in `visible_row` is internally
+/// consistent: a base cell's declared `span()` trailing cells are all
+/// `WIDE_CHAR_SPACER`, and every `WIDE_CHAR_SPACER` cell traces back to
+/// exactly one base within its own span (no orphans in either direction).
+/// Generalizes the previous `assert_no_orphaned_wide_chars`, which only
+/// checked a single adjacent cell -- correct for the old fixed CJK
+/// width=2 case, but not for a measured Indic cluster's span up to 8.
+fn assert_no_orphaned_spans(grid: &GridHandler, visible_row: VisibleRow) {
     let num_cols = grid.columns();
     let row = &grid.grid_storage()[visible_row];
-    for col in 0..num_cols {
-        if row[col].flags.contains(Flags::WIDE_CHAR) {
+    let mut col = 0;
+    while col < num_cols {
+        let span = row[col].span() as usize;
+        if span > 1 {
             assert!(
-                col + 1 < num_cols && row[col + 1].flags.contains(Flags::WIDE_CHAR_SPACER),
-                "Orphaned WIDE_CHAR at column {col}: next cell is not a WIDE_CHAR_SPACER."
+                col + span <= num_cols,
+                "Cluster at column {col} declares span {span}, but the row only has {num_cols} columns."
+            );
+            for offset in 1..span {
+                assert!(
+                    row[col + offset].flags.contains(Flags::WIDE_CHAR_SPACER),
+                    "Orphaned cluster base at column {col} (span {span}): cell at column {} is not a WIDE_CHAR_SPACER.",
+                    col + offset
+                );
+            }
+        } else {
+            assert!(
+                !row[col].flags.contains(Flags::WIDE_CHAR_SPACER),
+                "Orphaned WIDE_CHAR_SPACER at column {col}: not covered by any preceding cluster's span."
             );
         }
-        if row[col].flags.contains(Flags::WIDE_CHAR_SPACER) {
-            assert!(
-                col > 0 && row[col - 1].flags.contains(Flags::WIDE_CHAR),
-                "Orphaned WIDE_CHAR_SPACER at column {col}: previous cell is not a WIDE_CHAR."
-            );
-        }
+        col += span.max(1);
     }
 }
 
@@ -1725,7 +1741,7 @@ fn test_input_overwriting_wide_char_spacer_resets_wide_char() {
     grid.goto(VisibleRow(0), 1);
     grid.input('x');
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
     assert!(!grid.grid_storage()[VisibleRow(0)][0]
         .flags
         .contains(Flags::WIDE_CHAR));
@@ -1742,7 +1758,7 @@ fn test_input_overwriting_wide_char_resets_spacer() {
     grid.goto(VisibleRow(0), 0);
     grid.input('y');
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
     assert_eq!(grid.grid_storage()[VisibleRow(0)][0].c, 'y');
     assert!(!grid.grid_storage()[VisibleRow(0)][1]
         .flags
@@ -1759,7 +1775,7 @@ fn test_erase_chars_at_wide_char_spacer_boundary() {
     grid.goto(VisibleRow(0), 1);
     grid.erase_chars(1);
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
     assert!(!grid.grid_storage()[VisibleRow(0)][0]
         .flags
         .contains(Flags::WIDE_CHAR));
@@ -1778,7 +1794,7 @@ fn test_erase_chars_at_wide_char_end_boundary() {
     grid.goto(VisibleRow(0), 1);
     grid.erase_chars(2); // Erases cols 1..3.
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
 }
 
 #[test]
@@ -1791,7 +1807,7 @@ fn test_delete_chars_at_wide_char_spacer_boundary() {
     grid.goto(VisibleRow(0), 1);
     grid.delete_chars(1);
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
     assert!(!grid.grid_storage()[VisibleRow(0)][0]
         .flags
         .contains(Flags::WIDE_CHAR));
@@ -1807,7 +1823,7 @@ fn test_insert_blank_at_wide_char_spacer_boundary() {
     grid.goto(VisibleRow(0), 1);
     grid.insert_blank(1);
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
     assert!(!grid.grid_storage()[VisibleRow(0)][0]
         .flags
         .contains(Flags::WIDE_CHAR));
@@ -1823,7 +1839,7 @@ fn test_clear_line_right_at_wide_char_spacer() {
     grid.goto(VisibleRow(0), 1);
     grid.clear_line(ansi::LineClearMode::Right);
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
     assert!(!grid.grid_storage()[VisibleRow(0)][0]
         .flags
         .contains(Flags::WIDE_CHAR));
@@ -1842,7 +1858,7 @@ fn test_clear_line_left_at_wide_char() {
     grid.goto(VisibleRow(0), 2);
     grid.clear_line(ansi::LineClearMode::Left);
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
     assert!(!grid.grid_storage()[VisibleRow(0)][3]
         .flags
         .contains(Flags::WIDE_CHAR_SPACER));
@@ -1858,7 +1874,7 @@ fn test_clear_screen_below_at_wide_char_spacer() {
     grid.goto(VisibleRow(0), 1);
     grid.clear_screen(ansi::ClearMode::Below);
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
     assert!(!grid.grid_storage()[VisibleRow(0)][0]
         .flags
         .contains(Flags::WIDE_CHAR));
@@ -1877,7 +1893,7 @@ fn test_clear_screen_above_at_wide_char() {
     grid.goto(VisibleRow(0), 2);
     grid.clear_screen(ansi::ClearMode::Above);
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
     assert!(!grid.grid_storage()[VisibleRow(0)][3]
         .flags
         .contains(Flags::WIDE_CHAR_SPACER));
@@ -1976,7 +1992,7 @@ fn test_clear_line_left_preserves_adjacent_wide_char() {
     grid.goto(VisibleRow(0), 1);
     grid.clear_line(ansi::LineClearMode::Left);
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
     // The wide char at cols 2-3 must be preserved.
     assert!(
         grid.grid_storage()[VisibleRow(0)][2]
@@ -2004,7 +2020,7 @@ fn test_erase_chars_preserves_adjacent_wide_char_at_end() {
     grid.goto(VisibleRow(0), 0);
     grid.erase_chars(2);
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
     // The wide char at cols 2-3 must be preserved.
     assert!(
         grid.grid_storage()[VisibleRow(0)][2]
@@ -2032,7 +2048,7 @@ fn test_delete_chars_preserves_adjacent_wide_char_at_end() {
     grid.goto(VisibleRow(0), 0);
     grid.delete_chars(2);
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
     // The wide char should have been shifted left to cols 0-1.
     assert!(
         grid.grid_storage()[VisibleRow(0)][0]
@@ -2060,7 +2076,7 @@ fn test_clear_screen_above_preserves_adjacent_wide_char() {
     grid.goto(VisibleRow(0), 1);
     grid.clear_screen(ansi::ClearMode::Above);
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
     // The wide char at cols 2-3 must be preserved.
     assert!(
         grid.grid_storage()[VisibleRow(0)][2]
@@ -2088,7 +2104,7 @@ fn test_insert_mode_at_spacer_resets_wide_char() {
     grid.set_mode(ansi::Mode::Insert);
     grid.input('x');
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
 }
 
 #[test]
@@ -2110,7 +2126,7 @@ fn test_insert_mode_pushes_wide_char_off_end() {
     grid.set_mode(ansi::Mode::Insert);
     grid.input('x');
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
 }
 
 #[test]
@@ -2154,8 +2170,8 @@ fn test_write_at_cursor_clears_leading_wide_char_spacer() {
             .contains(Flags::LEADING_WIDE_CHAR_SPACER),
         "LEADING_WIDE_CHAR_SPACER was not cleared on previous row."
     );
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(1));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(1));
 }
 
 #[test]
@@ -2180,8 +2196,8 @@ fn test_write_at_cursor_clears_leading_wide_char_spacer_at_col_1() {
             .contains(Flags::LEADING_WIDE_CHAR_SPACER),
         "LEADING_WIDE_CHAR_SPACER was not cleared when overwriting col 1."
     );
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(1));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(1));
 }
 
 #[test]
@@ -2233,7 +2249,7 @@ fn test_insert_blank_resets_wide_char_pushed_off_end() {
     grid.goto(VisibleRow(0), 0);
     grid.insert_blank(2);
 
-    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
 }
 
 // ─── content_len / trailing blank row trimming ───────────────────────
@@ -2720,4 +2736,28 @@ fn test_real_telugu_sentence_clusters_correctly() {
             "దిం", "చా", "లి"
         ]
     );
+}
+
+#[test]
+fn test_mixed_ascii_cjk_indic_line_has_no_orphaned_spans() {
+    // A single line mixing plain ASCII, a real CJK wide char (width=2,
+    // exercised through the SAME set_span/CellType path as a measured
+    // Indic cluster -- not a special case), and a measured Indic cluster.
+    // Confirms the two span mechanisms (fixed CJK width=2, variable
+    // measured Indic span) coexist correctly on one row.
+    let mut grid = grid_with_fixed_width_measurer(2, 20);
+    feed(&mut grid, "aక్షి鳥bb");
+
+    assert_no_orphaned_spans(&grid, VisibleRow(0));
+
+    let row = &grid.grid_storage()[VisibleRow(0)];
+    assert_eq!(row[0].c, 'a');
+    let indic_cell = &row[1];
+    assert_eq!(indic_cell.span(), 4, "క్షి is a 4-codepoint measured cluster");
+    assert_eq!(indic_cell.raw_content(), CharOrStr::Str("క్షి"));
+    let cjk_cell = &row[5];
+    assert_eq!(cjk_cell.span(), 2, "鳥 is a fixed CJK width=2 char");
+    assert_eq!(cjk_cell.c, '鳥');
+    assert_eq!(row[7].c, 'b');
+    assert_eq!(row[8].c, 'b');
 }
