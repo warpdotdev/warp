@@ -8,15 +8,13 @@ use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    Color, Modifier, TuiColumn, TuiConstraint, TuiContainer, TuiElement, TuiLayoutContext,
+    Modifier, TuiColumn, TuiConstraint, TuiContainer, TuiElement, TuiLayoutContext,
     TuiParentElement, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::elements::Fill as CoreFill;
 use warpui_core::{AppContext, Entity, EntityIdMap, TuiView};
 
 const INPUT_PREFIX: &str = "≫ ";
-const INPUT_OUTPUT_GAP_ROWS: u16 = 1;
-const BLOCK_BOTTOM_PADDING_ROWS: u16 = 1;
 
 /// Renderable pieces of an agent block; this will grow as we add tool calls and other sub-elements.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -129,18 +127,14 @@ impl TuiAgentBlockView {
 
         let mut should_gap_before_next = false;
         for section in &sections {
-            let top_padding = if should_gap_before_next {
-                INPUT_OUTPUT_GAP_ROWS
-            } else {
-                0
-            };
+            let top_padding = if should_gap_before_next { 1 } else { 0 };
             column = column.with_child(section.render_element(top_padding, app));
             should_gap_before_next = matches!(section, TuiAgentBlockSection::Input(_));
         }
         Box::new(
             TuiContainer::new(column)
                 .with_background(CoreFill::from(theme.surface_1()).into())
-                .with_padding_bottom(u16::from(!sections.is_empty()) * BLOCK_BOTTOM_PADDING_ROWS),
+                .with_padding_bottom(u16::from(!sections.is_empty())),
         )
     }
 }
@@ -151,14 +145,15 @@ impl TuiAgentBlockSection {
         let theme = Appearance::as_ref(app).theme();
         match self {
             Self::Input(lines) => {
-                let text_color = tui_color(theme.foreground());
+                let text_color = CoreFill::from(theme.foreground()).into();
                 let accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
-                let background = tui_color(
+                let background = CoreFill::from(
                     theme
                         .background()
                         .blend(&accent.with_opacity(10))
                         .blend(&accent.with_opacity(10)),
-                );
+                )
+                .into();
                 let mut column = TuiColumn::new();
                 for line in lines {
                     column = column.child(
@@ -177,7 +172,8 @@ impl TuiAgentBlockSection {
                 )
             }
             Self::PlainText(text) => {
-                let text_color = tui_color(ThemeFill::from(theme.terminal_colors().normal.white));
+                let text_color =
+                    CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into();
                 Box::new(
                     TuiContainer::new(
                         TuiText::new(text.clone()).with_style(TuiStyle::default().fg(text_color)),
@@ -187,10 +183,6 @@ impl TuiAgentBlockSection {
             }
         }
     }
-}
-
-fn tui_color(fill: ThemeFill) -> Color {
-    CoreFill::from(fill).into()
 }
 
 /// Registers the view with the TUI runtime.

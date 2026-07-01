@@ -23,15 +23,11 @@ impl RootTuiView {
         }
     }
     /// Creates the terminal child view once login has completed.
-    pub(crate) fn ensure_terminal_session(
+    pub(crate) fn create_terminal_session(
         &mut self,
         surface_init: TerminalSurfaceInit,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<TuiTerminalSessionView> {
-        if let Some(terminal_session) = &self.terminal_session {
-            return terminal_session.clone();
-        }
-
         let terminal_session =
             ctx.add_typed_action_tui_view(|ctx| TuiTerminalSessionView::new(surface_init, ctx));
         self.terminal_session = Some(terminal_session.clone());
@@ -50,6 +46,7 @@ impl TuiView for RootTuiView {
     }
 
     fn child_view_ids(&self, ctx: &AppContext) -> Vec<EntityId> {
+        // The TUI runtime uses this for child focus and event routing.
         match TuiLoginModel::as_ref(ctx).phase() {
             TuiLoginPhase::LoggedIn => self
                 .terminal_session

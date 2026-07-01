@@ -118,7 +118,7 @@ fn create_terminal_session_after_login(
         ctx,
         move |surface_init, ctx| {
             let surface = root.update(ctx, |root, ctx| {
-                root.ensure_terminal_session(surface_init, ctx)
+                root.create_terminal_session(surface_init, ctx)
             });
             TerminalSurfaceResult {
                 surface,

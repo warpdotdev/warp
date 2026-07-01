@@ -1,10 +1,10 @@
-//! Simple visible-row terminal block rendering for the TUI transcript.
+//! Simple terminal block rendering for the TUI transcript.
 
 use std::ops::Range;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
-use warp::tui_export::{BlockGrid, BlockId, TerminalColorList, TerminalModel};
+use warp::tui_export::{Block, BlockGrid, BlockId, BlockList, TerminalColorList, TerminalModel};
 use warp_terminal::model::ansi::Color;
 use warp_terminal::model::grid::cell::{Cell, Flags};
 use warp_terminal::model::grid::Dimensions as _;
@@ -14,32 +14,31 @@ use warpui_core::elements::tui::{
 };
 use warpui_core::AppContext;
 
-/// TUI element for a terminal block's requested logical rows.
-pub(super) struct TerminalBlockRowsElement {
+/// Paints a pre-clipped row window from one terminal block.
+pub(super) struct TerminalBlockVisibleRowsElement {
     model: Arc<FairMutex<TerminalModel>>,
     block_id: BlockId,
-    rows: Range<usize>,
+    visible_rows: Range<usize>,
     width: u16,
 }
-
-impl TerminalBlockRowsElement {
-    /// Creates a terminal block rows element.
+impl TerminalBlockVisibleRowsElement {
+    /// Creates a terminal block element for a visible row window.
     pub(super) fn new(
         model: Arc<FairMutex<TerminalModel>>,
         block_id: BlockId,
-        rows: Range<usize>,
+        visible_rows: Range<usize>,
         width: u16,
     ) -> Self {
         Self {
             model,
             block_id,
-            rows,
+            visible_rows,
             width,
         }
     }
 }
 
-impl TuiElement for TerminalBlockRowsElement {
+impl TuiElement for TerminalBlockVisibleRowsElement {
     fn layout(
         &mut self,
         constraint: TuiConstraint,
@@ -48,9 +47,9 @@ impl TuiElement for TerminalBlockRowsElement {
     ) -> TuiSize {
         constraint.clamp(TuiSize::new(
             constraint.max.width,
-            self.rows
+            self.visible_rows
                 .end
-                .saturating_sub(self.rows.start)
+                .saturating_sub(self.visible_rows.start)
                 .min(usize::from(u16::MAX)) as u16,
         ))
     }
@@ -62,45 +61,40 @@ impl TuiElement for TerminalBlockRowsElement {
             return;
         };
 
-        let prompt_rows = if block.should_hide_command_grid() {
-            0
-        } else {
-            block.prompt_and_command_grid().len_displayed()
-        };
-        let output_rows = if block.should_hide_output_grid() {
-            0
-        } else {
-            block.output_grid().len_displayed()
-        };
-
-        let total_rows = prompt_rows.saturating_add(output_rows);
-        let rows = self.rows.start.min(total_rows)..self.rows.end.min(total_rows);
         let max_width = self.width.min(area.width);
-        let mut y = area.y;
-        if rows.start < prompt_rows {
-            render_displayed_rows(
+        if !block.should_hide_command_grid() {
+            render_grid_rows(
                 block.prompt_and_command_grid(),
-                rows.start..rows.end.min(prompt_rows),
+                block
+                    .prompt_and_command_grid_offset()
+                    .as_f64()
+                    .ceil()
+                    .max(0.0) as usize,
+                self.visible_rows.clone(),
                 max_width,
                 area,
                 buffer,
                 &colors,
-                &mut y,
             );
         }
 
-        if rows.end > prompt_rows {
-            render_displayed_rows(
+        if !block.should_hide_output_grid() {
+            render_grid_rows(
                 block.output_grid(),
-                rows.start.saturating_sub(prompt_rows)..rows.end.saturating_sub(prompt_rows),
+                block.output_grid_offset().as_f64().ceil().max(0.0) as usize,
+                self.visible_rows.clone(),
                 max_width,
                 area,
                 buffer,
                 &colors,
-                &mut y,
             );
         }
     }
+}
+
+/// Returns whether the TUI transcript should include this terminal block.
+pub(super) fn should_render_terminal_block(block: &Block, block_list: &BlockList) -> bool {
+    block.is_visible(block_list.agent_view_state()) && (block.started() || block.finished())
 }
 
 fn render_displayed_rows(
@@ -132,6 +126,39 @@ fn render_displayed_rows(
         }
         *y = (*y).saturating_add(1);
     }
+}
+
+fn render_grid_rows(
+    block_grid: &BlockGrid,
+    grid_start_row: usize,
+    visible_rows: Range<usize>,
+    max_width: u16,
+    area: TuiRect,
+    buffer: &mut TuiBuffer,
+    colors: &TerminalColorList,
+) {
+    let grid_end_row = grid_start_row.saturating_add(block_grid.len_displayed());
+    let visible_start = visible_rows.start.max(grid_start_row);
+    let visible_end = visible_rows.end.min(grid_end_row);
+    if visible_start >= visible_end {
+        return;
+    }
+
+    let displayed_rows =
+        visible_start.saturating_sub(grid_start_row)..visible_end.saturating_sub(grid_start_row);
+    let y_offset = visible_start.saturating_sub(visible_rows.start);
+    let mut y = area
+        .y
+        .saturating_add(y_offset.min(usize::from(u16::MAX)) as u16);
+    render_displayed_rows(
+        block_grid,
+        displayed_rows,
+        max_width,
+        area,
+        buffer,
+        colors,
+        &mut y,
+    );
 }
 
 fn cell_to_color(color: &Color, colors: &TerminalColorList) -> TuiColor {

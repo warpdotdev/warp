@@ -24,15 +24,13 @@ use crate::transcript_view::TuiTranscriptView;
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
-const BORDER_ROWS: u16 = 2;
-const SESSION_PADDING: u16 = 2;
 
 /// This TUI surface does not emit direct PTY intents.
-pub(crate) enum TuiTerminalSessionEvent {}
+pub(crate) struct TuiTerminalSessionEvent;
 
 impl PtyIntentEvent for TuiTerminalSessionEvent {
     fn pty_intent(&self) -> Option<PtyIntent> {
-        match *self {}
+        None
     }
 }
 
@@ -110,10 +108,18 @@ impl TuiTerminalSessionView {
         let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
         let input_view =
             ctx.add_typed_action_tui_view(move |ctx| TuiInputView::new(input_model, ctx));
-        ctx.subscribe_to_view(&input_view, |view, _, event, ctx| {
-            view.handle_submitted_prompt(event, ctx);
+        ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
+            TuiInputViewEvent::Submitted(prompt) => {
+                let prompt = prompt.trim().to_owned();
+                if !prompt.is_empty() {
+                    view.send_prompt(prompt, ctx);
+                    ctx.notify();
+                }
+            }
         });
 
+        // These events update block metadata or grids the transcript reads.
+        // PTY output redraws are driven by `wakeups_rx` below.
         ctx.subscribe_to_model(&model_events, |_, _, event, ctx| match event {
             ModelEvent::BlockCompleted(_)
             | ModelEvent::AfterBlockStarted { .. }
@@ -135,21 +141,6 @@ impl TuiTerminalSessionView {
             input_view,
             conversation_selection,
             ai_controller,
-        }
-    }
-
-    /// Routes submitted prompts to the surface's conversation.
-    fn handle_submitted_prompt(&mut self, event: &TuiInputViewEvent, ctx: &mut ViewContext<Self>) {
-        match event {
-            TuiInputViewEvent::Submitted(prompt) => {
-                let prompt = prompt.trim().to_owned();
-                if prompt.is_empty() {
-                    return;
-                }
-
-                self.send_prompt(prompt, ctx);
-                ctx.notify();
-            }
         }
     }
 
@@ -175,28 +166,6 @@ impl TuiTerminalSessionView {
             controller.send_user_query_in_conversation(prompt, conversation_id, None, ctx);
         });
     }
-
-    fn render_session(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        let theme = Appearance::as_ref(app).theme();
-        let border_color: Color =
-            CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.cyan)).into();
-        let background: Color = CoreFill::from(theme.surface_1()).into();
-        let input_box = TuiConstrainedBox::new(
-            TuiContainer::new(TuiChildView::new(&self.input_view))
-                .with_border_style(TuiStyle::default().fg(border_color)),
-        )
-        .with_max_rows(MAX_INPUT_TEXT_ROWS + BORDER_ROWS);
-
-        Box::new(
-            TuiContainer::new(
-                TuiColumn::new()
-                    .flex_child(TuiChildView::new(&self.transcript))
-                    .child(input_box),
-            )
-            .with_background(background)
-            .with_padding(SESSION_PADDING),
-        )
-    }
 }
 
 impl Entity for TuiTerminalSessionView {
@@ -213,7 +182,25 @@ impl TuiView for TuiTerminalSessionView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        self.render_session(ctx)
+        let theme = Appearance::as_ref(ctx).theme();
+        let border_color: Color =
+            CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.cyan)).into();
+        let background: Color = CoreFill::from(theme.surface_1()).into();
+        let input_box = TuiConstrainedBox::new(
+            TuiContainer::new(TuiChildView::new(&self.input_view))
+                .with_border_style(TuiStyle::default().fg(border_color)),
+        )
+        .with_max_rows(MAX_INPUT_TEXT_ROWS + 2);
+
+        Box::new(
+            TuiContainer::new(
+                TuiColumn::new()
+                    .flex_child(TuiChildView::new(&self.transcript))
+                    .child(input_box),
+            )
+            .with_background(background)
+            .with_padding(2),
+        )
     }
 }
 

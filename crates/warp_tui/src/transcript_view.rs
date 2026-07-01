@@ -102,7 +102,24 @@ impl TuiTranscriptView {
             BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. } => {
                 self.clear_agent_blocks(ctx);
             }
-            _ => {}
+            BlocklistAIHistoryEvent::StartedNewConversation { .. }
+            | BlocklistAIHistoryEvent::CreatedSubtask { .. }
+            | BlocklistAIHistoryEvent::UpgradedTask { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
+            | BlocklistAIHistoryEvent::SetActiveConversation { .. }
+            | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
+            | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
+            | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
+            | BlocklistAIHistoryEvent::SplitConversation { .. }
+            | BlocklistAIHistoryEvent::RestoredConversations { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
+            | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
+            | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
+            | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
+            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
         }
     }
 
