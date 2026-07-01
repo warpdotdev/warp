@@ -34,6 +34,7 @@ use crate::terminal::model::ansi::{
 };
 use crate::terminal::model::cell::{Cell, Flags};
 use crate::terminal::model::char_or_str::CharOrStr;
+use crate::terminal::model::indic::{is_in_indic_block, is_indic_virama};
 use crate::terminal::model::grid::indexing::IndexRegion as _;
 use crate::terminal::model::grid::{grapheme_cursor, Dimensions as _};
 use crate::terminal::model::image_map::{ImagePlacementData, ImageType, StoredImageMetadata};
@@ -189,6 +190,12 @@ impl ansi::Handler for GridHandler {
         let Some(width) = c.width() else {
             return;
         };
+
+        // Layer B: fold virama-conjunct second consonants to width=0 so the
+        // cell allocation stays close to the font's natural advance width.
+        // A fixed uniform scale (see render_indic_cluster) then keeps all
+        // Telugu words at the same visual size without per-word variation.
+        let width = if width == 1 { self.indic_grapheme_width(c) } else { width };
 
         let num_cols = self.columns();
 
@@ -1455,6 +1462,46 @@ impl ansi::Handler for GridHandler {
 
 /// Helper functions for the [`ansi::Handler`] implementation.
 impl GridHandler {
+    /// Returns 0 if `c` (a width-1 character) should attach to the previous
+    /// cell as part of an Indic grapheme cluster, or 1 if it should occupy its
+    /// own cell normally.
+    ///
+    fn indic_grapheme_width(&self, c: char) -> usize {
+        if self.grid.cursor().input_needs_wrap {
+            return 1;
+        }
+        let col = self.grid.cursor().point.col;
+        if col == 0 {
+            return 1;
+        }
+        let row = self.grid.cursor_point().row;
+        let prev_col = col - 1;
+        let actual_prev_col = if self.grid[row][prev_col]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+            && prev_col > 0
+        {
+            prev_col - 1
+        } else {
+            prev_col
+        };
+        let prev_cell = &self.grid[row][actual_prev_col];
+        let prev_last = match prev_cell.raw_content() {
+            CharOrStr::Str(s) => s.chars().last(),
+            CharOrStr::Char(ch) => Some(ch),
+        };
+        let Some(prev_last) = prev_last else {
+            return 1;
+        };
+        // Fold the consonant after a virama into the base cell so that each
+        // virama-conjunct cluster occupies one cell instead of two.
+        if is_indic_virama(prev_last) && is_in_indic_block(c) {
+            return 0;
+        }
+        1
+    }
+
+    /// Precondition: `c.width() == Some(1)`.
     /// Advances the cursor by one cell, handling wrapping appropriately.
     fn advance_cursor_by_one_cell(&mut self) {
         let num_cols = self.columns();

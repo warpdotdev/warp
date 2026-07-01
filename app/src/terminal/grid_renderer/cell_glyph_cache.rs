@@ -71,11 +71,9 @@ impl CellGlyphCache {
                     Default::default(),
                     &font_cache.text_layout_system(),
                 );
-                let run = line.runs.first()?;
-                if run.glyphs.len() > 1 {
-                    // If we have more than one glyph, something has gone wrong.
-                    return None;
-                }
+                // Skip empty runs: font-substituted text may produce an empty
+                // primary-font run before the run that actually contains the glyphs.
+                let run = line.runs.iter().find(|r| !r.glyphs.is_empty())?;
                 run.glyphs.first().map(|glyph| (glyph.id, run.font_id))
             });
 

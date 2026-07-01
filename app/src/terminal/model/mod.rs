@@ -15,6 +15,7 @@ macro_rules! assert_lines_approx_eq {
 
 pub mod alt_screen;
 pub mod ansi;
+pub mod indic;
 pub mod block;
 pub mod blockgrid;
 pub mod blocks;

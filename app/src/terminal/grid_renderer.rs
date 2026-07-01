@@ -34,7 +34,9 @@ use super::model::terminal_model::RangeInModel;
 use crate::settings::EnforceMinimumContrast;
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
 use crate::terminal::model::ansi::{Color, CursorShape, CursorStyle};
-use crate::terminal::model::cell::{Cell, Flags};
+use crate::terminal::model::cell::{Cell, Flags, DEFAULT_CHAR};
+use crate::terminal::model::indic::{is_in_indic_block, is_indic_str};
+use crate::terminal::model::grid::row::Row;
 use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
@@ -619,7 +621,38 @@ fn render_grid_without_ligatures<'a>(
             continue;
         };
 
+        // Single scale for every Indic run on this row (Layer A shaping fix):
+        // computed once up front so all Telugu words on the line render at
+        // the SAME font size, while the row's tightest-fitting run still
+        // guarantees no run overflows into a neighbouring cell.
+        let row_indic_scale = compute_indic_row_scale(
+            &row,
+            grid.columns(),
+            cell_size.x(),
+            font_family,
+            font_size,
+            ctx,
+        );
+
+        // How many upcoming cells are absorbed by an Indic cluster that started on the
+        // previous cell (or the cell before that for 3-part clusters).  Set to 1 for a
+        // 2-cell cluster (base+virama + consonant, or consonant + vowel sign), to 2 for
+        // a 3-cell cluster (virama-conjunct + trailing vowel sign / anusvara).
+        // Decremented at the top of every column iteration; reset per row so clusters
+        // never bleed across line boundaries.
+        let mut cells_to_absorb_after: usize = 0;
+
         for col in 0..grid.columns() {
+            // Consume one absorption slot at the top of every column iteration so that
+            // early `continue` paths (WIDE_CHAR_SPACER, empty cells) don't leave stale
+            // state.  Decrementing here (rather than inside the cluster branch) keeps
+            // the count correct even when a cell is skipped by an early continue.
+            let this_cell_absorbed = if cells_to_absorb_after > 0 {
+                cells_to_absorb_after -= 1;
+                true
+            } else {
+                false
+            };
             let current_point = Point::new(row_idx, col);
 
             // Skip the cursor cell when CLI agent rich input is open
@@ -684,6 +717,8 @@ fn render_grid_without_ligatures<'a>(
                         baseline_position,
                         &mut native_glyphs_to_render,
                         obfuscate_secrets,
+                        None::<(&str, usize)>, // marked text cells are never part of Indic clusters
+                        1.0, // no scaling for marked-text cells
                         bg_color_sampler.as_deref_mut(),
                         ctx,
                     );
@@ -788,6 +823,48 @@ fn render_grid_without_ligatures<'a>(
                 }
             }
 
+            // Indic full-run look-ahead (Layer A + Layer B shaping fix).
+            //
+            // Instead of detecting only 2-cell conjunct clusters, we scan forward
+            // to collect ALL consecutive Indic-script cells into one proportional
+            // Core Text run.  The entire run string is shaped by Core Text in a
+            // single call, so glyphs land at their natural advance positions —
+            // exactly what Obsidian, browsers, and any proportional renderer do.
+            // No manual gap arithmetic is needed.
+            //
+            // Tuple: (run_string, span_cells).
+            //   span_cells = 0 for absorbed cells (run_string is empty).
+            //   span_cells = 1..N for the first cell of an N-cell run.
+            let cluster_for_this_cell: Option<(String, usize)> = if this_cell_absorbed {
+                Some((String::new(), 0)) // glyph absorbed; background still rendered
+            } else if is_indic_cell(cell) {
+                // Collect the full consecutive Indic run starting at this cell.
+                let mut run = String::new();
+                append_cell_display(&mut run, cell);
+                let mut span = 1usize;
+                let mut scan = col + 1;
+                while scan < grid.columns() {
+                    let sc = &row[scan];
+                    if sc.c == DEFAULT_CHAR
+                        || sc
+                            .flags()
+                            .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                        || !is_indic_cell(sc)
+                    {
+                        break;
+                    }
+                    append_cell_display(&mut run, sc);
+                    span += 1;
+                    scan += 1;
+                }
+                if span > 1 {
+                    cells_to_absorb_after = span - 1;
+                }
+                Some((run, span))
+            } else {
+                None
+            };
+
             // Don't apply cursor contrast colouring when hide_cursor_cell
             // is active — the cursor itself won't be drawn, so the cell
             // should render with its normal colours.
@@ -820,6 +897,8 @@ fn render_grid_without_ligatures<'a>(
                 baseline_position,
                 &mut native_glyphs_to_render,
                 obfuscate_secrets,
+                cluster_for_this_cell.as_ref().map(|(s, n)| (s.as_str(), *n)),
+                row_indic_scale,
                 bg_color_sampler.as_deref_mut(),
                 ctx,
             );
@@ -895,6 +974,8 @@ fn render_cell(
     baseline_position: Vector2F,
     native_glyphs_to_render: &mut Vec<NativeGlyph>,
     obfuscate_mode: ObfuscateSecrets,
+    cluster_glyph_override: Option<(&str, usize)>,
+    row_indic_scale: f32,
     bg_color_sampler: Option<&mut ColorSampler>,
     ctx: &mut PaintContext,
 ) -> Option<CachedBackgroundColor> {
@@ -941,6 +1022,8 @@ fn render_cell(
         cell_colors.foreground_color,
         native_glyphs_to_render,
         obfuscate_mode,
+        cluster_glyph_override,
+        row_indic_scale,
         ctx,
     );
     cell_decorations.extend(calculate_cell_decorations(
@@ -1684,6 +1767,13 @@ fn render_cell_glyph(
     foreground_color: ColorU,
     native_glyphs_to_render: &mut Vec<NativeGlyph>,
     obfuscate_mode: ObfuscateSecrets,
+    // Indic conjunct cluster override (Layer A shaping fix):
+    //  - None     → normal rendering via cell.content_for_display().
+    //  - Some("") → this cell's glyph was absorbed by the preceding cluster; skip glyph.
+    //  - Some(s)  → render the full conjunct string s (e.g. "క్ష") at this position.
+    // Ignored when secret redaction is active (secrets always override everything).
+    cluster_glyph_override: Option<(&str, usize)>,
+    row_indic_scale: f32,
     ctx: &mut PaintContext,
 ) {
     let cell_size = if cell.flags().intersects(Flags::WIDE_CHAR) {
@@ -1722,28 +1812,99 @@ fn render_cell_glyph(
     let font_id = font_id_cache.font_ids[font_style as usize]
         .get_or_insert_with(|| ctx.font_cache.select_font(font_family, properties));
 
-    let glyph_and_font = match cell_content {
-        // Special-case whitespace, which doesn't need rendering.  We
-        // explicitly check these two chars instead of using
-        // `char::is_whitespace` for performance reasons.
-        CharOrStr::Char(' ' | '\t') => None,
-        CharOrStr::Char(char) => glyphs.glyph_for_char(char, *font_id, ctx.font_cache),
-        // Certain zerowidth characters, such as emoji presentation selectors, can affect the underlying glyph and
-        // change the rendering. Hence, we need to layout/render the text as a combined string, instead of simply
-        // the single character. For example, in \0x2601\0xFE0F, the FE0F selector causes ☁️ to be changed from a
-        // 1-width char to a 2-width char.
-        CharOrStr::Str(content_with_zerowidth) => glyphs.glyph_for_string(
-            content_with_zerowidth,
-            *font_id,
-            ctx.font_cache,
-            font_family,
-            font_size,
-            properties,
-            ctx,
-        ),
-    };
-
     let origin = grid_origin + glyph_offset + baseline_position;
+
+    // Indic conjunct cluster override: when active (and no secret is being redacted),
+    // either skip this cell's glyph entirely (Some("")) or render the provided
+    // cluster string (Some(s)) which spans this cell and the cell that follows.
+    // This is the render-side half of the Layer A Indic shaping fix; the look-ahead
+    // that produces `cluster_glyph_override` lives in the rendering loop above.
+    let glyph_and_font = if cell_type.secret.is_none() {
+        if matches!(cluster_glyph_override, Some(("", _))) {
+            // This cell's glyph was absorbed by the preceding Indic run.
+            None
+        } else if let Some((cluster_str, span)) =
+            cluster_glyph_override.filter(|(s, _)| !s.is_empty())
+        {
+            // Indic full run: render the entire consecutive Indic run string,
+            // centred within its allocated span of `span` cells.  Core Text
+            // shapes the whole string at once — inter-glyph spacing is
+            // determined by the font's natural advances, exactly as in
+            // browsers and Obsidian.  No manual gap arithmetic needed.
+            let allocated_width = span as f32 * cell_size.x();
+            render_indic_cluster(
+                cluster_str,
+                origin,
+                allocated_width,
+                font_family,
+                font_size,
+                properties,
+                foreground_color,
+                row_indic_scale,
+                ctx,
+            );
+            None // Glyphs rendered inline; skip single-glyph path.
+        } else {
+            match cell_content {
+                // Special-case whitespace, which doesn't need rendering.  We
+                // explicitly check these two chars instead of using
+                // `char::is_whitespace` for performance reasons.
+                CharOrStr::Char(' ' | '\t') => None,
+                CharOrStr::Char(char) => glyphs.glyph_for_char(char, *font_id, ctx.font_cache),
+                // Certain zerowidth characters, such as emoji presentation selectors, can affect the underlying glyph and
+                // change the rendering. Hence, we need to layout/render the text as a combined string, instead of simply
+                // the single character. For example, in \0x2601\0xFE0F, the FE0F selector causes ☁️ to be changed from a
+                // 1-width char to a 2-width char.
+                //
+                // Layer B Indic path: a cell whose Str content is an Indic grapheme cluster
+                // (e.g. "భు", "క్ష", "త్వం" — assembled by the PTY width-override) needs
+                // all Core Text glyphs drawn, not just the first one returned by glyph_for_string.
+                CharOrStr::Str(content_with_zerowidth) => {
+                    if is_indic_str(content_with_zerowidth) {
+                        // Layer B: 1-cell span.  Centre within cell_size.x().
+                        render_indic_cluster(
+                            content_with_zerowidth,
+                            origin,
+                            cell_size.x(),
+                            font_family,
+                            font_size,
+                            properties,
+                            foreground_color,
+                            row_indic_scale,
+                            ctx,
+                        );
+                        None // Rendered inline; skip single-glyph path below.
+                    } else {
+                        glyphs.glyph_for_string(
+                            content_with_zerowidth,
+                            *font_id,
+                            ctx.font_cache,
+                            font_family,
+                            font_size,
+                            properties,
+                            ctx,
+                        )
+                    }
+                }
+            }
+        }
+    } else {
+        // Secret redaction is active: render the (already-overridden) cell_content normally,
+        // ignoring any cluster override.
+        match cell_content {
+            CharOrStr::Char(' ' | '\t') => None,
+            CharOrStr::Char(char) => glyphs.glyph_for_char(char, *font_id, ctx.font_cache),
+            CharOrStr::Str(content_with_zerowidth) => glyphs.glyph_for_string(
+                content_with_zerowidth,
+                *font_id,
+                ctx.font_cache,
+                font_family,
+                font_size,
+                properties,
+                ctx,
+            ),
+        }
+    };
 
     // Handle special unicode characters that will look better with native
     // rendering instead of using glyphs from the font.
@@ -1876,6 +2037,167 @@ fn render_image(
         }
     }
 }
+
+/// Renders all Core Text glyphs for an Indic grapheme cluster string at `origin`.
+///
+/// Called for both the Layer A look-ahead path (conjunct spanning two cells) and the
+/// Layer B path (cluster already assembled into a single cell by the PTY width override).
+///
+/// Uses `layout_line` rather than `glyph_for_string` because:
+///   • Conjuncts like "క్ష" produce BASE + SUBSCRIPT glyphs (≥2 per cluster).
+///   • Font substitution inserts an empty primary-font CTRun before the Telugu run.
+///   • We must draw ALL glyphs from ALL non-empty runs at their shaper-assigned positions.
+#[allow(clippy::too_many_arguments)]
+fn render_indic_cluster(
+    cluster_str: &str,
+    origin: Vector2F,
+    // Width of the cell span allocated to this cluster:
+    allocated_width: f32,
+    font_family: FamilyId,
+    font_size: f32,
+    properties: Properties,
+    foreground_color: ColorU,
+    // Uniform scale for every Indic run on this row (see
+    // `compute_indic_row_scale`) — NOT computed per-word, so every Telugu
+    // word on the line renders at the same visual font size.
+    row_indic_scale: f32,
+    ctx: &mut PaintContext,
+) {
+    let run_length_chars = cluster_str.chars().count();
+    let effective_font_size = font_size * row_indic_scale;
+    let cluster_line = ctx.text_layout_cache.layout_line(
+        cluster_str,
+        LineStyle {
+            font_size: effective_font_size,
+            line_height_ratio: 1.0,
+            baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+            fixed_width_tab_size: None,
+        },
+        &[(
+            0..run_length_chars,
+            StyleAndFont {
+                font_family,
+                properties,
+                style: Default::default(),
+            },
+        )],
+        f32::MAX,
+        Default::default(),
+        &ctx.font_cache.text_layout_system(),
+    );
+    let center_inset = ((allocated_width - cluster_line.width) / 2.0).max(0.0);
+    for run in &cluster_line.runs {
+        if run.glyphs.is_empty() {
+            continue;
+        }
+        for glyph in &run.glyphs {
+            let glyph_origin =
+                origin + vec2f(center_inset + glyph.position_along_baseline.x(), 0.0);
+            ctx.scene.draw_glyph(
+                glyph_origin,
+                glyph.id,
+                run.font_id,
+                effective_font_size,
+                foreground_color,
+            );
+        }
+    }
+}
+
+/// Scans an entire row for Indic-script runs and returns the single tightest
+/// fit-scale across all of them (capped at 1.0).  Using one scale for the
+/// whole row — rather than a per-word scale — keeps every Telugu word on the
+/// row at the SAME visual font size, while still guaranteeing no run
+/// overflows its allocated cells (the row's narrowest-fitting run sets the
+/// scale for everyone).  Returns 1.0 when the row has no Indic content.
+fn compute_indic_row_scale(
+    row: &Row,
+    columns: usize,
+    cell_width: f32,
+    font_family: FamilyId,
+    font_size: f32,
+    ctx: &mut PaintContext,
+) -> f32 {
+    let mut min_scale = 1.0f32;
+    let mut col = 0usize;
+    while col < columns {
+        let cell = &row[col];
+        if cell.c == DEFAULT_CHAR
+            || cell
+                .flags()
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            || !is_indic_cell(cell)
+        {
+            col += 1;
+            continue;
+        }
+        let mut run = String::new();
+        append_cell_display(&mut run, cell);
+        let mut span = 1usize;
+        let mut scan = col + 1;
+        while scan < columns {
+            let sc = &row[scan];
+            if sc.c == DEFAULT_CHAR
+                || sc
+                    .flags()
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                || !is_indic_cell(sc)
+            {
+                break;
+            }
+            append_cell_display(&mut run, sc);
+            span += 1;
+            scan += 1;
+        }
+        let run_length_chars = run.chars().count();
+        let allocated_width = span as f32 * cell_width;
+        let natural_line = ctx.text_layout_cache.layout_line(
+            &run,
+            LineStyle {
+                font_size,
+                line_height_ratio: 1.0,
+                baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+                fixed_width_tab_size: None,
+            },
+            &[(
+                0..run_length_chars,
+                StyleAndFont {
+                    font_family,
+                    properties: Properties::default(),
+                    style: Default::default(),
+                },
+            )],
+            f32::MAX,
+            Default::default(),
+            &ctx.font_cache.text_layout_system(),
+        );
+        if natural_line.width > 0.0 {
+            let ratio = (allocated_width / natural_line.width).min(1.0);
+            min_scale = min_scale.min(ratio);
+        }
+        col = scan;
+    }
+    min_scale
+}
+
+/// Returns `true` if `cell` contains Indic-script content (used by the full-run
+/// look-ahead to decide whether to continue extending a run).
+fn is_indic_cell(cell: &Cell) -> bool {
+    match cell.content_for_display() {
+        CharOrStr::Str(s) => is_indic_str(s),
+        CharOrStr::Char(c) => is_in_indic_block(c),
+    }
+}
+
+/// Appends the display content of `cell` to `buf` (used when building the
+/// concatenated string for a full Indic run).
+fn append_cell_display(buf: &mut String, cell: &Cell) {
+    match cell.content_for_display() {
+        CharOrStr::Str(s) => buf.push_str(s),
+        CharOrStr::Char(c) => buf.push(c),
+    }
+}
+
 
 /// Checks to see if the cell's character is one that we can render natively
 /// using rects or other primitives, and if so, updates the paint context

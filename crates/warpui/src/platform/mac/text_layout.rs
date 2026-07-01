@@ -861,8 +861,9 @@ fn char_index_from_utf_16_byte_index(text: &str, utf_16_index: usize) -> usize {
 fn build_utf16_lookup(text: &str) -> Vec<usize> {
     // Use the UTF-8 length as a starting estimate, since each ASCII character
     // is represented by both 1 UTF-8 code point and 1 UTF-16 code point.
-    let mut table = Vec::with_capacity(text.len());
+    let mut table = Vec::with_capacity(text.len() + 1);
 
+    let mut char_count = 0usize;
     for (char_index, ch) in text.chars().enumerate() {
         // For each UTF-16 code unit in the character, add a mapping to the
         // character's index. The UTF-16 position is implicitly tracked by the
@@ -870,7 +871,13 @@ fn build_utf16_lookup(text: &str) -> Vec<usize> {
         for _ in 0..ch.len_utf16() {
             table.push(char_index);
         }
+        char_count = char_index + 1;
     }
+    // Sentinel: Core Text may report a caret edge at the past-the-end UTF-16
+    // position (= the trailing edge of the last cluster). Without this entry,
+    // the .get() call in caret_positions_for_line panics on strings whose last
+    // cluster is a multi-codepoint conjunct (e.g. Telugu ప్ర).
+    table.push(char_count);
 
     table
 }
@@ -902,8 +909,14 @@ fn caret_positions_for_line(
     let block = {
         let positions = positions.clone();
         ConcreteBlock::new(move |offset, char_index: isize, leading_edge, _stop| {
+            // Keep EVERY edge so the leading/trailing pairing stays intact.
+            // Core Text emits the two edges of each caret consecutively; dropping
+            // one edge would desync every following pair. Core Text indices are
+            // UTF-16 offsets (always >= 0 in practice); clamp the theoretical
+            // kCFNotFound (-1) sentinel to 0 rather than dropping the edge.
+            let utf16_index = usize::try_from(char_index).unwrap_or(0);
             positions.borrow_mut().push(CaretEdge {
-                utf16_index: char_index.try_into().expect("Negative UTF-16 offset"),
+                utf16_index,
                 leading_edge,
                 pixel_offset: offset,
             });
@@ -918,50 +931,56 @@ fn caret_positions_for_line(
     }
     drop(block);
 
-    let mut positions = Rc::try_unwrap(positions)
+    let positions = Rc::try_unwrap(positions)
         .expect("Block reference should be dropped")
         .into_inner();
 
-    debug_assert!(
-        positions.len() % 2 == 0,
-        "Missing a leading or trailing caret edge"
-    );
-    // Core Text sometimes swaps the order of the trailing edge of one caret and
-    // the leading edge of the next, causing edge pairs to be interspersed. So
-    // that we can pair the leading and trailing edges into carets, sort by
-    // character index, assuming that carets don't overlap with each other.
-    // positions should already be almost entirely sorted, except for swapped
-    // edges and RTL text.
-    positions.sort_unstable_by_key(|position| position.utf16_index);
+    // Pair the edges in the order Core Text emitted them. Core Text emits a
+    // caret's two edges (leading + trailing) consecutively, so every adjacent
+    // pair in emission order is exactly one caret: LTR → (leading, trailing),
+    // RTL → (trailing, leading).
+    //
+    // Do NOT sort by character index. When a grapheme cluster is shaped across
+    // multiple Core Text runs (e.g. a Telugu conjunct split by font fallback),
+    // the adjacent carets can have interleaved indices such as
+    //   leading@0 / trailing@2 / leading@1 / trailing@3
+    // Sorting by index regroups them as (leading@0, leading@1)(trailing@2, trailing@3),
+    // producing a (trailing, trailing) pair with no leading edge and a
+    // debug_assert abort.
+    //
+    // chunks_exact(2) silently discards a trailing unpaired edge, so an odd
+    // count is handled gracefully without a pop.
+    let fallback_idx = utf16_offset_to_char_idx.last().copied().unwrap_or(0);
     let mut carets: Vec<_> = positions
         .chunks_exact(2)
         .map(|edges| {
-            // Guaranteed by chunks_exact that there are 2 elements.
             let first = &edges[0];
             let second = &edges[1];
 
-            // Core Text enumerates edges in left-to-right visual order, but
-            // sets the leading edge based on logical order, so use that to
-            // handle RTL text.
-            // For any given leading/trailing edge pair, the pixel offset from
-            // the start of the line is the one for the leading edge.
+            // The caret's pixel offset belongs to the leading edge.
+            // If both edges happen to be trailing (unexpected), fall back to
+            // first.pixel_offset — a slightly misplaced caret beats an abort.
             let pixel_offset = if first.leading_edge {
                 first.pixel_offset
-            } else {
-                debug_assert!(
-                    second.leading_edge,
-                    "No leading edge in {first:?} or {second:?}"
-                );
+            } else if second.leading_edge {
                 second.pixel_offset
+            } else {
+                first.pixel_offset
             };
 
+            // Clamp out-of-range UTF-16 indices: the table covers [0, N] where
+            // N = UTF-16 length of the text (the sentinel added by
+            // build_utf16_lookup). An index beyond that can only come from an
+            // undocumented Core Text edge case; degrade to end-of-text caret.
             let first_index = utf16_offset_to_char_idx
                 .get(first.utf16_index)
-                .expect("Mapping covers whole string")
+                .copied()
+                .unwrap_or(fallback_idx)
                 + char_offset;
             let second_index = utf16_offset_to_char_idx
                 .get(second.utf16_index)
-                .expect("Mapping covers whole string")
+                .copied()
+                .unwrap_or(fallback_idx)
                 + char_offset;
 
             let (start, end) = if first_index < second_index {

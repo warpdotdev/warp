@@ -515,13 +515,20 @@ impl ViewSnapshot {
             .map(|(cur_line_idx, stylized_chars)| {
                 let mut line = String::with_capacity(stylized_chars.len());
                 let mut style_runs = Vec::with_capacity(stylized_chars.len());
-                for (idx, stylized_char) in stylized_chars.into_iter().enumerate() {
+                let mut byte_offset = 0usize;
+                for stylized_char in stylized_chars.into_iter() {
                     // Accumulate both style information and the characters to lay out.
+                    // Use byte offsets (not char indices) so that multi-byte Unicode
+                    // codepoints (Telugu, CJK, emoji, etc.) don't split a char boundary
+                    // and cause a panic in the text layout engine.
+                    let c = stylized_char.char();
+                    let char_byte_len = c.len_utf8();
                     style_runs.push((
-                        idx..idx + 1,
+                        byte_offset..byte_offset + char_byte_len,
                         StyleAndFont::new(family_id, properties, stylized_char.style()),
                     ));
-                    line.push(stylized_char.char());
+                    line.push(c);
+                    byte_offset += char_byte_len;
                 }
 
                 layout_cache.layout_text(
