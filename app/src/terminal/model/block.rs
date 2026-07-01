@@ -286,6 +286,7 @@ pub struct Block {
     virtual_env: Option<String>,
     conda_env: Option<String>,
     node_version: Option<String>,
+    ruby_version: Option<String>,
     exit_code: ExitCode,
     session_id: Option<SessionId>,
     rprompt: Option<String>,
@@ -498,6 +499,7 @@ pub struct PromptInfo {
     pub virtual_env: Option<String>,
     pub conda_env: Option<String>,
     pub node_version: Option<String>,
+    pub ruby_version: Option<String>,
     pub ps1: Option<String>,
     pub rprompt: Option<String>,
     pub honor_ps1: bool,
@@ -974,6 +976,7 @@ impl Block {
             virtual_env: None,
             conda_env: None,
             node_version: None,
+            ruby_version: None,
             rprompt: None,
             background_executor,
             event_proxy,
@@ -2736,6 +2739,10 @@ impl Block {
         self.node_version.as_ref()
     }
 
+    pub fn ruby_version(&self) -> Option<&String> {
+        self.ruby_version.as_ref()
+    }
+
     #[cfg(feature = "integration_tests")]
     pub fn prompt_to_string(&self) -> String {
         self.header_grid.prompt_to_string()
@@ -3339,6 +3346,7 @@ impl ansi::Handler for Block {
         self.virtual_env = data.virtual_env;
         self.conda_env = data.conda_env;
         self.node_version = data.node_version;
+        self.ruby_version = data.ruby_version;
         self.session_id = data.session_id.map(Into::into);
         self.rprompt.clone_from(&data.rprompt);
 

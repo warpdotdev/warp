@@ -236,6 +236,9 @@ impl DProtoHook {
                 "conda_env" => {
                     value.conda_env = map_empty_to_none(v);
                 }
+                "ruby_version" => {
+                    value.ruby_version = map_empty_to_none(v);
+                }
                 "kube_config" => {
                     value.kube_config = map_empty_to_none(v);
                 }
@@ -445,6 +448,8 @@ pub struct PrecmdValue {
 
     #[serde(deserialize_with = "empty_string_is_none", default)]
     pub virtual_env: Option<String>,
+    #[serde(deserialize_with = "empty_string_is_none", default)]
+    pub ruby_version: Option<String>,
 
     #[serde(deserialize_with = "empty_string_is_none", default)]
     pub conda_env: Option<String>,
@@ -487,6 +492,7 @@ impl Default for PrecmdValue {
             virtual_env: Default::default(),
             conda_env: Default::default(),
             node_version: Default::default(),
+            ruby_version: Default::default(),
             kube_config: Default::default(),
             session_id: Default::default(),
             is_after_in_band_command: Default::default(),

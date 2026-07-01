@@ -56,6 +56,14 @@ pub fn node_version(ctx: &GeneratorContext) -> Option<ChipValue> {
         .map(ChipValue::Text)
 }
 
+/// Generator function that shows the current Ruby version.
+pub fn ruby_version(ctx: &GeneratorContext) -> Option<ChipValue> {
+    ctx.current_environment
+        .ruby_version()
+        .cloned()
+        .map(ChipValue::Text)
+}
+
 /// Generator function that shows the current date.
 pub fn date(_: &GeneratorContext) -> Option<ChipValue> {
     Some(ChipValue::Text(

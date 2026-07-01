@@ -209,6 +209,7 @@ pub enum ChipFingerprintInput {
     PythonVirtualenv,
     CondaEnvironment,
     NodeVersion,
+    RubyVersion,
     SessionUser,
     SessionHostname,
     ExternalCommandsState,
@@ -341,6 +342,8 @@ pub struct Environment {
     conda_environment: Option<String>,
     /// The Node.js version.
     node_version: Option<String>,
+    /// The Ruby version.
+    ruby_version: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -502,12 +505,14 @@ impl Environment {
         python_virtualenv: Option<String>,
         conda_environment: Option<String>,
         node_version: Option<String>,
+        ruby_version: Option<String>,
     ) -> Self {
         Self {
             git_branch: None,
             python_virtualenv,
             conda_environment,
             node_version,
+            ruby_version,
         }
     }
 
@@ -518,6 +523,7 @@ impl Environment {
             python_virtualenv: block.virtual_env_short_name(),
             conda_environment: block.conda_env().cloned(),
             node_version: block.node_version().cloned(),
+            ruby_version: block.ruby_version().cloned(),
         }
     }
 
@@ -535,5 +541,9 @@ impl Environment {
 
     pub fn node_version(&self) -> Option<&String> {
         self.node_version.as_ref()
+    }
+
+    pub fn ruby_version(&self) -> Option<&String> {
+        self.ruby_version.as_ref()
     }
 }

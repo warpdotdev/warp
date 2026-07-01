@@ -335,6 +335,7 @@ impl PromptConfiguration {
             ContextChipKind::Ssh,
             ContextChipKind::Subshell,
             ContextChipKind::NodeVersion,
+            ContextChipKind::RubyVersion,
             ContextChipKind::WorkingDirectory,
             ContextChipKind::ShellGitBranch,
             ContextChipKind::GitDiffStats,

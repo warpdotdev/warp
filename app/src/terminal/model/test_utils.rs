@@ -385,6 +385,7 @@ impl TerminalModel {
             virtual_env: None,
             conda_env: None,
             node_version: None,
+            ruby_version: None,
             session_id: Some(0),
             kube_config: None,
             ps1: None,

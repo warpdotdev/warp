@@ -170,6 +170,9 @@ pub struct SerializedBlock {
 
     pub node_version: Option<String>,
 
+    #[serde(default)]
+    pub ruby_version: Option<String>,
+
     pub exit_code: ExitCode,
 
     /// True iff the block _started_ executing (i.e. preexec was received) or it's a static block.
@@ -299,6 +302,7 @@ impl From<&Block> for SerializedBlock {
             virtual_env: block.virtual_env.clone(),
             conda_env: block.conda_env.clone(),
             node_version: block.node_version.clone(),
+            ruby_version: block.ruby_version.clone(),
             ps1,
             rprompt,
             honor_ps1: block.honor_ps1(),
@@ -321,6 +325,7 @@ impl From<&Block> for SerializedBlock {
             virtual_env: prompt_info.virtual_env,
             conda_env: prompt_info.conda_env,
             node_version: prompt_info.node_version,
+            ruby_version: prompt_info.ruby_version,
             exit_code: block.exit_code,
             did_execute: block.state == BlockState::Executing
                 || block.state == BlockState::DoneWithExecution
@@ -355,6 +360,7 @@ impl From<crate::persistence::model::Block> for SerializedBlock {
             virtual_env: block.virtual_env,
             conda_env: block.conda_env,
             node_version: None, // Database does not store node_version yet
+            ruby_version: None, // Database does not store ruby_version yet
             exit_code,
             did_execute: block.did_execute,
             completed_ts: block
