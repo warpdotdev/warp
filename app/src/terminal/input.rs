@@ -13895,9 +13895,8 @@ impl Input {
             && queue_head_allows_lrc;
 
         // When queue mode is not normally active but an agent-requested run_shell_command
-        // action is still pending (snapshot not yet fired), queue as PendingLrcAutoQueue.
-        // This prevents the CliAgentUserQuery / LRC snapshot race and routes through the
-        // normal queue path so the input buffer is cleared and attachments are captured.
+        // action is still pending (snapshot not yet fired), queue as PendingLrcAutoQueue
+        // to prevent the CliAgentUserQuery / LRC snapshot race.
         let queued_for_pending_lrc = !queue_enabled && !queue_for_summarize && !is_command && {
             let pending_action_id = {
                 let terminal_model = self.model.lock();
@@ -13975,9 +13974,8 @@ impl Input {
             editor.clear_buffer(ctx);
         });
 
-        // Only prompt rows get a command-scoped origin; command rows keep AutoQueueToggle.
-        // PendingLrcAutoQueue is locked (disabled send-now) until the snapshot fires, at
-        // which point unlock_pending_lrc_rows transitions it to LrcAutoQueue.
+        // PendingLrcAutoQueue rows are locked until the snapshot fires; LrcAutoQueue
+        // rows auto-fire when the command completes. Command rows use AutoQueueToggle.
         let origin = if queued_for_pending_lrc {
             QueuedQueryOrigin::PendingLrcAutoQueue
         } else if queued_for_lrc && !is_command {

@@ -1055,9 +1055,6 @@ impl BlocklistAIActionModel {
     }
 
     /// Returns true if the given shell command action is still running (snapshot not yet fired).
-    ///
-    /// Used to decide whether an incoming user query should be queued rather than sent immediately,
-    /// to avoid a race between the CliAgentUserQuery and the pending LRC snapshot.
     pub fn is_shell_command_action_pending(
         &self,
         action_id: &AIAgentActionId,

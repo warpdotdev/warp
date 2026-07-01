@@ -35,8 +35,7 @@ pub enum QueuedQueryOrigin {
     /// Filed because auto-queue was in effect during an agent-requested long-running command.
     LrcAutoQueue,
     /// Filed while an agent-requested run_shell_command action's snapshot has not yet fired.
-    /// Locked for manual push and auto-fire until the snapshot fires, at which point it is
-    /// transitioned to [`LrcAutoQueue`] and fires normally when the command completes.
+    /// Locked for manual push and auto-fire until the snapshot fires.
     PendingLrcAutoQueue,
     /// Filed as the follow-up prompt of a `/compact-and <prompt>` slash command, waiting for
     /// the summarize to finish.
@@ -121,7 +120,7 @@ impl QueuedQuery {
     /// Returns true if this row is locked from user mutation, reorder, and auto-fire.
     /// Locked rows cannot be edited, deleted, reordered, pushed manually, or auto-fired by
     /// the drain mechanism. The initial Cloud Mode row is locked permanently; PendingLrcAutoQueue
-    /// rows are locked only until the action snapshot fires (see `unlock_pending_lrc_rows`).
+    /// rows are locked only until the action snapshot fires.
     pub fn is_locked(&self) -> bool {
         matches!(
             self.origin,
@@ -202,8 +201,8 @@ pub enum QueuedQueryEvent {
         conversation_id: AIConversationId,
         query_id: QueuedQueryId,
     },
-    /// Emitted when PendingLrcAutoQueue rows are transitioned to LrcAutoQueue after the
-    /// action snapshot fires. The panel responds by re-evaluating send-now availability.
+    /// Emitted when PendingLrcAutoQueue rows are transitioned to LrcAutoQueue after
+    /// the action snapshot fires.
     RowUnlocked {
         conversation_id: AIConversationId,
     },
@@ -481,7 +480,7 @@ impl QueuedQueryModel {
 
     /// Transitions all `PendingLrcAutoQueue` rows for `conversation_id` to `LrcAutoQueue`,
     /// unlocking them for auto-fire when the command completes. Emits `RowUnlocked` if any
-    /// rows were changed so the panel can refresh send-now button availability.
+    /// rows were changed.
     pub fn unlock_pending_lrc_rows(
         &mut self,
         conversation_id: AIConversationId,
@@ -502,8 +501,8 @@ impl QueuedQueryModel {
         }
     }
 
-    /// Removes all `PendingLrcAutoQueue` rows for `conversation_id`. Called when a conversation
-    /// is cancelled so stale locked rows do not linger in the panel.
+    /// Removes all `PendingLrcAutoQueue` rows for `conversation_id` so stale locked
+    /// rows do not linger.
     pub fn remove_pending_lrc_rows(
         &mut self,
         conversation_id: AIConversationId,

@@ -49,7 +49,7 @@ pub struct ShellCommandExecutor {
 }
 
 impl ShellCommandExecutor {
-    pub const MAX_WAIT_DURATION: Duration = Duration::from_secs(2);
+    pub const MAX_WAIT_DURATION: Duration = Duration::from_secs(30); // TEMP: bumped for manual testing, revert before merge
     /// Maximum delay we will honor for any agent-requested wait. Applies both  
     /// to finite `ShellCommandDelay::Duration` requests and to  
     /// `ShellCommandDelay::OnCompletion`, which would otherwise wait indefinitely.  

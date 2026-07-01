@@ -545,9 +545,8 @@ impl BlocklistAIController {
                 return;
             }
             me.send_follow_up_for_conversation(*conversation_id, ctx);
-            // Unlock any query queued during the pre-snapshot window now that the snapshot has
-            // been sent. The row becomes a regular LrcAutoQueue row and fires when the command
-            // completes via the existing send_lrc_queued_prompts path.
+            // Unlock any query queued during the pre-snapshot window now that the
+            // snapshot has been sent.
             QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                 model.unlock_pending_lrc_rows(*conversation_id, ctx);
             });
@@ -2590,8 +2589,7 @@ impl BlocklistAIController {
         self.pending_passive_suggestion_results
             .remove(&conversation_id);
 
-        // Remove any locked pending-LRC queries so they don't linger in the panel
-        // after the conversation is cancelled.
+        // Remove any locked pending-LRC queries so they don't linger after cancellation.
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.remove_pending_lrc_rows(conversation_id, ctx);
         });
