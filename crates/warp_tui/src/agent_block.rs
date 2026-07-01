@@ -1,17 +1,21 @@
-//! Simple input and streamed plain-text agent blocks for the TUI transcript.
+//! Agent blocks for the TUI transcript. Today this renders user input and
+//! streamed plain-text output; it is the seam intended to grow into a full
+//! rich AI block component (tool calls, code, tables, and other sub-elements).
 use std::rc::Rc;
 
 use warp::tui_export::{
     AIAgentExchangeId, AIAgentTextSection, AIBlockModel, AIConversationId, Appearance,
 };
 use warp_core::ui::color::blend::Blend;
+// `ThemeFill` is the theme-layer color (it supports blend/opacity); `Fill` below
+// is the element-layer color it converts into on its way to a terminal cell.
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     Modifier, TuiColumn, TuiConstraint, TuiContainer, TuiElement, TuiLayoutContext,
     TuiParentElement, TuiSize, TuiStyle, TuiText,
 };
-use warpui_core::elements::Fill as CoreFill;
+use warpui_core::elements::Fill;
 use warpui_core::{AppContext, Entity, EntityIdMap, TuiView};
 
 const INPUT_PREFIX: &str = "≫ ";
@@ -124,16 +128,19 @@ impl TuiAgentBlockView {
         let sections = self.sections(app);
 
         let mut column = TuiColumn::new();
-
-        let mut should_gap_before_next = false;
-        for section in &sections {
-            let top_padding = if should_gap_before_next { 1 } else { 0 };
-            column = column.with_child(section.render_element(top_padding, app));
-            should_gap_before_next = matches!(section, TuiAgentBlockSection::Input(_));
+        for (index, section) in sections.iter().enumerate() {
+            // The single blank line between the submitted input and the output is
+            // the output's top padding (not the input's bottom padding), so the
+            // gap keeps the transcript background instead of the input highlight.
+            let follows_input = index
+                .checked_sub(1)
+                .is_some_and(|prev| matches!(sections[prev], TuiAgentBlockSection::Input(_)));
+            column = column.with_child(section.render_element(u16::from(follows_input), app));
         }
+
         Box::new(
             TuiContainer::new(column)
-                .with_background(CoreFill::from(theme.surface_1()).into())
+                .with_background(Fill::from(theme.surface_1()).into())
                 .with_padding_bottom(u16::from(!sections.is_empty())),
         )
     }
@@ -145,9 +152,9 @@ impl TuiAgentBlockSection {
         let theme = Appearance::as_ref(app).theme();
         match self {
             Self::Input(lines) => {
-                let text_color = CoreFill::from(theme.foreground()).into();
+                let text_color = Fill::from(theme.foreground()).into();
                 let accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
-                let background = CoreFill::from(
+                let background = Fill::from(
                     theme
                         .background()
                         .blend(&accent.with_opacity(10))
@@ -173,7 +180,7 @@ impl TuiAgentBlockSection {
             }
             Self::PlainText(text) => {
                 let text_color =
-                    CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into();
+                    Fill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into();
                 Box::new(
                     TuiContainer::new(
                         TuiText::new(text.clone()).with_style(TuiStyle::default().fg(text_color)),

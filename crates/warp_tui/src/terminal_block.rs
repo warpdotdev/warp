@@ -15,6 +15,12 @@ use warpui_core::elements::tui::{
 use warpui_core::AppContext;
 
 /// Paints a pre-clipped row window from one terminal block.
+///
+/// This is a bespoke [`TuiElement`], unlike agent blocks which compose generic
+/// `TuiText`/`TuiContainer`: terminal cells each carry their own fg/bg/flags,
+/// which no generic single-style text element can express, and a block can be
+/// thousands of rows — painting only the visible slice into the buffer avoids
+/// materializing a huge element tree per frame.
 pub(super) struct TerminalBlockVisibleRowsElement {
     model: Arc<FairMutex<TerminalModel>>,
     block_id: BlockId,
@@ -62,6 +68,9 @@ impl TuiElement for TerminalBlockVisibleRowsElement {
             return;
         };
 
+        // A block stacks its prompt/command grid above its output grid; each call
+        // paints only that grid's rows overlapping this element's visible window,
+        // positioned within `area`, so the two grids don't overlap.
         let max_width = self.width.min(area.width);
         if !block.should_hide_command_grid() {
             render_grid_rows(
@@ -98,6 +107,8 @@ pub(super) fn should_render_terminal_block(block: &Block, block_list: &BlockList
     block.is_visible(block_list.agent_view_state()) && (block.started() || block.finished())
 }
 
+/// Paints consecutive displayed rows of one grid starting at `*y`, advancing
+/// `y` past each row drawn and stopping at the bottom of `area`.
 fn render_displayed_rows(
     block_grid: &BlockGrid,
     displayed_rows: Range<usize>,
@@ -129,6 +140,12 @@ fn render_displayed_rows(
     }
 }
 
+/// Paints the rows of one grid that fall within the element's visible window.
+///
+/// `grid_start_row` is where this grid begins relative to the top of the block
+/// (the command grid starts at 0; the output grid starts below it). Only the
+/// intersection of the grid's rows with `visible_rows` is drawn, offset within
+/// `area` so it lands at the correct vertical position.
 fn render_grid_rows(
     block_grid: &BlockGrid,
     grid_start_row: usize,

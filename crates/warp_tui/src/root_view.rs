@@ -22,16 +22,20 @@ impl RootTuiView {
             terminal_session: None,
         }
     }
-    /// Creates the terminal child view once login has completed.
+    /// Creates the terminal child view once login has completed, or returns the
+    /// existing one if it was already created. Callers notify the root so it
+    /// re-renders from the login placeholder to the terminal session.
     pub(crate) fn create_terminal_session(
         &mut self,
         surface_init: TerminalSurfaceInit,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<TuiTerminalSessionView> {
+        if let Some(terminal_session) = &self.terminal_session {
+            return terminal_session.clone();
+        }
         let terminal_session =
             ctx.add_typed_action_tui_view(|ctx| TuiTerminalSessionView::new(surface_init, ctx));
         self.terminal_session = Some(terminal_session.clone());
-        ctx.notify();
         terminal_session
     }
 }

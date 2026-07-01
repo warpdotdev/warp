@@ -31,19 +31,16 @@ pub(super) enum TuiBlockListViewportItemId {
     AgentBlock(EntityId),
 }
 
-enum TuiBlockListVisibleItem {
-    TerminalBlock {
-        origin_y: usize,
-        /// Full cached height from the canonical `BlockList`.
-        height: usize,
-        block_id: BlockId,
-    },
-    AgentBlock {
-        origin_y: usize,
-        /// Full cached height from the canonical `BlockList`.
-        height: usize,
-        view: ViewHandle<TuiAgentBlockView>,
-    },
+struct TuiBlockListVisibleItem {
+    origin_y: usize,
+    /// Full cached height from the canonical `BlockList`.
+    height: usize,
+    kind: TuiBlockListVisibleItemKind,
+}
+
+enum TuiBlockListVisibleItemKind {
+    TerminalBlock(BlockId),
+    AgentBlock(ViewHandle<TuiAgentBlockView>),
 }
 
 /// Adapts a terminal model's canonical block-list order for TUI viewporting.
@@ -84,6 +81,19 @@ impl TuiBlockListViewportSource {
             .collect()
     }
 
+    /// Writes measured rich-content heights back to the canonical block list.
+    /// Heights are already in the block list's native line unit (one line per
+    /// terminal row), so no pixel round-trip is needed.
+    fn write_line_heights(&self, line_heights: &HashMap<EntityId, BlockHeight>) {
+        if line_heights.is_empty() {
+            return;
+        }
+        self.model
+            .lock()
+            .block_list_mut()
+            .update_rich_content_heights_in_lines(line_heights);
+    }
+
     fn visible_items_in_window(
         &self,
         window: TuiViewportWindow,
@@ -117,6 +127,7 @@ impl TuiBlockListViewportSource {
             if item_top >= viewport_bottom {
                 break;
             }
+
             let visible_item = match item {
                 BlockHeightItem::Block(_) => {
                     let height = item.height().as_f64().ceil().max(0.0) as usize;
@@ -126,10 +137,10 @@ impl TuiBlockListViewportSource {
                             return None;
                         }
 
-                        Some(TuiBlockListVisibleItem::TerminalBlock {
+                        Some(TuiBlockListVisibleItem {
                             origin_y: item_top,
                             height,
-                            block_id: block.id().clone(),
+                            kind: TuiBlockListVisibleItemKind::TerminalBlock(block.id().clone()),
                         })
                     })
                 }
@@ -138,10 +149,10 @@ impl TuiBlockListViewportSource {
                         None
                     } else if let Some(view) = agent_blocks.get(&item.view_id) {
                         let height = item.last_laid_out_height.as_f64().ceil().max(1.0) as usize;
-                        Some(TuiBlockListVisibleItem::AgentBlock {
+                        Some(TuiBlockListVisibleItem {
                             origin_y: item_top,
                             height,
-                            view: view.clone(),
+                            kind: TuiBlockListVisibleItemKind::AgentBlock(view.clone()),
                         })
                     } else {
                         None
@@ -153,7 +164,7 @@ impl TuiBlockListViewportSource {
                 | BlockHeightItem::SubshellSeparator { .. } => None,
             };
             if let Some(item) = visible_item {
-                let rendered_item_bottom = item_top.saturating_add(item.height());
+                let rendered_item_bottom = item_top.saturating_add(item.height);
                 if rendered_item_bottom > window.scroll_top && item_top < viewport_bottom {
                     visible_items.push(item);
                 }
@@ -218,7 +229,7 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
             .take_dirty_rich_content_items();
         let dirty_heights =
             self.measured_dirty_agent_heights(dirty_rich_content_items, available_width, app);
-        write_line_heights(&mut self.model.lock(), &dirty_heights);
+        self.write_line_heights(&dirty_heights);
 
         let (content_height, visible_items) = self.visible_items_in_window(window);
         let items = visible_items
@@ -241,70 +252,50 @@ impl TuiViewportedElement for TuiBlockListViewportSource {
             return false;
         }
 
-        let mut model = self.model.lock();
+        let height_updates = {
+            let model = self.model.lock();
 
-        // Gather the current heights of just the measured items in a single tree
-        // walk, so the change guard below never rescans the whole list per item.
-        let measured_ids = measured_heights
-            .iter()
-            .map(|measured_height| measured_height.item_id)
-            .collect::<HashSet<_>>();
-        let mut current_heights = HashMap::new();
-        for item in model.block_list().block_heights().cursor::<(), ()>() {
-            if let BlockHeightItem::RichContent(item) = item {
-                if measured_ids.contains(&item.view_id) {
-                    current_heights.insert(item.view_id, item.last_laid_out_height.as_f64());
+            // Gather the current heights of just the measured items in a single
+            // tree walk, so the change guard below never rescans the whole list
+            // per item.
+            let measured_ids = measured_heights
+                .iter()
+                .map(|measured_height| measured_height.item_id)
+                .collect::<HashSet<_>>();
+            let mut current_heights = HashMap::new();
+            for item in model.block_list().block_heights().cursor::<(), ()>() {
+                if let BlockHeightItem::RichContent(item) = item {
+                    if measured_ids.contains(&item.view_id) {
+                        current_heights.insert(item.view_id, item.last_laid_out_height.as_f64());
+                    }
                 }
             }
-        }
 
-        let height_updates = measured_heights
-            .iter()
-            .filter_map(|measured_height| {
-                let measured_height_rows = f64::from(measured_height.height.max(1));
-                let current_height_rows = *current_heights.get(&measured_height.item_id)?;
-                (f64::abs(measured_height_rows - current_height_rows) > 0.01).then_some((
-                    measured_height.item_id,
-                    BlockHeight::from(measured_height_rows),
-                ))
-            })
-            .collect::<HashMap<_, _>>();
+            measured_heights
+                .iter()
+                .filter_map(|measured_height| {
+                    let measured_height_rows = f64::from(measured_height.height.max(1));
+                    let current_height_rows = *current_heights.get(&measured_height.item_id)?;
+                    (f64::abs(measured_height_rows - current_height_rows) > 0.01).then_some((
+                        measured_height.item_id,
+                        BlockHeight::from(measured_height_rows),
+                    ))
+                })
+                .collect::<HashMap<_, _>>()
+        };
         if height_updates.is_empty() {
             return false;
         }
 
-        write_line_heights(&mut model, &height_updates);
+        self.write_line_heights(&height_updates);
         true
     }
 }
 
-/// Writes measured rich-content heights back to the canonical block list. Heights
-/// are already in the block list's native line unit (one line per terminal row),
-/// so no pixel round-trip is needed.
-fn write_line_heights(model: &mut TerminalModel, line_heights: &HashMap<EntityId, BlockHeight>) {
-    if !line_heights.is_empty() {
-        model
-            .block_list_mut()
-            .update_rich_content_heights_in_lines(line_heights);
-    }
-}
-
 impl TuiBlockListVisibleItem {
-    fn height(&self) -> usize {
-        match self {
-            Self::TerminalBlock { height, .. } | Self::AgentBlock { height, .. } => *height,
-        }
-    }
-
-    fn origin_y(&self) -> usize {
-        match self {
-            Self::TerminalBlock { origin_y, .. } | Self::AgentBlock { origin_y, .. } => *origin_y,
-        }
-    }
-
     fn visible_rows(&self, window: TuiViewportWindow) -> Range<usize> {
-        let item_top = self.origin_y();
-        let item_bottom = item_top.saturating_add(self.height());
+        let item_top = self.origin_y;
+        let item_bottom = item_top.saturating_add(self.height);
         let visible_top = item_top.max(window.scroll_top);
         let visible_bottom = item_bottom.min(
             window
@@ -321,16 +312,18 @@ impl TuiBlockListVisibleItem {
         available_width: u16,
         app: &AppContext,
     ) -> TuiVisibleViewportItem {
-        let measured_height_id = match &self {
-            Self::AgentBlock { view, .. } => Some(view.id()),
-            Self::TerminalBlock { .. } => None,
+        let measured_height_id = match &self.kind {
+            TuiBlockListVisibleItemKind::AgentBlock(view) => Some(view.id()),
+            TuiBlockListVisibleItemKind::TerminalBlock(_) => None,
         };
         let visible_rows = self.visible_rows(window);
         // Terminal blocks get pre-sliced below; rich content stays whole and lets `TuiClipped`
         // handle any partial visibility.
-        let origin_y = match &self {
-            Self::TerminalBlock { origin_y, .. } => origin_y.saturating_add(visible_rows.start),
-            Self::AgentBlock { .. } => self.origin_y(),
+        let origin_y = match &self.kind {
+            TuiBlockListVisibleItemKind::TerminalBlock(_) => {
+                self.origin_y.saturating_add(visible_rows.start)
+            }
+            TuiBlockListVisibleItemKind::AgentBlock(_) => self.origin_y,
         };
         TuiVisibleViewportItem {
             origin_y,
@@ -346,11 +339,9 @@ impl TuiBlockListVisibleItem {
         width: u16,
         app: &AppContext,
     ) -> Box<dyn TuiElement> {
-        match self {
-            Self::TerminalBlock {
-                block_id, height, ..
-            } => {
-                debug_assert!(visible_rows.end <= height);
+        match self.kind {
+            TuiBlockListVisibleItemKind::TerminalBlock(block_id) => {
+                debug_assert!(visible_rows.end <= self.height);
                 Box::new(TerminalBlockVisibleRowsElement::new(
                     model.clone(),
                     block_id,
@@ -358,7 +349,7 @@ impl TuiBlockListVisibleItem {
                     width,
                 ))
             }
-            Self::AgentBlock { view, .. } => view.as_ref(app).render(app),
+            TuiBlockListVisibleItemKind::AgentBlock(view) => view.as_ref(app).render(app),
         }
     }
 }
