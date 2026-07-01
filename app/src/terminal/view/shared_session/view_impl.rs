@@ -210,7 +210,11 @@ impl TerminalView {
     ) {
         self.pending_cloud_followup_task_id = Some(task_id);
         self.input.update(ctx, |input, ctx| {
-            input.reset_after_cloud_followup_submission(ctx);
+            // This transition merely (re)enables the followup input (e.g. on session
+            // teardown), so it must preserve any draft the user already typed — it must NOT
+            // clear the buffer. The clear-on-submit behavior lives in
+            // `reset_after_cloud_followup_submission`.
+            input.enable_cloud_followup_input(ctx);
             input.set_input_mode_agent(true, ctx);
             input.editor().update(ctx, |editor, ctx| {
                 editor.set_interaction_state(InteractionState::Editable, ctx);
