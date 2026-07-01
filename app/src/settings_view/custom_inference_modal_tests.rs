@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use ai::api_keys::CustomEndpointModel;
 use pathfinder_geometry::vector::vec2f;
 use warpui::platform::WindowStyle;
@@ -61,10 +59,12 @@ fn modal_resizes_with_window_and_added_models() {
         let body = modal.read(&app, |modal, _| modal.body().clone());
         let mut presenter = Presenter::new(window_id);
         let invalidation = WindowInvalidation {
-            updated: HashSet::from([
+            updated: [
                 app.root_view_id(window_id).expect("root view should exist"),
                 body.id(),
-            ]),
+            ]
+            .into_iter()
+            .collect(),
             ..Default::default()
         };
 
@@ -159,10 +159,12 @@ fn action_row_remains_fixed_when_form_scrolls() {
         });
         let body = modal.read(&app, |modal, _| modal.body().clone());
         let invalidation = WindowInvalidation {
-            updated: HashSet::from([
+            updated: [
                 app.root_view_id(window_id).expect("root view should exist"),
                 body.id(),
-            ]),
+            ]
+            .into_iter()
+            .collect(),
             ..Default::default()
         };
 
