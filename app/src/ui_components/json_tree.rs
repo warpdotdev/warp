@@ -1,14 +1,9 @@
 //! Generic, reusable JSON tree rendering component.
 //!
 //! Renders a `serde_json::Value` as an interactive, collapsible tree with
-//! theme-driven colors. The component is designed to be embedded by callers
-//! that provide expansion-state management and callbacks for user actions.
-//!
-//! # Usage
-//! 1. Allocate a `JsonTreeState` in your view.
-//! 2. Resolve `JsonTreeColors` from the active `WarpTheme`.
-//! 3. Call `render_json_tree` on each render pass, passing callbacks for
-//!    toggle and copy-JSON actions.
+//! theme-driven colors.
+// Callers are wired in later phases; suppress until then.
+#![allow(dead_code)]
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -620,3 +615,7 @@ fn indent_spacer(depth: usize) -> Box<dyn Element> {
             .finish()
     }
 }
+
+#[cfg(test)]
+#[path = "json_tree_tests.rs"]
+mod tests;
