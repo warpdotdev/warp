@@ -34,14 +34,13 @@ download_appimage() {
   APPIMAGE_PATH="$LOCAL_BIN/$APPIMAGE_NAME"
 
   if [ -x "$APPIMAGE_PATH" ] && [ "$(appimage_commit "$APPIMAGE_PATH")" = "$COMMIT" ]; then
-    echo "✅ Found $BINARY_NAME on your PATH."
-    return
+    echo "✅ Found $APPIMAGE_NAME in $LOCAL_BIN."
+  else
+    APPIMAGE_RELEASE_URL="$REPO_URL/releases/download/$VERSION/$APPIMAGE_NAME"
+    echo "⬇️ Downloading $APPIMAGE_RELEASE_URL..."
+    curl -fL "$APPIMAGE_RELEASE_URL" --output "$APPIMAGE_PATH"
+    chmod +x "$APPIMAGE_PATH"
   fi
-
-  APPIMAGE_RELEASE_URL="$REPO_URL/releases/download/$VERSION/$APPIMAGE_NAME"
-  echo "⬇️ Downloading $APPIMAGE_RELEASE_URL..."
-  curl -fL "$APPIMAGE_RELEASE_URL" --output "$APPIMAGE_PATH"
-  chmod +x "$APPIMAGE_PATH"
 
   # Create a symlink so we can invoke it like a normal binary.
   ln -sf "$APPIMAGE_PATH" "$LOCAL_BIN/$BINARY_NAME"
