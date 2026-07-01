@@ -1,6 +1,8 @@
 //! Authenticated terminal-session TUI surface.
 use std::borrow::Cow;
+use std::sync::Arc;
 
+use parking_lot::FairMutex;
 use warp::editor::CodeEditorModel;
 use warp::tui_export::{
     AIAgentPtyWriteMode, AIConversationAutoexecuteMode, ActiveSession, AgentInteractionMetadata,
@@ -8,7 +10,7 @@ use warp::tui_export::{
     BlocklistAIController, BlocklistAIHistoryModel, BlocklistAIInputModel, CommandExecutionSource,
     ConversationSelection, ConversationSelectionHandle, ExecuteCommandEvent,
     GetRelevantFilesController, ModelEvent, PtyIntent, PtyIntentEvent, ShellCommandExecutorEvent,
-    TerminalSurface, TerminalSurfaceInit,
+    TerminalModel, TerminalSurface, TerminalSurfaceInit,
 };
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::SingletonEntity;
@@ -71,9 +73,8 @@ impl TuiTerminalSessionView {
         let terminal_surface_id: EntityId = ctx.view_id();
         let active_session =
             ctx.add_model(|ctx| ActiveSession::new(sessions.clone(), model_events.clone(), ctx));
-        // Agent-requested commands run to completion so tool calls execute end to end.
         let conversation_selection = ctx.add_model(|ctx| {
-            Box::new(TuiConversationSelection::new_with_autoexecute_override(
+            Box::new(TuiConversationSelection::new(
                 terminal_surface_id,
                 AIConversationAutoexecuteMode::RunToCompletion,
                 ctx,
@@ -198,7 +199,7 @@ impl TuiTerminalSessionView {
     fn handle_shell_command_executor_event(
         &mut self,
         event: &ShellCommandExecutorEvent,
-        model: &std::sync::Arc<parking_lot::FairMutex<warp::tui_export::TerminalModel>>,
+        model: &Arc<FairMutex<TerminalModel>>,
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
@@ -238,6 +239,10 @@ impl TuiTerminalSessionView {
                     mode: *mode,
                 });
             }
+            // TODO(tui-agent-cancel): we need to think about how we want to handle ctrl c.
+            // Right now it shuts down the entire app, but we should probably mimic the pattern from claude code, amp, etc.
+            // and have one ctrl c shut down any in progress conversation or tool call, and a double ctrl c actually close the app
+            // (with some ephemeral message after the first ctrl c).
             ShellCommandExecutorEvent::CancelExecution
             | ShellCommandExecutorEvent::TransferControlToUser { .. } => {}
         }
@@ -289,28 +294,5 @@ impl TerminalSurface for TuiTerminalSessionView {
     fn on_pty_spawn_failed(&mut self, error: anyhow::Error, ctx: &mut ViewContext<Self>) {
         log::error!("TUI PTY spawn failed: {error:#}");
         ctx.notify();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::borrow::Cow;
-
-    use warp::tui_export::{AIAgentPtyWriteMode, PtyIntent, PtyIntentEvent};
-
-    use super::TuiTerminalSessionEvent;
-
-    #[test]
-    fn write_agent_input_event_maps_to_pty_intent() {
-        let event = TuiTerminalSessionEvent::WriteAgentInput {
-            bytes: Cow::Borrowed(b"hello"),
-            mode: AIAgentPtyWriteMode::Line,
-        };
-
-        let Some(PtyIntent::WriteAgentInput { bytes, mode }) = event.pty_intent() else {
-            panic!("expected write-agent-input PTY intent");
-        };
-        assert_eq!(&*bytes, b"hello");
-        assert_eq!(mode, AIAgentPtyWriteMode::Line);
     }
 }

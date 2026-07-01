@@ -1,6 +1,6 @@
 use warp::tui_export::{
-    AIConversationId, AgentViewEntryOrigin, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    ConversationSelection, ConversationSelectionHandle,
+    AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, ConversationSelection, ConversationSelectionHandle,
 };
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{App, EntityId, ModelHandle};
@@ -18,8 +18,11 @@ fn build_tui_selection(
     let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
     let terminal_surface_id = EntityId::new();
     let selection = app.add_model(|ctx| {
-        Box::new(TuiConversationSelection::new(terminal_surface_id, ctx))
-            as Box<dyn ConversationSelection>
+        Box::new(TuiConversationSelection::new(
+            terminal_surface_id,
+            AIConversationAutoexecuteMode::RespectUserSettings,
+            ctx,
+        )) as Box<dyn ConversationSelection>
     });
     (history, selection, terminal_surface_id)
 }
@@ -126,12 +129,15 @@ fn tui_selection_reconciles_split_and_removed_selection() {
 #[test]
 fn tui_new_conversation_preserves_pending_autoexecute_override() {
     App::test((), |mut app| async move {
-        app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, true, ctx));
+        app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, false, ctx));
         let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::default());
         let terminal_surface_id = EntityId::new();
         let selection = app.add_model(|ctx| {
-            Box::new(TuiConversationSelection::new(terminal_surface_id, ctx))
-                as Box<dyn ConversationSelection>
+            Box::new(TuiConversationSelection::new(
+                terminal_surface_id,
+                AIConversationAutoexecuteMode::RunToCompletion,
+                ctx,
+            )) as Box<dyn ConversationSelection>
         });
 
         let conversation_id = selection

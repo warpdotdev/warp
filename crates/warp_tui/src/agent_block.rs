@@ -112,14 +112,16 @@ impl TuiAIBlock {
             for message in &output.messages {
                 match &message.message {
                     AIAgentOutputMessageType::Text(text) => {
-                        sections.extend(text.sections.iter().filter_map(|section| match section {
-                            AIAgentTextSection::PlainText { text } => (!text.text().is_empty())
-                                .then(|| TuiAIBlockSection::PlainText(text.text().to_owned())),
-                            // Add item variants here as the TUI learns to render richer sections.
-                            AIAgentTextSection::Code { .. }
-                            | AIAgentTextSection::Table { .. }
-                            | AIAgentTextSection::Image { .. }
-                            | AIAgentTextSection::MermaidDiagram { .. } => None,
+                        sections.extend(text.sections.iter().filter_map(|section| {
+                            match section {
+                                AIAgentTextSection::PlainText { text } => (!text.text().is_empty())
+                                    .then(|| TuiAIBlockSection::PlainText(text.text().to_owned())),
+                                // Add item variants here as the TUI learns to render richer sections.
+                                AIAgentTextSection::Code { .. }
+                                | AIAgentTextSection::Table { .. }
+                                | AIAgentTextSection::Image { .. }
+                                | AIAgentTextSection::MermaidDiagram { .. } => None,
+                            }
                         }));
                     }
                     AIAgentOutputMessageType::Action(action) => {
@@ -215,12 +217,15 @@ impl TuiAIBlockSection {
                 .finish()
             }
             Self::ToolCall(_action) => {
+                // TODO: add richer rendering for each tool call type. This is just a rendering stub to build off of.
                 let text_color =
                     Fill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into();
                 Box::new(
                     TuiContainer::new(
                         TuiText::new("executed a tool call").with_style(
-                            TuiStyle::default().fg(text_color).add_modifier(Modifier::DIM),
+                            TuiStyle::default()
+                                .fg(text_color)
+                                .add_modifier(Modifier::DIM),
                         ),
                     )
                     .with_padding_top(top_padding),

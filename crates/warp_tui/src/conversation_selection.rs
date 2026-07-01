@@ -14,22 +14,7 @@ pub(super) struct TuiConversationSelection {
 
 impl TuiConversationSelection {
     /// Creates TUI conversation selection for a terminal surface.
-    #[cfg(test)]
     pub(super) fn new(
-        terminal_surface_id: EntityId,
-        ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
-    ) -> Self {
-        let default_autoexecute_override =
-            if warp_core::execution_mode::AppExecutionMode::as_ref(ctx).is_sandboxed() {
-                AIConversationAutoexecuteMode::RunToCompletion
-            } else {
-                AIConversationAutoexecuteMode::RespectUserSettings
-            };
-        Self::new_with_autoexecute_override(terminal_surface_id, default_autoexecute_override, ctx)
-    }
-
-    /// Creates TUI conversation selection with an explicit new-conversation autoexecute mode.
-    pub(super) fn new_with_autoexecute_override(
         terminal_surface_id: EntityId,
         autoexecute_override: AIConversationAutoexecuteMode,
         ctx: &mut ModelContext<Box<dyn ConversationSelection>>,
@@ -38,9 +23,13 @@ impl TuiConversationSelection {
             &BlocklistAIHistoryModel::handle(ctx),
             |selection, _, event, ctx| selection.handle_history_event(event, ctx),
         );
+
+        // TODO: Implement actual permissions once settings are in place and there is a UI for permissions requests.
+        // For now, we just always set fast-forward to on.
         let pending_query_state = PendingQueryState::New {
             autoexecute_override,
         };
+
         Self {
             terminal_surface_id,
             default_autoexecute_override: autoexecute_override,
