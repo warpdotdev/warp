@@ -26,6 +26,7 @@ use crate::{AppContext, EntityId, EntityIdMap};
 mod buffer;
 mod child_view;
 mod clipped;
+mod collapsible;
 mod color;
 mod column;
 mod constrained_box;
@@ -41,6 +42,7 @@ mod viewported_list;
 pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiStyle};
 pub use child_view::TuiChildView;
 pub use clipped::TuiClipped;
+pub use collapsible::tui_collapsible;
 pub use column::TuiColumn;
 pub use constrained_box::TuiConstrainedBox;
 pub use container::TuiContainer;
@@ -165,6 +167,48 @@ pub trait TuiElement {
         Self: 'static + Sized,
     {
         Box::new(self)
+    }
+}
+
+/// Boxed trait objects delegate to their inner element, letting a
+/// `Box<dyn TuiElement>` be used anywhere an element is expected (e.g. as a
+/// container child) without an extra wrapper type.
+impl TuiElement for Box<dyn TuiElement> {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> TuiSize {
+        self.as_mut().layout(constraint, ctx, app)
+    }
+
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+        self.as_ref().render(area, buffer, ctx)
+    }
+
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+        self.as_ref().cursor_position(area, ctx)
+    }
+
+    fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
+        self.as_mut().present(ctx)
+    }
+
+    fn dispatch_event(
+        &mut self,
+        event: &TuiEvent,
+        area: TuiRect,
+        event_ctx: &mut TuiEventContext,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> bool {
+        self.as_mut()
+            .dispatch_event(event, area, event_ctx, ctx, app)
+    }
+
+    fn finish(self) -> Box<dyn TuiElement> {
+        self
     }
 }
 

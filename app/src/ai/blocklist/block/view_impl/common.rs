@@ -18,6 +18,7 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_core::time_format::format_elapsed_seconds;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::color::internal_colors;
@@ -683,16 +684,6 @@ pub fn render_warping_indicator_base(
         }
 
         container.finish()
-    }
-}
-
-/// Formats elapsed time as a human-readable string with proper singular/plural.
-pub fn format_elapsed_seconds(elapsed: std::time::Duration) -> String {
-    let total_seconds = elapsed.as_secs();
-    if total_seconds == 1 {
-        "1 second".to_string()
-    } else {
-        format!("{total_seconds} seconds")
     }
 }
 

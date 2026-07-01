@@ -21,6 +21,7 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
 use warp_core::channel::ChannelState;
+use warp_core::time_format::format_elapsed_seconds;
 use warp_core::ui::theme::color::internal_colors;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::elements::new_scrollable::SingleAxisConfig;
@@ -39,7 +40,7 @@ use warpui::{
 };
 
 use super::common::{
-    format_elapsed_seconds, render_debug_footer, render_failed_output, render_informational_footer,
+    render_debug_footer, render_failed_output, render_informational_footer,
     render_output_status_text, render_scrollable_collapsible_content, render_text_sections,
     DebugFooterProps, FailedOutputProps, FindContext, TextSectionsProps,
     STATUS_FOOTER_VERTICAL_PADDING, STATUS_ICON_SIZE_DELTA,
