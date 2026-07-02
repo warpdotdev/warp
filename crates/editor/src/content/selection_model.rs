@@ -376,6 +376,11 @@ impl BufferSelectionModel {
             Selection::new(head_anchor, tail_anchor)
         });
         self.set_selections(new_selections.into());
+        // Eagerly remove dead anchors left over from the replaced selections.
+        // Without this, dead anchors accumulate in the anchor map until the
+        // next text edit, causing unbounded memory growth in long sessions
+        // that involve heavy cursor movement without typing (e.g., AI diffs).
+        self.anchors.gc();
     }
 }
 
