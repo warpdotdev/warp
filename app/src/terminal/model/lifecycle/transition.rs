@@ -126,6 +126,7 @@ pub(in crate::terminal) struct LifecycleSnapshot {
     pub is_bootstrapped: bool,
     pub is_bootstrap_done: bool,
     pub is_alt_screen_active: bool,
+    pub completion_mismatch: bool,
 }
 
 /// Explains why an input was conservatively ignored instead of mutating terminal state.
@@ -145,14 +146,12 @@ pub(in crate::terminal) enum IgnoreReason {
 
 /// Describes the single mutation, epoch change, or no-op selected by transition policy.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[allow(dead_code)]
 pub(in crate::terminal) enum LifecycleAction {
     StartActiveBlock,
     ApplyPreexec,
     AcceptCommandFinished,
     ReconcileCompletionThenApplyPrecmd,
     ApplyPrecmd,
-    RefreshPrecmd,
     BeginEpoch,
     Terminate,
     Ignore(IgnoreReason),
@@ -223,7 +222,6 @@ pub(super) fn reconcile_phase(
 pub(super) fn plan(
     previous_phase: LifecyclePhase,
     input: LifecycleInput,
-    snapshot: &LifecycleSnapshot,
 ) -> (LifecyclePhase, LifecycleAction) {
     use IgnoreReason::*;
     use LifecycleAction::*;
@@ -260,22 +258,21 @@ pub(super) fn plan(
         CommandFinished(ActiveDuplicate) => (previous_phase, Ignore(DuplicateCompletion)),
         CommandFinished(ExistingCollision) => (previous_phase, Ignore(CollidingCompletion)),
         CommandFinished(Novel) => match previous_phase {
-            // Bootstrap script-execution blocks are intentionally auto-started before their
-            // prompt arrives, so their next completion may validly be observed from `AtPrompt`.
-            AtPrompt if !snapshot.is_bootstrap_done => (AwaitingPrecmd, AcceptCommandFinished),
-            Submitted | Executing => (AwaitingPrecmd, AcceptCommandFinished),
-            AwaitingPrecmd | AtPrompt | Unknown => (previous_phase, Ignore(RecoveryDisabled)),
+            AwaitingPrecmd | AtPrompt | Submitted | Executing | Unknown => {
+                (AwaitingPrecmd, AcceptCommandFinished)
+            }
             Terminated => (Terminated, Ignore(IgnoredTerminated)),
         },
         // A `Precmd` with completion metadata can apply a prompt after an already accepted
-        // completion. Novel-ID completion recovery remains disabled in this transition slice.
+        // completion. A novel next-block ID selects recovery, which the coordinator feature-gates
+        // before application.
         PrecmdWithCompletionMetadata(ExistingCollision) => {
             (previous_phase, Ignore(CollidingCompletion))
         }
         PrecmdWithCompletionMetadata(Novel) => match previous_phase {
             Terminated => (Terminated, Ignore(IgnoredTerminated)),
             AwaitingPrecmd | AtPrompt | Submitted | Executing | Unknown => {
-                (previous_phase, Ignore(RecoveryDisabled))
+                (AtPrompt, ReconcileCompletionThenApplyPrecmd)
             }
         },
         PrecmdWithCompletionMetadata(ActiveDuplicate) => match previous_phase {
