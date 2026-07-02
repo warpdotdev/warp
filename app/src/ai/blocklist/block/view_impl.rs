@@ -926,11 +926,7 @@ impl View for AIBlock {
                 ))
             });
         let query_and_index_is_some = query_and_index.is_some();
-        let attachment_name_list = if FeatureFlag::ImageAsContext.is_enabled() {
-            attachment_names(self.model.inputs_to_render(app))
-        } else {
-            vec![]
-        };
+        let attachment_name_list = attachment_names(self.model.inputs_to_render(app));
         if let Some((
             query_for_display,
             input_index,

@@ -5731,9 +5731,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::ChangedAgentModeCodingPermissions
             | Self::ChangedAgentModeAskUserQuestionPermission
             | Self::AutoexecutedAgentModeRequestedCommand => EnablementState::Always,
-            Self::AttachedImagesToAgentModeQuery => {
-                EnablementState::Flag(FeatureFlag::ImageAsContext)
-            }
+            Self::AttachedImagesToAgentModeQuery => EnablementState::Always,
             #[cfg(windows)]
             Self::WSLRegistryError
             | Self::AutoupdateUnableToCloseApplications

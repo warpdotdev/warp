@@ -538,7 +538,6 @@ default = [
     "file_retrieval_tools",
     "mcp_server",
     "fast_forward_autoexecute_button",
-    "image_as_context",
     "command_palette_file_search",
     "usage_based_pricing",
     "ai_context_menu",
@@ -757,7 +756,6 @@ inline_slash_commands = ["agent_view"]
 #
 # Enabled on WarpDev by default.
 heap_usage_tracking = ["jemalloc_pprof", "crash_reporting"]
-image_as_context = []
 in_band_generators_ssh = []
 jemalloc = ["dep:tikv-jemallocator", "ai/jemalloc"]
 jemalloc_with_profiling = ["jemalloc", "tikv-jemallocator/profiling"]

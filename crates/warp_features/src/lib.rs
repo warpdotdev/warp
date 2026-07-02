@@ -260,9 +260,6 @@ pub enum FeatureFlag {
     /// MCP server v0 functionality.
     McpServer,
 
-    /// Enables image as context for AM.
-    ImageAsContext,
-
     /// UNIX shells running "natively" on Windows via MSYS2.
     MSYS2Shells,
 

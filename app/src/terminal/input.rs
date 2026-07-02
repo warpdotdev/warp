@@ -5798,11 +5798,8 @@ impl Input {
             })
             .count();
 
-        // Image context is available whenever the feature flag is enabled and we're in AI input
-        // mode, including cloud mode
-        let image_context_options = if FeatureFlag::ImageAsContext.is_enabled()
-            && matches!(ai_input_model.input_type(), InputType::AI)
-        {
+        // Image context is available whenever we're in AI input mode, including cloud mode
+        let image_context_options = if matches!(ai_input_model.input_type(), InputType::AI) {
             ImageContextOptions::Enabled {
                 unsupported_model: !vision_supported,
                 is_processing_attached_images: self.is_processing_attached_images,
@@ -11118,7 +11115,7 @@ impl Input {
 
         // CLI agent rich input always supports image attachment, independent of
         // the UDI setting or the `AgentView` feature flag. Its own composer
-        // gates image chips on `ImageAsContext` + an active CLI agent session.
+        // gates image chips on an active CLI agent session.
         let is_cli_agent_input_open =
             CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id);
         if is_cli_agent_input_open {
