@@ -592,7 +592,16 @@ pub fn user_preferences_file_path() -> PathBuf {
     warp_core::paths::config_local_dir().join("user_preferences.json")
 }
 
-/// Returns the path to the TOML settings file.
+/// Returns the path to the TOML settings file for the active settings surface.
+///
+/// Both surfaces use the same `settings.toml` file name but live in different
+/// config directories (the GUI under [`warp_core::paths::config_local_dir`], the
+/// TUI under [`warp_core::paths::tui_config_local_dir`]) so an installed GUI and
+/// TUI never share (and clobber) one file.
 pub fn user_preferences_toml_file_path() -> PathBuf {
-    warp_core::paths::config_local_dir().join("settings.toml")
+    let config_dir = match settings::settings_mode() {
+        settings::SettingsMode::Gui => warp_core::paths::config_local_dir(),
+        settings::SettingsMode::Tui => warp_core::paths::tui_config_local_dir(),
+    };
+    config_dir.join("settings.toml")
 }

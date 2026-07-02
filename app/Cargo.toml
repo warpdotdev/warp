@@ -834,7 +834,7 @@ session_sharing = []
 session_sharing_acls = []
 skip_login = ["warp_server_client/skip_login"]
 # This feature should only be enabled when building a self-contained binary with the bundle script.
-standalone = ["warp_assets/standalone"]
+standalone = ["warp_assets/standalone", "warp_core/standalone"]
 prompt_suggestions_via_maa = []
 voice_input = ["dep:voice_input"]
 system_theme = []
