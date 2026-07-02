@@ -32,6 +32,7 @@ mod scroll;
 mod select;
 mod ssh;
 mod theme;
+mod tui_autoupdate;
 mod vim_banner;
 
 #[cfg(test)]
@@ -65,6 +66,7 @@ pub use scroll::*;
 pub use select::*;
 pub use ssh::*;
 pub use theme::*;
+pub use tui_autoupdate::*;
 pub use vim_banner::*;
 use warp_core::user_preferences::GetUserPreferences as _;
 

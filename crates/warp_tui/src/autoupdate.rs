@@ -22,6 +22,7 @@
 //! Background updates only run for managed installs (i.e. when the running
 //! executable resolves into a `versions/` directory), so `cargo run` builds
 //! and legacy flat installs are unaffected. Users can opt out with the
+//! file-backed `general.autoupdate_enabled` setting or the
 //! `WARP_TUI_DISABLE_AUTOUPDATE` environment variable; re-running the
 //! install script remains available as a manual escape hatch.
 
@@ -32,6 +33,7 @@ use std::time::Duration;
 use anyhow::{bail, Context as _, Result};
 use channel_versions::{ChannelVersions, ParsedVersion};
 use futures::{StreamExt as _, TryStreamExt as _};
+use warp::settings::TuiAutoupdateSettings;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::send_telemetry_from_ctx;
 use warpui::r#async::Timer;
@@ -40,7 +42,8 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 use crate::telemetry::TuiAutoupdateTelemetryEvent;
 
 /// Setting this environment variable (to any value) disables background
-/// auto-updates.
+/// auto-updates for a single launch, regardless of the
+/// `general.autoupdate_enabled` setting.
 const DISABLE_ENV_VAR: &str = "WARP_TUI_DISABLE_AUTOUPDATE";
 
 /// Name of the directory holding per-version installs under the install root.
@@ -166,15 +169,28 @@ enum AutoupdateEligibility {
 
 impl AutoupdateEligibility {
     /// Determines whether this process should run the background update loop.
-    fn determine() -> Self {
+    ///
+    /// The `general.autoupdate_enabled` setting is read once here, at startup;
+    /// toggling it takes effect on the next launch.
+    fn determine(ctx: &AppContext) -> Self {
         if std::env::var_os(DISABLE_ENV_VAR).is_some() {
             return Self::Disabled {
                 reason: "opted out via the WARP_TUI_DISABLE_AUTOUPDATE environment variable",
             };
         }
+        if !*TuiAutoupdateSettings::as_ref(ctx).autoupdate_enabled {
+            return Self::Disabled {
+                reason: "opted out via the general.autoupdate_enabled setting",
+            };
+        }
         if ChannelState::app_version().is_none() {
             return Self::Disabled {
                 reason: "no release version tag baked into this build",
+            };
+        }
+        if download_os().is_none() {
+            return Self::Disabled {
+                reason: "no TUI release artifacts exist for this platform",
             };
         }
         match InstallLayout::detect() {
@@ -211,7 +227,7 @@ impl TuiAutoupdater {
     /// Registers the singleton and starts the background update loop when
     /// this process is eligible (see [`AutoupdateEligibility::determine`]).
     pub(crate) fn register(ctx: &mut AppContext) {
-        let eligibility = AutoupdateEligibility::determine();
+        let eligibility = AutoupdateEligibility::determine(ctx);
         ctx.add_singleton_model(move |_| TuiAutoupdater {
             eligibility,
             last_reported_outcome: None,
@@ -224,7 +240,8 @@ impl TuiAutoupdater {
         });
     }
 
-    /// Runs one background update check, then schedules the next one.
+    /// Runs one background update check, then schedules the next one after
+    /// [`CHECK_INTERVAL`].
     fn check_now(&mut self, layout: InstallLayout, ctx: &mut ModelContext<Self>) {
         let layout_for_next = layout.clone();
         ctx.spawn(
@@ -237,15 +254,11 @@ impl TuiAutoupdater {
                     Err(error) => log::warn!("TUI autoupdate check failed: {error:#}"),
                 }
                 me.report_outcome(&result, ctx);
-                me.schedule_next_check(layout_for_next, ctx);
+                ctx.spawn(
+                    async { Timer::after(CHECK_INTERVAL).await },
+                    move |me, _, ctx| me.check_now(layout_for_next, ctx),
+                );
             },
-        );
-    }
-
-    fn schedule_next_check(&mut self, layout: InstallLayout, ctx: &mut ModelContext<Self>) {
-        ctx.spawn(
-            async { Timer::after(CHECK_INTERVAL).await },
-            move |me, _, ctx| me.check_now(layout, ctx),
         );
     }
 
@@ -308,8 +321,10 @@ async fn update_once(layout: InstallLayout) -> Result<UpdateOutcome> {
     }
 
     // If a previous check already staged this version and pointed `current`
-    // at it, there is nothing left to do until the user restarts.
-    let already_staged = version_dir.join(&layout.binary_name).is_file();
+    // at it, there is nothing left to do until the user restarts. Like the
+    // staging validation, don't treat a symlinked binary as staged.
+    let already_staged = fs::symlink_metadata(version_dir.join(&layout.binary_name))
+        .is_ok_and(|metadata| metadata.file_type().is_file());
     if already_staged && current_points_at(&layout, &latest_version) {
         return Ok(UpdateOutcome::PendingRestart {
             version: latest_version,
@@ -417,6 +432,21 @@ fn download_channel() -> &'static str {
     }
 }
 
+/// The server's `os` query parameter for this build's platform, or `None` on
+/// platforms that can never have TUI release artifacts. Deriving this from
+/// the build target (instead of hard-coding macOS) guarantees e.g. a Linux
+/// build can never download and stage a macOS artifact; on platforms without
+/// artifacts, [`AutoupdateEligibility::determine`] disables updates entirely.
+fn download_os() -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        Some("macos")
+    } else if cfg!(target_os = "linux") {
+        Some("linux")
+    } else {
+        None
+    }
+}
+
 /// Downloads and stages `version` into `version_dir`: stream the tarball into
 /// a staging directory next to `versions/`, extract and validate it, then
 /// atomically rename it into place. The staging directory lives on the same
@@ -428,13 +458,14 @@ async fn download_and_stage(
     version: &str,
     version_dir: &Path,
 ) -> Result<()> {
+    let os = download_os().context("no TUI release artifacts exist for this platform")?;
     let arch = if cfg!(target_arch = "aarch64") {
         "aarch64"
     } else {
         "x86_64"
     };
     let url = format!(
-        "{}/download/tui?os=macos&arch={arch}&channel={}&version={version}",
+        "{}/download/tui?os={os}&arch={arch}&channel={}&version={version}",
         ChannelState::server_root_url().trim_end_matches('/'),
         download_channel(),
     );
@@ -498,21 +529,24 @@ async fn download_and_stage(
         );
     }
 
-    // Validate the payload before touching the install.
+    // Validate the payload before touching the install, using symlink_metadata
+    // so a crafted archive can't satisfy these checks with symlinks pointing
+    // outside the staged payload: the binary and resources/ must be a regular
+    // file and a real directory, not symlinks.
     let binary_path = payload_dir.join(&layout.binary_name);
-    let binary_is_file = async_fs::metadata(&binary_path)
+    let binary_is_regular_file = async_fs::symlink_metadata(&binary_path)
         .await
-        .is_ok_and(|metadata| metadata.is_file());
-    if !binary_is_file {
+        .is_ok_and(|metadata| metadata.file_type().is_file());
+    if !binary_is_regular_file {
         bail!(
-            "downloaded TUI archive did not contain expected binary {:?}",
+            "downloaded TUI archive did not contain expected binary {:?} as a regular file",
             layout.binary_name
         );
     }
-    let resources_is_dir = async_fs::metadata(payload_dir.join("resources"))
+    let resources_is_regular_dir = async_fs::symlink_metadata(payload_dir.join("resources"))
         .await
-        .is_ok_and(|metadata| metadata.is_dir());
-    if !resources_is_dir {
+        .is_ok_and(|metadata| metadata.file_type().is_dir());
+    if !resources_is_regular_dir {
         bail!("downloaded TUI archive did not contain the expected resources/ directory");
     }
     #[cfg(unix)]
