@@ -293,6 +293,14 @@ fn file_nav_button_tooltip(is_sidebar_expanded: bool, app: &AppContext) -> Strin
     }
 }
 
+fn file_nav_button_icon(is_sidebar_expanded: bool) -> Icon {
+    if is_sidebar_expanded {
+        Icon::LeftSidebarClose
+    } else {
+        Icon::LeftSidebarOpen
+    }
+}
+
 /// Returns true if the file status changed between Deleted and non-Deleted states,
 /// which requires rebuilding the editor state because we can't use global buffer
 /// for files that don't exist on the file system.
@@ -1160,7 +1168,7 @@ impl CodeReviewView {
 
         let file_nav_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", NakedTheme)
-                .with_icon(Icon::FileCopy)
+                .with_icon(file_nav_button_icon(false))
                 .with_tooltip(file_nav_button_tooltip(false, ctx))
                 .on_click(|ctx| ctx.dispatch_typed_action(CodeReviewAction::ToggleFileSidebar))
         });
@@ -1431,9 +1439,11 @@ impl CodeReviewView {
         });
     }
 
-    fn update_file_nav_button_tooltip(&self, ctx: &mut ViewContext<Self>) {
+    fn update_file_nav_button_state(&self, ctx: &mut ViewContext<Self>) {
         let tooltip = file_nav_button_tooltip(self.file_sidebar_expanded, ctx);
+        let icon = file_nav_button_icon(self.file_sidebar_expanded);
         self.file_nav_button.update(ctx, |button, ctx| {
+            button.set_icon(Some(icon), ctx);
             button.set_tooltip(Some(tooltip), ctx);
         });
     }
@@ -1461,7 +1471,7 @@ impl CodeReviewView {
             self.file_sidebar_expanded_before_maximize = Some(self.file_sidebar_expanded);
             if !self.file_sidebar_expanded {
                 self.open_file_sidebar(ctx);
-                self.update_file_nav_button_tooltip(ctx);
+                self.update_file_nav_button_state(ctx);
                 ctx.notify();
             }
         } else if !is_maximized {
@@ -1469,7 +1479,7 @@ impl CodeReviewView {
                 // Transitioning to minimized: restore saved sidebar state
                 if self.file_sidebar_expanded != was_expanded {
                     self.file_sidebar_expanded = was_expanded;
-                    self.update_file_nav_button_tooltip(ctx);
+                    self.update_file_nav_button_state(ctx);
                     ctx.notify();
                 }
             }
@@ -7214,7 +7224,7 @@ impl TypedActionView for CodeReviewView {
                 } else {
                     self.open_file_sidebar(ctx);
                 }
-                self.update_file_nav_button_tooltip(ctx);
+                self.update_file_nav_button_state(ctx);
                 ctx.notify();
             }
             CodeReviewAction::FileSelected(file_index) => {
