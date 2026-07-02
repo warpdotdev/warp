@@ -81,18 +81,6 @@ if [[ -z "$WARP_PLIST_NO_FILE_TYPES" ]]; then
       </array>
     </dict>
     <dict>
-      <key>CFBundleTypeName</key><string>Markdown File</string>
-      <key>CFBundleTypeRole</key><string>Editor</string>
-      <key>LSHandlerRank</key><string>Alternate</string>
-      <key>LSItemContentTypes</key>
-      <array>
-        <string>net.daringfireball.markdown</string>
-        <string>com.unknown.md</string>
-        <string>net.ia.markdown</string>
-        <string>public.markdown</string>
-      </array>
-    </dict>
-    <dict>
       <key>CFBundleTypeName</key><string>Plain Text File</string>
       <key>CFBundleTypeRole</key><string>Editor</string>
       <key>LSHandlerRank</key><string>Alternate</string>
