@@ -8,6 +8,7 @@ use warp_core::send_telemetry_from_ctx;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionId, AIAgentActionResultType, AIAgentContext, CancellationReason,
@@ -334,18 +335,33 @@ impl CLISubagentController {
         // Cancel the in-flight stream to stop the CLI subagent monitoring loop.
         // When the user manually takes over, we use CLISubagentUserTakeover so the
         // conversation status stays InProgress — the agent will resume once the command
-        // finishes or the user hands control back. We do NOT use ManuallyCancelled here
-        // because that would mark the conversation (and ambient task) as cancelled,
-        // which is incorrect since the conversation is still proceeding.
+        // finishes or the user hands control back. Stop is different: Ctrl-C means the
+        // user is ending the agent's work, so mark the conversation cancelled to clear
+        // stale "Warping..." UI and inactive controls immediately.
         if should_cancel_conversation {
             if let Some(conversation_id) = conversation_id {
+                let cancellation_reason = if reason.is_stop() {
+                    CancellationReason::ManuallyCancelled
+                } else {
+                    CancellationReason::CLISubagentUserTakeover
+                };
                 self.controller.update(ctx, |controller, ctx| {
                     controller.cancel_conversation_progress(
                         conversation_id,
-                        CancellationReason::CLISubagentUserTakeover,
+                        cancellation_reason,
                         ctx,
                     );
                 });
+                if reason.is_stop() {
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                        history_model.update_conversation_status(
+                            self.terminal_view_id,
+                            conversation_id,
+                            ConversationStatus::Cancelled,
+                            ctx,
+                        );
+                    });
+                }
             }
         }
 
