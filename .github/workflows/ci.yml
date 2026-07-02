@@ -206,7 +206,7 @@ jobs:
 
       - name: Install cargo nextest
         if: ${{ matrix.is_self_hosted == false }}
-        uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468 # v2.79.3
+        uses: taiki-e/install-action@cde8c9e634f4a17bc06b61413ac0ef75450eac46 # v2.81.4
         with:
           tool: nextest
 
@@ -482,7 +482,7 @@ jobs:
           echo "::notice title=Remote Server Tests - Default Bash Version::$DEFAULT_BASH_VERSION"
 
       - name: Install cargo nextest
-        uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468 # v2.79.3
+        uses: taiki-e/install-action@cde8c9e634f4a17bc06b61413ac0ef75450eac46 # v2.81.4
         with:
           tool: nextest
 
