@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use anyhow::anyhow;
 use arborium::tree_sitter::{Parser, Query, QueryCursor, Tree};
@@ -22,6 +23,17 @@ cfg_if::cfg_if! {
         use crate::index::matches_gitignores;
     }
 }
+
+/// Upper bound on the cumulative heap size (in bytes) of the retained symbol
+/// outline for a single repository. Once the outlines built so far exceed this
+/// budget, the remaining files are skipped (their outline is left empty) so that
+/// a very large repository — or many indexed repositories at once — cannot grow
+/// the in-memory index to multiple gigabytes. Typical repositories produce
+/// outlines well under this limit and are unaffected.
+///
+/// See APP-4794 / Sentry 7259255054: ~6 GB of live heap was retained here as
+/// owned `Symbol` strings produced by `parse_file_outline`.
+const MAX_OUTLINE_TOTAL_BYTES: usize = 256 * 1024 * 1024;
 
 /// Given a repo path, try to build its outline. An outline is a list of all its files and the symbols
 /// of interest from each file.
@@ -67,12 +79,32 @@ pub async fn build_outline(
     pool.spawn(move || {
         // Parse each file in parallel. Note that we have to fold and then reduce given the parallelization.
         let result = pool.install(|| {
+            // Track the cumulative heap size of the outlines retained so far and
+            // stop parsing once we exceed the budget. This bounds the in-memory
+            // index for pathologically large (or numerous) repos, which could
+            // otherwise retain multiple GB of `Symbol` strings (APP-4794).
+            let retained_bytes = AtomicUsize::new(0);
+            let budget_warned = AtomicBool::new(false);
             files
                 .par_iter()
                 .map(|metadata| {
+                    if retained_bytes.load(Ordering::Relaxed) >= MAX_OUTLINE_TOTAL_BYTES {
+                        return (metadata.file_id, FileOutline::default());
+                    }
+
                     let outline = parse_file_outline(&metadata.path.to_local_path_lossy())
                         .ok()
                         .unwrap_or_default();
+                    retained_bytes.fetch_add(outline.approx_heap_size(), Ordering::Relaxed);
+
+                    if retained_bytes.load(Ordering::Relaxed) >= MAX_OUTLINE_TOTAL_BYTES
+                        && !budget_warned.swap(true, Ordering::Relaxed)
+                    {
+                        log::warn!(
+                            "Repo outline reached the {MAX_OUTLINE_TOTAL_BYTES}-byte memory \
+                             budget; remaining files will be skipped to bound memory usage."
+                        );
+                    }
 
                     (metadata.file_id, outline)
                 })
