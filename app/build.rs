@@ -117,17 +117,16 @@ fn main() -> Result<()> {
         // Retrieve the Cargo profile name so that we can put a copy of ConPTY in
         // the correct target subdirectory.
         //
-        // We need to pass this information manually through an environment variable.
-        // Of the built-in variables set by Cargo: `OUT_DIR` is only a temporary
-        // directory, and `PROFILE` can only be `debug` or `release`.
-        // See https://doc.rust-lang.org/cargo/reference/environment-variables.html#environment-variables-cargo-sets-for-build-scripts
-        // for more on Cargo environment variables.
+        // `CARGO_FULL_PROFILE` is set by bundle scripts for custom profiles (e.g.
+        // release-lto). Fall back to Cargo's built-in `PROFILE` ("debug"/"release")
+        // for direct `cargo build` invocations. See also:
+        // https://doc.rust-lang.org/cargo/reference/environment-variables.html#environment-variables-cargo-sets-for-build-scripts
         //
         // Ideally we could access `CARGO_TARGET_DIR` but this doesn't exist at build time.
         // See https://github.com/rust-lang/cargo/issues/9661.
-        //
-        // Cargo defaults to the `debug` profile.
-        let cargo_full_profile = env::var("CARGO_FULL_PROFILE").unwrap_or(String::from("debug"));
+        let cargo_full_profile = env::var("CARGO_FULL_PROFILE")
+            .or_else(|_| env::var("PROFILE"))
+            .unwrap_or_else(|_| String::from("debug"));
         let target_dir =
             app_target_dir(&cargo_full_profile).expect("Could not get app target directory");
         copy_windows_assets(&target_dir);
