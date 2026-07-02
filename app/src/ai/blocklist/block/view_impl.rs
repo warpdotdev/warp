@@ -58,6 +58,7 @@ use super::secret_redaction::SecretRedactionState;
 use super::{
     attachment_names, AIBlock, AIBlockAction, TextLocation,
     DISPATCHED_REQUESTED_EDIT_KEYMAP_CONTEXT, HAS_PENDING_ACTION,
+    RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID,
 };
 use crate::ai::agent::{AIAgentCitation, AIAgentInput};
 use crate::ai::blocklist::block::view_impl::comments::address_comment_chips;
@@ -174,7 +175,7 @@ fn add_highlights_to_text(
         if open_secret_tooltip.location == location {
             text_element = text_element.with_saved_char_position(
                 open_secret_tooltip.secret_range.char_range.start,
-                secret_redaction_state.resolved_tooltip_position_id(),
+                RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID.to_owned(),
             );
         }
     }
@@ -521,7 +522,7 @@ pub(crate) fn add_highlights_to_rich_text(
                 formatted_text_element = formatted_text_element.with_saved_glyph_position(
                     open_secret_tooltip.secret_range.char_range.start,
                     i,
-                    secret_redaction_state.resolved_tooltip_position_id(),
+                    RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID.to_owned(),
                 );
                 if !is_selecting {
                     let highlight_indices = open_secret_tooltip

@@ -20154,8 +20154,11 @@ impl TerminalView {
             }
             AIBlockEvent::ShowLinkTooltip(tooltip_info) => {
                 self.open_rich_content_link_tool_tip = Some(tooltip_info.clone());
-                // Re-render the terminal view so the tooltip overlay is (re)positioned and shown.
-                // Without this the overlay isn't added on the render that follows the click.
+                // A plain click that opens a tooltip now skips `dismiss_ai_tooltips` (see the
+                // empty-selection guard in `AIBlock`'s `SelectText` handler), which previously
+                // also triggered a re-render via its own `ctx.notify()`. Without that incidental
+                // render the terminal view doesn't re-render to place the tooltip overlay, so we
+                // must notify here when tooltip visibility changes.
                 ctx.notify();
             }
             AIBlockEvent::DismissLinkTooltip => {

@@ -226,12 +226,6 @@ fn rich_content_link_tooltip_position_id(view_id: &EntityId) -> String {
     format!("{base}_{view_id}")
 }
 
-/// Builds a per-view-unique save-position id for a rich-content secret tooltip.
-fn rich_content_secret_tooltip_position_id(view_id: &EntityId) -> String {
-    let base = RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID;
-    format!("{base}_{view_id}")
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct UserAvatarInfo {
     display_name: String,
@@ -5188,17 +5182,15 @@ impl AIBlock {
         secret_range: &SecretRange,
         ctx: &mut ViewContext<Self>,
     ) {
-        let position_id = rich_content_secret_tooltip_position_id(&ctx.view_id());
-        if let Some(hoverable_secret) = self.secret_redaction_state.show_secret_tooltip(
-            location,
-            secret_range,
-            position_id.clone(),
-        ) {
+        if let Some(hoverable_secret) = self
+            .secret_redaction_state
+            .show_secret_tooltip(location, secret_range)
+        {
             ctx.emit(AIBlockEvent::ShowSecretTooltip(
                 RichContentSecretTooltipInfo {
                     secret: hoverable_secret.secret.clone(),
                     is_obfuscated: hoverable_secret.is_obfuscated,
-                    position_id,
+                    position_id: RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID.to_owned(),
                     secret_range: secret_range.clone(),
                     location: *location,
                     view_id: ctx.view_id(),
