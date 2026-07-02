@@ -1285,8 +1285,8 @@ enum OpenFileAction {
 
 /// Pure routing decision for `open_file`. Extracted so it can be unit-tested without
 /// standing up a full `AppContext`.
-fn classify_open_file_action(path: &Path) -> OpenFileAction {
-    if is_markdown_file(path) {
+fn classify_open_file_action(path: &Path, prefer_markdown_viewer: bool) -> OpenFileAction {
+    if is_markdown_file(path) && prefer_markdown_viewer {
         OpenFileAction::Notebook
     } else if is_runnable_shell_script(path) {
         OpenFileAction::ExecuteInSession
@@ -1305,7 +1305,7 @@ fn can_open_file_editor_path(path: &Path) -> bool {
 }
 
 /// Handle an incoming `file://` URL.
-/// * Markdown files are opened as notebook panes.
+/// * Markdown files are opened as notebook panes when the viewer preference is enabled.
 /// * For directories, open a new session at the directory path.
 /// * For other files, open a new session at the parent directory path, then possibly execute the
 ///   file.
@@ -1315,7 +1315,15 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
             .map(|view_id| (window_id, view_id))
     });
 
-    let action = classify_open_file_action(&path);
+    #[cfg(feature = "local_fs")]
+    let prefer_markdown_viewer = {
+        use crate::util::file::external_editor::EditorSettings;
+        *EditorSettings::as_ref(ctx).prefer_markdown_viewer
+    };
+    #[cfg(not(feature = "local_fs"))]
+    let prefer_markdown_viewer = true;
+
+    let action = classify_open_file_action(&path, prefer_markdown_viewer);
 
     if action == OpenFileAction::Notebook {
         if let Some((primary_window_id, root_view_id)) = primary_window_and_view {
