@@ -15850,6 +15850,7 @@ dependencies = [
  "command",
  "dirs 6.0.0",
  "instant",
+ "itertools 0.14.0",
  "log",
  "num-traits",
  "parking_lot",

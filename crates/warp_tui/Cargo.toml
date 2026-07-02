@@ -36,6 +36,7 @@ path = "src/bin/stable.rs"
 anyhow.workspace = true
 dirs.workspace = true
 instant.workspace = true
+itertools.workspace = true
 log.workspace = true
 num-traits.workspace = true
 parking_lot.workspace = true

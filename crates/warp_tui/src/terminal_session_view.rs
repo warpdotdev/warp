@@ -8,21 +8,16 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
     AIAgentPtyWriteMode, ActiveSession, ActiveSessionEvent, AgentInteractionMetadata,
-    AgentViewEntryOrigin, Appearance, BlocklistAIActionModel, BlocklistAIContextModel,
-    BlocklistAIController, BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason,
-    CommandExecutionSource, ConversationSelection, ConversationSelectionHandle,
-    ExecuteCommandEvent, GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent,
-    ModelEvent, PtyIntent, PtyIntentEvent, ShellCommandExecutorEvent, TerminalModel,
-    TerminalSurface, TerminalSurfaceInit,
+    AgentViewEntryOrigin, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason, CommandExecutionSource,
+    ConversationSelection, ConversationSelectionHandle, ExecuteCommandEvent,
+    GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent, ModelEvent, PtyIntent,
+    PtyIntentEvent, ShellCommandExecutorEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit,
 };
-use warp_core::ui::theme::Fill as ThemeFill;
-use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    Color, Modifier, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiStyle,
-    TuiText,
+    Modifier, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiStyle, TuiText,
 };
-use warpui_core::elements::Fill as CoreFill;
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::FixedBinding;
 use warpui_core::platform::TerminationMode;
@@ -36,6 +31,7 @@ use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::transcript_view::TuiTranscriptView;
+use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
@@ -449,12 +445,9 @@ impl TuiView for TuiTerminalSessionView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        let theme = Appearance::as_ref(ctx).theme();
-        let border_color: Color =
-            CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.cyan)).into();
         let input_box = TuiConstrainedBox::new(
             TuiContainer::new(TuiChildView::new(&self.input_view).finish())
-                .with_border_style(TuiStyle::default().fg(border_color))
+                .with_border_style(TuiUiBuilder::from_app(ctx).accent_border_style())
                 .finish(),
         )
         .with_max_rows(MAX_INPUT_TEXT_ROWS + 2);

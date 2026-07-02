@@ -396,9 +396,7 @@ fn header_click_records_a_manual_collapse_override() {
             // The streaming block was expanded, so the click records a collapse
             // override that wins over the expanded-while-streaming default.
             let message_id = MessageId::new("reasoning-1".to_owned());
-            assert!(block
-                .thinking_states
-                .is_collapsed(&message_id, false));
+            assert!(block.thinking_states.is_collapsed(&message_id, false));
         });
     });
 }

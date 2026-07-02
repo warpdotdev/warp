@@ -12,6 +12,7 @@ mod agent_block_sections;
 pub mod input;
 pub mod root_view;
 pub mod session;
+mod tui_builder;
 mod ui;
 
 mod conversation_selection;

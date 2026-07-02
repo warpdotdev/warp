@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
+use itertools::Itertools;
 use warp::tui_export::{
     AIAgentAction, AIAgentExchangeId, AIAgentOutputMessageType, AIAgentTextSection, AIBlockModel,
     AIConversationId, MessageId,
@@ -166,7 +167,6 @@ impl TuiAIBlock {
             .inputs_to_render(app)
             .iter()
             .filter_map(|input| input.display_query())
-            .collect::<Vec<_>>()
             .join("\n");
         if !input.is_empty() {
             sections.push(TuiAIBlockSection::Input(input));
@@ -214,7 +214,6 @@ impl TuiAIBlock {
                                     | AIAgentTextSection::Image { .. }
                                     | AIAgentTextSection::MermaidDiagram { .. } => None,
                                 })
-                                .collect::<Vec<_>>()
                                 .join("\n"),
                         });
                     }
