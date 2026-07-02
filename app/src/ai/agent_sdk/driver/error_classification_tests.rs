@@ -298,3 +298,34 @@ fn harness_runtime_failure_detected_is_failed_with_auth_required() {
     assert!(update.message.contains("credit balance is too low"));
     assert!(update.message.contains("Your credit balance is too low"));
 }
+
+#[test]
+fn harness_runtime_failure_detected_500_is_error_with_internal_error() {
+    // Anthropic 500 server errors are transient and should map to ERROR
+    // (not FAILED) with an InternalError code so users know to retry.
+    let (state, update) = classify_driver_error(&AgentDriverError::HarnessRuntimeFailureDetected {
+        harness: "claude".into(),
+        pattern: "API Error: 500".into(),
+        excerpt: "API Error: 500 Internal server error. This is a server-side issue, usually temporary \u{2013} try again in a moment.".into(),
+    });
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
+    assert!(update.message.contains("temporary upstream API error"));
+    assert!(update.message.contains("claude"));
+    assert!(update.message.contains("API Error: 500"));
+    assert!(update.message.contains("try running your task again"));
+}
+
+#[test]
+fn harness_runtime_failure_detected_529_is_error_with_internal_error() {
+    // Anthropic 529 overloaded errors are also transient.
+    let (state, update) = classify_driver_error(&AgentDriverError::HarnessRuntimeFailureDetected {
+        harness: "claude".into(),
+        pattern: "API Error: 529".into(),
+        excerpt: "API Error: 529 Overloaded".into(),
+    });
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
+    assert!(update.message.contains("temporary upstream API error"));
+    assert!(update.message.contains("API Error: 529"));
+}
