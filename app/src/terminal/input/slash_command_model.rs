@@ -26,9 +26,9 @@ pub struct DetectedCommand {
     /// The command in the input.
     pub command: StaticCommand,
 
-    /// The space-delimited argument to the command, if any. Does not include the leading space.
+    /// The whitespace-delimited argument to the command, if any. Does not include the leading delimiter.
     ///
-    /// If there is no trailing space after the command, then `None`.
+    /// If there is no trailing whitespace after the command, then `None`.
     pub argument: Option<String>,
 }
 
@@ -41,7 +41,7 @@ pub struct DetectedSkillCommand {
     /// The skill name (without the leading '/').
     pub name: String,
 
-    /// The space-delimited argument to the skill command (the user's prompt).
+    /// The whitespace-delimited argument to the skill command (the user's prompt).
     pub argument: Option<String>,
 }
 
@@ -239,12 +239,7 @@ impl SlashCommandModel {
     /// Detects whether `buffer` matches a known skill command.
     /// Accepts `&AppContext` so it can be called outside a model update.
     fn detect_skill_command(&self, buffer: &str, ctx: &AppContext) -> Option<DetectedSkillCommand> {
-        let (possible_command, possible_argument) =
-            if let Some((command, argument)) = buffer.split_once(" ") {
-                (command, Some(argument.to_owned()))
-            } else {
-                (buffer, None)
-            };
+        let (possible_command, possible_argument) = split_command_and_argument(buffer);
 
         let skill_name = possible_command.strip_prefix('/')?;
 
@@ -396,8 +391,8 @@ impl SlashCommandModel {
                 }
 
                 if pending_command
-                    .split_once(' ')
-                    .map_or(pending_command, |(command, _)| command)
+                    .find(char::is_whitespace)
+                    .map_or(pending_command, |index| &pending_command[..index])
                     .contains('/')
                 {
                     // If the user typed a second '/' in the command token (e.g., /foo/bar),
@@ -422,22 +417,32 @@ impl Entity for SlashCommandModel {
     type Event = UpdatedSlashCommandModel;
 }
 
+fn split_command_and_argument(buffer: &str) -> (&str, Option<String>) {
+    if let Some(delimiter_start) = buffer.find(char::is_whitespace) {
+        let delimiter_len = buffer[delimiter_start..]
+            .chars()
+            .next()
+            .map_or(0, char::len_utf8);
+        (
+            &buffer[..delimiter_start],
+            Some(buffer[delimiter_start + delimiter_len..].to_owned()),
+        )
+    } else {
+        (buffer, None)
+    }
+}
+
 impl SlashCommandDataSource {
     // Matches `buffer` against active slash commands, returning the detected command and
-    // space-delimited argument (if provided).
+    // whitespace-delimited argument (if provided).
     //
     // If a slash command has no argument, it matches only if its an exact match or the
     // suffix is all whitespace.
     //
     // If the slash command has an argument, it matches only if its an exact match, or if the argument
-    // is space-delimited.
+    // is whitespace-delimited.
     fn parse_slash_command(&self, buffer: &str) -> Option<DetectedCommand> {
-        let (possible_command, possible_argument) =
-            if let Some((command, argument)) = buffer.split_once(" ") {
-                (command, Some(argument.to_owned()))
-            } else {
-                (buffer, None)
-            };
+        let (possible_command, possible_argument) = split_command_and_argument(buffer);
 
         let is_matching_command = |command: &StaticCommand| -> bool {
             if command.name != possible_command {
