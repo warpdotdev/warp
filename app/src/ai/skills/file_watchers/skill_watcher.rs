@@ -1066,13 +1066,59 @@ async fn read_and_parse_project_skills(
 fn read_local_project_skill_contents(
     skill_paths: Vec<LocalOrRemotePath>,
 ) -> Vec<(LocalOrRemotePath, String)> {
-    skill_paths
-        .into_iter()
-        .filter_map(|path| {
-            let content = fs::read_to_string(path.to_local_path()?).ok()?;
-            Some((path, content))
-        })
-        .collect()
+    // Mirror the remote skill read path (`read_remote_text_file_contents`), which
+    // bounds both per-file and per-batch bytes. Without these caps a single large
+    // file (or many files) matched as a project skill is read fully into memory
+    // via `read_to_string`, which has driven multi-hundred-MB heap spikes when a
+    // repository contains a pathologically large skill file (Sentry 7259255054).
+    let max_file_bytes = u64::from(REMOTE_CONTEXT_MAX_FILE_BYTES);
+    let max_batch_bytes = u64::from(REMOTE_CONTEXT_MAX_BATCH_BYTES);
+
+    let mut batch_bytes: u64 = 0;
+    let mut contents = Vec::new();
+    for path in skill_paths {
+        let Some(local_path) = path.to_local_path() else {
+            continue;
+        };
+        let Some(content) = read_capped_skill_file(local_path, max_file_bytes) else {
+            continue;
+        };
+        // Stop before exceeding the cumulative batch budget so the total amount of
+        // skill content held in memory at once stays bounded.
+        if batch_bytes.saturating_add(content.len() as u64) > max_batch_bytes {
+            log::warn!(
+                "Reached project skill read batch limit ({max_batch_bytes} bytes); skipping remaining files"
+            );
+            break;
+        }
+        batch_bytes = batch_bytes.saturating_add(content.len() as u64);
+        contents.push((path, content));
+    }
+    contents
+}
+
+/// Reads a local skill file into a `String`, returning `None` if the file is
+/// missing, unreadable, not valid UTF-8, or larger than `max_bytes`.
+///
+/// The read is bounded to `max_bytes + 1` so a pathologically large file is
+/// never fully loaded into memory before being rejected.
+fn read_capped_skill_file(path: &Path, max_bytes: u64) -> Option<String> {
+    use std::io::Read as _;
+
+    let file = fs::File::open(path).ok()?;
+    let mut content = String::new();
+    let bytes_read = file
+        .take(max_bytes.saturating_add(1))
+        .read_to_string(&mut content)
+        .ok()?;
+    if bytes_read as u64 > max_bytes {
+        log::warn!(
+            "Skipping oversized project skill file {} (> {max_bytes} byte limit)",
+            path.display()
+        );
+        return None;
+    }
+    Some(content)
 }
 
 fn parse_project_skill_contents(
