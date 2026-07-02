@@ -27,11 +27,15 @@ pub use self::changelog::get_current_changelog;
 use self::channel_versions::fetch_channel_versions;
 use crate::channel::Channel;
 use crate::features::FeatureFlag;
+use crate::palette::PaletteMode;
+use crate::quit_warning::UnsavedStateSummary;
 use crate::server::server_api::ServerApi;
-use crate::server::telemetry::TelemetryEvent;
-use crate::workspace::Workspace;
+use crate::server::telemetry::{CloseTarget, PaletteSource, TelemetryEvent};
+use crate::session_management::{RunningSessionSummary, SessionNavigationData};
+use crate::workspace::{Workspace, WorkspaceAction};
 use crate::{
-    report_if_error, send_telemetry_from_ctx, send_telemetry_sync_from_app_ctx, ChannelState,
+    report_if_error, send_telemetry_from_app_ctx, send_telemetry_from_ctx,
+    send_telemetry_sync_from_app_ctx, ChannelState,
 };
 
 /// A successfully downloaded and unpacked target update.
@@ -863,6 +867,14 @@ pub fn apply_update(
 /// 2. Request a relaunch.
 /// 3. Terminate the app.
 pub fn initiate_relaunch_for_update(app: &mut AppContext) {
+    initiate_relaunch_for_update_with_termination(app, false);
+}
+
+fn initiate_confirmed_relaunch_for_update(app: &mut AppContext) {
+    initiate_relaunch_for_update_with_termination(app, true);
+}
+
+fn initiate_relaunch_for_update_with_termination(app: &mut AppContext, force_termination: bool) {
     let autoupdate_stage = &AutoupdateState::as_ref(app).stage;
 
     match autoupdate_stage {
@@ -870,7 +882,7 @@ pub fn initiate_relaunch_for_update(app: &mut AppContext) {
             // The update was already fully applied, so all that's left to do is relaunch.
             log::info!("Relaunching to apply update");
             RelaunchModel::handle(app).update(app, RelaunchModel::request_relaunch);
-            app.terminate_app(TerminationMode::Cancellable, None);
+            app.terminate_app(termination_mode_for_update(force_termination), None);
         }
         AutoupdateStage::UpdateReady {
             new_version,
@@ -913,13 +925,40 @@ pub fn initiate_relaunch_for_update(app: &mut AppContext) {
                 send_telemetry_sync_from_app_ctx!(event, app);
 
                 // Request termination of the app.
-                app.terminate_app(TerminationMode::Cancellable, None);
+                app.terminate_app(termination_mode_for_update(force_termination), None);
             });
         }
         _ => {
             log::info!("No update ready to install, not relaunching");
         }
     }
+}
+
+fn termination_mode_for_update(force_termination: bool) -> TerminationMode {
+    if force_termination {
+        TerminationMode::ForceTerminate
+    } else {
+        TerminationMode::Cancellable
+    }
+}
+
+/// Warn before relaunching to apply an update when doing so would terminate running sessions or
+/// discard unsaved state.
+pub fn initiate_relaunch_for_update_with_warning(app: &mut AppContext) {
+    let summary = UnsavedStateSummary::for_app(app);
+    if summary.should_display_warning(app) {
+        let shown = summary
+            .dialog()
+            .on_confirm(initiate_confirmed_relaunch_for_update)
+            .on_cancel(|app| cancel_relaunch_and_maybe_show_processes(false, app))
+            .on_show_processes(|app| cancel_relaunch_and_maybe_show_processes(true, app))
+            .show(app);
+        if shown {
+            return;
+        }
+    }
+
+    initiate_relaunch_for_update(app);
 }
 
 /// Apply a pending update without relaunching. This is called at shutdown in case the user quit
@@ -1006,6 +1045,48 @@ pub fn cancel_relaunch(app: &mut AppContext) {
                 ctx,
             );
         });
+    }
+}
+
+fn cancel_relaunch_and_maybe_show_processes(open_navigation_palette: bool, app: &mut AppContext) {
+    cancel_relaunch(app);
+
+    send_telemetry_from_app_ctx!(
+        TelemetryEvent::QuitModalCancel {
+            nav_palette: open_navigation_palette,
+            modal_for: CloseTarget::App,
+        },
+        app
+    );
+
+    let sessions: Vec<_> = SessionNavigationData::all_sessions(app).collect();
+    let session_summary = RunningSessionSummary::new(&sessions);
+    if !open_navigation_palette || session_summary.long_running_cmds.is_empty() {
+        return;
+    }
+
+    let window_id_to_focus = app
+        .windows()
+        .active_window()
+        .or_else(|| session_summary.windows_running().iter().next().copied());
+    let Some(window_id_to_focus) = window_id_to_focus else {
+        return;
+    };
+
+    app.windows().show_window_and_focus_app(window_id_to_focus);
+    if let Some(workspace) = app
+        .views_of_type::<Workspace>(window_id_to_focus)
+        .and_then(|workspaces| workspaces.first().cloned())
+    {
+        app.dispatch_typed_action_for_view(
+            window_id_to_focus,
+            workspace.id(),
+            &WorkspaceAction::OpenPalette {
+                mode: PaletteMode::Navigation,
+                source: PaletteSource::QuitModal,
+                query: Some("running".to_owned()),
+            },
+        );
     }
 }
 

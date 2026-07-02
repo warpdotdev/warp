@@ -189,7 +189,7 @@ impl TypedActionView for MainSettingsPageView {
 
         match action {
             MainPageAction::Relaunch => {
-                autoupdate::initiate_relaunch_for_update(ctx);
+                autoupdate::initiate_relaunch_for_update_with_warning(ctx);
             }
             MainPageAction::DownloadUpdate => {
                 autoupdate::manually_download_new_version(ctx);
