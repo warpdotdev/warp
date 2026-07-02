@@ -719,6 +719,11 @@ impl<A: Action + Clone> MenuItemFields<A> {
         } else {
             "Maximize pane"
         })
+        .with_icon(if is_maximized {
+            icons::Icon::Minimize
+        } else {
+            icons::Icon::Maximize
+        })
     }
 
     /// Creates a [`MenuItemFields`] where the `on_select_action` is of a
