@@ -1838,19 +1838,38 @@ fn test_dispatch_custom_action_triggers_typed_action() -> Result<()> {
         app.dispatch_custom_action(custom_tag, window_id);
         assert_eq!(view_1.read(&app, |view, _| view.action_count), 1);
         assert_eq!(view_1.read(&app, |view, _| *view.keydown_count.borrow()), 0);
+        let handled = app.update(|ctx| {
+            ctx.dispatch_custom_action_for_keystroke(
+                &Keystroke::parse("ctrl-1").expect("failed to parse keystroke"),
+                window_id,
+            )
+        });
+        assert!(handled);
+        assert_eq!(view_1.read(&app, |view, _| view.action_count), 2);
+        assert_eq!(view_1.read(&app, |view, _| *view.keydown_count.borrow()), 0);
+
+        let handled = app.update(|ctx| {
+            ctx.dispatch_custom_action_for_keystroke(
+                &Keystroke::parse("ctrl-2").expect("failed to parse keystroke"),
+                window_id,
+            )
+        });
+        assert!(!handled);
+        assert_eq!(view_1.read(&app, |view, _| view.action_count), 2);
+        assert_eq!(view_1.read(&app, |view, _| *view.keydown_count.borrow()), 0);
 
         app.update(|ctx| {
             ctx.disable_key_bindings(window_id);
         });
         app.dispatch_custom_action(custom_tag, window_id);
-        assert_eq!(view_1.read(&app, |view, _| view.action_count), 1);
+        assert_eq!(view_1.read(&app, |view, _| view.action_count), 2);
         assert_eq!(view_1.read(&app, |view, _| *view.keydown_count.borrow()), 1);
 
         app.update(|ctx| {
             ctx.enable_key_bindings(window_id);
         });
         app.dispatch_custom_action(custom_tag, window_id);
-        assert_eq!(view_1.read(&app, |view, _| view.action_count), 2);
+        assert_eq!(view_1.read(&app, |view, _| view.action_count), 3);
         assert_eq!(view_1.read(&app, |view, _| *view.keydown_count.borrow()), 1);
 
         Ok(())
