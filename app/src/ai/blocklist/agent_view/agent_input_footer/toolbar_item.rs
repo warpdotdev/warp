@@ -125,7 +125,7 @@ impl AgentToolbarItemKind {
             Self::FileExplorer => "File Explorer",
             Self::RichInput => "Rich Input",
             Self::ShareSession => "/remote-control",
-            Self::Settings => "Settings",
+            Self::Settings => "More Settings",
             Self::FastForwardToggle => "Fast Forward",
             Self::HandoffToCloud => "Hand off to cloud",
         }
