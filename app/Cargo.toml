@@ -463,7 +463,7 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
-tui = []
+tui = ["warpui_core/tui"]
 ai_resume_button = []
 autoupdate = []
 figma_detection = []
@@ -472,6 +472,7 @@ supergrok = []
 gemini_enterprise = []
 agent_mode = []
 agent_mode_computer_use = []
+background_computer_use = []
 agent_mode_debug = []
 agent_mode_primary_xml = []
 agent_mode_pre_plan_xml = []
@@ -663,6 +664,7 @@ default = [
     "vertical_tabs",
     "vertical_tabs_summary_mode",
     "tab_configs",
+    "grouped_tabs",
     "agent_harness",
     "hoa_onboarding_flow",
     "hoa_remote_control",
@@ -687,7 +689,6 @@ default = [
     "handoff_cloud_cloud",
     "remote_codebase_indexing",
     "solo_user_byok",
-    "custom_inference_endpoints",
     "custom_model_routers",
     "supergrok",
     "billing_and_usage_page_v2",
@@ -934,6 +935,7 @@ inline_code_review = []
 integration_command = []
 artifact_command = []
 cloud_environments = []
+cloud_runners = []
 create_environment_slash_command = []
 summarize_conversation_command = []
 mcp_grouped_server_context = []
@@ -983,6 +985,7 @@ incremental_auto_reload = []
 run_agents_tool = []
 orchestration_viewer_streamer = []
 owner_orchestration_ancestor_streamer = []
+wait_for_events_parent_registration = []
 pending_user_query_indicator = []
 queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
@@ -1003,7 +1006,6 @@ hoa_notifications = []
 open_code_notifications = []
 transfer_control_tool = []
 skip_firebase_anonymous_user = []
-custom_inference_endpoints = []
 custom_model_routers = []
 solo_user_byok = []
 billing_and_usage_page_v2 = []

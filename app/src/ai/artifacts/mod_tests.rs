@@ -152,6 +152,17 @@ fn default_download_filename_falls_back_to_artifact_uid_with_extension() {
 }
 
 #[test]
+#[cfg(feature = "local_fs")]
+fn download_success_message_includes_filename_and_directory() {
+    use std::path::Path;
+
+    assert_eq!(
+        download_success_message("report.csv", Path::new("/Users/me/Downloads")),
+        "report.csv was downloaded to /Users/me/Downloads."
+    );
+}
+
+#[test]
 fn converts_graphql_file_artifact() {
     let artifact = Artifact::try_from(warp_graphql::ai::AIConversationArtifact::FileArtifact(
         warp_graphql::ai::FileArtifact {

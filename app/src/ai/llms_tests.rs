@@ -363,8 +363,6 @@ fn removing_endpoint_purges_all_its_models_from_custom_llms() {
 #[test]
 fn reconcile_preserves_custom_models_saved_on_execution_profile() {
     App::test((), |mut app| async move {
-        let _custom_inference_flag = FeatureFlag::CustomInferenceEndpoints.override_enabled(true);
-
         initialize_settings_for_tests(&mut app);
         app.add_singleton_model(|_| ServerApiProvider::new_for_test());
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());

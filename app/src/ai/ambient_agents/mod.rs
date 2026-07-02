@@ -88,8 +88,9 @@ pub fn conversation_output_status_from_conversation(
 
         ConversationStatus::Error => {
             // Prefer the structured error on the last exchange: it carries the precise
-            // error variant and rendering hints that the string-only `status_error_message`
-            // cannot.
+            // error variant and rendering hints. Fall back to the conversation-level
+            // `status_error` for out-of-band failures (e.g. shell exit) recorded
+            // without an exchange. Both drive FAILED-vs-ERROR classification downstream.
             if let Some(AIAgentOutputStatus::Finished {
                 finished_output: FinishedAIAgentOutput::Error { error, .. },
             }) = conversation
@@ -101,18 +102,13 @@ pub fn conversation_output_status_from_conversation(
                     error: error.clone(),
                 });
             }
-            if let Some(error_message) = conversation.status_error_message() {
+            if let Some(error) = conversation.status_error() {
                 return Some(AmbientConversationStatus::Error {
-                    error: RenderableAIError::Other {
-                        error_message: error_message.to_string(),
-                        will_attempt_resume: false,
-                        waiting_for_network: false,
-                        is_user_error: false,
-                    },
+                    error: error.clone(),
                 });
             }
-            // Neither a structured exchange error nor a status message is available;
-            // fall back to whatever terminal outcome the last exchange carries.
+            // No structured error anywhere; fall back to whatever terminal outcome
+            // the last exchange carries.
             terminal_status_from_last_exchange(conversation)
         }
 

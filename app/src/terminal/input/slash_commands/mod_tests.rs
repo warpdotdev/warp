@@ -1,8 +1,39 @@
+use super::slash_command_is_submitted_as_prompt;
 use crate::features::FeatureFlag;
 use crate::search::slash_command_menu::static_commands::{commands, Availability};
 const BASELINE_AVAILABILITY: Availability = Availability::AGENT_VIEW
     .union(Availability::AI_ENABLED)
     .union(Availability::NO_LRC_CONTROL);
+
+/// The centralized classifier must mark only the prompt-submitting commands (/compact, /plan,
+/// /orchestrate) as "submitted as a prompt". Every other slash command emits an immediate action
+/// and must be treated as "run now" by the prompt-queue gate and the shared-session viewer path.
+#[test]
+fn slash_command_is_submitted_as_prompt_only_for_prompt_commands() {
+    // Prompt-submitting commands reiterate their text into the conversation.
+    assert!(slash_command_is_submitted_as_prompt(&commands::COMPACT));
+    assert!(slash_command_is_submitted_as_prompt(&commands::PLAN));
+    assert!(slash_command_is_submitted_as_prompt(&commands::ORCHESTRATE));
+
+    // Action-emitting commands run immediately and are never queued / forwarded as prompts.
+    assert!(!slash_command_is_submitted_as_prompt(&commands::FORK));
+    assert!(!slash_command_is_submitted_as_prompt(
+        &commands::FORK_AND_COMPACT
+    ));
+    assert!(!slash_command_is_submitted_as_prompt(&commands::FORK_FROM));
+    assert!(!slash_command_is_submitted_as_prompt(
+        &commands::CONTINUE_LOCALLY
+    ));
+    assert!(!slash_command_is_submitted_as_prompt(
+        &commands::COMPACT_AND
+    ));
+    assert!(!slash_command_is_submitted_as_prompt(&commands::MODEL));
+    assert!(!slash_command_is_submitted_as_prompt(&commands::REWIND));
+    assert!(!slash_command_is_submitted_as_prompt(
+        &commands::CONVERSATIONS
+    ));
+    assert!(!slash_command_is_submitted_as_prompt(&commands::QUEUE));
+}
 
 #[test]
 fn not_cloud_agent_commands_are_only_active_outside_cloud_mode() {

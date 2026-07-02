@@ -83,6 +83,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ArtifactCommand,
         #[cfg(feature = "cloud_environments")]
         FeatureFlag::CloudEnvironments,
+        #[cfg(feature = "cloud_runners")]
+        FeatureFlag::CloudRunners,
         #[cfg(all(feature = "simulate_github_unauthed", debug_assertions))]
         FeatureFlag::SimulateGithubUnauthed,
         #[cfg(feature = "session_sharing_acls")]
@@ -343,6 +345,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AgentModeComputerUse,
         #[cfg(feature = "local_computer_use")]
         FeatureFlag::LocalComputerUse,
+        #[cfg(feature = "background_computer_use")]
+        FeatureFlag::BackgroundComputerUse,
         #[cfg(feature = "local_claude_codex_child_harnesses")]
         FeatureFlag::LocalClaudeCodexChildHarnesses,
         #[cfg(feature = "team_api_keys")]
@@ -419,6 +423,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::OrchestrationViewerStreamer,
         #[cfg(feature = "owner_orchestration_ancestor_streamer")]
         FeatureFlag::OwnerOrchestrationAncestorStreamer,
+        #[cfg(feature = "wait_for_events_parent_registration")]
+        FeatureFlag::WaitForEventsParentRegistration,
         #[cfg(feature = "pending_user_query_indicator")]
         FeatureFlag::PendingUserQueryIndicator,
         #[cfg(feature = "queue_slash_command")]
@@ -495,8 +501,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::GitCredentialRefresh,
         #[cfg(feature = "remote_code_review")]
         FeatureFlag::RemoteCodeReview,
-        #[cfg(feature = "custom_inference_endpoints")]
-        FeatureFlag::CustomInferenceEndpoints,
         #[cfg(feature = "custom_model_routers")]
         FeatureFlag::CustomModelRouters,
         #[cfg(feature = "supergrok")]

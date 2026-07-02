@@ -1172,6 +1172,8 @@ pub enum RequestComputerUseResult {
     Approved {
         screenshot: computer_use::Screenshot,
         platform: computer_use::Platform,
+        /// The on-screen windows the agent may target.
+        windows: Vec<computer_use::WindowInfo>,
     },
     /// Request errored.
     Error(String),

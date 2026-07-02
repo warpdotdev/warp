@@ -377,6 +377,11 @@ pub struct ByoApiKeyPolicy {
 }
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
+pub struct ByoEndpointPolicy {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub struct PurchaseAddOnCreditsPolicy {
     pub enabled: bool,
 }
@@ -474,6 +479,7 @@ pub struct Tier {
     pub usage_based_pricing_policy: Option<UsageBasedPricingPolicy>,
     pub codebase_context_policy: Option<CodebaseContextPolicy>,
     pub byo_api_key_policy: Option<ByoApiKeyPolicy>,
+    pub byo_endpoint_policy: Option<ByoEndpointPolicy>,
     pub purchase_add_on_credits_policy: Option<PurchaseAddOnCreditsPolicy>,
     pub enterprise_pay_as_you_go_policy: Option<EnterprisePayAsYouGoPolicy>,
     pub enterprise_credits_auto_reload_policy: Option<EnterpriseCreditsAutoReloadPolicy>,
@@ -700,6 +706,12 @@ impl BillingMetadata {
     pub fn is_byo_api_key_enabled(&self) -> bool {
         self.tier
             .byo_api_key_policy
+            .is_some_and(|policy| policy.enabled)
+    }
+
+    pub fn is_byo_endpoint_enabled(&self) -> bool {
+        self.tier
+            .byo_endpoint_policy
             .is_some_and(|policy| policy.enabled)
     }
 

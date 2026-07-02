@@ -21,7 +21,6 @@ use warp_util::path::{CleanPathResult, LineAndColumnArg};
 use warpui::clipboard::ClipboardContent;
 use warpui::{AppContext, SingletonEntity, ViewContext};
 
-#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::conversation::AIConversationId;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_conversations_model::AgentConversationsModel;
@@ -36,7 +35,7 @@ use crate::ai::blocklist::agent_view::{
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, InputTypeAutoDetectionSource, PendingAttachment, QueuedQuery,
-    QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
+    QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
 };
 use crate::ai::conversation_rename::rename_conversation;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -176,7 +175,7 @@ impl Input {
         }
         if command.argument.as_ref().is_none() {
             self.execute_slash_command(
-                command, None, trigger, /*is_queued_prompt*/ false, ctx,
+                command, None, trigger, /*is_queued_prompt*/ false, None, None, ctx,
             );
         } else if command
             .argument
@@ -196,6 +195,8 @@ impl Input {
                 argument.as_ref(),
                 trigger,
                 /*is_queued_prompt*/ false,
+                None,
+                None,
                 ctx,
             );
         } else {
@@ -364,12 +365,15 @@ impl Input {
     /// the agent was busy.
     ///
     /// Returns `true` if execution was 'handled' (whether or not it resulted in success or failure).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn execute_slash_command(
         &mut self,
         command: &StaticCommand,
         argument: Option<&String>,
         trigger: SlashCommandTrigger,
         is_queued_prompt: bool,
+        queued_conversation_id: Option<AIConversationId>,
+        queued_query_id: Option<QueuedQueryId>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         fn show_error_toast(message: String, ctx: &mut ViewContext<Input>) {
@@ -984,11 +988,8 @@ impl Input {
                     return true;
                 };
 
-                let destination = if trigger.is_cmd_or_ctrl_enter() {
-                    ForkedConversationDestination::NewTab
-                } else {
-                    ForkedConversationDestination::SplitPane
-                };
+                let destination =
+                    ForkedConversationDestination::for_fork_trigger(trigger.is_cmd_or_ctrl_enter());
 
                 // Move any pending attachments out of the source input so they travel with the
                 // initial prompt into the forked pane and no longer linger on the original input.
@@ -1033,11 +1034,8 @@ impl Input {
                     return true;
                 }
 
-                let destination = if trigger.is_cmd_or_ctrl_enter() {
-                    ForkedConversationDestination::NewTab
-                } else {
-                    ForkedConversationDestination::SplitPane
-                };
+                let destination =
+                    ForkedConversationDestination::for_fork_trigger(trigger.is_cmd_or_ctrl_enter());
 
                 send_telemetry_from_ctx!(
                     AgentManagementTelemetryEvent::SlashCommandContinueLocally,
@@ -1075,11 +1073,8 @@ impl Input {
                     return true;
                 };
 
-                let destination = if trigger.is_cmd_or_ctrl_enter() {
-                    ForkedConversationDestination::SplitPane
-                } else {
-                    ForkedConversationDestination::CurrentPane
-                };
+                let destination =
+                    ForkedConversationDestination::for_fork_trigger(trigger.is_cmd_or_ctrl_enter());
 
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
@@ -1092,23 +1087,45 @@ impl Input {
                 });
             }
             compact_and if command.name == commands::COMPACT_AND.name => {
-                if self
-                    .ai_context_model
-                    .as_ref(ctx)
-                    .selected_conversation_id(ctx)
-                    .is_none()
-                {
-                    show_error_toast(
-                        "/compact-and requires an active conversation".to_owned(),
-                        ctx,
-                    );
-                    return true;
+                let conversation_id = if is_queued_prompt {
+                    let Some(conversation_id) = queued_conversation_id else {
+                        log::error!("Queued /compact-and missing conversation id");
+                        return true;
+                    };
+                    conversation_id
+                } else {
+                    let Some(conversation_id) = self
+                        .ai_context_model
+                        .as_ref(ctx)
+                        .selected_conversation_id(ctx)
+                    else {
+                        show_error_toast(
+                            "/compact-and requires an active conversation".to_owned(),
+                            ctx,
+                        );
+                        return true;
+                    };
+                    conversation_id
                 };
 
-                ctx.dispatch_typed_action(&WorkspaceAction::SummarizeAIConversation {
-                    prompt: None,
-                    initial_prompt: argument.cloned(),
-                });
+                if is_queued_prompt {
+                    let Some(queued_query_id) = queued_query_id else {
+                        log::error!("Queued /compact-and missing queued query id");
+                        return true;
+                    };
+                    self.execute_queued_compact_and(
+                        conversation_id,
+                        queued_query_id,
+                        argument.cloned(),
+                        ctx,
+                    );
+                } else {
+                    let summarize = WorkspaceAction::SummarizeAIConversation {
+                        prompt: None,
+                        initial_prompt: argument.cloned(),
+                    };
+                    ctx.dispatch_typed_action(&summarize);
+                }
             }
             queue if command.name == commands::QUEUE.name => {
                 let Some(conversation_id) = self
@@ -1163,9 +1180,7 @@ impl Input {
                 self.open_repos_menu(ctx);
             }
             command_that_just_sends_ai_request_with_prefix
-                if command.name == commands::COMPACT.name
-                    || command.name == commands::PLAN.name
-                    || command.name == commands::ORCHESTRATE.name =>
+                if slash_command_is_submitted_as_prompt(command) =>
             {
                 // These slash commands just send AI requests with the slash command text as a
                 // prefix, and special handling is done downstream as an implementation detail
@@ -1260,6 +1275,8 @@ impl Input {
                     argument.as_ref(),
                     SlashCommandTrigger::cmd_or_ctrl_enter(),
                     /*is_queued_prompt*/ false,
+                    None,
+                    None,
                     ctx,
                 )
             }
@@ -1359,6 +1376,8 @@ impl Input {
                     argument.as_ref(),
                     SlashCommandTrigger::input(),
                     /*is_queued_prompt*/ false,
+                    None,
+                    None,
                     ctx,
                 )
             }
@@ -1394,6 +1413,58 @@ impl Input {
             context_model.take_pending_attachments(ctx)
         })
     }
+
+    /// Sends a queued `/compact-and` summary and stores its follow-up on the original conversation.
+    pub(super) fn execute_queued_compact_and(
+        &mut self,
+        conversation_id: AIConversationId,
+        queued_query_id: QueuedQueryId,
+        initial_prompt: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let followup_attachments = QueuedQueryModel::as_ref(ctx)
+            .attachments_for(conversation_id, queued_query_id)
+            .to_vec();
+        self.ai_controller.update(ctx, move |controller, ctx| {
+            controller.send_queued_slash_command_request(
+                SlashCommandRequest::Summarize { prompt: None },
+                queued_query_id,
+                Some(conversation_id),
+                ctx,
+            );
+        });
+
+        let Some(initial_prompt) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) else {
+            return;
+        };
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new_with_attachments(
+                    initial_prompt,
+                    QueuedQueryOrigin::CompactAndSlashCommand,
+                    followup_attachments,
+                ),
+                ctx,
+            )
+        });
+    }
+}
+
+/// Whether executing the static slash `command` submits its text to the conversation as an AI
+/// prompt (handled downstream like a normal user query) rather than performing an immediate
+/// local action.
+///
+/// This is the single source of truth for the "reiterated as a prompt vs handled immediately"
+/// distinction: only `/compact`, `/plan`, and `/orchestrate` are sent as prompts (mirroring the
+/// `command_that_just_sends_ai_request_with_prefix` arm in [`Input::execute_slash_command`]).
+/// Every other slash command emits an immediate action (forking, switching model, opening a
+/// menu, etc.), so callers gating prompt queuing or shared-session forwarding should treat those
+/// as "run now".
+pub(crate) fn slash_command_is_submitted_as_prompt(command: &StaticCommand) -> bool {
+    command.name == commands::COMPACT.name
+        || command.name == commands::PLAN.name
+        || command.name == commands::ORCHESTRATE.name
 }
 
 /// Returns true when the conversation with `conversation_id` is associated with an Oz

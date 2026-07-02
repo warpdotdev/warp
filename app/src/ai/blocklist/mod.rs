@@ -5,6 +5,7 @@ pub mod block;
 pub mod code_block;
 mod context_model;
 mod controller;
+pub(crate) mod conversation_selection;
 pub(crate) mod handoff;
 
 pub(crate) mod local_agent_task_sync_model;
@@ -33,18 +34,19 @@ pub(super) mod view_util;
 
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{
-    apply_edits, read_local_file_context, BlocklistAIActionEvent, BlocklistAIActionModel,
-    FileReadResult, ReadFileContextResult, RequestFileEditsFormatKind, ShellCommandExecutor,
-    ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
-    StartAgentRequestId,
+    apply_edits, read_local_file_context, BlocklistAIActionEvent, FileReadResult,
+    ReadFileContextResult, RequestFileEditsFormatKind, StartAgentExecutor, StartAgentExecutorEvent,
+    StartAgentRequest, StartAgentRequestId,
 };
+pub use action_model::{BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent};
 #[cfg(any(test, feature = "integration_tests"))]
 pub(crate) use block::model::testing::FakeAIBlockModel;
 pub(crate) use block::{init, model, AIBlock, AIBlockEvent, RequestedEditResolution};
 pub use block::{keyboard_navigable_buttons, toggleable_items};
+pub use context_model::BlocklistAIContextModel;
 pub(crate) use context_model::{
-    block_context_from_terminal_model, AttachmentType, BlocklistAIContextEvent,
-    BlocklistAIContextModel, PendingAttachment, PendingFile, PendingQueryState,
+    block_context_from_terminal_model, AttachmentType, BlocklistAIContextEvent, PendingAttachment,
+    PendingFile,
 };
 pub use controller::input_context::{
     BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
@@ -52,18 +54,22 @@ pub use controller::input_context::{
 #[cfg(test)]
 pub(crate) use controller::response_stream::ResponseStream;
 pub(crate) use controller::response_stream::ResponseStreamId;
+pub use controller::BlocklistAIController;
 pub(crate) use controller::{
-    BlocklistAIController, BlocklistAIControllerEvent, ClientIdentifiers, SessionContext,
-    SlashCommandRequest,
+    BlocklistAIControllerEvent, ClientIdentifiers, SessionContext, SlashCommandRequest,
+};
+pub(crate) use conversation_selection::{
+    ConversationSelection, ConversationSelectionEvent, ConversationSelectionHandle,
+    PendingQueryState,
 };
 pub(crate) use history_model::{
     AIQueryHistory, AIQueryHistoryOutputStatus, BeginConversationRenameError,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FORK_PREFIX,
     PRE_REWIND_PREFIX,
 };
+pub use input_model::BlocklistAIInputModel;
 pub(crate) use input_model::{
-    BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
-    InputTypeAutoDetectionSource,
+    BlocklistAIInputEvent, InputConfig, InputType, InputTypeAutoDetectionSource,
 };
 pub(crate) use passive_suggestions::{
     LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,

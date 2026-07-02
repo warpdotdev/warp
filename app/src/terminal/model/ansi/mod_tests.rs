@@ -187,8 +187,16 @@ impl Handler for MockHandler {
             .push(DProtoHook::CommandFinished { value: data });
     }
 
-    fn precmd(&mut self, data: PrecmdValue) {
-        self.d_proto_hooks.push(DProtoHook::Precmd { value: data });
+    fn precmd_with_completion_metadata(&mut self, data: PrecmdValue) {
+        self.d_proto_hooks.push(DProtoHook::Precmd {
+            value: PrecmdHookValue::WithCompletionMetadata(data),
+        });
+    }
+
+    fn prompt_only_precmd(&mut self, data: PromptMetadata) {
+        self.d_proto_hooks.push(DProtoHook::Precmd {
+            value: PrecmdHookValue::PromptOnly(data),
+        });
     }
 
     fn preexec(&mut self, data: PreexecValue) {
@@ -569,7 +577,7 @@ fn parse_dcs_ssh_with_external_control_master() {
 }
 
 #[test]
-fn parse_dcs_precmd_ignores_completion_fields() {
+fn parse_dcs_precmd_classifies_payload_with_completion_metadata() {
     let bytes = hex_encoded_dcs_string(
         r#"{
                 "hook": "Precmd",
@@ -593,38 +601,118 @@ fn parse_dcs_precmd_ignores_completion_fields() {
     match handler.d_proto_hooks.first().unwrap() {
         DProtoHook::Precmd { value } => assert_eq!(
             *value,
-            PrecmdValue {
-                pwd: Some("/Users".to_string()),
-                ps1: Some("$>".to_string()),
-                honor_ps1: Some(true),
-                rprompt: None,
-                git_head: None,
-                git_branch: None,
-                virtual_env: None,
-                conda_env: Some("numpy".to_string()),
-                node_version: None,
-                kube_config: None,
-                session_id: Some(167303092612201),
-                ps1_is_encoded: None,
-                is_after_in_band_command: false,
-            }
+            PrecmdHookValue::WithCompletionMetadata(PrecmdValue {
+                completion_metadata: CompletionMetadata {
+                    exit_code: ExitCode::from(0),
+                    next_block_id: "block_id".to_owned().into(),
+                },
+                prompt_metadata: PromptMetadata {
+                    pwd: Some("/Users".to_string()),
+                    ps1: Some("$>".to_string()),
+                    honor_ps1: Some(true),
+                    rprompt: None,
+                    git_head: None,
+                    git_branch: None,
+                    virtual_env: None,
+                    conda_env: Some("numpy".to_string()),
+                    node_version: None,
+                    kube_config: None,
+                    session_id: Some(167303092612201),
+                    ps1_is_encoded: None,
+                    is_after_in_band_command: false,
+                },
+            })
         ),
         _ => panic!("incorrect dcs value"),
     };
 }
 
 #[test]
-fn pending_precmd_ignores_completion_fields() {
+fn pending_precmd_classifies_payload_with_completion_metadata() {
     let mut hook = PendingHook::create("Precmd").unwrap();
     hook.update("exit_code".to_owned(), "127".to_owned());
     hook.update("next_block_id".to_owned(), "block_id".to_owned());
     hook.update("session_id".to_owned(), "167303092612201".to_owned());
 
-    match hook.finish() {
-        DProtoHook::Precmd { value } => {
+    match hook.finish().unwrap() {
+        DProtoHook::Precmd {
+            value: PrecmdHookValue::WithCompletionMetadata(value),
+        } => {
+            assert_eq!(
+                value.completion_metadata,
+                CompletionMetadata {
+                    exit_code: ExitCode::from(127),
+                    next_block_id: "block_id".to_owned().into(),
+                }
+            );
+            assert_eq!(value.prompt_metadata.session_id, Some(167303092612201));
+        }
+        _ => panic!("incorrect dcs value"),
+    }
+}
+
+#[test]
+fn parse_dcs_precmd_classifies_prompt_only_payload() {
+    let bytes = hex_encoded_dcs_string(
+        r#"{
+                "hook": "Precmd",
+                "value": {
+                    "pwd": "/Users",
+                    "session_id": 167303092612201
+                }
+            }"#,
+    );
+    let (_, handler) = parse_bytes(&bytes);
+
+    assert_eq!(handler.d_proto_hooks.len(), 1);
+    match handler.d_proto_hooks.first().unwrap() {
+        DProtoHook::Precmd {
+            value: PrecmdHookValue::PromptOnly(value),
+        } => {
+            assert_eq!(value.pwd.as_deref(), Some("/Users"));
             assert_eq!(value.session_id, Some(167303092612201));
         }
         _ => panic!("incorrect dcs value"),
+    }
+}
+
+#[test]
+fn parse_dcs_precmd_rejects_partial_completion_metadata() {
+    for partial_completion_metadata in [
+        r#""exit_code": 0"#,
+        r#""next_block_id": "block_id""#,
+        r#""exit_code": null"#,
+        r#""exit_code": null, "next_block_id": "block_id""#,
+    ] {
+        let bytes = hex_encoded_dcs_string(&format!(
+            r#"{{
+                "hook": "Precmd",
+                "value": {{
+                    "pwd": "/Users",
+                    {partial_completion_metadata},
+                    "session_id": 167303092612201
+                }}
+            }}"#
+        ));
+        let (_, handler) = parse_bytes(&bytes);
+
+        assert!(handler.d_proto_hooks.is_empty());
+    }
+}
+
+#[test]
+fn pending_precmd_rejects_partial_or_invalid_completion_metadata() {
+    for fields in [
+        vec![("exit_code", "0")],
+        vec![("next_block_id", "block_id")],
+        vec![("exit_code", "invalid"), ("next_block_id", "block_id")],
+    ] {
+        let mut hook = PendingHook::create("Precmd").unwrap();
+        for (key, value) in fields {
+            hook.update(key.to_owned(), value.to_owned());
+        }
+
+        assert!(hook.finish().is_err());
     }
 }
 
@@ -659,7 +747,9 @@ fn parse_dcs_unregistered_session_id_allowed_when_validation_disabled() {
 
     assert_eq!(handler.d_proto_hooks.len(), 1);
     match handler.d_proto_hooks.first().unwrap() {
-        DProtoHook::Precmd { value } => assert_eq!(value.session_id, Some(167303092612201)),
+        DProtoHook::Precmd {
+            value: PrecmdHookValue::PromptOnly(value),
+        } => assert_eq!(value.session_id, Some(167303092612201)),
         _ => panic!("incorrect dcs value"),
     };
 }
@@ -684,8 +774,10 @@ fn parse_dcs_command_finished() {
             assert_eq!(
                 *value,
                 CommandFinishedValue {
-                    exit_code: ExitCode::from(127),
-                    next_block_id: "block_id".to_owned().into(),
+                    completion_metadata: CompletionMetadata {
+                        exit_code: ExitCode::from(127),
+                        next_block_id: "block_id".to_owned().into(),
+                    },
                     session_id: Some(167303092612201)
                 }
             )

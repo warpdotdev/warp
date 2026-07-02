@@ -319,6 +319,23 @@ impl AmbientAgentRunner {
                 None => None,
             };
 
+            // The `--runner` CLI flag is gated in `run_agent`, but a config file
+            // can also set `runner_id`, which would otherwise bypass the gate.
+            if loaded_file
+                .as_ref()
+                .and_then(|f| f.file.runner_id.as_ref())
+                .is_some()
+                && !FeatureFlag::CloudRunners.is_enabled()
+            {
+                super::report_fatal_error(
+                    anyhow::anyhow!(
+                        "`runner_id` is set in the config file but runner support is not enabled"
+                    ),
+                    ctx,
+                );
+                return;
+            }
+
             // Validate and process attachments early, before environment selection
             // This ensures users don't have to go through env selection if attachment validation fails
             if args.attachment_paths.len() > MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY {
@@ -423,6 +440,7 @@ impl AmbientAgentRunner {
                 AgentConfigSnapshot {
                     name: args.name,
                     environment_id,
+                    runner_id: args.runner,
                     model_id: args.model.model.clone(),
                     base_prompt: None,
                     mcp_servers: cli_mcp_servers,

@@ -129,6 +129,17 @@ impl LLMProvider {
             LLMProvider::Unknown => None,
         }
     }
+
+    /// Human-readable provider name for user-facing copy.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            LLMProvider::OpenAI => "OpenAI",
+            LLMProvider::Anthropic => "Anthropic",
+            LLMProvider::Google => "Google",
+            LLMProvider::Xai => "xAI",
+            LLMProvider::Unknown => "this provider",
+        }
+    }
 }
 
 /// The host where an LLM can be routed to.
@@ -913,8 +924,7 @@ impl LLMPreferences {
     }
 
     fn custom_inference_enabled(app: &AppContext) -> bool {
-        FeatureFlag::CustomInferenceEndpoints.is_enabled()
-            && UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)
+        UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)
     }
 
     /// Resolves a custom model router by its `config_key`/`LLMId`.

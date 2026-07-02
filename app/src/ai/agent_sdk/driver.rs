@@ -873,6 +873,12 @@ impl AgentDriver {
                 }
                 let result = Self::run_internal(task, foreground.clone()).await;
 
+                // Stop accepting CLI session status updates now that the run
+                // is done. Already accepted task updates remain queued until
+                // delivery finishes.
+                let _ = foreground
+                    .spawn(|me, ctx| me.unregister_cli_agent_task_sync(ctx))
+                    .await;
                 // Unregister the driver consumer now that the run is done.
                 // The streamer will tear down the SSE if no other consumer
                 // remains and the conversation isn't a child.
@@ -2980,7 +2986,7 @@ impl AgentDriver {
         let mut written_conversation_id = false;
 
         ctx.subscribe_to_model(&history_model_handle, move |me, _, event, ctx| {
-            if event.terminal_view_id().is_some_and(|id| id != terminal_id) {
+            if event.terminal_surface_id().is_some_and(|id| id != terminal_id) {
                 return;
             }
 
@@ -3091,7 +3097,7 @@ impl AgentDriver {
 
                 }
 
-                BlocklistAIHistoryEvent::UpdatedConversationStatus { terminal_view_id: conversation_terminal_id, conversation_id, .. } => {
+                BlocklistAIHistoryEvent::UpdatedConversationStatus { terminal_surface_id: conversation_terminal_id, conversation_id, .. } => {
                     if *conversation_terminal_id != terminal_id {
                         return;
                     }
@@ -3210,7 +3216,7 @@ impl AgentDriver {
                 }
                 BlocklistAIHistoryEvent::StartedNewConversation { .. }
                 | BlocklistAIHistoryEvent::ReassignedExchange { .. }
-                | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
+                | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
                 | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
                 | BlocklistAIHistoryEvent::SplitConversation { .. }
                 | BlocklistAIHistoryEvent::RemoveConversation { .. }
@@ -3223,7 +3229,7 @@ impl AgentDriver {
                 | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
                 | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
                 | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. }
-                | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
+                | BlocklistAIHistoryEvent::ConversationTransferredBetweenTerminalSurfaces { .. }
                 | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
                 | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
                 | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
@@ -3454,6 +3460,14 @@ impl AgentDriver {
                 | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
                 | CLIAgentSessionsModelEvent::Ended { .. } => {}
             });
+    }
+
+    /// Removes the task mapping registered for CLI agent session status updates.
+    fn unregister_cli_agent_task_sync(&self, ctx: &mut ModelContext<Self>) {
+        let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+        LocalAgentTaskSyncModel::handle(ctx).update(ctx, |model, _| {
+            model.unregister_cli_session(terminal_view_id);
+        });
     }
 
     /// Handle events re-emitted by the `TerminalDriver`.

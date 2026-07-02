@@ -7,7 +7,7 @@ with the `-bundle` flag.  See the Makefile for more details.
 
 The plugin is installed into the app bundle at `Contents/PlugIns/WarpDockTilePlugin.docktileplugin` and is bundled using the script/mac/bundle script.  It is built as a universal binary for both arm64 and x86_64.
 
-The plugin is a simple Objective-C program that listens for notifications from the mainapplication when the app icon changes. When it receives a notification, it updates the dock tile icon.
+The plugin is a simple Objective-C program that listens for notifications from the main application when the app icon changes. When it receives a notification, it updates the dock tile icon.
 
 See Mac documentation for more details:
 https://developer.apple.com/documentation/appkit/nsdocktileplugin?language=objc

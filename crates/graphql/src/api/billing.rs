@@ -106,6 +106,7 @@ pub struct Tier {
     pub usage_based_pricing_policy: Option<UsageBasedPricingPolicy>,
     pub codebase_context_policy: Option<CodebaseContextPolicy>,
     pub byo_api_key_policy: Option<ByoApiKeyPolicy>,
+    pub byo_endpoint_policy: Option<ByoEndpointPolicy>,
     pub purchase_add_on_credits_policy: Option<PurchaseAddOnCreditsPolicy>,
     pub enterprise_pay_as_you_go_policy: Option<EnterprisePayAsYouGoPolicy>,
     pub enterprise_credits_auto_reload_policy: Option<EnterpriseCreditsAutoReloadPolicy>,
@@ -182,6 +183,11 @@ pub struct CodebaseContextPolicy {
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct ByoApiKeyPolicy {
+    pub enabled: bool,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ByoEndpointPolicy {
     pub enabled: bool,
 }
 

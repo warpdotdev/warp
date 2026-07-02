@@ -159,7 +159,9 @@ impl AIExecutionProfilesModel {
                 let default_profile_state = match launch_mode {
                     // The TUI front-end is an app-style client, so it shares the
                     // GUI app's cloud-synced default execution profile.
-                    LaunchMode::App { .. } | LaunchMode::Test { .. } | LaunchMode::Tui => {
+                    LaunchMode::App { .. }
+                    | LaunchMode::Test { .. }
+                    | LaunchMode::Tui { .. } => {
                         match default_profile_from_cloud {
                             Some(p) => {
                                 let execution_profile_id = ClientProfileId::new();
