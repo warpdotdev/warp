@@ -267,7 +267,7 @@ impl TestContext {
         let state =
             create_loaded_state_with_editors(app, window_id, vec![(file_path.into(), editor)]);
 
-        let diff_state_model = app.add_model(DiffStateModel::new_for_test);
+        let diff_state_model = app.add_model(DiffStateModel::new_for_local_test);
 
         let working_directories_model = app.add_model(|_| WorkingDirectoriesModel::new());
         let repo_key = LocalOrRemotePath::Local(repo_path.clone());
@@ -965,6 +965,80 @@ fn test_active_comments_not_marked_outdated() {
             assert_eq!(
                 fallbacks, 0,
                 "Should have no fallbacks when content matches"
+            );
+        });
+    });
+}
+
+#[test]
+fn loading_snapshot_preserves_already_loaded_diff() {
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2");
+
+        ctx.code_review_view.update(&mut app, |view, view_ctx| {
+            // Start from a rendered diff.
+            if let Some(repo) = view.active_repo.as_mut() {
+                repo.state = CodeReviewViewState::Loaded(ctx.state);
+            }
+
+            // A transient Loading snapshot must not knock an already-loaded
+            // diff back to the spinner (no-flicker rule).
+            view.apply_diff_snapshot(&DiffSnapshot::Loading, None, view_ctx);
+
+            assert!(
+                matches!(view.state(), CodeReviewViewState::Loaded(_)),
+                "Loading snapshot should leave an already-loaded diff intact"
+            );
+        });
+    });
+}
+
+#[test]
+fn loading_snapshot_shows_spinner_before_first_diff() {
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1");
+
+        ctx.code_review_view.update(&mut app, |view, view_ctx| {
+            // No diff has rendered yet.
+            if let Some(repo) = view.active_repo.as_mut() {
+                repo.state = CodeReviewViewState::NoRepoFound;
+            }
+
+            view.apply_diff_snapshot(&DiffSnapshot::Loading, None, view_ctx);
+
+            assert!(
+                matches!(view.state(), CodeReviewViewState::None),
+                "Loading before any diff renders should show the spinner (None state)"
+            );
+        });
+    });
+}
+
+#[test]
+fn snapshot_while_disconnected_does_not_clobber_frozen_diff() {
+    App::test((), |mut app| async move {
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1");
+
+        // Swap in a remote model stuck in `Disconnected` so `diff_state()`
+        // reports it; the local model `TestContext` wires can never be
+        // `Disconnected`.
+        let disconnected = app.add_model(DiffStateModel::new_for_remote_test);
+
+        ctx.code_review_view.update(&mut app, |view, view_ctx| {
+            view.diff_state_model = disconnected;
+
+            // A diff is frozen on screen from before the disconnect.
+            if let Some(repo) = view.active_repo.as_mut() {
+                repo.state = CodeReviewViewState::Loaded(ctx.state);
+            }
+
+            // A late Error snapshot drains after the disconnect; the guard must
+            // preserve the frozen diff rather than render an error panel.
+            view.apply_diff_snapshot(&DiffSnapshot::Error("boom".to_string()), None, view_ctx);
+
+            assert!(
+                matches!(view.state(), CodeReviewViewState::Loaded(_)),
+                "snapshot delivered while Disconnected must not overwrite the frozen diff"
             );
         });
     });

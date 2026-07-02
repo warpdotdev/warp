@@ -18,7 +18,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::{ModelContext, SingletonEntity};
 
 use super::{
-    BackendOrigin, CommitChainMode, DiffMetadata, DiffMode, DiffOperation, DiffState,
+    BackendOrigin, CommitChainMode, DiffMetadata, DiffMode, DiffOperation, DiffSnapshot, DiffState,
     DiffStateError, DiffStateModelEvent, DiffStats, FileDiffAndContent, GitDiffData,
     GitDiffWithBaseContent,
 };
@@ -270,7 +270,7 @@ impl RemoteDiffStateModel {
         });
         self.state = InternalRemoteDiffState::Loading;
         ctx.emit(DiffStateModelEvent::NewDiffsComputed {
-            diffs: None,
+            snapshot: DiffSnapshot::Loading,
             load_duration: None,
         });
     }
@@ -391,14 +391,14 @@ impl RemoteDiffStateModel {
                 self.tracked_diff_load_start_time = None;
                 self.state = InternalRemoteDiffState::NotInRepository;
                 ctx.emit(DiffStateModelEvent::NewDiffsComputed {
-                    diffs: None,
+                    snapshot: DiffSnapshot::NotInRepository,
                     load_duration: None,
                 });
             }
             DiffState::Loading => {
                 self.state = InternalRemoteDiffState::Loading;
                 ctx.emit(DiffStateModelEvent::NewDiffsComputed {
-                    diffs: None,
+                    snapshot: DiffSnapshot::Loading,
                     load_duration: None,
                 });
             }
@@ -419,9 +419,9 @@ impl RemoteDiffStateModel {
                     },
                     ctx
                 );
-                self.state = InternalRemoteDiffState::Error(msg);
+                self.state = InternalRemoteDiffState::Error(msg.clone());
                 ctx.emit(DiffStateModelEvent::NewDiffsComputed {
-                    diffs: None,
+                    snapshot: DiffSnapshot::Error(msg),
                     load_duration: None,
                 });
             }
@@ -445,7 +445,7 @@ impl RemoteDiffStateModel {
                     );
                     self.state = InternalRemoteDiffState::Error(err.to_string());
                     ctx.emit(DiffStateModelEvent::NewDiffsComputed {
-                        diffs: None,
+                        snapshot: DiffSnapshot::Error(err.to_string()),
                         load_duration: None,
                     });
                     return;
@@ -457,7 +457,7 @@ impl RemoteDiffStateModel {
                     .map(|start| start.elapsed());
                 self.state = InternalRemoteDiffState::Loaded(diffs);
                 ctx.emit(DiffStateModelEvent::NewDiffsComputed {
-                    diffs: Some(Arc::new(base_content)),
+                    snapshot: DiffSnapshot::Loaded(Arc::new(base_content)),
                     load_duration,
                 });
             }
@@ -870,6 +870,27 @@ impl RemoteDiffStateModel {
         ctx.emit(DiffStateModelEvent::MetadataRefreshed(Box::new(
             metadata.clone(),
         )));
+    }
+}
+
+#[cfg(test)]
+impl RemoteDiffStateModel {
+    /// Test-only constructor for a model stuck in `Disconnected`, used by the
+    /// code review view tests to exercise the disconnect guard in
+    /// `apply_diff_snapshot` without standing up a `RemoteServerManager`
+    /// subscription.
+    pub(crate) fn new_disconnected_for_test() -> Self {
+        Self {
+            remote_path: RemotePath::new(
+                remote_server::HostId::new("test-host".to_string()),
+                StandardizedPath::try_new("/test/repo")
+                    .expect("test repo path should be valid and absolute"),
+            ),
+            mode: DiffMode::Head,
+            state: InternalRemoteDiffState::Disconnected,
+            metadata: None,
+            tracked_diff_load_start_time: None,
+        }
     }
 }
 
