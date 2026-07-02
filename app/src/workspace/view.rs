@@ -24385,6 +24385,12 @@ impl TypedActionView for Workspace {
                 self.toggle_right_panel(&pane_group_handle, ctx);
             }
             #[cfg(feature = "local_fs")]
+            OpenCodeReviewBranchSelector => {
+                self.right_panel_view.update(ctx, |right_panel, ctx| {
+                    right_panel.focus_and_open_active_code_review_branch_selector(ctx);
+                });
+            }
+            #[cfg(feature = "local_fs")]
             OpenCodeReviewPanel(locator) => {
                 let pane_group_handle = self
                     .tabs
@@ -25988,6 +25994,22 @@ impl View for Workspace {
             .any_pane_being_dragged(app)
         {
             context.set.insert("Workspace_PaneDragging");
+        }
+
+        #[cfg(feature = "local_fs")]
+        if self.active_tab_pane_group().as_ref(app).right_panel_open
+            && self
+                .right_panel_view
+                .as_ref(app)
+                .has_active_code_review_view(app)
+            && !self
+                .right_panel_view
+                .as_ref(app)
+                .is_active_code_review_text_input_focused(app)
+        {
+            context
+                .set
+                .insert(super::WORKSPACE_CODE_REVIEW_PANEL_OPEN_NOT_EDITING);
         }
 
         // TODO: This is temporary. We currently check if any code pane is open where it should

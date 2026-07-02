@@ -46,6 +46,8 @@ use warpui::AppContext;
 
 use crate::ai::blocklist::NEW_AGENT_PANE_LABEL;
 use crate::channel::{Channel, ChannelState};
+#[cfg(feature = "local_fs")]
+use crate::code_review::OPEN_BRANCH_SELECTOR_BINDING_NAME;
 use crate::features::FeatureFlag;
 use crate::palette::PaletteMode;
 use crate::server::telemetry::{AgentModeEntrypoint, PaletteSource};
@@ -53,6 +55,21 @@ use crate::settings_view::{self, flags, SettingsSection};
 use crate::tab::{uses_vertical_tabs, NewSessionMenuItem};
 use crate::util::bindings::{self, cmd_or_ctrl_shift, is_binding_pty_compliant, CustomAction};
 use crate::{code, modal, notebooks, tab_configs};
+
+#[cfg(feature = "local_fs")]
+pub(crate) const WORKSPACE_CODE_REVIEW_PANEL_OPEN_NOT_EDITING: &str =
+    "Workspace_CodeReviewPanelOpen_NotEditing";
+#[cfg(feature = "local_fs")]
+pub(crate) fn register_code_review_branch_selector_binding(app: &mut AppContext) {
+    use warpui::keymap::macros::*;
+
+    app.register_editable_bindings([EditableBinding::new(
+        OPEN_BRANCH_SELECTOR_BINDING_NAME,
+        "Open branch selector in code review",
+        WorkspaceAction::OpenCodeReviewBranchSelector,
+    )
+    .with_context_predicate(id!("Workspace") & id!(WORKSPACE_CODE_REVIEW_PANEL_OPEN_NOT_EDITING))]);
+}
 
 // Helper function to access panel header corner radius from other modules
 pub fn panel_header_corner_radius() -> warpui::elements::CornerRadius {
@@ -98,6 +115,8 @@ pub fn init(app: &mut AppContext) {
     view::free_tier_limit_hit_modal::init(app);
     view::global_search::view::GlobalSearchView::init(app);
     view::right_panel::RightPanelView::init(app);
+    #[cfg(feature = "local_fs")]
+    register_code_review_branch_selector_binding(app);
     header_toolbar_editor::init(app);
     view::conversation_list::view::register_conversation_list_view_bindings(app);
 

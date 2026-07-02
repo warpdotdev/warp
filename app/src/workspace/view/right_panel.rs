@@ -1187,6 +1187,49 @@ impl RightPanelView {
         }
     }
 
+    #[cfg(feature = "local_fs")]
+    pub fn focus_and_open_active_code_review_branch_selector(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(code_review_view) = self.get_active_code_review_view(ctx) else {
+            return;
+        };
+
+        ctx.focus(&code_review_view);
+        code_review_view.update(ctx, |view, ctx| {
+            view.handle_action(&CodeReviewAction::OpenDiffSelector, ctx);
+        });
+        ctx.notify();
+    }
+
+    #[cfg(feature = "local_fs")]
+    pub fn has_active_code_review_view(&self, ctx: &AppContext) -> bool {
+        self.get_active_code_review_view(ctx).is_some()
+    }
+
+    #[cfg(feature = "local_fs")]
+    pub fn is_active_code_review_text_input_focused(&self, ctx: &AppContext) -> bool {
+        let Some(code_review_view) = self.get_active_code_review_view(ctx) else {
+            return false;
+        };
+
+        let window_id = code_review_view.window_id(ctx);
+        let Some(focused_view_id) = ctx.focused_view_id(window_id) else {
+            return false;
+        };
+
+        if !ctx
+            .view_name(window_id, focused_view_id)
+            .is_some_and(crate::code_review::is_code_review_text_input_view_name)
+        {
+            return false;
+        }
+
+        ctx.view_ancestors(window_id, focused_view_id)
+            .contains(&code_review_view.id())
+    }
+
     fn get_active_code_review_view(&self, ctx: &AppContext) -> Option<ViewHandle<CodeReviewView>> {
         let state = self.code_review_state.as_ref()?;
         let selected_repo_path = state.selected_repo_path.as_ref()?;

@@ -60,7 +60,7 @@ use super::comment_list_view::{CommentListDebugState, CommentListEvent, CommentL
 use super::comments::{attach_pending_imported_comments, AttachedReviewComment, CommentOrigin};
 use super::diff_size_limits::DiffSize;
 use super::git_dialog::{GitDialog, GitDialogEvent, GitDialogKind};
-use super::{GlobalCodeReviewEvent, GlobalCodeReviewModel};
+use super::{is_code_review_text_input_view_name, GlobalCodeReviewEvent, GlobalCodeReviewModel};
 use crate::ai::agent::{
     AIAgentAttachment, AgentReviewCommentBatch, CurrentHead, DiffBase, DiffSetHunk,
 };
@@ -321,6 +321,8 @@ pub enum CodeReviewAction {
     ToggleFileExpanded(String),
     OpenHeaderMenu,
     SetDiffMode(DiffMode),
+    /// Open (and focus) the branch/diff selector dropdown in the code review header.
+    OpenDiffSelector,
     ToggleFileSidebar,
     FileSelected(usize),
     ToggleMaximize,
@@ -7115,9 +7117,7 @@ impl View for CodeReviewView {
         let editor_focused = ctx
             .focused_view_id(self.window_id)
             .and_then(|view_id| ctx.view_name(self.window_id, view_id))
-            .is_some_and(|name| {
-                matches!(name, "EditorView" | "RichTextEditorView" | "CodeEditorView")
-            });
+            .is_some_and(is_code_review_text_input_view_name);
         if !editor_focused {
             context.set.insert("CodeReviewView_NotEditing");
         }
@@ -7202,6 +7202,11 @@ impl TypedActionView for CodeReviewView {
             }
             CodeReviewAction::SetDiffMode(mode) => {
                 self.apply_diff_mode(mode.clone(), ctx);
+            }
+            CodeReviewAction::OpenDiffSelector => {
+                self.diff_selector.update(ctx, |selector, ctx| {
+                    selector.open(ctx);
+                });
             }
             CodeReviewAction::ToggleFileSidebar => {
                 if self.file_sidebar_expanded {
