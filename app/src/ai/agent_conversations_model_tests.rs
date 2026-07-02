@@ -7,7 +7,6 @@ use instant::Instant;
 use parking_lot::Mutex;
 use persistence::model::{AgentConversationData, ConversationUsageMetadata};
 use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId, ModelHandle, SingletonEntity};
 
 use super::entry::{
@@ -113,8 +112,6 @@ fn subscribe_to_conversation_updated(
 #[test]
 fn test_restored_conversation_emits_restored_kind() {
     App::test((), |mut app| async move {
-        let _interactive_management_guard =
-            FeatureFlag::InteractiveConversationManagementView.override_enabled(true);
         let agent_model = app.add_singleton_model(|_| create_test_model());
         let captured = subscribe_to_conversation_updated(&mut app, &agent_model);
 
@@ -138,8 +135,6 @@ fn test_restored_conversation_emits_restored_kind() {
 #[test]
 fn test_status_transition_emits_status_set_with_filter_buckets() {
     App::test((), |mut app| async move {
-        let _interactive_management_guard =
-            FeatureFlag::InteractiveConversationManagementView.override_enabled(true);
         let agent_model = app.add_singleton_model(|_| create_test_model());
         let captured = subscribe_to_conversation_updated(&mut app, &agent_model);
 
@@ -171,8 +166,6 @@ fn test_status_transition_emits_status_set_with_filter_buckets() {
 #[test]
 fn test_same_bucket_re_emission_emits_status_set_with_equal_filters() {
     App::test((), |mut app| async move {
-        let _interactive_management_guard =
-            FeatureFlag::InteractiveConversationManagementView.override_enabled(true);
         let agent_model = app.add_singleton_model(|_| create_test_model());
         let captured = subscribe_to_conversation_updated(&mut app, &agent_model);
 
@@ -204,8 +197,6 @@ fn test_same_bucket_re_emission_emits_status_set_with_equal_filters() {
 #[test]
 fn test_title_update_refreshes_shadowing_task_title() {
     App::test((), |mut app| async move {
-        let _interactive_management_guard =
-            FeatureFlag::InteractiveConversationManagementView.override_enabled(true);
         initialize_history_persistence_for_tests(&mut app);
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
         app.add_singleton_model(|_| ActiveAgentViewsModel::new());
@@ -1451,8 +1442,6 @@ fn test_resolve_copy_link_returns_none_for_local_only_unsynced_conversation() {
 #[test]
 fn test_server_token_assignment_updates_copy_link_resolution() {
     App::test((), |mut app| async move {
-        let _interactive_management_guard =
-            FeatureFlag::InteractiveConversationManagementView.override_enabled(true);
         add_entry_projection_test_models(&mut app);
 
         let conversation_id = AIConversationId::new();

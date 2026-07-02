@@ -551,9 +551,7 @@ impl AgentManagementView {
             AgentSource::AgentWebhook,
             AgentSource::Cli,
         ];
-        if FeatureFlag::InteractiveConversationManagementView.is_enabled() {
-            sources.push(AgentSource::Interactive)
-        }
+        sources.push(AgentSource::Interactive);
         sources.push(AgentSource::Linear);
         sources.push(AgentSource::Slack);
         if FeatureFlag::ScheduledAmbientAgents.is_enabled() {
