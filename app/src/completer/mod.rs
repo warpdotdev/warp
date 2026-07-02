@@ -25,6 +25,14 @@ use crate::terminal::model::session::{ExecuteCommandOptions, Session, SessionTyp
 use crate::util::AsciiDebug;
 use crate::workflows::aliases::WorkflowAliases;
 
+/// Maximum number of directory entries returned by a single directory listing.
+///
+/// Collecting every file in a very large directory (e.g. `node_modules` with millions of entries)
+/// into a `Vec<EngineDirEntry>` can allocate tens of gigabytes on each autosuggestion keypress.
+/// Limiting to 10 000 entries bounds worst-case memory use while still providing far more
+/// completions than any user can realistically navigate in the menu.
+const MAX_DIR_ENTRIES: usize = 10_000;
+
 lazy_static! {
     pub static ref CURR_DIRECTORY_ENTRY: EngineDirEntry = EngineDirEntry {
         file_name: ".".to_owned(),
@@ -99,6 +107,7 @@ impl SessionContext {
 
                 read_dir
                     .filter_map(|res| res.and_then(EngineDirEntry::try_from).ok())
+                    .take(MAX_DIR_ENTRIES)
                     .collect::<Vec<_>>()
             }
             SessionType::WarpifiedRemote { .. } => {
@@ -169,6 +178,7 @@ impl SessionContext {
                                     })
                             });
                             entries.extend(files);
+                            entries.truncate(MAX_DIR_ENTRIES);
 
                             entries
                         }
