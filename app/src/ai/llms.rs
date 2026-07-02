@@ -324,6 +324,16 @@ impl LLMInfo {
         self.reasoning_level.clone()
     }
 
+    /// Whether the model is effectively usable for the current user: not
+    /// disabled, or disabled for a reason that a BYOK key for its provider
+    /// overrides (see [`DisableReason::should_clear_preference`]).
+    fn is_usable(&self, app: &AppContext) -> bool {
+        let has_byok_key = is_using_api_key_for_provider(&self.provider, app);
+        self.disable_reason
+            .as_ref()
+            .is_none_or(|reason| !reason.should_clear_preference(has_byok_key))
+    }
+
     #[cfg(feature = "integration_tests")]
     fn new_for_test(llm_name: &str) -> Self {
         Self {
@@ -401,17 +411,20 @@ impl AvailableLLMs {
     /// Returns the info for the given id only if the model is usable (present
     /// and not effectively disabled for the current user).
     fn usable_info_for_id(&self, id: &LLMId, app: &AppContext) -> Option<&LLMInfo> {
-        self.info_for_id(id).filter(|info| {
-            let has_byok_key = is_using_api_key_for_provider(&info.provider, app);
-            info.disable_reason
-                .as_ref()
-                .is_none_or(|reason| !reason.should_clear_preference(has_byok_key))
-        })
+        self.info_for_id(id).filter(|info| info.is_usable(app))
     }
 
     fn default_llm_info(&self) -> &LLMInfo {
         self.info_for_id(&self.default_id)
             .expect("Default LLM ID must be present in choices")
+    }
+
+    /// Returns the default choice when it is usable, otherwise the first usable
+    /// choice. `None` when every choice is effectively disabled for the current
+    /// user (e.g. Direct API admin-disabled with no cloud host configured).
+    fn usable_default_llm_info(&self, app: &AppContext) -> Option<&LLMInfo> {
+        self.usable_info_for_id(&self.default_id, app)
+            .or_else(|| self.choices.iter().find(|info| info.is_usable(app)))
     }
 
     #[cfg(feature = "integration_tests")]
@@ -810,6 +823,12 @@ impl LLMPreferences {
     }
 
     /// Returns the `LLMInfo` for the CLI agent model.
+    ///
+    /// Degrades gracefully when the selection or the server default is
+    /// effectively disabled (e.g. Direct API admin-disabled with no cloud
+    /// host): falls back to the first usable choice, then to the base model
+    /// when it is a custom endpoint (custom endpoints are valid CLI agent
+    /// models server-side), and only then to the raw default.
     pub fn get_active_cli_agent_model<'a>(
         &'a self,
         app: &'a AppContext,
@@ -824,10 +843,25 @@ impl LLMPreferences {
             .clone()
             .and_then(|id| {
                 available
-                    .info_for_id(&id)
+                    .usable_info_for_id(&id, app)
                     .or_else(|| self.custom_llm_info_for_id_if_enabled(&id, app))
             })
+            .or_else(|| available.usable_default_llm_info(app))
+            .or_else(|| self.active_base_custom_endpoint(app, terminal_view_id))
             .unwrap_or_else(|| available.default_llm_info())
+    }
+
+    /// Returns the active base model when it is one of the user's custom
+    /// endpoints. Used as a CLI agent fallback when every CLI agent choice is
+    /// effectively disabled, mirroring the server's own "empty CLI agent model
+    /// falls back to the base model" behavior.
+    fn active_base_custom_endpoint<'a>(
+        &'a self,
+        app: &'a AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> Option<&'a LLMInfo> {
+        let base_id = self.get_active_base_model(app, terminal_view_id).id.clone();
+        self.custom_llm_info_for_id_if_enabled(&base_id, app)
     }
 
     /// Returns the default CLI agent model as a fallback.
