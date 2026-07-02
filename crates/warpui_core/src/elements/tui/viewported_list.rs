@@ -268,7 +268,7 @@ where
             let height = visible_bottom.saturating_sub(visible_top);
             let viewport_y = viewport_y.min(usize::from(u16::MAX)) as u16;
             let height = height.min(usize::from(u16::MAX)) as u16;
-            let element = TuiClipped::from_boxed(element).with_viewport_origin_y(viewport_origin_y);
+            let element = TuiClipped::new(element).with_viewport_origin_y(viewport_origin_y);
             self.visible_elements.push(VisibleElement {
                 viewport_y,
                 height,

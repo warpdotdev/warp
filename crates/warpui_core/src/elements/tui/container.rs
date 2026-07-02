@@ -59,9 +59,9 @@ impl TuiPadding {
 }
 
 impl TuiContainer {
-    pub fn new(child: impl TuiElement + 'static) -> Self {
+    pub fn new(child: Box<dyn TuiElement>) -> Self {
         Self {
-            child: Box::new(child),
+            child,
             padding: TuiPadding::default(),
             border: false,
             border_style: TuiStyle::default(),

@@ -11,8 +11,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use warp::tui_export::{Appearance, MessageId};
-use warp_core::time_format::format_elapsed_seconds;
+use warp::tui_export::{format_elapsed_seconds, Appearance, MessageId};
 use warp_core::ui::color::blend::Blend;
 // `ThemeFill` is the theme-layer color (it supports blend/opacity); `Fill` below
 // is the element-layer color it converts into on its way to a terminal cell.
@@ -34,18 +33,24 @@ const THINKING_BODY_INDENT: u16 = 4;
 /// streams expanded and auto-collapses on finish unless the user has toggled
 /// it — a recorded override wins permanently.
 #[derive(Clone, Default)]
-pub(crate) struct ThinkingOverrides(Rc<RefCell<HashMap<MessageId, bool>>>);
+pub(crate) struct ThinkingOverrides {
+    overrides: Rc<RefCell<HashMap<MessageId, bool>>>,
+}
 
 impl ThinkingOverrides {
     /// Whether the thinking block for `message_id` is collapsed: the manual
     /// override if one was recorded, else collapsed iff `finished`.
     pub(crate) fn is_collapsed(&self, message_id: &MessageId, finished: bool) -> bool {
-        self.0.borrow().get(message_id).copied().unwrap_or(finished)
+        self.overrides
+            .borrow()
+            .get(message_id)
+            .copied()
+            .unwrap_or(finished)
     }
 
     /// Records a manual collapse override for `message_id`.
     pub(crate) fn set(&self, message_id: MessageId, collapsed: bool) {
-        self.0.borrow_mut().insert(message_id, collapsed);
+        self.overrides.borrow_mut().insert(message_id, collapsed);
     }
 }
 
@@ -62,6 +67,7 @@ pub(crate) fn render_input_section(text: &str, app: &AppContext) -> Box<dyn TuiE
             .blend(&accent.with_opacity(10)),
     )
     .into();
+
     // Only the first line carries the `≫` prompt marker; continuation
     // lines are indented to the marker's width so they align beneath it.
     let mut column = TuiFlex::column();
@@ -82,7 +88,7 @@ pub(crate) fn render_input_section(text: &str, app: &AppContext) -> Box<dyn TuiE
                 .finish(),
         );
     }
-    TuiContainer::new(column)
+    TuiContainer::new(column.finish())
         .with_background(background)
         .finish()
 }
@@ -130,7 +136,7 @@ pub(crate) fn render_thinking_section(
     // Indent the whole reasoning body beneath the header via left padding so
     // every wrapped line aligns, not just the first. An empty body renders
     // nothing, so a just-started block shows only the header.
-    let body_element = TuiContainer::new(TuiText::new(body.to_owned()).with_style(style))
+    let body_element = TuiContainer::new(TuiText::new(body.to_owned()).with_style(style).finish())
         .with_padding_left(THINKING_BODY_INDENT);
 
     let collapsed = overrides.is_collapsed(message_id, finished_duration.is_some());
@@ -140,7 +146,7 @@ pub(crate) fn render_thinking_section(
         collapsed,
         header,
         style,
-        body_element,
+        body_element.finish(),
         move |event_ctx, _app| {
             toggle_overrides.set(toggle_message_id.clone(), !collapsed);
             event_ctx.notify();

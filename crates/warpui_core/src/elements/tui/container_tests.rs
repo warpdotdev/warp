@@ -28,7 +28,7 @@ fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
 
 #[test]
 fn padding_offsets_the_child() {
-    let container = TuiContainer::new(TuiText::new("X")).with_padding(1);
+    let container = TuiContainer::new(TuiText::new("X").finish()).with_padding(1);
     assert_eq!(
         render_to_lines(&container, TuiSize::new(3, 3)),
         vec!["   ", " X ", "   "],
@@ -37,7 +37,7 @@ fn padding_offsets_the_child() {
 
 #[test]
 fn directional_padding_offsets_the_child() {
-    let container = TuiContainer::new(TuiText::new("X"))
+    let container = TuiContainer::new(TuiText::new("X").finish())
         .with_padding_left(2)
         .with_padding_top(1);
     assert_eq!(
@@ -48,7 +48,7 @@ fn directional_padding_offsets_the_child() {
 
 #[test]
 fn axis_padding_offsets_the_child() {
-    let container = TuiContainer::new(TuiText::new("X"))
+    let container = TuiContainer::new(TuiText::new("X").finish())
         .with_padding_x(1)
         .with_padding_y(1);
     assert_eq!(
@@ -59,7 +59,7 @@ fn axis_padding_offsets_the_child() {
 
 #[test]
 fn border_frames_the_child() {
-    let container = TuiContainer::new(TuiText::new("X")).with_border();
+    let container = TuiContainer::new(TuiText::new("X").finish()).with_border();
     assert_eq!(
         render_to_lines(&container, TuiSize::new(3, 3)),
         vec!["┌─┐", "│X│", "└─┘"],
@@ -70,7 +70,7 @@ fn border_frames_the_child() {
 fn border_and_padding_compose() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
-            let mut container = TuiContainer::new(TuiText::new("X"))
+            let mut container = TuiContainer::new(TuiText::new("X").finish())
                 .with_border()
                 .with_padding(1);
 
@@ -96,7 +96,7 @@ fn border_and_padding_compose() {
 
 #[test]
 fn background_fills_the_padding_area() {
-    let container = TuiContainer::new(TuiText::new("X"))
+    let container = TuiContainer::new(TuiText::new("X").finish())
         .with_padding(1)
         .with_background(Color::Blue);
 
@@ -123,7 +123,7 @@ fn present_recurses_into_the_child() {
         let mut rendered_views = EntityIdMap::default();
         let mut ctx = TuiPresentationContext::new(root, &mut rendered_views, &mut parent_by_child);
         let child_node = TuiChildView::from_rendered(embedded, Box::new(()), ctx.rendered_views);
-        let mut container = TuiContainer::new(child_node).with_border();
+        let mut container = TuiContainer::new(child_node.finish()).with_border();
         container.present(&mut ctx);
     }
 
@@ -138,7 +138,8 @@ fn dispatch_event_forwards_to_the_child_inside_the_inset() {
             let counter = hits.clone();
             let mut container = TuiContainer::new(
                 TuiEventHandler::new(TuiText::new("X").finish())
-                    .on_key("enter", move |_, _, _| counter.set(counter.get() + 1)),
+                    .on_key("enter", move |_, _, _| counter.set(counter.get() + 1))
+                    .finish(),
             )
             .with_border()
             .with_padding(1);
@@ -196,7 +197,7 @@ fn cursor_position_offsets_by_border_and_padding() {
     // The child reports its cursor at (0, 0); a 1-cell border + 1-cell padding
     // insets it by 2, so the container reports the cursor at (2, 2) within its
     // own area (inside the frame, not at the corner).
-    let container = TuiContainer::new(CursorElement)
+    let container = TuiContainer::new(CursorElement.finish())
         .with_border()
         .with_padding(1);
     let mut rendered_views = EntityIdMap::default();

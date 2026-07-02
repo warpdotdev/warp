@@ -40,9 +40,9 @@ pub struct TuiScrollable {
 
 impl TuiScrollable {
     /// Wraps `child` so wheel events over its area scroll it.
-    pub fn new(child: impl TuiScrollableElement + 'static) -> Self {
+    pub fn new(child: Box<dyn TuiScrollableElement>) -> Self {
         Self {
-            child: Box::new(child),
+            child,
             propagate_mousewheel_if_not_handled: false,
         }
     }

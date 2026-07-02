@@ -453,8 +453,9 @@ impl TuiView for TuiTerminalSessionView {
         let border_color: Color =
             CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.cyan)).into();
         let input_box = TuiConstrainedBox::new(
-            TuiContainer::new(TuiChildView::new(&self.input_view))
-                .with_border_style(TuiStyle::default().fg(border_color)),
+            TuiContainer::new(TuiChildView::new(&self.input_view).finish())
+                .with_border_style(TuiStyle::default().fg(border_color))
+                .finish(),
         )
         .with_max_rows(MAX_INPUT_TEXT_ROWS + 2);
 
@@ -466,10 +467,11 @@ impl TuiView for TuiTerminalSessionView {
                 .flex_child(TuiChildView::new(&self.transcript).finish())
                 .child(input_box.finish())
                 .child(
-                    TuiConstrainedBox::new(self.render_footer(ctx))
+                    TuiConstrainedBox::new(self.render_footer(ctx).finish())
                         .with_max_rows(1)
                         .finish(),
-                ),
+                )
+                .finish(),
         )
         .with_padding(2)
         .finish()

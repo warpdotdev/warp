@@ -193,7 +193,10 @@ impl TuiView for ViewportDemoView {
             items: self.items.clone(),
             last_width: self.last_width.clone(),
         };
-        let list = TuiScrollable::new(TuiViewportedList::new(self.viewport.clone(), content));
+        let list = TuiScrollable::new(Box::new(TuiViewportedList::new(
+            self.viewport.clone(),
+            content,
+        )));
 
         let quit_for_q = self.quit.clone();
         let quit_for_esc = self.quit.clone();

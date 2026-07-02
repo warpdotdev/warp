@@ -25,7 +25,7 @@ pub fn tui_collapsible(
     collapsed: bool,
     label: impl Into<String>,
     header_style: TuiStyle,
-    body: impl TuiElement + 'static,
+    body: Box<dyn TuiElement>,
     on_toggle: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
 ) -> Box<dyn TuiElement> {
     let chevron = if collapsed {
@@ -36,13 +36,14 @@ pub fn tui_collapsible(
     let header = TuiEventHandler::new(
         TuiText::new(format!("{} {chevron}", label.into()))
             .with_style(header_style)
-            .truncate(),
+            .truncate()
+            .finish(),
     )
     .on_click(on_toggle);
 
     let mut column = TuiFlex::column().child(header.finish());
     if !collapsed {
-        column = column.child(body.finish());
+        column = column.child(body);
     }
     column.finish()
 }

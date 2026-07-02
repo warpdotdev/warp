@@ -202,7 +202,8 @@ fn scrolling_up_clamps_to_the_top_without_snapping_to_bottom() {
     App::test((), |app| async move {
         let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
         let state = TuiViewportedListState::new_at_end();
-        let mut viewport = TuiScrollable::new(viewport_with_state(state.clone(), content));
+        let mut viewport =
+            TuiScrollable::new(Box::new(viewport_with_state(state.clone(), content)));
         let size = TuiSize::new(8, 4);
 
         render_viewport(&app, &mut viewport, size);
@@ -227,7 +228,8 @@ fn scrolling_down_pins_to_bottom_without_overscrolling() {
     App::test((), |app| async move {
         let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
         let state = TuiViewportedListState::new_at_end();
-        let mut viewport = TuiScrollable::new(viewport_with_state(state.clone(), content));
+        let mut viewport =
+            TuiScrollable::new(Box::new(viewport_with_state(state.clone(), content)));
         let size = TuiSize::new(8, 4);
 
         // Scroll up to the top, then back down past the end.
@@ -256,7 +258,8 @@ fn scrolling_is_a_noop_when_all_content_fits() {
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 1), fake_item(2, 1)]);
         let state = TuiViewportedListState::new_at_end();
-        let mut viewport = TuiScrollable::new(viewport_with_state(state.clone(), content));
+        let mut viewport =
+            TuiScrollable::new(Box::new(viewport_with_state(state.clone(), content)));
         let size = TuiSize::new(8, 4);
 
         render_viewport(&app, &mut viewport, size);
@@ -322,7 +325,7 @@ fn scrolling_notifies_the_view_when_scroll_state_changes() {
     App::test((), |app| async move {
         let content = FakeContent::new((1..=5).map(|id| fake_item(id, 3)).collect());
         let state = TuiViewportedListState::new_at_end();
-        let mut viewport = TuiScrollable::new(viewport_with_state(state, content));
+        let mut viewport = TuiScrollable::new(Box::new(viewport_with_state(state, content)));
         let size = TuiSize::new(8, 4);
 
         render_viewport(&app, &mut viewport, size);
@@ -338,8 +341,9 @@ fn propagating_scrollable_returns_unhandled_when_scroll_state_does_not_change() 
     App::test((), |app| async move {
         let content = FakeContent::new(vec![fake_item(1, 1), fake_item(2, 1)]);
         let state = TuiViewportedListState::new_at_end();
-        let mut viewport = TuiScrollable::new(viewport_with_state(state.clone(), content))
-            .with_propagate_mousewheel_if_not_handled(true);
+        let mut viewport =
+            TuiScrollable::new(Box::new(viewport_with_state(state.clone(), content)))
+                .with_propagate_mousewheel_if_not_handled(true);
         let size = TuiSize::new(8, 4);
 
         render_viewport(&app, &mut viewport, size);
@@ -403,14 +407,14 @@ impl TuiViewportedElement for SingleElementContent {
 
 fn single_element_viewport(
     position: TuiViewportPosition,
-    element: impl TuiElement + 'static,
+    element: Box<dyn TuiElement>,
 ) -> TuiViewportedList<SingleElementContent> {
     let state = TuiViewportedListState::new_at_end();
     state.set_position(position);
     TuiViewportedList::new(
         state,
         SingleElementContent {
-            element: RefCell::new(Some(Box::new(element))),
+            element: RefCell::new(Some(element)),
         },
     )
 }
@@ -420,7 +424,7 @@ fn cursor_position_is_shifted_into_the_visible_window() {
     App::test((), |app| async move {
         let mut viewport = single_element_viewport(
             TuiViewportPosition::RowsFromTop(1),
-            CursorElement { cursor: (0, 2) },
+            CursorElement { cursor: (0, 2) }.finish(),
         );
 
         app.read(|app_ctx| {
@@ -475,7 +479,8 @@ fn dispatch_filters_mouse_events_outside_visible_window() {
             TuiViewportPosition::RowsFromTop(1),
             DispatchRecorder {
                 called: called.clone(),
-            },
+            }
+            .finish(),
         );
 
         app.read(|app_ctx| {

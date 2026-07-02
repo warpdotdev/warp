@@ -5,11 +5,12 @@ use crate::elements::tui::{
 use crate::{App, EntityIdMap};
 
 /// A column of three single-row children (natural height 3).
-fn three_row_column() -> TuiFlex {
+fn three_row_column() -> Box<dyn TuiElement> {
     TuiFlex::column()
         .child(TuiText::new("A").finish())
         .child(TuiText::new("B").finish())
         .child(TuiText::new("C").finish())
+        .finish()
 }
 
 #[test]

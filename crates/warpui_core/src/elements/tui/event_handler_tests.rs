@@ -110,7 +110,7 @@ fn click_inside_area_runs_callback_and_reports_handled() {
         app.read(|app_ctx| {
             let hits = Rc::new(Cell::new(0u32));
             let counter = hits.clone();
-            let mut handler = TuiEventHandler::new(()).on_click(move |_ctx, _app| {
+            let mut handler = TuiEventHandler::new(().finish()).on_click(move |_ctx, _app| {
                 counter.set(counter.get() + 1);
             });
 
@@ -153,7 +153,7 @@ fn child_consumes_the_event_before_the_click_handler() {
             let outer_counter = outer_hits.clone();
 
             // A child that always handles the event pre-empts the wrapper's click.
-            let mut handler = TuiEventHandler::new(AlwaysHandles).on_click(move |_, _| {
+            let mut handler = TuiEventHandler::new(AlwaysHandles.finish()).on_click(move |_, _| {
                 outer_counter.set(outer_counter.get() + 1);
             });
 
