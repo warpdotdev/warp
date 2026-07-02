@@ -78,6 +78,53 @@ fn test_soft_wrapped_row_bounds() {
 }
 
 #[test]
+fn test_soft_wrapped_row_bounds_multi_codepoint_cluster() {
+    // Model a single visual row whose final character is a multi-codepoint
+    // cluster (e.g. an emoji): it renders as one glyph, but its caret position
+    // spans two buffer characters. The row end must land *after* the whole
+    // cluster (one past the last caret position's `last_offset`), not at
+    // `last_glyph().index + 1`, which would stop *inside* the cluster.
+    //
+    // Start from a mock line (which gives us real glyphs at indices 0, 1, 2) and
+    // attach caret positions where the final position covers two characters.
+    let mut line = text_layout::TextFrame::mock("abc").lines()[0].clone();
+    line.caret_positions = vec![
+        text_layout::CaretPosition {
+            position_in_line: 0.0,
+            start_offset: 0,
+            last_offset: 0,
+        },
+        text_layout::CaretPosition {
+            position_in_line: 0.0,
+            start_offset: 1,
+            last_offset: 1,
+        },
+        // The trailing cluster occupies two buffer characters (indices 2 and 3).
+        text_layout::CaretPosition {
+            position_in_line: 0.0,
+            start_offset: 2,
+            last_offset: 3,
+        },
+    ];
+    let frame_layouts = FrameLayouts {
+        frames: vec![Arc::new(text_layout::TextFrame::new(
+            vec1![line],
+            0.,
+            Default::default(),
+        ))],
+        start_line: 0,
+        end_line: 1,
+    };
+
+    // End is one-past the final cluster (4); a glyph-only derivation would
+    // incorrectly yield 3 (the last glyph's index + 1), landing inside it.
+    assert_eq!(
+        frame_layouts.soft_wrapped_row_bounds(DisplayPoint::new(0, 0), ClampDirection::Down),
+        Some(0..4)
+    );
+}
+
+#[test]
 fn test_soft_wrapped_frame_displayed_lines() {
     let frame_layouts = FrameLayouts {
         frames: vec![

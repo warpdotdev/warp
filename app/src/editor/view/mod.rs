@@ -648,11 +648,15 @@ pub fn init(ctx: &mut AppContext) {
         .with_mac_key_binding("ctrl-e"),
         // Match the behavior of both VSCode and Intellij by using `cmd-left/right` on Mac and
         // `home/end` on Windows and Linux. See https://www.jetbrains.com/help/idea/reference-keymap-win-default.html#caret_navigation.
-        EditableBinding::new("editor_view:home", "Home", EditorAction::VisualLineStart)
-            .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
-            .with_mac_key_binding("cmd-left")
-            .with_linux_or_windows_key_binding("home"),
-        EditableBinding::new("editor_view:end", "End", EditorAction::VisualLineEnd)
+        EditableBinding::new(
+            "editor_view:home",
+            "Home",
+            EditorAction::MoveToVisualLineStart,
+        )
+        .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
+        .with_mac_key_binding("cmd-left")
+        .with_linux_or_windows_key_binding("home"),
+        EditableBinding::new("editor_view:end", "End", EditorAction::MoveToVisualLineEnd)
             .with_context_predicate(id!("EditorView") & !id!("IMEOpen"))
             .with_mac_key_binding("cmd-right")
             .with_linux_or_windows_key_binding("end"),
@@ -1029,8 +1033,8 @@ pub enum EditorAction {
     Down,
     Left,
     Right,
-    VisualLineStart,
-    VisualLineEnd,
+    MoveToVisualLineStart,
+    MoveToVisualLineEnd,
     PageUp,
     PageDown,
     CmdUp,
@@ -5757,48 +5761,35 @@ impl EditorView {
             let mut new_selections = editor_model.selections(ctx).clone();
             for selection in new_selections.iter_mut() {
                 let start = selection.start().to_display_point(map, ctx).unwrap();
-                let cursor_start = match map
-                    .soft_wrapped_row_bounds(start, selection.clamp_direction)
-                {
-                    // The caret is on a laid-out visual row: anchor at the row's
-                    // first column, toggling to the first non-whitespace char
-                    // within that row.
-                    Some(bounds) => {
-                        let leading_whitespace = buffer
-                            .chars_at(
-                                DisplayPoint::new(start.row(), bounds.start)
-                                    .to_buffer_point(map, Bias::Left, ctx)
-                                    .unwrap(),
-                            )
-                            .unwrap()
-                            .take((bounds.end - bounds.start) as usize)
-                            .take_while(|c| c.is_whitespace())
-                            .count() as u32;
-                        let first_non_whitespace = bounds.start + leading_whitespace;
-                        if first_non_whitespace == start.column() {
-                            bounds.start
-                        } else {
-                            first_non_whitespace
-                        }
+                // Resolve the current visual (soft-wrapped) row's start column,
+                // falling back to the logical-line start (column 0) when the
+                // soft-wrap layout hasn't been laid out yet. The same "smart
+                // home" toggle (row start <-> first non-whitespace) then runs in
+                // both cases; when bounds are known we only scan whitespace
+                // within the current visual row.
+                let bounds = map.soft_wrapped_row_bounds(start, selection.clamp_direction);
+                let row_start = bounds.as_ref().map_or(0, |bounds| bounds.start);
+                let whitespace_scan_limit = bounds
+                    .as_ref()
+                    .map(|bounds| (bounds.end - bounds.start) as usize);
+                let chars = buffer
+                    .chars_at(
+                        DisplayPoint::new(start.row(), row_start)
+                            .to_buffer_point(map, Bias::Left, ctx)
+                            .unwrap(),
+                    )
+                    .unwrap();
+                let leading_whitespace = match whitespace_scan_limit {
+                    Some(limit) => {
+                        chars.take(limit).take_while(|c| c.is_whitespace()).count() as u32
                     }
-                    // No soft-wrap layout available: fall back to logical-line
-                    // start behavior.
-                    None => {
-                        let string_start = buffer
-                            .chars_at(
-                                DisplayPoint::new(start.row(), 0)
-                                    .to_buffer_point(map, Bias::Left, ctx)
-                                    .unwrap(),
-                            )
-                            .unwrap()
-                            .take_while(|c| c.is_whitespace())
-                            .count() as u32;
-                        if string_start == start.column() {
-                            0
-                        } else {
-                            string_start
-                        }
-                    }
+                    None => chars.take_while(|c| c.is_whitespace()).count() as u32,
+                };
+                let first_non_whitespace = row_start + leading_whitespace;
+                let cursor_start = if first_non_whitespace == start.column() {
+                    row_start
+                } else {
+                    first_non_whitespace
                 };
                 let cursor = map
                     .anchor_before(
@@ -8477,8 +8468,8 @@ impl TypedActionView for EditorView {
             | EditorAction::MoveToBufferEnd
             | EditorAction::Left
             | EditorAction::Right
-            | EditorAction::VisualLineStart
-            | EditorAction::VisualLineEnd
+            | EditorAction::MoveToVisualLineStart
+            | EditorAction::MoveToVisualLineEnd
             | EditorAction::MoveForwardOneWord
             | EditorAction::MoveBackwardOneWord
             | EditorAction::MoveForwardOneSubword
@@ -8547,8 +8538,8 @@ impl TypedActionView for EditorView {
             Down => self.down(ctx),
             Left => self.move_left(/* stop at line start */ false, ctx),
             Right => self.right(ctx),
-            VisualLineStart => self.move_to_visual_line_start(ctx),
-            VisualLineEnd => self.move_to_visual_line_end(ctx),
+            MoveToVisualLineStart => self.move_to_visual_line_start(ctx),
+            MoveToVisualLineEnd => self.move_to_visual_line_end(ctx),
             PageUp => self.page_up(ctx),
             PageDown => self.page_down(ctx),
             CmdUp => self.cmd_up(ctx),
