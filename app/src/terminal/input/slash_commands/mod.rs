@@ -394,7 +394,7 @@ impl Input {
         // follow-up composer or a read-only cloud transcript (they are also hidden from the slash
         // menu in that state); this no-op covers typed/keybinding execution.
         if slash_command_continues_conversation_locally(command)
-            && self.cloud_followup_routing(ctx).blocks_local_continuation()
+            && self.ai_query_routing(ctx).blocks_local_continuation()
         {
             show_error_toast(
                 "This cloud conversation can't continue on your local machine.".to_owned(),

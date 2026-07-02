@@ -308,7 +308,7 @@ use crate::terminal::view::ambient_agent::{
     HarnessSelector, HarnessSelectorEvent, HostSelector, HostSelectorEvent, NakedHeaderButtonTheme,
 };
 use crate::terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView};
-use crate::terminal::view::{resolve_cloud_followup_routing, CloudFollowupRouting, CodeDiffAction};
+use crate::terminal::view::{resolve_ai_query_routing, AIQueryRouting, CodeDiffAction};
 use crate::terminal::CLIAgent;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -2213,13 +2213,17 @@ impl Input {
         menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<HostSelector> {
-        let view =
-            ctx.add_typed_action_view(|ctx| HostSelector::new(menu_positioning_provider.clone(), ctx));
+        let view = ctx
+            .add_typed_action_view(|ctx| HostSelector::new(menu_positioning_provider.clone(), ctx));
         // Env var takes priority over workspace setting for developer testing.
         let effective_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
             .ok()
             .filter(|s| !s.is_empty())
-            .or_else(|| UserWorkspaces::as_ref(ctx).default_host_slug().map(String::from));
+            .or_else(|| {
+                UserWorkspaces::as_ref(ctx)
+                    .default_host_slug()
+                    .map(String::from)
+            });
         if let Some(slug) = &effective_host {
             view.update(ctx, |selector, ctx| {
                 selector.set_default_host(slug.clone(), ctx);
@@ -2233,7 +2237,10 @@ impl Input {
         // When the host selector menu closes (item picked or dismissed via Esc / click-outside),
         // restore focus to the input editor so typing resumes immediately.
         ctx.subscribe_to_view(&view, |me, _, event, ctx| {
-            if matches!(event, HostSelectorEvent::MenuVisibilityChanged { open: false }) {
+            if matches!(
+                event,
+                HostSelectorEvent::MenuVisibilityChanged { open: false }
+            ) {
                 me.focus_input_box(ctx);
             }
         });
@@ -2260,7 +2267,11 @@ impl Input {
             let effective_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
                 .ok()
                 .filter(|s| !s.is_empty())
-                .or_else(|| UserWorkspaces::as_ref(ctx).default_host_slug().map(String::from));
+                .or_else(|| {
+                    UserWorkspaces::as_ref(ctx)
+                        .default_host_slug()
+                        .map(String::from)
+                });
             if let Some(slug) = &effective_host {
                 view_for_ws.update(ctx, |selector, ctx| {
                     selector.set_default_host(slug.clone(), ctx);
@@ -2282,7 +2293,10 @@ impl Input {
         view_model: ModelHandle<AmbientAgentViewModel>,
         menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
         ctx: &mut ViewContext<Self>,
-    ) -> (ViewHandle<AuthSecretSelector>, ViewHandle<AuthSecretFtuxView>) {
+    ) -> (
+        ViewHandle<AuthSecretSelector>,
+        ViewHandle<AuthSecretFtuxView>,
+    ) {
         let selector = ctx.add_typed_action_view(|ctx| {
             AuthSecretSelector::new(menu_positioning_provider.clone(), view_model.clone(), ctx)
         });
@@ -2304,9 +2318,7 @@ impl Input {
                 ctx.notify();
             }
             AuthSecretSelectorEvent::DeleteConfirmationDialogToggled { is_open } => {
-                ctx.emit(Event::AuthSecretDeleteConfirmationDialogToggled {
-                    is_open: *is_open,
-                });
+                ctx.emit(Event::AuthSecretDeleteConfirmationDialogToggled { is_open: *is_open });
             }
             AuthSecretSelectorEvent::MenuVisibilityChanged { open: true } => {}
         });
@@ -2398,9 +2410,10 @@ impl Input {
         // Composer slash-command data sources gate cloud-follow-up commands on the ambient run
         // (e.g. `is_disconnected_cloud_followup`), so keep them in sync for the link-join viewer.
         let slash_model = view_model.clone();
-        self.slash_command_data_source.update(ctx, |data_source, ctx| {
-            data_source.set_ambient_agent_view_model(slash_model, ctx);
-        });
+        self.slash_command_data_source
+            .update(ctx, |data_source, ctx| {
+                data_source.set_ambient_agent_view_model(slash_model, ctx);
+            });
         if let Some(cloud_mode_composer_slash_command_data_source) =
             self.cloud_mode_composer_slash_command_data_source.clone()
         {
@@ -2432,27 +2445,27 @@ impl Input {
         // The host / auth-secret / FTUX selectors are composer-only: a viewer of an existing run
         // does not compose a new run, so they stay `None` for a shared-session viewer.
         let is_viewer = self.model.lock().shared_session_status().is_viewer();
-        let (host_selector, auth_secret_selector, auth_secret_ftux_view) =
-            if !is_viewer && FeatureFlag::CloudModeInputV2.is_enabled() {
-                let host_selector = Self::build_host_selector(
-                    view_model.clone(),
-                    self.menu_positioning_provider.clone(),
-                    ctx,
-                );
-                let (auth_secret_selector, auth_secret_ftux_view) =
-                    Self::build_auth_secret_selector(
-                        view_model.clone(),
-                        self.menu_positioning_provider.clone(),
-                        ctx,
-                    );
-                (
-                    Some(host_selector),
-                    Some(auth_secret_selector),
-                    Some(auth_secret_ftux_view),
-                )
-            } else {
-                (None, None, None)
-            };
+        let (host_selector, auth_secret_selector, auth_secret_ftux_view) = if !is_viewer
+            && FeatureFlag::CloudModeInputV2.is_enabled()
+        {
+            let host_selector = Self::build_host_selector(
+                view_model.clone(),
+                self.menu_positioning_provider.clone(),
+                ctx,
+            );
+            let (auth_secret_selector, auth_secret_ftux_view) = Self::build_auth_secret_selector(
+                view_model.clone(),
+                self.menu_positioning_provider.clone(),
+                ctx,
+            );
+            (
+                Some(host_selector),
+                Some(auth_secret_selector),
+                Some(auth_secret_ftux_view),
+            )
+        } else {
+            (None, None, None)
+        };
         self.ambient_agent_view_state = Some(AmbientAgentViewState {
             view_model,
             harness_selector,
@@ -4003,17 +4016,109 @@ impl Input {
             .map(AmbientAgentViewState::view_model)
     }
 
-    /// Classifies how a follow-up prompt for this pane would be routed. Used to keep
-    /// conversation-continuing submissions (slash/skill commands) from running on the local
-    /// agent when the pane is a disconnected/read-only remote cloud conversation.
-    fn cloud_followup_routing(&self, ctx: &AppContext) -> CloudFollowupRouting {
+    /// Classifies how a follow-up prompt for this pane would be routed, using the same
+    /// [`resolve_ai_query_routing`] source of truth as the footer live-VM indicator.
+    /// Consulted by `try_route_cloud_followup_submission` and the slash/skill guards so a remote
+    /// cloud conversation never continues on the local agent.
+    fn ai_query_routing(&self, ctx: &AppContext) -> AIQueryRouting {
         let model = self.model.lock();
-        resolve_cloud_followup_routing(
+        resolve_ai_query_routing(
             self.terminal_view_id,
             self.ambient_agent_view_model(),
             &model,
             ctx,
         )
+    }
+
+    /// Shows a transient error toast for a follow-up submission that was blocked or redirected.
+    fn show_ephemeral_error_toast(&self, message: &str, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::error(message.to_string()),
+                window_id,
+                ctx,
+            );
+        });
+    }
+
+    /// Routes a follow-up submission to the correct non-local target, using the same
+    /// [`resolve_ai_query_routing`] source of truth as the footer live-VM indicator, so a
+    /// cloud/remote conversation never continues on the local agent. Called by the submission
+    /// dispatchers (`input_enter` / `input_cmd_enter`) before falling back to local submission.
+    ///
+    /// Returns `true` when the submission was handled here (forwarded to the live VM, started a
+    /// cloud follow-up, or blocked with a toast) and the caller should stop; `false` when the
+    /// caller should proceed with local submission (an ordinary local pane, or an executor viewer
+    /// running a local-action slash command such as `/fork`).
+    fn try_route_cloud_followup_submission(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        // Nothing to route for an empty buffer; let the caller's normal (no-op) handling run.
+        if self.editor.as_ref(ctx).buffer_text(ctx).trim().is_empty() {
+            return false;
+        }
+
+        // Match the local submission path: cancel any in-flight image-attachment processing
+        // before forwarding or blocking the prompt.
+        self.editor.update(ctx, |editor, ctx| {
+            editor.abort_attached_images_future_handle(ctx);
+        });
+
+        // Route by the shared source of truth. A live shared-session viewer forwards to the sharer
+        // (an ambient cloud run or a shared local session); the other arms cover panes that are not
+        // attached to a live session.
+        match self.ai_query_routing(ctx) {
+            AIQueryRouting::Local => false,
+            AIQueryRouting::LiveRemoteVm {
+                is_executor: true, ..
+            } => {
+                // Returns false for local-action slash commands (e.g. /fork), which should still
+                // run on the viewer's own machine; the caller then proceeds to local submission.
+                self.submit_viewer_ai_query(ctx)
+            }
+            AIQueryRouting::LiveRemoteVm {
+                is_executor: false, ..
+            } => {
+                if self.model.lock().shared_session_status().is_active_viewer() {
+                    // Connected to the live session but without an executor role.
+                    log::warn!("Viewer tried to submit AI query without executor role");
+                    self.show_ephemeral_error_toast(
+                        "Cannot send queries as a read-only viewer.",
+                        ctx,
+                    );
+                } else {
+                    // The Oz run has a live execution this pane never attached to (a new execution
+                    // was started for the run while this pane was open from earlier), so there is
+                    // no live shared session to forward the prompt to.
+                    // TODO(remote-2047): instead of blocking, connect to the live shared session
+                    // and submit the prompt to the running remote VM.
+                    self.show_ephemeral_error_toast(
+                        "This pane is out of date. Reopen the Oz session link in a new pane and try submitting again.",
+                        ctx,
+                    );
+                }
+                true
+            }
+            AIQueryRouting::NewCloudVm { .. } => {
+                if FeatureFlag::HandoffCloudCloud.is_enabled() {
+                    let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();
+                    ctx.emit(Event::SubmitCloudFollowup { prompt });
+                } else {
+                    // Cloud-to-cloud follow-up is unavailable; block rather than run locally.
+                    self.show_ephemeral_error_toast(
+                        "This cloud conversation can't continue on your local machine.",
+                        ctx,
+                    );
+                }
+                true
+            }
+            AIQueryRouting::UnconnectedReadOnly => {
+                self.show_ephemeral_error_toast(
+                    "This cloud conversation can't continue on your local machine.",
+                    ctx,
+                );
+                true
+            }
+        }
     }
 
     fn harness_selector(&self) -> Option<&ViewHandle<HarnessSelector>> {
@@ -5650,7 +5755,7 @@ impl Input {
         // resolves and runs locally, so it must not run when this pane is a disconnected cloud
         // follow-up composer or a read-only cloud transcript. Skills are also hidden from the
         // slash menu in that state; this no-op covers typed/keybinding execution.
-        if self.cloud_followup_routing(ctx).blocks_local_continuation() {
+        if self.ai_query_routing(ctx).blocks_local_continuation() {
             let window_id = ctx.window_id();
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
@@ -6038,7 +6143,7 @@ impl Input {
 
         self.focus_input_box(ctx);
         // TODO(advait): Avoid using user-simulated codepaths here. Revisit function to use here.
-        self.submit_ai_query(Some(suggestion_type), ctx);
+        self.submit_ai_query_local(Some(suggestion_type), ctx);
 
         send_telemetry_from_ctx!(
             TelemetryEvent::ZeroStatePromptSuggestionUsed {
@@ -13313,20 +13418,6 @@ impl Input {
             // During cloud-mode setup, non-queued submissions (e.g. third-party harness runs that
             // don't queue) are dropped rather than sent as live prompts the sharer can't accept.
             return;
-        } else if FeatureFlag::HandoffCloudCloud.is_enabled()
-            && self
-                .ambient_agent_view_model()
-                .is_some_and(|ambient_agent_model| {
-                    ambient_agent_model
-                        .as_ref(ctx)
-                        .is_ready_for_cloud_followup_prompt()
-                })
-        {
-            log::info!("[remote-2047] Enter routed to SubmitCloudFollowup (typed prompt)");
-            ctx.emit(Event::SubmitCloudFollowup {
-                prompt: command.trim().to_owned(),
-            });
-            return;
         } else if FeatureFlag::AgentMode.is_enabled()
             && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
             && (self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
@@ -13451,7 +13542,13 @@ impl Input {
                 return;
             }
 
-            self.submit_ai_query(None, ctx);
+            // Route cloud/remote follow-ups (live viewer, new cloud VM, stale or read-only)
+            // through the shared resolver so a remote conversation never continues locally.
+            if self.try_route_cloud_followup_submission(ctx) {
+                return;
+            }
+
+            self.submit_ai_query_local(None, ctx);
         } else {
             // If we're submitting a shell command, we want to send telemetry for the input type.
             let input_model = self.ai_input_model.as_ref(ctx);
@@ -13675,19 +13772,11 @@ impl Input {
                     return;
                 }
 
-                // For viewers in a shared session, send the prompt to the sharer via
-                // submit_viewer_ai_query instead of emitting UnhandledCmdEnter. This keeps
-                // all viewer AI query logic in input.rs.
-                let shared_session_status = self.model.lock().shared_session_status().clone();
-                if FeatureFlag::AgentView.is_enabled()
-                    && shared_session_status.is_viewer()
-                    && shared_session_status.is_executor()
-                {
-                    let prompt = self.editor.as_ref(ctx).buffer_text(ctx);
-                    if !prompt.trim().is_empty() {
-                        self.submit_viewer_ai_query(ctx);
-                        return;
-                    }
+                // Route cloud/remote follow-ups (live viewer, new cloud VM, stale or read-only)
+                // through the shared resolver so Cmd+Enter matches Enter; otherwise fall back to
+                // the default unhandled-cmd-enter behavior.
+                if self.try_route_cloud_followup_submission(ctx) {
+                    return;
                 }
 
                 ctx.emit(Event::UnhandledCmdEnter)
@@ -14179,8 +14268,9 @@ impl Input {
         true
     }
 
-    /// Submit the input buffer contents as an AI query.
-    fn submit_ai_query(
+    /// Submit the input buffer contents as an AI query to continue the conversation
+    /// locally on the machine. Consider using try_route_cloud_followup_submission instead.
+    fn submit_ai_query_local(
         &mut self,
         zero_state_prompt_suggestion_type: Option<ZeroStatePromptSuggestionType>,
         ctx: &mut ViewContext<Self>,
@@ -14189,32 +14279,9 @@ impl Input {
             editor.abort_attached_images_future_handle(ctx);
         });
 
-        // If this is a viewer in a shared session, send the agent prompt
-        // to the sharer instead of executing locally.
-        let shared_session_status = self.model.lock().shared_session_status().clone();
-        if shared_session_status.is_viewer() {
-            if shared_session_status.is_executor() {
-                // This will return false if we should execute the given command locally instead
-                // of sending it to the sharer (which is the case for slash commands like fork
-                // and fork-and-compact).
-                if self.submit_viewer_ai_query(ctx) {
-                    return;
-                }
-            } else {
-                log::warn!("Viewer tried to submit AI query without executor role");
-                let window_id = ctx.window_id();
-                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(
-                            "Cannot send queries as a read-only viewer.".to_string(),
-                        ),
-                        window_id,
-                        ctx,
-                    );
-                });
-                return;
-            }
-        }
+        // Cloud/remote follow-up routing (live viewer, new cloud VM, stale or read-only) is
+        // handled by `try_route_cloud_followup_submission` at the dispatch layer (`input_enter` /
+        // `input_cmd_enter`) before this point, so this method only performs local submission.
 
         // If the agent view is inactive but the current input is detected as AI, submitting
         // this query triggers entering the agent view.

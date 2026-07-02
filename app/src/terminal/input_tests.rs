@@ -1230,6 +1230,179 @@ fn test_history_up_for_shared_session_executor() {
 }
 
 #[test]
+fn try_route_cloud_followup_submission_proceeds_for_local_pane() {
+    // An ordinary local pane (not a viewer, not a cloud/ambient pane) must not be intercepted:
+    // the helper returns false so the caller proceeds with normal local submission.
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        terminal.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.block_list_mut().set_bootstrapped();
+            model
+                .block_list_mut()
+                .active_block_for_test()
+                .set_session_id(SessionId::from(0));
+        });
+
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("run something", ctx);
+        });
+
+        let handled = input.update(&mut app, |input, ctx| {
+            input.try_route_cloud_followup_submission(ctx)
+        });
+        assert!(
+            !handled,
+            "a local pane must not be intercepted by cloud follow-up routing"
+        );
+    });
+}
+
+#[test]
+fn try_route_cloud_followup_submission_proceeds_for_empty_buffer() {
+    // Even on a viewer pane, an empty buffer is a no-op the caller handles normally, so the
+    // helper returns false and does not forward anything.
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        terminal.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.block_list_mut().set_bootstrapped();
+            model.set_shared_session_status(SharedSessionStatus::executor());
+        });
+
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        let sent = Rc::new(RefCell::new(Vec::<String>::new()));
+        let sent_cb = sent.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &super::Event, _| {
+                if let super::Event::SendAgentPrompt { prompt, .. } = event {
+                    sent_cb.borrow_mut().push(prompt.clone());
+                }
+            });
+        });
+
+        let handled = input.update(&mut app, |input, ctx| {
+            input.try_route_cloud_followup_submission(ctx)
+        });
+        assert!(!handled, "an empty buffer must not be routed");
+        assert!(
+            sent.borrow().is_empty(),
+            "an empty buffer must not forward a viewer prompt"
+        );
+    });
+}
+
+#[test]
+fn try_route_cloud_followup_submission_blocks_read_only_viewer() {
+    // A read-only (reader) viewer cannot submit; the helper handles it (blocks) without
+    // forwarding a prompt to the sharer.
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        terminal.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.block_list_mut().set_bootstrapped();
+            model.set_shared_session_status(SharedSessionStatus::ActiveViewer {
+                role: Role::Reader,
+            });
+        });
+
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        let sent = Rc::new(RefCell::new(Vec::<String>::new()));
+        let sent_cb = sent.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &super::Event, _| {
+                if let super::Event::SendAgentPrompt { prompt, .. } = event {
+                    sent_cb.borrow_mut().push(prompt.clone());
+                }
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("please continue", ctx);
+        });
+
+        let handled = input.update(&mut app, |input, ctx| {
+            input.try_route_cloud_followup_submission(ctx)
+        });
+        assert!(
+            handled,
+            "a read-only viewer submission must be handled (blocked)"
+        );
+        assert!(
+            sent.borrow().is_empty(),
+            "a read-only viewer must not forward a prompt to the sharer"
+        );
+    });
+}
+
+#[test]
+fn try_route_cloud_followup_submission_forwards_executor_viewer_prompt() {
+    // An executor viewer forwards the prompt to the sharer (SendAgentPrompt) instead of running
+    // it on the viewer's local machine.
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        terminal.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.block_list_mut().set_bootstrapped();
+            model
+                .block_list_mut()
+                .active_block_for_test()
+                .set_session_id(SessionId::from(0));
+            model.set_shared_session_status(SharedSessionStatus::executor());
+        });
+
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        let sent = Rc::new(RefCell::new(Vec::<String>::new()));
+        let sent_cb = sent.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &super::Event, _| {
+                if let super::Event::SendAgentPrompt { prompt, .. } = event {
+                    sent_cb.borrow_mut().push(prompt.clone());
+                }
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("continue please", ctx);
+        });
+
+        let handled = input.update(&mut app, |input, ctx| {
+            input.try_route_cloud_followup_submission(ctx)
+        });
+        assert!(handled, "an executor viewer submission must be handled");
+        assert_eq!(
+            sent.borrow().as_slice(),
+            ["continue please"],
+            "an executor viewer must forward the prompt to the sharer"
+        );
+    });
+}
+
+#[test]
 fn send_now_event_submits_through_active_pane_and_preserves_draft() {
     // A queued-prompt "send now" surfaces as a SendNow event on the input. The host should
     // immediately route the removed prompt through the active-pane submission path (here, the
@@ -7947,7 +8120,7 @@ fn test_remove_ignored_suggestion_on_ai_query_execution() {
             });
             input.clear_buffer_and_reset_undo_stack(ctx);
             input.user_insert(test_query, ctx);
-            input.submit_ai_query(None, ctx);
+            input.submit_ai_query_local(None, ctx);
         });
 
         // Verify the query is no longer ignored

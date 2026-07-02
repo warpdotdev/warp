@@ -96,7 +96,7 @@ use crate::terminal::view::ambient_agent::{
     AmbientAgentViewModel, ModelSelector, ModelSelectorEvent,
 };
 use crate::terminal::view::init::OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING;
-use crate::terminal::view::{resolve_cloud_followup_routing, CloudFollowupRouting, TerminalAction};
+use crate::terminal::view::{resolve_ai_query_routing, AIQueryRouting, TerminalAction};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::ShellLaunchData;
 use crate::terminal::{CLIAgent, TerminalModel};
@@ -206,7 +206,7 @@ pub struct AgentInputFooter {
     context_window_button: ViewHandle<ActionButton>,
     /// Non-interactive indicators for a cloud follow-up pane: one shown when attached to a live
     /// remote VM, one when the next follow-up will start a new cloud VM. See
-    /// [`CloudFollowupRouting`].
+    /// [`AIQueryRouting`].
     live_session_indicator: ViewHandle<ActionButton>,
     new_cloud_vm_indicator: ViewHandle<ActionButton>,
     model_selector: ViewHandle<ProfileModelSelector>,
@@ -689,7 +689,7 @@ impl AgentInputFooter {
         });
 
         // Non-interactive cloud follow-up indicators. Only one is rendered at a time, chosen by
-        // `CloudFollowupRouting` at render time.
+        // `AIQueryRouting` at render time.
         let live_session_indicator = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::CloudFilled)
@@ -873,7 +873,12 @@ impl AgentInputFooter {
             let view = ctx.add_typed_action_view(|ctx| {
                 // Built without the ambient model; the footer's ambient setter attaches it via the
                 // `ModelSelector` setter so construction and the lazy viewer path share one path.
-                ModelSelector::new(menu_positioning_provider.clone(), terminal_view_id, None, ctx)
+                ModelSelector::new(
+                    menu_positioning_provider.clone(),
+                    terminal_view_id,
+                    None,
+                    ctx,
+                )
             });
             ctx.subscribe_to_view(&view, |_, _, event, ctx| match event {
                 ModelSelectorEvent::MenuVisibilityChanged { open } => {
@@ -937,7 +942,11 @@ impl AgentInputFooter {
         // Route ambient wiring through the setter so construction and the lazy shared-session
         // viewer path share one implementation.
         if let Some(ambient_agent_view_model) = ambient_agent_view_model {
-            me.set_ambient_agent_view_model(ambient_agent_view_model, menu_positioning_provider, ctx);
+            me.set_ambient_agent_view_model(
+                ambient_agent_view_model,
+                menu_positioning_provider,
+                ctx,
+            );
         }
         me
     }
@@ -2348,25 +2357,35 @@ impl View for AgentInputFooter {
             is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
 
         // Indicate whether the next follow-up continues on the live remote VM or starts a new one.
-        // A top-right status dot reads green when connected to a live session and yellow otherwise,
-        // mirroring the context-window chip's notification dot.
-        match resolve_cloud_followup_routing(
+        // The new-cloud-VM chip carries a yellow top-right status dot (mirroring the context-window
+        // chip's notification dot); the live-session chip is shown without a dot.
+        match resolve_ai_query_routing(
             self.terminal_view_id,
             self.ambient_agent_view_model.as_ref(),
             &terminal_model,
             app,
         ) {
-            CloudFollowupRouting::LiveRemoteVm => {
-                let chip = ChildView::new(&self.live_session_indicator).finish();
-                left_buttons
-                    .add_child(Self::status_dot_overlay(chip, AnsiColorIdentifier::Green, app));
+            AIQueryRouting::LiveRemoteVm {
+                ambient_agent_task_id: Some(_),
+                ..
+            } => {
+                left_buttons.add_child(ChildView::new(&self.live_session_indicator).finish());
             }
-            CloudFollowupRouting::NewCloudVm { .. } => {
+            AIQueryRouting::NewCloudVm { .. } => {
                 let chip = ChildView::new(&self.new_cloud_vm_indicator).finish();
-                left_buttons
-                    .add_child(Self::status_dot_overlay(chip, AnsiColorIdentifier::Yellow, app));
+                left_buttons.add_child(Self::status_dot_overlay(
+                    chip,
+                    AnsiColorIdentifier::Yellow,
+                    app,
+                ));
             }
-            CloudFollowupRouting::ReadOnly | CloudFollowupRouting::Local => {}
+            // Shared *local* session viewers (no ambient task) and non-live panes show no indicator.
+            AIQueryRouting::LiveRemoteVm {
+                ambient_agent_task_id: None,
+                ..
+            }
+            | AIQueryRouting::UnconnectedReadOnly
+            | AIQueryRouting::Local => {}
         }
 
         for item in &left_items {

@@ -777,13 +777,17 @@ fn ambient_pane_model(task_id: AmbientAgentTaskId, status: SharedSessionStatus) 
 
 #[test]
 fn blocks_local_continuation_only_when_disconnected_or_read_only() {
-    assert!(CloudFollowupRouting::NewCloudVm {
+    assert!(AIQueryRouting::NewCloudVm {
         task_id: ambient_task_id(1)
     }
     .blocks_local_continuation());
-    assert!(CloudFollowupRouting::ReadOnly.blocks_local_continuation());
-    assert!(!CloudFollowupRouting::LiveRemoteVm.blocks_local_continuation());
-    assert!(!CloudFollowupRouting::Local.blocks_local_continuation());
+    assert!(AIQueryRouting::UnconnectedReadOnly.blocks_local_continuation());
+    let live_remote_vm = AIQueryRouting::LiveRemoteVm {
+        is_executor: true,
+        ambient_agent_task_id: None,
+    };
+    assert!(!live_remote_vm.blocks_local_continuation());
+    assert!(!AIQueryRouting::Local.blocks_local_continuation());
 }
 
 #[test]
@@ -792,8 +796,8 @@ fn routing_is_local_for_non_cloud_pane() {
         let model = TerminalModel::mock(None, None);
         app.update(|ctx| {
             assert_eq!(
-                resolve_cloud_followup_routing(EntityId::new(), None, &model, ctx),
-                CloudFollowupRouting::Local
+                resolve_ai_query_routing(EntityId::new(), None, &model, ctx),
+                AIQueryRouting::Local
             );
         });
     });
@@ -805,8 +809,30 @@ fn routing_is_live_remote_vm_for_active_viewer() {
         let model = ambient_pane_model(ambient_task_id(1), SharedSessionStatus::reader());
         app.update(|ctx| {
             assert_eq!(
-                resolve_cloud_followup_routing(EntityId::new(), None, &model, ctx),
-                CloudFollowupRouting::LiveRemoteVm
+                resolve_ai_query_routing(EntityId::new(), None, &model, ctx),
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: false,
+                    ambient_agent_task_id: Some(ambient_task_id(1)),
+                }
+            );
+        });
+    });
+}
+
+#[test]
+fn routing_omits_task_id_for_non_ambient_shared_session_viewer() {
+    App::test((), |mut app| async move {
+        // A viewer of a shared *local* session (no ambient task) still forwards to the sharer, but
+        // carries no ambient task id, so the footer live-VM indicator stays hidden.
+        let mut model = TerminalModel::mock(None, None);
+        model.set_shared_session_status(SharedSessionStatus::executor());
+        app.update(|ctx| {
+            assert_eq!(
+                resolve_ai_query_routing(EntityId::new(), None, &model, ctx),
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: true,
+                    ambient_agent_task_id: None,
+                }
             );
         });
     });
@@ -818,8 +844,8 @@ fn routing_is_local_for_active_sharer_local_orchestration_child() {
         let model = ambient_pane_model(ambient_task_id(1), SharedSessionStatus::ActiveSharer);
         app.update(|ctx| {
             assert_eq!(
-                resolve_cloud_followup_routing(EntityId::new(), None, &model, ctx),
-                CloudFollowupRouting::Local
+                resolve_ai_query_routing(EntityId::new(), None, &model, ctx),
+                AIQueryRouting::Local
             );
         });
     });
@@ -840,8 +866,8 @@ fn routing_is_new_cloud_vm_for_owned_oz_disconnected_pane() {
         let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
         app.update(|ctx| {
             assert_eq!(
-                resolve_cloud_followup_routing(terminal_view_id, None, &model, ctx),
-                CloudFollowupRouting::NewCloudVm { task_id }
+                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
+                AIQueryRouting::NewCloudVm { task_id }
             );
         });
     });
@@ -862,8 +888,8 @@ fn routing_is_read_only_for_non_owner_disconnected_pane() {
         let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
         app.update(|ctx| {
             assert_eq!(
-                resolve_cloud_followup_routing(terminal_view_id, None, &model, ctx),
-                CloudFollowupRouting::ReadOnly
+                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
+                AIQueryRouting::UnconnectedReadOnly
             );
         });
     });
@@ -887,8 +913,11 @@ fn routing_is_live_remote_vm_for_active_execution_without_attached_viewer() {
         let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
         app.update(|ctx| {
             assert_eq!(
-                resolve_cloud_followup_routing(terminal_view_id, None, &model, ctx),
-                CloudFollowupRouting::LiveRemoteVm
+                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: false,
+                    ambient_agent_task_id: Some(task_id),
+                }
             );
         });
     });

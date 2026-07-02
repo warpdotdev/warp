@@ -34,25 +34,33 @@ pub(in crate::terminal::view) enum CloudConversationContinuationUiState {
 /// submission router (so a remote cloud conversation never continues on the local agent) and the
 /// agent input footer live-VM indicator.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CloudFollowupRouting {
-    /// Connected as a viewer to a live remote cloud VM's shared session; the follow-up goes to the
-    /// live remote VM via the existing viewer prompt path.
-    LiveRemoteVm,
+pub(crate) enum AIQueryRouting {
+    /// Connected as a live shared-session viewer (an ambient cloud run or a shared session); the
+    /// follow-up is forwarded to the sharer via the viewer prompt path. `is_executor` is true when
+    /// this viewer may submit (read-only viewers are blocked). `ambient_agent_task_id` is set only
+    /// for ambient agent shared sessions (it is `None` for a shared local session), so the footer
+    /// shows the live-VM indicator only for ambient runs. Also used for a disconnected pane whose
+    /// owned run still has an active execution we can't attach to as a viewer, in which case
+    /// `is_executor` is false and the submission router surfaces stale-pane guidance.
+    LiveRemoteVm {
+        is_executor: bool,
+        ambient_agent_task_id: Option<AmbientAgentTaskId>,
+    },
     /// Disconnected but resumable owned Oz cloud conversation; the follow-up must start a new cloud
     /// VM via cloud-to-cloud handoff.
     NewCloudVm { task_id: AmbientAgentTaskId },
     /// A finished/non-resumable remote cloud conversation (non-owner finished viewer, blocked
     /// source, non-Oz tombstone). The input is non-editable; a follow-up must never run locally.
-    ReadOnly,
+    UnconnectedReadOnly,
     /// Continues on the local machine. Covers ordinary local agent panes and local ambient sharers
     /// (e.g. `run_agents(local)` orchestration children, `/remote-control` of a local session).
     Local,
 }
 
-impl CloudFollowupRouting {
+impl AIQueryRouting {
     /// True when a conversation-continuing submission on this pane must not reach the local agent.
     pub(crate) fn blocks_local_continuation(&self) -> bool {
-        matches!(self, Self::NewCloudVm { .. } | Self::ReadOnly)
+        matches!(self, Self::NewCloudVm { .. } | Self::UnconnectedReadOnly)
     }
 }
 
@@ -140,42 +148,50 @@ pub(in crate::terminal::view) fn resolve_cloud_conversation_continuation_ui_stat
     }
 }
 
-/// Resolves the [`CloudFollowupRouting`] for a pane from its terminal model and optional ambient
+/// Resolves the [`AIQueryRouting`] for a pane from its terminal model and optional ambient
 /// view model. `terminal_model` must already be locked by the caller; this function does not lock
 /// it, and reuses [`resolve_cloud_conversation_continuation_ui_state`] for the disconnected case.
-pub(crate) fn resolve_cloud_followup_routing(
+pub(crate) fn resolve_ai_query_routing(
     terminal_view_id: EntityId,
     ambient_agent_view_model: Option<&ModelHandle<AmbientAgentViewModel>>,
     terminal_model: &TerminalModel,
     app: &AppContext,
-) -> CloudFollowupRouting {
+) -> AIQueryRouting {
     let status = terminal_model.shared_session_status();
     let is_ambient = terminal_model.is_shared_ambient_agent_session()
         || ambient_agent_view_model.is_some_and(|model| model.as_ref(app).is_ambient_agent());
     let is_transcript_viewer = terminal_model.is_conversation_transcript_viewer();
+    // The ambient task this pane is associated with, if any. `None` for a shared *local* session,
+    // which keeps the footer's live-VM indicator hidden for non-ambient shared sessions.
+    let ambient_agent_task_id = ambient_agent_view_model
+        .and_then(|model| model.as_ref(app).task_id())
+        .or_else(|| terminal_model.ambient_agent_task_id());
 
-    // Ordinary local pane (not a cloud/ambient or transcript pane): existing local behavior.
-    if !is_ambient && !is_transcript_viewer {
-        return CloudFollowupRouting::Local;
+    // A live shared-session viewer forwards its follow-up to the sharer via the viewer prompt path,
+    // whether the shared session is an ambient cloud run or a shared local session. `is_executor`
+    // tells the submission router whether this viewer may actually submit; `ambient_agent_task_id`
+    // is set only for ambient runs so the footer indicator stays hidden for shared local sessions.
+    if status.is_active_viewer() {
+        return AIQueryRouting::LiveRemoteVm {
+            is_executor: status.is_executor(),
+            ambient_agent_task_id,
+        };
     }
 
-    // A live shared session: a viewer is attached to a live remote VM, while a sharer is running
-    // locally (e.g. a local orchestration child) and so continues locally.
-    if status.is_active_viewer() {
-        return CloudFollowupRouting::LiveRemoteVm;
+    // Ordinary local pane (not a cloud/ambient or transcript pane), or a sharer running locally
+    // (e.g. a local orchestration child, `/remote-control` of a local session): local behavior.
+    if !is_ambient && !is_transcript_viewer {
+        return AIQueryRouting::Local;
     }
     if status.is_active_sharer() {
-        return CloudFollowupRouting::Local;
+        return AIQueryRouting::Local;
     }
 
     // Disconnected / ended / transcript ambient pane: defer to the resolved continuation state.
-    let task_id = ambient_agent_view_model
-        .and_then(|model| model.as_ref(app).task_id())
-        .or_else(|| terminal_model.ambient_agent_task_id());
-    let Some(task_id) = task_id else {
+    let Some(task_id) = ambient_agent_task_id else {
         // No ambient task yet (fresh composing cloud pane, replay/loading, or a generic local
         // transcript): defer to existing local handling.
-        return CloudFollowupRouting::Local;
+        return AIQueryRouting::Local;
     };
 
     match resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, app) {
@@ -183,15 +199,19 @@ pub(crate) fn resolve_cloud_followup_routing(
         Ok(CloudConversationContinuationUiState::FollowupInput)
             if !terminal_model.is_read_only() =>
         {
-            CloudFollowupRouting::NewCloudVm { task_id }
+            AIQueryRouting::NewCloudVm { task_id }
         }
-        // The run still has an active execution we can't represent as a viewer yet; treat it as
-        // live rather than letting a follow-up fall through to local submission.
+        // The run still has an active execution but this pane is not attached as a viewer; treat it
+        // as a live remote VM (never local) so the submission router surfaces stale-pane guidance
+        // rather than letting a follow-up fall through to local submission.
         Err(CloudConversationContinuationError::ActiveTaskExecution) => {
-            CloudFollowupRouting::LiveRemoteVm
+            AIQueryRouting::LiveRemoteVm {
+                is_executor: false,
+                ambient_agent_task_id: Some(task_id),
+            }
         }
         // Any other outcome on an existing cloud task is non-resumable here: read-only, never local.
-        Ok(_) | Err(_) => CloudFollowupRouting::ReadOnly,
+        Ok(_) | Err(_) => AIQueryRouting::UnconnectedReadOnly,
     }
 }
 
