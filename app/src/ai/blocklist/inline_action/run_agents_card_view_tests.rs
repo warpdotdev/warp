@@ -347,20 +347,40 @@ mod format_terminal_state_tests {
     }
 
     #[test]
-    fn denied_with_reason_appends_reason() {
+    fn denied_with_reason_surfaces_reason() {
         let (label, kind) = format_terminal_state(&RunAgentsResult::Denied {
-            reason: "disapproved".to_string(),
+            reason: "Orchestration config was disapproved".to_string(),
         });
-        assert!(label.contains("disapproved"));
+        assert_eq!(label, "Orchestration config was disapproved");
+        // A denial must not falsely claim orchestration is disabled.
+        assert!(!label.contains("Orchestration is currently disabled"));
         assert!(matches!(kind, StatusKind::Cancelled));
     }
 
     #[test]
-    fn denied_without_reason_uses_short_label() {
+    fn denied_with_duplicate_launch_reason_does_not_claim_disabled() {
+        // Regression: the duplicate-launch guard denies a run_agents call while
+        // orchestration is fully enabled (the agent re-ran run_agents for
+        // children that were already spawned). The card must surface that
+        // reason, not the misleading "Orchestration is currently disabled" copy.
+        let reason = "Requested agent(s) have already been launched: frontend (a-1). \
+                      Do not start duplicate child agents; send any follow-up with \
+                      send_message_to_agent using the existing agent id(s): a-1.";
+        let (label, kind) = format_terminal_state(&RunAgentsResult::Denied {
+            reason: reason.to_string(),
+        });
+        assert_eq!(label, reason);
+        assert!(!label.contains("Orchestration is currently disabled"));
+        assert!(matches!(kind, StatusKind::Cancelled));
+    }
+
+    #[test]
+    fn denied_without_reason_reads_as_deliberate_skip() {
         let (label, kind) = format_terminal_state(&RunAgentsResult::Denied {
             reason: String::new(),
         });
-        assert!(!label.contains("()"));
+        assert_eq!(label, "Continued without orchestration.");
+        assert!(!label.contains("Orchestration is currently disabled"));
         assert!(matches!(kind, StatusKind::Cancelled));
     }
 

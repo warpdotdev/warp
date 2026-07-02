@@ -1391,13 +1391,19 @@ pub(crate) fn format_terminal_state(result: &RunAgentsResult) -> (String, Status
             }
         }
         RunAgentsResult::Denied { reason } => {
-            let body = if reason.is_empty() {
-                "Orchestration is currently disabled. Re-enable on the plan card to launch."
-                    .to_string()
+            // A denial is not the same as orchestration being disabled. The
+            // request can be declined while orchestration is fully enabled —
+            // most commonly by the duplicate-launch guard (the agent re-ran
+            // run_agents for children that were already spawned). Surface the
+            // actual reason instead of always claiming orchestration is off,
+            // which previously misled users whose agents were merely duplicates
+            // and pointed them at a "plan card" re-enable affordance that the
+            // terminal card doesn't have.
+            let body = if reason.trim().is_empty() {
+                // An empty reason is the user's "Accept w/o orchestration" choice.
+                "Continued without orchestration.".to_string()
             } else {
-                format!(
-                    "Orchestration is currently disabled. Re-enable on the plan card to launch. ({reason})"
-                )
+                reason.clone()
             };
             (body, StatusKind::Cancelled)
         }
