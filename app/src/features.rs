@@ -195,8 +195,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AIResumeButton,
         #[cfg(feature = "figma_detection")]
         FeatureFlag::FigmaDetection,
-        #[cfg(feature = "agent_decides_command_execution")]
-        FeatureFlag::AgentDecidesCommandExecution,
         #[cfg(feature = "codebase_index_speedbump")]
         FeatureFlag::CodebaseIndexSpeedbump,
         #[cfg(feature = "context_line_review_comments")]
