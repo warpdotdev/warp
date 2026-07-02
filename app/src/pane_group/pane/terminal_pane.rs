@@ -259,7 +259,16 @@ impl TerminalPane {
         app: &AppContext,
     ) -> SessionNavigationData {
         let view = self.terminal_view(app).as_ref(app);
-        SessionNavigationData::new(
+        // The user's custom pane name (set via rename-pane) is stored as the
+        // vertical-tabs title. We only carry the *custom* name (not the
+        // auto-generated terminal title) so it is both searchable and worth
+        // displaying in the palette row.
+        let pane_title = self
+            .pane_configuration()
+            .as_ref(app)
+            .custom_vertical_tabs_title()
+            .map(|title| title.to_string());
+        let mut session = SessionNavigationData::new(
             view.full_prompt(app),
             view.prompt_elements(app),
             view.session_command_context(app),
@@ -271,7 +280,9 @@ impl TerminalPane {
             view.is_read_only(),
             window_id,
             view.model.lock().shared_session_status().clone(),
-        )
+        );
+        session.set_pane_title(pane_title);
+        session
     }
 
     pub fn terminal_pane_id(&self) -> TerminalPaneId {

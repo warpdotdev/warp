@@ -1275,6 +1275,51 @@ fn test_workspace_sessions_retrieves_panes() {
     });
 }
 
+#[test]
+fn test_workspace_sessions_carry_custom_tab_and_pane_names() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            // Rename the tab (pane group), then grab its first pane's id.
+            let pane_id = {
+                let tab_view = workspace
+                    .get_pane_group_view(0)
+                    .expect("tab pane group should exist");
+                tab_view.update(ctx, |pane_group, ctx| {
+                    pane_group.set_title("deploy logs", ctx);
+                    pane_group.pane_id_by_index(0).unwrap()
+                })
+            };
+
+            // The session for that pane carries the custom tab name, and the
+            // display name falls back to it when the pane has no custom name.
+            let session = workspace
+                .workspace_sessions(ctx.window_id(), ctx)
+                .find(|session| session.pane_view_locator().pane_id == pane_id)
+                .expect("session for the renamed tab should exist");
+            assert_eq!(session.tab_name(), Some("deploy logs"));
+            assert_eq!(session.pane_title(), None);
+            assert_eq!(session.display_name(), Some("deploy logs"));
+
+            // Give the pane its own custom name; it should now be carried too,
+            // and the display name prefers the more-specific pane name.
+            let locator = session.pane_view_locator();
+            workspace.set_custom_pane_name(locator, "build output".to_string(), ctx);
+
+            let session = workspace
+                .workspace_sessions(ctx.window_id(), ctx)
+                .find(|session| session.pane_view_locator().pane_id == pane_id)
+                .expect("session after renaming the pane should exist");
+            assert_eq!(session.tab_name(), Some("deploy logs"));
+            assert_eq!(session.pane_title(), Some("build output"));
+            assert_eq!(session.display_name(), Some("build output"));
+        });
+    });
+}
+
 fn number_of_shared_sessions_in_tab(
     workspace: &Workspace,
     index: usize,

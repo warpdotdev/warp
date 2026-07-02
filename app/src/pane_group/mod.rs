@@ -2475,8 +2475,15 @@ impl PaneGroup {
         window_id: WindowId,
         app: &'a AppContext,
     ) -> impl Iterator<Item = SessionNavigationData> + 'a {
-        self.panes_of::<TerminalPane>()
-            .map(move |pane| pane.session_navigation_data(pane_group_id, window_id, app))
+        // The custom tab title lives on the pane group, so stamp it onto each
+        // session here. This lets the session navigation palette match sessions
+        // by their user-assigned tab name, not just cwd/command/status.
+        let tab_name = self.custom_title(app);
+        self.panes_of::<TerminalPane>().map(move |pane| {
+            let mut session = pane.session_navigation_data(pane_group_id, window_id, app);
+            session.set_tab_name(tab_name.clone());
+            session
+        })
     }
 
     /// Send prompt change bindkey events to all terminal sessions in this pane group. This
