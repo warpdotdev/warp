@@ -2024,6 +2024,14 @@ pub enum Event {
     KillAgentConversation {
         conversation_id: AIConversationId,
     },
+    /// Emitted when this pane's [`ambient_agent::AmbientAgentViewModel`] is lazily
+    /// created — e.g. a raw `shared_session` link-join viewer that only discovers the
+    /// joined session is an ambient (cloud) run at `SessionJoined`. Lets
+    /// `PaneGroup::create_shared_session_viewer` wire the viewer `TerminalManager` to the
+    /// model's session lifecycle events (via
+    /// [`ambient_agent::wire_ambient_agent_session_events`]) so follow-up runs after the
+    /// previous VM ends re-attach the viewer to the new execution session.
+    AmbientAgentViewModelCreated,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3115,14 +3123,14 @@ impl TerminalView {
         initial_input_config: Option<InputConfig>,
         conversation_restoration: Option<ConversationRestorationInNewPaneType>,
         inactive_pty_reads_rx: Option<async_broadcast::InactiveReceiver<Arc<Vec<u8>>>>,
-        is_cloud_mode: bool,
+        is_ambient_agent: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let terminal_view_id = ctx.view_id();
         let active_session = ctx.add_model(|ctx| {
             ActiveSession::new(sessions.clone(), model_events_handle.clone(), ctx)
         });
-        let ambient_agent_view_model = is_cloud_mode.then(|| {
+        let ambient_agent_view_model = is_ambient_agent.then(|| {
             ctx.add_model(|ctx| ambient_agent::AmbientAgentViewModel::new(terminal_view_id, ctx))
         });
 
@@ -7892,6 +7900,62 @@ impl TerminalView {
         &self,
     ) -> Option<&ModelHandle<ambient_agent::AmbientAgentViewModel>> {
         self.ambient_agent_view_model.as_ref()
+    }
+
+    /// Ensures this pane has an [`ambient_agent::AmbientAgentViewModel`], creating and wiring
+    /// it into the input if absent. Idempotent: returns the existing model when already
+    /// present (the upfront cloud-mode construction path). Used by both the upfront and
+    /// `SessionJoined` paths so a shared-session viewer that only discovers it is viewing an
+    /// ambient run at join time (e.g. a raw `shared_session` link) still gets a fully wired
+    /// model.
+    fn ensure_ambient_agent_view_model(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> ModelHandle<ambient_agent::AmbientAgentViewModel> {
+        if let Some(existing) = self.ambient_agent_view_model.clone() {
+            return existing;
+        }
+        let terminal_view_id = self.view_id;
+        log::info!(
+            "[remote-2047] creating ambient agent view model for viewer (view_id={terminal_view_id:?})"
+        );
+        let model = ctx
+            .add_model(|ctx| ambient_agent::AmbientAgentViewModel::new(terminal_view_id, ctx));
+        self.ambient_agent_view_model = Some(model.clone());
+        // Route this model's events (FollowupDispatched, SessionReady, DispatchedAgent, ...)
+        // through `handle_ambient_agent_event`, mirroring the upfront construction path
+        // (see the `ambient_agent_view_model` subscription in `TerminalView::new`). Without
+        // this, a lazily-created viewer model never drives the setup-command group reset or
+        // the queued follow-up prompt UI. The early return above guarantees this runs once.
+        ctx.subscribe_to_model(&model, |me, _, event, ctx| {
+            me.handle_ambient_agent_event(event, ctx);
+        });
+        let model_for_input = model.clone();
+        self.input.update(ctx, |input, ctx| {
+            input.attach_ambient_agent_view_model(model_for_input, ctx);
+        });
+        // Notify observers (e.g. `PaneGroup::create_shared_session_viewer`) that the model
+        // now exists so they can wire the viewer `TerminalManager` to its session events.
+        ctx.emit(Event::AmbientAgentViewModelCreated);
+        model
+    }
+
+    /// Begins viewing an existing ambient (cloud) run in this shared-session viewer pane.
+    /// Shared entry point for the upfront and `SessionJoined` paths: ensures the
+    /// [`ambient_agent::AmbientAgentViewModel`] exists, initializes it for viewing `task_id`,
+    /// and records the live `session_id` so `is_ready_for_cloud_followup_prompt` stays false
+    /// while the session is live and flips to the resumable follow-up state when it ends.
+    pub fn begin_viewing_ambient_session(
+        &mut self,
+        task_id: AmbientAgentTaskId,
+        session_id: session_sharing_protocol::common::SessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let model = self.ensure_ambient_agent_view_model(ctx);
+        model.update(ctx, |model, ctx| {
+            model.enter_viewing_existing_session(task_id, ctx);
+            model.set_live_execution_session(session_id);
+        });
     }
 
     /// Tear down the Cloud Mode Setup V2 UI in response to a
@@ -21102,6 +21166,34 @@ impl TerminalView {
         ambient_agent_view_model.update(ctx, |model, ctx| {
             model.submit_cloud_followup(prompt, ctx);
         });
+
+        // [remote-2047] Capture the UI-gating state right after dispatching the follow-up so we
+        // can tell why the setup / prompt-queuing UI does (or does not) render for this pane.
+        {
+            let agent_view_state = self
+                .agent_view_controller
+                .as_ref(ctx)
+                .agent_view_state()
+                .clone();
+            let model = self.model.lock();
+            let pre_first_exchange = ambient_agent::is_cloud_agent_pre_first_exchange(
+                self.ambient_agent_view_model.as_ref(),
+                &self.agent_view_controller,
+                &model,
+                ctx,
+            );
+            let is_shared_ambient = model.is_shared_ambient_agent_session();
+            drop(model);
+            log::info!(
+                "[remote-2047] post-followup UI gate: agent_view_active={} origin={:?} \
+                 active_conversation_id={:?} is_shared_ambient_agent_session={is_shared_ambient} \
+                 is_cloud_agent_pre_first_exchange={pre_first_exchange}",
+                agent_view_state.is_active(),
+                agent_view_state.origin(),
+                agent_view_state.active_conversation_id(),
+            );
+        }
+
         self.input.update(ctx, |input, ctx| {
             input.reset_after_cloud_followup_submission(ctx);
             input.set_input_mode_agent(true, ctx);
@@ -27491,7 +27583,17 @@ impl View for TerminalView {
                         column.add_child(ChildView::new(&self.use_agent_footer).finish());
                     }
 
-                    if self.is_input_box_visible(&model, app) {
+                    let input_box_visible = self.is_input_box_visible(&model, app);
+                    if self
+                        .ambient_agent_view_model
+                        .as_ref()
+                        .is_some_and(|m| m.as_ref(app).is_waiting_for_session())
+                    {
+                        log::info!(
+                            "[remote-2047] TerminalView render (waiting_for_session): is_input_box_visible={input_box_visible}"
+                        );
+                    }
+                    if input_box_visible {
                         column.add_child(self.render_input());
                     } else if self.should_render_legacy_ambient_agent_loading_footer(&model, app) {
                         column.add_child(ambient_agent::render_loading_footer(appearance));

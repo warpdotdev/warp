@@ -395,6 +395,41 @@ impl BlocklistAIStatusBar {
         }
     }
 
+    /// Attaches an ambient agent view model to an already-constructed status bar. Used on the
+    /// shared-session viewer path where the model is created lazily at `SessionJoined` (a raw
+    /// `shared_session` link that turns out to be a cloud run), after the status bar was built
+    /// with `None`. Without this, `render_cloud_mode_setup_status` has no model and the
+    /// "connecting to host / creating environment" progress never renders for the viewer's
+    /// follow-up. Wires the same subscription as [`Self::new`] so the status bar re-renders as
+    /// setup progress updates. Idempotent: a no-op when a model is already set.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.ambient_agent_view_model.is_some() {
+            return;
+        }
+        ctx.subscribe_to_model(&view_model, |me, _, event, ctx| match event {
+            AmbientAgentViewModelEvent::DispatchedAgent
+            | AmbientAgentViewModelEvent::FollowupDispatched
+            | AmbientAgentViewModelEvent::ProgressUpdated => {
+                me.update_agent_tip(ctx);
+                ctx.notify();
+            }
+            AmbientAgentViewModelEvent::SessionReady { .. }
+            | AmbientAgentViewModelEvent::ExecutionSessionReady { .. }
+            | AmbientAgentViewModelEvent::Failed { .. }
+            | AmbientAgentViewModelEvent::NeedsGithubAuth
+            | AmbientAgentViewModelEvent::Cancelled => {
+                ctx.notify();
+            }
+            _ => (),
+        });
+        self.ambient_agent_view_model = Some(view_model);
+        ctx.notify();
+    }
+
     pub fn should_show_summarization_cancel_dialog(&self, app: &AppContext) -> bool {
         self.is_summarization_cancel_dialog_open
             && self
@@ -1137,6 +1172,18 @@ impl View for BlocklistAIStatusBar {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn warpui::Element> {
+        // [remote-2047] While an ambient run is spinning up, confirm whether this status bar is
+        // actually rendered (and whether it produces the setup progress). If we never see this for
+        // a viewer's follow-up, the status bar host isn't being rendered for that pane.
+        if let Some(ambient) = self.ambient_agent_view_model.as_ref() {
+            if ambient.as_ref(app).is_waiting_for_session() {
+                log::info!(
+                    "[remote-2047] status_bar render (waiting_for_session): progress_some={} cloud_mode_setup_v2={}",
+                    ambient.as_ref(app).agent_progress().is_some(),
+                    FeatureFlag::CloudModeSetupV2.is_enabled(),
+                );
+            }
+        }
         let appearance = Appearance::as_ref(app);
         let agent_view_controller = self.agent_view_controller.as_ref(app);
         if let Some(cloud_mode_setup_terminal_message) =

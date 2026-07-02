@@ -266,6 +266,62 @@ pub struct AgentInputFooter {
 }
 
 impl AgentInputFooter {
+    /// Attaches an ambient agent view model to an already-constructed footer. Used when a
+    /// shared-session viewer only learns at `SessionJoined` that the session is an ambient
+    /// run (e.g. a raw `shared_session` link): the footer was built with `None` at
+    /// construction, so it must be given the model now to render the cloud environment
+    /// selector and re-render on model events. Mirrors the ambient wiring in [`Self::new`].
+    /// `menu_positioning_provider` is passed in because the footer does not retain it.
+    /// Idempotent: a no-op when a model is already present.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
+        menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.ambient_agent_view_model.is_some() {
+            return;
+        }
+        self.ambient_agent_view_model = Some(ambient_agent_view_model.clone());
+        self.display_chip_config.ambient_agent_view_model = Some(ambient_agent_view_model.clone());
+
+        // Push the model into the model/harness selector chip too. It captured `None` at
+        // construction on this link-join path, so without this it shows the local default model
+        // instead of the viewed cloud run's harness/model.
+        let selector_model = ambient_agent_view_model.clone();
+        self.model_selector.update(ctx, |selector, ctx| {
+            selector.set_ambient_agent_view_model(selector_model, ctx);
+        });
+
+        // Build the environment selector now that the model exists (mirrors `new`).
+        let environment_selector = ctx.add_typed_action_view(|ctx| {
+            EnvironmentSelector::new(
+                menu_positioning_provider.clone(),
+                EnvironmentSelectorTarget::CloudPane(ambient_agent_view_model.clone()),
+                ctx,
+            )
+        });
+        ctx.subscribe_to_view(&environment_selector, |_, _, event, ctx| match event {
+            EnvironmentSelectorEvent::MenuVisibilityChanged { open } => {
+                ctx.emit(AgentInputFooterEvent::ToggledChipMenu { open: *open });
+                if !*open {
+                    ctx.emit(AgentInputFooterEvent::EnvironmentSelectorClosed);
+                }
+            }
+            EnvironmentSelectorEvent::OpenEnvironmentManagementPane => {
+                ctx.emit(AgentInputFooterEvent::OpenEnvironmentManagementPane);
+            }
+        });
+        self.environment_selector = Some(environment_selector);
+
+        // Re-render on ambient model events (mirrors `new`).
+        ctx.subscribe_to_model(&ambient_agent_view_model, |_, _, _, ctx| {
+            ctx.notify();
+        });
+
+        ctx.notify();
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         menu_positioning_provider: Arc<dyn MenuPositioningProvider>,

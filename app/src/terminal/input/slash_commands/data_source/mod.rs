@@ -85,6 +85,22 @@ impl SlashCommandDataSource {
         Self::build(args, /* is_cloud_mode_v2 */ true, ctx)
     }
 
+    /// Attaches an ambient agent view model after construction. Used on the shared-session viewer
+    /// path where the model is created lazily at `SessionJoined`, after the data source was built
+    /// with `None`. Keeps cloud-follow-up command gating (e.g. `is_disconnected_cloud_followup`)
+    /// correct for a link-join viewer. Idempotent: a no-op when a model is already set.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.ambient_agent_view_model.is_some() {
+            return;
+        }
+        self.ambient_agent_view_model = Some(ambient_agent_view_model);
+        self.recompute_active_commands(ctx);
+    }
+
     fn build(args: DataSourceArgs, is_cloud_mode_v2: bool, ctx: &mut ModelContext<Self>) -> Self {
         let DataSourceArgs {
             active_session,

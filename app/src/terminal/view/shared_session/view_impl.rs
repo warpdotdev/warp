@@ -208,6 +208,7 @@ impl TerminalView {
         task_id: AmbientAgentTaskId,
         ctx: &mut ViewContext<Self>,
     ) {
+        log::info!("[remote-2047] enabling cloud follow-up input task_id={task_id}");
         self.pending_cloud_followup_task_id = Some(task_id);
         self.input.update(ctx, |input, ctx| {
             input.reset_after_cloud_followup_submission(ctx);
@@ -929,8 +930,12 @@ impl TerminalView {
             return;
         }
         let Some(state) = self.cloud_conversation_continuation_ui_state(ctx) else {
+            log::info!(
+                "[remote-2047] non-running ambient task: no continuation UI state resolved"
+            );
             return;
         };
+        log::info!("[remote-2047] non-running ambient task continuation state: {state:?}");
         match state {
             CloudConversationContinuationUiState::Tombstone { cta } => {
                 self.insert_conversation_ended_tombstone_with_cta(cta, ctx);
@@ -952,12 +957,26 @@ impl TerminalView {
             return;
         }
 
+        let model_task_id = self
+            .ambient_agent_view_model
+            .as_ref()
+            .map(|model| model.as_ref(ctx).task_id());
+        log::info!(
+            "[remote-2047] start_cloud_followup_from_tombstone task_id={task_id} \
+             model_present={} model_task_id={model_task_id:?}",
+            self.ambient_agent_view_model.is_some()
+        );
+
         let Some(ambient_agent_view_model) = self.ambient_agent_view_model.as_ref() else {
+            log::warn!("[remote-2047] cannot continue cloud task: no ambient view model on this pane");
             self.show_error_toast("Couldn't continue this cloud task.".to_string(), ctx);
             return;
         };
 
         if ambient_agent_view_model.as_ref(ctx).task_id() != Some(task_id) {
+            log::warn!(
+                "[remote-2047] cannot continue cloud task: model task id {model_task_id:?} != tombstone task id {task_id}"
+            );
             self.show_error_toast("Couldn't continue this cloud task.".to_string(), ctx);
             return;
         }

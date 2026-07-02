@@ -161,6 +161,51 @@ fn record_ambient_execution_ended_keeps_active_session_when_id_differs() {
     });
 }
 
+#[test]
+fn set_live_execution_session_marks_session_live_until_it_ends() {
+    // REMOTE-2047: a viewer that joins an already-running ambient session records the live
+    // session id so a follow-up is not prematurely routed as a new cloud VM while the run is
+    // live. When the session ends, `record_ambient_execution_ended` clears it and the pane
+    // accepts a cloud follow-up.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+        let session_id = SessionId::new();
+        let task = "22222222-2222-2222-2222-222222222222"
+            .parse::<AmbientAgentTaskId>()
+            .expect("hardcoded task id parses");
+
+        model.update(&mut app, |model, _ctx| {
+            model.task_id = Some(task);
+            model.status = Status::AgentRunning;
+            // With no live session recorded yet, an AgentRunning task would already accept a
+            // cloud follow-up.
+            assert!(model.is_ready_for_cloud_followup_prompt());
+
+            model.set_live_execution_session(session_id);
+            assert_eq!(model.active_execution_session_id, Some(session_id));
+            assert_eq!(model.last_ended_execution_session_id, None);
+            assert!(
+                !model.is_ready_for_cloud_followup_prompt(),
+                "while the joined session is live, follow-ups go to the live sharer"
+            );
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.record_ambient_execution_ended(session_id, ctx);
+        });
+
+        model.read(&app, |model, _| {
+            assert_eq!(model.active_execution_session_id, None);
+            assert_eq!(model.last_ended_execution_session_id, Some(session_id));
+            assert!(
+                model.is_ready_for_cloud_followup_prompt(),
+                "after the live session ends the viewer can start a cloud follow-up"
+            );
+        });
+    });
+}
+
 fn retry_request(prompt: impl Into<String>) -> SpawnAgentRequest {
     SpawnAgentRequest {
         prompt: Some(prompt.into()),

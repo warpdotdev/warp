@@ -16,7 +16,9 @@ use warpui::platform::{Cursor, OperatingSystem};
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _};
+use warpui::{
+    AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _,
+};
 
 use super::model_spec_scores::{
     render_model_spec_header, render_model_spec_scores, CostRow, CostRowTooltip,
@@ -146,6 +148,23 @@ impl ModelSelectorDataSource {
             terminal_view_id,
             ambient_agent_view_model,
         }
+    }
+
+    /// Attaches an ambient agent view model after construction so the picker treats this pane as a
+    /// cloud pane, which changes the listed models (custom-endpoint models are suppressed; see
+    /// [`Self::include_model_in_picker`]). Used on the shared-session viewer path where the model
+    /// is created lazily at `SessionJoined`. Idempotent: a no-op when a model is already set. The
+    /// next `run_query` (menu open / typing) picks up the new value.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.ambient_agent_view_model.is_some() {
+            return;
+        }
+        self.ambient_agent_view_model = Some(ambient_agent_view_model);
+        ctx.notify();
     }
 
     /// Returns whether a model should appear in the inline picker.

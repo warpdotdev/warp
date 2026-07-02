@@ -2123,6 +2123,166 @@ impl Input {
         self.execute_pending_command(ctx);
     }
 
+    /// Subscribes the input to an ambient agent view model so it re-renders on status
+    /// transitions and surfaces snapshot-upload failures. Shared by [`Self::new`] and
+    /// [`Self::attach_ambient_agent_view_model`] so the upfront (construction) and late
+    /// (`SessionJoined`) paths wire up identical behavior.
+    fn subscribe_to_ambient_agent_view_model(
+        view_model: &ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        ctx.subscribe_to_model(view_model, |me, handle, event, ctx| {
+            let is_ambient = handle.as_ref(ctx).is_ambient_agent();
+            me.editor.update(ctx, |editor, ctx| {
+                if let Some(ai_context_menu) = editor.ai_context_menu() {
+                    ai_context_menu.update(ctx, |menu, ctx| {
+                        menu.set_is_in_ambient_agent(is_ambient, ctx);
+                    });
+                }
+            });
+            // Surface async snapshot upload failures as a toast.
+            if let AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { error_message } = event
+            {
+                let window_id = ctx.window_id();
+                let toast_message = format!("Failed to prepare cloud handoff: {error_message}");
+                ToastStack::handle(ctx).update(ctx, |ts, ctx| {
+                    ts.add_ephemeral_toast(DismissibleToast::error(toast_message), window_id, ctx);
+                });
+            }
+
+            // Re-render on status-footer transitions and on status-affecting events that
+            // decide whether the input is in its composing shape.
+            let should_notify = handle.as_ref(ctx).should_show_status_footer()
+                || matches!(
+                    event,
+                    AmbientAgentViewModelEvent::EnteredSetupState
+                        | AmbientAgentViewModelEvent::EnteredComposingState
+                        | AmbientAgentViewModelEvent::DispatchedAgent
+                        | AmbientAgentViewModelEvent::SessionReady { .. }
+                        | AmbientAgentViewModelEvent::Failed { .. }
+                        | AmbientAgentViewModelEvent::Cancelled
+                        | AmbientAgentViewModelEvent::NeedsGithubAuth
+                        | AmbientAgentViewModelEvent::HarnessSelected
+                        | AmbientAgentViewModelEvent::PendingHandoffChanged
+                        | AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { .. }
+                );
+
+            if should_notify {
+                me.set_zero_state_hint_text(ctx);
+                ctx.notify();
+            }
+        });
+    }
+
+    /// Builds the cloud-mode harness selector for an ambient agent view model. Shared by
+    /// [`Self::new`] and [`Self::attach_ambient_agent_view_model`] so construction and late
+    /// attach produce the same selector wiring.
+    fn build_harness_selector(
+        view_model: ModelHandle<AmbientAgentViewModel>,
+        menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<HarnessSelector> {
+        let harness_selector = ctx.add_typed_action_view(|ctx| {
+            HarnessSelector::new(menu_positioning_provider.clone(), view_model.clone(), ctx)
+        });
+        if FeatureFlag::CloudModeInputV2.is_enabled() {
+            harness_selector.update(ctx, |selector, ctx| {
+                selector.set_button_theme(NakedHeaderButtonTheme, ctx);
+            });
+        }
+        // Mirror the V2 model selector / host selector refocus path: when the
+        // harness selector menu closes (item picked or dismissed via Esc /
+        // click-outside), restore focus to the input editor so typing resumes
+        // immediately. This powers the "input is focused after the harness
+        // selector closes" UX for the `/harness` slash command.
+        ctx.subscribe_to_view(&harness_selector, |me, _, event, ctx| {
+            let HarnessSelectorEvent::MenuVisibilityChanged { open } = event;
+            if !*open {
+                me.focus_input_box(ctx);
+            }
+        });
+        harness_selector
+    }
+
+    /// Attaches an ambient agent view model to an already-constructed input. Used when a
+    /// shared-session viewer only learns at `SessionJoined` that the session is an ambient
+    /// run (e.g. a raw `shared_session` link that turns out to be a cloud run). Idempotent:
+    /// a no-op when the state was already wired at construction. Wires the same view state +
+    /// subscription as [`Self::new`]; composer-only sub-views (host/auth selectors, footer
+    /// chips, slash-command data sources) stay in their non-ambient form because a viewer of
+    /// an existing run does not compose a new run.
+    pub(crate) fn attach_ambient_agent_view_model(
+        &mut self,
+        view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.ambient_agent_view_state.is_some() {
+            return;
+        }
+        log::info!("[remote-2047] attaching ambient agent view model to input");
+        Self::subscribe_to_ambient_agent_view_model(&view_model, ctx);
+        let harness_selector = Self::build_harness_selector(
+            view_model.clone(),
+            self.menu_positioning_provider.clone(),
+            ctx,
+        );
+        // Push the model down to the footer (parent -> child) so its environment selector
+        // reflects the cloud run. On this link-join path the footer captured `None` at
+        // construction, so it must be given the model now to render the environment chip.
+        let footer_model = view_model.clone();
+        let footer_menu_positioning = self.menu_positioning_provider.clone();
+        self.agent_input_footer.update(ctx, |footer, ctx| {
+            footer.set_ambient_agent_view_model(footer_model, footer_menu_positioning, ctx);
+        });
+        // Same parent -> child push for the agent status bar. It captured `None` at construction
+        // on this link-join path, so without this it can't render the cloud-mode setup /
+        // follow-up progress (`render_cloud_mode_setup_status`) while a follow-up VM spins up.
+        let status_bar_model = view_model.clone();
+        self.agent_status_view.update(ctx, |status_bar, ctx| {
+            status_bar.set_ambient_agent_view_model(status_bar_model, ctx);
+        });
+        // Composer slash-command data sources gate cloud-follow-up commands on the ambient run
+        // (e.g. `is_disconnected_cloud_followup`), so keep them in sync for the link-join viewer.
+        let slash_model = view_model.clone();
+        self.slash_command_data_source.update(ctx, |data_source, ctx| {
+            data_source.set_ambient_agent_view_model(slash_model, ctx);
+        });
+        if let Some(cloud_mode_composer_slash_command_data_source) =
+            self.cloud_mode_composer_slash_command_data_source.clone()
+        {
+            let composer_slash_model = view_model.clone();
+            cloud_mode_composer_slash_command_data_source.update(ctx, |data_source, ctx| {
+                data_source.set_ambient_agent_view_model(composer_slash_model, ctx);
+            });
+        }
+        // The /model picker's data source lists a different model set for cloud panes (it suppresses
+        // custom-endpoint models), so keep it in sync for the link-join viewer.
+        let model_selector_model = view_model.clone();
+        self.inline_model_selector_view.update(ctx, |view, ctx| {
+            view.set_ambient_agent_view_model(model_selector_model, ctx);
+        });
+        // NOTE: This method is the single propagation point for a lazily-created ambient view
+        // model. Any component that captures `Option<ModelHandle<AmbientAgentViewModel>>` at
+        // construction AND is reachable on the shared-session viewer path MUST be updated here
+        // (add a `set_ambient_agent_view_model` setter and call it above), otherwise it will hold
+        // a stale `None` for a raw-link viewer whose model is only created at `SessionJoined`.
+        // Currently propagated: input subscription, harness selector, agent input footer (which
+        // forwards to its environment selector, model/harness selector, and display-chip config),
+        // agent status bar, slash-command data sources, and the inline model-selector data source.
+        // Intentionally NOT updated (verified safe): the UDI button bar's selectors (not rendered
+        // in agent view, so unreachable for a cloud viewer) and per-exchange AI blocks / ambient
+        // setup-command blocks (created after the model exists). Revisit those if they become
+        // viewer-visible.
+        self.ambient_agent_view_state = Some(AmbientAgentViewState {
+            view_model,
+            harness_selector,
+            host_selector: None,
+            auth_secret_selector: None,
+            auth_secret_ftux_view: None,
+        });
+        ctx.notify();
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         model: Arc<FairMutex<TerminalModel>>,
@@ -2235,52 +2395,7 @@ impl Input {
         });
 
         if let Some(ambient_agent_view_model) = ambient_agent_view_model.as_ref() {
-            ctx.subscribe_to_model(ambient_agent_view_model, |me, handle, event, ctx| {
-                let is_ambient = handle.as_ref(ctx).is_ambient_agent();
-                me.editor.update(ctx, |editor, ctx| {
-                    if let Some(ai_context_menu) = editor.ai_context_menu() {
-                        ai_context_menu.update(ctx, |menu, ctx| {
-                            menu.set_is_in_ambient_agent(is_ambient, ctx);
-                        });
-                    }
-                });
-                // Surface async snapshot upload failures as a toast.
-                if let AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { error_message } =
-                    event
-                {
-                    let window_id = ctx.window_id();
-                    let toast_message = format!("Failed to prepare cloud handoff: {error_message}");
-                    ToastStack::handle(ctx).update(ctx, |ts, ctx| {
-                        ts.add_ephemeral_toast(
-                            DismissibleToast::error(toast_message),
-                            window_id,
-                            ctx,
-                        );
-                    });
-                }
-
-                // Re-render on status-footer transitions and on status-affecting events that
-                // decide whether the input is in its composing shape.
-                let should_notify = handle.as_ref(ctx).should_show_status_footer()
-                    || matches!(
-                        event,
-                        AmbientAgentViewModelEvent::EnteredSetupState
-                            | AmbientAgentViewModelEvent::EnteredComposingState
-                            | AmbientAgentViewModelEvent::DispatchedAgent
-                            | AmbientAgentViewModelEvent::SessionReady { .. }
-                            | AmbientAgentViewModelEvent::Failed { .. }
-                            | AmbientAgentViewModelEvent::Cancelled
-                            | AmbientAgentViewModelEvent::NeedsGithubAuth
-                            | AmbientAgentViewModelEvent::HarnessSelected
-                            | AmbientAgentViewModelEvent::PendingHandoffChanged
-                            | AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { .. }
-                    );
-
-                if should_notify {
-                    me.set_zero_state_hint_text(ctx);
-                    ctx.notify();
-                }
-            });
+            Self::subscribe_to_ambient_agent_view_model(ambient_agent_view_model, ctx);
         }
 
         let prompt_selection_state_handle = SelectionHandle::default();
@@ -2326,32 +2441,11 @@ impl Input {
                 .as_ref()
                 .map(|view_model| AmbientAgentViewState {
                     view_model: view_model.clone(),
-                    harness_selector: {
-                        let harness_selector = ctx.add_typed_action_view(|ctx| {
-                            HarnessSelector::new(
-                                menu_positioning_provider.clone(),
-                                view_model.clone(),
-                                ctx,
-                            )
-                        });
-                        if FeatureFlag::CloudModeInputV2.is_enabled() {
-                            harness_selector.update(ctx, |selector, ctx| {
-                                selector.set_button_theme(NakedHeaderButtonTheme, ctx);
-                            });
-                        }
-                        // Mirror the V2 model selector / host selector refocus path: when the
-                        // harness selector menu closes (item picked or dismissed via Esc /
-                        // click-outside), restore focus to the input editor so typing resumes
-                        // immediately. This powers the "input is focused after the harness
-                        // selector closes" UX for the `/harness` slash command.
-                        ctx.subscribe_to_view(&harness_selector, |me, _, event, ctx| {
-                            let HarnessSelectorEvent::MenuVisibilityChanged { open } = event;
-                            if !*open {
-                                me.focus_input_box(ctx);
-                            }
-                        });
-                        harness_selector
-                    },
+                    harness_selector: Self::build_harness_selector(
+                        view_model.clone(),
+                        menu_positioning_provider.clone(),
+                        ctx,
+                    ),
                     host_selector: if FeatureFlag::CloudModeInputV2.is_enabled() {
                         let view = ctx.add_typed_action_view(|ctx| {
                             HostSelector::new(menu_positioning_provider.clone(), ctx)
@@ -13215,6 +13309,7 @@ impl Input {
                         .is_ready_for_cloud_followup_prompt()
                 })
         {
+            log::info!("[remote-2047] Enter routed to SubmitCloudFollowup (typed prompt)");
             ctx.emit(Event::SubmitCloudFollowup {
                 prompt: command.trim().to_owned(),
             });
@@ -13810,6 +13905,7 @@ impl Input {
                     "Dropping attachments on a queued cloud follow-up prompt; cloud follow-up does not support attachments"
                 );
             }
+            log::info!("[remote-2047] queued prompt routed to SubmitCloudFollowup");
             ctx.emit(Event::SubmitCloudFollowup { prompt });
             return;
         }
@@ -16169,6 +16265,17 @@ impl View for Input {
                 .is_some_and(|ambient_agent_model| {
                     ambient_agent_model.as_ref(app).should_show_status_footer()
                 });
+
+        if self
+            .ambient_agent_view_model()
+            .is_some_and(|m| m.as_ref(app).is_waiting_for_session())
+        {
+            log::info!(
+                "[remote-2047] Input::render (waiting_for_session): should_show_status_footer={should_show_status_footer} agent_view_active={} cloud_mode={} universal={is_universal_input}",
+                self.agent_view_controller.as_ref(app).is_active(),
+                FeatureFlag::CloudMode.is_enabled(),
+            );
+        }
 
         if FeatureFlag::CloudMode.is_enabled() && should_show_status_footer {
             self.render_ambient_agent_status_footer(app)

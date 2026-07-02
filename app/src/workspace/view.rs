@@ -3958,7 +3958,8 @@ impl Workspace {
                 self.check_and_trigger_onboarding(ctx);
             }
             NewWorkspaceSource::SharedSessionAsViewer { session_id } => {
-                self.add_tab_for_joining_shared_session(session_id, ctx);
+                // Generic session link: ambient-ness (if any) is discovered at SessionJoined.
+                self.add_tab_for_joining_shared_session(session_id, false, ctx);
             }
             NewWorkspaceSource::FromCloudConversationId { conversation_id } => {
                 self.open_cloud_conversation_from_server_token(conversation_id, ctx);
@@ -4261,9 +4262,14 @@ impl Workspace {
         }
     }
 
+    /// Joins a shared session as a viewer in a new tab. `is_ambient_agent` should be `true`
+    /// only when the caller already knows the session is an ambient (cloud) run (the
+    /// attach-to-running path). Generic link joins pass `false`; if such a session turns out
+    /// to be ambient, the ambient view model is created lazily at `SessionJoined`.
     pub fn add_tab_for_joining_shared_session(
         &mut self,
         session_id: SharedSessionId,
+        is_ambient_agent: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let new_pane_group = ctx.add_typed_action_view(|ctx| {
@@ -4274,6 +4280,7 @@ impl Workspace {
                     .clone(),
                 self.server_api.clone(),
                 self.model_event_sender.clone(),
+                is_ambient_agent,
                 ctx,
             )
         });
@@ -25205,7 +25212,8 @@ impl TypedActionView for Workspace {
                         });
                     }
                 } else {
-                    self.add_tab_for_joining_shared_session(*session_id, ctx);
+                    // Attaching to a known ambient run: build the pane in ambient mode.
+                    self.add_tab_for_joining_shared_session(*session_id, true, ctx);
                 }
             }
             OpenConversationTranscriptViewer {

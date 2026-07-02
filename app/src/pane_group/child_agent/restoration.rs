@@ -351,7 +351,7 @@ impl PaneGroup {
             resources,
             view_size,
             false, // enable_orchestration_polling
-            false, // is_cloud_mode
+            false, // is_ambient_agent
             ctx,
         );
 

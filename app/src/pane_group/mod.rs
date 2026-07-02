@@ -1909,7 +1909,7 @@ impl PaneGroup {
                         Self::create_shared_session_viewer(
                             session_id, resources, view_size,
                             true, // enable_orchestration_polling
-                            true, // is_cloud_mode
+                            true, // is_ambient_agent
                             ctx,
                         )
                     }
@@ -3492,6 +3492,7 @@ impl PaneGroup {
         user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
         server_api: Arc<ServerApi>,
         model_event_sender: Option<SyncSender<ModelEvent>>,
+        is_ambient_agent: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let model_event_sender_clone = model_event_sender.clone();
@@ -3504,8 +3505,12 @@ impl PaneGroup {
                 session_id,
                 resources,
                 view_bounds.size(),
-                true,  // enable_orchestration_polling (root orchestrator viewer)
-                false, // is_cloud_mode
+                true, // enable_orchestration_polling (root orchestrator viewer)
+                // `true` when the caller already knows this is an ambient run
+                // (e.g. attach-to-running). Otherwise `false`: a raw shared_session
+                // link may still turn out to be ambient, in which case the model is
+                // created lazily at `SessionJoined`.
+                is_ambient_agent,
                 ctx,
             );
 
@@ -6017,20 +6022,22 @@ impl PaneGroup {
         (terminal_view, terminal_manager)
     }
 
-    /// `is_cloud_mode` controls whether the resulting [`TerminalView`] is
-    /// constructed with an `ambient_agent_view_model`. Pass `true` when the
-    /// viewer pane represents the local pane of a cloud orchestration parent
-    /// agent — otherwise the snapshot path in
-    /// `TerminalPane::snapshot` falls through to an empty
-    /// `LeafContents::Terminal` for shared-session viewers and the pane
-    /// restores as a stray local terminal on the next launch.
+    /// `is_ambient_agent` controls whether the resulting [`TerminalView`] is
+    /// constructed with an `ambient_agent_view_model` up front. Pass `true` when
+    /// the pane is known to be an ambient (cloud) run at construction time (the
+    /// attach-to-running and restore paths), so the snapshot path in
+    /// `TerminalPane::snapshot` emits `LeafContents::AmbientAgent` rather than
+    /// falling through to an empty `LeafContents::Terminal`. Pass `false` for
+    /// generic shared-session joins: if such a session turns out to be ambient,
+    /// the model is created lazily at `SessionJoined` via
+    /// `TerminalView::begin_viewing_ambient_session`.
     #[allow(clippy::too_many_arguments)]
     fn create_shared_session_viewer(
         session_id: SessionId,
         resources: TerminalViewResources,
         initial_size: Vector2F,
         enable_orchestration_polling: bool,
-        is_cloud_mode: bool,
+        is_ambient_agent: bool,
         ctx: &mut ViewContext<Self>,
     ) -> (
         ViewHandle<TerminalView>,
@@ -6043,13 +6050,71 @@ impl PaneGroup {
             initial_size,
             window_id,
             enable_orchestration_polling,
-            is_cloud_mode,
+            is_ambient_agent,
             ctx,
         );
         let viewer_manager = terminal_init.manager;
         let terminal_view = terminal_init.view;
         let terminal_manager =
             ctx.add_model(|_ctx| Box::new(viewer_manager) as Box<dyn TerminalManager>);
+
+        // Wire the viewer's `TerminalManager` to the ambient model's session lifecycle
+        // events so a follow-up run (which spawns a fresh VM after the previous one ends)
+        // re-attaches the viewer to the new execution session. `create_cloud_mode_view`
+        // does this for the compose path; shared-session viewers need it too.
+        if let Some(view_model) = terminal_view.as_ref(ctx).ambient_agent_view_model().cloned() {
+            // Upfront ambient viewer (attach-to-running / restore): the model already
+            // exists at construction, so wire it immediately.
+            log::info!(
+                "[remote-2047] create_shared_session_viewer: model present at construction, wiring immediately (is_ambient_agent={is_ambient_agent}, polling={enable_orchestration_polling})"
+            );
+            crate::terminal::view::ambient_agent::wire_ambient_agent_session_events(
+                &terminal_manager,
+                &view_model,
+                ctx,
+            );
+        } else if enable_orchestration_polling {
+            // Link-join viewer: the model is created lazily at `SessionJoined` (see
+            // `TerminalView::begin_viewing_ambient_session`), so wire it once it exists.
+            // Gate on `enable_orchestration_polling` to mirror the `SessionJoined` model-
+            // creation gate, so model-less hidden child viewers don't install a dead
+            // subscription. The weak manager handle avoids keeping a closed pane's manager
+            // and view alive via this dormant subscription.
+            log::info!(
+                "[remote-2047] create_shared_session_viewer: no model yet, subscribing for lazy wiring (link-join viewer)"
+            );
+            let weak_terminal_manager = terminal_manager.downgrade();
+            ctx.subscribe_to_view(&terminal_view, move |_, terminal_view, event, ctx| {
+                if !matches!(
+                    event,
+                    crate::terminal::view::Event::AmbientAgentViewModelCreated
+                ) {
+                    return;
+                }
+                log::info!(
+                    "[remote-2047] create_shared_session_viewer: AmbientAgentViewModelCreated received, wiring manager now"
+                );
+                let Some(terminal_manager) = weak_terminal_manager.upgrade(ctx) else {
+                    log::warn!(
+                        "[remote-2047] lazy wiring: manager already dropped"
+                    );
+                    return;
+                };
+                let Some(view_model) =
+                    terminal_view.as_ref(ctx).ambient_agent_view_model().cloned()
+                else {
+                    log::warn!(
+                        "[remote-2047] lazy wiring: view has no ambient model after creation event"
+                    );
+                    return;
+                };
+                crate::terminal::view::ambient_agent::wire_ambient_agent_session_events(
+                    &terminal_manager,
+                    &view_model,
+                    ctx,
+                );
+            });
+        }
 
         (terminal_view, terminal_manager)
     }
