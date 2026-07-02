@@ -325,8 +325,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::RevertToCheckpoints,
         #[cfg(feature = "rewind_slash_command")]
         FeatureFlag::RewindSlashCommand,
-        #[cfg(feature = "agent_management_view")]
-        FeatureFlag::AgentManagementView,
         #[cfg(feature = "agent_management_details_view")]
         FeatureFlag::AgentManagementDetailsView,
         #[cfg(feature = "agent_view")]

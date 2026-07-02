@@ -528,9 +528,6 @@ pub enum FeatureFlag {
     /// Enables the /rewind slash command.
     RewindSlashCommand,
 
-    /// Agent Management View.
-    AgentManagementView,
-
     /// Agent Management Details View - enables new details panel on card click.
     AgentManagementDetailsView,
 

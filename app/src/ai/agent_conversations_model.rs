@@ -605,21 +605,6 @@ impl SingletonEntity for AgentConversationsModel {}
 
 impl AgentConversationsModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        // If FF not enabled, return an empty model and don't sync any tasks.
-        if !FeatureFlag::AgentManagementView.is_enabled() {
-            return Self {
-                tasks: HashMap::new(),
-                conversations: HashMap::new(),
-                in_flight_poll_abort_handle: None,
-                next_poll_abort_handle: None,
-                active_data_consumers_per_window: HashMap::new(),
-                has_finished_initial_load: true,
-                task_fetch_state: HashMap::new(),
-                rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
-                dirty_since: None,
-            };
-        }
-
         // Subscribe to network status and window manager to inform whether we should poll for new task data
         let network_status = NetworkStatus::handle(ctx);
         ctx.subscribe_to_model(&network_status, Self::handle_network_status_changed);
@@ -1182,6 +1167,21 @@ impl AgentConversationsModel {
     /// Returns an iterator over all ambient agent tasks.
     pub fn tasks_iter(&self) -> impl Iterator<Item = &AmbientAgentTask> {
         self.tasks.values()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_empty_for_test() -> Self {
+        Self {
+            tasks: HashMap::new(),
+            conversations: HashMap::new(),
+            in_flight_poll_abort_handle: None,
+            next_poll_abort_handle: None,
+            active_data_consumers_per_window: HashMap::new(),
+            has_finished_initial_load: true,
+            task_fetch_state: HashMap::new(),
+            rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
+            dirty_since: None,
+        }
     }
 
     #[cfg(test)]

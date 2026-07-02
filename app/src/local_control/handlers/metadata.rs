@@ -366,10 +366,7 @@ pub(crate) fn surface_unavailable_reason(
             Some("vertical tabs are unavailable or disabled")
         }
         SurfaceDestination::VerticalTabs => None,
-        SurfaceDestination::AgentManagement
-            if !FeatureFlag::AgentManagementView.is_enabled()
-                || !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) =>
-        {
+        SurfaceDestination::AgentManagement if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) => {
             Some("agent management is unavailable or disabled")
         }
         SurfaceDestination::AgentManagement => None,

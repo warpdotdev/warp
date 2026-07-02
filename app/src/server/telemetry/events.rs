@@ -5805,9 +5805,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             | Self::CLISubagentActionRejected { .. } => EnablementState::Always,
             Self::AgentManagementViewToggled { .. }
             | Self::AgentManagementViewOpenedSession
-            | Self::AgentManagementViewCopiedSessionLink => {
-                EnablementState::Flag(FeatureFlag::AgentManagementView)
-            }
+            | Self::AgentManagementViewCopiedSessionLink => EnablementState::Always,
             Self::DetectedIsolationPlatform { .. } => EnablementState::Always,
             Self::AgentExitedShellProcess { .. } => EnablementState::Always,
             Self::CLIAgentToolbarVoiceInputUsed { .. } => EnablementState::Always,
