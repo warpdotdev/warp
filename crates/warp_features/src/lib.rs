@@ -198,9 +198,6 @@ pub enum FeatureFlag {
     /// Enables prompt suggestions sourced via MAA.
     PromptSuggestionsViaMAA,
 
-    /// Enables using `esc` to clear autosuggestions.
-    ClearAutosuggestionOnEscape,
-
     /// If enabled, the default theme is set to Adeberry for new users.
     DefaultAdeberryTheme,
 
