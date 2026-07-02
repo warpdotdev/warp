@@ -72,8 +72,8 @@ impl StartRecordingExecutor {
                     } else {
                         defaults.frame_rate
                     },
-                    max_duration: max_duration.or(defaults.max_duration),
-                    max_size_bytes: max_size_bytes.or(defaults.max_size_bytes),
+                    max_duration: max_duration.unwrap_or(defaults.max_duration),
+                    max_size_bytes: max_size_bytes.unwrap_or(defaults.max_size_bytes),
                 };
                 recorder.start(config).await
             },
