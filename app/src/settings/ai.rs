@@ -907,7 +907,6 @@ define_settings_group!(AISettings, settings: [
         private: false,
         toml_path: "agents.warp_agent.active_ai.rule_suggestions_enabled",
         description: "Controls whether the agent suggests rules to save after responses.",
-        feature_flag: FeatureFlag::SuggestedRules,
     }
     // This field should not be referenced directly to lookup Voice AI enablement -- use the
     // `is_voice_input_enabled()` getter.

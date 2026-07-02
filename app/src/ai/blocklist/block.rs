@@ -2489,9 +2489,7 @@ impl AIBlock {
             suggestions.extend(output_suggestions);
         }
 
-        if FeatureFlag::SuggestedRules.is_enabled()
-            && AISettings::as_ref(ctx).is_rule_suggestions_enabled(ctx)
-        {
+        if AISettings::as_ref(ctx).is_rule_suggestions_enabled(ctx) {
             // Ensure we don't suggest rules that were already suggested and saved by checking the logging id.
             let existing_suggestions = self
                 .suggested_rules

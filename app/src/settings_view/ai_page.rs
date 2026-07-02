@@ -7018,9 +7018,7 @@ impl SettingsWidget for AIFactWidget {
             .with_child(header)
             .with_child(self.render_rules_toggle(view, ai_settings, appearance, app));
 
-        if FeatureFlag::SuggestedRules.is_enabled() {
-            column.add_child(self.render_rule_suggestions_toggle(view, ai_settings, app));
-        }
+        column.add_child(self.render_rule_suggestions_toggle(view, ai_settings, app));
 
         column
             .with_child(button)
