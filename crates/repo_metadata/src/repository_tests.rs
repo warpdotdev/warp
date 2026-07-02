@@ -189,6 +189,41 @@ fn merge_repository_updates_preserves_remote_ref_updates() {
 }
 
 #[test]
+fn repository_update_len_counts_file_entries_only() {
+    let mut update = RepositoryUpdate {
+        added: [
+            TargetFile::new(PathBuf::from("/repo/a.txt"), false),
+            TargetFile::new(PathBuf::from("/repo/b.txt"), false),
+        ]
+        .into(),
+        modified: [TargetFile::new(PathBuf::from("/repo/c.txt"), false)].into(),
+        deleted: [TargetFile::new(PathBuf::from("/repo/d.txt"), false)].into(),
+        moved: [(
+            TargetFile::new(PathBuf::from("/repo/e.txt"), false),
+            TargetFile::new(PathBuf::from("/repo/old_e.txt"), false),
+        )]
+        .into(),
+        // Boolean git-state flags must NOT contribute to `len()`.
+        commit_updated: true,
+        index_lock_detected: true,
+        remote_ref_updated: true,
+    };
+
+    // 2 added + 1 modified + 1 deleted + 1 moved = 5; bool flags ignored.
+    assert_eq!(update.len(), 5);
+    assert!(!update.is_empty());
+
+    update.added.clear();
+    update.modified.clear();
+    update.deleted.clear();
+    update.moved.clear();
+    // With no file entries `len()` is 0, even though git-state flags remain set
+    // (so it is intentionally not equivalent to `is_empty()`).
+    assert_eq!(update.len(), 0);
+    assert!(!update.is_empty());
+}
+
+#[test]
 fn tracked_remote_ref_change_notifies_subscribers() {
     VirtualFS::test("tracked_remote_ref_change_notifies", |dirs, mut vfs| {
         stub_git_repository(&mut vfs, "repo");

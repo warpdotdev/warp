@@ -713,6 +713,14 @@ impl RepositoryUpdate {
             && !self.remote_ref_updated
     }
 
+    /// Total number of buffered file entries (added + modified + deleted + moved).
+    ///
+    /// Used to bound how large a coalescing buffer is allowed to grow before it is
+    /// flushed; it intentionally ignores the boolean git-state flags.
+    pub fn len(&self) -> usize {
+        self.added.len() + self.modified.len() + self.deleted.len() + self.moved.len()
+    }
+
     /// Iterator over all created and modified files.
     ///
     /// Most consumers don't care about the added-vs-modified distinction.

@@ -592,7 +592,17 @@ where
 
                 st.flush_handle = Some(ctx.spawn(
                     async move {
-                        // Loop until we observe a quiet period (version stable for `wait`).
+                        // Bound how long and how large we buffer. A true debounce (flush
+                        // only after a quiet period) never settles during a sustained burst
+                        // of filesystem events (e.g. `git checkout`, installing
+                        // `node_modules`, or a build touching many files), so `pending` could
+                        // grow without limit and clone every `TargetFile` path into multi-GB
+                        // of memory. Flush when we observe a quiet period, when the buffer
+                        // grows past `MAX_PENDING_ENTRIES`, or after `MAX_DEBOUNCE_CYCLES`
+                        // consecutive non-quiet cycles, whichever comes first (APP-4795).
+                        const MAX_PENDING_ENTRIES: usize = 50_000;
+                        const MAX_DEBOUNCE_CYCLES: u32 = 10;
+                        let mut cycles: u32 = 0;
                         loop {
                             // Capture current version, then wait.
                             let start_version = {
@@ -600,14 +610,19 @@ where
                                 st.version
                             };
                             warpui_core::r#async::Timer::after(wait).await;
+                            cycles = cycles.saturating_add(1);
 
-                            // If version unchanged, we're quiet; flush pending and exit loop.
+                            // Flush if we're quiet (version unchanged), or if buffering has
+                            // grown too large or lasted too long during sustained activity.
                             let maybe_merged = {
                                 // Yield before flushing to check if the current flush is cancelled.
                                 futures_lite::future::yield_now().await;
 
                                 let mut st = state.lock().unwrap();
-                                if st.version == start_version {
+                                if st.version == start_version
+                                    || st.pending.len() >= MAX_PENDING_ENTRIES
+                                    || cycles >= MAX_DEBOUNCE_CYCLES
+                                {
                                     st.flush_handle = None;
                                     Some(std::mem::take(&mut st.pending))
                                 } else {
