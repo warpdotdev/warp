@@ -25,7 +25,7 @@ const STREAM_TIMEOUT: Duration = Duration::from_secs(60 * 6);
 // buffer grows by one frame per audio callback and is only drained on stop, so an
 // unbounded session (e.g. a stuck or forgotten recording) would accumulate audio
 // until memory is exhausted. Capping it at ~10 minutes of 16000Hz mono f32 samples
-// (~38 MB) bounds that growth; reaching the cap auto-stops the session and forwards
+// (~38 MB of samples) bounds that growth; reaching the cap auto-stops the session and forwards
 // whatever has been captured so far.
 const MAX_RECORDING_SECS: usize = 60 * 10;
 const MAX_RECORDING_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * MAX_RECORDING_SECS;
