@@ -5383,7 +5383,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::MCPServerCollectionPaneOpened { .. }
             | Self::MCPServerAdded { .. }
             | Self::MCPServerSpawned { .. }
-            | Self::MCPToolCallAccepted { .. } => EnablementState::Flag(FeatureFlag::McpServer),
+            | Self::MCPToolCallAccepted { .. } => EnablementState::Always,
             Self::MCPTemplateCreated { .. }
             | Self::MCPTemplateInstalled { .. }
             | Self::MCPTemplateShared { .. } => EnablementState::Always,

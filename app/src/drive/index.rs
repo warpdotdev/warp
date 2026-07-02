@@ -838,9 +838,7 @@ impl DriveIndex {
                     if !section_state.collapsed {
                         // Add AI fact collection object + MCP server collection object for personal space
                         if matches!(space, Space::Personal) {
-                            if FeatureFlag::McpServer.is_enabled()
-                                && ContextFlag::ShowMCPServers.is_enabled()
-                            {
+                            if ContextFlag::ShowMCPServers.is_enabled() {
                                 self.ordered_items
                                     .push(WarpDriveItemId::MCPServerCollection);
                             }
@@ -2304,9 +2302,7 @@ impl DriveIndex {
                         if matches!(space, Space::Personal)
                             && matches!(self.index_variant, DriveIndexVariant::MainIndex)
                         {
-                            if FeatureFlag::McpServer.is_enabled()
-                                && ContextFlag::ShowMCPServers.is_enabled()
-                            {
+                            if ContextFlag::ShowMCPServers.is_enabled() {
                                 if let Some(mcp_server_collection_item) =
                                     self.render_mcp_server_collection_item(space, appearance, app)
                                 {

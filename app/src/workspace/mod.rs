@@ -1441,9 +1441,7 @@ pub fn init(app: &mut AppContext) {
             .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Open MCP Servers"),
         WorkspaceAction::OpenMCPServerCollection,
     )
-    .with_enabled(|| {
-        FeatureFlag::McpServer.is_enabled() && ContextFlag::ShowMCPServers.is_enabled()
-    })
+    .with_enabled(|| ContextFlag::ShowMCPServers.is_enabled())
     .with_custom_action(CustomAction::OpenMCPServerCollection)
     .with_context_predicate(id!("Workspace") & id!(flags::IS_ANY_AI_ENABLED))
     .with_group(bindings::BindingGroup::WarpAi.as_str())]);

@@ -583,9 +583,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             )
             .with_group(bindings::BindingGroup::WarpAi)
             .with_enabled(|| {
-                FeatureFlag::McpServer.is_enabled()
-                    && FeatureFlag::FileBasedMcp.is_enabled()
-                    && ContextFlag::ShowMCPServers.is_enabled()
+                FeatureFlag::FileBasedMcp.is_enabled() && ContextFlag::ShowMCPServers.is_enabled()
             }),
         ],
         app,
@@ -6722,7 +6720,7 @@ struct MCPServersWidget {
 
 impl MCPServersWidget {
     fn should_show_mcp() -> bool {
-        FeatureFlag::McpServer.is_enabled() && ContextFlag::ShowMCPServers.is_enabled()
+        ContextFlag::ShowMCPServers.is_enabled()
     }
 }
 

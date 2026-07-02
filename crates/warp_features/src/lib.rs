@@ -257,9 +257,6 @@ pub enum FeatureFlag {
     /// Allows AI to call the grep tool.
     GrepTool,
 
-    /// MCP server v0 functionality.
-    McpServer,
-
     /// Enables image as context for AM.
     ImageAsContext,
 
