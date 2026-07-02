@@ -418,3 +418,73 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
         });
     });
 }
+
+// -- tui_agent_model_info tests --
+
+fn agent_llm(id: &str, display_name: &str) -> LLMInfo {
+    LLMInfo {
+        display_name: display_name.to_owned(),
+        base_model_name: display_name.to_owned(),
+        id: id.into(),
+        reasoning_level: None,
+        usage_metadata: LLMUsageMetadata {
+            request_multiplier: 1,
+            credit_multiplier: None,
+        },
+        description: None,
+        disable_reason: None,
+        vision_supported: false,
+        spec: None,
+        provider: LLMProvider::Unknown,
+        host_configs: HashMap::new(),
+        discount_percentage: None,
+        context_window: LLMContextWindow::default(),
+    }
+}
+
+/// Preferences whose agent-mode models are a server-style list with an
+/// `"auto"` default plus one concrete model.
+fn preferences_for_tui_tests() -> LLMPreferences {
+    let agent_mode = AvailableLLMs::new(
+        "auto".into(),
+        vec![
+            agent_llm("auto", "auto (cost-efficient)"),
+            agent_llm("claude-opus", "Opus"),
+        ],
+        None,
+    )
+    .expect("choices are non-empty");
+    LLMPreferences {
+        models_by_feature: ModelsByFeature {
+            agent_mode,
+            ..Default::default()
+        },
+        last_update: None,
+        base_llm_for_terminal_view: HashMap::new(),
+        custom_llms: Vec::new(),
+        custom_model_routers: Vec::new(),
+    }
+}
+
+#[test]
+fn tui_agent_model_auto_resolves_to_the_default_model() {
+    let preferences = preferences_for_tui_tests();
+    assert_eq!(preferences.tui_agent_model_info("auto").id.as_str(), "auto");
+}
+
+#[test]
+fn tui_agent_model_known_id_resolves_to_that_model() {
+    let preferences = preferences_for_tui_tests();
+    let info = preferences.tui_agent_model_info("claude-opus");
+    assert_eq!(info.id.as_str(), "claude-opus");
+    assert_eq!(info.display_name, "Opus");
+}
+
+#[test]
+fn tui_agent_model_unknown_id_falls_back_to_the_default_model() {
+    let preferences = preferences_for_tui_tests();
+    assert_eq!(
+        preferences.tui_agent_model_info("not-a-model").id.as_str(),
+        "auto"
+    );
+}

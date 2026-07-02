@@ -29,7 +29,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use warpui_core::elements::tui::{
-    Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiScrollable, TuiStyle,
+    Modifier, TuiElement, TuiEventHandler, TuiFlex, TuiParentElement, TuiScrollable, TuiStyle,
     TuiText, TuiViewportContent, TuiViewportWindow, TuiViewportedElement, TuiViewportedList,
     TuiViewportedListState, TuiVisibleViewportItem,
 };
@@ -199,7 +199,7 @@ impl TuiView for ViewportDemoView {
         let quit_for_esc = self.quit.clone();
         Box::new(
             TuiEventHandler::new(
-                TuiColumn::new()
+                TuiFlex::column()
                     .with_child(Box::new(
                         TuiText::new("WarpUI · TUI viewport harness")
                             .with_style(bold)

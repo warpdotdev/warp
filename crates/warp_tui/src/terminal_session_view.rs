@@ -4,18 +4,20 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::editor::CodeEditorModel;
+use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
-    AIAgentPtyWriteMode, ActiveSession, AgentInteractionMetadata, AgentViewEntryOrigin, Appearance,
-    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIHistoryModel, BlocklistAIInputModel, CommandExecutionSource, ConversationSelection,
-    ConversationSelectionHandle, ExecuteCommandEvent, GetRelevantFilesController, ModelEvent,
-    PtyIntent, PtyIntentEvent, ShellCommandExecutorEvent, TerminalModel, TerminalSurface,
-    TerminalSurfaceInit,
+    AIAgentPtyWriteMode, ActiveSession, ActiveSessionEvent, AgentInteractionMetadata,
+    AgentViewEntryOrigin, Appearance, BlocklistAIActionModel, BlocklistAIContextModel,
+    BlocklistAIController, BlocklistAIHistoryModel, BlocklistAIInputModel, CommandExecutionSource,
+    ConversationSelection, ConversationSelectionHandle, ExecuteCommandEvent,
+    GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent, ModelEvent, PtyIntent,
+    PtyIntentEvent, ShellCommandExecutorEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit,
 };
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    Color, TuiChildView, TuiColumn, TuiConstrainedBox, TuiContainer, TuiElement, TuiStyle,
+    Color, Modifier, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiStyle,
+    TuiText,
 };
 use warpui_core::elements::Fill as CoreFill;
 use warpui_core::{
@@ -25,6 +27,7 @@ use warpui_core::{
 use crate::conversation_selection::TuiConversationSelection;
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::transcript_view::TuiTranscriptView;
+use crate::ui::abbreviate_home_prefix;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
@@ -57,6 +60,11 @@ pub(crate) struct TuiTerminalSessionView {
     input_view: ViewHandle<TuiInputView>,
     conversation_selection: ConversationSelectionHandle,
     ai_controller: ModelHandle<BlocklistAIController>,
+    /// Read by the footer for the active session's working directory.
+    active_session: ModelHandle<ActiveSession>,
+    /// This view's surface id, used to resolve the active model for the footer
+    /// the same way the request path does.
+    terminal_surface_id: EntityId,
 }
 
 impl TuiTerminalSessionView {
@@ -113,7 +121,7 @@ impl TuiTerminalSessionView {
                 context_model,
                 conversation_selection.clone(),
                 action_model.clone(),
-                active_session,
+                active_session.clone(),
                 model.clone(),
                 terminal_surface_id,
                 ctx,
@@ -158,6 +166,25 @@ impl TuiTerminalSessionView {
             | ModelEvent::FinishUpdate(_) => ctx.notify(),
             _ => {}
         });
+        // The footer shows the active model and working directory: re-render
+        // when the TUI model setting changes (e.g. settings-file hot reload),
+        // when model display names arrive from the server post-login, or when
+        // the session's working directory changes.
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+            if let AISettingsChangedEvent::TuiAgentModel { .. } = event {
+                ctx.notify();
+            }
+        });
+        ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |_, _, event, ctx| {
+            if let LLMPreferencesEvent::UpdatedAvailableLLMs = event {
+                ctx.notify();
+            }
+        });
+        ctx.subscribe_to_model(&active_session, |_, _, event, ctx| match event {
+            ActiveSessionEvent::UpdatedPwd => ctx.notify(),
+            ActiveSessionEvent::Bootstrapped => {}
+        });
+
         ctx.spawn_stream_local(wakeups_rx, |_, _, ctx| ctx.notify(), |_, _| {});
         ctx.focus_self();
 
@@ -166,7 +193,46 @@ impl TuiTerminalSessionView {
             input_view,
             conversation_selection,
             ai_controller,
+            active_session,
+            terminal_surface_id,
         }
+    }
+
+    /// Builds the status footer under the input box: the active model and
+    /// working directory, pushed to the right edge behind a flex spacer. The
+    /// caller must cap the row's height (a row fills the height it is
+    /// offered), e.g. with a one-row [`TuiConstrainedBox`].
+    fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
+        let dim = TuiStyle::default().add_modifier(Modifier::DIM);
+        let model_name = LLMPreferences::as_ref(ctx)
+            .get_active_base_model(ctx, Some(self.terminal_surface_id))
+            .display_name
+            .clone();
+        let mut footer = TuiFlex::row()
+            .flex_child(TuiFlex::row().finish())
+            .child(TuiText::new(model_name).truncate().finish());
+        // The session's cwd only arrives once shell metadata flows (warpified
+        // sessions); until then fall back to the process cwd the TUI's shell
+        // was spawned with.
+        let cwd = self
+            .active_session
+            .as_ref(ctx)
+            .current_working_directory()
+            .cloned()
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|cwd| cwd.to_string_lossy().into_owned())
+            });
+        if let Some(cwd) = cwd {
+            footer = footer.child(
+                TuiText::new(format!(" {}", abbreviate_home_prefix(&cwd)))
+                    .with_style(dim)
+                    .truncate()
+                    .finish(),
+            );
+        }
+        footer
     }
 
     /// Sends a prompt to the selected conversation, creating one if needed.
@@ -270,9 +336,14 @@ impl TuiView for TuiTerminalSessionView {
         .with_max_rows(MAX_INPUT_TEXT_ROWS + 2);
 
         TuiContainer::new(
-            TuiColumn::new()
-                .flex_child(TuiChildView::new(&self.transcript))
-                .child(input_box),
+            TuiFlex::column()
+                .flex_child(TuiChildView::new(&self.transcript).finish())
+                .child(input_box.finish())
+                .child(
+                    TuiConstrainedBox::new(self.render_footer(ctx))
+                        .with_max_rows(1)
+                        .finish(),
+                ),
         )
         .with_padding(2)
         .finish()

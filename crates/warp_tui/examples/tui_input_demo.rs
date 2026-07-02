@@ -35,7 +35,7 @@ use warp::appearance::Appearance;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp_tui::input::{TuiInputView, TuiInputViewEvent};
 use warpui_core::elements::tui::{
-    Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiStyle, TuiText,
+    Modifier, TuiElement, TuiEventHandler, TuiFlex, TuiParentElement, TuiStyle, TuiText,
 };
 use warpui_core::platform::WindowStyle;
 use warpui_core::runtime::TuiRuntime;
@@ -121,7 +121,7 @@ impl TuiView for ShellView {
         let dim = TuiStyle::default().add_modifier(Modifier::DIM);
         let bold = TuiStyle::default().add_modifier(Modifier::BOLD);
 
-        let mut column = TuiColumn::new();
+        let mut column = TuiFlex::column();
 
         // ── Header ──────────────────────────────────────────────────────────
         column = column.with_child(Box::new(

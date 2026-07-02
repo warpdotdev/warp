@@ -12,8 +12,8 @@ use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    Modifier, TuiColumn, TuiConstraint, TuiContainer, TuiElement, TuiLayoutContext,
-    TuiParentElement, TuiSize, TuiStyle, TuiText,
+    Modifier, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiParentElement,
+    TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::elements::Fill;
 use warpui_core::{AppContext, Entity, EntityIdMap, TuiView};
@@ -150,7 +150,7 @@ impl TuiAIBlock {
     fn render_element(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let sections = self.sections(app);
 
-        let mut column = TuiColumn::new();
+        let mut column = TuiFlex::column();
         for (index, section) in sections.iter().enumerate() {
             // Output is many sections (one per text section), so top padding is
             // applied only to the section right after the input, giving a single
@@ -186,7 +186,7 @@ impl TuiAIBlockSection {
                 .into();
                 // Only the first line carries the `≫` prompt marker; continuation
                 // lines are indented to the marker's width so they align beneath it.
-                let mut column = TuiColumn::new();
+                let mut column = TuiFlex::column();
                 for (index, line) in text.split('\n').enumerate() {
                     let line_text = if index == 0 {
                         format!("{INPUT_PREFIX}{line}")
@@ -194,12 +194,14 @@ impl TuiAIBlockSection {
                         format!("{}{line}", " ".repeat(INPUT_PREFIX.chars().count()))
                     };
                     column = column.child(
-                        TuiText::new(line_text).with_style(
-                            TuiStyle::default()
-                                .fg(text_color)
-                                .bg(background)
-                                .add_modifier(Modifier::BOLD),
-                        ),
+                        TuiText::new(line_text)
+                            .with_style(
+                                TuiStyle::default()
+                                    .fg(text_color)
+                                    .bg(background)
+                                    .add_modifier(Modifier::BOLD),
+                            )
+                            .finish(),
                     );
                 }
                 TuiContainer::new(column)

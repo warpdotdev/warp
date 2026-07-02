@@ -29,7 +29,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use warpui_core::elements::tui::{
-    Modifier, TuiColumn, TuiElement, TuiEventHandler, TuiParentElement, TuiStyle, TuiText,
+    Modifier, TuiElement, TuiEventHandler, TuiFlex, TuiParentElement, TuiStyle, TuiText,
 };
 use warpui_core::platform::WindowStyle;
 use warpui_core::runtime::TuiRuntime;
@@ -116,7 +116,7 @@ impl TuiView for FileView {
         rows.push(Box::new(TuiText::new("─".repeat(80)).truncate()));
 
         // ── Body: lines from scroll offset ─────────────────────────────────
-        // The TuiColumn clips children that don't fit vertically, so we can
+        // The TuiFlex clips children that don't fit vertically, so we can
         // push all remaining lines and the presenter will stop rendering once
         // the allocated area is exhausted.
         for line in &self.lines[self.scroll..] {
@@ -131,7 +131,7 @@ impl TuiView for FileView {
 
         // ── Wire up key handlers ────────────────────────────────────────────
         Box::new(
-            TuiEventHandler::new(TuiColumn::new().with_children(rows))
+            TuiEventHandler::new(TuiFlex::column().with_children(rows))
                 .on_key("j", |_, ctx, _| ctx.dispatch_typed_action(Nav::LineDown))
                 .on_key("down", |_, ctx, _| ctx.dispatch_typed_action(Nav::LineDown))
                 .on_key("k", |_, ctx, _| ctx.dispatch_typed_action(Nav::LineUp))

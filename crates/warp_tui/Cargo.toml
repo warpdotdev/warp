@@ -34,6 +34,7 @@ path = "src/bin/stable.rs"
 
 [dependencies]
 anyhow.workspace = true
+dirs.workspace = true
 log.workspace = true
 num-traits.workspace = true
 parking_lot.workspace = true

@@ -13,7 +13,7 @@
 //!   [`TuiDispatchEventResult`], [`TuiEventDispatchResult`]) threaded through
 //!   [`TuiElement::dispatch_event`]. (The crossterm → warp event *conversion*
 //!   lives with the runtime, in `crate::runtime`.)
-//! - The concrete elements: [`TuiText`], [`TuiColumn`], [`TuiContainer`],
+//! - The concrete elements: [`TuiText`], [`TuiFlex`], [`TuiContainer`],
 //!   [`TuiChildView`], and [`TuiEventHandler`].
 //! - [`TuiParentElement`]: a trait for multi-child elements, providing
 //!   [`with_child`](TuiParentElement::with_child) /
@@ -27,11 +27,11 @@ mod buffer;
 mod child_view;
 mod clipped;
 mod color;
-mod column;
 mod constrained_box;
 mod container;
 mod event;
 mod event_handler;
+mod flex;
 mod geometry;
 mod parent;
 mod scrollable;
@@ -41,13 +41,13 @@ mod viewported_list;
 pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiStyle};
 pub use child_view::TuiChildView;
 pub use clipped::TuiClipped;
-pub use column::TuiColumn;
 pub use constrained_box::TuiConstrainedBox;
 pub use container::TuiContainer;
 pub use event::{
     TuiDispatchEventResult, TuiEvent, TuiEventContext, TuiEventDispatchResult, TuiScrollDelta,
 };
 pub use event_handler::TuiEventHandler;
+pub use flex::TuiFlex;
 pub use geometry::{TuiConstraint, TuiPoint, TuiPointExt, TuiRect, TuiRectExt, TuiSize};
 pub use parent::TuiParentElement;
 pub use scrollable::{TuiScrollable, TuiScrollableElement};

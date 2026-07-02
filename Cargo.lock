@@ -15845,6 +15845,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "command",
+ "dirs 6.0.0",
  "log",
  "num-traits",
  "parking_lot",

@@ -29,7 +29,7 @@ pub use crate::ai::blocklist::{
     ShellCommandExecutor, ShellCommandExecutorEvent,
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
-pub use crate::ai::llms::LLMId;
+pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
 pub use crate::appearance::Appearance;
 pub use crate::banner::BannerState;
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
@@ -45,7 +45,7 @@ pub use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
 };
 pub use crate::terminal::model::rich_content::RichContentType;
-pub use crate::terminal::model::session::active_session::ActiveSession;
+pub use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 pub use crate::terminal::model::terminal_model::BlockIndex;
 pub use crate::terminal::model_events::ModelEvent;
 pub use crate::terminal::shared_session::IsSharedSessionCreator;

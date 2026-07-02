@@ -29,7 +29,7 @@ use warp_editor::render::model::{
 };
 use warp_editor::selection::TextUnit;
 use warpui_core::elements::tui::{
-    Modifier, TuiBuffer, TuiColumn, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
     TuiLayoutContext, TuiParentElement, TuiPoint, TuiRect, TuiRectExt, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
@@ -204,7 +204,7 @@ impl TuiInputView {
             scroll_offset: self.scroll_offset,
             max_visible_rows: self.max_visible_rows,
             is_selecting: self.is_selecting,
-            column: TuiColumn::new(),
+            column: TuiFlex::column(),
             cursor_col: 0,
             cursor_row_in_view: 0,
             cursor_visible: false,
@@ -696,7 +696,7 @@ struct TuiInputElement {
     /// render time); gates drag/up handling in `dispatch_event`.
     is_selecting: bool,
     /// Visible rows, built during `layout`.
-    column: TuiColumn,
+    column: TuiFlex,
     /// The cursor's 0-based column within the visible area (set during `layout`).
     cursor_col: u16,
     /// The cursor's 0-based row within the visible area (set during `layout`).
@@ -755,7 +755,7 @@ impl TuiInputElement {
             }
         }
 
-        let mut column = TuiColumn::new();
+        let mut column = TuiFlex::column();
         for (row_text, _) in &visible_rows_slice {
             // An empty `TuiText` lays out to zero rows, which would collapse the
             // row and clip the cursor (or following rows) off the column. Render

@@ -1,15 +1,15 @@
 use super::TuiConstrainedBox;
 use crate::elements::tui::{
-    TuiColumn, TuiConstraint, TuiElement, TuiLayoutContext, TuiSize, TuiText,
+    TuiConstraint, TuiElement, TuiFlex, TuiLayoutContext, TuiSize, TuiText,
 };
 use crate::{App, EntityIdMap};
 
 /// A column of three single-row children (natural height 3).
-fn three_row_column() -> TuiColumn {
-    TuiColumn::new()
-        .child(TuiText::new("A"))
-        .child(TuiText::new("B"))
-        .child(TuiText::new("C"))
+fn three_row_column() -> TuiFlex {
+    TuiFlex::column()
+        .child(TuiText::new("A").finish())
+        .child(TuiText::new("B").finish())
+        .child(TuiText::new("C").finish())
 }
 
 #[test]
