@@ -6,7 +6,7 @@ use warpui::elements::{
     ParentElement, ParentOffsetBounds, Percentage, Radius, Shrinkable, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
-use warpui::keymap::{FixedBinding, Keystroke};
+use warpui::keymap::{Context, FixedBinding, Keystroke};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
@@ -460,6 +460,12 @@ impl<T: View> View for Modal<T> {
             ctx.focus(&self.body);
             ctx.notify();
         }
+    }
+
+    fn keymap_context(&self, ctx: &AppContext) -> Context {
+        let mut context = Self::default_keymap_context();
+        context.extend(self.body.keymap_context(ctx));
+        context
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
