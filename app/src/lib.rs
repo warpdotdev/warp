@@ -1273,11 +1273,6 @@ pub(crate) fn initialize_app(
         LaunchMode::App { api_key, .. } if ChannelState::channel().is_dogfood() => api_key.clone(),
         _ => None,
     };
-    let api_key = if FeatureFlag::APIKeyAuthentication.is_enabled() {
-        api_key
-    } else {
-        None
-    };
 
     // A key supplied to an App launch but dropped here means Warp will start logged out
     // (non-dogfood channel or feature disabled). Surface this loudly so it isn't silent.
