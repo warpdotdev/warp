@@ -1363,9 +1363,13 @@ impl BlockListElement {
                         .block_list()
                         .block_at(block_index)
                         .is_some_and(|block| block.is_active_and_long_running());
-
-                    if on_long_running_block && !should_intercept_scroll(&model, app) {
+                    if on_long_running_block
+                        && !should_intercept_scroll(&model, app)
+                        && !viewport.can_scroll_by_delta(delta_lines)
+                    {
                         // Send scroll event to PTY as mouse wheel action.
+                        // If Warp can move its own scrollback, keep the gesture for the block list
+                        // so users can always navigate previous output while a command is running.
                         // Convert Lines to i32 by rounding to nearest non-zero integer.
                         let delta = round_nonzero(delta_lines.as_f64());
                         if delta != 0 {
