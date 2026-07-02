@@ -1,5 +1,6 @@
 //! Authenticated terminal-session TUI surface.
 use std::borrow::Cow;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use instant::Instant;
@@ -30,6 +31,7 @@ use warpui_core::{
 use crate::conversation_selection::TuiConversationSelection;
 use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
 use crate::input::{TuiInputView, TuiInputViewEvent};
+use crate::input_mode_policy::TuiInputModePolicy;
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::transcript_view::TuiTranscriptView;
 use crate::tui_builder::TuiUiBuilder;
@@ -133,6 +135,7 @@ impl TuiTerminalSessionView {
                 model.clone(),
                 conversation_selection.clone(),
                 context_model.clone(),
+                Rc::new(TuiInputModePolicy),
                 terminal_surface_id,
                 ctx,
             )
