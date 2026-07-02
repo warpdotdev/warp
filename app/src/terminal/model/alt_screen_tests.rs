@@ -87,6 +87,73 @@ fn test_alt_screen_single_cell_selection() {
 }
 
 #[test]
+fn test_alt_screen_extend_selection_to_nearest_boundary() {
+    let mut screen = new_alt_screen(default_size());
+    let semantic_selection = SemanticSelection::mock(false, "");
+
+    screen.start_selection(Point::new(2, 1), SelectionType::Simple, Side::Left);
+    screen.update_selection(Point::new(7, 1), Side::Right);
+
+    screen.extend_selection(Point::new(9, 1), Side::Right);
+    assert_eq!(
+        screen.selection_range(&semantic_selection),
+        Some(ExpandedSelectionRange::Regular {
+            start: Point::new(2, 1),
+            end: Point::new(9, 1),
+            reversed: false,
+        })
+    );
+
+    screen.extend_selection(Point::new(1, 1), Side::Left);
+    assert_eq!(
+        screen.selection_range(&semantic_selection),
+        Some(ExpandedSelectionRange::Regular {
+            start: Point::new(1, 1),
+            end: Point::new(9, 1),
+            reversed: false,
+        })
+    );
+}
+
+#[test]
+fn test_alt_screen_extend_selection_shrinks_inside_selection() {
+    let mut screen = new_alt_screen(default_size());
+    let semantic_selection = SemanticSelection::mock(false, "");
+
+    screen.start_selection(Point::new(2, 1), SelectionType::Simple, Side::Left);
+    screen.update_selection(Point::new(8, 1), Side::Right);
+
+    screen.extend_selection(Point::new(3, 1), Side::Left);
+    assert_eq!(
+        screen.selection_range(&semantic_selection),
+        Some(ExpandedSelectionRange::Regular {
+            start: Point::new(3, 1),
+            end: Point::new(8, 1),
+            reversed: false,
+        })
+    );
+
+    screen.extend_selection(Point::new(7, 1), Side::Right);
+    assert_eq!(
+        screen.selection_range(&semantic_selection),
+        Some(ExpandedSelectionRange::Regular {
+            start: Point::new(3, 1),
+            end: Point::new(7, 1),
+            reversed: false,
+        })
+    );
+}
+
+#[test]
+fn test_alt_screen_extend_selection_without_existing_selection_noops() {
+    let mut screen = new_alt_screen(default_size());
+
+    screen.extend_selection(Point::new(3, 1), Side::Right);
+
+    assert!(screen.selection().is_none());
+}
+
+#[test]
 fn test_accumulate_lines_to_scroll() {
     let mut screen = new_alt_screen(default_size());
 

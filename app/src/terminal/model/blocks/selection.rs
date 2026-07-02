@@ -20,7 +20,10 @@ use crate::env_vars::env_var_collection_block::EnvVarCollectionBlock;
 use crate::terminal::event::Event as TerminalEvent;
 use crate::terminal::model::block::BlockSection;
 use crate::terminal::model::index::{Direction, Point, Side};
-use crate::terminal::model::selection::{ExpandedSelectionRange, Selection, SelectionDirection};
+use crate::terminal::model::selection::{
+    should_extend_selection_start, ExpandedSelectionRange, Selection, SelectionDirection,
+    SelectionPoint,
+};
 use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
 use crate::terminal::warpify::success_block::WarpifySuccessBlock;
 use crate::terminal::GridType;
@@ -104,6 +107,35 @@ impl BlockListSelection {
             head
         } else {
             tail
+        }
+    }
+
+    fn selection_point(point: BlockListPoint) -> SelectionPoint {
+        SelectionPoint {
+            row: point.row,
+            col: point.column,
+        }
+    }
+
+    /// Extend the selection by moving whichever boundary is closest to `point`.
+    pub fn extend_to_nearest_boundary(&mut self, point: BlockListPoint, side: Side) {
+        let target = BlockAnchor::new(point, side);
+        let head_is_selection_start = !Self::points_need_swap(self.head.point, self.tail.point);
+        let (selection_start, selection_end) = if head_is_selection_start {
+            (self.head, self.tail)
+        } else {
+            (self.tail, self.head)
+        };
+
+        let should_update_selection_start = should_extend_selection_start(
+            Self::selection_point(point),
+            Self::selection_point(selection_start.point),
+            Self::selection_point(selection_end.point),
+        );
+
+        match (should_update_selection_start, head_is_selection_start) {
+            (true, true) | (false, false) => self.head = target,
+            (true, false) | (false, true) => self.tail = target,
         }
     }
 
@@ -439,6 +471,18 @@ impl BlockList {
         let block_anchor = BlockAnchor::new(point, side);
 
         selection.tail = block_anchor;
+
+        self.set_selection(selection);
+    }
+
+    /// Used to extend an existing selection to a new BlockListPoint, moving whichever boundary
+    /// is closest to the point. Must have an existing selection to update.
+    pub fn extend_selection_to_nearest_boundary(&mut self, point: BlockListPoint, side: Side) {
+        let Some(mut selection) = self.selection.take() else {
+            return;
+        };
+
+        selection.extend_to_nearest_boundary(point, side);
 
         self.set_selection(selection);
     }
