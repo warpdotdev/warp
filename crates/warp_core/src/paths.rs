@@ -125,32 +125,32 @@ pub fn config_local_dir() -> PathBuf {
     }
 }
 
-/// Returns the macOS config directory name for CLI / headless surfaces (e.g.
-/// the `warp-tui` front-end) for the current channel.
+/// Returns the macOS config directory name for the TUI front-end (`warp-tui`)
+/// for the current channel.
 ///
 /// This mirrors [`macos_config_dir_name`] but under a `.warp_cli*` directory so
-/// the CLI/TUI surface keeps its settings separate from the GUI's `.warp*`
-/// directory. Like the GUI names, these are persisted on disk as directory
-/// names and must not be changed once established.
+/// the TUI keeps its settings separate from the GUI's `.warp*` directory. Like
+/// the GUI names, these are persisted on disk as directory names and must not be
+/// changed once established.
 #[cfg(target_os = "macos")]
-fn macos_cli_config_dir_name() -> String {
+fn macos_tui_config_dir_name() -> String {
     macos_config_dir_name().replacen(WARP_CONFIG_DIR, ".warp_cli", 1)
 }
 
 /// Returns the path to the directory where non-portable configuration files for
-/// CLI / headless surfaces (e.g. the `warp-tui` front-end) should be stored.
+/// the TUI front-end (`warp-tui`) should be stored.
 ///
 /// This is intentionally distinct from [`config_local_dir`] so the GUI and the
-/// CLI/TUI never share (and clobber) a settings file. On macOS it is a sibling
+/// TUI never share (and clobber) a settings file. On macOS it is a sibling
 /// `.warp_cli*` directory (mirroring the GUI's `.warp*`); on other platforms —
 /// whose config dirs are already app-id based — it nests under a `cli`
 /// subdirectory of the standard config dir.
-pub fn cli_config_local_dir() -> PathBuf {
+pub fn tui_config_local_dir() -> PathBuf {
     cfg_if! {
         if #[cfg(target_os = "macos")] {
             dirs::home_dir()
                 .unwrap_or_default()
-                .join(macos_cli_config_dir_name())
+                .join(macos_tui_config_dir_name())
         } else {
             config_local_dir().join("cli")
         }

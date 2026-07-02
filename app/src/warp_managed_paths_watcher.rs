@@ -45,16 +45,16 @@ pub(crate) fn ensure_warp_watch_roots_exist() {
         }
     }
 
-    // The CLI/TUI surface stores its settings in a separate config directory
-    // (see `warp_core::paths::cli_config_local_dir`). Create it up front — only
+    // The TUI surface stores its settings in a separate config directory
+    // (see `warp_core::paths::tui_config_local_dir`). Create it up front — only
     // for that surface — so the watcher can register it at startup and pick up
     // the first settings write.
     if settings::settings_mode() == settings::SettingsMode::Tui {
-        let cli_config_local_dir = warp_core::paths::cli_config_local_dir();
-        if let Err(err) = fs::create_dir_all(&cli_config_local_dir) {
+        let tui_config_local_dir = warp_core::paths::tui_config_local_dir();
+        if let Err(err) = fs::create_dir_all(&tui_config_local_dir) {
             log::warn!(
-                "Failed to create Warp CLI config directory {}: {err}",
-                cli_config_local_dir.display()
+                "Failed to create Warp TUI config directory {}: {err}",
+                tui_config_local_dir.display()
             );
         }
     }
@@ -284,25 +284,25 @@ impl WarpManagedPathsWatcher {
                     "Warp config directory",
                 );
             }
-            // Watch the CLI/TUI settings directory for that surface. On macOS
-            // it's a sibling `.warp_cli*` directory outside `config_local_dir`;
-            // on other platforms it nests under `config_local_dir` and is
-            // already covered by the recursive watch above (the `starts_with`
-            // guard skips the redundant registration).
+            // Watch the TUI settings directory for that surface. On macOS it's
+            // a sibling `.warp_cli*` directory outside `config_local_dir`; on
+            // other platforms it nests under `config_local_dir` and is already
+            // covered by the recursive watch above (the `starts_with` guard
+            // skips the redundant registration).
             if settings::settings_mode() == settings::SettingsMode::Tui {
-                let cli_config_local_dir = warp_core::paths::cli_config_local_dir();
-                if cli_config_local_dir.exists()
-                    && !cli_config_local_dir.starts_with(&data_dir)
+                let tui_config_local_dir = warp_core::paths::tui_config_local_dir();
+                if tui_config_local_dir.exists()
+                    && !tui_config_local_dir.starts_with(&data_dir)
                     && (!should_register_config_local_dir
-                        || !cli_config_local_dir.starts_with(&config_local_dir))
+                        || !tui_config_local_dir.starts_with(&config_local_dir))
                 {
                     Self::register_path(
                         ctx,
                         &watcher,
-                        cli_config_local_dir,
+                        tui_config_local_dir,
                         WatchFilter::accept_all(),
                         RecursiveMode::Recursive,
-                        "Warp CLI config directory",
+                        "Warp TUI config directory",
                     );
                 }
             }

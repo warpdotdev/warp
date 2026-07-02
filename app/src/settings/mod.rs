@@ -596,12 +596,12 @@ pub fn user_preferences_file_path() -> PathBuf {
 ///
 /// Both surfaces use the same `settings.toml` file name but live in different
 /// config directories (the GUI under [`warp_core::paths::config_local_dir`], the
-/// TUI under [`warp_core::paths::cli_config_local_dir`]) so an installed GUI and
+/// TUI under [`warp_core::paths::tui_config_local_dir`]) so an installed GUI and
 /// TUI never share (and clobber) one file.
 pub fn user_preferences_toml_file_path() -> PathBuf {
     let config_dir = match settings::settings_mode() {
         settings::SettingsMode::Gui => warp_core::paths::config_local_dir(),
-        settings::SettingsMode::Tui => warp_core::paths::cli_config_local_dir(),
+        settings::SettingsMode::Tui => warp_core::paths::tui_config_local_dir(),
     };
     config_dir.join("settings.toml")
 }
