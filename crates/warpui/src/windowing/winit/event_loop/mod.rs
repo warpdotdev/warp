@@ -75,6 +75,15 @@ const MOMENTUM_MIN_VELOCITY: f32 = 1.0; // When velocity falls below this, scrol
 const MOMENTUM_MAX_VELOCITY: f32 = 2000.0; // Hard cap on momentum initial velocity (px/s)
 const MIN_VELOCITY_TIME_DELTA: f32 = 0.004; // Floor for time deltas to prevent spikes from batched events
 
+/// Smooth (animated) mouse-wheel scrolling configuration. When enabled, each discrete wheel
+/// notch's delta is accumulated into a remaining distance and emitted over several frames using
+/// an exponential ease-out: every tick we dispatch `SMOOTH_SCROLL_FACTOR` of whatever distance is
+/// left, so the motion starts quickly and settles gently. This only affects non-precise (mouse
+/// wheel) scrolling; precise trackpad scrolling is already smooth and has its own momentum.
+const SMOOTH_SCROLL_FRAME_INTERVAL: Duration = Duration::from_millis(8); // ~125Hz animation tick.
+const SMOOTH_SCROLL_FACTOR: f32 = 0.25; // Fraction of the remaining distance emitted each tick.
+const SMOOTH_SCROLL_MIN_DELTA: f32 = 0.05; // Below this remaining distance (lines), finish and stop.
+
 /// TryFrom implementation for converting winit's `KeyCode` to
 /// `crate::platform::keyboard::KeyCode`.
 /// Only converts modifier keys and fails for all other keys.
@@ -161,6 +170,13 @@ struct WindowState {
     scroll_velocity: Option<ScrollVelocity>,
     /// Abort handle for momentum scrolling timer. Present only during the momentum phase.
     momentum_scroll_abort: Option<AbortHandle>,
+    /// Remaining (not-yet-emitted) mouse-wheel scroll distance, in line units, that the
+    /// smooth-scroll animation is easing out. New wheel events add to this mid-animation so
+    /// rapid scrolling stays responsive.
+    smooth_scroll_remaining: Vector2F,
+    /// Abort handle for the smooth-scroll animation timer. Present only while a smooth
+    /// mouse-wheel animation is in flight.
+    smooth_scroll_abort: Option<AbortHandle>,
     /// For touch events, stores whether soft keyboard was requested during LeftMouseDown.
     /// This is needed because touch keyboard updates are deferred to LeftMouseUp, but the
     /// UI element only requests the keyboard during LeftMouseDown.
@@ -183,6 +199,8 @@ impl WindowState {
             last_touch_purpose: None,
             scroll_velocity: None,
             momentum_scroll_abort: None,
+            smooth_scroll_remaining: Vector2F::default(),
+            smooth_scroll_abort: None,
             #[cfg(target_family = "wasm")]
             pending_soft_keyboard_request: false,
         }
@@ -194,6 +212,15 @@ impl WindowState {
             abort_handle.abort();
         }
         self.scroll_velocity = None;
+    }
+
+    /// Cancels an in-flight smooth mouse-wheel scroll, clearing both the animation timer
+    /// and any remaining distance.
+    fn cancel_smooth_scroll(&mut self) {
+        if let Some(abort_handle) = self.smooth_scroll_abort.take() {
+            abort_handle.abort();
+        }
+        self.smooth_scroll_remaining = Vector2F::default();
     }
 
     /// When a mouse button is pressed, save it to [`Self::current_mouse_button_pressed`] so that
@@ -830,6 +857,26 @@ impl EventLoop {
                         modifiers: ModifiersState::default(),
                     },
                 );
+            }
+            Event::UserEvent(CustomEvent::SmoothScroll { window_id }) => {
+                let step = {
+                    let Some(window_state) = self.state.windows.get_mut(&window_id) else {
+                        return;
+                    };
+                    let remaining = window_state.smooth_scroll_remaining;
+                    if remaining.length() <= SMOOTH_SCROLL_MIN_DELTA {
+                        // Close enough: emit whatever is left and stop animating.
+                        window_state.cancel_smooth_scroll();
+                        remaining
+                    } else {
+                        let step = remaining * SMOOTH_SCROLL_FACTOR;
+                        window_state.smooth_scroll_remaining = remaining - step;
+                        step
+                    }
+                };
+                if step.length() > 0.0 {
+                    self.dispatch_smooth_scroll_step(window_id, step);
+                }
             }
             Event::WindowEvent {
                 window_id,
@@ -1575,6 +1622,24 @@ impl EventLoop {
         window_id: winit::window::WindowId,
         event: crate::Event,
     ) {
+        // Smooth scrolling: intercept discrete (non-precise) mouse-wheel deltas and animate them
+        // toward their target instead of applying the whole jump at once. Precise (trackpad)
+        // deltas are already smooth and have their own momentum handling, so they pass through
+        // untouched. Animation steps are re-dispatched via `dispatch_smooth_scroll_step` (which
+        // calls the window callbacks directly), so they don't re-enter this interception.
+        if warpui_core::smooth_scroll_enabled() {
+            if let crate::Event::ScrollWheel {
+                delta,
+                precise: false,
+                ..
+            } = &event
+            {
+                let delta = *delta;
+                self.enqueue_smooth_scroll(window_id, delta);
+                return;
+            }
+        }
+
         let Some(window_state) = self.state.windows.get_mut(&window_id) else {
             return;
         };
@@ -1759,6 +1824,74 @@ impl EventLoop {
             loop {
                 Timer::after(MOMENTUM_FRAME_INTERVAL).await;
                 let _ = proxy.send_event(CustomEvent::MomentumScroll { window_id });
+            }
+        });
+
+        self.ui_app.read(|ctx| {
+            ctx.foreground_executor()
+                .spawn(async move {
+                    let _ = future.await;
+                })
+                .detach();
+        });
+
+        abort_handle
+    }
+
+    /// Accumulates a discrete mouse-wheel delta into the smooth-scroll animation for the given
+    /// window, starting the animation timer if one isn't already running.
+    fn enqueue_smooth_scroll(&mut self, window_id: winit::window::WindowId, delta: Vector2F) {
+        let need_start = match self.state.windows.get_mut(&window_id) {
+            Some(window_state) => {
+                window_state.smooth_scroll_remaining += delta;
+                window_state.smooth_scroll_abort.is_none()
+            }
+            None => return,
+        };
+
+        if need_start {
+            let abort_handle = self.start_smooth_scroll(window_id);
+            if let Some(window_state) = self.state.windows.get_mut(&window_id) {
+                window_state.smooth_scroll_abort = Some(abort_handle);
+            }
+        }
+    }
+
+    /// Dispatches a single eased smooth-scroll step to the window as a non-precise scroll-wheel
+    /// event. This goes straight to the window callbacks rather than back through
+    /// [`Self::handle_converted_warpui_event`], so the app's scroll-speed multiplier still applies
+    /// per step while avoiding re-entering (and re-accumulating in) the smooth-scroll interception.
+    fn dispatch_smooth_scroll_step(&mut self, window_id: winit::window::WindowId, delta: Vector2F) {
+        let Some(window_state) = self.state.windows.get(&window_id) else {
+            return;
+        };
+        let position = window_state.last_cursor_position.to_vec2f();
+        let modifiers = from_winit_modifiers_state(window_state.modifiers);
+        let Some(window) = self
+            .ui_app
+            .read(|ctx| ctx.windows().platform_window(window_state.window_id))
+        else {
+            return;
+        };
+        let winit_window = downcast_window(window.as_ref());
+        self.callbacks
+            .for_window(winit_window)
+            .dispatch_event(crate::event::Event::ScrollWheel {
+                position,
+                delta,
+                precise: false,
+                modifiers,
+            });
+    }
+
+    /// Starts a timer that triggers SmoothScroll animation frames at a fixed interval.
+    fn start_smooth_scroll(&self, window_id: winit::window::WindowId) -> AbortHandle {
+        let proxy = self.proxy.clone();
+        // Abortable so we can stop the animation once the remaining distance is depleted.
+        let (future, abort_handle) = futures::future::abortable(async move {
+            loop {
+                Timer::after(SMOOTH_SCROLL_FRAME_INTERVAL).await;
+                let _ = proxy.send_event(CustomEvent::SmoothScroll { window_id });
             }
         });
 
