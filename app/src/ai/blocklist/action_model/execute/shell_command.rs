@@ -27,7 +27,7 @@ use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::execution_profiles::WriteToPtyPermission;
 use crate::terminal::event::BlockMetadataReceivedEvent;
 use crate::terminal::model::block::{
-    formatted_terminal_contents_for_input, Block, BlockId, CURSOR_MARKER,
+    formatted_terminal_contents_for_input, Block, BlockId, BlockState, CURSOR_MARKER,
 };
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
@@ -465,6 +465,17 @@ impl ShellCommandExecutor {
                                                     None,
                                                     CURSOR_MARKER,
                                                 )
+                                            } else if block.state() == BlockState::BeforeExecution {
+                                                // Preexec has not fired yet — the shell is either
+                                                // echoing the command or waiting at a continuation
+                                                // prompt (e.g. `dquote>` from unbalanced quotes).
+                                                // In this state all PTY output is routed to the
+                                                // command/header grid, not the output grid.
+                                                formatted_terminal_contents_for_input(
+                                                    block.prompt_and_command_grid().grid_handler(),
+                                                    Some(1000),
+                                                    CURSOR_MARKER,
+                                                )
                                             } else {
                                                 formatted_terminal_contents_for_input(
                                                     block.output_grid().grid_handler(),
@@ -607,6 +618,18 @@ impl ShellCommandExecutor {
                             formatted_terminal_contents_for_input(
                                 model.alt_screen().grid_handler(),
                                 None,
+                                CURSOR_MARKER,
+                            )
+                        } else if block.state() == BlockState::BeforeExecution {
+                            // Preexec has not fired yet — the shell is either echoing the command
+                            // or waiting at a continuation prompt (e.g. `dquote>` from unbalanced
+                            // quotes). In this state all PTY output is routed to the command/header
+                            // grid rather than the output grid, so read from there so the agent
+                            // can observe the stuck state.
+                            formatted_terminal_contents_for_input(
+                                block.prompt_and_command_grid().grid_handler(),
+                                // TODO(vorporeal): This is probably too large.
+                                Some(1000),
                                 CURSOR_MARKER,
                             )
                         } else {

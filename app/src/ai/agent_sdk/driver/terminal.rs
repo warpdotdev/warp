@@ -24,7 +24,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::attachments_download_dir;
 use crate::pane_group::NewTerminalOptions;
 use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
-use crate::terminal::model::block::{BlockId, SerializedBlock};
+use crate::terminal::model::block::{BlockId, BlockState, SerializedBlock};
 use crate::terminal::model::find::RegexDFAs;
 use crate::terminal::model::grid::RespectDisplayedOutput;
 use crate::terminal::model::index::Point;
@@ -405,11 +405,17 @@ impl TerminalDriver {
             .map(SerializedBlock::from)
     }
 
-    /// Full visible plaintext of `block_id`'s output grid (no ANSI escape
+    /// Full visible plaintext of `block_id`'s active grid (no ANSI escape
     /// sequences; secrets obfuscated). Used by the harness output monitor
     /// to detect whether the block has stalled — two byte-identical
     /// snapshots taken N seconds apart imply the harness has produced no
     /// new output and no spinner activity.
+    ///
+    /// When the block is in [`BlockState::BeforeExecution`] (preexec has not
+    /// fired yet), terminal output — including shell continuation prompts such
+    /// as `dquote>` from unbalanced quotes — is routed to the command/header
+    /// grid rather than the output grid. We read from there in that state so
+    /// stall detection can observe a stuck continuation prompt.
     ///
     /// We intentionally pass `None` for `max_rows` so we compare the entire
     /// visible output; capping the row count could falsely report "stalled"
@@ -418,7 +424,12 @@ impl TerminalDriver {
         let terminal = self.terminal_view.as_ref(ctx);
         let model = terminal.model.lock();
         let block = model.block_list().block_with_id(block_id)?;
-        Some(block.output_grid().contents_to_string(
+        let grid = if block.state() == BlockState::BeforeExecution {
+            block.prompt_and_command_grid()
+        } else {
+            block.output_grid()
+        };
+        Some(grid.contents_to_string(
             false, // include_escape_sequences
             None,  // max_rows: full visible output
         ))
