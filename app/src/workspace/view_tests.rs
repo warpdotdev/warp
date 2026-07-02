@@ -3007,6 +3007,39 @@ fn test_pointer_opened_tab_configs_menu_does_not_select_top_item() {
 }
 
 #[test]
+fn test_new_session_menu_is_scrollable_and_capped_to_window_height() {
+    let _tab_configs_guard = FeatureFlag::TabConfigs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let window_height = ctx
+                .windows()
+                .platform_window(ctx.window_id())
+                .expect("expected workspace window")
+                .size()
+                .y();
+
+            workspace.open_new_session_dropdown_menu(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
+
+            let expected_height = (window_height - NEW_SESSION_MENU_WINDOW_MARGIN).max(120.);
+            let menu_height = workspace.new_session_dropdown_menu.read(ctx, |menu, _| {
+                assert!(menu.is_scrollable());
+                menu.height()
+            });
+
+            assert!((menu_height - expected_height).abs() < f32::EPSILON);
+        });
+    });
+}
+
+#[test]
 fn test_open_tab_config_with_params_does_not_use_worktree_branch_as_implicit_title() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

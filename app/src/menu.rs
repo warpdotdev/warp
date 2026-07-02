@@ -2388,6 +2388,16 @@ impl<A: Action + Clone> Menu<A> {
         self.menu.with_height(height);
     }
 
+    #[cfg(test)]
+    pub fn height(&self) -> f32 {
+        self.menu.height
+    }
+
+    #[cfg(test)]
+    pub fn is_scrollable(&self) -> bool {
+        matches!(self.menu.menu_variant, MenuVariant::Scrollable(_))
+    }
+
     pub fn set_items(
         &mut self,
         items: impl IntoIterator<Item = MenuItem<A>>,
