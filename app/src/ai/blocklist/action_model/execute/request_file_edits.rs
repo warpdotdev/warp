@@ -22,32 +22,49 @@ pub use telemetry::{
 };
 use vec1::{vec1, Vec1};
 use warp_core::send_telemetry_from_ctx;
-use warp_util::file::FileSaveError;
-use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _, ViewHandle};
+use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
-    AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, AnyFileContent, FileContext,
-    FileLocations, RequestFileEditsResult, UpdatedFileContext,
+    AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, RequestFileEditsResult,
 };
-use crate::ai::blocklist::inline_action::code_diff_view::{
-    CodeDiffView, CodeDiffViewEvent, DiffSessionType, FileDiff,
-};
+use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff};
+use crate::ai::blocklist::persist_diff_model::PersistDiffModel;
 use crate::ai::blocklist::{BlocklistAIPermissions, RequestedEditResolution};
 use crate::ai::paths::host_native_absolute_path;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::SessionType;
 use crate::{safe_warn, BlocklistAIHistoryModel};
-const APPLY_DIFF_RESULT_CONTEXT_LINES: usize = 10;
+
+/// Events emitted by the file-edits executor for review surfaces to observe.
+pub enum RequestFileEditsExecutorEvent {
+    /// A `RequestFileEdits` action's diffs have been resolved and are ready for a
+    /// review surface to display via [`RequestFileEditsExecutor::prepared_diffs`].
+    DiffsPrepared(AIAgentActionId),
+}
+
+/// Per-action state carried from `preprocess_action` to `execute`.
+enum PendingFileEdits {
+    /// Diffs resolved and ready to persist. `reviewed` holds GUI-supplied final
+    /// content per file (keyed by path) when a review surface edited/accepted
+    /// them; `None` on headless surfaces, where final content is derived from
+    /// the diff's deltas.
+    Prepared {
+        diffs: Vec<FileDiff>,
+        session_type: DiffSessionType,
+        reviewed: Option<HashMap<String, String>>,
+    },
+    /// Diff application failed during preprocess; `execute` reports it to the LLM.
+    Failed(Vec1<DiffApplicationError>),
+}
 
 pub struct RequestFileEditsExecutor {
     active_session: ModelHandle<ActiveSession>,
     apply_diff_model: ModelHandle<ApplyDiffModel>,
-    diff_views: HashMap<AIAgentActionId, ViewHandle<CodeDiffView>>,
-    /// Set of action IDs where diff application failed.
-    diff_application_failures: HashMap<AIAgentActionId, Vec1<DiffApplicationError>>,
+    /// Per-action state produced by preprocess and consumed by execute.
+    pending: HashMap<AIAgentActionId, PendingFileEdits>,
     terminal_view_id: EntityId,
 }
 
@@ -61,8 +78,7 @@ impl RequestFileEditsExecutor {
         Self {
             active_session,
             apply_diff_model,
-            diff_views: HashMap::new(),
-            diff_application_failures: HashMap::new(),
+            pending: HashMap::new(),
             terminal_view_id,
         }
     }
@@ -105,10 +121,10 @@ impl RequestFileEditsExecutor {
         // from the LLM.
         // If we don't do this, a failed diff application will block execution of the entire AI conversation
         // without any possibility of recovery.
-        if self
-            .diff_application_failures
-            .contains_key(&input.action.id)
-        {
+        if matches!(
+            self.pending.get(&input.action.id),
+            Some(PendingFileEdits::Failed(_))
+        ) {
             return true;
         }
 
@@ -117,15 +133,32 @@ impl RequestFileEditsExecutor {
             .is_allowed()
     }
 
-    /// Registers a diff view to handle a RequestFileEdits action.
-    /// Note this MUST be called before `execute` or `preprocess_action` is invoked in
-    /// order for the necessary state to be set to handle the action.
-    pub fn register_requested_edits(
+    /// Records the GUI-reviewed final content for an action before it executes.
+    /// Keyed by file path; consumed by `execute` on the review (GUI) path.
+    pub fn set_reviewed_content(
         &mut self,
         action_id: &AIAgentActionId,
-        view: &ViewHandle<CodeDiffView>,
+        files: HashMap<String, String>,
     ) {
-        self.diff_views.insert(action_id.clone(), view.clone());
+        if let Some(PendingFileEdits::Prepared { reviewed, .. }) = self.pending.get_mut(action_id) {
+            *reviewed = Some(files);
+        }
+    }
+
+    /// Returns the prepared diffs and session backend for an action so a review
+    /// surface can display them. `None` if the action is not prepared.
+    pub fn prepared_diffs(
+        &self,
+        action_id: &AIAgentActionId,
+    ) -> Option<(Vec<FileDiff>, DiffSessionType)> {
+        match self.pending.get(action_id) {
+            Some(PendingFileEdits::Prepared {
+                diffs,
+                session_type,
+                ..
+            }) => Some((diffs.clone(), session_type.clone())),
+            _ => None,
+        }
     }
 
     pub(super) fn execute(
@@ -146,22 +179,24 @@ impl RequestFileEditsExecutor {
             return ActionExecution::InvalidAction;
         };
 
-        // TODO(surface-agnostic-file-edit-execution): non-GUI surfaces (e.g. the TUI) have no
-        // CodeDiffView, so file-edit tool calls are not executable here yet. The stacked
-        // surface-agnostic refactor routes execution through a shared PersistDiffModel instead.
-        let Some(diff_view) = self.diff_views.get(id) else {
-            log::warn!("Tried to execute a RequestFileEdits action without a diff view");
-            return ActionExecution::NotReady;
+        let (diffs, session_type, reviewed) = match self.pending.remove(id) {
+            Some(PendingFileEdits::Prepared {
+                diffs,
+                session_type,
+                reviewed,
+            }) => (diffs, session_type, reviewed),
+            Some(PendingFileEdits::Failed(errors)) => {
+                return ActionExecution::Sync(AIAgentActionResultType::RequestFileEdits(
+                    RequestFileEditsResult::DiffApplicationFailed {
+                        error: DiffApplicationError::error_for_conversation(&errors),
+                    },
+                ));
+            }
+            None => {
+                log::warn!("Tried to execute a RequestFileEdits action without prepared diffs");
+                return ActionExecution::NotReady;
+            }
         };
-
-        // If diff application failed, early exit.
-        if let Some(errors) = self.diff_application_failures.remove(id) {
-            return ActionExecution::Sync(AIAgentActionResultType::RequestFileEdits(
-                RequestFileEditsResult::DiffApplicationFailed {
-                    error: DiffApplicationError::error_for_conversation(&errors),
-                },
-            ));
-        }
 
         let identifiers = self
             .generate_ai_identifiers(&input.conversation_id, id, ctx)
@@ -169,87 +204,38 @@ impl RequestFileEditsExecutor {
                 client_conversation_id: Some(input.conversation_id),
                 ..Default::default()
             });
+        let passive_diff = BlocklistAIHistoryModel::as_ref(ctx)
+            .is_entirely_passive_conversation(&input.conversation_id);
 
-        let (result_tx, result_rx) = oneshot::channel();
-        let mut result_tx = Some(result_tx);
+        // GUI review supplies final content per path; headless applies the diff deltas.
+        let reviewed = reviewed.unwrap_or_default();
+        let result_future = PersistDiffModel::handle(ctx).update(ctx, |model, ctx| {
+            model.resolve_and_persist(diffs, reviewed, session_type, ctx)
+        });
 
-        ctx.subscribe_to_view(diff_view, move |_me, _, event, ctx| match event {
-            CodeDiffViewEvent::Rejected => {
-                let Some(result_tx) = result_tx.take() else {
-                    return;
-                };
-                let _ = result_tx.send(RequestFileEditsResult::Cancelled);
-            }
-            CodeDiffViewEvent::SavedAcceptedDiffs {
-                diff,
+        ActionExecution::new_async(result_future, move |result, ctx| {
+            if let RequestFileEditsResult::Success {
                 updated_files,
-                file_contents,
-                deleted_files,
-                save_errors,
-            } => {
-                let Some(result_tx) = result_tx.take() else {
-                    return;
-                };
-
-                // If saving any file failed, report it as an error to the LLM. Other files may
-                // have saved successfully, but we're ignoring this edge case for now.
-                if !save_errors.is_empty() {
-                    let error = save_errors
-                        .iter()
-                        .filter_map(|err| match err.as_ref() {
-                            FileSaveError::IOError { error, path } => {
-                                Some(format!("Failed to save file {path:?}: {error}"))
-                            }
-                            _ => None,
-                        })
-                        .join("\n");
-
-                    let _ = result_tx.send(RequestFileEditsResult::DiffApplicationFailed { error });
-                    return;
-                }
-
-                let passive_diff = BlocklistAIHistoryModel::as_ref(ctx)
-                    .is_entirely_passive_conversation(&input.conversation_id);
+                lines_added,
+                lines_removed,
+                ..
+            } = &result
+            {
                 send_telemetry_from_ctx!(
                     RequestFileEditsTelemetryEvent::EditResolved(EditResolvedEvent {
                         identifiers: identifiers.clone(),
                         response: RequestedEditResolution::Accept,
                         stats: EditStats {
                             files_edited: updated_files.len(),
-                            lines_added: diff.lines_added,
-                            lines_removed: diff.lines_removed,
+                            lines_added: *lines_added,
+                            lines_removed: *lines_removed,
                         },
                         passive_diff,
-                    },),
+                    }),
                     ctx
                 );
-
-                // Build a map of file path → content from the editor buffers.
-                // This avoids re-reading files from disk or the remote server.
-                let content_map: HashMap<String, String> = file_contents.iter().cloned().collect();
-
-                let _ = result_tx.send(RequestFileEditsResult::Success {
-                    diff: diff.unified_diff.clone(),
-                    updated_files: updated_file_contexts_from_editor_buffers(
-                        updated_files,
-                        &content_map,
-                    ),
-                    deleted_files: deleted_files.clone(),
-                    lines_added: diff.lines_added,
-                    lines_removed: diff.lines_removed,
-                });
             }
-            _ => (),
-        });
-        diff_view.update(ctx, |diff_view, ctx| {
-            diff_view.accept_and_save(ctx);
-        });
-
-        ActionExecution::new_async(result_rx, |result, _ctx| match result {
-            Ok(result) => AIAgentActionResultType::RequestFileEdits(result),
-            Err(oneshot::Canceled) => {
-                AIAgentActionResultType::RequestFileEdits(RequestFileEditsResult::Cancelled)
-            }
+            AIAgentActionResultType::RequestFileEdits(result)
         })
     }
 
@@ -320,20 +306,15 @@ impl RequestFileEditsExecutor {
     ) {
         tx.send(()).ok();
 
-        let Some(diff_view) = self.diff_views.get(&id) else {
-            log::warn!(
-                "Tried to apply diffs for a RequestFileEdits action without a corresponding diff view"
-            );
-            return;
-        };
-
         let applied_diffs = match applied_diffs {
             Ok(diffs) if !diffs.is_empty() => diffs,
             Ok(_) => {
                 // We didn't generate any diffs--consider this a failure.
                 log::warn!("No diffs generated");
-                self.diff_application_failures
-                    .insert(id, vec1![DiffApplicationError::EmptyDiff]);
+                self.pending.insert(
+                    id,
+                    PendingFileEdits::Failed(vec1![DiffApplicationError::EmptyDiff]),
+                );
                 return;
             }
             Err(err) => {
@@ -341,7 +322,7 @@ impl RequestFileEditsExecutor {
                     safe: ("Failed to generate diffs"),
                     full: ("Failed to generate diffs {err:?}")
                 );
-                self.diff_application_failures.insert(id, err);
+                self.pending.insert(id, PendingFileEdits::Failed(err));
                 return;
             }
         };
@@ -361,23 +342,29 @@ impl RequestFileEditsExecutor {
                 &shell_launch_data,
                 &current_working_directory,
             );
-            let file_diff = FileDiff::new(diff.original_content, path, diff.diff_type);
-            diffs.push(file_diff);
+            diffs.push(FileDiff::new(diff.original_content, path, diff.diff_type));
         }
 
-        // Set the session type on the diff view so save/delete/create routes
-        // through the correct FileModel backend.
-        let diff_session_type = match self.active_session.as_ref(ctx).session_type(ctx) {
+        let session_type = self.resolve_diff_session_type(ctx);
+        self.pending.insert(
+            id.clone(),
+            PendingFileEdits::Prepared {
+                diffs,
+                session_type,
+                reviewed: None,
+            },
+        );
+        ctx.emit(RequestFileEditsExecutorEvent::DiffsPrepared(id));
+    }
+
+    /// Resolves whether file writes target the local filesystem or a remote host.
+    fn resolve_diff_session_type(&self, ctx: &mut ModelContext<Self>) -> DiffSessionType {
+        match self.active_session.as_ref(ctx).session_type(ctx) {
             Some(SessionType::WarpifiedRemote {
                 host_id: Some(host_id),
             }) => DiffSessionType::Remote(host_id.clone()),
             _ => DiffSessionType::Local,
-        };
-
-        diff_view.update(ctx, |diff_view, ctx| {
-            diff_view.set_diff_session_type(diff_session_type);
-            diff_view.set_candidate_diffs(diffs, ctx);
-        });
+        }
     }
 
     fn generate_ai_identifiers(
@@ -414,76 +401,6 @@ impl RequestFileEditsExecutor {
     }
 }
 
-fn updated_file_contexts_from_editor_buffers(
-    updated_files: &[(FileLocations, bool)],
-    content_map: &HashMap<String, String>,
-) -> Vec<UpdatedFileContext> {
-    updated_files
-        .iter()
-        .flat_map(|(file_location, was_edited)| {
-            let content = content_map
-                .get(&file_location.name)
-                .cloned()
-                .unwrap_or_default();
-            let line_count = content.lines().count();
-
-            let mut file_location = file_location.clone();
-            file_location.expand_surrounding_context(APPLY_DIFF_RESULT_CONTEXT_LINES);
-            clamp_to_file_context_range_start(&mut file_location);
-
-            if file_location.lines.is_empty() {
-                return vec![UpdatedFileContext {
-                    was_edited_by_user: *was_edited,
-                    file_context: FileContext {
-                        file_name: file_location.name,
-                        content: AnyFileContent::StringContent(content),
-                        line_range: None,
-                        last_modified: None,
-                        line_count,
-                    },
-                }];
-            }
-
-            let lines = content.lines().collect_vec();
-            file_location
-                .lines
-                .into_iter()
-                .map(|range| {
-                    let start = range.start.saturating_sub(1).min(lines.len());
-                    let end = range.end.saturating_sub(1).min(lines.len());
-                    let fragment = if start >= end {
-                        String::new()
-                    } else {
-                        lines[start..end].join("\n")
-                    };
-
-                    UpdatedFileContext {
-                        was_edited_by_user: *was_edited,
-                        file_context: FileContext {
-                            file_name: file_location.name.clone(),
-                            content: AnyFileContent::StringContent(fragment),
-                            line_range: Some(range),
-                            last_modified: None,
-                            line_count,
-                        },
-                    }
-                })
-                .collect_vec()
-        })
-        .collect()
-}
-
-fn clamp_to_file_context_range_start(file_location: &mut FileLocations) {
-    for range in &mut file_location.lines {
-        range.start = range.start.max(1);
-        range.end = range.end.max(range.start);
-    }
-}
-
 impl Entity for RequestFileEditsExecutor {
-    type Event = ();
+    type Event = RequestFileEditsExecutorEvent;
 }
-
-#[cfg(test)]
-#[path = "request_file_edits_tests.rs"]
-mod tests;

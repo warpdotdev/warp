@@ -6,7 +6,9 @@ pub mod code_block;
 mod context_model;
 mod controller;
 pub(crate) mod conversation_selection;
+pub(crate) mod diff_types;
 pub(crate) mod handoff;
+pub(crate) mod persist_diff_model;
 
 pub(crate) mod local_agent_task_sync_model;
 pub(crate) mod orchestration_event_streamer;

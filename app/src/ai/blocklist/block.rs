@@ -67,10 +67,11 @@ use warpui::{
     ViewHandle, WeakViewHandle, WindowId,
 };
 
-#[cfg(feature = "agent_mode_debug")]
-use self::code_diff_view::FileDiff;
 use self::model::{AIBlockModel, AIBlockModelHelper};
-use super::action_model::{AIActionStatus, BlocklistAIActionEvent, RequestFileEditsFormatKind};
+use super::action_model::{
+    AIActionStatus, BlocklistAIActionEvent, RequestFileEditsExecutor,
+    RequestFileEditsExecutorEvent, RequestFileEditsFormatKind,
+};
 use super::code_block::CodeSnippetButtonHandles;
 use super::controller::ClientIdentifiers;
 use super::inline_action::code_diff_view::{
@@ -108,6 +109,8 @@ use crate::ai::blocklist::block::keyboard_navigable_buttons::{
     KeyboardNavigableButtonBuilder, KeyboardNavigableButtons,
 };
 use crate::ai::blocklist::context_model::AttachmentType;
+#[cfg(feature = "agent_mode_debug")]
+use crate::ai::blocklist::diff_types::FileDiff;
 use crate::ai::blocklist::inline_action::ask_user_question_view::{
     self, AskUserQuestionView, AskUserQuestionViewEvent,
 };
@@ -1218,6 +1221,21 @@ impl AIBlock {
         );
 
         Self::register_action_model_subscription(&action_model, ctx);
+
+        // Feed prepared file-edit diffs to their review views as the executor
+        // resolves them. One block-level subscription serves every edit action;
+        // views are looked up in `requested_edits` by the prepared action's ID.
+        let file_edits_executor = action_model.as_ref(ctx).request_file_edits_executor(ctx);
+        ctx.subscribe_to_model(&file_edits_executor, |me, executor, event, ctx| {
+            let RequestFileEditsExecutorEvent::DiffsPrepared(action_id) = event;
+            if let Some(view) = me
+                .requested_edits
+                .get(action_id)
+                .map(|edit| edit.view.clone())
+            {
+                Self::feed_prepared_diffs_to_view(&executor, action_id, &view, ctx);
+            }
+        });
 
         ctx.subscribe_to_model(&active_session, |me, _, event, ctx| match event {
             ActiveSessionEvent::UpdatedPwd => {
@@ -3092,6 +3110,26 @@ impl AIBlock {
         });
     }
 
+    /// Feeds the executor's prepared diffs into a review `CodeDiffView` once they
+    /// have been resolved. Safe to call repeatedly; only feeds once.
+    fn feed_prepared_diffs_to_view(
+        executor: &ModelHandle<RequestFileEditsExecutor>,
+        action_id: &AIAgentActionId,
+        view: &ViewHandle<CodeDiffView>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !view.as_ref(ctx).is_pending_diffs_empty() {
+            return;
+        }
+        let Some((diffs, session_type)) = executor.as_ref(ctx).prepared_diffs(action_id) else {
+            return;
+        };
+        view.update(ctx, |view, ctx| {
+            view.set_diff_session_type(session_type);
+            view.set_candidate_diffs(diffs, ctx);
+        });
+    }
+
     fn handle_requested_edit_complete(
         &mut self,
         action_id: &AIAgentActionId,
@@ -3159,9 +3197,6 @@ impl AIBlock {
             .action_model
             .as_ref(ctx)
             .request_file_edits_executor(ctx);
-        executor.update(ctx, |executor, _| {
-            executor.register_requested_edits(action_id, &view);
-        });
 
         // If the diff is being viewed in a shared session (read-only mode), populate diffs from the payload.
         if self.action_model.as_ref(ctx).is_view_only() {
@@ -3174,12 +3209,25 @@ impl AIBlock {
             view.update(ctx, |diff_view, ctx| {
                 diff_view.set_candidate_diffs(file_diffs, ctx);
             });
+        } else {
+            // The executor resolves diffs asynchronously during preprocess. Feed them to the
+            // view now if already prepared; otherwise the block-level executor subscription
+            // (registered in `new`) feeds them once they are, via `requested_edits`.
+            Self::feed_prepared_diffs_to_view(&executor, action_id, &view, ctx);
         }
 
         let action_id_clone = action_id.clone();
         ctx.subscribe_to_view(&view, move |me, view, event, ctx| {
             match event {
                 CodeDiffViewEvent::TryAccept => {
+                    // Hand the (possibly edited) reviewed content to the executor before it
+                    // executes and persists the edits via `PersistDiffModel`.
+                    let reviewed = view.as_ref(ctx).reviewed_file_contents(ctx);
+                    view.update(ctx, |view, ctx| view.send_malformed_line_telemetry(ctx));
+                    let executor = me.action_model.as_ref(ctx).request_file_edits_executor(ctx);
+                    executor.update(ctx, |executor, _| {
+                        executor.set_reviewed_content(&action_id_clone, reviewed);
+                    });
                     me.action_model.update(ctx, |action_model, ctx| {
                         action_model.execute_action(
                             &action_id_clone,
@@ -3383,7 +3431,7 @@ impl AIBlock {
                     match action_status {
                         Some(AIActionStatus::Finished(result)) => {
                             if result.result.is_successful() {
-                                CodeDiffState::Accepted(None)
+                                CodeDiffState::Accepted
                             } else {
                                 // For other finished states, default to rejected
                                 CodeDiffState::Rejected

@@ -101,7 +101,10 @@ pub enum CodeEditorEvent {
     ContentChanged {
         origin: EditOrigin,
     },
-    UnifiedDiffComputed(Rc<DiffResult>),
+    /// Emitted when a unified diff computation completes. The payload is retained
+    /// for the model->view forwarding contract; consumers currently use it only as
+    /// a "diff computed" signal.
+    UnifiedDiffComputed(#[allow(dead_code)] Rc<DiffResult>),
     SelectionChanged,
     SelectionStart,
     SelectionEnd,
