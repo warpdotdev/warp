@@ -189,6 +189,13 @@ impl AtContextMenuDisabledReason {
 const AT_CONTEXT_TOOLTIP: &str = "Attach context";
 
 const BLURRED_OPACITY: Opacity = 50;
+fn udi_button_size() -> ButtonSize {
+    if cfg!(target_family = "wasm") {
+        ButtonSize::UDITouchButton
+    } else {
+        ButtonSize::UDIButton
+    }
+}
 
 // Threshold calculation that estimates the width needed for the profile/model selector
 // This is used for determining whether the selector should be rendered as full or compact
@@ -337,7 +344,7 @@ impl UniversalDeveloperInputButtonBar {
         terminal_model: std::sync::Arc<parking_lot::FairMutex<crate::terminal::TerminalModel>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let button_size = ButtonSize::UDIButton;
+        let button_size = udi_button_size();
 
         let mic_button_view = ctx.add_typed_action_view(|_ctx| {
             #[cfg_attr(not(feature = "voice_input"), allow(unused_mut))]
@@ -922,7 +929,11 @@ impl TypedActionView for UniversalDeveloperInputButtonBar {
 fn segmented_control_styles(app: &AppContext) -> UiComponentStyles {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    let button_size = 5.0 + appearance.monospace_font_size();
+    let button_size = if cfg!(target_family = "wasm") {
+        udi_button_size().button_height(appearance, app)
+    } else {
+        5.0 + appearance.monospace_font_size()
+    };
     // Use a smaller base font size that scales properly
     let base_font_size = 10.0; // Start with smaller font
     let scaled_ui_font_size = base_font_size * appearance.monospace_ui_scalar();
