@@ -692,9 +692,9 @@ impl TerminalView {
                 return;
             };
 
-            if pane_stack.as_ref(ctx).depth() <= 1 {
+            if !pane_stack.as_ref(ctx).has_nav_entries() {
                 log::warn!(
-                    "Nested cloud mode pane stack depth <= 1; cannot pop to start sibling cloud mode session"
+                    "Nested cloud mode pane stack has no pushed view; cannot pop to start sibling cloud mode session"
                 );
                 return;
             }

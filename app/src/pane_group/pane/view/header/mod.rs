@@ -184,7 +184,9 @@ impl<P: BackingView> PaneHeader<P> {
         // Re-render when the active view changes
         if matches!(
             event,
-            PaneStackEvent::ViewAdded(_) | PaneStackEvent::ViewRemoved(_)
+            PaneStackEvent::ViewAdded(_)
+                | PaneStackEvent::ViewRemoved(_)
+                | PaneStackEvent::ActiveChanged
         ) {
             ctx.notify();
         }
