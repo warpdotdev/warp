@@ -3977,6 +3977,8 @@ union UpdateOnboardingSurveyStatusResult = UpdateOnboardingSurveyStatusOutput | 
 
 input UpdateUserSettingsInput {
   cloudConversationStorageEnabled: Boolean
+  computerUseArtifactStorageEnabled: Boolean
+  computerUsePrScreenshotAttachmentEnabled: Boolean
   crashReportingEnabled: Boolean
   telemetryEnabled: Boolean
 }
@@ -4298,6 +4300,8 @@ UserSettings types and mutations are the v2 equivalent of the v1 user_settings.g
 """
 type UserSettings {
   isCloudConversationStorageEnabled: Boolean!
+  isComputerUseArtifactStorageEnabled: Boolean!
+  isComputerUsePrScreenshotAttachmentEnabled: Boolean!
   isCrashReportingEnabled: Boolean!
   isTelemetryEnabled: Boolean!
 }

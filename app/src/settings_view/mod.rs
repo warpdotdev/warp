@@ -499,6 +499,7 @@ pub mod flags {
     pub const CLOUD_CONVERSATION_STORAGE_FLAG: &str = "Cloud_Conversation_Storage_Enabled";
     pub const CLOUD_CONVERSATION_STORAGE_EDITABLE_FLAG: &str =
         "Cloud_Conversation_Storage_Editable";
+    pub const COMPUTER_USE_ARTIFACT_STORAGE_FLAG: &str = "Computer_Use_Artifact_Storage_Enabled";
     pub const DIM_INACTIVE_PANES_FLAG: &str = "Dim_Inactive_Panes";
     pub const OPEN_WINDOWS_AT_CUSTOM_SIZE_FLAG: &str = "Open_Windows_At_Custom_Size";
     pub const WINDOW_BLUR_TEXTURE_FLAG: &str = "Window_Blur_Texture";

@@ -65,6 +65,8 @@ struct AgentIdentitiesResponse {
 #[derive(Copy, Clone, Debug, Default)]
 pub struct SyncedUserSettings {
     pub is_cloud_conversation_storage_enabled: bool,
+    pub is_computer_use_artifact_storage_enabled: bool,
+    pub is_computer_use_pr_screenshot_attachment_enabled: bool,
     pub is_crash_reporting_enabled: bool,
     pub is_telemetry_enabled: bool,
 }
@@ -133,6 +135,10 @@ pub trait AuthClient: Send + Sync {
     async fn set_is_crash_reporting_enabled(&self, value: bool) -> Result<()>;
 
     async fn set_is_cloud_conversation_storage_enabled(&self, value: bool) -> Result<()>;
+    async fn set_is_computer_use_artifact_storage_enabled(&self, value: bool) -> Result<()>;
+
+    async fn set_is_computer_use_pr_screenshot_attachment_enabled(&self, value: bool)
+    -> Result<()>;
 
     /// Sends a request to update the user's settings on the server with values in the given input.
     async fn update_user_settings(&self, input: UpdateUserSettingsInput) -> Result<()>;
@@ -335,6 +341,10 @@ impl AuthClient for AuthClientImpl {
                     .map(|settings| SyncedUserSettings {
                         is_cloud_conversation_storage_enabled: settings
                             .is_cloud_conversation_storage_enabled,
+                        is_computer_use_artifact_storage_enabled: settings
+                            .is_computer_use_artifact_storage_enabled,
+                        is_computer_use_pr_screenshot_attachment_enabled: settings
+                            .is_computer_use_pr_screenshot_attachment_enabled,
                         is_crash_reporting_enabled: settings.is_crash_reporting_enabled,
                         is_telemetry_enabled: settings.is_telemetry_enabled,
                     }))
@@ -374,6 +384,31 @@ impl AuthClient for AuthClientImpl {
                 ..Default::default()
             },
             "failed to set cloud conversation storage enabled",
+        )
+        .await
+    }
+
+    async fn set_is_computer_use_artifact_storage_enabled(&self, value: bool) -> Result<()> {
+        self.update_settings(
+            UpdateUserSettingsInput {
+                computer_use_artifact_storage_enabled: Some(value),
+                ..Default::default()
+            },
+            "failed to set computer use artifact storage enabled",
+        )
+        .await
+    }
+
+    async fn set_is_computer_use_pr_screenshot_attachment_enabled(
+        &self,
+        value: bool,
+    ) -> Result<()> {
+        self.update_settings(
+            UpdateUserSettingsInput {
+                computer_use_pr_screenshot_attachment_enabled: Some(value),
+                ..Default::default()
+            },
+            "failed to set computer use PR screenshot attachment enabled",
         )
         .await
     }

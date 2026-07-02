@@ -94,11 +94,11 @@ use crate::settings::{
     CodebaseContextEnabled, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
     IncludeAgentCommandsInHistory, InputSettings, IntelligentAutosuggestionsEnabled,
     LongRunningCommandSubmissionMode, MemoryEnabled, NLDInTerminalEnabled,
-    NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode, PromptSubmissionMode,
-    RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
-    ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
-    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
-    WarpDriveContextEnabled,
+    NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode, PrivacySettings,
+    PromptSubmissionMode, RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled,
+    ShouldRenderCLIAgentToolbar, ShouldRenderUseAgentToolbarForUserCommands,
+    ShouldShowOzUpdatesInZeroState, ShowAgentTips, ShowConversationHistory, ShowHintText,
+    ThinkingDisplayMode, VoiceInputEnabled, WarpDriveContextEnabled,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
@@ -636,6 +636,19 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             .with_group(bindings::BindingGroup::WarpAi)
             .with_enabled(|| FeatureFlag::CLIAgentRichInput.is_enabled()),
         ],
+        app,
+    );
+    ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
+        vec![ToggleSettingActionPair::new(
+            "Computer Use artifacts",
+            builder(SettingsAction::AI(
+                AISettingsPageAction::ToggleComputerUseArtifactStorage,
+            )),
+            &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+            flags::COMPUTER_USE_ARTIFACT_STORAGE_FLAG,
+        )
+        .with_group(bindings::BindingGroup::WarpAi)
+        .with_enabled(|| FeatureFlag::AgentModeComputerUse.is_enabled())],
         app,
     );
     if !FeatureFlag::FullSourceCodeEmbedding.is_enabled() {
@@ -3623,6 +3636,7 @@ pub enum AISettingsPageAction {
     ToggleAwsBedrockCredentialsEnabled,
     RefreshAwsBedrockCredentials,
     ToggleCloudAgentComputerUse,
+    ToggleComputerUseArtifactStorage,
     ToggleFileBasedMcp,
     ToggleIncludeAgentCommandsInHistory,
     ToggleAgentAttribution,
@@ -4371,6 +4385,15 @@ impl TypedActionView for AISettingsPageView {
                     report_if_error!(settings
                         .cloud_agent_computer_use_enabled
                         .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleComputerUseArtifactStorage => {
+                PrivacySettings::handle(ctx).update(ctx, |settings, ctx| {
+                    settings.set_is_computer_use_artifacts_enabled(
+                        !settings.is_computer_use_artifacts_enabled(),
+                        ctx,
+                    );
                 });
                 ctx.notify();
             }
@@ -7796,7 +7819,8 @@ mod tests;
 
 #[derive(Default)]
 struct CloudAgentComputerUseWidget {
-    toggle: SwitchStateHandle,
+    computer_use_toggle: SwitchStateHandle,
+    artifact_storage_toggle: SwitchStateHandle,
 }
 
 impl SettingsWidget for CloudAgentComputerUseWidget {
@@ -7817,6 +7841,7 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
         };
 
         let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
+        let privacy_settings = PrivacySettings::as_ref(app);
 
         // Determine toggle state based on workspace autonomy setting and user preference
         let CloudAgentComputerUseState {
@@ -7826,12 +7851,13 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
 
         // Toggle is disabled if forced by org settings OR if AI is globally disabled
         let is_disabled = is_forced_by_org || !is_any_ai_enabled;
+        let is_computer_use_effectively_enabled = is_checked && is_any_ai_enabled;
 
         let ui_builder = appearance.ui_builder();
         let toggle = if is_forced_by_org {
             // Disabled by organization setting - show tooltip on hover
             ui_builder
-                .switch(self.toggle.clone())
+                .switch(self.computer_use_toggle.clone())
                 .check(is_checked)
                 .with_tooltip(TooltipConfig {
                     text: "This option is enforced by your organization's settings and cannot be customized.".to_string(),
@@ -7843,7 +7869,7 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
         } else if !is_any_ai_enabled {
             // Disabled because AI is off globally - no tooltip needed
             ui_builder
-                .switch(self.toggle.clone())
+                .switch(self.computer_use_toggle.clone())
                 .check(is_checked)
                 .with_disabled(true)
                 .build()
@@ -7851,7 +7877,7 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
         } else {
             // Enabled - allow toggling
             ui_builder
-                .switch(self.toggle.clone())
+                .switch(self.computer_use_toggle.clone())
                 .check(is_checked)
                 .build()
                 .on_click(move |ctx, _, _| {
@@ -7889,6 +7915,33 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
             .with_child(render_ai_setting_description(
                 "Enable computer use in cloud agent conversations started from the Warp app.",
                 !is_disabled,
+                app,
+            ))
+            .with_child(build_toggle_element(
+                render_body_item_label::<AISettingsPageAction>(
+                    "Store Computer Use artifacts".to_string(),
+                    Some(styles::header_font_color(
+                        is_computer_use_effectively_enabled,
+                        app,
+                    )),
+                    None,
+                    LocalOnlyIconState::Hidden,
+                    ToggleState::Enabled,
+                    appearance,
+                ),
+                render_ai_feature_switch(
+                    self.artifact_storage_toggle.clone(),
+                    privacy_settings.is_computer_use_artifacts_enabled(),
+                    is_computer_use_effectively_enabled,
+                    AISettingsPageAction::ToggleComputerUseArtifactStorage,
+                    app,
+                ),
+                appearance,
+                None,
+            ))
+            .with_child(render_ai_setting_description(
+                "Use Warp-hosted storage for artifacts generated by Computer Use, including screenshots attached to PRs.",
+                is_computer_use_effectively_enabled,
                 app,
             ))
             .finish()

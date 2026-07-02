@@ -8,6 +8,8 @@ query GetUserSettings($requestContext: RequestContext!) {
       user {
         settings {
           isCloudConversationStorageEnabled
+          isComputerUseArtifactStorageEnabled
+          isComputerUsePrScreenshotAttachmentEnabled
           isCrashReportingEnabled
           isTelemetryEnabled
         }
@@ -52,6 +54,8 @@ crate::client::define_operation! {
 #[derive(cynic::QueryFragment, Debug)]
 pub struct UserSettings {
     pub is_cloud_conversation_storage_enabled: bool,
+    pub is_computer_use_artifact_storage_enabled: bool,
+    pub is_computer_use_pr_screenshot_attachment_enabled: bool,
     pub is_crash_reporting_enabled: bool,
     pub is_telemetry_enabled: bool,
 }

@@ -22920,6 +22920,11 @@ impl Workspace {
         if privacy_settings.is_cloud_conversation_storage_enabled {
             context.set.insert(flags::CLOUD_CONVERSATION_STORAGE_FLAG);
         }
+        if privacy_settings.is_computer_use_artifacts_enabled() {
+            context
+                .set
+                .insert(flags::COMPUTER_USE_ARTIFACT_STORAGE_FLAG);
+        }
 
         if privacy_settings.is_crash_reporting_enabled {
             context.set.insert(flags::CRASH_REPORTING_FLAG);
