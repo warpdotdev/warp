@@ -308,6 +308,14 @@ impl RequestInput {
     }
 }
 
+/// Maximum total encoded-protobuf size of active tasks included in a passive suggestion request.
+///
+/// When a multi-agent conversation accumulates large tool-result/FileContext payloads, calling
+/// `compute_active_tasks` and then serializing the result into a protobuf request can spike
+/// resident memory by many gigabytes. Passive suggestion requests with tasks exceeding this
+/// limit are skipped instead of serialized (Sentry 7259255054, APP-4650).
+const MAX_PASSIVE_SUGGESTION_TASK_BYTES: usize = 64 * 1024 * 1024; // 64 MB
+
 /// Controller for Blocklist AI.
 ///
 /// This is responsible for managing and updating blocklist AI state for a single terminal surface.
@@ -2106,13 +2114,30 @@ impl BlocklistAIController {
         {
             let Some(conversation) = history_model.conversation(&conversation_id) else {
                 return Err(anyhow!(
-                        "Tried to build passive suggestions request params for non-existent conversation with ID {conversation_id:?}"
-                    ));
+                    "Tried to build passive suggestions request params for non-existent conversation with ID {conversation_id:?}"
+                ));
             };
             let task_id = conversation.get_root_task_id().clone();
+            let active_tasks = conversation.compute_active_tasks();
+            // Guard against serializing huge FileContext payloads into the passive
+            // suggestion request. `compute_active_tasks` can return GBs of task data
+            // when multi-agent conversations accumulate large tool-result/FileContext
+            // payloads; encoding that into a protobuf request causes memory spikes
+            // (Sentry issue 7259255054, APP-4650). Skip the passive suggestion instead.
+            let task_bytes_total: usize = active_tasks
+                .iter()
+                .map(|t| prost::Message::encoded_len(t))
+                .sum();
+            if task_bytes_total > MAX_PASSIVE_SUGGESTION_TASK_BYTES {
+                return Err(anyhow!(
+                    "Skipping passive suggestion for conversation {conversation_id:?} because \
+                     active tasks total {task_bytes_total} bytes (limit: \
+                     {MAX_PASSIVE_SUGGESTION_TASK_BYTES} bytes)"
+                ));
+            }
             let conversation_data = api::ConversationData {
                 id: conversation_id,
-                tasks: conversation.compute_active_tasks(),
+                tasks: active_tasks,
                 server_conversation_token: conversation.server_conversation_token().cloned(),
                 forked_from_conversation_token: conversation
                     .forked_from_server_conversation_token()
