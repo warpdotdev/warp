@@ -4007,6 +4007,7 @@ fn agent_output_message(
         task_id: task_id.to_string(),
         server_message_data: String::new(),
         citations: vec![],
+        fetched_memories: vec![],
         message: Some(warp_multi_agent_api::message::Message::AgentOutput(
             warp_multi_agent_api::message::AgentOutput {
                 text: text.to_string(),
@@ -4028,6 +4029,7 @@ fn subagent_tool_call_result_message(
         task_id: task_id.to_string(),
         server_message_data: String::new(),
         citations: vec![],
+        fetched_memories: vec![],
         message: Some(warp_multi_agent_api::message::Message::ToolCallResult(
             warp_multi_agent_api::message::ToolCallResult {
                 tool_call_id: tool_call_id.to_string(),
