@@ -102,7 +102,7 @@ The spec-writing skills are sourced from [`warpdotdev/common-skills`](https://gi
 - `WARP_COMMON_SKILLS_INSTALL_TARGET=project ./script/bootstrap` and `WARP_COMMON_SKILLS_INSTALL_TARGET=global ./script/bootstrap` select the same targets non-interactively.
 - `./script/bootstrap --skip-common-skills` leaves common skills untouched if you are managing them separately.
 
-Warp also maintains a small set of internal skills in [`warpdotdev/warp-skills`](https://github.com/warpdotdev/warp-skills), pinned in [`warp-skills-lock.json`](warp-skills-lock.json). After the common-skills step, `./script/bootstrap` and `./script/run` optionally run `./script/resolve_common_skills install_warp_skills` to restore them into the same target as the common skills. This step is **optional and not required for external contributors**: it is best-effort and a no-op if you lack access to that repository, and you can always skip it with `./script/bootstrap --skip-warp-skills` or `WARP_SKIP_WARP_SKILLS_INSTALL=1`.
+Warp also maintains a small set of internal skills in [`warpdotdev/warp-skills`](https://github.com/warpdotdev/warp-skills), pinned in [`warp-skills-lock.json`](warp-skills-lock.json). After the common-skills step, `./script/bootstrap` and `./script/run` optionally run `./script/resolve_common_skills install_warp_skills` to restore them into the same target as the common skills. This step is **internal-only**: it needs access to `warpdotdev/warp-skills`, which external contributors don't have, so for them it is a best-effort no-op. You can skip it explicitly with `./script/bootstrap --skip-warp-skills` or `WARP_SKIP_WARP_SKILLS_INSTALL=1`.
 
 To open a spec PR:
 
