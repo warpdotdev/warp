@@ -1,16 +1,17 @@
 use std::any::Any;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Result};
 use core_foundation::array::{CFArray, CFArrayRef};
-use core_foundation::base::{CFType, ItemRef, TCFType};
+use core_foundation::base::{CFEqual, CFHash, CFType, CFTypeRef, ItemRef, TCFType};
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::{CFString, CFStringRef, UniChar};
 use core_graphics::display::CGSize;
-use core_graphics::font::CGGlyph;
+use core_graphics::font::{CGFont, CGGlyph};
 use core_text::font::{cascade_list_for_languages as ct_cascade_list_for_languages, CTFont};
 use core_text::font_descriptor::{
     kCTFontFamilyNameAttribute, kCTFontLanguagesAttribute, kCTFontNameAttribute,
@@ -186,11 +187,10 @@ pub struct FontDB {
     rasterizer: Rasterizer,
     font_names: DashMap<FontId, Arc<String>>,
     native_fonts: DashMap<(FontId, OrderedFloat<f32>), NativeFont>,
-    // Maps a PostScript name to every font registered under it. PostScript names are not
-    // unique across bundled and user/system fonts (a user-installed "Roboto"/"Hack" can share
-    // a bundled font's name), so the name is only a bucket; a font's identity is resolved by
-    // CGFont equality within the bucket (#12923).
-    fonts_by_name: DashMap<Arc<String>, Vec<(NativeFont, FontId)>>,
+    // Maps a concrete font's Core Foundation identity to its FontId. Keying on the CGFont (via
+    // CFHash/CFEqual) rather than the PostScript name means fonts that share a name — a
+    // user-installed font vs. a bundled one — don't collide (#12923).
+    cgfont_to_id: DashMap<CGFontKey, FontId>,
     fallback_fonts: DashMap<FontId, Arc<Vec<FontId>>>,
     metrics: DashMap<FontId, Metrics>,
     font_selections: DashMap<(FamilyId, Properties), FontId>,
@@ -238,11 +238,30 @@ fn space_advance_width(font: &CTFont) -> Option<f64> {
     (width.is_finite() && width > 0.0).then_some(width)
 }
 
-// Two native fonts refer to the same underlying font when they resolve to the same CGFont.
-// This distinguishes fonts that merely share a PostScript name — e.g. a user-installed and a
-// bundled font — which a name comparison cannot (#12923).
-fn same_native_font(a: &NativeFont, b: &NativeFont) -> bool {
-    a.copy_to_CGFont().as_ptr() == b.copy_to_CGFont().as_ptr()
+// A hashable, comparable key wrapping a `CGFont`. `CGFont` is a Core Foundation object without
+// Rust `Hash`/`Eq`, so we key on its Core Foundation identity via `CFHash`/`CFEqual`. Fonts that
+// merely share a PostScript name (e.g. a user-installed and a bundled font) are distinct CGFonts,
+// so this tells them apart where a name cannot (#12923).
+struct CGFontKey(CGFont);
+
+impl CGFontKey {
+    fn as_type_ref(&self) -> CFTypeRef {
+        self.0.as_ptr() as CFTypeRef
+    }
+}
+
+impl PartialEq for CGFontKey {
+    fn eq(&self, other: &Self) -> bool {
+        unsafe { CFEqual(self.as_type_ref(), other.as_type_ref()) != 0 }
+    }
+}
+
+impl Eq for CGFontKey {}
+
+impl Hash for CGFontKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_usize(unsafe { CFHash(self.as_type_ref()) } as usize);
+    }
 }
 
 impl FontDB {
@@ -254,7 +273,7 @@ impl FontDB {
             rasterizer: Rasterizer::new(),
             font_names: Default::default(),
             native_fonts: Default::default(),
-            fonts_by_name: Default::default(),
+            cgfont_to_id: Default::default(),
             fallback_fonts: Default::default(),
             metrics: Default::default(),
             font_selections: Default::default(),
@@ -465,28 +484,14 @@ impl FontDB {
         stored.map(|a| a * size as f64 / DEFAULT_FONT_SIZE)
     }
 
-    // Resolves a native font to an already-registered font_id by CGFont identity. The PostScript
-    // name is only a bucket prefilter; the match is confirmed by CGFont equality so a different
-    // font sharing a bundled font's name can't shadow it (#12923). Returns None for a font we
-    // haven't registered (e.g. a Core Text substitution/fallback). The read guard is released on
-    // return, so callers can register a new font without a re-entrant lock.
-    fn font_id_by_identity(
-        &self,
-        postscript_name: &str,
-        native_font: &NativeFont,
-    ) -> Option<FontId> {
-        // `fonts_by_name` is keyed by `Arc<String>`, so look up with an owned `String` key.
-        let entries = self.fonts_by_name.get(&postscript_name.to_owned())?;
-        entries
-            .iter()
-            .find(|(candidate, _)| same_native_font(candidate, native_font))
-            .map(|(_, font_id)| *font_id)
-    }
-
     pub fn font_id_for_native_font(&self, native_font: NativeFont) -> FontId {
-        let postscript_name = native_font.postscript_name();
-        if let Some(font_id) = self.font_id_by_identity(&postscript_name, &native_font) {
-            return font_id;
+        // Look the font up by its CGFont identity. The read guard is released before push_font
+        // runs, avoiding a re-entrant DashMap lock on the same shard.
+        if let Some(font_id) = self
+            .cgfont_to_id
+            .get(&CGFontKey(native_font.copy_to_CGFont()))
+        {
+            return *font_id;
         }
 
         // Not one of ours — a genuine Core Text substitution/fallback font — so register it.
@@ -499,15 +504,12 @@ impl FontDB {
 
         let ct_font = font.native_font().clone_with_font_size(DEFAULT_FONT_SIZE);
         let advance = space_advance_width(&ct_font);
+        let cg_font = ct_font.copy_to_CGFont();
 
         self.rasterizer.insert(font_id, Arc::new(font));
-        self.font_names.insert(font_id, name.clone());
-        // Register the font under its name. Same-named fonts are kept as separate entries so
-        // they can be told apart by CGFont identity (#12923).
-        self.fonts_by_name
-            .entry(name)
-            .or_default()
-            .push((ct_font, font_id));
+        self.font_names.insert(font_id, name);
+        // Key the font by its CGFont identity so a same-named font can't shadow it (#12923).
+        self.cgfont_to_id.insert(CGFontKey(cg_font), font_id);
         self.space_advances.insert(font_id, advance);
         font_id
     }

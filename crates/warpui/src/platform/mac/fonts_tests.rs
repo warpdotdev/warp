@@ -6,11 +6,31 @@ fn load_family(db: &mut FontDB, name: &str) -> FamilyId {
     db.insert_font_family(family).expect("family should insert")
 }
 
-// Regression test for #12923: within a single PostScript-name bucket, identity is resolved by
-// CGFont equality, so two different fonts sharing a name (a user/system-installed font vs. a
-// bundled one) each resolve to their OWN font_id, which a name comparison cannot distinguish.
+// Regression test for #12923: a font resolves to its own FontId by CGFont identity, so two
+// different fonts (which could share a PostScript name — a user-installed font vs. a bundled one)
+// never map to each other. A CGFontKey compares equal only for the same underlying font.
 #[test]
-fn font_id_by_identity_disambiguates_same_named_fonts() {
+fn cgfont_key_matches_same_font_only() {
+    let mut db = FontDB::new();
+    let helvetica = load_family(&mut db, "Helvetica");
+    let menlo = load_family(&mut db, "Menlo");
+
+    let nf_helvetica = db.native_font(
+        db.select_font(helvetica, Properties::default()),
+        DEFAULT_FONT_SIZE as f32,
+    );
+    let nf_menlo = db.native_font(
+        db.select_font(menlo, Properties::default()),
+        DEFAULT_FONT_SIZE as f32,
+    );
+
+    assert!(CGFontKey(nf_helvetica.copy_to_CGFont()) == CGFontKey(nf_helvetica.copy_to_CGFont()));
+    assert!(CGFontKey(nf_helvetica.copy_to_CGFont()) != CGFontKey(nf_menlo.copy_to_CGFont()));
+}
+
+// Distinct fonts must resolve to distinct, correct FontIds through the CGFont-keyed map.
+#[test]
+fn distinct_fonts_resolve_to_their_own_ids() {
     let mut db = FontDB::new();
     let helvetica = load_family(&mut db, "Helvetica");
     let menlo = load_family(&mut db, "Menlo");
@@ -21,29 +41,13 @@ fn font_id_by_identity_disambiguates_same_named_fonts() {
 
     let nf_helvetica = db.native_font(id_helvetica, DEFAULT_FONT_SIZE as f32);
     let nf_menlo = db.native_font(id_menlo, DEFAULT_FONT_SIZE as f32);
-
-    // Bucket both distinct fonts under one shared PostScript name, exactly as happens when a
-    // user font shares a bundled font's name.
-    let shared = "SharedPostScriptName";
-    db.fonts_by_name.insert(
-        Arc::new(shared.to_string()),
-        vec![
-            (nf_helvetica.clone(), id_helvetica),
-            (nf_menlo.clone(), id_menlo),
-        ],
-    );
-
-    // Each font must resolve to its own id despite sharing the bucket.
-    assert_eq!(
-        db.font_id_by_identity(shared, &nf_helvetica),
-        Some(id_helvetica)
-    );
-    assert_eq!(db.font_id_by_identity(shared, &nf_menlo), Some(id_menlo));
+    assert_eq!(db.font_id_for_native_font(nf_helvetica), id_helvetica);
+    assert_eq!(db.font_id_for_native_font(nf_menlo), id_menlo);
 }
 
-// The identity round-trip must hold across font sizes: a run comes back at the shaping size,
-// while registered entries are stored at DEFAULT_FONT_SIZE, yet both share one CGFont, so the
-// lookup must still resolve to the originally-selected font_id.
+// The identity round-trip must hold across font sizes: a run comes back at the shaping size while
+// the registered key was built at DEFAULT_FONT_SIZE, but both share one (size-independent) CGFont,
+// so the lookup still resolves to the originally-selected FontId.
 #[test]
 fn font_id_for_native_font_round_trips_across_sizes() {
     let mut db = FontDB::new();
@@ -58,20 +62,4 @@ fn font_id_for_native_font_round_trips_across_sizes() {
             "font at size {size} should resolve to its selected id"
         );
     }
-}
-
-// The identity comparator must treat the same font as equal and different fonts as distinct.
-#[test]
-fn same_native_font_distinguishes_different_fonts() {
-    let mut db = FontDB::new();
-    let helvetica = load_family(&mut db, "Helvetica");
-    let menlo = load_family(&mut db, "Menlo");
-
-    let id_h = db.select_font(helvetica, Properties::default());
-    let id_m = db.select_font(menlo, Properties::default());
-    let nf_helvetica = db.native_font(id_h, DEFAULT_FONT_SIZE as f32);
-    let nf_menlo = db.native_font(id_m, DEFAULT_FONT_SIZE as f32);
-
-    assert!(same_native_font(&nf_helvetica, &nf_helvetica));
-    assert!(!same_native_font(&nf_helvetica, &nf_menlo));
 }
