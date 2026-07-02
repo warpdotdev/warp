@@ -242,9 +242,7 @@ impl AgentToolbarItemKind {
             Self::FileAttach,
             Self::ContextWindowUsage,
         ]);
-        if FeatureFlag::FastForwardAutoexecuteButton.is_enabled() {
-            items.push(Self::FastForwardToggle);
-        }
+        items.push(Self::FastForwardToggle);
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && FeatureFlag::HOARemoteControl.is_enabled()
         {

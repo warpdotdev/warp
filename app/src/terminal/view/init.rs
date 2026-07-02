@@ -976,8 +976,7 @@ pub fn init(app: &mut AppContext) {
         )
         .with_key_binding("cmdorctrl-shift-I")
         .with_group(bindings::BindingGroup::WarpAi.as_str())
-        .with_context_predicate(id!(flags::IS_ANY_AI_ENABLED) & id!("Terminal"))
-        .with_enabled(|| FeatureFlag::FastForwardAutoexecuteButton.is_enabled()),
+        .with_context_predicate(id!(flags::IS_ANY_AI_ENABLED) & id!("Terminal")),
         EditableBinding::new(
             TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING,
             "Toggle Queue Next Prompt",
