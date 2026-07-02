@@ -275,7 +275,7 @@ use crate::editor::{
 use crate::env_vars::manager::{EnvVarCollectionManager, EnvVarCollectionSource};
 use crate::env_vars::CloudEnvVarCollection;
 use crate::experiments::{BlockOnboarding, Experiment};
-use crate::launch_configs::launch_config::WindowTemplate;
+use crate::launch_configs::launch_config::{PaneTemplateType, WindowTemplate};
 use crate::launch_configs::save_modal::{LaunchConfigModalEvent, LaunchConfigSaveModal};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
@@ -6821,6 +6821,12 @@ impl Workspace {
         let tab_color = tab_config.color;
         let (rendered_title, pane_template) =
             crate::tab_configs::render_tab_config(&tab_config, &param_values, worktree_branch_name);
+
+        if let Some(invalid_cwd) = find_invalid_tab_config_cwd(&pane_template) {
+            self.show_invalid_tab_config_cwd_toast(&tab_config, invalid_cwd, ctx);
+            return;
+        }
+
         self.add_tab_with_pane_layout(
             PanesLayout::Template(pane_template),
             Arc::new(HashMap::new()),
@@ -6833,6 +6839,37 @@ impl Workspace {
                 tab.selected_color = SelectedTabColor::Color(color);
             }
         }
+    }
+
+    fn show_invalid_tab_config_cwd_toast(
+        &mut self,
+        tab_config: &crate::tab_configs::TabConfig,
+        invalid_cwd: &Path,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let message = format!(
+            "Tab config '{}' references a directory that does not exist or is not a directory: {}",
+            tab_config.name,
+            invalid_cwd.display()
+        );
+
+        let object_id = tab_config.source_path.as_ref().map_or_else(
+            || format!("tab_config_error:{}", tab_config.name),
+            |path| format!("tab_config_error:{}", path.display()),
+        );
+        let mut toast = DismissibleToast::error(message).with_object_id(object_id.clone());
+        if let Some(path) = &tab_config.source_path {
+            toast = toast.with_link(ToastLink::new("Open file".to_string()).with_onclick_action(
+                WorkspaceAction::OpenTabConfigErrorFile {
+                    path: path.clone(),
+                    toast_object_id: object_id,
+                },
+            ));
+        }
+
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_persistent_toast(toast, ctx);
+        });
     }
 
     /// Opens a tab config, showing the param-fill modal when the config has parameters,
@@ -23574,6 +23611,21 @@ impl Workspace {
 
         // Open the URL on desktop. This does nothing if the app isn't installed.
         crate::uri::web_intent_parser::open_url_on_desktop(url);
+    }
+}
+
+fn find_invalid_tab_config_cwd(pane_template: &PaneTemplateType) -> Option<&Path> {
+    match pane_template {
+        PaneTemplateType::PaneTemplate { cwd, .. } => {
+            if cwd.as_os_str().is_empty() || cwd.is_dir() {
+                None
+            } else {
+                Some(cwd.as_path())
+            }
+        }
+        PaneTemplateType::PaneBranchTemplate { panes, .. } => {
+            panes.iter().find_map(find_invalid_tab_config_cwd)
+        }
     }
 }
 

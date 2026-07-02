@@ -1364,9 +1364,8 @@ impl PaneGroup {
                         Self::create_ambient_agent_terminal(resources, view_size, ctx)
                     }
                     PaneMode::Terminal | PaneMode::Agent => PaneGroup::create_session(
-                        // Use cwd from the template iff such path exists, otherwise None
                         // TODO(CORE-3187): On Windows, support WSL directory restoration.
-                        Some(cwd).filter(|p| p.exists()),
+                        Some(cwd),
                         HashMap::new(),
                         uuid.as_bytes(),
                         IsSharedSessionCreator::No,

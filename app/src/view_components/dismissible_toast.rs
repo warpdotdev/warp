@@ -164,6 +164,11 @@ impl<A: Action + Clone> DismissibleToastStack<A> {
     pub fn has_toasts(&self) -> bool {
         !self.toasts.is_empty()
     }
+
+    #[cfg(test)]
+    pub fn toast_count(&self) -> usize {
+        self.toasts.len()
+    }
 }
 
 impl<A: Action + Clone> View for DismissibleToastStack<A> {
