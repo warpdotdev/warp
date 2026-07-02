@@ -997,7 +997,8 @@ impl NotebookView {
             }
             EditorViewEvent::CmdEnter
             | EditorViewEvent::EscapePressed
-            | EditorViewEvent::TextSelectionChanged => (),
+            | EditorViewEvent::TextSelectionChanged
+            | EditorViewEvent::AddComment => (),
         }
     }
 

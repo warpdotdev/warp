@@ -39,6 +39,8 @@ const ACTION_BUTTON_SIZE: f32 = 24.;
 
 pub enum OmnibarEvent {
     OpenLinkEditor,
+    /// The user clicked the "Comment" button to comment on the current selection.
+    AddComment,
 }
 
 /// View to render the omnibar.
@@ -53,13 +55,21 @@ pub struct Omnibar {
     strikethrough_button_state: MouseStateHandle,
     link_button_state: MouseStateHandle,
     inline_code_button_state: MouseStateHandle,
+    comment_button_state: MouseStateHandle,
+
+    /// When true, a "Comment" button is shown that lets the user comment on the selection.
+    comments_enabled: bool,
 
     active_text_styles: Option<TextStylesWithMetadata>,
     active_block_type: Option<ContentBlockType>,
 }
 
 impl Omnibar {
-    pub fn new(model: ModelHandle<NotebooksEditorModel>, ctx: &mut ViewContext<Self>) -> Self {
+    pub fn new(
+        model: ModelHandle<NotebooksEditorModel>,
+        comments_enabled: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         let block_conversion_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = CompactDropdown::new(MenuVariant::Fixed, ctx);
             let appearance = Appearance::as_ref(ctx);
@@ -85,6 +95,8 @@ impl Omnibar {
             italicize_button_state: Default::default(),
             underline_button_state: Default::default(),
             inline_code_button_state: Default::default(),
+            comment_button_state: Default::default(),
+            comments_enabled,
             active_text_styles: None,
             active_block_type: None,
         }
@@ -355,6 +367,17 @@ impl View for Omnibar {
             );
         }
 
+        if self.comments_enabled {
+            actions.add_child(self.render_separator(appearance));
+            actions.add_child(self.render_action_button(
+                appearance,
+                Icon::MessagePlusSquare,
+                OmnibarAction::AddComment,
+                false,
+                &self.comment_button_state,
+            ));
+        }
+
         let bar = Container::new(
             ConstrainedBox::new(actions.finish())
                 .with_height(OMNIBAR_HEIGHT - 2. * OMNIBAR_PADDING)
@@ -385,6 +408,8 @@ pub enum OmnibarAction {
     UnstyleLink,
     /// Convert the selected text to a particular kind of block.
     ConvertBlock(BufferBlockStyle),
+    /// Comment on the current selection.
+    AddComment,
 }
 
 impl TypedActionView for Omnibar {
@@ -410,6 +435,7 @@ impl TypedActionView for Omnibar {
             OmnibarAction::ConvertBlock(style) => {
                 self.convert_block(style.clone(), ctx);
             }
+            OmnibarAction::AddComment => ctx.emit(OmnibarEvent::AddComment),
         }
     }
 
@@ -448,6 +474,9 @@ impl TypedActionView for Omnibar {
             OmnibarAction::OpenLinkEditor => ActionAccessibilityContent::from_debug(),
             OmnibarAction::UnstyleLink => ActionAccessibilityContent::Custom(
                 AccessibilityContent::new_without_help("Remove link", WarpA11yRole::UserAction),
+            ),
+            OmnibarAction::AddComment => ActionAccessibilityContent::Custom(
+                AccessibilityContent::new_without_help("Comment", WarpA11yRole::UserAction),
             ),
         }
     }
