@@ -83,6 +83,7 @@ pub struct FileTreeIdentifier {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PendingEditKind {
     CreateNewFile,
+    CreateNewDirectory,
     RenameExisting,
 }
 
@@ -119,6 +120,9 @@ pub enum FileTreeAction {
         id: FileTreeIdentifier,
     },
     NewFileBelowDirectory {
+        id: FileTreeIdentifier,
+    },
+    NewDirectoryBelowDirectory {
         id: FileTreeIdentifier,
     },
     OpenInNewPane {
@@ -2367,13 +2371,18 @@ impl FileTreeView {
                     }
                 }
                 FileTreeItem::DirectoryHeader { .. } => {
-                    items.push(
+                    items.extend([
                         MenuItemFields::new("New file")
                             .with_on_select_action(FileTreeAction::NewFileBelowDirectory {
                                 id: id.clone(),
                             })
                             .into_item(),
-                    );
+                        MenuItemFields::new("New directory")
+                            .with_on_select_action(FileTreeAction::NewDirectoryBelowDirectory {
+                                id: id.clone(),
+                            })
+                            .into_item(),
+                    ]);
                     items.push(MenuItem::Separator);
                     if self.has_terminal_session {
                         items.push(
@@ -3103,6 +3112,11 @@ impl TypedActionView for FileTreeView {
             FileTreeAction::NewFileBelowDirectory { id } => {
                 if !self.is_remote_item(id) {
                     self.create_new_file(id, ctx);
+                }
+            }
+            FileTreeAction::NewDirectoryBelowDirectory { id } => {
+                if !self.is_remote_item(id) {
+                    self.create_new_directory(id, ctx);
                 }
             }
             FileTreeAction::OpenInNewPane { id } => {
