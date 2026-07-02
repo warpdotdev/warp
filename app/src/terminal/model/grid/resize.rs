@@ -57,6 +57,17 @@ impl GridHandler {
     pub(super) fn resize_storage(&mut self, num_rows: usize, num_cols: usize) {
         use std::cmp::min;
 
+        // For finished (immutable) blocks where only the row count changes, text
+        // reflow is unnecessary — layout is determined by column count alone.
+        // Skipping the push/pop cycle avoids materializing all Vec<Cell> data
+        // across every historical block on every height-only terminal resize,
+        // which is the dominant source of memory churn in long-running sessions.
+        // The cursor position is fixed for finished blocks, so no cursor
+        // adjustment is needed either.
+        if self.finished && self.columns() == num_cols {
+            return;
+        }
+
         // If this is the alt screen, we can skip reflowing the grid and simply
         // adjust the size of rows. We also do this for CLI agent TUIs so pane
         // resizes don't append old frames into block scrollback before the app
