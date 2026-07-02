@@ -1984,6 +1984,70 @@ fn cloud_mode_dispatched_agent_inserts_queued_user_query() {
 }
 
 #[test]
+fn ctrl_c_cancels_ambient_agent_while_waiting_for_session() {
+    // Regression: ctrl-c was never wired to cloud-agent cancellation during
+    // cloud-handoff env startup; only the PaneHeader Stop button cancelled the
+    // run. While the ambient pane is `WaitingForSession`, ctrl-c should now
+    // cancel the run, matching the button.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _handoff = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+        let _setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+
+        let ambient_agent_view_model = terminal.update(&mut app, |view, ctx| {
+            let ambient_agent_view_model = view
+                .ambient_agent_view_model()
+                .expect("cloud mode terminal should have ambient model")
+                .clone();
+            ambient_agent_view_model.update(ctx, |model, ctx| {
+                model.spawn_agent_with_request(
+                    SpawnAgentRequest {
+                        prompt: Some("write the tests".to_string()),
+                        mode: UserQueryMode::Normal,
+                        config: None,
+                        title: None,
+                        team: None,
+                        agent_identity_uid: None,
+                        skill: None,
+                        attachments: vec![],
+                        interactive: None,
+                        parent_run_id: None,
+                        runtime_skills: vec![],
+                        referenced_attachments: vec![],
+                        conversation_id: None,
+                        initial_snapshot_token: None,
+                        snapshot_disabled: None,
+                        orchestration_handoff: None,
+                    },
+                    ctx,
+                );
+            });
+            assert!(
+                ambient_agent_view_model
+                    .as_ref(ctx)
+                    .is_waiting_for_session(),
+                "spawning should put the ambient pane in WaitingForSession"
+            );
+
+            // Simulate the user pressing ctrl-c while the env is still provisioning.
+            view.handle_ctrl_c_input_event(0, ctx);
+            ambient_agent_view_model
+        });
+
+        terminal.read(&app, |_view, ctx| {
+            assert!(
+                ambient_agent_view_model.as_ref(ctx).is_cancelled(),
+                "ctrl-c while waiting for session should cancel the ambient agent run"
+            );
+        });
+    });
+}
+
+#[test]
 fn cloud_mode_failed_keeps_queued_query_above_tombstone_and_hides_input() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

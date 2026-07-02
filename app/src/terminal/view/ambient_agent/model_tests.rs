@@ -365,6 +365,32 @@ fn followup_github_auth_does_not_reuse_stored_initial_request() {
 }
 
 #[test]
+fn cancel_task_from_waiting_for_session_transitions_to_cancelled() {
+    // Ctrl-c during cloud-handoff env startup routes here: cancelling while the
+    // pane is `WaitingForSession` must transition the run to `Cancelled`, giving
+    // ctrl-c parity with the PaneHeader Stop button.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.status = Status::WaitingForSession {
+                progress: AgentProgress::new(),
+                kind: SessionStartupKind::InitialRun,
+            };
+            assert!(model.is_waiting_for_session());
+
+            model.cancel_task(ctx);
+
+            assert!(
+                model.is_cancelled(),
+                "cancel_task while waiting for session should transition to Cancelled"
+            );
+        });
+    });
+}
+
+#[test]
 fn queue_handoff_auto_submit_enters_waiting_state_without_consuming_launch() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
