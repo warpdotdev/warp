@@ -466,25 +466,44 @@ fn preferences_for_tui_tests() -> LLMPreferences {
     }
 }
 
+/// Runs `f` against a test app with the singletons the shared model
+/// resolution path (`model_info_for_id`) consults for custom-endpoint gating.
+fn tui_agent_model_test(f: impl FnOnce(&LLMPreferences, &AppContext) + 'static) {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.read(|app_ctx| f(&preferences_for_tui_tests(), app_ctx));
+    });
+}
+
 #[test]
 fn tui_agent_model_auto_resolves_to_the_default_model() {
-    let preferences = preferences_for_tui_tests();
-    assert_eq!(preferences.tui_agent_model_info("auto").id.as_str(), "auto");
+    tui_agent_model_test(|preferences, app| {
+        assert_eq!(
+            preferences.tui_agent_model_info("auto", app).id.as_str(),
+            "auto"
+        );
+    });
 }
 
 #[test]
 fn tui_agent_model_known_id_resolves_to_that_model() {
-    let preferences = preferences_for_tui_tests();
-    let info = preferences.tui_agent_model_info("claude-opus");
-    assert_eq!(info.id.as_str(), "claude-opus");
-    assert_eq!(info.display_name, "Opus");
+    tui_agent_model_test(|preferences, app| {
+        let info = preferences.tui_agent_model_info("claude-opus", app);
+        assert_eq!(info.id.as_str(), "claude-opus");
+        assert_eq!(info.display_name, "Opus");
+    });
 }
 
 #[test]
 fn tui_agent_model_unknown_id_falls_back_to_the_default_model() {
-    let preferences = preferences_for_tui_tests();
-    assert_eq!(
-        preferences.tui_agent_model_info("not-a-model").id.as_str(),
-        "auto"
-    );
+    tui_agent_model_test(|preferences, app| {
+        assert_eq!(
+            preferences
+                .tui_agent_model_info("not-a-model", app)
+                .id
+                .as_str(),
+            "auto"
+        );
+    });
 }
