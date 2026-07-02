@@ -21,6 +21,8 @@ pub use crate::ai::blocklist::conversation_selection::{
     ConversationSelection, ConversationSelectionEvent, ConversationSelectionHandle,
     PendingQueryState,
 };
+pub use crate::ai::blocklist::diff_storage::TuiDiffStorage;
+pub use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff};
 pub use crate::ai::blocklist::history_model::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
     ConversationStatusUpdate,
@@ -28,7 +30,7 @@ pub use crate::ai::blocklist::history_model::{
 pub use crate::ai::blocklist::{
     BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel,
     InputConfig, InputModePolicy, InputModePolicyHandle, InputType, InputTypeAutoDetectionSource,
-    PolicyConfigUpdate, ShellCommandExecutor, ShellCommandExecutorEvent,
+    PolicyConfigUpdate, RequestFileEditsExecutor, ShellCommandExecutor, ShellCommandExecutorEvent,
 };
 pub use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 pub use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
@@ -49,8 +51,9 @@ pub use crate::terminal::model::blocks::{
 };
 pub use crate::terminal::model::rich_content::RichContentType;
 pub use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
+pub use crate::terminal::model::session::Sessions;
 pub use crate::terminal::model::terminal_model::BlockIndex;
-pub use crate::terminal::model_events::ModelEvent;
+pub use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 pub use crate::terminal::shared_session::IsSharedSessionCreator;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
 pub use crate::terminal::view::ExecuteCommandEvent;

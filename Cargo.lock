@@ -15862,6 +15862,7 @@ name = "warp_tui"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "async-fs",
  "channel_versions",
  "command",
