@@ -22,6 +22,8 @@ pub enum FileLoadError {
     DoesNotExist,
     #[error("IO error when loading file.")]
     IOError(#[from] io::Error),
+    #[error("File is too large to open in the editor ({size_bytes} bytes, limit is {limit_bytes} bytes)")]
+    FileTooLarge { size_bytes: u64, limit_bytes: u64 },
 }
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
