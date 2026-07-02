@@ -12,6 +12,44 @@ Use the Oz REST API and CLI to:
 * Create and manage the environments in which cloud agents run
 * Provide secrets for cloud agents to use
 
+## Launching Cloud Agents: Prefer the Orchestration Agent
+
+When you are an interactive agent and the user asks you to launch, spawn, or run
+one or more cloud agents (i.e. start ambient/background work), **prefer the
+built-in orchestration tooling (`run_agents`) over the `{{warp_cli_binary_name}}`
+CLI.** The orchestration agent launches and coordinates cloud (remote) child
+agents directly, gives the user an inline confirmation card to review run-wide
+settings, and keeps the resulting runs tracked and addressable for follow-up
+messaging.
+
+For a remote/cloud launch via orchestration, pass a `remote` execution config to
+`run_agents` (for example, inheriting the current environment or specifying a
+`remote.environment_id`). This is the default, preferred path for "run this in
+the cloud" style requests.
+
+### When to use the `{{warp_cli_binary_name}}` CLI instead
+
+Reach for the CLI (the rest of this skill) only when the task specifically
+requires functionality the orchestration agent does not cover, or when the user
+explicitly asks for the CLI. Concretely:
+
+* **The user explicitly requests the CLI** (e.g. "use the `oz` CLI", "run
+  `{{warp_cli_binary_name}} agent run-cloud`").
+* **Scheduling** recurring/cron runs (`{{warp_cli_binary_name}} schedule ...`).
+* **Environment management** — creating, updating, or inspecting environments
+  (`{{warp_cli_binary_name}} environment ...`).
+* **Secret management** — creating or managing secrets for cloud agents
+  (`{{warp_cli_binary_name}} secret ...`).
+* **Programmatic / external automation** — the REST API, TypeScript/Python
+  SDKs, or GitHub Actions integration (triggers that live outside an
+  interactive Warp session).
+* **Inspecting existing runs** outside the orchestration flow
+  (`{{warp_cli_binary_name}} run list` / `{{warp_cli_binary_name}} run get`), or
+  any other CLI-only flexibility the task needs.
+
+If you are unsure whether a request needs CLI-specific flexibility, default to
+the orchestration agent.
+
 ## Command Line
 
 The Oz CLI is installed as `{{warp_cli_binary_name}}`. To get help output, use `{{warp_cli_binary_name}} help` or `{{warp_cli_binary_name}} help <subcommand>`.
