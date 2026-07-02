@@ -1450,9 +1450,7 @@ impl AmbientAgentViewModel {
             }
             AmbientAgentEvent::SessionStarted { session_join_info } => {
                 if ignore_events {
-                    log::info!(
-                        "[remote-2047] SessionStarted ignored (status is Cancelled/Failed)"
-                    );
+                    log::info!("[remote-2047] SessionStarted ignored (status is Cancelled/Failed)");
                     return;
                 }
 

@@ -6062,7 +6062,11 @@ impl PaneGroup {
         // events so a follow-up run (which spawns a fresh VM after the previous one ends)
         // re-attaches the viewer to the new execution session. `create_cloud_mode_view`
         // does this for the compose path; shared-session viewers need it too.
-        if let Some(view_model) = terminal_view.as_ref(ctx).ambient_agent_view_model().cloned() {
+        if let Some(view_model) = terminal_view
+            .as_ref(ctx)
+            .ambient_agent_view_model()
+            .cloned()
+        {
             // Upfront ambient viewer (attach-to-running / restore): the model already
             // exists at construction, so wire it immediately.
             log::info!(

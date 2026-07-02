@@ -930,9 +930,7 @@ impl TerminalView {
             return;
         }
         let Some(state) = self.cloud_conversation_continuation_ui_state(ctx) else {
-            log::info!(
-                "[remote-2047] non-running ambient task: no continuation UI state resolved"
-            );
+            log::info!("[remote-2047] non-running ambient task: no continuation UI state resolved");
             return;
         };
         log::info!("[remote-2047] non-running ambient task continuation state: {state:?}");
@@ -968,7 +966,9 @@ impl TerminalView {
         );
 
         let Some(ambient_agent_view_model) = self.ambient_agent_view_model.as_ref() else {
-            log::warn!("[remote-2047] cannot continue cloud task: no ambient view model on this pane");
+            log::warn!(
+                "[remote-2047] cannot continue cloud task: no ambient view model on this pane"
+            );
             self.show_error_toast("Couldn't continue this cloud task.".to_string(), ctx);
             return;
         };
