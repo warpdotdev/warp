@@ -14,10 +14,12 @@ on:
     inputs:
       targets:
         type: choice
-        description: Which releases to build. Nightly = dev; Weekly = preview/stable.
+        description: Which releases to build. Nightly = dev; Weekly = preview + stable.
         options:
           - nightly
           - weekly
+          - preview
+          - stable
           - all
 
 env:
@@ -57,10 +59,13 @@ jobs:
           echo ::echo::on
           if [[ "$TARGETS" == "all" ]]; then
             TARGETS="$(jq -rc '[.channels[] | .type] | unique' $CONFIG_FILE)"
+            export CHANNELS="$(jq -rc '[.channels[] | select(.type | inside($ENV.TARGETS)) | .channel]' $CONFIG_FILE)"
+          elif jq -e --arg ch "$TARGETS" '.channels[] | select(.channel == $ch)' $CONFIG_FILE > /dev/null 2>&1; then
+            export CHANNELS="[\"$TARGETS\"]"
           else
             TARGETS="[\"$TARGETS\"]"
+            export CHANNELS="$(jq -rc '[.channels[] | select(.type | inside($ENV.TARGETS)) | .channel]' $CONFIG_FILE)"
           fi
-          export CHANNELS="$(jq -rc '[.channels[] | select(.type | inside($ENV.TARGETS)) | .channel]' $CONFIG_FILE)"
           echo "channels=$CHANNELS" >> $GITHUB_OUTPUT
           # CHANNELS_INCLUDE_AUTOPUSH=$(jq -rc '[.channels[] | select(.channel | inside($ENV.CHANNELS)) | .is_autopush] | any' $CONFIG_FILE)
           # echo "channels-include-autopush=$CHANNELS_INCLUDE_AUTOPUSH" >> $GITHUB_OUTPUT
