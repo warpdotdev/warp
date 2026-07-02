@@ -809,6 +809,14 @@ pub enum FeatureFlag {
     /// When enabled, solo users (not on a team) can use BYO API keys.
     SoloUserByok,
 
+    /// Gates the Team BYOK/BYOE feature: admin-provided team keys/endpoints
+    /// surfaced to members (picker "Team" labels + credential icon, the
+    /// "Provided by your team" settings section) and the team
+    /// allow-user-keys / allow-user-endpoints policy. Dev-only until rollout —
+    /// intentionally absent from every channel list and Cargo `default`, so it
+    /// is enabled only via `--features team_byo`.
+    TeamByo,
+
     /// Replaces the in-block warpification banner with a warpify footer.
     WarpifyFooter,
 

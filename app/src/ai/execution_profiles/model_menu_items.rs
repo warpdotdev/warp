@@ -15,6 +15,7 @@ use crate::ai::llms::{
     LLMInfo, LLMPreferences,
 };
 use crate::menu::{MenuItem, MenuItemFields, MenuTooltipPosition};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub fn is_auto(llm: &LLMInfo) -> bool {
     llm.display_name.to_lowercase().contains("auto")
@@ -86,8 +87,17 @@ fn make_item_fields<A: Action + Clone>(
     let is_custom_endpoint = LLMPreferences::as_ref(app)
         .custom_llm_info_for_id(&llm.id)
         .is_some();
+    let user_workspaces = UserWorkspaces::as_ref(app);
+    let is_team_model = user_workspaces
+        .team_endpoint_name_for_model(llm.id.as_str())
+        .is_some();
+    let team_has_first_party_key =
+        user_workspaces.team_has_first_party_key_for_provider(&llm.provider);
     let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
-    let is_using_api_key = is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app);
+    let is_using_api_key = is_custom_endpoint
+        || is_team_model
+        || team_has_first_party_key
+        || is_using_api_key_for_provider(&llm.provider, app);
     let is_custom_router = is_custom_router_id(llm.id.as_str());
     let leading_icon = if is_using_bedrock {
         Icon::Aws

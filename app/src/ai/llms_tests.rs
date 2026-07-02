@@ -418,3 +418,128 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
         });
     });
 }
+
+// -- team endpoint model (team-managed BYOE) picker + request-shape tests --
+
+/// A server-catalog team endpoint model (id == config_key) must surface in the
+/// agent-mode picker list, not be filtered out as an unknown/local custom model.
+#[test]
+fn team_endpoint_model_from_server_catalog_appears_in_agent_mode_picker() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+        app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        // A team endpoint model arrives via the existing model-choices channel as
+        // an ordinary agent-mode catalog entry whose `id` is the `config_key`.
+        let team_config_key = "team-endpoint-config-key";
+        let team_model: LLMInfo = serde_json::from_str(&format!(
+            r#"{{
+                "display_name": "Team Llama (Team GPU)",
+                "id": "{team_config_key}",
+                "usage_metadata": {{ "request_multiplier": 1, "credit_multiplier": null }},
+                "provider": "OpenAI"
+            }}"#
+        ))
+        .expect("team endpoint model should deserialize");
+
+        llm_preferences.update(&mut app, |preferences, _| {
+            preferences
+                .models_by_feature
+                .agent_mode
+                .choices
+                .push(team_model);
+        });
+
+        let visible = llm_preferences.read(&app, |preferences, ctx| {
+            preferences
+                .get_base_llm_choices_for_agent_mode(ctx)
+                .any(|info| info.id.as_str() == team_config_key)
+        });
+        assert!(
+            visible,
+            "server-provided team endpoint model should appear in the agent-mode picker list"
+        );
+    });
+}
+
+/// Selecting a team endpoint model (id == config_key) must build a request whose
+/// `ModelConfig.base` is the config_key while carrying NO `CustomModelProviders`
+/// entry/secret for it: the team endpoint secret is injected server-side (Task
+/// 3.2), not sent by the client.
+#[test]
+fn team_endpoint_model_selection_sends_no_custom_provider_secret() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        // The user has their OWN custom endpoint with a distinct config_key. The
+        // team endpoint model is NOT one of the user's endpoints.
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.add_custom_endpoint(
+                "My Endpoint".to_string(),
+                "https://mine.example/v1".to_string(),
+                "user-secret-key".to_string(),
+                vec![(
+                    "user-model".to_string(),
+                    None,
+                    Some("user-config-key".to_string()),
+                )],
+                ctx,
+            );
+        });
+
+        // Selecting the team endpoint model sets `ModelConfig.base` to its
+        // config_key (mirrors `RequestParams.model.into()` in agent/api/impl.rs).
+        let team_config_key = "team-endpoint-config-key";
+        let model_config = api::request::settings::ModelConfig {
+            base: LLMId::from(team_config_key).into(),
+            ..Default::default()
+        };
+        assert_eq!(model_config.base.as_str(), team_config_key);
+
+        // The client's custom_model_providers registry (built from the user's own
+        // endpoints) must not contain any entry/secret for the team config_key.
+        let providers = ApiKeyManager::handle(&app).read(&app, |manager, _| {
+            manager.custom_model_providers_for_request(true)
+        });
+
+        let references_team_key = providers.as_ref().is_some_and(|providers| {
+            providers.providers.iter().any(|provider| {
+                provider
+                    .models
+                    .iter()
+                    .any(|model| model.config_key == team_config_key)
+            })
+        });
+        assert!(
+            !references_team_key,
+            "team endpoint model must not appear in the client's CustomModelProviders"
+        );
+
+        // Sanity: the user's OWN endpoint IS sent, so the check above is not vacuous.
+        let references_user_key = providers.as_ref().is_some_and(|providers| {
+            providers.providers.iter().any(|provider| {
+                provider
+                    .models
+                    .iter()
+                    .any(|model| model.config_key == "user-config-key")
+            })
+        });
+        assert!(
+            references_user_key,
+            "the user's own custom endpoint model should still be sent"
+        );
+    });
+}

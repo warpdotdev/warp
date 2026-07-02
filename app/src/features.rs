@@ -503,6 +503,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::RemoteCodeReview,
         #[cfg(feature = "custom_model_routers")]
         FeatureFlag::CustomModelRouters,
+        #[cfg(feature = "team_byo")]
+        FeatureFlag::TeamByo,
         #[cfg(feature = "supergrok")]
         FeatureFlag::SuperGrok,
         #[cfg(feature = "gemini_enterprise")]

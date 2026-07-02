@@ -618,8 +618,35 @@ type ByoApiKeyPolicy {
   enabled: Boolean!
 }
 
+type ByoEndpointMetadata {
+  uid: ID!
+  name: String!
+  enabled: Boolean!
+
+  """Credential handle for this endpoint; pass to deleteTeamByoCredential to remove it."""
+  credentialUid: ID!
+  models: [ByoEndpointModelMetadata!]!
+}
+
+type ByoEndpointModelMetadata {
+  configKey: String!
+  slug: String!
+  alias: String
+  displayName: String!
+  enabled: Boolean!
+}
+
 type ByoEndpointPolicy {
   enabled: Boolean!
+}
+
+"""
+A configured first-party provider credential. Presence in the list means a key is
+configured for that provider; pass credentialUid to deleteTeamByoCredential to remove it.
+"""
+type ByoFirstPartyKey {
+  provider: LlmProvider!
+  credentialUid: ID!
 }
 
 """Token count for a specific usage category."""
@@ -3564,6 +3591,15 @@ type Team {
   uid: ID!
 }
 
+type TeamByoSettings {
+  firstPartyEnabled: Boolean!
+  endpointsEnabled: Boolean!
+  allowUserKeys: Boolean!
+  allowUserEndpoints: Boolean!
+  firstPartyKeys: [ByoFirstPartyKey!]!
+  endpoints: [ByoEndpointMetadata!]!
+}
+
 enum TeamDiscoveryEntrypoint {
   TeamSettings
   WebSignup
@@ -4434,6 +4470,7 @@ type WorkspaceSettings {
   llmSettings: LlmSettings!
   sandboxedAgentSettings: SandboxedAgentSettings
   secretRedactionSettings: SecretRedactionSettings!
+  teamByo: TeamByoSettings
   telemetrySettings: TelemetrySettings!
   ugcCollectionSettings: UgcCollectionSettings!
   usageBasedPricingSettings: UsageBasedPricingSettings!

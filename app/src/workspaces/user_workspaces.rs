@@ -14,7 +14,7 @@ use super::workspace::{
     AdminEnablementSetting, CustomerType, EnterpriseSecretRegex, HostEnablementSetting,
     UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
 };
-use crate::ai::llms::LLMModelHost;
+use crate::ai::llms::{LLMModelHost, LLMProvider};
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::channel::ChannelState;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -35,7 +35,8 @@ use crate::workspaces::workspace::{
     AIAutonomyPolicy, BillingMetadata, WorkspaceMember, WorkspaceSettings,
 };
 use crate::workspaces::workspace::{
-    AiAutonomySettings, AiOverages, SandboxedAgentSettings, UsageBasedPricingSettings,
+    AiAutonomySettings, AiOverages, SandboxedAgentSettings, TeamByoSettings,
+    UsageBasedPricingSettings,
 };
 
 const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
@@ -1544,6 +1545,38 @@ impl UserWorkspaces {
     pub fn default_host_slug(&self) -> Option<&str> {
         self.current_team()
             .and_then(|team| team.organization_settings.default_host_slug.as_deref())
+    }
+
+    /// Returns the current team's secret-less team-BYO projection, if any.
+    ///
+    /// Gated behind `FeatureFlag::TeamByo`: when the flag is off this returns
+    /// `None`, which is the single client seam for the whole Team BYO feature.
+    /// Every consumer (picker Team labels / credential icon, the "Provided by
+    /// your team" settings section, and the member allow-keys/endpoints policy
+    /// in `ApiKeysWidget` / `custom_inference_enabled`) flows through here, so a
+    /// disabled flag hides all of it. The server enforces the real policy
+    /// regardless of what the client renders.
+    pub fn current_team_byo(&self) -> Option<&TeamByoSettings> {
+        if !FeatureFlag::TeamByo.is_enabled() {
+            return None;
+        }
+        self.current_team()
+            .and_then(|team| team.organization_settings.team_byo.as_ref())
+    }
+
+    /// Returns the owning team endpoint's display name when `model_id` is a
+    /// team-provided custom-endpoint model (matched on its `config_key`).
+    pub fn team_endpoint_name_for_model(&self, model_id: &str) -> Option<&str> {
+        self.current_team_byo()
+            .and_then(|team_byo| team_byo.endpoint_name_for_model(model_id))
+    }
+
+    /// Returns whether the current team has a first-party BYO key configured for
+    /// `provider` (and team first-party keys are enabled). Used to show the
+    /// credential icon on provider models that route via a team key.
+    pub fn team_has_first_party_key_for_provider(&self, provider: &LLMProvider) -> bool {
+        self.current_team_byo()
+            .is_some_and(|team_byo| team_byo.has_first_party_key(provider))
     }
 
     /// Returns the team-level agent attribution setting.

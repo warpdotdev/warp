@@ -14,7 +14,7 @@ use super::team::{MembershipRole, Team};
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
 };
-use crate::ai::llms::LLMModelHost;
+use crate::ai::llms::{LLMModelHost, LLMProvider};
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
@@ -937,4 +937,74 @@ pub struct WorkspaceSettings {
     pub enable_warp_attribution: AdminEnablementSetting,
     #[serde(default)]
     pub default_host_slug: Option<String>,
+    /// Secret-less mirror of the server's `teamByo` projection (team-managed
+    /// BYOK/BYOE). Populated from the synced workspace settings and refreshed on
+    /// team change. `None` for non-enterprise teams or teams without team-managed
+    /// BYO configured. Contains only display/reference metadata — never an API
+    /// key, endpoint base URL, or ciphertext — and is never written to secure
+    /// storage.
+    #[serde(default)]
+    pub team_byo: Option<TeamByoSettings>,
+}
+
+/// Secret-less mirror of the server's `teamByo` projection.
+///
+/// This intentionally contains ONLY display/reference metadata. It must never
+/// gain a field for an API key, endpoint base URL, or ciphertext: team secrets
+/// live encrypted server-side and are injected at the inference seam, never
+/// synced to clients or persisted to secure storage. The projection includes
+/// disabled endpoints/models with their `enabled` flags, so consumers filter
+/// on `enabled` where it matters.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamByoSettings {
+    pub first_party_enabled: bool,
+    pub endpoints_enabled: bool,
+    pub allow_user_keys: bool,
+    pub allow_user_endpoints: bool,
+    /// Providers with a configured team first-party key. Mirrors the server's
+    /// `firstPartyKeys` list; the admin-only deletion handles are not synced.
+    pub first_party_providers: Vec<LLMProvider>,
+    pub endpoints: Vec<TeamByoEndpoint>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamByoEndpoint {
+    /// Server-side endpoint uid; identity only, carries no routing information.
+    pub uid: String,
+    pub name: String,
+    pub enabled: bool,
+    pub models: Vec<TeamByoEndpointModel>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamByoEndpointModel {
+    /// Stable request identifier for this team endpoint model. Equals the
+    /// server-side `config_key` and is what the picker selection sends as
+    /// `ModelConfig.base`; the server maps it back to the team endpoint and
+    /// injects the endpoint secret. No secret is carried here.
+    pub config_key: String,
+    pub slug: String,
+    pub alias: Option<String>,
+    pub display_name: String,
+    pub enabled: bool,
+}
+
+impl TeamByoSettings {
+    /// Returns the owning endpoint's display name for a team-provided model's
+    /// `config_key`, if one matches an endpoint in this projection.
+    pub fn endpoint_name_for_model(&self, config_key: &str) -> Option<&str> {
+        self.endpoints.iter().find_map(|endpoint| {
+            endpoint
+                .models
+                .iter()
+                .any(|model| model.config_key == config_key)
+                .then_some(endpoint.name.as_str())
+        })
+    }
+
+    /// Whether the team provides a first-party key for `provider` (and team
+    /// first-party keys are enabled).
+    pub fn has_first_party_key(&self, provider: &LLMProvider) -> bool {
+        self.first_party_enabled && self.first_party_providers.contains(provider)
+    }
 }

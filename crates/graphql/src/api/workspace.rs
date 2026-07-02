@@ -152,6 +152,47 @@ pub struct WorkspaceSettings {
     pub codebase_context_settings: CodebaseContextSettings,
     pub sandboxed_agent_settings: Option<SandboxedAgentSettings>,
     pub ambient_agent_settings: Option<AmbientAgentSettings>,
+    /// Team-managed BYOK/BYOE projection for the requesting member. Display/reference
+    /// metadata only — never an API key, endpoint base URL, or ciphertext. `None` for
+    /// teams without team-managed BYO in effect. The projection includes disabled
+    /// endpoints/models with their `enabled` flags (admins re-enable them elsewhere),
+    /// so consumers filter on `enabled` where it matters.
+    pub team_byo: Option<TeamByoSettings>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct TeamByoSettings {
+    pub first_party_enabled: bool,
+    pub endpoints_enabled: bool,
+    pub allow_user_keys: bool,
+    pub allow_user_endpoints: bool,
+    pub first_party_keys: Vec<ByoFirstPartyKey>,
+    pub endpoints: Vec<ByoEndpointMetadata>,
+}
+
+/// A configured team first-party key. Presence in the list means a key exists for
+/// `provider`. The admin-only `credentialUid` deletion handle is intentionally not
+/// selected — the terminal client only reads team BYO state, never mutates it.
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ByoFirstPartyKey {
+    pub provider: LlmProvider,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ByoEndpointMetadata {
+    pub uid: cynic::Id,
+    pub name: String,
+    pub enabled: bool,
+    pub models: Vec<ByoEndpointModelMetadata>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ByoEndpointModelMetadata {
+    pub config_key: String,
+    pub slug: String,
+    pub alias: Option<String>,
+    pub display_name: String,
+    pub enabled: bool,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

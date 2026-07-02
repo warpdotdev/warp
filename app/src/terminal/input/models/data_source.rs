@@ -158,12 +158,15 @@ impl ModelSelectorDataSource {
     fn order_model_choices<'a>(
         llm_preferences: &LLMPreferences,
         choices: Vec<&'a LLMInfo>,
+        app: &AppContext,
     ) -> Vec<&'a LLMInfo> {
         let mut auto_choices = Vec::new();
         let mut custom_router_choices = Vec::new();
         let mut custom_choices = Vec::new();
+        let mut team_choices = Vec::new();
         let mut other_choices = Vec::new();
 
+        let user_workspaces = UserWorkspaces::as_ref(app);
         for llm in choices {
             // Check custom router before is_auto because custom router ids contain
             // "auto" and would otherwise land in auto_choices.
@@ -173,6 +176,11 @@ impl ModelSelectorDataSource {
                 auto_choices.push(llm);
             } else if llm_preferences.custom_llm_info_for_id(&llm.id).is_some() {
                 custom_choices.push(llm);
+            } else if user_workspaces
+                .team_endpoint_name_for_model(llm.id.as_str())
+                .is_some()
+            {
+                team_choices.push(llm);
             } else {
                 other_choices.push(llm);
             }
@@ -182,6 +190,7 @@ impl ModelSelectorDataSource {
             .into_iter()
             .chain(custom_router_choices)
             .chain(custom_choices)
+            .chain(team_choices)
             .chain(other_choices)
             .collect()
     }
@@ -228,7 +237,7 @@ impl SyncDataSource for ModelSelectorDataSource {
                 })
                 .collect_vec()
         };
-        let choices = Self::order_model_choices(llm_preferences, choices);
+        let choices = Self::order_model_choices(llm_preferences, choices, app);
 
         let query_text = query.text.trim().to_lowercase();
 
@@ -277,6 +286,8 @@ struct ModelSearchItem {
     is_selected: bool,
     is_custom_endpoint: bool,
     is_custom_router: bool,
+    /// Whether this is a team-provided custom-endpoint model.
+    is_team_model: bool,
     /// Source/routing description for custom model routers (from `LLMInfo.description`).
     description: Option<String>,
     disable_reason: Option<DisableReason>,
@@ -304,11 +315,19 @@ impl ModelSearchItem {
         let is_custom_endpoint = LLMPreferences::as_ref(app)
             .custom_llm_info_for_id(&llm.id)
             .is_some();
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        let is_team_model = user_workspaces
+            .team_endpoint_name_for_model(llm.id.as_str())
+            .is_some();
+        let team_has_first_party_key =
+            user_workspaces.team_has_first_party_key_for_provider(&llm.provider);
         let is_custom_router = is_custom_router_id(llm.id.as_str());
         let is_auto = is_auto(llm);
         let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
-        let is_using_api_key =
-            is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app);
+        let is_using_api_key = is_custom_endpoint
+            || is_team_model
+            || team_has_first_party_key
+            || is_using_api_key_for_provider(&llm.provider, app);
         let leading_icon = if is_using_bedrock {
             Icon::Aws
         } else if is_custom_router {
@@ -331,6 +350,7 @@ impl ModelSearchItem {
             is_selected: &llm.id == active_llm_id,
             is_custom_endpoint,
             is_custom_router,
+            is_team_model,
             description: llm.description.clone(),
             disable_reason,
             is_auto,
@@ -432,6 +452,24 @@ impl SearchItem for ModelSearchItem {
                     .with_margin_left(6.)
                     .finish(),
             );
+        }
+
+        let source_label = if self.is_team_model {
+            Some("Team")
+        } else if self.is_custom_endpoint {
+            Some("User")
+        } else {
+            None
+        };
+        if let Some(source_label) = source_label {
+            let source_text = Text::new_inline(
+                source_label.to_string(),
+                appearance.ui_font_family(),
+                font_size,
+            )
+            .with_color(secondary_text_color.into())
+            .finish();
+            row = row.with_child(Container::new(source_text).with_margin_left(6.).finish());
         }
 
         if self.is_selected {
