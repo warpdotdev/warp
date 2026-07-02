@@ -73,7 +73,7 @@ pub async fn dump_heap_profile_to_disk() -> anyhow::Result<std::path::PathBuf> {
 
             let path = heap_profile_path();
             let profile_data = dump_jemalloc_heap_profile_inner().await?;
-            std::fs::write(&path, profile_data)
+            async_fs::write(&path, profile_data).await
                 .with_context(|| format!("Failed to write heap profile to {}", path.display()))?;
             Ok(path)
         } else {
