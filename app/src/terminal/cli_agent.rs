@@ -157,6 +157,17 @@ pub enum CLIAgent {
 }
 
 impl CLIAgent {
+    /// Bytes that simulate a "paste image from clipboard" keystroke for the foreground
+    /// CLI agent. Claude Code on Windows uses Alt+V for native image paste; other
+    /// agents, including Codex, use the regular terminal Ctrl+V path.
+    pub fn image_paste_keystroke_bytes(&self) -> Vec<u8> {
+        if cfg!(windows) && matches!(self, CLIAgent::Claude) {
+            vec![0x1b, b'v']
+        } else {
+            vec![0x16]
+        }
+    }
+
     /// The command prefix used to invoke this CLI agent.
     pub fn command_prefix(&self) -> &'static str {
         match self {

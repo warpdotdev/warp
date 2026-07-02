@@ -16356,24 +16356,12 @@ impl TerminalView {
             let clipboard_content = ctx.clipboard().read();
 
             if is_cli_agent_paste && clipboard_content.has_image_data() {
-                if !cfg!(windows) {
-                    self.write_user_bytes_to_pty(vec![escape_sequences::C0::SYN], ctx);
-                    return;
-                }
-
-                // On Windows, Claude Code uses Alt+V for native image paste.
-                let is_claude = CLIAgentSessionsModel::as_ref(ctx)
+                let paste_keystroke = CLIAgentSessionsModel::as_ref(ctx)
                     .session(self.view_id)
-                    .is_some_and(|s| s.agent == CLIAgent::Claude);
-                if is_claude {
-                    self.write_user_bytes_to_pty(vec![escape_sequences::C0::ESC, b'v'], ctx);
-                    return;
-                }
-
-                // For all other agents on Windows, fall through to the normal paste path. When
-                // bracketed paste is enabled (true for TUI-based CLI agents), the empty-text paste
-                // sends \x1b[200~\x1b[201~ to the PTY. The agent interprets this as a "paste
-                // happened" signal and reads the Windows clipboard directly for image data.
+                    .map(|session| session.agent.image_paste_keystroke_bytes())
+                    .unwrap_or_else(|| vec![escape_sequences::C0::SYN]);
+                self.write_user_bytes_to_pty(paste_keystroke, ctx);
+                return;
             }
 
             clipboard_content_with_escaped_paths(clipboard_content, shell_family, false)
