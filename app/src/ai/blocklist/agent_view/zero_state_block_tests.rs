@@ -9,8 +9,8 @@ use crate::ai::blocklist::agent_view::zero_state_block::current_working_director
 use crate::terminal::color::{self, Colors};
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{
-    CommandFinishedValue, CompletionMetadata, Handler, InitShellValue, PreexecValue, PromptMetadata,
-    SSHValue,
+    CommandFinishedValue, CompletionMetadata, Handler, InitShellValue, PreexecValue,
+    PromptMetadata, SSHValue,
 };
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::Session;
