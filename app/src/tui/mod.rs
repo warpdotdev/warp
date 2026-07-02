@@ -12,6 +12,9 @@ use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
 use crate::TuiMountFn;
 
+pub(crate) mod autoupdate;
+mod telemetry;
+
 /// Login state of the headless TUI, observed by the `warp_tui` root view to
 /// decide whether to show the login placeholder or the input UI.
 pub enum TuiLoginPhase {
@@ -69,6 +72,10 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
     // Mount the TUI now so it renders immediately; the root view shows the
     // login placeholder until the model flips to `LoggedIn`.
     mount(ctx);
+
+    // Kick off the background auto-updater (a no-op unless this is a release
+    // build running from a managed install; see the module docs).
+    autoupdate::TuiAutoupdater::register(ctx);
 
     if logged_in {
         return;

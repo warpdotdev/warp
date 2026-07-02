@@ -43,6 +43,11 @@ pub fn run() -> Result<()> {
     if let Some(result) = warp::run_tui_worker_if_requested() {
         return result;
     }
+    // `warp-tui update` checks for and installs the latest build without
+    // booting the app.
+    if std::env::args().nth(1).as_deref() == Some("update") {
+        return warp::run_tui_update();
+    }
     warp::run_tui(Box::new(init))
 }
 
