@@ -394,8 +394,6 @@ fn available(default_id: &str, choices: Vec<LLMInfo>) -> AvailableLLMs {
 #[test]
 fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disabled() {
     App::test((), |mut app| async move {
-        let _custom_inference_flag = FeatureFlag::CustomInferenceEndpoints.override_enabled(true);
-
         initialize_settings_for_tests(&mut app);
         app.add_singleton_model(|_| ServerApiProvider::new_for_test());
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
