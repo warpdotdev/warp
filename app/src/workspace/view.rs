@@ -25990,13 +25990,11 @@ impl View for Workspace {
             context.set.insert("Workspace_PaneDragging");
         }
 
-        // TODO: This is temporary. We currently check if any code pane is open where it should
-        // really be whether the code pane is opened and focused.
         if self
             .active_tab_pane_group()
             .as_ref(app)
-            .pane_ids()
-            .any(|id| id.is_code_pane())
+            .focused_pane_id(app)
+            .is_code_pane()
         {
             context.set.insert("Workspace_TextOpen");
         }

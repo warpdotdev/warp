@@ -687,6 +687,99 @@ fn test_open_file_notebook_focuses_existing_markdown_pane() {
 
 #[cfg(feature = "local_fs")]
 #[test]
+fn keymap_context_marks_text_open_only_for_focused_code_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(crate::code::global_buffer_model::GlobalBufferModel::new);
+        app.add_singleton_model(|_| crate::code::editor_management::CodeManager::default());
+        app.add_singleton_model(|_| crate::code::opened_files::OpenedFilesModel::new());
+        app.add_singleton_model(|_| crate::terminal::local_shell::LocalShellState::NotLoaded);
+        let workspace = mock_workspace(&mut app);
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let source_path = temp_dir.path().join("main.rs");
+        std::fs::write(&source_path, "fn main() {}\n").expect("failed to write source file");
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_file_with_target(
+                source_path.clone(),
+                FileTarget::CodeEditor(EditorLayout::SplitPane),
+                None,
+                CodeSource::Link {
+                    path: source_path,
+                    range_start: None,
+                    range_end: None,
+                },
+                ctx,
+            );
+        });
+
+        let (code_pane_id, terminal_pane_id) = workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group();
+            pane_group.update(ctx, |pane_group, ctx| {
+                let code_pane_id = pane_group
+                    .code_panes(ctx)
+                    .next()
+                    .expect("should open a code pane")
+                    .0;
+                assert_eq!(pane_group.focused_pane_id(ctx), code_pane_id);
+
+                let terminal_pane_id = pane_group.add_terminal_pane(Direction::Right, None, ctx);
+                assert_eq!(pane_group.focused_pane_id(ctx), terminal_pane_id.into());
+
+                (code_pane_id, terminal_pane_id.into())
+            })
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(
+                !workspace
+                    .keymap_context(ctx)
+                    .set
+                    .contains("Workspace_TextOpen"),
+                "terminal focus should keep workspace keybindings available"
+            );
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace
+                .active_tab_pane_group()
+                .update(ctx, |pane_group, ctx| {
+                    pane_group.focus_pane_by_id(code_pane_id, ctx);
+                });
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .keymap_context(ctx)
+                    .set
+                    .contains("Workspace_TextOpen"),
+                "focused code pane should keep text-editor keybinding suppression"
+            );
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace
+                .active_tab_pane_group()
+                .update(ctx, |pane_group, ctx| {
+                    pane_group.focus_pane_by_id(terminal_pane_id, ctx);
+                });
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(
+                !workspace
+                    .keymap_context(ctx)
+                    .set
+                    .contains("Workspace_TextOpen"),
+                "returning focus to terminal should restore workspace keybindings"
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
 fn test_worktree_sidecar_search_editor_enter_executes_selection() {
     let _tab_configs_guard = FeatureFlag::TabConfigs.override_enabled(true);
 
