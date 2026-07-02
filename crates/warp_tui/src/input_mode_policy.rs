@@ -41,7 +41,7 @@ impl InputModePolicy for TuiInputModePolicy {
         &self,
         _event: &AISettingsChangedEvent,
         _current: InputConfig,
-        _is_autodetection_enabled_for_current_context: &dyn Fn() -> bool,
+        _is_autodetection_enabled_for_current_context: bool,
         _app: &AppContext,
     ) -> Option<PolicyConfigUpdate> {
         None

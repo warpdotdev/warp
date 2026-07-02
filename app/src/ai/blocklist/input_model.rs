@@ -91,7 +91,7 @@ use super::input_mode_policy::{InputModePolicyHandle, PolicyConfigUpdate};
 use super::telemetry_banner::should_collect_ai_ugc_telemetry;
 use super::ConversationSelectionHandle;
 use crate::input_classifier::InputClassifierModel;
-use crate::settings::{AISettings, InputBoxType, InputSettings};
+use crate::settings::{AISettings, AISettingsChangedEvent, InputBoxType, InputSettings};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
@@ -267,21 +267,18 @@ impl BlocklistAIInputModel {
         );
 
         ctx.subscribe_to_model(&AISettings::handle(ctx), move |me, _, event, ctx| {
-            let update = {
-                // Reborrow shared so the lazy closure and the policy call can
-                // both read the model; the guarded-context computation takes
-                // the terminal-model lock, so it must only run if the policy
-                // actually needs it.
-                let me_shared: &Self = me;
-                let app: &AppContext = ctx;
-                me_shared.policy.config_on_ai_settings_changed(
-                    event,
-                    me_shared.input_config(),
-                    &|| me_shared.is_autodetection_enabled_for_current_context(app),
-                    app,
-                )
-            };
-            if let Some(update) = update {
+            // Computing the guarded autodetection state takes the terminal-model
+            // lock, so only compute it for the one event whose handling can need
+            // it; policies must not rely on it for any other event.
+            let is_autodetection_enabled_for_current_context =
+                matches!(event, AISettingsChangedEvent::AIAutoDetectionEnabled { .. })
+                    && me.is_autodetection_enabled_for_current_context(ctx);
+            if let Some(update) = me.policy.config_on_ai_settings_changed(
+                event,
+                me.input_config(),
+                is_autodetection_enabled_for_current_context,
+                ctx,
+            ) {
                 me.apply_policy_update(update, ctx);
             }
         });

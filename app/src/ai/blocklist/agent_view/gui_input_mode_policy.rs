@@ -151,7 +151,7 @@ impl InputModePolicy for GuiInputModePolicy {
         &self,
         event: &AISettingsChangedEvent,
         current: InputConfig,
-        is_autodetection_enabled_for_current_context: &dyn Fn() -> bool,
+        is_autodetection_enabled_for_current_context: bool,
         app: &AppContext,
     ) -> Option<PolicyConfigUpdate> {
         match event {
@@ -178,7 +178,7 @@ impl InputModePolicy for GuiInputModePolicy {
             AISettingsChangedEvent::AIAutoDetectionEnabled { .. } => {
                 // If autodetection is enabled, unlock the input.
                 Some(PolicyConfigUpdate::new(InputConfig {
-                    is_locked: !is_autodetection_enabled_for_current_context(),
+                    is_locked: !is_autodetection_enabled_for_current_context,
                     ..current
                 }))
             }

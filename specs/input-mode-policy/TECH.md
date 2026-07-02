@@ -42,18 +42,18 @@ pub trait InputModePolicy: 'static {
     /// Config to apply when AI settings change; None leaves it unchanged.
     fn config_on_ai_settings_changed(
         &self, event: &AISettingsChangedEvent, current: InputConfig,
-        is_autodetection_enabled_for_current_context: &dyn Fn() -> bool, app: &AppContext,
+        is_autodetection_enabled_for_current_context: bool, app: &AppContext,
     ) -> Option<PolicyConfigUpdate>;
 }
 
 pub type InputModePolicyHandle = Rc<dyn InputModePolicy>;
 ```
 
-The reactive hooks receive the raw events, so view-specific payloads (fullscreen vs. inline, entry origins, exit-before-new-entrance) stay a concern of the implementing view — the trait signature carries no GUI vocabulary beyond the shared event types. `PolicyConfigUpdate` bundles exactly what the previously-inlined GUI decision code passed to the model's internal setter: the config, its recorded decision source, and (for one agent-view entry path) a brief autodetection suppression. The settings hook receives the model's guarded autodetection context as a lazy closure because computing it takes the terminal-model lock; it must only run when a decision actually needs it (matching the original code, which computed it inside one match arm).
+The reactive hooks receive the raw events, so view-specific payloads (fullscreen vs. inline, entry origins, exit-before-new-entrance) stay a concern of the implementing view — the trait signature carries no GUI vocabulary beyond the shared event types. `PolicyConfigUpdate` bundles exactly what the previously-inlined GUI decision code passed to the model's internal setter: the config, its recorded decision source, and (for one agent-view entry path) a brief autodetection suppression. The settings hook receives the model's guarded autodetection context as a `bool`. Computing it takes the terminal-model lock, so the model computes it only for `AIAutoDetectionEnabled` events — the one event whose handling can need it — and passes `false` for all others.
 
 `BlocklistAIInputModel::new` gains an `InputModePolicyHandle` parameter; the five decision points above become calls through it. The reactive *subscriptions* stay in the model — the ~35 GUI mutator call sites rely on the model self-healing across CLI-agent-input close and agent-view enter/exit — only their *decisions* move. The `CLIAgentSessionsModel` restore subscription ([input_model.rs (234-264)](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/app/src/ai/blocklist/input_model.rs#L234-L264)) is pure restore-what-was-saved mechanism and stays as-is.
 
-### GUI implementation (`app/src/ai/blocklist/agent_view/input_mode_policy.rs`)
+### GUI implementation (`app/src/ai/blocklist/agent_view/gui_input_mode_policy.rs`)
 
 `GuiInputModePolicy` holds the `ConversationSelectionHandle`, the `BlocklistAIContextModel` handle (for `has_locking_attachment`), and the surface id (for `CLIAgentSessionsModel::is_input_open`). Each trait method transplants the corresponding branch verbatim, including the `FeatureFlag::AgentView` checks — the flag becomes a GUI-policy detail instead of a model detail. Constructed next to the model in `Input::new` ([`app/src/terminal/view.rs:3472`](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/app/src/terminal/view.rs#L3472)).
 
