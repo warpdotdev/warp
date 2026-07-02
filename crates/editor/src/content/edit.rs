@@ -29,7 +29,6 @@ use super::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
 use super::text::{
     BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache,
 };
-use crate::parallel_util::Last;
 use crate::render::layout::{InlineTextLayoutInput, TextLayout, add_link_to_style_and_font};
 use crate::render::model::{
     BlockItem, BlockLocation, BlockSpacing, CellLayout, Cursor, Decoration, FrameOffset,
@@ -499,6 +498,24 @@ impl LayOutArgs {
     }
 }
 
+/// Number of layout tasks laid out per parallel chunk in [`EditDelta::layout_delta`].
+///
+/// Laying an entire edit out at once is what drives the large transient memory spikes on big
+/// files (issue #12561): every block's glyph/caret layout scratch is live simultaneously, and the
+/// parallel collect transiently double-buffers the full result. Laying out in fixed-size chunks
+/// bounds both. The size is a multiple of the rayon thread-pool size (clamped to a sane minimum)
+/// so each chunk still saturates every worker thread and the per-chunk overhead stays negligible.
+fn layout_chunk_size() -> usize {
+    /// Tasks per worker thread within a single chunk. Large enough that the inter-chunk barrier is
+    /// amortized across many tasks, small enough to keep peak layout scratch bounded.
+    const TASKS_PER_THREAD: usize = 32;
+    /// Floor for environments that report very few threads.
+    const MIN_CHUNK_SIZE: usize = 64;
+    rayon::current_num_threads()
+        .saturating_mul(TASKS_PER_THREAD)
+        .max(MIN_CHUNK_SIZE)
+}
+
 impl EditDelta {
     /// Lay out the given EditDelta into TextFrames.
     /// If hidden_lines is provided, lines within hidden ranges will be laid out as BlockItem::Hidden.
@@ -510,6 +527,31 @@ impl EditDelta {
         hidden_ranges: Option<RangeSet<CharOffset>>,
         app: &AppContext,
     ) -> LaidOutRenderDelta {
+        self.layout_delta_with_chunk_size(
+            layout,
+            document_path,
+            layout_options,
+            hidden_ranges,
+            app,
+            layout_chunk_size(),
+        )
+    }
+
+    /// Lay out the given EditDelta into TextFrames, laying out blocks in parallel in chunks of
+    /// `chunk_size` tasks. See [`layout_chunk_size`] and issue #12561 for why layout is chunked
+    /// rather than run over the entire edit at once. `chunk_size` is a parameter (rather than
+    /// always [`layout_chunk_size`]) so tests can assert the output is independent of it.
+    fn layout_delta_with_chunk_size(
+        self,
+        layout: &TextLayout,
+        document_path: Option<&Path>,
+        layout_options: &RenderLayoutOptions,
+        hidden_ranges: Option<RangeSet<CharOffset>>,
+        app: &AppContext,
+        chunk_size: usize,
+    ) -> LaidOutRenderDelta {
+        // `chunks(0)` would panic; a chunk of at least one task is always valid.
+        let chunk_size = chunk_size.max(1);
         let hidden_ranges = hidden_ranges.unwrap_or_default();
 
         // old_offset is in the same 1-indexed coordinate system as hidden ranges.
@@ -542,33 +584,55 @@ impl EditDelta {
 
         let last_task = layout_tasks.len().saturating_sub(1);
 
-        // Then, run each task in parallel, collecting (a) the laid out BlockItems and (b) whether
-        // or not the last item ends with a newline.
-        let (block_items, has_trailing_newline): (Vec<_>, Last<_>) = layout_tasks
-            .into_par_iter()
-            .enumerate()
-            .filter_map(|(idx, (task, is_hidden))| {
-                let location = if idx == 0 {
-                    BlockLocation::Start
-                } else if idx >= last_task {
-                    BlockLocation::End
-                } else {
-                    BlockLocation::Middle
-                };
+        // Then run the tasks in parallel, but in bounded chunks rather than handing the entire
+        // edit to `into_par_iter()` at once. Laying out the whole edit simultaneously is what
+        // drives the large transient memory spikes on big files (issue #12561): every block's
+        // glyph/caret layout scratch is live at the same time, and a parallel `unzip`/collect
+        // transiently double-buffers the full `Vec<BlockItem>`. Instead we lay out at most
+        // `chunk_size` blocks in parallel at a time and extend a single pre-sized vector, so peak
+        // memory is bounded to roughly one chunk. `into_par_iter().filter_map(...).collect()`
+        // preserves input order and chunks are processed in order, so blocks keep their original
+        // sequence; we track the trailing-newline flag of the last laid-out block as we go.
+        let mut block_items: Vec<BlockItem> = Vec::with_capacity(layout_tasks.len());
+        let mut has_trailing_newline: Option<bool> = None;
 
-                match task.run(layout, location, is_hidden) {
-                    Ok(result) => Some(result),
-                    Err(e) => {
-                        log::error!(
-                            "Failed to lay out BlockItem at offset {:?}: {:?}",
-                            self.old_offset,
-                            e
-                        );
-                        None
+        let chunks = layout_tasks.into_iter().chunks(chunk_size);
+        for (chunk_index, chunk) in (&chunks).into_iter().enumerate() {
+            let base = chunk_index * chunk_size;
+            let chunk: Vec<(LayoutTask, bool)> = chunk.collect();
+
+            let laid_out: Vec<(BlockItem, bool)> = chunk
+                .into_par_iter()
+                .enumerate()
+                .filter_map(|(offset, (task, is_hidden))| {
+                    let idx = base + offset;
+                    let location = if idx == 0 {
+                        BlockLocation::Start
+                    } else if idx >= last_task {
+                        BlockLocation::End
+                    } else {
+                        BlockLocation::Middle
+                    };
+
+                    match task.run(layout, location, is_hidden) {
+                        Ok(result) => Some(result),
+                        Err(e) => {
+                            log::error!(
+                                "Failed to lay out BlockItem at offset {:?}: {:?}",
+                                self.old_offset,
+                                e
+                            );
+                            None
+                        }
                     }
-                }
-            })
-            .unzip();
+                })
+                .collect();
+
+            if let Some((_, trailing)) = laid_out.last() {
+                has_trailing_newline = Some(*trailing);
+            }
+            block_items.extend(laid_out.into_iter().map(|(item, _)| item));
+        }
 
         // Iterate through block_items, and collapse adjacent Hidden items.
         let block_items = block_items.into_iter().fold(Vec::new(), |mut acc, item| {
@@ -589,7 +653,7 @@ impl EditDelta {
         // Trailing newline is default to true. This default value is used when
         // edit delta has no new line, which means one or multiple entire lines have
         // been deleted. We should still leave a trailing newline in this case.
-        let has_trailing_newline = has_trailing_newline.into_inner().unwrap_or(true);
+        let has_trailing_newline = has_trailing_newline.unwrap_or(true);
         let rich_text_styles = layout.rich_text_styles();
 
         LaidOutRenderDelta {
