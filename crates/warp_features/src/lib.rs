@@ -316,9 +316,6 @@ pub enum FeatureFlag {
     /// Enables the find/replace in code editor
     CodeFindReplace,
 
-    /// Enables file search functionality in command palette
-    CommandPaletteFileSearch,
-
     /// Enables the AI context menu nesting and commands
     AIContextMenuCommands,
 
