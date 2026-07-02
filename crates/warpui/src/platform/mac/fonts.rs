@@ -185,7 +185,12 @@ pub struct FontDB {
     rasterizer: Rasterizer,
     font_names: DashMap<FontId, Arc<String>>,
     native_fonts: DashMap<(FontId, OrderedFloat<f32>), NativeFont>,
-    fonts_by_name: DashMap<Arc<String>, FontId>,
+    // Maps a PostScript name to every font registered under it. PostScript names are NOT
+    // unique across bundled + user/system fonts (a user-installed "Roboto"/"Hack" can share
+    // a bundled font's name), so the name is only a cheap bucket: the actual identity of a
+    // font is resolved by CGFont equality within the bucket. Matching purely by name used to
+    // return the wrong font's outlines, misrendering shaped glyphs on macOS (see #12923).
+    fonts_by_name: DashMap<Arc<String>, Vec<(NativeFont, FontId)>>,
     fallback_fonts: DashMap<FontId, Arc<Vec<FontId>>>,
     metrics: DashMap<FontId, Metrics>,
     font_selections: DashMap<(FamilyId, Properties), FontId>,
@@ -231,6 +236,16 @@ fn space_advance_width(font: &CTFont) -> Option<f64> {
 
     let width = advance.width;
     (width.is_finite() && width > 0.0).then_some(width)
+}
+
+// Returns true if two native fonts refer to the same underlying font, compared by CGFont
+// identity rather than by (non-unique) PostScript name. Two different fonts that happen to
+// share a PostScript name — e.g. a user-installed and a bundled font — must not be treated
+// as equal, which is exactly what name-based comparison got wrong (#12923). CGFont is a CF
+// type, so we compare via CFEqual (`CFType`'s `PartialEq`) rather than a raw pointer, since
+// Core Text can hand back a distinct-but-equal CGFont object.
+fn same_native_font(a: &NativeFont, b: &NativeFont) -> bool {
+    a.copy_to_CGFont().as_CFType() == b.copy_to_CGFont().as_CFType()
 }
 
 impl FontDB {
@@ -370,28 +385,20 @@ impl FontDB {
             }
         };
 
-        let font_name = match unsafe { FontDB::get_font_name(&fontdesc) } {
-            Some(name) => name,
-            None => {
-                log::warn!("Failed to load the font as it does not have a valid name.");
-                return None;
-            }
-        };
+        // Ensure the descriptor has a valid font name; skip it otherwise (matches prior
+        // behavior). The name itself is no longer used as the font's identity.
+        if unsafe { FontDB::get_font_name(&fontdesc) }.is_none() {
+            log::warn!("Failed to load the font as it does not have a valid name.");
+            return None;
+        }
 
         // We should not load fonts with name that starts with dot
         // https://developer.apple.com/videos/play/wwdc2019/227/?time=200
         (!name.starts_with('.')).then(|| {
-            // Check if the fallback font is in cache.
-            match self.fonts_by_name.entry(Arc::new(font_name)) {
-                Entry::Occupied(entry) => return *entry.get(),
-                Entry::Vacant(_) => (),
-            }
-
-            // We need to push font after releasing the entry of the dashmap to prevent deadlocks.
-            self.push_font(Font::from_ct_font(font::new_from_descriptor(
-                &fontdesc,
-                DEFAULT_FONT_SIZE,
-            )))
+            // Reuse an existing font_id only when it's the *same* font by CGFont identity,
+            // not merely the same PostScript name (#12923). font_id_for_native_font performs
+            // exactly that identity lookup, registering the font if it's new.
+            self.font_id_for_native_font(font::new_from_descriptor(&fontdesc, DEFAULT_FONT_SIZE))
         })
     }
 
@@ -464,12 +471,31 @@ impl FontDB {
         stored.map(|a| a * size as f64 / DEFAULT_FONT_SIZE)
     }
 
+    // Resolves a native font to an already-registered font_id by CGFont identity. Buckets by
+    // PostScript name only as a cheap prefilter — the actual match is by CGFont equality, so a
+    // different font sharing a bundled font's name can't shadow it (#12923). Returns None when
+    // the font isn't one of ours (a genuine Core Text substitution/fallback). The read guard is
+    // dropped when this returns, so callers may register a new font without a re-entrant lock.
+    fn font_id_by_identity(
+        &self,
+        postscript_name: &str,
+        native_font: &NativeFont,
+    ) -> Option<FontId> {
+        // `fonts_by_name` is keyed by `Arc<String>`, so look up with an owned `String` key.
+        let entries = self.fonts_by_name.get(&postscript_name.to_owned())?;
+        entries
+            .iter()
+            .find(|(candidate, _)| same_native_font(candidate, native_font))
+            .map(|(_, font_id)| *font_id)
+    }
+
     pub fn font_id_for_native_font(&self, native_font: NativeFont) -> FontId {
         let postscript_name = native_font.postscript_name();
-        if let Some(font_id) = self.fonts_by_name.get(&postscript_name).as_ref() {
-            return *font_id.value();
+        if let Some(font_id) = self.font_id_by_identity(&postscript_name, &native_font) {
+            return font_id;
         }
 
+        // Not one of ours — a genuine Core Text substitution/fallback font — so register it.
         self.push_font(Font::from_ct_font(native_font))
     }
 
@@ -482,7 +508,13 @@ impl FontDB {
 
         self.rasterizer.insert(font_id, Arc::new(font));
         self.font_names.insert(font_id, name.clone());
-        self.fonts_by_name.insert(name, font_id);
+        // Record the concrete font under its name so identity can be resolved by CGFont
+        // equality rather than by name alone (#12923). Same-named fonts coexist as separate
+        // entries instead of overwriting each other.
+        self.fonts_by_name
+            .entry(name)
+            .or_default()
+            .push((ct_font, font_id));
         self.space_advances.insert(font_id, advance);
         font_id
     }
@@ -655,3 +687,7 @@ impl crate::platform::TextLayoutSystem for FontDB {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "fonts_tests.rs"]
+mod tests;
