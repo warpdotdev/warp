@@ -231,7 +231,8 @@ impl ControlItemRenderer {
             } else {
                 appearance.theme().surface_1()
             };
-            let color = appearance.theme().sub_text_color(background).into_solid();
+            let color =
+                crate::context_chips::readable_chip_label_color(appearance.theme(), background);
 
             let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
