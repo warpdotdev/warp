@@ -12,8 +12,8 @@ use warp::tui_export::{
     TerminalModel,
 };
 use warpui_core::elements::tui::{
-    TuiElement, TuiScrollable, TuiViewportVerticalAlignment, TuiViewportedList,
-    TuiViewportedListState,
+    TuiElement, TuiScrollable, TuiScrollableElement, TuiViewportVerticalAlignment,
+    TuiViewportedList, TuiViewportedListState,
 };
 use warpui_core::{
     AppContext, Entity, EntityId, SingletonEntity, TuiView, TypedActionView, ViewContext,
@@ -261,10 +261,11 @@ impl TuiView for TuiTranscriptView {
 
     fn render(&self, _app: &AppContext) -> Box<dyn TuiElement> {
         let source = TuiBlockListViewportSource::new(self.model.clone(), self.agent_blocks.clone());
-        TuiScrollable::new(Box::new(
+        TuiScrollable::new(
             TuiViewportedList::new(self.viewport.clone(), source)
-                .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom),
-        ))
+                .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom)
+                .finish_scrollable(),
+        )
         .finish()
     }
 }

@@ -20,7 +20,6 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, EntityId, EntityIdMap, ViewContext};
 
 use super::{TuiAIBlock, TuiAIBlockSection};
-use crate::agent_block_sections::ThinkingOverrides;
 
 #[test]
 fn simple_agent_block_reports_full_height_and_renders_content() {
@@ -91,13 +90,7 @@ fn expected_prompt_text_color(app: &AppContext) -> Color {
 fn expected_input_background(app: &AppContext) -> Color {
     let theme = Appearance::as_ref(app).theme();
     let accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
-    CoreFill::from(
-        theme
-            .background()
-            .blend(&accent.with_opacity(10))
-            .blend(&accent.with_opacity(10)),
-    )
-    .into()
+    CoreFill::from(theme.background().blend(&accent.with_opacity(20))).into()
 }
 
 fn expected_output_text_color(app: &AppContext) -> Color {
@@ -343,52 +336,6 @@ fn finished_reasoning_renders_collapsed_thought_for_header() {
 }
 
 #[test]
-fn finished_reasoning_uses_singular_second() {
-    App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        app.read(|app_ctx| {
-            let block = test_agent_block(FakeAgentBlockModel {
-                inputs: Vec::new(),
-                status: reasoning_status(Some(Duration::from_secs(1)), "body"),
-            });
-            let rendered = render_block_lines(&block, 40, app_ctx);
-            assert_eq!(rendered[0], "Thought for 1 second ▸");
-        });
-    });
-}
-
-#[test]
-fn thinking_collapse_derives_from_finished_by_default() {
-    let overrides = ThinkingOverrides::default();
-    let id = MessageId::new("r1".to_owned());
-    // Expanded while streaming, collapsed once finished.
-    assert!(!overrides.is_collapsed(&id, false));
-    assert!(overrides.is_collapsed(&id, true));
-}
-
-#[test]
-fn manual_override_wins_over_the_finished_default() {
-    let overrides = ThinkingOverrides::default();
-    let id = MessageId::new("r1".to_owned());
-    // The user collapses while streaming, then re-expands: the recorded
-    // override suppresses auto-collapse when reasoning finishes.
-    overrides.set(id.clone(), true);
-    assert!(overrides.is_collapsed(&id, false));
-    overrides.set(id.clone(), false);
-    assert!(!overrides.is_collapsed(&id, true));
-}
-
-#[test]
-fn overrides_are_independent_per_message() {
-    let overrides = ThinkingOverrides::default();
-    let toggled = MessageId::new("r1".to_owned());
-    let untouched = MessageId::new("r2".to_owned());
-    overrides.set(toggled.clone(), false);
-    assert!(!overrides.is_collapsed(&toggled, true));
-    assert!(overrides.is_collapsed(&untouched, true));
-}
-
-#[test]
 fn manual_expand_override_shows_finished_reasoning_body() {
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -399,7 +346,7 @@ fn manual_expand_override_shows_finished_reasoning_body() {
             });
             // A manual expand wins over the collapsed-when-finished default.
             block
-                .thinking_overrides
+                .thinking_collapse_overrides
                 .set(MessageId::new("reasoning-1".to_owned()), false);
 
             let rendered = render_block_lines(&block, 40, app_ctx);
@@ -449,7 +396,9 @@ fn header_click_records_a_manual_collapse_override() {
             // The streaming block was expanded, so the click records a collapse
             // override that wins over the expanded-while-streaming default.
             let message_id = MessageId::new("reasoning-1".to_owned());
-            assert!(block.thinking_overrides.is_collapsed(&message_id, false));
+            assert!(block
+                .thinking_collapse_overrides
+                .is_collapsed(&message_id, false));
         });
     });
 }

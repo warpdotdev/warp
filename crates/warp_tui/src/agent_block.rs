@@ -4,21 +4,25 @@
 //! This module owns section extraction ([`TuiAIBlock::sections`]) and
 //! composition ([`TuiAIBlock::render_element`]); the per-section render
 //! functions live in [`crate::agent_block_sections`].
+
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
 use warp::tui_export::{
-    AIAgentAction, AIAgentExchangeId, AIAgentOutputMessageType, AIAgentText, AIAgentTextSection,
-    AIBlockModel, AIConversationId, MessageId,
+    AIAgentAction, AIAgentExchangeId, AIAgentOutputMessageType, AIAgentTextSection, AIBlockModel,
+    AIConversationId, MessageId,
 };
 use warpui_core::elements::tui::{
-    TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiSize,
+    TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiMouseStateHandle,
+    TuiParentElement, TuiSize,
 };
 use warpui_core::{AppContext, Entity, EntityIdMap, TuiView};
 
 use crate::agent_block_sections::{
     render_input_section, render_plain_text_section, render_thinking_section,
-    render_tool_call_section, ThinkingOverrides,
+    render_tool_call_section,
 };
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
@@ -36,6 +40,32 @@ enum TuiAIBlockSection {
     },
 }
 
+/// Manual collapse overrides for thinking blocks, keyed by reasoning message.
+/// Absence means the default: collapsed iff reasoning has finished, so a block
+/// streams expanded and auto-collapses on finish unless the user has toggled
+/// it — a recorded override wins permanently.
+#[derive(Clone, Default)]
+pub(crate) struct ThinkingCollapseOverrides {
+    overrides: Rc<RefCell<HashMap<MessageId, bool>>>,
+}
+
+impl ThinkingCollapseOverrides {
+    /// Whether the thinking block for `message_id` is collapsed: the manual
+    /// override if one was recorded, else collapsed iff `finished`.
+    pub(crate) fn is_collapsed(&self, message_id: &MessageId, finished: bool) -> bool {
+        self.overrides
+            .borrow()
+            .get(message_id)
+            .copied()
+            .unwrap_or(finished)
+    }
+
+    /// Records a manual collapse override for `message_id`.
+    pub(crate) fn set(&self, message_id: MessageId, collapsed: bool) {
+        self.overrides.borrow_mut().insert(message_id, collapsed);
+    }
+}
+
 /// A thin TUI rich-content view adapter backed by one agent exchange.
 ///
 /// The rendering logic is mostly section extraction, but the shared block list
@@ -45,7 +75,11 @@ pub(super) struct TuiAIBlock {
     exchange_id: AIAgentExchangeId,
     model: Rc<dyn AIBlockModel<View = Self>>,
     /// Manual collapse overrides for this exchange's thinking blocks.
-    thinking_overrides: ThinkingOverrides,
+    thinking_collapse_overrides: ThinkingCollapseOverrides,
+    /// Hover state for each thinking header, keyed by reasoning message. Owned
+    /// here (not created inline during render) so it survives element-tree
+    /// rebuilds, mirroring the GUI's `MouseStateHandle` pattern.
+    thinking_hover_states: RefCell<HashMap<MessageId, TuiMouseStateHandle>>,
 }
 
 /// Extracts model state into renderable agent block sections.
@@ -60,7 +94,8 @@ impl TuiAIBlock {
             conversation_id,
             exchange_id,
             model,
-            thinking_overrides: Default::default(),
+            thinking_collapse_overrides: Default::default(),
+            thinking_hover_states: Default::default(),
         }
     }
 
@@ -124,7 +159,16 @@ impl TuiAIBlock {
                 match &message.message {
                     AIAgentOutputMessageType::Text(text) => {
                         sections.extend(
-                            plain_text_sections(text)
+                            text.sections
+                                .iter()
+                                .filter_map(|section| match section {
+                                    AIAgentTextSection::PlainText { text } => Some(text.text()),
+                                    // The TUI can't render these section kinds yet.
+                                    AIAgentTextSection::Code { .. }
+                                    | AIAgentTextSection::Table { .. }
+                                    | AIAgentTextSection::Image { .. }
+                                    | AIAgentTextSection::MermaidDiagram { .. } => None,
+                                })
                                 .filter(|line| !line.is_empty())
                                 .map(|line| TuiAIBlockSection::PlainText(line.to_owned())),
                         );
@@ -139,7 +183,19 @@ impl TuiAIBlock {
                         sections.push(TuiAIBlockSection::Thinking {
                             message_id: message.id.clone(),
                             finished_duration: *finished_duration,
-                            body: plain_text_sections(text).collect::<Vec<_>>().join("\n"),
+                            body: text
+                                .sections
+                                .iter()
+                                .filter_map(|section| match section {
+                                    AIAgentTextSection::PlainText { text } => Some(text.text()),
+                                    // The TUI can't render these section kinds yet.
+                                    AIAgentTextSection::Code { .. }
+                                    | AIAgentTextSection::Table { .. }
+                                    | AIAgentTextSection::Image { .. }
+                                    | AIAgentTextSection::MermaidDiagram { .. } => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n"),
                         });
                     }
                     // Other message kinds are not rendered by the TUI transcript yet.
@@ -161,8 +217,7 @@ impl TuiAIBlock {
         sections
     }
 
-    /// Builds this block's generic TUI element tree: every section's element,
-    /// each wrapped with uniform bottom padding.
+    /// Builds this block's generic TUI element tree.
     fn render_element(&self, app: &AppContext) -> Box<dyn TuiElement> {
         let mut column = TuiFlex::column();
         for section in &self.sections(app) {
@@ -174,33 +229,30 @@ impl TuiAIBlock {
                     message_id,
                     finished_duration,
                     body,
-                } => render_thinking_section(
-                    &self.thinking_overrides,
-                    message_id,
-                    *finished_duration,
-                    body,
-                    app,
-                ),
+                } => {
+                    let hover_state = self
+                        .thinking_hover_states
+                        .borrow_mut()
+                        .entry(message_id.clone())
+                        .or_default()
+                        .clone();
+                    render_thinking_section(
+                        &self.thinking_collapse_overrides,
+                        hover_state,
+                        message_id,
+                        *finished_duration,
+                        body,
+                        app,
+                    )
+                }
             };
+
             // One row of bottom padding gives uniform spacing between sections
             // and after the last one.
-            column = column.child(TuiContainer::new(element).with_padding_bottom(1).finish());
+            column.add_child(TuiContainer::new(element).with_padding_bottom(1).finish());
         }
         column.finish()
     }
-}
-
-/// Yields the plain-text strings of `text`'s sections, skipping section kinds
-/// the TUI does not render yet.
-fn plain_text_sections(text: &AIAgentText) -> impl Iterator<Item = &str> {
-    text.sections.iter().filter_map(|section| match section {
-        AIAgentTextSection::PlainText { text } => Some(text.text()),
-        // Add item variants here as the TUI learns to render richer sections.
-        AIAgentTextSection::Code { .. }
-        | AIAgentTextSection::Table { .. }
-        | AIAgentTextSection::Image { .. }
-        | AIAgentTextSection::MermaidDiagram { .. } => None,
-    })
 }
 
 /// Registers the view with the TUI runtime.

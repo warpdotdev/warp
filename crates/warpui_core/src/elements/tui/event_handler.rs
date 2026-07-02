@@ -1,33 +1,30 @@
-//! [`TuiEventHandler`]: wraps a child element and runs callbacks for events the
-//! child itself did not handle.
+//! [`TuiEventHandler`]: wraps a child element and runs callbacks for keys the
+//! child itself did not handle. (Mouse gestures — clicks and hover — live on
+//! [`TuiHoverable`](super::TuiHoverable), mirroring the GUI split between
+//! `EventHandler` and `Hoverable`.)
 //!
 //! # Construction
 //! Wrap a child with [`TuiEventHandler::new`] and register handlers with
 //! [`on_key`](TuiEventHandler::on_key), matching against the
 //! [`Keystroke::key`](crate::keymap::Keystroke) string (e.g. `"enter"`,
-//! `"a"`), and/or [`on_click`](TuiEventHandler::on_click) for left clicks
-//! inside the element's area. Layout, render, height, and cursor are
-//! transparent — they delegate to the wrapped child.
+//! `"a"`). Layout, render, height, and cursor are transparent — they delegate
+//! to the wrapped child.
 //!
 //! # Dispatch policy
 //! On [`dispatch_event`](TuiElement::dispatch_event) the event is offered to the
 //! child first. If the child consumes it, dispatch stops. Otherwise, for a
 //! `KeyDown` event, the first registered binding whose key matches is invoked
 //! (with the event, the [`TuiEventContext`], and the [`AppContext`]) and the
-//! event is reported handled; for a
-//! [`LeftMouseDown`](TuiEvent::LeftMouseDown) whose position falls within this
-//! element's area, the click handler is invoked and the event is reported
-//! handled. Events matching no handler are left unhandled so ancestors can
-//! react.
+//! event is reported handled. Events matching no binding are left unhandled so
+//! ancestors can react.
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
+    TuiPresentationContext, TuiRect, TuiSize,
 };
 use crate::AppContext;
 
 type KeyCallback = Box<dyn FnMut(&TuiEvent, &mut TuiEventContext, &AppContext)>;
-type ClickCallback = Box<dyn FnMut(&mut TuiEventContext, &AppContext)>;
 
 struct KeyBinding {
     key: String,
@@ -37,7 +34,6 @@ struct KeyBinding {
 pub struct TuiEventHandler {
     child: Box<dyn TuiElement>,
     bindings: Vec<KeyBinding>,
-    on_click: Option<ClickCallback>,
 }
 
 impl TuiEventHandler {
@@ -45,7 +41,6 @@ impl TuiEventHandler {
         Self {
             child,
             bindings: Vec::new(),
-            on_click: None,
         }
     }
 
@@ -60,16 +55,6 @@ impl TuiEventHandler {
             key: key.into(),
             callback: Box::new(callback),
         });
-        self
-    }
-
-    /// Registers `callback` to run when a `LeftMouseDown` within this element's
-    /// area reaches this element unhandled by the child.
-    pub fn on_click(
-        mut self,
-        callback: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
-    ) -> Self {
-        self.on_click = Some(Box::new(callback));
         self
     }
 }
@@ -114,15 +99,6 @@ impl TuiElement for TuiEventHandler {
                     (binding.callback)(event, event_ctx, app);
                     return true;
                 }
-            }
-        }
-
-        if let (TuiEvent::LeftMouseDown { position, .. }, Some(on_click)) =
-            (event, self.on_click.as_mut())
-        {
-            if area.contains_point(*position) {
-                on_click(event_ctx, app);
-                return true;
             }
         }
 
