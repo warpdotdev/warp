@@ -66,6 +66,9 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
               byoApiKeyPolicy {
                 enabled
               }
+              byoEndpointPolicy {
+                enabled
+              }
               usageVisibilityPolicy {
                 adminGranularity
                 maxPriorCycles

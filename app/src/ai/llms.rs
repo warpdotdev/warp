@@ -924,8 +924,7 @@ impl LLMPreferences {
     }
 
     fn custom_inference_enabled(app: &AppContext) -> bool {
-        FeatureFlag::CustomInferenceEndpoints.is_enabled()
-            && UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)
+        UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)
     }
 
     /// Resolves a custom model router by its `config_key`/`LLMId`.

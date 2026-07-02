@@ -395,8 +395,10 @@ fn map_conversation_status(
         // can't clear it later, so a "reconnecting" note would linger after resume.
         ConversationStatus::TransientError => (AgentTaskState::InProgress, None),
         ConversationStatus::Error => {
-            // Extract the specific RenderableAIError from the last exchange to
-            // classify ERROR vs FAILED and provide a PlatformErrorCode.
+            // Extract the specific RenderableAIError to classify ERROR vs FAILED
+            // and provide a PlatformErrorCode. Prefer the last exchange's error;
+            // fall back to the conversation's out-of-band `status_error` (set when
+            // the failure had no stream/exchange to attach to, e.g. shell exit).
             let renderable_error = conversation
                 .root_task_exchanges()
                 .last()
@@ -409,11 +411,9 @@ fn map_conversation_status(
                     } else {
                         None
                     }
-                });
-            task_update_for_conversation_error(
-                renderable_error,
-                conversation.status_error_message(),
-            )
+                })
+                .or_else(|| conversation.status_error());
+            task_update_for_conversation_error(renderable_error)
         }
         ConversationStatus::Cancelled => (
             AgentTaskState::Cancelled,
@@ -432,22 +432,18 @@ fn map_conversation_status(
 /// surface as `TransientError`, so an `Error` status is always terminal here — the
 /// `will_attempt_resume` rendering hint is deliberately ignored.
 ///
-/// When no structured exchange error is available, falls back to `status_error_message`
-/// so that the real failure reason is visible rather than the generic
-/// "Agent encountered an error" text. This covers pre-spawn failures (quota check
-/// before any stream) where the exchange is never populated.
+/// Every error-setting path records a structured `RenderableAIError` (on the last
+/// exchange or via the conversation's `status_error`), so the `None` arm is only a
+/// defensive fallback for an `Error` status set without one.
 fn task_update_for_conversation_error(
     error: Option<&RenderableAIError>,
-    status_error_message: Option<&str>,
 ) -> (AgentTaskState, Option<TaskStatusUpdate>) {
     match error {
         Some(error) => classify_renderable_error(error),
         None => (
             AgentTaskState::Error,
             Some(TaskStatusUpdate::message(
-                status_error_message
-                    .unwrap_or("Agent encountered an error")
-                    .to_string(),
+                "Agent encountered an error".to_string(),
             )),
         ),
     }
@@ -535,6 +531,13 @@ pub(crate) fn classify_renderable_error(
                 )
             }
         }
+        RenderableAIError::AgentExitedShell => (
+            AgentTaskState::Failed,
+            Some(TaskStatusUpdate::with_error_code(
+                error.to_string(),
+                PlatformErrorCode::InvalidRequest,
+            )),
+        ),
     }
 }
 

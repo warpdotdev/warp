@@ -23,10 +23,10 @@
 //! height is the sum of its children's, clamped to the constraint.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
 };
-use crate::{AppContext, Event};
+use crate::AppContext;
 
 /// A child of a [`TuiColumn`] plus whether it fills leftover vertical space.
 struct ColumnChild {
@@ -183,7 +183,7 @@ impl TuiElement for TuiColumn {
 
     fn dispatch_event(
         &mut self,
-        event: &Event,
+        event: &TuiEvent,
         area: TuiRect,
         event_ctx: &mut TuiEventContext,
         ctx: &mut TuiLayoutContext,

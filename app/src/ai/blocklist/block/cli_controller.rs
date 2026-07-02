@@ -237,7 +237,7 @@ impl CLISubagentController {
                             me.controller.update(ctx, |controller, ctx| {
                                 controller.cancel_conversation_progress(
                                     conversation_id,
-                                    CancellationReason::OptimisticCLISubagentCompletion,
+                                    CancellationReason::CommandFinishedDuringInlineAgentView,
                                     ctx,
                                 );
                             });

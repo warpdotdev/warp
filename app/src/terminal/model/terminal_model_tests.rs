@@ -12,7 +12,7 @@ use warpui::text::{str_to_byte_vec, SelectionType};
 use super::*;
 use crate::terminal::color;
 use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::ansi::{Handler, Processor};
+use crate::terminal::model::ansi::{CompletionMetadata, Handler, Processor};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::grid::Dimensions as _;
@@ -152,6 +152,21 @@ fn hex_encoded_json_dcs(payload: &str) -> Vec<u8> {
     bytes
 }
 
+fn command_finished_and_precmd(terminal: &mut TerminalModel) {
+    let completion_metadata = CompletionMetadata {
+        exit_code: ExitCode::from(0),
+        next_block_id: BlockId::new(),
+    };
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: completion_metadata.clone(),
+        ..Default::default()
+    });
+    terminal.precmd_with_completion_metadata(PrecmdValue {
+        completion_metadata,
+        prompt_metadata: PromptMetadata::default(),
+    });
+}
+
 #[test]
 fn ignores_non_inline_iterm_file_payload_without_overwriting_cwd_file() {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -161,7 +176,7 @@ fn ignores_non_inline_iterm_file_payload_without_overwriting_cwd_file() {
     fs::write(&target_path, original_bytes).unwrap();
 
     let mut terminal = TerminalModel::mock(None, None);
-    terminal.precmd(PrecmdValue {
+    terminal.prompt_only_precmd(PromptMetadata {
         pwd: Some(temp_dir.path().to_string_lossy().to_string()),
         ..Default::default()
     });
@@ -182,7 +197,7 @@ fn ignores_multipart_non_inline_iterm_file_payload_without_overwriting_cwd_file(
     fs::write(&target_path, original_bytes).unwrap();
 
     let mut terminal = TerminalModel::mock(None, None);
-    terminal.precmd(PrecmdValue {
+    terminal.prompt_only_precmd(PromptMetadata {
         pwd: Some(temp_dir.path().to_string_lossy().to_string()),
         ..Default::default()
     });
@@ -220,10 +235,8 @@ fn handles_inline_iterm_image_payload() {
 #[test]
 fn ssh_bootstraps_if_blocklist_empty() {
     let mut terminal = TerminalModel::mock(None, None);
-    terminal.command_finished(Default::default());
-    terminal.precmd(Default::default());
-    terminal.command_finished(Default::default());
-    terminal.precmd(Default::default());
+    command_finished_and_precmd(&mut terminal);
+    command_finished_and_precmd(&mut terminal);
 
     let bootstrapped_value = BootstrappedValue {
         session_id: None,
@@ -251,8 +264,19 @@ fn ssh_bootstraps_if_blocklist_empty() {
         shell_path: None,
     };
     terminal.bootstrapped(bootstrapped_value.clone());
-    terminal.command_finished(Default::default());
-    terminal.block_list_mut().precmd(Default::default());
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: BlockId::new(),
+        },
+        session_id: None,
+    });
+    terminal
+        .block_list_mut()
+        .precmd_with_completion_metadata(PrecmdValue {
+            completion_metadata: CompletionMetadata::default(),
+            prompt_metadata: PromptMetadata::default(),
+        });
 
     assert!(terminal.is_active_block_bootstrapped());
 
@@ -271,13 +295,10 @@ fn ssh_bootstraps_if_blocklist_empty() {
     // The active block should no longer be considered bootstrapped after the init shell call.
     assert!(!terminal.is_active_block_bootstrapped());
 
-    terminal.command_finished(Default::default());
-    terminal.precmd(PrecmdValue::default());
-    terminal.command_finished(Default::default());
-    terminal.precmd(Default::default());
+    command_finished_and_precmd(&mut terminal);
+    command_finished_and_precmd(&mut terminal);
     terminal.bootstrapped(bootstrapped_value);
-    terminal.command_finished(Default::default());
-    terminal.precmd(Default::default());
+    command_finished_and_precmd(&mut terminal);
 
     assert!(terminal.is_active_block_bootstrapped());
 }
@@ -843,12 +864,19 @@ fn test_reset_state() {
 #[test]
 fn test_exit_alt_screen_on_command_finished() {
     let mut terminal: TerminalModel = TerminalModel::mock(None, None);
+    terminal.start_command_execution();
+    terminal.preexec(PreexecValue {
+        command: "accepted".to_owned(),
+        session_id: None,
+    });
 
     terminal.enter_alt_screen(true);
 
     terminal.command_finished(CommandFinishedValue {
-        exit_code: ExitCode::from(0),
-        next_block_id: BlockId::new(),
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: BlockId::new(),
+        },
         session_id: None,
     });
 
@@ -856,20 +884,310 @@ fn test_exit_alt_screen_on_command_finished() {
 }
 
 #[test]
+fn accepted_precmd_and_preexec_target_the_block_list_while_the_alt_screen_is_active() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.start_command_execution();
+    terminal.enter_alt_screen(true);
+    terminal.preexec(PreexecValue {
+        command: "accepted".to_owned(),
+        session_id: None,
+    });
+    assert_eq!(
+        terminal.block_list().active_block().state(),
+        BlockState::Executing
+    );
+    assert!(terminal.alt_screen_active);
+
+    let next_block_id = BlockId::new();
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: next_block_id.clone(),
+        },
+        session_id: None,
+    });
+    terminal.enter_alt_screen(true);
+    terminal.precmd_with_completion_metadata(PrecmdValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id,
+        },
+        prompt_metadata: PromptMetadata {
+            pwd: Some("/accepted".to_owned()),
+            ..Default::default()
+        },
+    });
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
+            .pwd()
+            .map(String::as_str),
+        Some("/accepted")
+    );
+    assert!(terminal.alt_screen_active);
+}
+
+#[test]
 fn test_unset_bracketed_paste_mode_on_command_finished() {
     let mut terminal: TerminalModel = TerminalModel::mock(None, None);
+    terminal.start_command_execution();
+    terminal.preexec(PreexecValue {
+        command: "accepted".to_owned(),
+        session_id: None,
+    });
 
     terminal.set_mode(Mode::BracketedPaste);
 
     terminal.command_finished(CommandFinishedValue {
-        exit_code: ExitCode::from(0),
-        next_block_id: BlockId::new(),
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: BlockId::new(),
+        },
         session_id: None,
     });
 
     assert!(!terminal.is_term_mode_set(TermMode::BRACKETED_PASTE));
 }
 
+#[test]
+fn normal_lifecycle_pipeline_emits_completion_and_prompt_side_effects_once() {
+    let (event_tx, event_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(event_tx)
+        .build();
+    let mut terminal = TerminalModel::mock(None, Some(event_proxy));
+    while event_rx.try_recv().is_ok() {}
+
+    let (ordered_tx, ordered_rx) = async_channel::unbounded();
+    terminal.set_ordered_terminal_events_for_shared_session_tx(ordered_tx);
+
+    let completed_block_id = terminal.active_block_id().clone();
+    let next_block_id = BlockId::new();
+    let completion_metadata = CompletionMetadata {
+        exit_code: ExitCode::from(7),
+        next_block_id: next_block_id.clone(),
+    };
+    terminal.start_command_execution();
+    terminal.preexec(PreexecValue {
+        command: "false".to_owned(),
+        session_id: None,
+    });
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: completion_metadata.clone(),
+        session_id: None,
+    });
+    terminal.precmd_with_completion_metadata(PrecmdValue {
+        completion_metadata,
+        prompt_metadata: PromptMetadata {
+            pwd: Some("/normal-lifecycle".to_owned()),
+            ..Default::default()
+        },
+    });
+
+    let completed_block = terminal
+        .block_list()
+        .block_with_id(&completed_block_id)
+        .expect("The completed block should remain in the block list.");
+    assert_eq!(completed_block.state(), BlockState::DoneWithExecution);
+    assert_eq!(completed_block.exit_code(), ExitCode::from(7));
+    assert_eq!(terminal.active_block_id(), &next_block_id);
+    assert_eq!(
+        terminal
+            .block_list()
+            .active_block()
+            .pwd()
+            .map(String::as_str),
+        Some("/normal-lifecycle")
+    );
+
+    let events: Vec<_> = std::iter::from_fn(|| event_rx.try_recv().ok()).collect();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::BlockCompleted(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::AfterBlockCompleted(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::BlockMetadataReceived(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::Handler(HandlerEvent::Preexec)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    Event::Handler(HandlerEvent::CommandFinished {
+                        command_type: CommandType::User
+                    })
+                )
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::Handler(HandlerEvent::Precmd { .. })))
+            .count(),
+        1
+    );
+
+    assert!(matches!(
+        ordered_rx.try_recv(),
+        Ok(OrderedTerminalEventType::CommandExecutionFinished { .. })
+    ));
+    assert!(ordered_rx.try_recv().is_err());
+}
+
+#[test]
+fn repeated_and_executing_command_starts_are_safely_gated() {
+    let mut terminal = TerminalModel::mock(None, None);
+    let active_block_id = terminal.active_block_id().clone();
+
+    assert_eq!(
+        terminal.start_command_execution(),
+        StartCommandOutcome::Accepted
+    );
+    assert_eq!(
+        terminal.start_command_execution(),
+        StartCommandOutcome::Coalesced
+    );
+    assert_eq!(terminal.active_block_id(), &active_block_id);
+
+    terminal.preexec(PreexecValue {
+        command: "running".to_owned(),
+        session_id: None,
+    });
+    assert_eq!(
+        terminal.start_command_execution(),
+        StartCommandOutcome::RejectedExecuting
+    );
+    assert_eq!(terminal.active_block_id(), &active_block_id);
+    assert_eq!(
+        terminal.block_list().active_block().state(),
+        BlockState::Executing
+    );
+}
+
+#[test]
+fn duplicate_and_colliding_completion_evidence_is_ignored() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.start_command_execution();
+    terminal.preexec(PreexecValue {
+        command: "first".to_owned(),
+        session_id: None,
+    });
+    let first_block_id = terminal.active_block_id().clone();
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(9),
+            next_block_id: first_block_id.clone(),
+        },
+        session_id: None,
+    });
+    assert_eq!(terminal.active_block_id(), &first_block_id);
+    assert_eq!(
+        terminal.block_list().active_block().state(),
+        BlockState::Executing
+    );
+
+    let second_block_id = BlockId::new();
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: second_block_id.clone(),
+        },
+        session_id: None,
+    });
+    terminal.precmd_with_completion_metadata(PrecmdValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: second_block_id.clone(),
+        },
+        prompt_metadata: PromptMetadata::default(),
+    });
+    terminal.start_command_execution();
+    terminal.preexec(PreexecValue {
+        command: "second".to_owned(),
+        session_id: None,
+    });
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(7),
+            next_block_id: first_block_id,
+        },
+        session_id: None,
+    });
+    assert_eq!(terminal.active_block_id(), &second_block_id);
+    assert_eq!(
+        terminal.block_list().active_block().state(),
+        BlockState::Executing
+    );
+}
+
+#[test]
+fn terminal_exit_absorbs_later_lifecycle_inputs() {
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.exit(ExitReason::PtyDisconnected);
+    let active_block_id = terminal.active_block_id().clone();
+    let block_count = terminal.block_list().blocks().len();
+    let pending_session_id = terminal.pending_session_id();
+
+    assert_eq!(
+        terminal.start_command_execution(),
+        StartCommandOutcome::IgnoredTerminated
+    );
+    terminal.preexec(PreexecValue {
+        command: "ignored".to_owned(),
+        session_id: None,
+    });
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(1),
+            next_block_id: BlockId::new(),
+        },
+        session_id: None,
+    });
+    terminal.precmd_with_completion_metadata(PrecmdValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(1),
+            next_block_id: active_block_id.clone(),
+        },
+        prompt_metadata: PromptMetadata::default(),
+    });
+    terminal.prompt_only_precmd(PromptMetadata::default());
+    terminal.init_shell(InitShellValue {
+        shell: "bash".to_owned(),
+        user: "ignored".to_owned(),
+        hostname: "ignored".to_owned(),
+        session_id: 42.into(),
+        ..Default::default()
+    });
+
+    assert_eq!(terminal.active_block_id(), &active_block_id);
+    assert_eq!(terminal.block_list().blocks().len(), block_count);
+    assert_eq!(terminal.pending_session_id(), pending_session_id);
+}
 #[test]
 fn test_alt_screen_selection_tracks_scroll() {
     let mut terminal: TerminalModel = TerminalModel::mock(None, None);
@@ -1025,6 +1343,14 @@ fn test_rect_selection_in_alt_screen() {
 fn viewer_processes_dcs_hook_with_unregistered_session_id() {
     let mut terminal = TerminalModel::mock(None, None);
     terminal.set_shared_session_status(SharedSessionStatus::reader());
+    terminal.start_command_execution();
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: BlockId::new(),
+        },
+        session_id: None,
+    });
 
     let bytes = hex_encoded_json_dcs(
         r#"{
@@ -1051,6 +1377,14 @@ fn viewer_processes_dcs_hook_with_unregistered_session_id() {
 fn sharer_rejects_dcs_hook_with_unregistered_session_id() {
     let mut terminal = TerminalModel::mock(None, None);
     terminal.set_shared_session_status(SharedSessionStatus::ActiveSharer);
+    terminal.start_command_execution();
+    terminal.command_finished(CommandFinishedValue {
+        completion_metadata: CompletionMetadata {
+            exit_code: ExitCode::from(0),
+            next_block_id: BlockId::new(),
+        },
+        session_id: None,
+    });
 
     let bytes = hex_encoded_json_dcs(
         r#"{

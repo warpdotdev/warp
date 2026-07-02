@@ -289,12 +289,8 @@ impl RequestParams {
             geap_binding,
         );
         let is_custom_inference_enabled = user_workspaces.is_custom_inference_enabled(app);
-        let custom_model_providers = FeatureFlag::CustomInferenceEndpoints
-            .is_enabled()
-            .then(|| {
-                api_key_manager.custom_model_providers_for_request(is_custom_inference_enabled)
-            })
-            .flatten();
+        let custom_model_providers =
+            api_key_manager.custom_model_providers_for_request(is_custom_inference_enabled);
         let custom_model_routers = FeatureFlag::CustomModelRouters.is_enabled().then(|| {
             LLMPreferences::as_ref(app).custom_model_routers_for_request(
                 &request_input.model_id,

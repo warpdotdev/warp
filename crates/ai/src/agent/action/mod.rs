@@ -768,7 +768,8 @@ pub struct CreateDocumentsRequest {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct UseComputerRequest {
     pub action_summary: String,
-    pub actions: Vec<computer_use::Action>,
+    /// Each action carries the surface (screen or a specific window) it targets.
+    pub actions: Vec<computer_use::TargetedAction>,
     /// If set, a screenshot will be captured after the actions are executed.
     pub screenshot_params: Option<computer_use::ScreenshotParams>,
 }

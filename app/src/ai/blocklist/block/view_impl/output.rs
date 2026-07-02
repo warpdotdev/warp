@@ -58,10 +58,11 @@ use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentCitation, AIAgentInput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CreateDocumentsResult,
-    EditDocumentsResult, MessageId, ReadFilesRequest, ReadFilesResult, RequestCommandOutputResult,
-    SearchCodebaseFailureReason, SearchCodebaseResult, SubagentCall, SubagentType,
-    SuggestNewConversationResult, SummarizationType, TodoOperation, UploadArtifactResult,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome,
+    CreateDocumentsResult, EditDocumentsResult, MessageId, ReadFilesRequest, ReadFilesResult,
+    RequestCommandOutputResult, SearchCodebaseFailureReason, SearchCodebaseResult, SubagentCall,
+    SubagentType, SuggestNewConversationResult, SummarizationType, TodoOperation,
+    UploadArtifactResult,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -1098,9 +1099,30 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 }
 
                 if should_render_references_section {
-                    if let Some(references) =
-                        render_references_footer(&output.citations, props, app)
-                    {
+                    let exchange_id = props.model.exchange_id(app);
+                    let memory_citations: Vec<AIAgentCitation> = props
+                        .model
+                        .conversation(app)
+                        .filter(|conv| {
+                            // Only show memory citations on the first exchange.
+                            conv.first_exchange().map(|e| Some(e.id)) == Some(exchange_id)
+                        })
+                        .into_iter()
+                        .flat_map(|conv| conv.fetched_memories())
+                        .filter(|m| !m.memory_store_id.is_empty() && !m.memory_id.is_empty())
+                        .map(|m| AIAgentCitation::AgentMemory {
+                            memory_store_id: m.memory_store_id.clone(),
+                            memory_id: m.memory_id.clone(),
+                            content: m.content.clone(),
+                        })
+                        .collect();
+                    let all_citations: Vec<AIAgentCitation> = output
+                        .citations
+                        .iter()
+                        .cloned()
+                        .chain(memory_citations)
+                        .collect();
+                    if let Some(references) = render_references_footer(&all_citations, props, app) {
                         output_items.add_child(references);
                     }
                 }
@@ -1231,7 +1253,15 @@ fn should_render_stopped_output(props: Props, app: &AppContext) -> bool {
 
     let status = props.model.status(app);
     let cancellation_reason = status.cancellation_reason().cloned();
-    if cancellation_reason.is_some_and(|reason| reason.should_preserve_in_progress_status()) {
+    // Reasons that keep the conversation alive (follow-ups, CLI-subagent takeover)
+    // or finalize it as a success (optimistic command completion, revert) must not
+    // render a stopped banner.
+    if cancellation_reason.is_some_and(|reason| {
+        matches!(
+            reason.conversation_outcome(),
+            CancellationOutcome::KeepInProgress | CancellationOutcome::Succeeded
+        )
+    }) {
         return false;
     }
 

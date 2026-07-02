@@ -253,6 +253,109 @@ fn orchestration_aware_status_uses_direct_status_for_non_parent() {
     });
 }
 #[test]
+fn has_local_orchestrated_children_detects_active_local_children() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+
+        // No children yet.
+        history_model.read(&app, |history_model, _| {
+            assert!(!has_local_orchestrated_children(
+                history_model,
+                orchestrator_id
+            ));
+        });
+
+        let child = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "local-child".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        // An active local child counts.
+        history_model.read(&app, |history_model, _| {
+            assert!(has_local_orchestrated_children(
+                history_model,
+                orchestrator_id
+            ));
+        });
+
+        // A finished local child no longer counts.
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child,
+                ConversationStatus::Success,
+                ctx,
+            );
+        });
+        history_model.read(&app, |history_model, _| {
+            assert!(!has_local_orchestrated_children(
+                history_model,
+                orchestrator_id
+            ));
+        });
+    });
+}
+
+#[test]
+fn has_local_orchestrated_children_ignores_remote_children() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let remote_child = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "remote-child".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                remote_child,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+            history_model.mark_conversation_as_remote_child(remote_child, ctx);
+        });
+
+        // A remote child runs on its own worker and is not orphaned by a
+        // parent-only cloud handoff, so it must not count.
+        history_model.read(&app, |history_model, _| {
+            assert!(!has_local_orchestrated_children(
+                history_model,
+                orchestrator_id
+            ));
+        });
+    });
+}
+
+#[test]
 fn descendant_conversation_ids_in_spawn_order_returns_empty_without_children() {
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);

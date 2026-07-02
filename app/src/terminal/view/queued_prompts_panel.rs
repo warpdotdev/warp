@@ -57,6 +57,8 @@ const PROMPT_PREVIEW_MAX_CHARS: usize = 500;
 const INITIAL_CLOUD_MODE_PROMPT_TOOLTIP: &str = "The first cloud-mode prompt cannot be changed.";
 const SEND_NOW_DURING_CLOUD_SETUP_TOOLTIP: &str =
     "Prompts cannot be sent until environment setup is complete.";
+const SEND_NOW_PENDING_LRC_TOOLTIP: &str =
+    "Prompts cannot be sent until the full terminal use agent is initialized.";
 const SEND_NOW_TO_FULL_TERMINAL_USE_AGENT_TOOLTIP: &str = "Send to full terminal use agent";
 const SEND_NOW_AS_READ_ONLY_VIEWER_TOOLTIP: &str = "Read-only viewers cannot send prompts.";
 /// Suffix on rows auto-queued during an agent-requested long-running command, which fire
@@ -416,10 +418,14 @@ impl QueuedPromptsPanelView {
             else {
                 continue;
             };
+            let disabled_for_pending_lrc = *origin == QueuedQueryOrigin::PendingLrcAutoQueue;
             let disabled_for_cloud_setup =
                 *origin == QueuedQueryOrigin::InitialCloudMode || cloud_setup_in_progress;
-            let disabled = disabled_for_cloud_setup || !self.can_send_prompt;
-            let tooltip = if disabled_for_cloud_setup {
+            let disabled =
+                disabled_for_pending_lrc || disabled_for_cloud_setup || !self.can_send_prompt;
+            let tooltip = if disabled_for_pending_lrc {
+                SEND_NOW_PENDING_LRC_TOOLTIP
+            } else if disabled_for_cloud_setup {
                 SEND_NOW_DURING_CLOUD_SETUP_TOOLTIP
             } else if !self.can_send_prompt {
                 SEND_NOW_AS_READ_ONLY_VIEWER_TOOLTIP
@@ -488,6 +494,7 @@ impl QueuedPromptsPanelView {
             | QueuedQueryEvent::Removed {
                 conversation_id, ..
             }
+            | QueuedQueryEvent::RowUnlocked { conversation_id }
             | QueuedQueryEvent::Reordered { conversation_id }
             | QueuedQueryEvent::EditEntered {
                 conversation_id, ..
@@ -574,6 +581,9 @@ impl QueuedPromptsPanelView {
                         .or_insert_with(|| build_row_state(*query_id, origin, &text, ctx));
                 }
                 // A new row queued while the locked initial row is present must start disabled.
+                self.update_send_now_availability(ctx);
+            }
+            QueuedQueryEvent::RowUnlocked { .. } => {
                 self.update_send_now_availability(ctx);
             }
             QueuedQueryEvent::Reordered { .. }
@@ -1177,7 +1187,9 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
                     )
                     .with_child(Expanded::new(1., preview).finish())
                     .finish()
-            } else if origin == QueuedQueryOrigin::LrcAutoQueue {
+            } else if origin == QueuedQueryOrigin::LrcAutoQueue
+                || origin == QueuedQueryOrigin::PendingLrcAutoQueue
+            {
                 let suffix_color: ColorU = theme.sub_text_color(theme.surface_1()).into();
                 let suffix = Text::new(
                     LRC_AUTO_QUEUE_ROW_SUFFIX.to_owned(),

@@ -14,10 +14,10 @@
 //! bottom input to at most six rows) without a bespoke layout element.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPresentationContext, TuiRect, TuiSize,
 };
-use crate::{AppContext, Event};
+use crate::AppContext;
 
 pub struct TuiConstrainedBox {
     child: Box<dyn TuiElement>,
@@ -98,7 +98,7 @@ impl TuiElement for TuiConstrainedBox {
 
     fn dispatch_event(
         &mut self,
-        event: &Event,
+        event: &TuiEvent,
         area: TuiRect,
         event_ctx: &mut TuiEventContext,
         ctx: &mut TuiLayoutContext,

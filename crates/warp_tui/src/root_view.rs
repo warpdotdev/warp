@@ -1,64 +1,53 @@
-//! [`RootTuiView`]: the root view of the `warp-tui` front-end.
-//!
-//! The view gates on login state (observed from [`warp::TuiLoginModel`]):
-//! - while the user is signing in, it shows a centered placeholder (and the
-//!   device-login URL/code once known, since the alt screen hides stdout);
-//! - once authenticated, it renders the input box — matching the Figma: a single
-//!   bordered [`TuiInputView`] docked at the bottom of the screen. The input box
-//!   grows with newlines up to six visual rows and then scrolls (behavior
-//!   provided by [`TuiInputView`] itself).
+//! [`RootTuiView`]: the login-gated root view of the `warp-tui` front-end.
 
-use warp::editor::CodeEditorModel;
+use warp::tui_export::TerminalSurfaceInit;
 use warp::{TuiLoginModel, TuiLoginPhase};
-use warpui_core::elements::tui::{
-    TuiChildView, TuiColumn, TuiConstrainedBox, TuiContainer, TuiElement,
-};
+use warpui_core::elements::tui::{TuiChildView, TuiElement};
 use warpui_core::{
     keymap, AppContext, Entity, EntityId, SingletonEntity, TuiView, TypedActionView, ViewContext,
     ViewHandle,
 };
 
-use crate::input::TuiInputView;
-use crate::ui::{login_failed, login_placeholder};
+use crate::terminal_session_view::TuiTerminalSessionView;
+use crate::ui::{login_failed, login_placeholder, terminal_starting};
 
-/// Width used to construct the editor model before the first layout pass pushes
-/// the real terminal width onto it.
-const INITIAL_TERMINAL_WIDTH: u16 = 80;
+/// Whether the authenticated terminal session has been created yet. Mirrors the
+/// GUI root view's `AuthOnboardingState` split between the pre-session login gate
+/// and the live terminal session.
+enum RootTuiState {
+    /// Login gate: no terminal session exists yet. The placeholder shown is
+    /// chosen from the current [`TuiLoginPhase`].
+    Auth,
+    /// The authenticated terminal session.
+    Terminal(ViewHandle<TuiTerminalSessionView>),
+}
 
-/// The input box grows up to this many text rows (matching [`TuiInputView`]'s own
-/// cap) before scrolling; the bordered container adds one row above and below.
-const MAX_INPUT_TEXT_ROWS: u16 = 6;
-
-/// Rows the box's border occupies (top + bottom).
-const BORDER_ROWS: u16 = 2;
-
-/// The root view: a login placeholder until the user is authenticated, then a
-/// single bordered input box docked at the bottom of the screen. Owns the
-/// editor-backed [`TuiInputView`] as a child view.
+/// The app-level TUI shell. It gates the authenticated terminal session on login state.
 pub struct RootTuiView {
-    input: ViewHandle<TuiInputView>,
+    state: RootTuiState,
 }
 
 impl RootTuiView {
-    pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let model = ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_TERMINAL_WIDTH, ctx));
-        let input = ctx.add_typed_action_tui_view(move |ctx| TuiInputView::new(model, ctx));
-        Self { input }
+    pub(crate) fn new() -> Self {
+        Self {
+            state: RootTuiState::Auth,
+        }
     }
-
-    /// The bordered input box, capped so it never grows past its six text rows
-    /// plus the one-cell border on each side, with a flex spacer above docking
-    /// it to the bottom.
-    fn render_input(&self) -> Box<dyn TuiElement> {
-        let input_box =
-            TuiConstrainedBox::new(TuiContainer::new(TuiChildView::new(&self.input)).with_border())
-                .with_max_rows(MAX_INPUT_TEXT_ROWS + BORDER_ROWS);
-
-        Box::new(
-            TuiColumn::new()
-                .flex_child(TuiColumn::new())
-                .child(input_box),
-        )
+    /// Creates the terminal child view once login has completed, or returns the
+    /// existing one if it was already created. Callers notify the root so it
+    /// re-renders from the login placeholder to the terminal session.
+    pub(crate) fn create_terminal_session(
+        &mut self,
+        surface_init: TerminalSurfaceInit,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<TuiTerminalSessionView> {
+        if let RootTuiState::Terminal(terminal_session) = &self.state {
+            return terminal_session.clone();
+        }
+        let terminal_session =
+            ctx.add_typed_action_tui_view(|ctx| TuiTerminalSessionView::new(surface_init, ctx));
+        self.state = RootTuiState::Terminal(terminal_session.clone());
+        terminal_session
     }
 }
 
@@ -71,25 +60,28 @@ impl TuiView for RootTuiView {
         "RootTuiView"
     }
 
-    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        // Reading the login phase here registers this view as a dependency, so a
-        // phase change (`notify`) re-renders and the TUI driver repaints.
-        match TuiLoginModel::as_ref(ctx).phase() {
-            TuiLoginPhase::LoggedIn => self.render_input(),
-            TuiLoginPhase::AwaitingLogin {
-                verification_uri,
-                user_code,
-            } => login_placeholder(verification_uri.as_deref(), user_code.as_deref()),
-            TuiLoginPhase::Failed { message } => login_failed(message),
+    fn child_view_ids(&self, _ctx: &AppContext) -> Vec<EntityId> {
+        // The TUI runtime uses this for child focus and event routing; only the
+        // live terminal session participates.
+        match &self.state {
+            RootTuiState::Terminal(terminal_session) => vec![terminal_session.id()],
+            RootTuiState::Auth => Vec::new(),
         }
     }
 
-    fn child_view_ids(&self, ctx: &AppContext) -> Vec<EntityId> {
-        // The input view only participates while it is actually shown, so
-        // keystrokes never reach it during the login placeholder.
-        match TuiLoginModel::as_ref(ctx).phase() {
-            TuiLoginPhase::LoggedIn => vec![self.input.id()],
-            TuiLoginPhase::AwaitingLogin { .. } | TuiLoginPhase::Failed { .. } => Vec::new(),
+    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        match &self.state {
+            RootTuiState::Terminal(terminal_session) => {
+                TuiChildView::new(terminal_session).finish()
+            }
+            RootTuiState::Auth => match TuiLoginModel::as_ref(ctx).phase() {
+                TuiLoginPhase::LoggedIn => terminal_starting(),
+                TuiLoginPhase::AwaitingLogin {
+                    verification_uri,
+                    user_code,
+                } => login_placeholder(verification_uri.as_deref(), user_code.as_deref()),
+                TuiLoginPhase::Failed { message } => login_failed(message.as_str()),
+            },
         }
     }
 
@@ -102,7 +94,5 @@ impl TuiView for RootTuiView {
 }
 
 impl TypedActionView for RootTuiView {
-    // The root handles no typed actions itself; editing actions are handled by
-    // the input view, and Ctrl-C quit is handled by the TUI driver.
     type Action = ();
 }

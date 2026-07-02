@@ -13669,6 +13669,16 @@ impl Input {
             );
         });
 
+        let compact_and_argument = if prompt == commands::COMPACT_AND.name {
+            Some(None)
+        } else {
+            commands::strip_command_prefix(&prompt, commands::COMPACT_AND.name).map(Some)
+        };
+        if let Some(argument) = compact_and_argument {
+            self.execute_queued_compact_and(conversation_id, query_id, argument, ctx);
+            return;
+        }
+
         let detected = self
             .slash_command_model
             .as_ref(ctx)
@@ -13684,6 +13694,8 @@ impl Input {
                     detected_command.argument.as_ref(),
                     SlashCommandTrigger::input(),
                     /*is_queued_prompt*/ true,
+                    Some(conversation_id),
+                    Some(query_id),
                     ctx,
                 )
             }
@@ -13767,6 +13779,7 @@ impl Input {
                         .as_ref(ctx)
                         .is_ready_for_cloud_followup_prompt()
                 });
+
         if is_ready_for_cloud_followup {
             // Cloud follow-up does not support attachments; a queued row's attachments are dropped
             // when the row is removed after dispatch.
@@ -13874,7 +13887,10 @@ impl Input {
 
         let queue_model = QueuedQueryModel::as_ref(ctx);
         let queue_head_allows_lrc = match queue_model.queue(conversation_id).first() {
-            Some(row) => row.origin() == QueuedQueryOrigin::LrcAutoQueue,
+            Some(row) => matches!(
+                row.origin(),
+                QueuedQueryOrigin::LrcAutoQueue | QueuedQueryOrigin::PendingLrcAutoQueue
+            ),
             None => true,
         };
         let queue_enabled = {
@@ -13892,7 +13908,28 @@ impl Input {
             && !queue_model.is_queue_next_prompt_toggle_enabled(conversation_id)
             && queue_head_allows_lrc;
 
-        if !queue_enabled && !queue_for_summarize {
+        // When queue mode is not normally active but an agent-requested run_shell_command
+        // action is still pending (snapshot not yet fired), queue as PendingLrcAutoQueue
+        // to prevent the CliAgentUserQuery / LRC snapshot race.
+        let queued_for_pending_lrc = !queue_enabled && !queue_for_summarize && !is_command && {
+            let pending_action_id = {
+                let terminal_model = self.model.lock();
+                let active_block = terminal_model.block_list().active_block();
+                if active_block.is_active_and_long_running() && !active_block.is_agent_monitoring()
+                {
+                    active_block.requested_command_action_id().cloned()
+                } else {
+                    None
+                }
+            };
+            pending_action_id.as_ref().is_some_and(|action_id| {
+                self.ai_action_model
+                    .as_ref(ctx)
+                    .is_shell_command_action_pending(action_id, conversation_id)
+            })
+        };
+
+        if !queue_enabled && !queue_for_summarize && !queued_for_pending_lrc {
             return false;
         }
 
@@ -13931,12 +13968,13 @@ impl Input {
                     // handler show the error toast.
                     None => return false,
                 }
-            } else if !slash_command_is_submitted_as_prompt(&detected.command) {
+            } else if !slash_command_is_submitted_as_prompt(&detected.command)
+                && detected.command.name != commands::COMPACT_AND.name
+            {
                 // Action-emitting slash commands (e.g. `/fork`) execute immediately and must not
                 // be captured by prompt queuing — they emit an action rather than reiterating
-                // input into the conversation. Bypass the queue and let the slash-command
-                // executor handle them now; commands that submit a prompt to the conversation
-                // instead fall through to be queued (see `slash_command_is_submitted_as_prompt`).
+                // input into the conversation. `/compact-and` is captured anyway so compaction
+                // waits for the current response, then queues its follow-up after summarization.
                 return false;
             } else {
                 prompt
@@ -13952,10 +13990,11 @@ impl Input {
             editor.clear_buffer(ctx);
         });
 
-        // Only prompt rows get the LrcAutoQueue origin (sent when the command finishes);
-        // command rows can't be delivered to the agent, so they keep the generic origin
-        // and the existing queued-command drain semantics.
-        let origin = if queued_for_lrc && !is_command {
+        // PendingLrcAutoQueue rows are locked until the snapshot fires; LrcAutoQueue
+        // rows auto-fire when the command completes. Command rows use AutoQueueToggle.
+        let origin = if queued_for_pending_lrc {
+            QueuedQueryOrigin::PendingLrcAutoQueue
+        } else if queued_for_lrc && !is_command {
             QueuedQueryOrigin::LrcAutoQueue
         } else {
             QueuedQueryOrigin::AutoQueueToggle
@@ -13969,9 +14008,8 @@ impl Input {
             });
             QueuedQuery::new_with_attachments(prompt, origin, attachments)
         };
-        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-            model.append(conversation_id, query, ctx);
-        });
+        QueuedQueryModel::handle(ctx)
+            .update(ctx, |model, ctx| model.append(conversation_id, query, ctx));
 
         true
     }

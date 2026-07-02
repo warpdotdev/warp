@@ -662,6 +662,10 @@ const DEBOUNCE_PERIOD: Duration = Duration::from_millis(40);
 /// clipboard blocked banner.
 const OSC52_CLIPBOARD_BANNER_SUPPRESSED_KEY: &str = "Osc52ClipboardBannerSuppressed";
 
+/// Key used in user preferences to persist the "don't show again" choice for the SSH
+/// ControlMaster / "completions are not working" banner.
+const CONTROL_MASTER_BANNER_SUPPRESSED_KEY: &str = "ControlMasterBannerSuppressed";
+
 /// Which type of OSC 52 clipboard operation was blocked.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Osc52ClipboardBlockedType {
@@ -2589,6 +2593,8 @@ pub struct TerminalView {
 
     control_master_error_banner: ViewHandle<Banner<TerminalAction>>,
     control_master_error_banner_state: ControlMasterErrorBannerState,
+    /// Whether the user has permanently dismissed the control master error banner.
+    control_master_error_banner_suppressed: bool,
 
     /// Banner to show if we detect a configuration in the user's rc files that
     /// is incompatible with Warp.
@@ -2683,6 +2689,7 @@ pub struct TerminalView {
     pending_user_query_kind: Option<PendingUserQueryKind>,
     queued_prompt_callback: Option<ConversationFinishedCallback>,
     last_observed_conversation_status: HashMap<AIConversationId, ConversationStatus>,
+    last_observed_active_subagent: HashMap<AIConversationId, bool>,
 
     /// Cached view ids for usage footers keyed by the AI block view id that owns them.
     usage_footer_view_ids: HashMap<EntityId, EntityId>,
@@ -3887,7 +3894,7 @@ impl TerminalView {
         });
 
         let control_master_error_banner = ctx.add_typed_action_view(|_| {
-            Banner::new(BannerTextContent::formatted_text(vec![
+            Banner::new_permanently_dismissible(BannerTextContent::formatted_text(vec![
                 FormattedTextFragment::plain_text("Seems like your completions are not working ("),
                 FormattedTextFragment::hyperlink("more info", CONTROLMASTER_ISSUES_URL),
                 FormattedTextFragment::plain_text("). Enabling the SSH extension in "),
@@ -3991,6 +3998,13 @@ impl TerminalView {
         let osc52_clipboard_banner_suppressed = ctx
             .private_user_preferences()
             .read_value(OSC52_CLIPBOARD_BANNER_SUPPRESSED_KEY)
+            .ok()
+            .flatten()
+            .is_some_and(|v| v == "true");
+
+        let control_master_error_banner_suppressed = ctx
+            .private_user_preferences()
+            .read_value(CONTROL_MASTER_BANNER_SUPPRESSED_KEY)
             .ok()
             .flatten()
             .is_some_and(|v| v == "true");
@@ -4298,6 +4312,7 @@ impl TerminalView {
             is_emacs_bindings_banner_open: false,
             control_master_error_banner,
             control_master_error_banner_state: Default::default(),
+            control_master_error_banner_suppressed,
             osc52_clipboard_blocked_banner,
             osc52_clipboard_blocked_type: None,
             osc52_clipboard_banner_suppressed,
@@ -4329,6 +4344,7 @@ impl TerminalView {
             pending_user_query_kind: None,
             queued_prompt_callback: None,
             last_observed_conversation_status: Default::default(),
+            last_observed_active_subagent: Default::default(),
             usage_footer_view_ids: Default::default(),
             block_onboarding_active: false,
             onboarding_prompt_block: None,
@@ -5577,14 +5593,23 @@ impl TerminalView {
     }
 
     /// Sends the leading prompts that were auto-queued during an agent-requested long-running
-    /// command ([`QueuedQueryOrigin::LrcAutoQueue`]) to the agent, in queue order. Invoked when the
-    /// command finishes — these rows were queued "until the command finishes", unlike other queued
-    /// rows, which wait for the end of the full response.
+    /// command ([`QueuedQueryOrigin::LrcAutoQueue`]) to the agent, in queue order.
+    ///
+    /// Command finish may happen before the CLI subagent has handed its result back to the main
+    /// agent. In that case the rows stay queued and fire when history shows the subagent is gone.
     pub(crate) fn send_lrc_queued_prompts(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
+        let has_active_subagent = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|conversation| conversation.has_active_subagent());
+        if has_active_subagent {
+            self.last_observed_active_subagent
+                .insert(conversation_id, true);
+            return;
+        }
         let editing_front_lrc_row = QueuedQueryModel::as_ref(ctx)
             .editing_row(conversation_id)
             .is_some_and(|query_id| {
@@ -6071,6 +6096,7 @@ impl TerminalView {
                 response_stream_id,
                 ..
             } => {
+                self.maybe_send_lrc_queued_prompts_after_subagent_handoff(*conversation_id, ctx);
                 // Hide telemetry banner forever after first AI input user sends.
                 if FeatureFlag::GlobalAIAnalyticsBanner.is_enabled()
                     && !GeneralSettings::as_ref(ctx)
@@ -6296,6 +6322,7 @@ impl TerminalView {
                 conversation_id,
                 ..
             } => {
+                self.maybe_send_lrc_queued_prompts_after_subagent_handoff(*conversation_id, ctx);
                 let ai_block_model = match AIBlockModelImpl::<AIBlock>::new(
                     *exchange_id,
                     *conversation_id,
@@ -6355,6 +6382,7 @@ impl TerminalView {
                 new_status,
                 ..
             } => {
+                self.maybe_send_lrc_queued_prompts_after_subagent_handoff(*conversation_id, ctx);
                 // When the conversation state changes or a new conversation
                 // is selected, update the title to reflect that change.
                 self.update_pane_configuration(ctx);
@@ -6469,6 +6497,7 @@ impl TerminalView {
                 // The singleton's own history subscriber drops queue state for cleared
                 // conversations, so no `clear_all` call is needed here.
                 self.last_observed_conversation_status.clear();
+                self.last_observed_active_subagent.clear();
                 if let Some(active_conversation_id) = active_conversation_id {
                     self.ai_controller.update(ctx, |controller, ctx| {
                         controller.cancel_conversation_progress(
@@ -6534,9 +6563,14 @@ impl TerminalView {
                 // needed here.
                 self.last_observed_conversation_status
                     .remove(conversation_id);
+                self.last_observed_active_subagent.remove(conversation_id);
             }
-            BlocklistAIHistoryEvent::CreatedSubtask { .. }
-            | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
+            BlocklistAIHistoryEvent::CreatedSubtask {
+                conversation_id, ..
+            } => {
+                self.maybe_send_lrc_queued_prompts_after_subagent_handoff(*conversation_id, ctx);
+            }
+            BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
             | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
             | BlocklistAIHistoryEvent::RestoredConversations { .. }
             | BlocklistAIHistoryEvent::UpgradedTask { .. }
@@ -6549,6 +6583,30 @@ impl TerminalView {
             | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
         }
         ctx.notify();
+    }
+
+    fn maybe_send_lrc_queued_prompts_after_subagent_handoff(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let has_lrc_queued_prompt = QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .first()
+            .is_some_and(|row| row.origin() == QueuedQueryOrigin::LrcAutoQueue);
+        if !has_lrc_queued_prompt {
+            return;
+        }
+        let has_active_subagent = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|conversation| conversation.has_active_subagent());
+        let previously_had_active_subagent = self
+            .last_observed_active_subagent
+            .insert(conversation_id, has_active_subagent)
+            .unwrap_or(false);
+        if previously_had_active_subagent && !has_active_subagent {
+            self.send_lrc_queued_prompts(conversation_id, ctx);
+        }
     }
 
     fn handle_cli_subagent_controller_event(
@@ -6676,8 +6734,8 @@ impl TerminalView {
                 self.cli_subagent_views.remove(block_id);
 
                 // The command ended — drop any LRC-scoped auto-queue override so the
-                // conversation reverts to its pre-command queue state, then deliver the
-                // prompts that were queued "until the command finishes".
+                // conversation reverts to its pre-command queue state, then try to deliver the
+                // prompts queued for this LRC. Delivery defers until subagent handoff if needed.
                 if let Some(conversation_id) = conversation_id {
                     QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                         model.clear_queue_next_lrc_prompt_override(*conversation_id, ctx);
@@ -8701,10 +8759,18 @@ impl TerminalView {
     /// Returns `true` if focus is inside any AI block (e.g. the user is arrowing
     /// through a code diff's hunks).
     fn is_any_ai_block_focused(&self, ctx: &mut ViewContext<Self>) -> bool {
+        let window_id = ctx.window_id();
+        let Some(focused_id) = ctx.focused_view_id(window_id) else {
+            return false;
+        };
+        let ancestors: HashSet<_> = ctx
+            .view_ancestors(window_id, focused_id)
+            .into_iter()
+            .collect();
         self.rich_content_views.iter().any(|rich_content| {
             rich_content
                 .ai_block_metadata()
-                .is_some_and(|metadata| metadata.ai_block_handle.is_self_or_child_focused(ctx))
+                .is_some_and(|metadata| ancestors.contains(&metadata.ai_block_handle.id()))
         })
     }
 
@@ -9506,9 +9572,10 @@ impl TerminalView {
             });
 
             // Don't show the banner when the session already has a remote server
-            // active — the CTA to enable the SSH extension is irrelevant.
+            // active — the CTA to enable the SSH extension is irrelevant — or when
+            // the user has permanently dismissed it.
             self.control_master_error_banner_state = ControlMasterErrorBannerState {
-                is_open: !has_remote_server,
+                is_open: self.should_open_control_master_banner(has_remote_server),
                 associated_session_id: active_session_id,
             };
 
@@ -9519,6 +9586,13 @@ impl TerminalView {
                 ctx
             );
         }
+    }
+
+    /// The control master / completions banner should open only when the session has no
+    /// remote server (the CTA to enable the SSH extension would be irrelevant otherwise)
+    /// and the user has not permanently dismissed it via "Don't show me again".
+    fn should_open_control_master_banner(&self, has_remote_server: bool) -> bool {
+        !has_remote_server && !self.control_master_error_banner_suppressed
     }
 
     fn read_from_clipboard(
@@ -11195,8 +11269,13 @@ impl TerminalView {
         ctx.notify();
     }
 
-    /// Sends telemetry if an AI-requested command caused the shell to exit.
-    fn maybe_send_agent_exited_shell_telemetry(&self, ctx: &mut ViewContext<Self>) {
+    /// Sends telemetry if an AI-requested command caused the shell to exit, and
+    /// returns the conversation that issued that command so the caller can
+    /// finalize it as a shell-exit failure.
+    fn maybe_send_agent_exited_shell_telemetry(
+        &self,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<AIConversationId> {
         let model = self.model.lock();
         let block_list = model.block_list();
         let blocks = block_list.blocks();
@@ -11218,29 +11297,29 @@ impl TerminalView {
                         .get(prev_idx)
                         .filter(|b| b.requested_command_action_id().is_some())
                 })
-            });
+            })?;
 
-        if let Some(block) = agent_block {
-            let mut command = block.command_to_string();
-            redact_secrets(&mut command);
+        let mut command = agent_block.command_to_string();
+        redact_secrets(&mut command);
 
-            let server_output_id = block.ai_conversation_id().and_then(|conversation_id| {
-                BlocklistAIHistoryModel::as_ref(ctx)
-                    .conversation(&conversation_id)
-                    .and_then(|conversation| {
-                        conversation
-                            .latest_exchange()
-                            .and_then(|e| e.output_status.server_output_id())
-                    })
-            });
-            send_telemetry_from_ctx!(
-                TelemetryEvent::AgentExitedShellProcess {
-                    command,
-                    server_output_id,
-                },
-                ctx
-            );
-        }
+        let conversation_id = agent_block.ai_conversation_id();
+        let server_output_id = conversation_id.and_then(|conversation_id| {
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .and_then(|conversation| {
+                    conversation
+                        .latest_exchange()
+                        .and_then(|e| e.output_status.server_output_id())
+                })
+        });
+        send_telemetry_from_ctx!(
+            TelemetryEvent::AgentExitedShellProcess {
+                command,
+                server_output_id,
+            },
+            ctx
+        );
+        conversation_id
     }
 
     /// Updates the back button's state and label. For child agents the
@@ -11609,7 +11688,17 @@ impl TerminalView {
             }
             ModelEvent::Exit { reason } => {
                 if !self.manual_pty_shutdown_requested {
-                    self.maybe_send_agent_exited_shell_telemetry(ctx);
+                    if let Some(conversation_id) = self.maybe_send_agent_exited_shell_telemetry(ctx)
+                    {
+                        // The agent's command caused the shell to exit. Finalize the
+                        // conversation as a failure (with a message) before the pane is
+                        // torn down, so the Oz run reports the failure instead of
+                        // "Cancelled by user" (which the pane-close cancellation would
+                        // otherwise produce).
+                        self.ai_controller.update(ctx, |controller, ctx| {
+                            controller.fail_conversation_due_to_shell_exit(conversation_id, ctx);
+                        });
+                    }
                 }
 
                 // If the pty spawn has failed, we've already inserted a banner.
@@ -20107,6 +20196,19 @@ impl TerminalView {
                 AIAgentCitation::WebPage { url } => {
                     ctx.open_url(url);
                 }
+                AIAgentCitation::AgentMemory {
+                    memory_store_id,
+                    memory_id,
+                    ..
+                } => {
+                    let oz_root_url = ChannelState::oz_root_url();
+                    let url = format!(
+                        "{oz_root_url}/memory/{}/memories/{}",
+                        urlencoding::encode(memory_store_id),
+                        urlencoding::encode(memory_id)
+                    );
+                    ctx.open_url(&url);
+                }
             },
             AIBlockEvent::OpenAIFactCollection { sync_id } => {
                 ctx.emit(Event::OpenAIFactCollection { sync_id: *sync_id });
@@ -20908,11 +21010,7 @@ impl TerminalView {
                 let block_str = match entity {
                     BlockEntity::Command => block.command_to_string(),
                     BlockEntity::Output => block.output_to_string_force_full_grid_contents(),
-                    BlockEntity::CommandAndOutput => format!(
-                        "{}\n{}",
-                        block.command_to_string(),
-                        block.output_to_string(),
-                    ),
+                    BlockEntity::CommandAndOutput => block.command_and_output_to_string(),
                     BlockEntity::FilteredOutput => block.output_to_string(),
                 };
 
@@ -22123,8 +22221,16 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            BannerEvent::Dismiss { .. } => {
+            BannerEvent::Dismiss(DismissalType::Temporary) => {
                 self.control_master_error_banner_state.is_open = false;
+                ctx.notify();
+            }
+            BannerEvent::Dismiss(DismissalType::Permanent) => {
+                self.control_master_error_banner_state.is_open = false;
+                self.control_master_error_banner_suppressed = true;
+                let _ = ctx
+                    .private_user_preferences()
+                    .write_value(CONTROL_MASTER_BANNER_SUPPRESSED_KEY, "true".to_owned());
                 ctx.notify();
             }
             BannerEvent::Action(_) => {

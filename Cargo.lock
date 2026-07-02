@@ -3183,10 +3183,10 @@ dependencies = [
  "clap",
  "command",
  "computer_use",
- "dispatch2",
  "futures",
  "image",
  "instant",
+ "libc",
  "log",
  "nix 0.26.4",
  "objc2 0.6.3",
@@ -4399,7 +4399,6 @@ checksum = "89a09f22a6c6069a18470eb92d2298acf25463f14256d24778e1230d789a2aec"
 dependencies = [
  "bitflags 2.13.0",
  "block2 0.6.2",
- "libc",
  "objc2 0.6.3",
 ]
 
@@ -7985,8 +7984,11 @@ dependencies = [
 name = "managed_secrets_wasm"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "warp_managed_secrets",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -15656,7 +15658,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=ac1af7303d2931b0fb485be650a1fbc8b80d5667#ac1af7303d2931b0fb485be650a1fbc8b80d5667"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=45f9b1342b256b20f716aede64dc1b46a639e5e6#45f9b1342b256b20f716aede64dc1b46a639e5e6"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -15848,13 +15850,17 @@ dependencies = [
  "command",
  "log",
  "num-traits",
+ "parking_lot",
+ "pathfinder_color",
  "pathfinder_geometry",
  "string-offset",
+ "sum_tree",
  "vec1",
  "warp",
  "warp_channel_config",
  "warp_core",
  "warp_editor",
+ "warp_terminal",
  "warpui",
  "warpui_core",
 ]

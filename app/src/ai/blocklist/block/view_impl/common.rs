@@ -3099,6 +3099,9 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
             // reach here recovery has failed, so surface the error directly.
             format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
         }
+        RenderableAIError::AgentExitedShell => {
+            format!("{ERROR_APOLOGY_TEXT}\n\n{}", props.error)
+        }
         RenderableAIError::TransientNetworkError { .. } => {
             // Recovering transient errors are handled by the early return above; once we
             // reach here recovery has failed. These carry their own complete user-facing

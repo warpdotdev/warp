@@ -70,6 +70,32 @@ pub fn collect_descendant_conversation_ids_in_spawn_order(
     }
 }
 
+/// Returns `true` if `orchestrator_id` has at least one **active local** child
+/// agent in its orchestration subtree.
+///
+/// "Local" means the child runs in this client (`!is_remote_child()`); a
+/// remote/cloud child is owned by its worker and is unaffected by handing the
+/// parent off to the cloud. "Active" means the child is not in a terminal state
+/// (`!ConversationStatus::is_done()`), so a session whose children have all
+/// finished is not treated as still orchestrating.
+///
+/// This is used to keep automatic cloud handoff from forking only the
+/// orchestrator to the cloud and orphaning its still-running local children.
+/// Descendants whose `AIConversation` is not loaded are ignored — active local
+/// children are always loaded in this client.
+pub fn has_local_orchestrated_children(
+    history: &BlocklistAIHistoryModel,
+    orchestrator_id: AIConversationId,
+) -> bool {
+    descendant_conversation_ids_in_spawn_order(history, orchestrator_id)
+        .iter()
+        .any(|id| {
+            history.conversation(id).is_some_and(|conversation| {
+                !conversation.is_remote_child() && !conversation.status().is_done()
+            })
+        })
+}
+
 /// Returns descendants in the canonical orchestration pill order:
 ///   1) pinned children
 ///   2) unpinned children

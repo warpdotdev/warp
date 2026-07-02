@@ -169,10 +169,11 @@ impl SlashCommandRequest {
         else {
             return;
         };
+        let task_id = conversation.get_root_task_id().clone();
 
         let request_input = RequestInput::for_task(
             inputs,
-            conversation.get_root_task_id().clone(),
+            task_id,
             &controller.active_session,
             controller.get_current_response_initiator(),
             conversation_id,

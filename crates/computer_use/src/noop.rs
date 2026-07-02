@@ -26,6 +26,12 @@ impl super::Recorder for Recorder {
     }
 }
 
+/// Reports whether background, per-window control is available. The noop backend performs no
+/// real actions, so per-window background control is unsupported.
+pub fn background_supported() -> bool {
+    false
+}
+
 pub struct Actor;
 
 impl Actor {
@@ -42,12 +48,9 @@ impl super::Actor for Actor {
 
     async fn perform_actions(
         &mut self,
-        _actions: &[super::Action],
+        _actions: &[super::TargetedAction],
         _options: super::Options,
     ) -> Result<ActionResult, String> {
-        Ok(ActionResult {
-            screenshot: None,
-            cursor_position: None,
-        })
+        Ok(ActionResult::legacy(None, None))
     }
 }

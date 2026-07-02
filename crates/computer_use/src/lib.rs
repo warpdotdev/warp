@@ -90,6 +90,117 @@ pub fn create_actor() -> Box<dyn Actor> {
     }
 }
 
+/// Returns whether background, per-window control (driving a specific window without raising it
+/// or moving the cursor) is available on this client and OS. When false, callers should target
+/// the whole screen / frontmost application.
+pub fn background_supported() -> bool {
+    if cfg!(feature = "test-util") {
+        noop::background_supported()
+    } else {
+        imp::background_supported()
+    }
+}
+
+/// Enumerates the on-screen windows, returning their metadata so a caller can pick one to
+/// target. Returns an empty list on platforms where window enumeration is unsupported.
+pub fn enumerate_windows() -> Vec<WindowInfo> {
+    #[cfg(macos)]
+    {
+        imp::enumerate_windows()
+    }
+    #[cfg(not(macos))]
+    {
+        Vec::new()
+    }
+}
+
+/// Experimental: lists on-screen windows as a formatted diagnostic string. macOS only.
+///
+/// Unlike [`enumerate_windows`], which returns slim [`WindowInfo`] records for window selection
+/// and wire serialization, this function returns richer data including window bounds, formatted
+/// as a human-readable table for CLI debugging. The two use separate types intentionally:
+/// [`WindowInfo`] is kept wire-safe and bounds-free; the diagnostic output carries bounds that
+/// are not part of the API representation.
+#[cfg(macos)]
+pub fn experimental_list_windows() -> Result<String, String> {
+    Ok(imp::list_windows())
+}
+
+/// Experimental: lists on-screen windows. Unsupported on this platform.
+#[cfg(not(macos))]
+pub fn experimental_list_windows() -> Result<String, String> {
+    Err("Window listing is only supported on macOS.".to_string())
+}
+
+/// The surface that a computer-use action or screenshot targets.
+///
+/// `Screen` reproduces the legacy behavior of acting on the whole screen / frontmost
+/// application. `Window` drives a specific background window of a specific process without
+/// raising it or moving the global cursor.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum Target {
+    /// Target the whole screen / frontmost application (legacy behavior).
+    #[default]
+    Screen,
+    /// Target a specific background window of a specific process.
+    Window {
+        /// The platform window id (a `CGWindowID` on macOS). Must be a concrete, non-zero id
+        /// selected from the enumerated window list. `0` is the "unknown" sentinel and is
+        /// rejected by the actor, since coordinate remapping and window capture both require a
+        /// known window.
+        window_id: u32,
+        /// The pid of the process that owns the window.
+        pid: i32,
+    },
+}
+
+/// An action paired with the surface it targets.
+///
+/// The target is carried per-action so a single batch can, in principle, drive more than one
+/// window. An absent / `Screen` target reproduces the legacy whole-screen behavior.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TargetedAction {
+    pub action: Action,
+    #[serde(default)]
+    pub target: Target,
+}
+
+impl TargetedAction {
+    /// Builds a screen-targeted action (legacy behavior).
+    pub fn screen(action: Action) -> Self {
+        Self {
+            action,
+            target: Target::Screen,
+        }
+    }
+}
+
+/// Metadata about an on-screen window, so a caller can select a window to target.
+/// Mirrors the fields of the `WindowInfo` API message.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WindowInfo {
+    /// The platform window id (a `CGWindowID` on macOS).
+    pub window_id: u32,
+    /// The pid of the process that owns the window.
+    pub pid: i32,
+    /// The owning application's name (e.g. "Arc", "Notes").
+    pub app_name: String,
+    /// The window title, if available.
+    pub title: String,
+    /// The window layer (0 is a normal application window).
+    pub layer: i32,
+}
+/// Metadata describing a captured window screenshot.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct CapturedWindow {
+    /// The platform window id that was captured.
+    pub window_id: u32,
+    /// The width of the native captured image, in pixels.
+    pub width_px: i32,
+    /// The height of the native captured image, in pixels.
+    pub height_px: i32,
+}
+
 #[async_trait]
 pub trait Actor: Send + Sync + 'static {
     /// Returns the platform that this actor is running on, if known.
@@ -97,7 +208,7 @@ pub trait Actor: Send + Sync + 'static {
 
     async fn perform_actions(
         &mut self,
-        actions: &[Action],
+        actions: &[TargetedAction],
         options: Options,
     ) -> Result<ActionResult, String>;
 }
@@ -270,7 +381,7 @@ pub enum ScrollDistance {
 }
 
 /// A rectangular region defined by top-left and bottom-right corners.
-/// Coordinates are in physical screen pixels (same coordinate space as mouse actions).
+/// Coordinates are physical pixels relative to the selected screenshot target.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ScreenshotRegion {
     #[serde(with = "Vector2IDef")]
@@ -319,15 +430,24 @@ pub struct ScreenshotParams {
     pub max_long_edge_px: Option<usize>,
     /// The maximum total number of pixels in the screenshot.
     pub max_total_px: Option<usize>,
-    /// Optional region to capture. If `None`, captures the full display.
+    /// Optional sub-region of `target` to capture, in target-relative physical pixels.
+    /// If `None`, captures the full target.
     #[serde(default)]
     pub region: Option<ScreenshotRegion>,
+    /// The surface to capture. `Screen` captures the main display (legacy); `Window` captures
+    /// a specific window's image.
+    #[serde(default)]
+    pub target: Target,
 }
 
 pub struct Options {
     /// If set, a screenshot will be captured after the actions are executed.
     /// The parameters specify what constraints, if any, to apply to the screenshot.
     pub screenshot_params: Option<ScreenshotParams>,
+    /// Whether background, per-window computer use is enabled. When false, actors must behave
+    /// exactly like the legacy full-screen path: any window target is ignored, only the main
+    /// display is captured, and no window list or captured-window metadata is returned.
+    pub background_enabled: bool,
 }
 
 /// The buttons of a mouse.
@@ -347,6 +467,25 @@ pub enum MouseButton {
 pub struct ActionResult {
     pub screenshot: Option<Screenshot>,
     pub cursor_position: Option<Vector2I>,
+    /// The on-screen windows, refreshed after the actions run, so the caller always has a fresh
+    /// list to target next. Empty on platforms without window enumeration.
+    pub windows: Vec<WindowInfo>,
+    /// Metadata about the captured window, populated only when a window target was
+    /// screenshotted, so window-local coordinates map onto the screenshot image.
+    pub captured_window: Option<CapturedWindow>,
+}
+
+impl ActionResult {
+    /// Builds a result that carries no window list or captured-window metadata (used by
+    /// platforms and code paths that do not support per-window targeting).
+    pub fn legacy(screenshot: Option<Screenshot>, cursor_position: Option<Vector2I>) -> Self {
+        Self {
+            screenshot,
+            cursor_position,
+            windows: Vec::new(),
+            captured_window: None,
+        }
+    }
 }
 
 /// A simple representation of a screenshot.

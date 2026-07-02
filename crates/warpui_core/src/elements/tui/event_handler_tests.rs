@@ -3,14 +3,15 @@ use std::rc::Rc;
 
 use super::TuiEventHandler;
 use crate::elements::tui::{
-    TuiChildView, TuiElement, TuiEventContext, TuiLayoutContext, TuiPresentationContext, TuiRect,
+    TuiChildView, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPresentationContext,
+    TuiRect,
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
-use crate::{App, EntityId, EntityIdMap, Event};
+use crate::{App, EntityId, EntityIdMap};
 
-fn key_event(key: &str) -> Event {
-    Event::KeyDown {
+fn key_event(key: &str) -> TuiEvent {
+    TuiEvent::KeyDown {
         keystroke: Keystroke {
             key: key.to_owned(),
             ..Default::default()

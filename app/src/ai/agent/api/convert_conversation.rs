@@ -1346,34 +1346,52 @@ pub(crate) fn convert_tool_call_result_to_input(
             })
         }
         Some(ToolCallResultType::UseComputer(result)) => {
-            let use_computer_result = match &result.result {
-                Some(api::use_computer_result::Result::Success(success)) => {
-                    let screenshot = success.screenshot.as_ref().map(|s| {
-                        // The original dimensions are not preserved through the API, so we use
-                        // the current dimensions for both.
-                        computer_use::Screenshot {
-                            width: s.width as usize,
-                            height: s.height as usize,
-                            original_width: s.width as usize,
-                            original_height: s.height as usize,
-                            data: s.data.clone(),
-                            mime_type: s.mime_type.clone().into(),
-                        }
-                    });
-                    let cursor_position = success
-                        .cursor_position
-                        .as_ref()
-                        .map(|c| computer_use::Vector2I::new(c.x, c.y));
-                    UseComputerResult::Success(computer_use::ActionResult {
-                        screenshot,
-                        cursor_position,
-                    })
-                }
-                Some(api::use_computer_result::Result::Error(error)) => {
-                    UseComputerResult::Error(error.message.clone())
-                }
-                None => UseComputerResult::Cancelled,
-            };
+            let use_computer_result =
+                match &result.result {
+                    Some(api::use_computer_result::Result::Success(success)) => {
+                        let screenshot = success.screenshot.as_ref().map(|s| {
+                            // The original dimensions are not preserved through the API, so we use
+                            // the current dimensions for both.
+                            computer_use::Screenshot {
+                                width: s.width as usize,
+                                height: s.height as usize,
+                                original_width: s.width as usize,
+                                original_height: s.height as usize,
+                                data: s.data.clone(),
+                                mime_type: s.mime_type.clone().into(),
+                            }
+                        });
+                        let cursor_position = success
+                            .cursor_position
+                            .as_ref()
+                            .map(|c| computer_use::Vector2I::new(c.x, c.y));
+                        let windows = success
+                            .windows
+                            .iter()
+                            .map(convert_api_window_info)
+                            .collect();
+                        // A present captured-window message indicates a window screenshot was taken.
+                        // The window id is an opaque string on the wire; on macOS it is a CGWindowID,
+                        // so parse it back to a u32, defaulting to 0 when it is not parseable.
+                        let captured_window = success.captured_window.as_ref().map(|c| {
+                            computer_use::CapturedWindow {
+                                window_id: c.window_id.parse().unwrap_or(0),
+                                width_px: c.width_px,
+                                height_px: c.height_px,
+                            }
+                        });
+                        UseComputerResult::Success(computer_use::ActionResult {
+                            screenshot,
+                            cursor_position,
+                            windows,
+                            captured_window,
+                        })
+                    }
+                    Some(api::use_computer_result::Result::Error(error)) => {
+                        UseComputerResult::Error(error.message.clone())
+                    }
+                    None => UseComputerResult::Cancelled,
+                };
 
             Some(AIAgentInput::ActionResult {
                 result: AIAgentActionResult {
@@ -1392,6 +1410,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                             api::request_computer_use_result::Approved {
                                 screen_dimensions: Some(screen_dimensions),
                                 initial_screenshot: Some(initial_screenshot),
+                                windows,
                                 ..
                             },
                             Some(platform),
@@ -1405,6 +1424,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 mime_type: initial_screenshot.mime_type.clone().into(),
                             },
                             platform,
+                            windows: windows.iter().map(convert_api_window_info).collect(),
                         },
                         _ => RequestComputerUseResult::Error(
                             "Missing screen dimensions, initial screenshot, or valid platform"
@@ -2124,6 +2144,19 @@ fn convert_api_platform(platform: i32) -> Option<computer_use::Platform> {
             log::warn!("Unknown platform value: {platform}");
             None
         }
+    }
+}
+
+/// Reconstructs the internal computer_use window record from the API `WindowInfo` message.
+fn convert_api_window_info(window: &api::WindowInfo) -> computer_use::WindowInfo {
+    computer_use::WindowInfo {
+        // The window id arrives as an opaque string; on macOS it is a CGWindowID (u32). Default to
+        // 0 when it is not parseable.
+        window_id: window.window_id.parse().unwrap_or(0),
+        pid: window.pid,
+        app_name: window.app_name.clone(),
+        title: window.title.clone(),
+        layer: window.layer,
     }
 }
 
