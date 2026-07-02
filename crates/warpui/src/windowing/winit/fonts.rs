@@ -507,15 +507,19 @@ impl TextLayoutSystem {
             }
 
             for &id in &corrupted_ids {
+                if let Some(face) = db.face(id) {
+                    log::warn!(
+                        "Removed corrupted face (reserved bit 7 set on simple glyph flags): id={}, family={:?}, source={:?}",
+                        id,
+                        face.families.first().map(|(n, _)| n),
+                        face.source,
+                    );
+                }
                 db.remove_face(id);
             }
 
             if !corrupted_ids.is_empty() {
                 fontdb_ids.retain(|id| !corrupted_ids.contains(id));
-                log::warn!(
-                    "Removed {} corrupted face(s) (reserved bit 7 set on simple glyph flags)",
-                    corrupted_ids.len()
-                );
             }
 
             fontdb_ids
