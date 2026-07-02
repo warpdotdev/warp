@@ -4023,7 +4023,11 @@ impl TerminalView {
         ctx.subscribe_to_model(
             &privacy_settings_handle,
             |me, privacy_settings_handle, event, ctx| {
-                if let PrivacySettingsChangedEvent::UpdateIsTelemetryEnabled { .. } = event {
+                if matches!(
+                    event,
+                    PrivacySettingsChangedEvent::UpdateIsTelemetryEnabled { .. }
+                        | PrivacySettingsChangedEvent::UpdateOrganizationTelemetryPolicy { .. }
+                ) {
                     me.privacy_settings_snapshot =
                         privacy_settings_handle.as_ref(ctx).get_snapshot(ctx)
                 }
@@ -15549,14 +15553,12 @@ impl TerminalView {
                     return;
                 }
 
-                let (query_string, block_command) = if should_collect_ai_ugc_telemetry(
-                    ctx,
-                    PrivacySettings::as_ref(ctx).is_telemetry_enabled,
-                ) {
-                    (Some(suggestion.prompt.to_string()), Some(command))
-                } else {
-                    (None, None)
-                };
+                let (query_string, block_command) =
+                    if should_collect_ai_ugc_telemetry(PrivacySettings::as_ref(ctx), ctx) {
+                        (Some(suggestion.prompt.to_string()), Some(command))
+                    } else {
+                        (None, None)
+                    };
 
                 let banner_id = self.inline_banners_state.next_banner_id();
 

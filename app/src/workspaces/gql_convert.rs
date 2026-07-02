@@ -34,6 +34,7 @@ use warp_graphql::workspace::{
     HostEnablementSetting as GqlHostEnablementSetting,
     InviteLinkDomainRestriction as GqlInviteLinkDomainRestriction,
     MembershipRole as GqlMembershipRole, Team as GqlTeam, TeamMember as GqlTeamMember,
+    TelemetryEnabled as GqlTelemetryEnabled,
     UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting, Workspace as GqlWorkspace,
     WorkspaceMember as GqlWorkspaceMember, WorkspaceMemberUsageInfo as GqlWorkspaceMemberUsageInfo,
     WorkspaceSettings as GqlWorkspaceSettings,
@@ -48,12 +49,12 @@ use super::workspace::{
     BillingCycleUsageSummary, BillingMetadata, CloudConversationStorageSettings,
     CodebaseContextSettings, CustomerType, DelinquencyStatus, EmailInvite, EnterpriseSecretRegex,
     HostEnablementSetting, InstanceShape, InviteLinkDomainRestriction, LinkSharingSettings,
-    LlmSettings, MaxPriorCycles, SandboxedAgentSettings, SecretRedactionSettings,
-    SessionSharingPolicy, SharedNotebooksPolicy, SharedWorkflowsPolicy,
-    TelemetryDataCollectionPolicy, TelemetrySettings, Tier, UgcCollectionEnablementSetting,
-    UgcCollectionSettings, UgcDataCollectionPolicy, UsageBasedPricingPolicy,
-    UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy, Workspace,
-    WorkspaceInviteCode, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceSettings,
+    LlmSettings, MaxPriorCycles, OrganizationTelemetryPolicy, SandboxedAgentSettings,
+    SecretRedactionSettings, SessionSharingPolicy, SharedNotebooksPolicy, SharedWorkflowsPolicy,
+    TelemetryDataCollectionPolicy, TelemetryEnablementSetting, TelemetrySettings, Tier,
+    UgcCollectionEnablementSetting, UgcCollectionSettings, UgcDataCollectionPolicy,
+    UsageBasedPricingPolicy, UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy,
+    Workspace, WorkspaceInviteCode, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceSettings,
     WorkspaceSizePolicy,
 };
 use crate::ai::blocklist::usage::conversation_usage_view::ConversationUsageInfo;
@@ -62,6 +63,7 @@ use crate::ai::execution_profiles::{
 };
 use crate::ai::{BonusGrant, BonusGrantScope};
 use crate::auth::UserUid;
+use crate::features::FeatureFlag;
 use crate::server::cloud_objects::listener::ObjectUpdateMessage;
 use crate::server::experiments::ServerExperiment;
 use crate::server::graphql::schema::object_action_history_from_gql;
@@ -82,6 +84,42 @@ impl From<GqlTeamMember> for TeamMember {
             uid: UserUid::new(&gql_team_member.uid.into_inner()),
             email: gql_team_member.email,
             role: gql_team_member.role.into(),
+        }
+    }
+}
+
+pub(super) fn organization_telemetry_policy(
+    setting: GqlTelemetryEnabled,
+    force_enabled: bool,
+) -> OrganizationTelemetryPolicy {
+    if !FeatureFlag::EnterpriseTelemetryPolicy.is_enabled() {
+        // Preserve legacy behavior while the enterprise telemetry policy rolls out: only an
+        // org-enforced enable (via either the new enum or the deprecated boolean) is honored;
+        // everything else is treated as unmanaged.
+        return if force_enabled || matches!(setting, GqlTelemetryEnabled::Enable) {
+            OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Enabled)
+        } else {
+            OrganizationTelemetryPolicy::Unmanaged
+        };
+    }
+    match setting {
+        GqlTelemetryEnabled::Enable => {
+            OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Enabled)
+        }
+        GqlTelemetryEnabled::Disable => {
+            OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled)
+        }
+        GqlTelemetryEnabled::RespectUserSetting => OrganizationTelemetryPolicy::Unmanaged,
+        GqlTelemetryEnabled::Other(value) => {
+            report_error!(
+                anyhow!(
+                    "Invalid TelemetryEnabled '{value}'. Make sure to update client GraphQL types!"
+                ),
+                warp_core::errors::ReportErrorLogMode::OncePerRun
+            );
+            // Fall back to respecting the user's own setting until the client
+            // understands the organization's policy.
+            OrganizationTelemetryPolicy::Unmanaged
         }
     }
 }
@@ -808,10 +846,14 @@ impl From<warp_graphql::workspace::LlmSettings> for LlmSettings {
 
 impl From<GqlWorkspaceSettings> for WorkspaceSettings {
     fn from(gql_workspace_settings: GqlWorkspaceSettings) -> WorkspaceSettings {
+        let telemetry_policy = organization_telemetry_policy(
+            gql_workspace_settings.telemetry_settings.setting.clone(),
+            gql_workspace_settings.telemetry_settings.force_enabled,
+        );
         Self {
             llm_settings: gql_workspace_settings.llm_settings.into(),
             telemetry_settings: TelemetrySettings {
-                force_enabled: gql_workspace_settings.telemetry_settings.force_enabled,
+                policy: telemetry_policy,
             },
             ugc_collection_settings: UgcCollectionSettings {
                 setting: UgcCollectionEnablementSetting::from(
@@ -1149,3 +1191,7 @@ impl From<GqlDiscoverableTeamData> for DiscoverableTeam {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "gql_convert_tests.rs"]
+mod tests;

@@ -4158,8 +4158,7 @@ impl AIBlock {
         let identifiers = view.as_ref(ctx).identifiers().clone();
         let query = view.as_ref(ctx).query().unwrap_or_default();
 
-        let should_collect_ugc =
-            should_collect_ai_ugc_telemetry(ctx, PrivacySettings::as_ref(ctx).is_telemetry_enabled);
+        let should_collect_ugc = should_collect_ai_ugc_telemetry(PrivacySettings::as_ref(ctx), ctx);
         let redacted_query = if should_collect_ugc {
             let mut redacted_query = query.clone();
             redact_secrets(&mut redacted_query);

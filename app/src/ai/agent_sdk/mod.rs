@@ -121,6 +121,11 @@ fn maybe_warn_team_api_key(ctx: &AppContext) {
     );
 }
 
+fn should_defer_cli_telemetry_until_policy_refresh(command: &CliCommand) -> bool {
+    FeatureFlag::EnterpriseTelemetryPolicy.is_enabled()
+        && matches!(command, CliCommand::Agent(AgentCommand::Run(_)))
+}
+
 /// Run a Warp CLI command.
 #[tracing::instrument(name = "agent_sdk::run", skip_all, err, fields(tags.cloud_agent = true))]
 pub fn run(
@@ -128,8 +133,10 @@ pub fn run(
     command: CliCommand,
     global_options: GlobalOptions,
 ) -> anyhow::Result<()> {
-    let event = command_to_telemetry_event(&command);
-    send_telemetry_sync_from_app_ctx!(event, ctx);
+    if !should_defer_cli_telemetry_until_policy_refresh(&command) {
+        let event = command_to_telemetry_event(&command);
+        send_telemetry_sync_from_app_ctx!(event, ctx);
+    }
 
     launch_command(ctx, command, global_options)
 }
@@ -211,6 +218,16 @@ fn dispatch_command(
             }
             api_key::run(ctx, global_options, api_key_cmd)
         }
+    }
+}
+
+fn agent_run_telemetry_event(args: &RunAgentArgs) -> CliTelemetryEvent {
+    CliTelemetryEvent::AgentRun {
+        gui: args.gui,
+        requested_mcp_servers: args.mcp_specs.len() + args.mcp_servers.len(),
+        has_environment: args.environment.is_some(),
+        task_id: args.task_id.clone(),
+        harness: args.harness.to_string(),
     }
 }
 
@@ -648,6 +665,14 @@ impl AgentDriverRunner {
                 Self::refresh_team_metadata(&foreground),
             )
             .await?;
+        if FeatureFlag::EnterpriseTelemetryPolicy.is_enabled() {
+            let run_event = agent_run_telemetry_event(&args);
+            foreground
+                .spawn(move |_, ctx| {
+                    send_telemetry_sync_from_app_ctx!(run_event, ctx);
+                })
+                .await?;
+        }
 
         // Wait for Warp Drive to sync before building the task config, since
         // prompt resolution (SavedPrompt -> workflow lookup) and environment
@@ -1660,13 +1685,7 @@ fn resolve_orchestration_harness_label() -> &'static str {
 /// Map each CLI command into a telemetry event to emit when it's executed.
 fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
     match command {
-        CliCommand::Agent(AgentCommand::Run(args)) => CliTelemetryEvent::AgentRun {
-            gui: args.gui,
-            requested_mcp_servers: args.mcp_specs.len() + args.mcp_servers.len(),
-            has_environment: args.environment.is_some(),
-            task_id: args.task_id.clone(),
-            harness: args.harness.to_string(),
-        },
+        CliCommand::Agent(AgentCommand::Run(args)) => agent_run_telemetry_event(args),
         CliCommand::Agent(AgentCommand::RunCloud(_)) => CliTelemetryEvent::AgentRunAmbient,
         CliCommand::Agent(AgentCommand::Profile(sub)) => match sub {
             AgentProfileCommand::List => CliTelemetryEvent::AgentProfileList,

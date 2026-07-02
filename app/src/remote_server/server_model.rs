@@ -15,6 +15,7 @@ use remote_server::proto::OpenBufferSuccess;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use warp_core::channel::ChannelState;
+use warp_core::interval_timer::TimingDataPoint;
 use warp_core::{safe_error, SessionId};
 use warp_files::{FileModel, FileModelEvent};
 use warp_util::content_version::ContentVersion;
@@ -98,6 +99,8 @@ use crate::terminal::model::session::command_executor::{
     ExecuteCommandOptions, LocalCommandExecutor,
 };
 use crate::util::git;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::{send_telemetry_sync_from_ctx, TelemetryEvent};
 
 /// Resolves the global bundled resources directory populated by the install
 /// script (see [`remote_server::setup::remote_server_bundled_resources_dir`]),
@@ -308,6 +311,10 @@ pub struct ServerModel {
     /// In-flight host-scoped requests whose response may be delivered on
     /// a different connection if the originating connection disconnects.
     host_scoped_requests: HashMap<RequestId, ConnectionId>,
+    /// One-shot startup telemetry held until the first authenticated workspace-policy refresh.
+    pending_startup_timing_data: Option<Vec<TimingDataPoint>>,
+    /// Prevents concurrent Initialize messages from spawning duplicate policy refreshes.
+    telemetry_policy_refresh_in_flight: bool,
     /// Per-repo local git status models tracked on the daemon, keyed by repo
     /// path. Created when `NavigatedToDirectory` resolves a git root or a
     /// client requests a snapshot; each is subscribed so watcher ticks
@@ -337,7 +344,10 @@ impl Entity for ServerModel {
 impl SingletonEntity for ServerModel {}
 
 impl ServerModel {
-    pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new(
+        pending_startup_timing_data: Option<Vec<TimingDataPoint>>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
         let host_id = uuid::Uuid::new_v4().to_string();
         log::info!(
             "Daemon started: PID={}, host_id={}",
@@ -361,6 +371,8 @@ impl ServerModel {
             buffers: ServerBufferTracker::new(),
             diff_states: ctx.add_model(|_| RemoteDiffStateManager::new()),
             host_scoped_requests: HashMap::new(),
+            pending_startup_timing_data,
+            telemetry_policy_refresh_in_flight: false,
             git_status_models: HashMap::new(),
             github_repo_models: HashMap::new(),
             git_status_subscribers: HashMap::new(),
@@ -742,6 +754,43 @@ impl ServerModel {
         model
     }
 
+    /// Resolves the daemon's telemetry policy after an authenticated context is supplied.
+    /// Initialize and Authenticate remain non-blocking; until resolution completes the
+    /// policy stays Unmanaged (respecting the user's own setting), and the startup
+    /// telemetry event is emitted once only after a successful resolution.
+    fn refresh_telemetry_policy_after_auth(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.should_refresh_telemetry_policy_after_auth() {
+            return;
+        }
+
+        self.telemetry_policy_refresh_in_flight = true;
+        let refresh = TeamUpdateManager::handle(ctx)
+            .update(ctx, |manager, ctx| manager.refresh_workspace_metadata(ctx));
+        let _ = ctx.spawn(refresh, |server, result, ctx| {
+            server.telemetry_policy_refresh_in_flight = false;
+            match result {
+                Ok(Ok(())) => {
+                    if let Some(timing_data) = server.pending_startup_timing_data.take() {
+                        send_telemetry_sync_from_ctx!(
+                            TelemetryEvent::RemoteServerDaemonStartup { timing_data },
+                            ctx
+                        );
+                    }
+                }
+                Ok(Err(error)) => {
+                    log::warn!("Daemon: workspace metadata refresh failed: {error:#}")
+                }
+                Err(_) => log::warn!("Daemon: workspace metadata refresh was canceled"),
+            }
+        });
+    }
+
+    fn should_refresh_telemetry_policy_after_auth(&self) -> bool {
+        FeatureFlag::EnterpriseTelemetryPolicy.is_enabled()
+            && self.auth_state.is_logged_in()
+            && !self.telemetry_policy_refresh_in_flight
+    }
+
     fn refresh_remote_agent_context_snapshot(&mut self, ctx: &warpui::AppContext) {
         let revision = self
             .remote_agent_context_snapshot
@@ -1003,7 +1052,7 @@ impl ServerModel {
                         self.handle_abort(m, &request_id, ctx);
                     }
                     Some(notification::Message::Authenticate(m)) => {
-                        self.handle_authenticate(m);
+                        self.handle_authenticate(m, ctx);
                     }
                     Some(notification::Message::UpdatePreferences(m)) => {
                         self.handle_update_preferences(m, ctx);
@@ -1632,6 +1681,7 @@ impl ServerModel {
     ) -> HandlerOutcome {
         log::info!("Handling Initialize (request_id={request_id})");
         self.apply_initialize_auth(&msg);
+        self.refresh_telemetry_policy_after_auth(ctx);
         Self::apply_codebase_index_limits(msg.codebase_index_limits.as_ref(), ctx);
         CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.start_persisted_index_restore(ctx);
@@ -1732,7 +1782,12 @@ impl ServerModel {
 
     /// Handles `Authenticate` by replacing the daemon-wide credential.
     /// This is a notification — no response is sent.
-    fn handle_authenticate(&mut self, msg: Authenticate) {
+    fn handle_authenticate(&mut self, msg: Authenticate, ctx: &mut ModelContext<Self>) {
+        self.apply_authenticate_auth(msg);
+        self.refresh_telemetry_policy_after_auth(ctx);
+    }
+
+    fn apply_authenticate_auth(&mut self, msg: Authenticate) {
         self.auth_state
             .set_remote_server_bearer_token(msg.auth_token);
     }

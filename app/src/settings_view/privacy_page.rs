@@ -55,7 +55,8 @@ use crate::util::links::PRIVACY_POLICY_URL;
 use crate::view_components::{Dropdown, DropdownItem};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, CustomerType, UgcCollectionEnablementSetting,
+    AdminEnablementSetting, OrganizationTelemetryPolicy, TelemetryEnablementSetting,
+    UgcCollectionEnablementSetting,
 };
 use crate::{report_if_error, send_telemetry_from_ctx};
 
@@ -73,15 +74,21 @@ const USER_SECRET_REGEX_DESCRIPTION: &str =
     "Use regex to define additional secrets or data you'd like to redact. This will take effect \
     when the next command runs. You can use the inline (?i) flag as a prefix to your regex \
     to make it case-insensitive.";
-const TELEMETRY_DESCRIPTION_OLD: &str =
-    "App analytics help us make the product better for you. We only collect \
-    app usage metadata, never console input or output.";
-const TELEMETRY_TITLE: &str = "Help improve Warp";
+const TELEMETRY_TITLE: &str = "Usage telemetry";
 const TELEMETRY_DESCRIPTION: &str =
-    "App analytics help us make the product better for you. We may collect \
-    certain console interactions to improve Warp's AI capabilities.";
+    "Allow Warp to collect telemetry to analyze feature uptake and usage \
+    patterns. These are high level metrics and do not include any \
+    user-generated content.";
 const TELEMETRY_DOCS_URL: &str =
     "https://docs.warp.dev/support-and-community/privacy-and-security/privacy#what-telemetry-data-does-warp-collect-and-why";
+
+const UGC_COLLECTION_TITLE: &str = "User-generated content data collection";
+const UGC_COLLECTION_DESCRIPTION: &str =
+    "Allow Warp to collect user-generated content, such as AI queries and console \
+    input/output, for analytics or debugging purposes.";
+const ORG_MANAGED_TOOLTIP: &str = "This setting is managed by your organization.";
+const UGC_TELEMETRY_DISABLED_TOOLTIP: &str =
+    "This setting is unavailable because usage telemetry is disabled.";
 
 const DATA_MANAGEMENT_TITLE: &str = "Manage your data";
 const DATA_MANAGEMENT_DESCRIPTION: &str =
@@ -226,6 +233,7 @@ impl PrivacyPageView {
         let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
             Box::new(SecretRedactionWidget::default()),
             Box::new(AppAnalyticsWidget::default()),
+            Box::new(UgcCollectionWidget::default()),
             Box::new(CrashReportsWidget::default()),
             Box::new(CloudConversationStorageWidget::default()),
         ];
@@ -298,6 +306,17 @@ impl PrivacyPageView {
         let old_value = privacy_settings_handle.as_ref(ctx).is_telemetry_enabled;
         ctx.update_model(&privacy_settings_handle, |privacy_settings, ctx| {
             privacy_settings.set_is_telemetry_enabled(!old_value, ctx);
+        });
+        ctx.notify();
+    }
+
+    fn toggle_ugc_collection(&mut self, ctx: &mut ViewContext<Self>) {
+        let privacy_settings_handle = PrivacySettings::handle(ctx);
+        let old_value = privacy_settings_handle
+            .as_ref(ctx)
+            .is_ugc_collection_enabled;
+        ctx.update_model(&privacy_settings_handle, |privacy_settings, ctx| {
+            privacy_settings.set_is_ugc_collection_enabled(!old_value, ctx);
         });
         ctx.notify();
     }
@@ -488,6 +507,7 @@ pub enum PrivacyPageAction {
     ToggleHideSecretsInBlockList,
     SetSecretDisplayMode(SecretDisplayMode),
     ToggleTelemetry,
+    ToggleUgcCollection,
     ToggleCrashReporting,
     ToggleCloudConversationStorage,
     LaunchNetworkLogging,
@@ -569,6 +589,7 @@ impl TypedActionView for PrivacyPageView {
                 self.set_secret_display_mode(*mode, ctx)
             }
             PrivacyPageAction::ToggleTelemetry => self.toggle_telemetry(ctx),
+            PrivacyPageAction::ToggleUgcCollection => self.toggle_ugc_collection(ctx),
             PrivacyPageAction::ToggleCrashReporting => self.toggle_crash_reporting(ctx),
             PrivacyPageAction::ToggleCloudConversationStorage => {
                 self.toggle_cloud_conversation_storage(ctx)
@@ -1365,60 +1386,81 @@ impl SettingsWidget for SecretRedactionWidget {
     }
 }
 
+fn render_zero_data_retention_badge(
+    zdr_badge_mouse_state: &MouseStateHandle,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let ui_builder = appearance.ui_builder();
+
+    Hoverable::new(zdr_badge_mouse_state.clone(), move |mouse_state| {
+        let is_hovered = mouse_state.is_hovered();
+        let theme = appearance.theme();
+
+        let background_color = appearance.theme().accent();
+
+        let badge = Container::new(
+            Text::new_inline("ZDR", appearance.ui_font_family(), CONTENT_FONT_SIZE - 2.)
+                .with_color(theme.active_ui_text_color().into())
+                .finish(),
+        )
+        .with_background(background_color)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
+        .with_uniform_padding(3.)
+        .with_margin_left(8.)
+        .finish();
+
+        let mut stack = Stack::new().with_child(badge);
+        if is_hovered {
+            let tooltip = ui_builder.tool_tip(
+                "Your administrator has enabled zero data retention for your team. User generated content will never be collected."
+                    .to_string(),
+            );
+            stack.add_positioned_child(
+                tooltip.build().finish(),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., -3.),
+                    ParentOffsetBounds::Unbounded,
+                    ParentAnchor::TopLeft,
+                    ChildAnchor::BottomLeft,
+                ),
+            );
+        }
+        stack.finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .finish()
+}
+
+fn should_show_zdr_badge(app: &AppContext) -> bool {
+    let setting = UserWorkspaces::as_ref(app).get_ugc_collection_enablement_setting();
+    matches!(setting, UgcCollectionEnablementSetting::Disable)
+}
+
+fn label_with_optional_zdr_badge(
+    label: Box<dyn Element>,
+    zdr_badge_mouse_state: &MouseStateHandle,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    if should_show_zdr_badge(app) {
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(label)
+            .with_child(render_zero_data_retention_badge(
+                zdr_badge_mouse_state,
+                appearance,
+            ))
+            .finish()
+    } else {
+        label
+    }
+}
+
 #[derive(Default)]
 struct AppAnalyticsWidget {
     switch_state: SwitchStateHandle,
     docs_link_mouse_state: MouseStateHandle,
     zdr_badge_mouse_state: MouseStateHandle,
-}
-
-impl AppAnalyticsWidget {
-    fn render_zero_data_retention_badge(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let ui_builder = appearance.ui_builder();
-
-        Hoverable::new(self.zdr_badge_mouse_state.clone(), move |mouse_state| {
-            let is_hovered = mouse_state.is_hovered();
-            let theme = appearance.theme();
-
-            let background_color = appearance.theme().accent();
-
-            let badge = Container::new(
-                Text::new_inline("ZDR", appearance.ui_font_family(), CONTENT_FONT_SIZE - 2.)
-                    .with_color(theme.active_ui_text_color().into())
-                    .finish(),
-            )
-            .with_background(background_color)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
-            .with_uniform_padding(3.)
-            .with_margin_left(8.)
-            .finish();
-
-            let mut stack = Stack::new().with_child(badge);
-            if is_hovered {
-                let tooltip = ui_builder.tool_tip(
-                    "Your administrator has enabled zero data retention for your team. User generated content will never be collected."
-                        .to_string(),
-                );
-                stack.add_positioned_child(
-                    tooltip.build().finish(),
-                    OffsetPositioning::offset_from_parent(
-                        vec2f(0., -3.),
-                        ParentOffsetBounds::Unbounded,
-                        ParentAnchor::TopLeft,
-                        ChildAnchor::BottomLeft,
-                    ),
-                );
-            }
-            stack.finish()
-        })
-        .with_cursor(Cursor::PointingHand)
-        .finish()
-    }
-
-    fn should_show_zdr_badge(&self, app: &AppContext) -> bool {
-        let setting = UserWorkspaces::as_ref(app).get_ugc_collection_enablement_setting();
-        matches!(setting, UgcCollectionEnablementSetting::Disable)
-    }
 }
 
 impl SettingsWidget for AppAnalyticsWidget {
@@ -1428,14 +1470,13 @@ impl SettingsWidget for AppAnalyticsWidget {
         "telemetry usage analytics data collection"
     }
 
-    fn should_render(&self, app: &AppContext) -> bool {
+    fn should_render(&self, _app: &AppContext) -> bool {
         // Builds without a telemetry config (e.g. OpenWarp) cannot ship
         // telemetry, so the toggle would be a no-op. Hide it in that case.
         if !ChannelState::is_telemetry_available() {
             return false;
         }
-        let privacy_settings = PrivacySettings::as_ref(app);
-        !privacy_settings.is_telemetry_force_enabled()
+        true
     }
 
     fn render(
@@ -1448,51 +1489,29 @@ impl SettingsWidget for AppAnalyticsWidget {
         let ui_builder = appearance.ui_builder();
         let description_text_color = description_text_color(appearance.theme()).into_solid();
 
-        let is_enterprise = UserWorkspaces::as_ref(app)
-            .current_workspace()
-            .is_some_and(|w| w.billing_metadata.customer_type == CustomerType::Enterprise);
-        // Keep the old description for enterprise users because we do not collect block input/output for them.
-        let description = if is_enterprise {
-            TELEMETRY_DESCRIPTION_OLD
-        } else {
-            TELEMETRY_DESCRIPTION
-        };
-
-        let org_setting = UserWorkspaces::handle(app)
-            .as_ref(app)
-            .get_ugc_collection_enablement_setting();
-
-        let (is_toggleable, is_checked) = match org_setting {
-            UgcCollectionEnablementSetting::Enable => (false, true),
-            UgcCollectionEnablementSetting::Disable => (false, false),
-            UgcCollectionEnablementSetting::RespectUserSetting => {
-                (true, privacy_settings.is_telemetry_enabled)
+        // This is the all-up usage telemetry toggle: its state derives only from the
+        // organization's telemetry policy and the user's telemetry preference. UGC
+        // collection has its own dedicated toggle below.
+        let (is_toggleable, is_checked) = match privacy_settings.organization_telemetry_policy() {
+            OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Enabled) => {
+                (false, true)
             }
+            OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled) => {
+                (false, false)
+            }
+            OrganizationTelemetryPolicy::Unmanaged => (true, privacy_settings.is_telemetry_enabled),
         };
 
-        let zdr_label_component = if self.should_show_zdr_badge(app) {
-            Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(render_body_item_label::<PrivacyPageAction>(
-                    TELEMETRY_TITLE.into(),
-                    None,
-                    None,
-                    LocalOnlyIconState::Hidden,
-                    is_toggleable.into(),
-                    appearance,
-                ))
-                .with_child(self.render_zero_data_retention_badge(appearance))
-                .finish()
-        } else {
-            render_body_item_label::<PrivacyPageAction>(
-                TELEMETRY_TITLE.into(),
-                None,
-                None,
-                LocalOnlyIconState::Hidden,
-                is_toggleable.into(),
-                appearance,
-            )
-        };
+        let label = render_body_item_label::<PrivacyPageAction>(
+            TELEMETRY_TITLE.into(),
+            None,
+            None,
+            LocalOnlyIconState::Hidden,
+            is_toggleable.into(),
+            appearance,
+        );
+        let label_component =
+            label_with_optional_zdr_badge(label, &self.zdr_badge_mouse_state, appearance, app);
 
         let switch = ui_builder
             .switch(self.switch_state.clone())
@@ -1507,7 +1526,7 @@ impl SettingsWidget for AppAnalyticsWidget {
         } else {
             switch
                 .with_tooltip(TooltipConfig {
-                    text: "This setting is managed by your organization.".to_string(),
+                    text: ORG_MANAGED_TOOLTIP.to_string(),
                     styles: ui_builder.default_tool_tip_styles(),
                 })
                 .disable()
@@ -1517,14 +1536,14 @@ impl SettingsWidget for AppAnalyticsWidget {
 
         let mut column = Flex::column();
         column.add_child(super::settings_page::build_toggle_element(
-            zdr_label_component,
+            label_component,
             switch,
             appearance,
             None,
         ));
         column.add_child(
             ui_builder
-                .paragraph(description)
+                .paragraph(TELEMETRY_DESCRIPTION)
                 .with_style(UiComponentStyles {
                     font_color: Some(description_text_color),
                     margin: Some(
@@ -1561,6 +1580,118 @@ impl SettingsWidget for AppAnalyticsWidget {
 }
 
 #[derive(Default)]
+struct UgcCollectionWidget {
+    switch_state: SwitchStateHandle,
+    zdr_badge_mouse_state: MouseStateHandle,
+}
+
+impl SettingsWidget for UgcCollectionWidget {
+    type View = PrivacyPageView;
+
+    fn search_terms(&self) -> &str {
+        "ugc user generated content ai data collection queries"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        // Builds without a telemetry config (e.g. OpenWarp) cannot ship
+        // telemetry, so the toggle would be a no-op. Hide it in that case.
+        if !ChannelState::is_telemetry_available() {
+            return false;
+        }
+        true
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let privacy_settings = PrivacySettings::as_ref(app);
+        let ui_builder = appearance.ui_builder();
+        let description_text_color = description_text_color(appearance.theme()).into_solid();
+
+        let org_ugc_setting = UserWorkspaces::as_ref(app).get_ugc_collection_enablement_setting();
+
+        // Cascade: when all-up usage telemetry is off (org-enforced or via the user's
+        // telemetry toggle), UGC collection is effectively disabled too.
+        let is_telemetry_off = match privacy_settings.organization_telemetry_policy() {
+            OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled) => true,
+            OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Enabled) => false,
+            OrganizationTelemetryPolicy::Unmanaged => !privacy_settings.is_telemetry_enabled,
+        };
+
+        let (is_toggleable, is_checked, disabled_tooltip) = if is_telemetry_off {
+            (false, false, UGC_TELEMETRY_DISABLED_TOOLTIP)
+        } else {
+            match org_ugc_setting {
+                UgcCollectionEnablementSetting::Enable => (false, true, ORG_MANAGED_TOOLTIP),
+                UgcCollectionEnablementSetting::Disable => (false, false, ORG_MANAGED_TOOLTIP),
+                UgcCollectionEnablementSetting::RespectUserSetting => {
+                    (true, privacy_settings.is_ugc_collection_enabled, "")
+                }
+            }
+        };
+
+        let label = render_body_item_label::<PrivacyPageAction>(
+            UGC_COLLECTION_TITLE.into(),
+            None,
+            None,
+            LocalOnlyIconState::Hidden,
+            is_toggleable.into(),
+            appearance,
+        );
+        let label_component =
+            label_with_optional_zdr_badge(label, &self.zdr_badge_mouse_state, appearance, app);
+
+        let switch = ui_builder
+            .switch(self.switch_state.clone())
+            .check(is_checked);
+        let switch = if is_toggleable {
+            switch
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(PrivacyPageAction::ToggleUgcCollection)
+                })
+                .finish()
+        } else {
+            switch
+                .with_tooltip(TooltipConfig {
+                    text: disabled_tooltip.to_string(),
+                    styles: ui_builder.default_tool_tip_styles(),
+                })
+                .disable()
+                .build()
+                .finish()
+        };
+
+        Flex::column()
+            .with_child(super::settings_page::build_toggle_element(
+                label_component,
+                switch,
+                appearance,
+                None,
+            ))
+            .with_child(
+                ui_builder
+                    .paragraph(UGC_COLLECTION_DESCRIPTION)
+                    .with_style(UiComponentStyles {
+                        font_color: Some(description_text_color),
+                        margin: Some(
+                            Coords::default()
+                                .top(styles::DESCRIPTION_NEGATIVE_MARGIN_OFFSET)
+                                .bottom(styles::DESCRIPTION_MARGIN_BOTTOM),
+                        ),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish(),
+            )
+            .finish()
+    }
+}
+
+#[derive(Default)]
 struct CrashReportsWidget {
     switch_state: SwitchStateHandle,
 }
@@ -1572,14 +1703,13 @@ impl SettingsWidget for CrashReportsWidget {
         "telemetry crash reports stability data collection"
     }
 
-    fn should_render(&self, app: &AppContext) -> bool {
+    fn should_render(&self, _app: &AppContext) -> bool {
         // Builds without a crash reporting config (e.g. OpenWarp) cannot ship
         // crash reports, so the toggle would be a no-op. Hide it in that case.
         if !ChannelState::is_crash_reporting_available() {
             return false;
         }
-        let privacy_settings = PrivacySettings::as_ref(app);
-        !privacy_settings.is_telemetry_force_enabled()
+        true
     }
 
     fn render(
@@ -1659,8 +1789,7 @@ impl SettingsWidget for CloudConversationStorageWidget {
             return false;
         }
 
-        let privacy_settings = PrivacySettings::as_ref(app);
-        !privacy_settings.is_telemetry_force_enabled()
+        true
     }
 
     fn render(
@@ -1961,12 +2090,20 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 ) {
     let mut toggle_binding_pairs = vec![
         ToggleSettingActionPair::new(
-            "app analytics",
+            "usage telemetry",
             builder(SettingsAction::PrivacyPageToggle(
                 PrivacyPageAction::ToggleTelemetry,
             )),
             context,
             flags::TELEMETRY_FLAG,
+        ),
+        ToggleSettingActionPair::new(
+            "user-generated content data collection",
+            builder(SettingsAction::PrivacyPageToggle(
+                PrivacyPageAction::ToggleUgcCollection,
+            )),
+            context,
+            flags::UGC_COLLECTION_FLAG,
         ),
         ToggleSettingActionPair::new(
             "crash reporting",

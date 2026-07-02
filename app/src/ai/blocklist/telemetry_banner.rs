@@ -7,12 +7,15 @@ use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext};
 
+use crate::settings::PrivacySettings;
 use crate::settings_view::SettingsSection;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::UgcCollectionEnablementSetting;
+use crate::workspaces::workspace::{
+    OrganizationTelemetryPolicy, TelemetryEnablementSetting, UgcCollectionEnablementSetting,
+};
 use crate::{Appearance, FeatureFlag, WorkspaceAction};
 
 const TITLE_EXISTING_USERS: &str = "We've updated our telemetry policy.";
@@ -192,16 +195,59 @@ impl Entity for TelemetryBanner {
 /// For example, a metadata event that records if a user toggled Pair/Dispatch mode does not
 /// require this check, but an event that logs the input buffer for natural language detection
 /// _does_ need to check this.
-pub fn should_collect_ai_ugc_telemetry(app: &AppContext, is_telemetry_enabled: bool) -> bool {
-    match UserWorkspaces::as_ref(app).get_ugc_collection_enablement_setting() {
+pub fn should_collect_ai_ugc_telemetry(
+    privacy_settings: &PrivacySettings,
+    ctx: &AppContext,
+) -> bool {
+    should_collect_ai_ugc_telemetry_for_settings(
+        UserWorkspaces::as_ref(ctx).get_ugc_collection_enablement_setting(),
+        privacy_settings.organization_telemetry_policy(),
+        privacy_settings.is_telemetry_enabled,
+        privacy_settings.is_ugc_collection_enabled,
+    )
+}
+
+/// Pure implementation of [`should_collect_ai_ugc_telemetry`], split out for testability.
+fn should_collect_ai_ugc_telemetry_for_settings(
+    org_ugc_setting: UgcCollectionEnablementSetting,
+    organization_telemetry_policy: OrganizationTelemetryPolicy,
+    is_telemetry_enabled: bool,
+    is_ugc_collection_enabled: bool,
+) -> bool {
+    // Effective all-up usage telemetry enablement, mirroring
+    // `PrivacySettingsSnapshot::should_disable_telemetry`.
+    let is_telemetry_effectively_enabled = if FeatureFlag::EnterpriseTelemetryPolicy.is_enabled() {
+        match organization_telemetry_policy {
+            OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled) => false,
+            OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Enabled) => true,
+            OrganizationTelemetryPolicy::Unmanaged => {
+                is_telemetry_enabled || FeatureFlag::AgentModeAnalytics.is_enabled()
+            }
+        }
+    } else {
+        is_telemetry_enabled || FeatureFlag::AgentModeAnalytics.is_enabled()
+    };
+
+    // Cascade: when all-up usage telemetry is disabled, UGC collection is disabled as well,
+    // regardless of the organization's UGC setting.
+    if FeatureFlag::EnterpriseTelemetryPolicy.is_enabled() && !is_telemetry_effectively_enabled {
+        return false;
+    }
+
+    match org_ugc_setting {
         UgcCollectionEnablementSetting::Disable => false,
         UgcCollectionEnablementSetting::Enable => true,
         UgcCollectionEnablementSetting::RespectUserSetting => {
             (FeatureFlag::GlobalAIAnalyticsCollection.is_enabled()
                 // Do NOT remove this check. Unlike the send telemetry macro,
                 // UploadBlock endpoint does not automatically check user's telemetry setting.
-                && is_telemetry_enabled)
+                && is_telemetry_effectively_enabled
+                && is_ugc_collection_enabled)
                 || FeatureFlag::AgentModeAnalytics.is_enabled()
         }
     }
 }
+
+#[cfg(test)]
+#[path = "telemetry_banner_tests.rs"]
+mod tests;

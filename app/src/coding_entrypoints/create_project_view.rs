@@ -85,10 +85,8 @@ impl CreateProjectView {
                 );
 
                 // Send content event only if UGC collection is enabled
-                let should_collect_ugc = should_collect_ai_ugc_telemetry(
-                    ctx,
-                    PrivacySettings::as_ref(ctx).is_telemetry_enabled,
-                );
+                let should_collect_ugc =
+                    should_collect_ai_ugc_telemetry(PrivacySettings::as_ref(ctx), ctx);
                 if should_collect_ugc {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::CreateProjectPromptSubmittedContent {
