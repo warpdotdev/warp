@@ -24,6 +24,7 @@
 //!         default: false,
 //!         supported_platforms: SupportedPlatforms::ALL,
 //!         sync_to_cloud: SyncToCloud::Never,
+//!         surface: SettingSurfaces::ALL,
 //!         private: false,
 //!         toml_path: "example.bool_setting",
 //!     },
@@ -32,6 +33,7 @@
 //!         default: 3.14,
 //!         supported_platforms: SupportedPlatforms::ALL,
 //!         sync_to_cloud: SyncToCloud::Never,
+//!         surface: SettingSurfaces::ALL,
 //!         private: false,
 //!         toml_path: "example.float_setting",
 //!     },
@@ -74,7 +76,7 @@
 //!
 //! impl settings_value::SettingsValue for MyEnum {}
 //!
-//! implement_setting_for_enum!(MyEnum, EnumSettingsGroup, SupportedPlatforms::ALL, SyncToCloud::Never, private: false, toml_path: "example.my_enum");
+//! implement_setting_for_enum!(MyEnum, EnumSettingsGroup, SupportedPlatforms::ALL, SyncToCloud::Never, surface: SettingSurfaces::ALL, private: false, toml_path: "example.my_enum");
 //!
 //! define_settings_group!(EnumSettingsGroup, settings: [
 //!     my_enum: MyEnum,
@@ -98,6 +100,7 @@
 //!         default: false,
 //!         supported_platforms: SupportedPlatforms::ALL,
 //!         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+//!         surface: SettingSurfaces::ALL,
 //!         private: false,
 //!         toml_path: "example.to_override",
 //!     },
@@ -121,6 +124,7 @@
 //!         default: false,
 //!         supported_platforms: SupportedPlatforms::ALL,
 //!         sync_to_cloud: SyncToCloud::Never,
+//!         surface: SettingSurfaces::ALL,
 //!         private: false,
 //!         toml_path: "example.bool_setting",
 //!     },
