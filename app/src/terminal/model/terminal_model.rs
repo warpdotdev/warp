@@ -32,6 +32,7 @@ use super::block::{
     BlocklistEnvVarMetadata, SerializedBlock,
 };
 use super::blockgrid::BlockGrid;
+use super::blocks::ActiveBlockCompletion;
 use super::grid::grid_handler::{
     ContainsPoint, FragmentBoundary, GridHandler, Link, PossiblePath, TermMode,
 };
@@ -2263,6 +2264,7 @@ impl TerminalModel {
     fn emit_handler_event(&mut self, event: HandlerEvent) {
         self.event_proxy.send_handler_event(event);
     }
+
     /// Applies the normal command-completion pipeline and its once-per-command side effects.
     fn complete_command(&mut self, data: CompletionMetadata) {
         // If we ssh from a doesn't-understand-bracketed-paste shell into one
@@ -2283,25 +2285,27 @@ impl TerminalModel {
             .ensure_active_block_executing_for_completion();
         let is_for_in_band_command = self.block_list().active_block().is_in_band_command_block();
         let finished_block_bootstrap_stage = self.block_list().active_block().bootstrap_stage();
-        self.block_list.complete_active_block_and_advance(data);
+        let active_block_completion = self.block_list.complete_active_block_and_advance(data);
 
-        if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
-            if let Err(e) = tx.try_send(OrderedTerminalEventType::CommandExecutionFinished {
-                next_block_id: block_id.into(),
-            }) {
-                log::warn!("Failed to send OrderedTerminalEventType::CommandFinished: {e}");
+        if active_block_completion == ActiveBlockCompletion::NewlyFinished {
+            if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
+                if let Err(e) = tx.try_send(OrderedTerminalEventType::CommandExecutionFinished {
+                    next_block_id: block_id.into(),
+                }) {
+                    log::warn!("Failed to send OrderedTerminalEventType::CommandFinished: {e}");
+                }
             }
-        }
 
-        self.emit_handler_event(HandlerEvent::CommandFinished {
-            command_type: if is_for_in_band_command {
-                CommandType::InBandCommand
-            } else if finished_block_bootstrap_stage == BootstrapStage::PostBootstrapPrecmd {
-                CommandType::User
-            } else {
-                CommandType::Bootstrap
-            },
-        });
+            self.emit_handler_event(HandlerEvent::CommandFinished {
+                command_type: if is_for_in_band_command {
+                    CommandType::InBandCommand
+                } else if finished_block_bootstrap_stage == BootstrapStage::PostBootstrapPrecmd {
+                    CommandType::User
+                } else {
+                    CommandType::Bootstrap
+                },
+            });
+        }
     }
 
     /// Applies prompt metadata through the normal once-per-block path.

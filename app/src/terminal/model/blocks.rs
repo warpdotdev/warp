@@ -61,6 +61,11 @@ use crate::terminal::{BlockPadding, ShellHost, SizeInfo, SizeUpdate};
 #[cfg(feature = "local_fs")]
 const RESTORED_BLOCK_SEPARATOR_HEIGHT: f64 = 1.5;
 pub(in crate::terminal) const INLINE_BANNER_HEIGHT: f64 = 2.5;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ActiveBlockCompletion {
+    AlreadyFinished,
+    NewlyFinished,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RichContentItem {
@@ -3093,7 +3098,10 @@ impl BlockList {
     /// 3. Update block heights.
     /// 4. Adjust selection based on changed heights.
     /// 5. Create a new block.
-    pub(super) fn complete_active_block_and_advance(&mut self, data: CompletionMetadata) {
+    pub(super) fn complete_active_block_and_advance(
+        &mut self,
+        data: CompletionMetadata,
+    ) -> ActiveBlockCompletion {
         record_trace_event!("command_execution:blocks:complete_active_block_and_advance");
         let next_block_id_disposition = self.classify_next_block_id(&data.next_block_id);
         log::trace!(
@@ -3142,6 +3150,11 @@ impl BlockList {
                 &next_bootstrap_stage
             );
             self.bootstrap_stage = next_bootstrap_stage;
+        }
+        if active_block_was_finished {
+            ActiveBlockCompletion::AlreadyFinished
+        } else {
+            ActiveBlockCompletion::NewlyFinished
         }
     }
 

@@ -1465,6 +1465,8 @@ fn recovery_advances_finished_active_block_without_republishing_completion() {
         .with_terminal_events_tx(event_tx)
         .build();
     let mut terminal = TerminalModel::mock(None, Some(event_proxy));
+    let (ordered_tx, ordered_rx) = async_channel::unbounded();
+    terminal.set_ordered_terminal_events_for_shared_session_tx(ordered_tx);
     let completed_block_id = terminal.active_block_id().clone();
     terminal
         .block_list_mut()
@@ -1508,7 +1510,9 @@ fn recovery_advances_finished_active_block_without_republishing_completion() {
     assert!(!events.iter().any(|event| {
         matches!(
             event,
-            Event::BlockCompleted(_) | Event::AfterBlockCompleted(_)
+            Event::BlockCompleted(_)
+                | Event::AfterBlockCompleted(_)
+                | Event::Handler(HandlerEvent::CommandFinished { .. })
         )
     }));
     assert_eq!(
@@ -1518,6 +1522,7 @@ fn recovery_advances_finished_active_block_without_republishing_completion() {
             .count(),
         1
     );
+    assert!(ordered_rx.try_recv().is_err());
 }
 
 #[test]
