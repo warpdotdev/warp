@@ -4018,7 +4018,7 @@ impl Input {
 
     /// Classifies how a follow-up prompt for this pane would be routed, using the same
     /// [`resolve_ai_query_routing`] source of truth as the footer live-VM indicator.
-    /// Consulted by `try_route_cloud_followup_submission` and the slash/skill guards so a remote
+    /// Consulted by `maybe_route_ai_query_to_remote_target` and the slash/skill guards so a remote
     /// cloud conversation never continues on the local agent.
     fn ai_query_routing(&self, ctx: &AppContext) -> AIQueryRouting {
         let model = self.model.lock();
@@ -4042,16 +4042,18 @@ impl Input {
         });
     }
 
-    /// Routes a follow-up submission to the correct non-local target, using the same
+    /// Routes an AI query submission to the correct non-local target, using the same
     /// [`resolve_ai_query_routing`] source of truth as the footer live-VM indicator, so a
-    /// cloud/remote conversation never continues on the local agent. Called by the submission
-    /// dispatchers (`input_enter` / `input_cmd_enter`) before falling back to local submission.
+    /// cloud/remote conversation never continues on the local agent. Shared by
+    /// [`Self::submit_ai_query_with_routing`] (the Enter / zero-state submit path) and
+    /// `input_cmd_enter`.
     ///
     /// Returns `true` when the submission was handled here (forwarded to the live VM, started a
     /// cloud follow-up, or blocked with a toast) and the caller should stop; `false` when the
-    /// caller should proceed with local submission (an ordinary local pane, or an executor viewer
-    /// running a local-action slash command such as `/fork`).
-    fn try_route_cloud_followup_submission(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+    /// caller should handle the local case (submit locally for Enter, or emit the default
+    /// unhandled-cmd-enter action for Cmd+Enter). Also returns `false` for an executor viewer
+    /// running a local-action slash command such as `/fork`.
+    fn maybe_route_ai_query_to_remote_target(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         // Nothing to route for an empty buffer; let the caller's normal (no-op) handling run.
         if self.editor.as_ref(ctx).buffer_text(ctx).trim().is_empty() {
             return false;
@@ -4118,6 +4120,20 @@ impl Input {
                 );
                 true
             }
+        }
+    }
+
+    /// Primary entry point for submitting the input buffer as an AI query. Routes to the correct
+    /// target via [`Self::maybe_route_ai_query_to_remote_target`] (live viewer, new cloud VM, stale or
+    /// read-only), falling back to [`Self::submit_ai_query_local`] for ordinary local panes and
+    /// for an executor viewer running a local-action slash command (e.g. `/fork`).
+    fn submit_ai_query_with_routing(
+        &mut self,
+        zero_state_prompt_suggestion_type: Option<ZeroStatePromptSuggestionType>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.maybe_route_ai_query_to_remote_target(ctx) {
+            self.submit_ai_query_local(zero_state_prompt_suggestion_type, ctx);
         }
     }
 
@@ -6143,7 +6159,7 @@ impl Input {
 
         self.focus_input_box(ctx);
         // TODO(advait): Avoid using user-simulated codepaths here. Revisit function to use here.
-        self.submit_ai_query_local(Some(suggestion_type), ctx);
+        self.submit_ai_query_with_routing(Some(suggestion_type), ctx);
 
         send_telemetry_from_ctx!(
             TelemetryEvent::ZeroStatePromptSuggestionUsed {
@@ -13542,13 +13558,7 @@ impl Input {
                 return;
             }
 
-            // Route cloud/remote follow-ups (live viewer, new cloud VM, stale or read-only)
-            // through the shared resolver so a remote conversation never continues locally.
-            if self.try_route_cloud_followup_submission(ctx) {
-                return;
-            }
-
-            self.submit_ai_query_local(None, ctx);
+            self.submit_ai_query_with_routing(None, ctx);
         } else {
             // If we're submitting a shell command, we want to send telemetry for the input type.
             let input_model = self.ai_input_model.as_ref(ctx);
@@ -13772,10 +13782,10 @@ impl Input {
                     return;
                 }
 
-                // Route cloud/remote follow-ups (live viewer, new cloud VM, stale or read-only)
-                // through the shared resolver so Cmd+Enter matches Enter; otherwise fall back to
-                // the default unhandled-cmd-enter behavior.
-                if self.try_route_cloud_followup_submission(ctx) {
+                // Cmd+Enter is not a local-submit gesture (Enter is), so only route the
+                // remote/cloud cases here; the local case falls through to the default
+                // unhandled-cmd-enter behavior (e.g. accepting a passive prompt suggestion).
+                if self.maybe_route_ai_query_to_remote_target(ctx) {
                     return;
                 }
 
@@ -14268,8 +14278,9 @@ impl Input {
         true
     }
 
-    /// Submit the input buffer contents as an AI query to continue the conversation
-    /// locally on the machine. Consider using try_route_cloud_followup_submission instead.
+    /// Submit the input buffer contents as an AI query to continue the conversation locally on the
+    /// machine. This is the local case of [`Self::submit_ai_query_with_routing`]; prefer calling
+    /// that so cloud/remote panes are routed correctly.
     fn submit_ai_query_local(
         &mut self,
         zero_state_prompt_suggestion_type: Option<ZeroStatePromptSuggestionType>,
@@ -14279,9 +14290,9 @@ impl Input {
             editor.abort_attached_images_future_handle(ctx);
         });
 
-        // Cloud/remote follow-up routing (live viewer, new cloud VM, stale or read-only) is
-        // handled by `try_route_cloud_followup_submission` at the dispatch layer (`input_enter` /
-        // `input_cmd_enter`) before this point, so this method only performs local submission.
+        // Cloud/remote follow-up routing (live viewer, new cloud VM, stale or read-only) is handled
+        // by `submit_ai_query_with_routing` / `maybe_route_ai_query_to_remote_target` before this point,
+        // so this method only performs local submission.
 
         // If the agent view is inactive but the current input is detected as AI, submitting
         // this query triggers entering the agent view.

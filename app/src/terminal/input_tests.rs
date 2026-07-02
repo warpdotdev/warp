@@ -1230,7 +1230,7 @@ fn test_history_up_for_shared_session_executor() {
 }
 
 #[test]
-fn try_route_cloud_followup_submission_proceeds_for_local_pane() {
+fn maybe_route_ai_query_to_remote_target_proceeds_for_local_pane() {
     // An ordinary local pane (not a viewer, not a cloud/ambient pane) must not be intercepted:
     // the helper returns false so the caller proceeds with normal local submission.
     App::test((), |mut app| async move {
@@ -1255,7 +1255,7 @@ fn try_route_cloud_followup_submission_proceeds_for_local_pane() {
         });
 
         let handled = input.update(&mut app, |input, ctx| {
-            input.try_route_cloud_followup_submission(ctx)
+            input.maybe_route_ai_query_to_remote_target(ctx)
         });
         assert!(
             !handled,
@@ -1265,7 +1265,7 @@ fn try_route_cloud_followup_submission_proceeds_for_local_pane() {
 }
 
 #[test]
-fn try_route_cloud_followup_submission_proceeds_for_empty_buffer() {
+fn maybe_route_ai_query_to_remote_target_proceeds_for_empty_buffer() {
     // Even on a viewer pane, an empty buffer is a no-op the caller handles normally, so the
     // helper returns false and does not forward anything.
     App::test((), |mut app| async move {
@@ -1294,7 +1294,7 @@ fn try_route_cloud_followup_submission_proceeds_for_empty_buffer() {
         });
 
         let handled = input.update(&mut app, |input, ctx| {
-            input.try_route_cloud_followup_submission(ctx)
+            input.maybe_route_ai_query_to_remote_target(ctx)
         });
         assert!(!handled, "an empty buffer must not be routed");
         assert!(
@@ -1305,7 +1305,7 @@ fn try_route_cloud_followup_submission_proceeds_for_empty_buffer() {
 }
 
 #[test]
-fn try_route_cloud_followup_submission_blocks_read_only_viewer() {
+fn maybe_route_ai_query_to_remote_target_blocks_read_only_viewer() {
     // A read-only (reader) viewer cannot submit; the helper handles it (blocks) without
     // forwarding a prompt to the sharer.
     App::test((), |mut app| async move {
@@ -1340,7 +1340,7 @@ fn try_route_cloud_followup_submission_blocks_read_only_viewer() {
         });
 
         let handled = input.update(&mut app, |input, ctx| {
-            input.try_route_cloud_followup_submission(ctx)
+            input.maybe_route_ai_query_to_remote_target(ctx)
         });
         assert!(
             handled,
@@ -1354,7 +1354,7 @@ fn try_route_cloud_followup_submission_blocks_read_only_viewer() {
 }
 
 #[test]
-fn try_route_cloud_followup_submission_forwards_executor_viewer_prompt() {
+fn maybe_route_ai_query_to_remote_target_forwards_executor_viewer_prompt() {
     // An executor viewer forwards the prompt to the sharer (SendAgentPrompt) instead of running
     // it on the viewer's local machine.
     App::test((), |mut app| async move {
@@ -1391,7 +1391,7 @@ fn try_route_cloud_followup_submission_forwards_executor_viewer_prompt() {
         });
 
         let handled = input.update(&mut app, |input, ctx| {
-            input.try_route_cloud_followup_submission(ctx)
+            input.maybe_route_ai_query_to_remote_target(ctx)
         });
         assert!(handled, "an executor viewer submission must be handled");
         assert_eq!(
