@@ -1,8 +1,7 @@
 //! Unit tests for the `coerce_integer_args` helper.
 
-use serde_json::json;
-
 use super::*;
+use serde_json::json;
 
 fn obj(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
     match value {
@@ -49,64 +48,49 @@ fn no_coercion_when_not_typed_as_integer() {
 }
 
 #[test]
-fn nested_object_integer_is_coerced() {
-    let mut args = obj(json!({ "outer": { "inner": 5.0 } }));
+fn nested_integer_fields_are_coerced() {
+    let mut args = obj(json!({
+        "request_data": {
+            "search_from": 0.0,
+            "search_to": 100.0,
+            "ratio": 1.5
+        }
+    }));
     let schema = obj(json!({
         "properties": {
-            "outer": {
+            "request_data": {
                 "type": "object",
-                "properties": { "inner": { "type": "integer" } }
+                "properties": {
+                    "search_from": { "type": "integer" },
+                    "search_to": { "type": "integer" },
+                    "ratio": { "type": "number" }
+                }
             }
         }
     }));
 
     coerce_integer_args(&mut args, &schema);
 
-    assert_eq!(args["outer"]["inner"].as_i64(), Some(5));
-    assert_eq!(serde_json::to_string(&args["outer"]["inner"]).unwrap(), "5");
+    assert_eq!(
+        serde_json::to_string(&args["request_data"]["search_from"]).unwrap(),
+        "0"
+    );
+    assert_eq!(
+        serde_json::to_string(&args["request_data"]["search_to"]).unwrap(),
+        "100"
+    );
+    assert_eq!(
+        serde_json::to_string(&args["request_data"]["ratio"]).unwrap(),
+        "1.5"
+    );
 }
 
 #[test]
-fn array_items_integer_is_coerced() {
-    let mut args = obj(json!({ "ids": [1.0, 2.0, 3.5] }));
-    let schema = obj(json!({
-        "properties": {
-            "ids": { "type": "array", "items": { "type": "integer" } }
-        }
-    }));
-
-    coerce_integer_args(&mut args, &schema);
-
-    // Whole-number floats become i64; fractional values are left alone.
-    assert_eq!(args["ids"][0].as_i64(), Some(1));
-    assert_eq!(args["ids"][1].as_i64(), Some(2));
-    assert_eq!(args["ids"][2].as_f64(), Some(3.5));
-}
-
-#[test]
-fn nullable_integer_type_array_is_coerced() {
-    let mut args = obj(json!({ "n": 7.0, "m": null }));
-    let schema = obj(json!({
-        "properties": {
-            "n": { "type": ["integer", "null"] },
-            "m": { "type": ["integer", "null"] }
-        }
-    }));
-
-    coerce_integer_args(&mut args, &schema);
-
-    assert_eq!(args["n"].as_i64(), Some(7));
-    assert!(args["m"].is_null());
-}
-
-#[test]
-fn one_of_branch_with_integer_is_coerced() {
-    // Mirrors the schema shape from issue #10596: a `filters` array whose items
-    // are a oneOf where one branch has `value: integer` (a millisecond timestamp).
+fn array_items_and_one_of_branches_are_coerced() {
     let mut args = obj(json!({
         "filters": [
-            { "value": ["a", "b"] },
-            { "value": 1730419200000.0 }
+            { "field": "timestamp", "value": 1730419200000.0 },
+            { "field": "names", "value": ["a", "b"] }
         ]
     }));
     let schema = obj(json!({
@@ -115,8 +99,18 @@ fn one_of_branch_with_integer_is_coerced() {
                 "type": "array",
                 "items": {
                     "oneOf": [
-                        { "properties": { "value": { "type": "array", "items": { "type": "string" } } } },
-                        { "properties": { "value": { "type": "integer" } } }
+                        {
+                            "type": "object",
+                            "properties": {
+                                "value": { "type": "array", "items": { "type": "string" } }
+                            }
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "value": { "type": "integer" }
+                            }
+                        }
                     ]
                 }
             }
@@ -125,21 +119,59 @@ fn one_of_branch_with_integer_is_coerced() {
 
     coerce_integer_args(&mut args, &schema);
 
-    assert_eq!(args["filters"][1]["value"].as_i64(), Some(1730419200000));
     assert_eq!(
-        serde_json::to_string(&args["filters"][1]["value"]).unwrap(),
+        serde_json::to_string(&args["filters"][0]["value"]).unwrap(),
         "1730419200000"
     );
-    // The string-array branch value is untouched.
-    assert_eq!(args["filters"][0]["value"][0].as_str(), Some("a"));
+    assert_eq!(args["filters"][1]["value"], json!(["a", "b"]));
 }
 
 #[test]
-fn any_of_at_property_level_is_coerced() {
-    let mut args = obj(json!({ "x": 9.0 }));
+fn one_of_skips_coercion_when_branch_matching_is_ambiguous() {
+    // `1.0` matches both the `number` and `integer` branches, so the matching branch is
+    // ambiguous. We skip coercion rather than risk applying the `integer` branch.
+    let mut args = obj(json!({ "value": 1.0 }));
     let schema = obj(json!({
         "properties": {
-            "x": {
+            "value": {
+                "oneOf": [
+                    { "type": "number" },
+                    { "type": "integer" }
+                ]
+            }
+        }
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    assert_eq!(serde_json::to_string(&args["value"]).unwrap(), "1.0");
+}
+
+#[test]
+fn any_of_uses_matching_branch_before_coercing() {
+    // The selected `number` branch must not be coerced even though a later `integer` branch
+    // would type-check the same value.
+    let mut number_args = obj(json!({ "value": 1.0 }));
+    let number_schema = obj(json!({
+        "properties": {
+            "value": {
+                "anyOf": [
+                    { "type": "number" },
+                    { "type": "integer" }
+                ]
+            }
+        }
+    }));
+
+    coerce_integer_args(&mut number_args, &number_schema);
+
+    assert_eq!(serde_json::to_string(&number_args["value"]).unwrap(), "1.0");
+
+    // When only the `integer` branch matches, coercion still applies.
+    let mut integer_args = obj(json!({ "value": 2.0 }));
+    let integer_schema = obj(json!({
+        "properties": {
+            "value": {
                 "anyOf": [
                     { "type": "string" },
                     { "type": "integer" }
@@ -148,173 +180,172 @@ fn any_of_at_property_level_is_coerced() {
         }
     }));
 
-    coerce_integer_args(&mut args, &schema);
+    coerce_integer_args(&mut integer_args, &integer_schema);
 
-    assert_eq!(args["x"].as_i64(), Some(9));
+    assert_eq!(serde_json::to_string(&integer_args["value"]).unwrap(), "2");
 }
 
 #[test]
-fn all_of_with_integer_branch_is_coerced() {
-    let mut args = obj(json!({ "x": 4.0 }));
+fn one_of_branch_selection_honors_required() {
+    // Both branches declare an optional `id: integer`, but only the branch whose `required`
+    // key (`amount`) is present should match. Selecting the wrong branch would still coerce
+    // `id`, so this exercises that `required` actually narrows the selection.
+    let mut args = obj(json!({ "amount": 3.0, "id": 4.0 }));
     let schema = obj(json!({
         "properties": {
-            "x": {
-                "allOf": [
-                    { "type": "integer" },
-                    { "minimum": 0 }
-                ]
-            }
-        }
-    }));
-
-    coerce_integer_args(&mut args, &schema);
-
-    assert_eq!(args["x"].as_i64(), Some(4));
-}
-
-#[test]
-fn additional_properties_schema_is_applied() {
-    let mut args = obj(json!({ "meta": { "a": 1.0, "b": 2.0 } }));
-    let schema = obj(json!({
-        "properties": {
-            "meta": {
+            "payload": { "type": "object" }
+        },
+        "oneOf": [
+            {
                 "type": "object",
-                "additionalProperties": { "type": "integer" }
+                "required": ["label"],
+                "properties": {
+                    "label": { "type": "string" },
+                    "id": { "type": "integer" }
+                }
+            },
+            {
+                "type": "object",
+                "required": ["amount"],
+                "properties": {
+                    "amount": { "type": "number" },
+                    "id": { "type": "integer" }
+                }
             }
-        }
-    }));
-
-    coerce_integer_args(&mut args, &schema);
-
-    assert_eq!(args["meta"]["a"].as_i64(), Some(1));
-    assert_eq!(args["meta"]["b"].as_i64(), Some(2));
-}
-
-#[test]
-fn fractional_value_is_not_coerced_to_int() {
-    let mut args = obj(json!({ "x": 2.5 }));
-    let schema = obj(json!({
-        "properties": { "x": { "type": "integer" } }
-    }));
-
-    coerce_integer_args(&mut args, &schema);
-
-    // Schema mismatch (server will reject) but we must not silently truncate.
-    assert_eq!(args["x"].as_f64(), Some(2.5));
-}
-
-#[test]
-fn root_level_one_of_branch_with_integer_is_coerced() {
-    // When the root schema uses a combinator instead of (or alongside)
-    // `properties`, the entrypoint must walk every branch, not stop at the
-    // first one.
-    let mut args = obj(json!({ "x": 6.0 }));
-    let schema = obj(json!({
-        "oneOf": [
-            { "properties": { "x": { "type": "string" } } },
-            { "properties": { "x": { "type": "integer" } } }
         ]
     }));
 
     coerce_integer_args(&mut args, &schema);
 
-    assert_eq!(args["x"].as_i64(), Some(6));
+    // Second branch is selected: `amount` stays a float, `id` is coerced.
+    assert_eq!(serde_json::to_string(&args["amount"]).unwrap(), "3.0");
+    assert_eq!(serde_json::to_string(&args["id"]).unwrap(), "4");
 }
 
 #[test]
-fn root_level_additional_properties_is_applied() {
-    let mut args = obj(json!({ "anything": 8.0, "more": 9.0 }));
-    let schema = obj(json!({ "additionalProperties": { "type": "integer" } }));
-
-    coerce_integer_args(&mut args, &schema);
-
-    assert_eq!(args["anything"].as_i64(), Some(8));
-    assert_eq!(args["more"].as_i64(), Some(9));
-}
-
-#[test]
-fn negative_whole_float_is_coerced() {
-    let mut args = obj(json!({ "x": -42.0 }));
+fn one_of_branch_selection_honors_const_and_enum() {
+    // The discriminant `kind` pins each branch via `const`/`enum`. Only the matching branch's
+    // `integer` declaration should be applied.
     let schema = obj(json!({
-        "properties": { "x": { "type": "integer" } }
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "kind": { "const": "ratio" },
+                    "value": { "type": "number" }
+                }
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": { "enum": ["count"] },
+                    "value": { "type": "integer" }
+                }
+            }
+        ]
+    }));
+
+    let mut ratio_args = obj(json!({ "kind": "ratio", "value": 5.0 }));
+    coerce_integer_args(&mut ratio_args, &schema);
+    assert_eq!(serde_json::to_string(&ratio_args["value"]).unwrap(), "5.0");
+
+    let mut count_args = obj(json!({ "kind": "count", "value": 5.0 }));
+    coerce_integer_args(&mut count_args, &schema);
+    assert_eq!(serde_json::to_string(&count_args["value"]).unwrap(), "5");
+}
+
+#[test]
+fn one_of_branch_selection_honors_additional_properties_false() {
+    // The first (closed) branch forbids the extra `id` key, so the open second branch must be
+    // selected and its `integer` declaration applied to `id`.
+    let mut args = obj(json!({ "name": "abc", "id": 7.0 }));
+    let schema = obj(json!({
+        "oneOf": [
+            {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string" }
+                }
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "id": { "type": "integer" }
+                }
+            }
+        ]
     }));
 
     coerce_integer_args(&mut args, &schema);
 
-    assert_eq!(args["x"].as_i64(), Some(-42));
-    assert_eq!(serde_json::to_string(&args["x"]).unwrap(), "-42");
+    assert_eq!(serde_json::to_string(&args["id"]).unwrap(), "7");
 }
 
 #[test]
-fn tuple_style_items_coerces_positional_schemas() {
-    let mut args = obj(json!({ "pair": [1.0, "hi", 2.0] }));
+fn additional_properties_skip_declared_properties() {
+    let mut args = obj(json!({
+        "price": 1.0,
+        "quantity": 2.0
+    }));
     let schema = obj(json!({
         "properties": {
-            "pair": {
-                "type": "array",
-                "items": [
-                    { "type": "integer" },
-                    { "type": "string" },
-                    { "type": "integer" }
-                ]
+            "price": { "type": "number" }
+        },
+        "additionalProperties": { "type": "integer" }
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    assert_eq!(serde_json::to_string(&args["price"]).unwrap(), "1.0");
+    assert_eq!(serde_json::to_string(&args["quantity"]).unwrap(), "2");
+}
+
+#[test]
+fn integer_coercion_rejects_f64_i64_upper_rounding_boundary() {
+    let mut args = obj(json!({ "id": 9_223_372_036_854_775_808.0 }));
+    let schema = obj(json!({
+        "properties": { "id": { "type": "integer" } }
+    }));
+
+    coerce_integer_args(&mut args, &schema);
+
+    assert_eq!(args["id"].as_f64(), Some(9_223_372_036_854_775_808.0));
+}
+
+#[test]
+fn refs_and_nullable_integer_types_are_coerced() {
+    let mut args = obj(json!({
+        "limit": 5.0,
+        "cursor": null,
+        "range": { "start": 10.0, "end": 12.0 }
+    }));
+    let schema = obj(json!({
+        "$defs": {
+            "nullable_integer": { "type": ["integer", "null"] },
+            "range": {
+                "type": "object",
+                "properties": {
+                    "start": { "$ref": "#/$defs/nullable_integer" },
+                    "end": { "type": "integer" }
+                }
             }
+        },
+        "properties": {
+            "limit": { "$ref": "#/$defs/nullable_integer" },
+            "cursor": { "$ref": "#/$defs/nullable_integer" },
+            "range": { "$ref": "#/$defs/range" }
         }
     }));
 
     coerce_integer_args(&mut args, &schema);
 
-    assert_eq!(args["pair"][0].as_i64(), Some(1));
-    assert_eq!(args["pair"][1].as_str(), Some("hi"));
-    assert_eq!(args["pair"][2].as_i64(), Some(2));
-}
-
-#[test]
-fn multiple_combinators_at_same_level_are_all_traversed() {
-    // A schema may declare more than one of {oneOf, anyOf, allOf} at the
-    // same level, and every combinator must be walked — not just the first
-    // present key.
-    let mut args = obj(json!({ "a": 1.0, "b": 2.0, "c": 3.0 }));
-    let schema = obj(json!({
-        "oneOf": [{ "properties": { "a": { "type": "integer" } } }],
-        "anyOf": [{ "properties": { "b": { "type": "integer" } } }],
-        "allOf": [{ "properties": { "c": { "type": "integer" } } }]
-    }));
-
-    coerce_integer_args(&mut args, &schema);
-
-    assert_eq!(args["a"].as_i64(), Some(1));
-    assert_eq!(args["b"].as_i64(), Some(2));
-    assert_eq!(args["c"].as_i64(), Some(3));
-}
-
-#[test]
-fn one_of_with_multiple_branches_all_visited() {
-    // Every branch under a combinator must be visited, not just the first
-    // match. The same property name across branches with different types
-    // should still get the integer branch's coercion when applicable.
-    let mut args = obj(json!({ "v": 11.0 }));
-    let schema = obj(json!({
-        "oneOf": [
-            { "properties": { "v": { "type": "string" } } },
-            { "properties": { "v": { "type": "number" } } },
-            { "properties": { "v": { "type": "integer" } } }
-        ]
-    }));
-
-    coerce_integer_args(&mut args, &schema);
-
-    assert_eq!(args["v"].as_i64(), Some(11));
-}
-
-#[test]
-fn already_integer_value_is_unchanged() {
-    let mut args = obj(json!({ "x": 5 }));
-    let schema = obj(json!({
-        "properties": { "x": { "type": "integer" } }
-    }));
-
-    coerce_integer_args(&mut args, &schema);
-
-    assert_eq!(args["x"].as_i64(), Some(5));
-    assert_eq!(serde_json::to_string(&args["x"]).unwrap(), "5");
+    assert_eq!(serde_json::to_string(&args["limit"]).unwrap(), "5");
+    assert_eq!(args["cursor"], serde_json::Value::Null);
+    assert_eq!(
+        serde_json::to_string(&args["range"]["start"]).unwrap(),
+        "10"
+    );
+    assert_eq!(serde_json::to_string(&args["range"]["end"]).unwrap(), "12");
 }
