@@ -352,6 +352,9 @@ impl NotebookView {
                 },
                 propagate_and_no_op_vertical_navigation_keys:
                     PropagateAndNoOpNavigationKeys::Always,
+                // The notebook title provides its own right-click context menu
+                // (see `render_title`), so opt out of the built-in one.
+                disable_builtin_context_menu: true,
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);

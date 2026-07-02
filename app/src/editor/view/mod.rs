@@ -58,8 +58,10 @@ use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, Wa
 use warpui::actions::StandardAction;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable, MainAxisSize,
-    MouseStateHandle, ParentElement, Radius, Shrinkable, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    ChildAnchor, ChildView, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult,
+    EventHandler, Flex, Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, SavePosition, Shrinkable, Stack,
+    DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 use warpui::fonts::{Cache as FontCache, FamilyId, Properties, Weight};
 use warpui::keymap::{EditableBinding, FixedBinding, Keystroke, PerPlatformKeystroke};
@@ -101,6 +103,7 @@ use crate::editor::accept_autosuggestion_keybinding_view::AcceptAutosuggestionKe
 use crate::editor::autosuggestion_ignore_view::{AutosuggestionIgnore, AutosuggestionIgnoreEvent};
 use crate::editor::RangeExt;
 use crate::features::FeatureFlag;
+use crate::menu::{self, Menu, MenuItem, MenuItemFields};
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::ai_context_menu::view::{
     AIContextMenu, AIContextMenuCategory, AIContextMenuEvent,
@@ -972,6 +975,15 @@ pub fn init(ctx: &mut AppContext) {
     )]);
 }
 
+/// Actions for the built-in right-click text-editing context menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorContextMenuAction {
+    SelectAll,
+    Copy,
+    Cut,
+    Paste,
+}
+
 /// Actions that can be performed on an [`EditorView`].
 #[derive(Debug)]
 pub enum EditorAction {
@@ -1085,6 +1097,9 @@ pub enum EditorAction {
     ProcessNonImageFiles {
         file_paths: Vec<String>,
     },
+    /// Opens the built-in text-editing context menu at the given offset, which is
+    /// relative to the editor's saved position (see [`EditorView`] render).
+    OpenContextMenu(Vector2F),
 }
 
 impl EditorAction {
@@ -1461,6 +1476,11 @@ pub struct EditorOptions {
     /// Optional closure that allows parent views to add flags to the EditorView's keymap context.
     /// This is called during `keymap_context()` and can insert additional flags into the context.
     pub keymap_context_modifier: Option<KeymapContextModifierFn>,
+    /// If true, this editor will NOT show the built-in right-click text-editing
+    /// context menu (Select All / Copy / Cut / Paste). Defaults to false so the
+    /// menu is enabled. Set to true to opt out editors that provide their own
+    /// right-click context menu at a parent level (e.g. the terminal input).
+    pub disable_builtin_context_menu: bool,
 }
 
 impl Default for EditorOptions {
@@ -1493,6 +1513,7 @@ impl Default for EditorOptions {
             drag_drop_path_transformer: None,
             is_password: false,
             keymap_context_modifier: None,
+            disable_builtin_context_menu: false,
         }
     }
 }
@@ -1528,6 +1549,7 @@ impl From<SingleLineEditorOptions> for EditorOptions {
             drag_drop_path_transformer: None,
             is_password: options.is_password,
             keymap_context_modifier: None,
+            disable_builtin_context_menu: options.disable_builtin_context_menu,
         }
     }
 }
@@ -1560,6 +1582,9 @@ pub struct SingleLineEditorOptions {
     pub allow_user_cursor_preference: bool,
     pub convert_newline_to_space: bool,
     pub is_password: bool,
+    /// If true, opt out of the built-in right-click text-editing context menu.
+    /// See [`EditorOptions::disable_builtin_context_menu`].
+    pub disable_builtin_context_menu: bool,
 }
 
 impl Default for SingleLineEditorOptions {
@@ -1583,6 +1608,7 @@ impl Default for SingleLineEditorOptions {
             allow_user_cursor_preference: false,
             convert_newline_to_space: true,
             is_password: false,
+            disable_builtin_context_menu: false,
         }
     }
 }
@@ -1904,6 +1930,14 @@ pub struct EditorView {
 
     /// Optional closure that allows parent views to add flags to this editor's keymap context.
     keymap_context_modifier: Option<KeymapContextModifierFn>,
+
+    /// The built-in right-click text-editing context menu, when enabled. `None`
+    /// when the editor opts out via [`EditorOptions::disable_builtin_context_menu`].
+    context_menu: Option<ViewHandle<Menu<EditorContextMenuAction>>>,
+
+    /// The offset (relative to the editor's saved position) at which the context
+    /// menu is currently shown, or `None` when it is closed.
+    context_menu_position: Option<Vector2F>,
 }
 
 pub(super) struct ScrollState {
@@ -3111,6 +3145,21 @@ impl EditorView {
             None
         };
 
+        let context_menu = if options.disable_builtin_context_menu {
+            None
+        } else {
+            let menu = ctx.add_typed_action_view(|_| {
+                Menu::new()
+                    .prevent_interaction_with_other_elements()
+                    .with_drop_shadow()
+                    .without_item_action_dispatch()
+            });
+            ctx.subscribe_to_view(&menu, |me, _, event, ctx| {
+                me.handle_context_menu_event(event, ctx);
+            });
+            Some(menu)
+        };
+
         Self {
             view_id: ctx.view_id(),
             editor_model,
@@ -3186,6 +3235,8 @@ impl EditorView {
             process_attached_images_future_handle: None,
             is_password: options.is_password,
             keymap_context_modifier: options.keymap_context_modifier,
+            context_menu,
+            context_menu_position: None,
         }
     }
 
@@ -4208,6 +4259,98 @@ impl EditorView {
         }
 
         ctx.emit(Event::Paste);
+    }
+
+    /// Saved-position id used to anchor the built-in context menu overlay to
+    /// this editor instance.
+    fn context_menu_position_id(&self) -> String {
+        format!("editor_context_menu:{}", self.view_id)
+    }
+
+    /// Builds the items for the built-in text-editing context menu, enabling or
+    /// omitting each based on the editor's current state.
+    fn build_context_menu_items(
+        &self,
+        ctx: &ViewContext<Self>,
+    ) -> Vec<MenuItem<EditorContextMenuAction>> {
+        let has_selection = !self.selected_text(ctx).is_empty();
+        let can_edit = self.can_edit(ctx);
+        let can_select = self.can_select(ctx);
+        let is_empty = self.is_empty(ctx);
+
+        let mut items = vec![MenuItemFields::new("Select All")
+            .with_on_select_action(EditorContextMenuAction::SelectAll)
+            .with_disabled(is_empty || !can_select)
+            .into_item()];
+
+        // Copy/Cut are omitted entirely for password fields so the masked secret
+        // can't be exfiltrated via the menu (mirrors `EditorView::copy`, which
+        // already no-ops for password editors).
+        if !self.is_password {
+            items.push(
+                MenuItemFields::new("Copy")
+                    .with_on_select_action(EditorContextMenuAction::Copy)
+                    .with_disabled(!has_selection || !can_select)
+                    .into_item(),
+            );
+            items.push(
+                MenuItemFields::new("Cut")
+                    .with_on_select_action(EditorContextMenuAction::Cut)
+                    .with_disabled(!has_selection || !can_edit)
+                    .into_item(),
+            );
+        }
+
+        items.push(
+            MenuItemFields::new("Paste")
+                .with_on_select_action(EditorContextMenuAction::Paste)
+                .with_disabled(!can_edit)
+                .into_item(),
+        );
+
+        items
+    }
+
+    /// Opens the built-in text-editing context menu at the given offset (relative
+    /// to this editor's saved position).
+    fn open_context_menu(&mut self, position: Vector2F, ctx: &mut ViewContext<Self>) {
+        let Some(context_menu) = self.context_menu.clone() else {
+            return;
+        };
+        // Focus the editor so the chosen text action operates on this field.
+        ctx.focus_self();
+        let items = self.build_context_menu_items(ctx);
+        context_menu.update(ctx, move |menu, ctx| {
+            menu.set_items(items, ctx);
+        });
+        self.context_menu_position = Some(position);
+        ctx.notify();
+    }
+
+    /// Handles events from the built-in context menu: performs the chosen
+    /// text-editing action and closes the menu.
+    fn handle_context_menu_event(&mut self, event: &menu::Event, ctx: &mut ViewContext<Self>) {
+        let menu::Event::Close { via_select_item } = event else {
+            return;
+        };
+        let selected_action = if *via_select_item {
+            self.context_menu
+                .clone()
+                .and_then(|menu| menu.as_ref(ctx).selected_item())
+                .and_then(|item| item.item_on_select_action().copied())
+        } else {
+            None
+        };
+        self.context_menu_position = None;
+        if let Some(action) = selected_action {
+            match action {
+                EditorContextMenuAction::SelectAll => self.select_all(ctx),
+                EditorContextMenuAction::Copy => self.copy(ctx),
+                EditorContextMenuAction::Cut => self.cut(ctx),
+                EditorContextMenuAction::Paste => self.paste(ctx),
+            }
+        }
+        ctx.notify();
     }
 
     fn middle_click_paste(&mut self, ctx: &mut ViewContext<Self>) {
@@ -8603,6 +8746,7 @@ impl TypedActionView for EditorView {
                 selected_range,
             } => self.set_marked_text(marked_text, selected_range, ctx),
             ClearMarkedText => self.clear_marked_text(ctx),
+            OpenContextMenu(position) => self.open_context_menu(*position, ctx),
         }
 
         if self.is_focused() {
@@ -8678,7 +8822,7 @@ impl View for EditorView {
             .with_cursor(Cursor::IBeam)
             .finish();
 
-        if let Some(controls) = self.render_controls(ctx) {
+        let content = if let Some(controls) = self.render_controls(ctx) {
             let mut row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::End);
@@ -8687,7 +8831,42 @@ impl View for EditorView {
             row.finish()
         } else {
             hoverable
+        };
+
+        // Editors that opt out of the built-in context menu render exactly as
+        // before, leaving any parent-provided right-click handling untouched.
+        let Some(context_menu) = &self.context_menu else {
+            return content;
+        };
+
+        let position_id = self.context_menu_position_id();
+        let handler_position_id = position_id.clone();
+        let mut stack = Stack::new().with_child(
+            EventHandler::new(content)
+                .on_right_mouse_down(move |ctx, _app, position| {
+                    let offset = match ctx.element_position_by_id(handler_position_id.clone()) {
+                        Some(rect) => position - rect.origin(),
+                        None => position,
+                    };
+                    ctx.dispatch_typed_action(EditorAction::OpenContextMenu(offset));
+                    DispatchEventResult::StopPropagation
+                })
+                .finish(),
+        );
+
+        if let Some(position) = self.context_menu_position {
+            stack.add_positioned_overlay_child(
+                ChildView::new(context_menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    position,
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
         }
+
+        SavePosition::new(stack.finish(), &position_id).finish()
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> warpui::keymap::Context {

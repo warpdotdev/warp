@@ -4521,6 +4521,71 @@ fn test_drag_and_drop_files_applies_path_transformer() {
     });
 }
 
+/// Regression test for the built-in right-click text-editing context menu
+/// (GitHub #13067): right-clicking an editor field should offer text actions,
+/// password fields should omit Copy/Cut, and opted-out editors should have no
+/// menu so their parent-provided right-click handling is preserved.
+#[test]
+fn test_builtin_context_menu_items() {
+    fn item_labels(view: &EditorView, ctx: &ViewContext<EditorView>) -> Vec<String> {
+        view.build_context_menu_items(ctx)
+            .iter()
+            .filter_map(|item| match item {
+                MenuItem::Item(fields) => Some(fields.label().to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        // A regular (non-password) editor offers the full text-editing menu.
+        let (_, editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new_with_base_text("hello world", Default::default(), ctx)
+        });
+        let labels = editor.update(&mut app, |view, ctx| {
+            view.select_all(ctx);
+            item_labels(view, ctx)
+        });
+        assert_eq!(labels, vec!["Select All", "Copy", "Cut", "Paste"]);
+
+        // A password editor omits Copy/Cut so the masked secret can't be
+        // exfiltrated via the menu, but still offers Select All and Paste.
+        let (_, password_editor) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new_with_base_text(
+                "secret",
+                EditorOptions {
+                    is_password: true,
+                    ..Default::default()
+                },
+                ctx,
+            )
+        });
+        let password_labels = password_editor.update(&mut app, |view, ctx| {
+            view.select_all(ctx);
+            item_labels(view, ctx)
+        });
+        assert_eq!(password_labels, vec!["Select All", "Paste"]);
+
+        // An editor that opts out has no built-in context menu, so a parent's
+        // own right-click handling is left intact.
+        let (_, opted_out) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            EditorView::new_with_base_text(
+                "x",
+                EditorOptions {
+                    disable_builtin_context_menu: true,
+                    ..Default::default()
+                },
+                ctx,
+            )
+        });
+        opted_out.update(&mut app, |view, _ctx| {
+            assert!(view.context_menu.is_none());
+        });
+    });
+}
+
 #[path = "vim_handler_tests.rs"]
 mod vim_handler_tests;
 
