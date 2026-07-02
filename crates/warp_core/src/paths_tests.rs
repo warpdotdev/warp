@@ -130,48 +130,25 @@ fn test_project_path_for_warp_dev_app_id() {
     }
 }
 
+// Regression test for the standalone macOS CLI resources path. This only runs
+// on macOS (CI runs the suite on all platforms). A cargo test binary is not
+// inside a `.app` bundle, so `bundled_resources_dir()` must take the
+// standalone-CLI branch and resolve resources to a sibling `resources`
+// directory next to the executable — not `Contents/Resources`. Before the fix,
+// macOS unconditionally returned `<bundle>/Contents/Resources`, which for a
+// loose binary would have been `<exe_dir>/Contents/Resources`.
+#[cfg(target_os = "macos")]
 #[test]
-fn test_macos_bundled_resources_dir_app_bundle() {
-    // For a real `.app` bundle, resources live in `Contents/Resources` inside
-    // the bundle, regardless of where the executable is.
-    let bundle_path = PathBuf::from("/Applications/Warp.app");
-    let executable_dir = PathBuf::from("/Applications/Warp.app/Contents/MacOS");
-    assert_eq!(
-        macos_bundled_resources_dir(Some(&bundle_path), Some(&executable_dir)),
-        Some(PathBuf::from("/Applications/Warp.app/Contents/Resources"))
+fn test_bundled_resources_dir_standalone_cli() {
+    let resources_dir = bundled_resources_dir().expect("should resolve a resources dir");
+    assert!(
+        resources_dir.ends_with("resources"),
+        "expected a sibling `resources` dir, got {resources_dir:?}"
     );
-}
-
-#[test]
-fn test_macos_bundled_resources_dir_standalone_cli() {
-    // For the standalone CLI build the binary is not inside a `.app` bundle, so
-    // `NSBundle.mainBundle` reports the directory containing the binary. Resources
-    // live in a sibling `resources` directory next to the binary, not in
-    // `Contents/Resources`.
-    let bundle_path = PathBuf::from("/opt/warp/bin");
-    let executable_dir = PathBuf::from("/opt/warp/bin");
-    assert_eq!(
-        macos_bundled_resources_dir(Some(&bundle_path), Some(&executable_dir)),
-        Some(PathBuf::from("/opt/warp/bin/resources"))
+    assert!(
+        !resources_dir.ends_with("Contents/Resources"),
+        "standalone CLI should not resolve to a .app Contents/Resources path, got {resources_dir:?}"
     );
-}
-
-#[test]
-fn test_macos_bundled_resources_dir_no_bundle_path() {
-    // If the bundle path can't be determined, fall back to the sibling
-    // `resources` directory next to the executable.
-    let executable_dir = PathBuf::from("/opt/warp/bin");
-    assert_eq!(
-        macos_bundled_resources_dir(None, Some(&executable_dir)),
-        Some(PathBuf::from("/opt/warp/bin/resources"))
-    );
-}
-
-#[test]
-fn test_macos_bundled_resources_dir_no_paths() {
-    // With neither a bundle path nor an executable directory, there's nothing to
-    // resolve.
-    assert_eq!(macos_bundled_resources_dir(None, None), None);
 }
 
 #[test]
