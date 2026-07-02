@@ -55,3 +55,36 @@ fn test_workflow_by_command_name() {
         });
     });
 }
+
+#[test]
+fn test_tail_command_converts_windows_path_for_wsl_shell() {
+    let path =
+        std::path::PathBuf::from(r"C:\Users\sheffler\AppData\Local\warp\Warp\data\logs\mcp\a.log");
+
+    let command = tail_command_for_shell_with_path_converter(
+        warp_util::path::ShellFamily::Posix,
+        &path,
+        Some(warp_util::path::convert_windows_path_to_wsl),
+    );
+
+    assert_eq!(
+        command,
+        "tail -f /mnt/c/Users/sheffler/AppData/Local/warp/Warp/data/logs/mcp/a.log"
+    );
+}
+
+#[test]
+fn test_tail_command_escapes_converted_wsl_path() {
+    let path = std::path::PathBuf::from(r"C:\Users\sheffler\App Data\mcp logs\a.log");
+
+    let command = tail_command_for_shell_with_path_converter(
+        warp_util::path::ShellFamily::Posix,
+        &path,
+        Some(warp_util::path::convert_windows_path_to_wsl),
+    );
+
+    assert_eq!(
+        command,
+        r"tail -f /mnt/c/Users/sheffler/App\ Data/mcp\ logs/a.log"
+    );
+}
