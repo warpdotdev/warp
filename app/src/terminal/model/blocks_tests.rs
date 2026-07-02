@@ -171,6 +171,47 @@ fn drain_terminal_events(events_rx: &async_channel::Receiver<Event>) -> Vec<Even
     events
 }
 
+#[test]
+fn restored_blocks_resolve_deferred_completion_work() {
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let mut block_list = new_bootstrapped_block_list(
+        None,
+        None,
+        ChannelEventListener::builder_for_test()
+            .with_terminal_events_tx(events_tx)
+            .build(),
+    );
+    drain_terminal_events(&events_rx);
+
+    let restored_block_id = BlockId::new();
+    let restored_block = SerializedBlock {
+        id: restored_block_id.clone(),
+        start_ts: Some(Local::now()),
+        completed_ts: Some(Local::now()),
+        ..Default::default()
+    };
+    block_list.insert_restored_block(&restored_block);
+
+    let events = drain_terminal_events(&events_rx);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::AfterBlockCompleted(_)))
+            .count(),
+        1
+    );
+    let restored_block = block_list
+        .block_with_id(&restored_block_id)
+        .expect("The restored block should be present.");
+    assert!(restored_block.deferred_completion_work_resolved());
+
+    block_list.apply_precmd_to_active(PromptMetadata::default());
+    let events = drain_terminal_events(&events_rx);
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Event::AfterBlockCompleted(_))));
+}
+
 /// Advances the block list to the ScriptExecution stage.
 fn advance_to_script_execution(block_list: &mut BlockList) {
     assert!(
@@ -2254,6 +2295,12 @@ fn test_background_blocks_finished() {
         }
         other => panic!("Expected BlockType::BackgroundOutput, but was {other:?}"),
     }
+    assert!(block_list
+        .blocks()
+        .iter()
+        .find(|block| block.is_background())
+        .expect("The background block should be present.")
+        .deferred_completion_work_resolved());
 
     match &block_completed_events[2].block_type {
         BlockType::User(block) => {

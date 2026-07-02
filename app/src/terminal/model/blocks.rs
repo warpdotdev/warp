@@ -299,9 +299,6 @@ pub struct BlockList {
     restored_session_ts: Option<DateTime<Local>>,
 
     latest_block_finished_time: Option<SystemTime>,
-    /// Whether the next prompt must avoid repeating deferred completion work for an already-finished
-    /// active block that recovery advanced past.
-    skip_next_after_block_completed_event: bool,
 
     /// The number of in-band commands that are "in-flight", where "in-flight" is defined as
     /// written to the PTY without yet a completed block.
@@ -662,7 +659,6 @@ impl BlockList {
             is_restored_session: false,
             restored_session_ts: None,
             latest_block_finished_time: None,
-            skip_next_after_block_completed_event: false,
             early_output: EarlyOutput::new(event_proxy),
             in_flight_in_band_command_count: 0,
             last_populated_precmd_payload: None,
@@ -3080,6 +3076,7 @@ impl BlockList {
                 cloud_workflow_id: None,
                 cloud_env_var_collection_id: None,
             }));
+        self.active_block_mut().resolve_deferred_completion_work();
 
         // Set the completed_ts to the saved completed_ts _after_ `finish`ing the block (which would have set its own completed_ts).
         self.active_block_mut().override_completed_ts(completed_ts);
@@ -3123,10 +3120,9 @@ impl BlockList {
         }
 
         if active_block_was_finished {
-            self.skip_next_after_block_completed_event = true;
+            self.active_block_mut().resolve_deferred_completion_work();
             self.latest_block_finished_time = None;
         } else {
-            self.skip_next_after_block_completed_event = false;
             self.active_block_mut().finish(data.exit_code);
             self.latest_block_finished_time = Some(instant::SystemTime::now());
         }
@@ -3195,15 +3191,18 @@ impl BlockList {
 
         // Depending on whether or not there's a background block active, the previous
         // completed block is at blocks.len - 2 or blocks.len - 3.
-        let previous_block = [2usize, 3usize]
+        let previous_block_index = [2usize, 3usize]
             .into_iter()
             .flat_map(|offset| self.blocks.len().checked_sub(offset))
-            .map(|idx| &self.blocks[idx])
-            .find(|block| !block.is_background());
-        if self.skip_next_after_block_completed_event {
-            self.skip_next_after_block_completed_event = false;
-        } else if let Some(previous_block) = previous_block {
-            self.send_after_block_completed_event(previous_block, block_finished_to_precmd_delay);
+            .find(|idx| !self.blocks[*idx].is_background());
+        if let Some(previous_block_index) = previous_block_index {
+            if !self.blocks[previous_block_index].deferred_completion_work_resolved() {
+                self.send_after_block_completed_event(
+                    &self.blocks[previous_block_index],
+                    block_finished_to_precmd_delay,
+                );
+                self.blocks[previous_block_index].resolve_deferred_completion_work();
+            }
         } else {
             self.event_proxy
                 .send_terminal_event(TerminalEvent::BootstrapPrecmdDone);
@@ -3245,30 +3244,39 @@ impl BlockList {
     /// notifies the view of the completed block, so that it can be saved for
     /// session restoration.
     fn finish_background_block(&mut self) {
-        let num_secrets_obfuscated = self
-            .background_block_mut()
-            .map(|block| block.num_secrets_obfuscated());
         let agent_view_state = self.agent_view_state.clone();
-        if let Some(background_block) = self.background_block_mut() {
-            background_block.finish(0);
-            let block_index = background_block.index();
+        if self.background_block_mut().is_some() {
+            let (block_index, event) = {
+                let background_block = self
+                    .background_block_mut()
+                    .expect("Background block should still exist.");
+                background_block.finish(0);
+                let block_index = background_block.index();
 
-            // It's common to have empty background blocks (because they only contained
-            // typeahead), so we skip serializing them.
-            if !background_block.is_empty(&agent_view_state) {
-                // This is similar to send_after_block_completed_event, but we can't
-                // call it because background_block mutably borrows self.
-                let block_type = background_block.into();
-                self.event_proxy.send_terminal_event(AfterBlockCompleted(
-                    AfterBlockCompletedEvent {
+                // It's common to have empty background blocks (because they only contained
+                // typeahead), so we skip serializing them.
+                let event = if background_block.is_empty(&agent_view_state) {
+                    None
+                } else {
+                    // This is similar to send_after_block_completed_event, but we can't
+                    // call it because background_block mutably borrows self.
+                    let block_type = (&*background_block).into();
+                    Some(AfterBlockCompletedEvent {
                         command_finished_to_precmd_delay: None,
                         block_type,
-                        num_secrets_obfuscated: num_secrets_obfuscated.unwrap_or_default(),
+                        num_secrets_obfuscated: background_block.num_secrets_obfuscated(),
                         // Background blocks are not tracked as cloud workflow executions.
                         cloud_workflow_id: None,
                         cloud_env_var_collection_id: None,
-                    },
-                ));
+                    })
+                };
+                background_block.resolve_deferred_completion_work();
+                (block_index, event)
+            };
+
+            if let Some(event) = event {
+                self.event_proxy
+                    .send_terminal_event(AfterBlockCompleted(event));
             }
 
             // Now that the block is no longer active, its height may have changed.
