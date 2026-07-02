@@ -22863,6 +22863,9 @@ impl Workspace {
         if *general_settings.link_tooltip {
             context.set.insert(flags::LINK_TOOLTIP_CONTEXT_FLAG);
         }
+        if *general_settings.file_links {
+            context.set.insert(flags::FILE_LINKS_CONTEXT_FLAG);
+        }
 
         if *input_settings.completions_open_while_typing.value() {
             context

@@ -70,6 +70,15 @@ define_settings_group!(GeneralSettings, settings: [
         toml_path: "general.link_tooltip",
         description: "Whether to show a tooltip when hovering over links.",
     },
+    file_links: FileLinks {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "general.file_links",
+        description: "Whether file paths in terminal output are linkified on hover.",
+    },
     welcome_tips_features_used: WelcomeTipsFeaturesUsed {
         type: HashSet<Tip>,
         default: HashSet::new(),

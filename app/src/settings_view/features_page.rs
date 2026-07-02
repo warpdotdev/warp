@@ -80,7 +80,7 @@ use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
 };
 use crate::terminal::general_settings::{
-    AutoOpenCodeReviewPaneOnFirstAgentChange, GeneralSettings, LinkTooltip, LoginItem,
+    AutoOpenCodeReviewPaneOnFirstAgentChange, FileLinks, GeneralSettings, LinkTooltip, LoginItem,
     QuitOnLastWindowClosed, RestoreSession, ShowWarningBeforeQuitting,
 };
 use crate::terminal::input::OPEN_COMPLETIONS_KEYBINDING_NAME;
@@ -318,6 +318,14 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         )),
         context,
         flags::LINK_TOOLTIP_CONTEXT_FLAG,
+    ));
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "file and directory links in terminal output",
+        builder(SettingsAction::FeaturesPageToggle(
+            FeaturesPageAction::ToggleFileLinks,
+        )),
+        context,
+        flags::FILE_LINKS_CONTEXT_FLAG,
     ));
     toggle_binding_pairs.push(
         ToggleSettingActionPair::new(
@@ -735,6 +743,7 @@ pub enum FeaturesPageAction {
     ToggleSshReuseControlMaster,
     ToggleSnackbar,
     ToggleLinkTooltip,
+    ToggleFileLinks,
     ToggleCompletionsOpenWhileTyping,
     ToggleCommandCorrections,
     ToggleErrorUnderlining,
@@ -936,6 +945,10 @@ impl FeaturesPageAction {
             Self::ToggleLinkTooltip => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleLinkTooltip".to_string(),
                 value: to_string(*GeneralSettings::as_ref(ctx).link_tooltip),
+            },
+            Self::ToggleFileLinks => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleFileLinks".to_string(),
+                value: to_string(*GeneralSettings::as_ref(ctx).file_links),
             },
             Self::ToggleCompletionsOpenWhileTyping => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleCompletionsOpenWhileTyping".to_string(),
@@ -1858,6 +1871,11 @@ impl TypedActionView for FeaturesPageView {
                     report_if_error!(settings.link_tooltip.toggle_and_save_value(ctx));
                 });
             }
+            ToggleFileLinks => {
+                GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.file_links.toggle_and_save_value(ctx));
+                });
+            }
             ToggleShowWarningBeforeQuitting => {
                 GeneralSettings::handle(ctx).update(ctx, |warning_settings, ctx| {
                     report_if_error!(warning_settings
@@ -2683,6 +2701,7 @@ impl FeaturesPageView {
 
         general_widgets.push(Box::new(SnackbarHeaderWidget::default()));
         general_widgets.push(Box::new(LinkTooltipWidget::default()));
+        general_widgets.push(Box::new(FileLinksWidget::default()));
 
         #[cfg(feature = "local_fs")]
         {
@@ -4725,6 +4744,52 @@ impl SettingsWidget for LinkTooltipWidget {
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(FeaturesPageAction::ToggleLinkTooltip);
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct FileLinksWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for FileLinksWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "file directory links terminal output hover"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Link file paths in terminal output".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                FileLinks::storage_key(),
+                FileLinks::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(*GeneralSettings::as_ref(app).file_links)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleFileLinks);
                 })
                 .finish(),
             None,
