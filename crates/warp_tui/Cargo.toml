@@ -34,7 +34,13 @@ path = "src/bin/stable.rs"
 
 [dependencies]
 anyhow.workspace = true
+async-fs.workspace = true
+channel_versions.workspace = true
+command.workspace = true
 dirs.workspace = true
+futures.workspace = true
+futures-lite.workspace = true
+http_client.workspace = true
 instant.workspace = true
 itertools.workspace = true
 log.workspace = true
@@ -42,7 +48,10 @@ num-traits.workspace = true
 parking_lot.workspace = true
 pathfinder_color.workspace = true
 pathfinder_geometry.workspace = true
+serde_json.workspace = true
 string-offset.workspace = true
+strum.workspace = true
+strum_macros.workspace = true
 sum_tree.workspace = true
 vec1.workspace = true
 warp = { workspace = true, features = ["tui"] }

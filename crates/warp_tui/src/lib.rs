@@ -9,9 +9,11 @@
 
 mod agent_block;
 mod agent_block_sections;
+mod autoupdate;
 pub mod input;
 pub mod root_view;
 pub mod session;
+mod telemetry;
 mod tui_builder;
 mod ui;
 

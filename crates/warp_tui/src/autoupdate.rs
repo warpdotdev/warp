@@ -10,14 +10,14 @@
 //! ~/.local/bin/warp-tui        # symlink to current/warp-tui-<channel>
 //! ```
 //!
-//! and this module keeps that layout fresh: it periodically compares the
-//! running build's version against the channel's latest, downloads newer
-//! builds from the server's `/download/tui` endpoint, stages them into
-//! `versions/<version>`, and atomically retargets the `current` symlink. The
-//! running session is never touched — the new version is picked up on the
-//! next launch. In particular, the updater never deletes the version
-//! directory the current process is executing from (removing a running
-//! binary breaks child-process spawning).
+//! and this module keeps that layout fresh: it polls on the same cadence as
+//! the GUI autoupdater (each poll is a single lightweight `/client_version`
+//! request), downloads newer builds from the server's `/download/tui`
+//! endpoint, stages them into `versions/<version>`, and atomically retargets
+//! the `current` symlink. The running session is never touched — the new
+//! version is picked up on the next launch. In particular, the updater never
+//! deletes the version directory the current process is executing from
+//! (removing a running binary breaks child-process spawning).
 //!
 //! Background updates only run for managed installs (i.e. when the running
 //! executable resolves into a `versions/` directory), so `cargo run` builds
@@ -31,14 +31,13 @@ use std::time::Duration;
 
 use anyhow::{bail, Context as _, Result};
 use channel_versions::{ChannelVersions, ParsedVersion};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use futures::{StreamExt as _, TryStreamExt as _};
+use warp_core::channel::{Channel, ChannelState};
 use warp_core::send_telemetry_from_ctx;
 use warpui::r#async::Timer;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use crate::channel::{Channel, ChannelState};
-use crate::tui::telemetry::TuiAutoupdateTelemetryEvent;
+use crate::telemetry::TuiAutoupdateTelemetryEvent;
 
 /// Setting this environment variable (to any value) disables background
 /// auto-updates.
@@ -50,21 +49,15 @@ const VERSIONS_DIR_NAME: &str = "versions";
 /// Name of the symlink under the install root pointing at the active version.
 const CURRENT_LINK_NAME: &str = "current";
 
-/// State file under the install root recording the last update check, so
-/// short-lived TUI sessions don't re-check the server on every launch.
-const CHECK_STATE_FILE_NAME: &str = "update_check.json";
-
 /// Lock file under the install root serializing installs across concurrent
 /// TUI processes.
 const LOCK_FILE_NAME: &str = ".update.lock";
 
-/// How often a long-running session re-checks for updates. The persistent
-/// throttle below is what actually limits server traffic to ~once a day.
-const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
-
-/// Minimum time between server version checks, persisted across sessions.
-/// Mirrors the ~daily cadence used by the GUI autoupdater and peer CLIs.
-const CHECK_THROTTLE_HOURS: i64 = 20;
+/// How often to check for updates. Mirrors the GUI autoupdater's poll
+/// interval (`AutoupdateState::AUTOUPDATE_POLL`); each check is a single
+/// lightweight `/client_version` request unless a new version actually needs
+/// downloading.
+const CHECK_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 /// A lock file held for longer than this is considered abandoned (e.g. a
 /// crashed updater) and is broken.
@@ -123,19 +116,57 @@ impl InstallLayout {
 /// The result of a single update check.
 #[derive(Debug)]
 enum UpdateOutcome {
-    /// Skipped: a check ran recently (see [`CHECK_THROTTLE_HOURS`]).
-    Throttled,
     /// Skipped: another process is installing an update right now.
     Locked,
     /// The running build is already the channel's latest version.
     UpToDate { version: String },
+    /// A newer version was already staged by a previous check and `current`
+    /// points at it; nothing to do until the next launch.
+    PendingRestart { version: String },
     /// A newer version was staged and `current` now points at it. It takes
     /// effect on the next launch.
     Installed { version: String },
 }
 
+impl UpdateOutcome {
+    /// Stable identifier for this kind of outcome, used for telemetry and
+    /// for detecting transitions between consecutive checks.
+    fn kind(&self) -> &'static str {
+        match self {
+            UpdateOutcome::Locked => "locked",
+            UpdateOutcome::UpToDate { .. } => "up_to_date",
+            UpdateOutcome::PendingRestart { .. } => "pending_restart",
+            UpdateOutcome::Installed { .. } => "installed",
+        }
+    }
+
+    /// The version associated with this outcome, if any.
+    fn version(&self) -> Option<&str> {
+        match self {
+            UpdateOutcome::Locked => None,
+            UpdateOutcome::UpToDate { version }
+            | UpdateOutcome::PendingRestart { version }
+            | UpdateOutcome::Installed { version } => Some(version),
+        }
+    }
+}
+
 /// Singleton driving the background update loop for the TUI session.
-pub(crate) struct TuiAutoupdater;
+///
+/// Always registered — even when this process isn't eligible for background
+/// updates — so other callsites can safely access the singleton. Eligibility
+/// is captured in [`Self::layout`]; the polling loop only runs when it is
+/// `Some`.
+pub(crate) struct TuiAutoupdater {
+    /// The managed install layout when this process is eligible for
+    /// background updates (a release build running from the versioned
+    /// install layout, without the env opt-out); `None` disables the loop.
+    layout: Option<InstallLayout>,
+    /// The outcome kind last reported to telemetry. Consecutive checks
+    /// usually resolve to the same outcome (e.g. `up_to_date` on every
+    /// poll), so only transitions are reported.
+    last_reported_outcome: Option<&'static str>,
+}
 
 impl Entity for TuiAutoupdater {
     type Event = ();
@@ -144,25 +175,19 @@ impl Entity for TuiAutoupdater {
 impl SingletonEntity for TuiAutoupdater {}
 
 impl TuiAutoupdater {
-    /// Starts the background update loop, if this process is eligible:
-    /// a release build from a managed install, with no env opt-out. No-op
-    /// otherwise.
+    /// Registers the singleton and starts the background update loop when
+    /// this process is eligible (see [`eligible_layout`]).
     pub(crate) fn register(ctx: &mut AppContext) {
-        if std::env::var_os(DISABLE_ENV_VAR).is_some() {
-            log::info!("TUI autoupdate disabled via {DISABLE_ENV_VAR}");
-            return;
-        }
-        if ChannelState::app_version().is_none() {
-            log::info!("TUI autoupdate disabled: no release version tag baked in");
-            return;
-        }
-        let Some(layout) = InstallLayout::detect() else {
-            log::info!("TUI autoupdate disabled: not running from a managed install");
-            return;
-        };
-
-        ctx.add_singleton_model(|_| TuiAutoupdater);
-        TuiAutoupdater::handle(ctx).update(ctx, |me, ctx| me.check_now(layout, ctx));
+        let layout = eligible_layout();
+        ctx.add_singleton_model(move |_| TuiAutoupdater {
+            layout,
+            last_reported_outcome: None,
+        });
+        TuiAutoupdater::handle(ctx).update(ctx, |me, ctx| {
+            if let Some(layout) = me.layout.clone() {
+                me.check_now(layout, ctx);
+            }
+        });
     }
 
     /// Runs one background update check, then schedules the next one.
@@ -173,13 +198,11 @@ impl TuiAutoupdater {
             move |me, result, ctx| {
                 match &result {
                     Ok(outcome) => log::info!("TUI autoupdate check finished: {outcome:?}"),
-                    // Fail quietly and let the next interval retry; transient
+                    // Fail quietly and let the next poll retry; transient
                     // network errors (e.g. waking from sleep) are common here.
                     Err(error) => log::warn!("TUI autoupdate check failed: {error:#}"),
                 }
-                if let Some(event) = telemetry_event_for(&result) {
-                    send_telemetry_from_ctx!(event, ctx);
-                }
+                me.report_outcome(&result, ctx);
                 me.schedule_next_check(layout_for_next, ctx);
             },
         );
@@ -191,41 +214,53 @@ impl TuiAutoupdater {
             move |me, _, ctx| me.check_now(layout, ctx),
         );
     }
+
+    /// Sends a telemetry event when the outcome kind changed since the last
+    /// check, so the frequent poll doesn't emit repeated `up_to_date` (or
+    /// repeated-failure) events.
+    fn report_outcome(&mut self, result: &Result<UpdateOutcome>, ctx: &mut ModelContext<Self>) {
+        let kind = match result {
+            Ok(outcome) => outcome.kind(),
+            Err(_) => "failed",
+        };
+        if self.last_reported_outcome == Some(kind) {
+            return;
+        }
+        self.last_reported_outcome = Some(kind);
+
+        let event = match result {
+            Ok(outcome) => TuiAutoupdateTelemetryEvent::CheckCompleted {
+                outcome: kind,
+                version: outcome.version().map(ToOwned::to_owned),
+            },
+            Err(error) => TuiAutoupdateTelemetryEvent::CheckFailed {
+                error: format!("{error:#}"),
+            },
+        };
+        send_telemetry_from_ctx!(event, ctx);
+    }
 }
 
-/// Maps a background check result onto its telemetry event. Throttled checks
-/// happen on most launches and are not worth reporting.
-fn telemetry_event_for(result: &Result<UpdateOutcome>) -> Option<TuiAutoupdateTelemetryEvent> {
-    match result {
-        Ok(UpdateOutcome::Throttled) => None,
-        Ok(UpdateOutcome::Locked) => Some(TuiAutoupdateTelemetryEvent::CheckCompleted {
-            outcome: "locked",
-            version: None,
-        }),
-        Ok(UpdateOutcome::UpToDate { version }) => {
-            Some(TuiAutoupdateTelemetryEvent::CheckCompleted {
-                outcome: "up_to_date",
-                version: Some(version.clone()),
-            })
-        }
-        Ok(UpdateOutcome::Installed { version }) => {
-            Some(TuiAutoupdateTelemetryEvent::CheckCompleted {
-                outcome: "installed",
-                version: Some(version.clone()),
-            })
-        }
-        Err(error) => Some(TuiAutoupdateTelemetryEvent::CheckFailed {
-            error: format!("{error:#}"),
-        }),
+/// Returns the managed install layout when this process is eligible for
+/// background updates, logging the reason when it isn't.
+fn eligible_layout() -> Option<InstallLayout> {
+    if std::env::var_os(DISABLE_ENV_VAR).is_some() {
+        log::info!("TUI autoupdate disabled via {DISABLE_ENV_VAR}");
+        return None;
     }
+    if ChannelState::app_version().is_none() {
+        log::info!("TUI autoupdate disabled: no release version tag baked in");
+        return None;
+    }
+    let layout = InstallLayout::detect();
+    if layout.is_none() {
+        log::info!("TUI autoupdate disabled: not running from a managed install");
+    }
+    layout
 }
 
 /// Performs a single check-and-install pass.
 async fn update_once(layout: InstallLayout) -> Result<UpdateOutcome> {
-    if checked_recently(&layout) {
-        return Ok(UpdateOutcome::Throttled);
-    }
-
     let current_version =
         ChannelState::app_version().context("no release version tag baked into this build")?;
 
@@ -246,9 +281,22 @@ async fn update_once(layout: InstallLayout) -> Result<UpdateOutcome> {
     let current_parsed = ParsedVersion::try_from(current_version)
         .with_context(|| format!("invalid current version {current_version:?}"))?;
     if latest_parsed <= current_parsed {
-        record_check(&layout);
         return Ok(UpdateOutcome::UpToDate {
             version: current_version.to_owned(),
+        });
+    }
+
+    let version_dir = layout.versions_dir.join(&latest_version);
+    if version_dir == layout.running_version_dir {
+        bail!("refusing to overwrite the running version directory {version_dir:?}");
+    }
+
+    // If a previous check already staged this version and pointed `current`
+    // at it, there is nothing left to do until the user restarts.
+    let already_staged = version_dir.join(&layout.binary_name).is_file();
+    if already_staged && current_points_at(&layout, &latest_version) {
+        return Ok(UpdateOutcome::PendingRestart {
+            version: latest_version,
         });
     }
 
@@ -257,23 +305,24 @@ async fn update_once(layout: InstallLayout) -> Result<UpdateOutcome> {
         return Ok(UpdateOutcome::Locked);
     };
 
-    let version_dir = layout.versions_dir.join(&latest_version);
-    if version_dir == layout.running_version_dir {
-        bail!("refusing to overwrite the running version directory {version_dir:?}");
-    }
-
-    // Skip the download when a previous pass already staged this version
-    // (e.g. it flipped `current` but a check ran again before a restart).
-    if !version_dir.join(&layout.binary_name).is_file() {
+    if !already_staged {
         download_and_stage(&layout, &client, &latest_version, &version_dir).await?;
     }
 
     point_current_at(&layout, &latest_version)?;
-    prune_old_versions(&layout, &latest_version);
-    record_check(&layout);
+    prune_old_versions(&layout, &latest_version).await;
 
     Ok(UpdateOutcome::Installed {
         version: latest_version,
+    })
+}
+
+/// Whether the `current` symlink points at `versions/<version>`.
+fn current_points_at(layout: &InstallLayout, version: &str) -> bool {
+    fs::read_link(&layout.current_link).is_ok_and(|target| {
+        target
+            .file_name()
+            .is_some_and(|name| name == std::ffi::OsStr::new(version))
     })
 }
 
@@ -311,7 +360,10 @@ async fn fetch_latest_version(client: &http_client::Client) -> Result<String> {
             let url = format!(
                 "{}/channel_versions.json?r={}",
                 releases_base_url.trim_end_matches('/'),
-                Utc::now().timestamp_millis()
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
             );
             let response = client
                 .get(url.as_str())
@@ -349,7 +401,7 @@ fn download_channel() -> &'static str {
     }
 }
 
-/// Downloads and stages `version` into `version_dir`: fetch the tarball into
+/// Downloads and stages `version` into `version_dir`: stream the tarball into
 /// a staging directory next to `versions/`, extract and validate it, then
 /// atomically rename it into place. The staging directory lives on the same
 /// filesystem so the final move is a cheap rename, and it is cleaned up on
@@ -371,17 +423,21 @@ async fn download_and_stage(
         download_channel(),
     );
 
-    fs::create_dir_all(&layout.versions_dir)
+    async_fs::create_dir_all(&layout.versions_dir)
+        .await
         .with_context(|| format!("failed to create {:?}", layout.versions_dir))?;
     let staging_dir = layout
         .versions_dir
         .join(format!(".staging-{version}-{}", std::process::id()));
     let _cleanup = RemoveDirOnDrop(staging_dir.clone());
     // Clear any leftovers from a previous crashed attempt by this same pid.
-    let _ = fs::remove_dir_all(&staging_dir);
-    fs::create_dir_all(&staging_dir)
+    let _ = async_fs::remove_dir_all(&staging_dir).await;
+    async_fs::create_dir_all(&staging_dir)
+        .await
         .with_context(|| format!("failed to create staging dir {staging_dir:?}"))?;
 
+    // Stream the tarball straight to disk instead of buffering it in memory
+    // (the artifact is tens of MBs), mirroring the GUI's DMG download.
     log::info!("TUI autoupdate: downloading version {version}");
     let response = client
         .get(url.as_str())
@@ -391,25 +447,33 @@ async fn download_and_stage(
         .context("failed to download the TUI update")?
         .error_for_status()
         .context("failed to download the TUI update")?;
-    let bytes = response
-        .bytes()
-        .await
-        .context("failed to download the TUI update")?;
     let tarball_path = staging_dir.join("warp-tui.tar.gz");
-    fs::write(&tarball_path, &bytes)
-        .with_context(|| format!("failed to write {tarball_path:?}"))?;
-    drop(bytes);
+    let mut tarball = async_fs::File::create(&tarball_path)
+        .await
+        .with_context(|| format!("failed to create {tarball_path:?}"))?;
+    futures_lite::io::copy(
+        response
+            .bytes_stream()
+            .map_err(std::io::Error::other)
+            .into_async_read(),
+        &mut tarball,
+    )
+    .await
+    .context("failed to download the TUI update")?;
+    tarball.sync_data().await?;
+    drop(tarball);
 
     // Extract the tarball (binary + sibling resources/ tree) into a payload
     // directory, using the system tar like the install script does.
     let payload_dir = staging_dir.join("payload");
-    fs::create_dir_all(&payload_dir)?;
-    let output = command::blocking::Command::new("tar")
+    async_fs::create_dir_all(&payload_dir).await?;
+    let output = command::r#async::Command::new("tar")
         .arg("xzf")
         .arg(&tarball_path)
         .arg("-C")
         .arg(&payload_dir)
         .output()
+        .await
         .context("failed to run tar to extract the TUI update")?;
     if !output.status.success() {
         bail!(
@@ -420,19 +484,26 @@ async fn download_and_stage(
 
     // Validate the payload before touching the install.
     let binary_path = payload_dir.join(&layout.binary_name);
-    if !binary_path.is_file() {
+    let binary_is_file = async_fs::metadata(&binary_path)
+        .await
+        .is_ok_and(|metadata| metadata.is_file());
+    if !binary_is_file {
         bail!(
             "downloaded TUI archive did not contain expected binary {:?}",
             layout.binary_name
         );
     }
-    if !payload_dir.join("resources").is_dir() {
+    let resources_is_dir = async_fs::metadata(payload_dir.join("resources"))
+        .await
+        .is_ok_and(|metadata| metadata.is_dir());
+    if !resources_is_dir {
         bail!("downloaded TUI archive did not contain the expected resources/ directory");
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&binary_path, fs::Permissions::from_mode(0o755))
+        async_fs::set_permissions(&binary_path, std::fs::Permissions::from_mode(0o755))
+            .await
             .context("failed to mark the TUI binary as executable")?;
     }
 
@@ -440,18 +511,20 @@ async fn download_and_stage(
     // any Gatekeeper quarantine attribute to avoid a first-run prompt.
     #[cfg(target_os = "macos")]
     {
-        let _ = command::blocking::Command::new("xattr")
+        let _ = command::r#async::Command::new("xattr")
             .arg("-dr")
             .arg("com.apple.quarantine")
             .arg(&payload_dir)
-            .output();
+            .output()
+            .await;
     }
 
     // Move the validated payload into place. `version_dir` can only already
     // exist as a partial install (the validity check above failed for it), so
     // replacing it is safe — and it's never the running version's directory.
-    let _ = fs::remove_dir_all(version_dir);
-    fs::rename(&payload_dir, version_dir)
+    let _ = async_fs::remove_dir_all(version_dir).await;
+    async_fs::rename(&payload_dir, version_dir)
+        .await
         .with_context(|| format!("failed to move the staged TUI update into {version_dir:?}"))?;
 
     Ok(())
@@ -459,7 +532,8 @@ async fn download_and_stage(
 
 /// Atomically points the `current` symlink at `versions/<version>` by staging
 /// a new symlink and renaming it over the old one. `rename(2)` replaces the
-/// destination link itself, so `current` never dangles mid-swap.
+/// destination link itself, so `current` never dangles mid-swap. These are
+/// metadata-only operations, so plain (sync) fs calls are fine here.
 #[cfg(unix)]
 fn point_current_at(layout: &InstallLayout, version: &str) -> Result<()> {
     let staged_link = layout.root.join(".current.new");
@@ -479,7 +553,7 @@ fn point_current_at(_layout: &InstallLayout, _version: &str) -> Result<()> {
 /// the version the running binary is executing from, and whatever `current`
 /// points at. Deleting a running version's directory would break its child
 /// process spawning, so this errs on the side of keeping things.
-fn prune_old_versions(layout: &InstallLayout, new_version: &str) {
+async fn prune_old_versions(layout: &InstallLayout, new_version: &str) {
     let current_target = fs::read_link(&layout.current_link)
         .ok()
         .and_then(|target| target.file_name().map(|name| name.to_owned()));
@@ -488,10 +562,10 @@ fn prune_old_versions(layout: &InstallLayout, new_version: &str) {
         .file_name()
         .map(ToOwned::to_owned);
 
-    let Ok(entries) = fs::read_dir(&layout.versions_dir) else {
+    let Ok(mut entries) = async_fs::read_dir(&layout.versions_dir).await else {
         return;
     };
-    for entry in entries.flatten() {
+    while let Some(Ok(entry)) = entries.next().await {
         let name = entry.file_name();
         // Skip staging dirs / lock leftovers, the new install, the running
         // version, and the current target.
@@ -502,44 +576,15 @@ fn prune_old_versions(layout: &InstallLayout, new_version: &str) {
         {
             continue;
         }
-        if entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+        if entry
+            .file_type()
+            .await
+            .is_ok_and(|file_type| file_type.is_dir())
+        {
             log::info!("TUI autoupdate: pruning old version {name:?}");
-            if let Err(error) = fs::remove_dir_all(entry.path()) {
+            if let Err(error) = async_fs::remove_dir_all(entry.path()).await {
                 log::warn!("TUI autoupdate: failed to prune {name:?}: {error}");
             }
-        }
-    }
-}
-
-/// Serialized record of the last completed update check.
-#[derive(Serialize, Deserialize)]
-struct UpdateCheckState {
-    last_checked_at: DateTime<Utc>,
-}
-
-fn check_state_path(layout: &InstallLayout) -> PathBuf {
-    layout.root.join(CHECK_STATE_FILE_NAME)
-}
-
-/// Whether a check completed within the persistent throttle window.
-fn checked_recently(layout: &InstallLayout) -> bool {
-    let Ok(contents) = fs::read_to_string(check_state_path(layout)) else {
-        return false;
-    };
-    let Ok(state) = serde_json::from_str::<UpdateCheckState>(&contents) else {
-        return false;
-    };
-    Utc::now() - state.last_checked_at < chrono::Duration::hours(CHECK_THROTTLE_HOURS)
-}
-
-/// Best-effort record that a check completed now.
-fn record_check(layout: &InstallLayout) {
-    let state = UpdateCheckState {
-        last_checked_at: Utc::now(),
-    };
-    if let Ok(contents) = serde_json::to_string(&state) {
-        if let Err(error) = fs::write(check_state_path(layout), contents) {
-            log::warn!("TUI autoupdate: failed to record the update check: {error}");
         }
     }
 }

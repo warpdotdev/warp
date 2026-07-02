@@ -1,12 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{Duration, Utc};
-
-use super::{
-    checked_recently, record_check, InstallLayout, InstallLock, UpdateCheckState,
-    CHECK_STATE_FILE_NAME,
-};
+use super::{InstallLayout, InstallLock};
 
 /// Creates a unique, empty temp directory for a test.
 fn temp_root(name: &str) -> PathBuf {
@@ -17,13 +12,6 @@ fn temp_root(name: &str) -> PathBuf {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
-}
-
-fn layout_for_root(root: &Path) -> InstallLayout {
-    InstallLayout::from_canonical_exe_path(
-        &root.join("versions/v0.2026.01.01.00.00.dev_00/warp-tui-dev"),
-    )
-    .unwrap()
 }
 
 #[test]
@@ -59,36 +47,6 @@ fn rejects_unmanaged_exe_paths() {
         InstallLayout::from_canonical_exe_path(Path::new("/repo/target/debug/warp-tui-dev")),
         None
     );
-}
-
-#[test]
-fn check_throttle_round_trips_through_the_state_file() {
-    let root = temp_root("throttle");
-    let layout = layout_for_root(&root);
-
-    // No state file yet: not throttled.
-    assert!(!checked_recently(&layout));
-
-    // A just-recorded check throttles subsequent ones.
-    record_check(&layout);
-    assert!(checked_recently(&layout));
-
-    // An old check does not.
-    let stale = UpdateCheckState {
-        last_checked_at: Utc::now() - Duration::days(2),
-    };
-    fs::write(
-        root.join(CHECK_STATE_FILE_NAME),
-        serde_json::to_string(&stale).unwrap(),
-    )
-    .unwrap();
-    assert!(!checked_recently(&layout));
-
-    // Corrupt state is treated as "never checked".
-    fs::write(root.join(CHECK_STATE_FILE_NAME), "not json").unwrap();
-    assert!(!checked_recently(&layout));
-
-    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
