@@ -1024,6 +1024,11 @@ impl TerminalView {
             ConversationDetailsPanelAutoOpenPolicy::DefaultOpen => {
                 self.is_conversation_details_panel_open = true;
                 self.fetch_and_update_conversation_details_panel(ctx);
+                // Keep the session content as the primary scroll target when a cloud run opens
+                // with the details panel visible. Otherwise the newly-rendered side panel can
+                // retain focus, making finished transcripts feel artificially short because
+                // mouse-wheel input scrolls the details panel instead of the session.
+                self.redetermine_global_focus(ctx);
                 ctx.notify();
             }
             ConversationDetailsPanelAutoOpenPolicy::DefaultClosed => {}
