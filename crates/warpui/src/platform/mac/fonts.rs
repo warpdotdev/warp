@@ -187,9 +187,6 @@ pub struct FontDB {
     rasterizer: Rasterizer,
     font_names: DashMap<FontId, Arc<String>>,
     native_fonts: DashMap<(FontId, OrderedFloat<f32>), NativeFont>,
-    // Maps a concrete font's Core Foundation identity to its FontId. Keying on the CGFont (via
-    // CFHash/CFEqual) rather than the PostScript name means fonts that share a name — a
-    // user-installed font vs. a bundled one — don't collide (#12923).
     cgfont_to_id: DashMap<CGFontKey, FontId>,
     fallback_fonts: DashMap<FontId, Arc<Vec<FontId>>>,
     metrics: DashMap<FontId, Metrics>,
@@ -238,10 +235,11 @@ fn space_advance_width(font: &CTFont) -> Option<f64> {
     (width.is_finite() && width > 0.0).then_some(width)
 }
 
-// A hashable, comparable key wrapping a `CGFont`. `CGFont` is a Core Foundation object without
-// Rust `Hash`/`Eq`, so we key on its Core Foundation identity via `CFHash`/`CFEqual`. Fonts that
-// merely share a PostScript name (e.g. a user-installed and a bundled font) are distinct CGFonts,
-// so this tells them apart where a name cannot (#12923).
+/// A hashable, comparable key wrapping a [`CGFont`].
+///
+/// [`CGFont`] is a Core Foundation object without Rust [`Hash`]/[`Eq`], so we key on its Core Foundation
+/// identity via [`CFHash`]/[`CFEqual`]. Fonts that merely share a PostScript name (e.g. a user-installed
+/// and a bundled font) are distinct CGFonts, so this tells them apart where a name cannot.
 struct CGFontKey(CGFont);
 
 impl CGFontKey {
@@ -508,7 +506,6 @@ impl FontDB {
 
         self.rasterizer.insert(font_id, Arc::new(font));
         self.font_names.insert(font_id, name);
-        // Key the font by its CGFont identity so a same-named font can't shadow it (#12923).
         self.cgfont_to_id.insert(CGFontKey(cg_font), font_id);
         self.space_advances.insert(font_id, advance);
         font_id
