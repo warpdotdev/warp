@@ -38,9 +38,6 @@ pub enum FeatureFlag {
     /// If set, generators are executed using cmd.exe on Windows.
     RunGeneratorsWithCmdExe,
 
-    /// Gates a bindable keyboard action for accepting command corrections.
-    CommandCorrectionKey,
-
     /// If `true`, the "Show Initialization Block" menu item is added to the Blocks menu in the Mac
     /// menu bar.
     ToggleBootstrapBlock,
