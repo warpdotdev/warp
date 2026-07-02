@@ -300,7 +300,7 @@ fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn
         commit_col.add_child(clickable_summary);
 
         if is_expanded {
-            commit_col.add_child(render_file_list(&commit.files, appearance));
+            commit_col.add_child(render_file_list(&commit.files, None, appearance));
         }
 
         let bordered_commit = Container::new(commit_col.finish())

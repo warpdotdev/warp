@@ -661,15 +661,30 @@ pub async fn get_diff_for_commit_message(
     Err(anyhow!("Not supported on wasm"))
 }
 
-/// Commits changes. If `include_unstaged` is true, stages all changes first via `git add -A`.
+/// Commits changes.
+///
+/// When `selected_paths` is non-empty, only those repo-relative paths are
+/// staged (`git add -A -- <paths>`) and committed (`git commit -- <paths>`),
+/// letting the user commit a subset of their changes while leaving the rest in
+/// the working tree. `include_unstaged` is ignored in that case because the
+/// chosen paths are always staged explicitly.
+///
+/// When `selected_paths` is empty, the whole working set is committed: if
+/// `include_unstaged` is true everything is staged first via `git add -A`,
+/// otherwise only the already-staged changes are committed.
+///
 /// `path_env` is forwarded so commit hooks can find tools on the user's `PATH`.
 #[cfg(feature = "local_fs")]
 pub async fn run_commit(
     repo_path: &Path,
     message: &str,
     include_unstaged: bool,
+    selected_paths: &[String],
     path_env: Option<&str>,
 ) -> Result<String> {
+    if !selected_paths.is_empty() {
+        return run_selective_commit(repo_path, message, selected_paths, path_env).await;
+    }
     if include_unstaged {
         run_git_command_with_env(repo_path, &["add", "-A"], path_env).await?;
     }
@@ -694,11 +709,48 @@ pub async fn run_commit(
     run_git_command_with_env(repo_path, &["commit", "-m", message], path_env).await
 }
 
+/// Stages and commits only `selected_paths` (repo-relative). `git add -A`
+/// scoped to the pathspec stages modifications, additions, and deletions for
+/// just those files (including untracked ones, which a bare pathspec commit
+/// would reject); the trailing pathspec on `git commit` then commits exactly
+/// those paths even if other changes were already staged.
+#[cfg(feature = "local_fs")]
+async fn run_selective_commit(
+    repo_path: &Path,
+    message: &str,
+    selected_paths: &[String],
+    path_env: Option<&str>,
+) -> Result<String> {
+    let mut add_args: Vec<&str> = vec!["add", "-A", "--"];
+    add_args.extend(selected_paths.iter().map(String::as_str));
+    run_git_command_with_env(repo_path, &add_args, path_env).await?;
+
+    // Guard against an empty commit scoped to the selected paths (e.g. the
+    // chosen files had no net change), mirroring the commit-all backstop.
+    let mut staged_args: Vec<&str> = vec![
+        "--no-optional-locks",
+        "diff",
+        "--cached",
+        "--name-only",
+        "--",
+    ];
+    staged_args.extend(selected_paths.iter().map(String::as_str));
+    let staged = run_git_command_with_env(repo_path, &staged_args, path_env).await?;
+    if staged.trim().is_empty() {
+        anyhow::bail!("no changes added to commit");
+    }
+
+    let mut commit_args: Vec<&str> = vec!["commit", "-m", message, "--"];
+    commit_args.extend(selected_paths.iter().map(String::as_str));
+    run_git_command_with_env(repo_path, &commit_args, path_env).await
+}
+
 #[cfg(not(feature = "local_fs"))]
 pub async fn run_commit(
     _repo_path: &Path,
     _message: &str,
     _include_unstaged: bool,
+    _selected_paths: &[String],
     _path_env: Option<&str>,
 ) -> Result<String> {
     Err(anyhow!("Not supported on wasm"))

@@ -210,6 +210,7 @@ fn render_changes_section(state: &PrState, appearance: &Appearance) -> Box<dyn E
         &state.summary_mouse_state,
         &state.changes_scroll_state,
         GitDialogAction::Pr(PrSubAction::ToggleChangesExpanded),
+        None,
         appearance,
     );
 
