@@ -54,8 +54,16 @@ fn make_pty(size: winsize) -> Result<(RawFd, RawFd)> {
     // across duplicated fds, so when we call `libc::dup2()` below, those fds
     // will _not_ be closed when we exec the shell.
     unsafe {
-        libc::fcntl(ends.master, libc::F_SETFD, libc::FD_CLOEXEC);
-        libc::fcntl(ends.slave, libc::F_SETFD, libc::FD_CLOEXEC);
+        let r1 = libc::fcntl(ends.master, libc::F_SETFD, libc::FD_CLOEXEC);
+        if r1 < 0 {
+            return Err(io::Error::last_os_error())
+                .context("fcntl FD_CLOEXEC on master failed");
+        }
+        let r2 = libc::fcntl(ends.slave, libc::F_SETFD, libc::FD_CLOEXEC);
+        if r2 < 0 {
+            return Err(io::Error::last_os_error())
+                .context("fcntl FD_CLOEXEC on slave failed");
+        }
     }
 
     Ok((ends.master, ends.slave))
@@ -98,58 +106,87 @@ fn docker_sandbox_run_args(starter: &DockerSandboxShellStarter) -> Vec<std::ffi:
 }
 
 #[derive(Debug)]
-struct Passwd<'a> {
-    name: &'a str,
-    dir: &'a str,
-    shell: &'a str,
+struct Passwd {
+    name: String,
+    dir: String,
+    shell: String,
 }
 
-pub fn get_pw_shell() -> String {
-    let mut buf = [0; 1024];
-    let pw = get_pw_entry(&mut buf);
-    pw.shell.to_string()
+#[allow(dead_code)]
+pub fn get_pw_shell() -> Result<String, io::Error> {
+    let pw = get_pw_entry()?;
+    Ok(pw.shell)
 }
 
-/// Return a Passwd struct with pointers into the provided buf.
-///
-/// # Unsafety
-///
-/// If `buf` is changed while `Passwd` is alive, bad things will almost certainly happen.
-fn get_pw_entry(buf: &mut [i8; 1024]) -> Passwd<'_> {
-    // Create zeroed passwd struct.
-    let mut entry: MaybeUninit<libc::passwd> = MaybeUninit::uninit();
-
-    let mut res: *mut libc::passwd = ptr::null_mut();
-
-    // Try and read the pw file.
+fn get_pw_entry() -> Result<Passwd, io::Error> {
     let uid = unsafe { libc::getuid() };
-    let status = unsafe {
-        libc::getpwuid_r(
-            uid,
-            entry.as_mut_ptr(),
-            buf.as_mut_ptr() as *mut _,
-            buf.len(),
-            &mut res,
-        )
-    };
-    let entry = unsafe { entry.assume_init() };
+    let mut buf_size = 1024usize;
 
-    if status < 0 {
-        panic!("getpwuid_r failed");
-    }
+    loop {
+        let mut buf: Vec<libc::c_char> = vec![0; buf_size];
+        let mut entry: MaybeUninit<libc::passwd> = MaybeUninit::uninit();
+        let mut res: *mut libc::passwd = ptr::null_mut();
 
-    if res.is_null() {
-        panic!("pw not found");
-    }
+        let status = unsafe {
+            libc::getpwuid_r(
+                uid,
+                entry.as_mut_ptr(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut res,
+            )
+        };
 
-    // Sanity check.
-    assert_eq!(entry.pw_uid, uid);
+        if status == libc::ERANGE {
+            if buf_size >= 65536 {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "passwd entry too large for buffer",
+                ));
+            }
+            buf_size = (buf_size * 2).min(65536);
+            continue;
+        }
 
-    // Build a borrowed Passwd struct.
-    Passwd {
-        name: unsafe { CStr::from_ptr(entry.pw_name).to_str().unwrap() },
-        dir: unsafe { CStr::from_ptr(entry.pw_dir).to_str().unwrap() },
-        shell: unsafe { CStr::from_ptr(entry.pw_shell).to_str().unwrap() },
+        if status != 0 {
+            return Err(io::Error::from_raw_os_error(status));
+        }
+
+        if res.is_null() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "passwd entry not found for uid",
+            ));
+        }
+
+        // Strict check: res must point to the caller-supplied entry.
+        if res != entry.as_mut_ptr() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "getpwuid_r returned unexpected entry pointer",
+            ));
+        }
+
+        let entry = unsafe { entry.assume_init_read() };
+
+        if entry.pw_uid != uid {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "uid mismatch in passwd entry",
+            ));
+        }
+
+        // Build an owned Passwd struct.
+        Ok(Passwd {
+            name: unsafe { CStr::from_ptr(entry.pw_name).to_string_lossy().into_owned() },
+            dir: unsafe { CStr::from_ptr(entry.pw_dir).to_string_lossy().into_owned() },
+            shell: unsafe {
+                CStr::from_ptr(entry.pw_shell)
+                    .to_str()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+                    .to_owned()
+            },
+        })
     }
 }
 
@@ -210,7 +247,7 @@ pub(super) fn spawn(options: PtyOptions) -> Result<PtySpawnInfo> {
         shell_debug_mode,
         honor_ps1,
         node_version_chip_enabled,
-    );
+    )?;
 
     spawn_command_in_pty(command, &size, close_fds)
 }
@@ -231,9 +268,8 @@ fn build_host_shell_command(
     shell_debug_mode: bool,
     honor_ps1: bool,
     node_version_chip_enabled: bool,
-) -> Command {
-    let mut buf = [0; 1024];
-    let pw = get_pw_entry(&mut buf);
+) -> Result<Command, io::Error> {
+    let pw = get_pw_entry()?;
 
     log::info!(
         "Starting shell {}",
@@ -387,7 +423,7 @@ fn build_host_shell_command(
     // start of bootstrap.
     builder.current_dir(home_dir);
 
-    builder
+    Ok(builder)
 }
 
 /// Shared PTY setup used by both host-shell and Docker-sandbox sessions.
@@ -742,7 +778,7 @@ fn spawn_docker_sandbox(
         shell_debug_mode,
         honor_ps1,
         node_version_chip_enabled,
-    );
+    )?;
 
     spawn_command_in_pty(command, &size, close_fds)
 }
@@ -763,9 +799,8 @@ fn build_docker_sandbox_command(
     shell_debug_mode: bool,
     honor_ps1: bool,
     node_version_chip_enabled: bool,
-) -> Command {
-    let mut buf = [0; 1024];
-    let pw = get_pw_entry(&mut buf);
+) -> Result<Command, io::Error> {
+    let pw = get_pw_entry()?;
 
     log::info!(
         "Starting Docker sandbox via {}",
@@ -853,7 +888,7 @@ fn build_docker_sandbox_command(
 
     builder.current_dir(home_dir);
 
-    builder
+    Ok(builder)
 }
 
 /// Prepare the Docker sandbox before spawning the PTY:
@@ -945,6 +980,5 @@ mod utils {
 
 #[test]
 fn test_get_pw_entry() {
-    let mut buf: [i8; 1024] = [0; 1024];
-    let _pw = get_pw_entry(&mut buf);
+    let _pw = get_pw_entry().expect("get_pw_entry should succeed in test");
 }
