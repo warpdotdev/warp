@@ -6,6 +6,18 @@ use warp::tui_export::{
 };
 use warpui_core::AppContext;
 
+/// The TUI's default input config: agent input, no autodetection.
+pub(crate) const AI_LOCKED_CONFIG: InputConfig = InputConfig {
+    input_type: InputType::AI,
+    is_locked: true,
+};
+
+/// The config for `!` shell mode.
+pub(crate) const SHELL_LOCKED_CONFIG: InputConfig = InputConfig {
+    input_type: InputType::Shell,
+    is_locked: true,
+};
+
 /// TUI input-mode policy: the input is agent-first and deterministic. It
 /// starts locked to AI, may always be locked to AI, has no autodetection (yet),
 /// and conversation/settings transitions never rewrite the mode — only
@@ -14,10 +26,7 @@ pub(crate) struct TuiInputModePolicy;
 
 impl InputModePolicy for TuiInputModePolicy {
     fn initial_config(&self, _app: &AppContext) -> InputConfig {
-        InputConfig {
-            input_type: InputType::AI,
-            is_locked: true,
-        }
+        AI_LOCKED_CONFIG
     }
 
     fn allows_locked_ai_input(&self, _app: &AppContext) -> bool {

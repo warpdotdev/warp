@@ -10,9 +10,11 @@ use warp_core::semantic_selection::SemanticSelection;
 use warp_editor::model::CoreEditorModel;
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{
-    TuiConstraint, TuiElement, TuiEvent, TuiLayoutContext, TuiPoint, TuiRect, TuiSize,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPoint, TuiRect,
+    TuiSize,
 };
-use warpui_core::event::ModifiersState;
+use warpui_core::event::{KeyEventDetails, ModifiersState};
+use warpui_core::keymap::Keystroke;
 use warpui_core::platform::WindowStyle;
 use warpui_core::{AddWindowOptions, App, AppContext, TuiView, TypedActionView, ViewHandle};
 
@@ -702,6 +704,166 @@ fn wheel_outside_area_is_ignored() {
             // Row 50 is well outside the 6-row viewport.
             assert!(!mouse(&view, ctx, &scroll_wheel(0, 50, 1)));
             assert_eq!(view.as_ref(ctx).scroll_offset, before);
+        });
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shell mode
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Mode *transitions* live on the shared `BlocklistAIInputModel` (exercised by
+// the app crate's `input_model` tests); these tests cover the view's inert
+// default without an input-mode model, the submit/clear split, and the
+// element's shell-mode gutter geometry (via a directly-flipped `shell_mode`).
+
+/// Without an input-mode model, `!` is a plain character — no shell mode.
+#[test]
+fn bang_inserts_literally_without_input_mode_model() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "!ls");
+            assert_eq!(text(&view, ctx), "!ls");
+        });
+    });
+}
+
+/// Submit emits without clearing; the owner clears via [`TuiInputView::clear`]
+/// once a submission is accepted.
+#[test]
+fn submit_keeps_buffer_until_cleared() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "ab");
+            dispatch(&view, ctx, &[TuiInputAction::Submit]);
+            assert_eq!(text(&view, ctx), "ab", "submit must not clear the buffer");
+            view.update(ctx, |v, vctx| v.clear(vctx));
+            assert_eq!(text(&view, ctx), "");
+            assert_eq!(cursor_and_height(&view, ctx).0, Some((0, 0)));
+        });
+    });
+}
+
+/// Esc is not consumed outside shell mode (it stays available to ancestors,
+/// e.g. the demo's quit binding), and `ExitShellMode` is a no-op.
+#[test]
+fn escape_passes_through_outside_shell_mode() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "ab");
+            let (mut element, area) = laid_out_element(&view, ctx);
+            let mut rendered_views = EntityIdMap::default();
+            let mut lctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let mut event_ctx = TuiEventContext::default();
+            event_ctx.set_origin_view(Some(view.id()));
+            let escape = TuiEvent::KeyDown {
+                keystroke: Keystroke {
+                    key: "escape".to_owned(),
+                    ..Default::default()
+                },
+                chars: String::new(),
+                details: KeyEventDetails::default(),
+                is_composing: false,
+            };
+            assert!(
+                !element.dispatch_event(&escape, area, &mut event_ctx, &mut lctx, ctx),
+                "escape must not be consumed outside shell mode"
+            );
+
+            // In shell mode the same key is consumed (mapped to ExitShellMode).
+            element.shell_mode = true;
+            assert!(
+                element.dispatch_event(&escape, area, &mut event_ctx, &mut lctx, ctx),
+                "escape must be consumed in shell mode"
+            );
+
+            dispatch(&view, ctx, &[TuiInputAction::ExitShellMode]);
+            assert_eq!(text(&view, ctx), "ab", "no-op without an input-mode model");
+        });
+    });
+}
+
+/// Lays out the view's element with `shell_mode` forced on, returning the
+/// element and its area (as `laid_out_element`, plus the gutter).
+fn laid_out_shell_element(
+    view: &ViewHandle<TuiInputView>,
+    ctx: &AppContext,
+) -> (TuiInputElement, TuiRect) {
+    let mut element = view.as_ref(ctx).render_element(ctx);
+    element.shell_mode = true;
+    let mut rendered_views = EntityIdMap::default();
+    let mut lctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = element.layout(TuiConstraint::loose(TuiSize::new(W, 20)), &mut lctx, ctx);
+    (element, TuiRect::new(0, 0, size.width, size.height))
+}
+
+/// In shell mode the rendered cursor is shifted right by the `!` gutter.
+#[test]
+fn shell_mode_offsets_cursor_by_gutter() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "ab");
+            let (element, area) = laid_out_shell_element(&view, ctx);
+            let mut rendered_views = EntityIdMap::default();
+            let mut lctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            assert_eq!(element.cursor_position(area, &mut lctx), Some((4, 0)));
+        });
+    });
+}
+
+/// In shell mode mouse columns are measured from the editable area (clicks on
+/// the gutter resolve to column 0).
+#[test]
+fn shell_mode_offsets_mouse_mapping_by_gutter() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            type_str(&view, ctx, "hello world");
+            let action = {
+                let (element, area) = laid_out_shell_element(&view, ctx);
+                element.mouse_action(&left_down(2 + 3, 0, 1, false), area, ctx)
+            };
+            let Some(TuiInputAction::SelectionStartAt { offset }) = action else {
+                panic!("expected SelectionStartAt, got {action:?}");
+            };
+            // Screen column 5 = content column 3 = gap offset 4 (1-based).
+            assert_eq!(offset.as_usize(), 4);
+
+            let action = {
+                let (element, area) = laid_out_shell_element(&view, ctx);
+                element.mouse_action(&left_down(0, 0, 1, false), area, ctx)
+            };
+            let Some(TuiInputAction::SelectionStartAt { offset }) = action else {
+                panic!("expected SelectionStartAt, got {action:?}");
+            };
+            assert_eq!(offset.as_usize(), 1, "gutter clicks land at the start");
+        });
+    });
+}
+
+/// The gutter narrows the editable width, so wrapping happens two columns
+/// earlier in shell mode.
+#[test]
+fn shell_mode_wraps_at_gutter_narrowed_width() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let view = build_view(ctx);
+            // W - 1 chars: fits one row at width W, wraps at width W - 2.
+            type_str(&view, ctx, &"x".repeat(usize::from(W) - 1));
+            let (_, area) = laid_out_element(&view, ctx);
+            assert_eq!(area.height, 1);
+            let (_, area) = laid_out_shell_element(&view, ctx);
+            assert_eq!(area.height, 2, "shell mode should wrap two columns earlier");
         });
     });
 }

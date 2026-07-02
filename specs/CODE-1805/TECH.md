@@ -2,6 +2,8 @@
 
 Implements the behavior in [`PRODUCT.md`](./PRODUCT.md). References are pinned to commit `51145bb70dc2e461d1152880e8f173dce28ac165`.
 
+Stacked on the `InputModePolicy` refactor ([`specs/input-mode-policy/TECH.md`](../input-mode-policy/TECH.md)), which makes `BlocklistAIInputModel` view-agnostic so the TUI can reuse the GUI's input-mode state machine deterministically (`{AI, locked}` default via `TuiInputModePolicy`; no reactive GUI transitions).
+
 ## Context
 
 The TUI prompt input ([`crates/warp_tui/src/input/view.rs @ 51145bb7`](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/crates/warp_tui/src/input/view.rs)) is a `TuiInputView` backed by a char-cell `CodeEditorModel`. Keystrokes map to `TuiInputAction`s in `TuiInputElement::dispatch_event` ([view.rs (940-1022)](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/crates/warp_tui/src/input/view.rs#L940-L1022)); Enter emits `TuiInputViewEvent::Submitted` and clears the buffer ([view.rs (492-497)](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/crates/warp_tui/src/input/view.rs#L492-L497)).
@@ -29,22 +31,22 @@ Everything ships with existing `warpui_core::elements::tui` primitives; the fram
 - **Esc key**: the runtime already converts `KeyCode::Esc` to keystroke key `"escape"` ([`crates/warpui_core/src/runtime/event_conversion.rs:146`](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/crates/warpui_core/src/runtime/event_conversion.rs#L146)); the input key table just gains an arm for it. No new `TuiEvent` variants.
 - **New surface area is crate-local to `warp_tui`**: one `TuiInputAction` variant (`ExitShellMode`), the hint-line view, and the transient-hint timer (a spawned delayed task via the existing view-context spawn APIs, as `ctx.spawn_stream_local` is already used in the session view).
 
-### 1. Export shared input-mode types (`app/src/tui_export.rs`)
+### 1. Exports (`app/src/tui_export.rs`)
 
-Add `InputConfig`, `InputType`, and `InputTypeAutoDetectionSource` (from `app/src/ai/blocklist/input_model.rs`) plus `CancellationReason` (from `app/src/ai/agent/mod.rs`) to [`app/src/tui_export.rs`](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/app/src/tui_export.rs#L27-L30). `CommandExecutionSource` is already exported (line 37).
+The input-mode types (`InputConfig`, `InputType`, `InputTypeAutoDetectionSource`, `InputModePolicy`) are exported by the stacked policy PR; this PR additionally exports `CancellationReason` (from `app/src/ai/agent/mod.rs`) for the mid-agent cancellation path. `CommandExecutionSource` is already exported (line 37).
 
 ### 2. Shell-mode state and editing (`crates/warp_tui/src/input/view.rs`)
 
-Shell mode lives on the shared `BlocklistAIInputModel` (per GUI): `TuiInputView` gains a `ModelHandle<BlocklistAIInputModel>` (passed in from `TuiTerminalSessionView`) and a `fn is_shell_mode(&self, ctx) -> bool` reading `is_input_type_locked() && !input_type().is_ai()`. The session view sets the model's config to `InputConfig { input_type: InputType::AI, is_locked: true }` at construction so the TUI default is explicit (the model's GUI-oriented default is shell/autodetect).
+Shell mode lives on the shared `BlocklistAIInputModel` (per GUI): `TuiInputView` gains an optional `input_mode: Option<ModelHandle<BlocklistAIInputModel>>`, wired by the session view via `set_input_mode_model` (optional so the standalone `tui_input_demo` example keeps working with shell mode inert), and `fn is_shell_mode(&self, ctx) -> bool` reading `is_input_type_locked() && !is_ai_input_enabled()`. The model's `TuiInputModePolicy` (from the stacked PR) makes the default `{AI, locked}` and the state deterministic.
 
 Action handling changes:
-- `InsertChar('!')` with the cursor at offset start and not already in shell mode: set `InputConfig { Shell, locked: true }` (source `InputTypeAutoDetectionSource::ShellPrefix`) instead of inserting the char. Anywhere else, `!` inserts literally. Detection at the `InsertChar` level is inherently typed-only — `TuiEvent` has no paste variant ([`crates/warpui_core/src/elements/tui/event.rs:24`](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/crates/warpui_core/src/elements/tui/event.rs#L24)), so PRODUCT.md #3 falls out for free; if bracketed paste is later routed through `InsertChar`, a pasted leading `!` entering shell mode is acceptable per product decision.
+- `InsertChar('!')` with the cursor at the buffer start (no active selection) and not already in shell mode: set `InputConfig { Shell, locked: true }` (source `InputTypeAutoDetectionSource::ShellPrefix`) instead of inserting the char. Anywhere else — or when typing over a selection anchored at the start — `!` inserts literally. Detection at the `InsertChar` level is inherently typed-only — `TuiEvent` has no paste variant ([`crates/warpui_core/src/elements/tui/event.rs:24`](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/crates/warpui_core/src/elements/tui/event.rs#L24)), so PRODUCT.md #3 falls out for free; if bracketed paste is later routed through `InsertChar`, a pasted leading `!` entering shell mode is acceptable per product decision.
 - `Backspace` with the cursor at the very start while in shell mode: exit shell mode (reset config to AI-locked) instead of deleting; text preserved (PRODUCT.md #10).
-- New `TuiInputAction::ExitShellMode` bound to plain `esc` in the key table; no-op when not in shell mode so esc remains free for future use (PRODUCT.md #11).
+- New `TuiInputAction::ExitShellMode` bound to plain `esc` in the key table, consumed only while in shell mode so esc stays available to ancestors otherwise (PRODUCT.md #11).
 - `Submit` no longer clears the buffer; it only emits `Submitted`. A new `pub fn clear(&mut self, ctx)` clears buffer + scroll, and the session view calls it on every accepted submission (agent prompt or executed shell command). This is what lets a blocked shell submission retain its text (PRODUCT.md #20).
 
 Rendering changes (`TuiInputElement`):
-- The element captures `shell_mode: bool` at render time. When set, `layout` lays the editor out at `terminal_width - 2` (the width pushed onto the char-cell render state), and `render`/`cursor_position`/`offset_at` inset all rows by 2 columns; the `! ` affordance is drawn at the origin of the first visible row styled with `theme.ansi_fg_blue()`. Because the affordance is outside the buffer, selection/select-all/cursor math need no special-casing (PRODUCT.md #2, #8) — only the 2-column x-offset in `offset_at` ([view.rs (791-817)](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/crates/warp_tui/src/input/view.rs#L791-L817)) and `cursor_position` must account for it.
+- The element captures `shell_mode: bool` and the accent style at render time. When set, `layout` lays the editor out at `terminal_width - 2` (the width pushed onto the char-cell render state), and `render`/`cursor_position`/`offset_at` inset all rows by 2 columns; the `!` affordance is drawn in the first-row gutter styled with the shell-mode accent (`theme.ansi_fg_blue()`, via `crate::ui::shell_mode_accent_color`). Because the affordance is outside the buffer, selection/select-all/cursor math need no special-casing (PRODUCT.md #2, #8) — only the 2-column x-offset in `offset_at` and `cursor_position` must account for it.
 
 ### 3. Submit routing and execution (`crates/warp_tui/src/terminal_session_view.rs`)
 
@@ -52,7 +54,7 @@ The `Submitted` handler branches on `is_shell_mode`:
 - Agent path: unchanged (`send_prompt`), then `input_view.clear()`.
 - Shell path (`fn execute_user_command`):
   1. Whitespace-only text → no-op, stay in shell mode (PRODUCT.md #16-17).
-  2. PTY-availability check mirroring `can_execute_command`: lock the `TerminalModel` and reject when the active block `is_active_and_long_running()` and not in-band. On reject: keep the input text, show the transient hint `cannot run — command already running` (PRODUCT.md #20). Keep the lock scope minimal per the terminal-model locking guidance.
+  2. PTY-availability check mirroring `can_execute_command`: lock the `TerminalModel` and reject when the session isn't bootstrapped or the active block `is_active_and_long_running()` and not in-band. On reject: keep the input text, show the transient hint `cannot run — command already running` (PRODUCT.md #20). Keep the lock scope minimal per the terminal-model locking guidance.
   3. Otherwise emit `TuiTerminalSessionEvent::ExecuteCommand(ExecuteCommandEvent { command, session_id, source: CommandExecutionSource::User, should_add_command_to_history: true, .. })` — the same PTY-intent bridge agent commands use, so the transcript terminal-block rendering comes for free (PRODUCT.md #13-14).
   4. Cancel any in-progress conversation: `ai_controller.cancel_conversation_progress(id, CancellationReason::UserCommandExecuted, ctx)` for the selected conversation when `status().is_in_progress()` (PRODUCT.md #19), mirroring [input.rs (13392-13406)](https://github.com/warpdotdev/warp/blob/51145bb70dc2e461d1152880e8f173dce28ac165/app/src/terminal/input.rs#L13392-L13406).
   5. `input_view.clear()` and reset `InputConfig` to AI-locked (PRODUCT.md #15).
@@ -61,29 +63,28 @@ Border color: `render` picks `ansi_fg_blue()` when `is_shell_mode`, else the cur
 
 ### 4. Hint line with transient messages (new `crates/warp_tui/src/input_hint_line.rs`)
 
-A small view/model owned by `TuiTerminalSessionView`, rendered as a one-row `TuiText` below the input box in the session view's column (the Figma `← for conversations` slot):
-- `enum HintContent { None, ShellMode }` for persistent content — `ShellMode` renders `shell mode · esc to exit` in `ansi_fg_blue()` (PRODUCT.md #7). Persistent content is computed from current state each render, so exiting shell mode reverts automatically (PRODUCT.md #12).
-- `fn show_transient(&mut self, text: String, ctx)` displays `text` for 3s, then reverts and notifies, via a spawned timer task that clears the message (guarded by a generation counter so overlapping transients don't clear each other early). This is the extensible transient-notice pattern (PRODUCT.md #21); future callers just invoke `show_transient`.
+`InputHintLineView`, owned by `TuiTerminalSessionView` and rendered as a one-row `TuiText` below the input box in the session view's column (the Figma `← for conversations` slot; a blank row is reserved when idle so the input box doesn't shift):
+- Persistent content is computed from the input mode each render — shell mode renders `shell mode · esc to exit` in the accent color (PRODUCT.md #7), so exiting shell mode reverts automatically (PRODUCT.md #12).
+- `fn show_transient(&mut self, text: String, ctx)` displays `text` for 3s via `ctx.spawn(Timer::after(..))`, then reverts and notifies (guarded by a generation counter so overlapping transients don't clear each other early). This is the extensible transient-notice pattern (PRODUCT.md #21); future callers just invoke `show_transient`.
 
 ## Testing and validation
 
 Unit tests follow the repo convention (separate `_tests.rs` files included via `#[cfg(test)] #[path = ...]`), run with `cargo nextest run -p warp_tui`.
 
-`crates/warp_tui/src/input/view_tests.rs` (extends the existing `App::test`-based suite):
-- `!` on empty input and before existing text enters shell mode without inserting the char (PRODUCT.md #1-2); `!` mid-text inserts literally (#4).
-- Backspace at text start exits shell mode preserving text (#10); esc exits preserving text (#11); backspace/esc when not in shell mode behave as today (#23).
-- Enter emits `Submitted` without clearing; `clear()` empties buffer and resets scroll.
-- In shell mode: wrapping/cursor/mouse `offset_at` account for the 2-column inset; select-all covers only command text (#2, #8).
+Mode-transition semantics (the `{AI, locked}` default sticking, `{Shell, locked}` writes applying, reactive events not rewriting the config) are covered by the app crate's `input_model` tests added in the stacked policy PR. `BlocklistAIInputModel` cannot be constructed from `warp_tui` tests (its constructor requires app-internal singletons — `AISettings`, `CLIAgentSessionsModel` — that are not exported), so the TUI-side tests cover the view and element behavior:
 
-`crates/warp_tui/src/terminal_session_view` tests (new `terminal_session_view_tests.rs`, patterned on `conversation_selection_tests.rs`):
-- Shell-mode submit emits `ExecuteCommand` with `CommandExecutionSource::User` and clears + resets to agent mode (#13-15); agent-mode submit still routes to the conversation (#23).
-- Whitespace-only shell submit is a no-op (#16-17).
-- Submit with an in-progress conversation cancels it with `CancellationReason::UserCommandExecuted` (#19).
-- Submit while the active block is long-running does not emit `ExecuteCommand`, retains input text, and sets the transient hint; the hint clears after the timeout (#20-21).
+`crates/warp_tui/src/input/view_tests.rs` (extends the existing `App::test`-based suite):
+- Without an input-mode model, `!` inserts literally (the demo stays unaffected) and `ExitShellMode` is a no-op.
+- Enter emits `Submitted` without clearing; `clear()` empties buffer and resets scroll (#20's retain-on-reject depends on this split).
+- Esc is not consumed outside shell mode and is consumed in shell mode (#11, #23).
+- Shell-mode gutter geometry: the rendered cursor shifts right by 2 (#2), mouse mapping measures from the editable area with gutter clicks landing at the start (#8), and wrapping happens two columns earlier (#8).
+
+Session-view routing (shell submit → `ExecuteCommand` with `CommandExecutionSource::User`, conversation cancellation, blocked-PTY transient hint) is not unit-testable for the same constructibility reason (`TuiTerminalSessionView` needs a full `TerminalSurfaceInit`); it is validated manually.
 
 Manual validation (run the TUI binary from `crates/warp_tui/src/bin` against a real session):
 - Visuals against PRODUCT.md #5-7 and the GUI: blue `!`, blue border, `shell mode · esc to exit` callout; colors change with theme (#24).
-- End-to-end: `!ls` renders a live-streaming terminal block in the transcript (#13); run a shell command mid-agent-stream and verify the conversation cancels (#19); run one while an agent tool command occupies the PTY and verify the transient message (#20).
+- Entering/exiting: `!` on empty and non-empty input (#1-3), backspace/esc preserving text (#10-12), `!` mid-text literal (#4).
+- End-to-end: `!ls` renders a live-streaming terminal block in the transcript and the input resets to agent mode (#13-15); run a shell command mid-agent-stream and verify the conversation cancels (#19); run one while an agent tool command occupies the PTY and verify the transient message (#20-21).
 - `./script/presubmit` before the PR.
 
 ## Parallelization
@@ -92,6 +93,6 @@ Not proposed: the work is a single tightly-coupled change centered on two files 
 
 ## Risks and mitigations
 
-- **Submit-flow refactor**: moving buffer-clearing from `TuiInputView::submit` to the session view changes the agent path too. Covered by the routing unit tests and the existing input-view test suite.
+- **Submit-flow refactor**: moving buffer-clearing from `TuiInputView::submit` to the session view changes the agent path too. Covered by the input-view test suite (submit keeps the buffer; `clear()` resets it).
 - **TerminalModel locking**: the PTY-availability check adds a `model.lock()` call site in the submit path; keep the lock scope to the availability read only (no nested calls), per the repo's locking guidance.
-- **`BlocklistAIInputModel` default config**: the model defaults to GUI semantics (shell/autodetect). The session view must set AI-locked at construction or `is_shell_mode` would be true on startup; the startup-state unit test covers this.
+- **`BlocklistAIInputModel` default config**: handled by the stacked policy PR — `TuiInputModePolicy::initial_config` is `{AI, locked}` and reactive GUI transitions are disabled, so `is_shell_mode` cannot be true at startup or flip spontaneously.
