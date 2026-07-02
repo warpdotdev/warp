@@ -1575,18 +1575,8 @@ impl UserWorkspaces {
     /// `provider` (and team first-party keys are enabled). Used to show the
     /// credential icon on provider models that route via a team key.
     pub fn team_has_first_party_key_for_provider(&self, provider: &LLMProvider) -> bool {
-        let Some(team_byo) = self.current_team_byo() else {
-            return false;
-        };
-        if !team_byo.first_party_enabled {
-            return false;
-        }
-        match provider {
-            LLMProvider::OpenAI => team_byo.first_party.openai_configured,
-            LLMProvider::Anthropic => team_byo.first_party.anthropic_configured,
-            LLMProvider::Google => team_byo.first_party.google_configured,
-            LLMProvider::Xai | LLMProvider::Unknown => false,
-        }
+        self.current_team_byo()
+            .is_some_and(|team_byo| team_byo.has_first_party_key(provider))
     }
 
     /// Returns the team-level agent attribution setting.

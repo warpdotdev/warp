@@ -8901,17 +8901,17 @@ impl SettingsWidget for TeamProvidedModelsWidget {
         if team_byo.first_party_enabled {
             let configured: Vec<(Icon, &str)> = [
                 (
-                    team_byo.first_party.openai_configured,
+                    team_byo.has_first_party_key(&LLMProvider::OpenAI),
                     Icon::OpenAILogo,
                     "OpenAI API key",
                 ),
                 (
-                    team_byo.first_party.anthropic_configured,
+                    team_byo.has_first_party_key(&LLMProvider::Anthropic),
                     Icon::ClaudeLogo,
                     "Anthropic API key",
                 ),
                 (
-                    team_byo.first_party.google_configured,
+                    team_byo.has_first_party_key(&LLMProvider::Google),
                     Icon::GeminiLogo,
                     "Google API key",
                 ),

@@ -14,7 +14,7 @@ use super::team::{MembershipRole, Team};
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
 };
-use crate::ai::llms::LLMModelHost;
+use crate::ai::llms::{LLMModelHost, LLMProvider};
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
@@ -952,27 +952,25 @@ pub struct WorkspaceSettings {
 /// This intentionally contains ONLY display/reference metadata. It must never
 /// gain a field for an API key, endpoint base URL, or ciphertext: team secrets
 /// live encrypted server-side and are injected at the inference seam, never
-/// synced to clients or persisted to secure storage.
+/// synced to clients or persisted to secure storage. The projection includes
+/// disabled endpoints/models with their `enabled` flags, so consumers filter
+/// on `enabled` where it matters.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TeamByoSettings {
     pub first_party_enabled: bool,
     pub endpoints_enabled: bool,
     pub allow_user_keys: bool,
     pub allow_user_endpoints: bool,
-    pub first_party: TeamByoFirstPartyKeys,
+    /// Providers with a configured team first-party key. Mirrors the server's
+    /// `firstPartyKeys` list; the admin-only deletion handles are not synced.
+    pub first_party_providers: Vec<LLMProvider>,
     pub endpoints: Vec<TeamByoEndpoint>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct TeamByoFirstPartyKeys {
-    pub openai_configured: bool,
-    pub anthropic_configured: bool,
-    pub google_configured: bool,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TeamByoEndpoint {
-    pub id: String,
+    /// Server-side endpoint uid; identity only, carries no routing information.
+    pub uid: String,
     pub name: String,
     pub enabled: bool,
     pub models: Vec<TeamByoEndpointModel>,
@@ -1002,5 +1000,11 @@ impl TeamByoSettings {
                 .any(|model| model.config_key == config_key)
                 .then_some(endpoint.name.as_str())
         })
+    }
+
+    /// Whether the team provides a first-party key for `provider` (and team
+    /// first-party keys are enabled).
+    pub fn has_first_party_key(&self, provider: &LLMProvider) -> bool {
+        self.first_party_enabled && self.first_party_providers.contains(provider)
     }
 }

@@ -30,13 +30,12 @@ use warp_graphql::workspace::{
     AddonCreditsSettings as GqlAddonCreditsSettings,
     AdminEnablementSetting as GqlAdminEnablementSetting, AiAutonomyValue as GqlAiAutonomyValue,
     AiPermissionsSettings as GqlAiPermissionsSettings,
+    ByoEndpointMetadata as GqlByoEndpointMetadata,
+    ByoEndpointModelMetadata as GqlByoEndpointModelMetadata,
     ComputerUseAutonomyValue as GqlComputerUseAutonomyValue, EmailInvite as GqlEmailInvite,
     HostEnablementSetting as GqlHostEnablementSetting,
-    InviteLinkDomainRestriction as GqlInviteLinkDomainRestriction,
-    MembershipRole as GqlMembershipRole, Team as GqlTeam,
-    TeamByoEndpointMetaData as GqlTeamByoEndpointMetaData,
-    TeamByoEndpointModelMetaData as GqlTeamByoEndpointModelMetaData,
-    TeamByoFirstPartyKeys as GqlTeamByoFirstPartyKeys, TeamByoSettings as GqlTeamByoSettings,
+    InviteLinkDomainRestriction as GqlInviteLinkDomainRestriction, LlmProvider as GqlLlmProvider,
+    MembershipRole as GqlMembershipRole, Team as GqlTeam, TeamByoSettings as GqlTeamByoSettings,
     TeamMember as GqlTeamMember,
     UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting, Workspace as GqlWorkspace,
     WorkspaceMember as GqlWorkspaceMember, WorkspaceMemberUsageInfo as GqlWorkspaceMemberUsageInfo,
@@ -54,11 +53,11 @@ use super::workspace::{
     HostEnablementSetting, InstanceShape, InviteLinkDomainRestriction, LinkSharingSettings,
     LlmSettings, MaxPriorCycles, SandboxedAgentSettings, SecretRedactionSettings,
     SessionSharingPolicy, SharedNotebooksPolicy, SharedWorkflowsPolicy, TeamByoEndpoint,
-    TeamByoEndpointModel, TeamByoFirstPartyKeys, TeamByoSettings, TelemetryDataCollectionPolicy,
-    TelemetrySettings, Tier, UgcCollectionEnablementSetting, UgcCollectionSettings,
-    UgcDataCollectionPolicy, UsageBasedPricingPolicy, UsageVisibilityGranularity,
-    UsageVisibilityPolicy, WarpAiPolicy, Workspace, WorkspaceInviteCode, WorkspaceMember,
-    WorkspaceMemberUsageInfo, WorkspaceSettings, WorkspaceSizePolicy,
+    TeamByoEndpointModel, TeamByoSettings, TelemetryDataCollectionPolicy, TelemetrySettings, Tier,
+    UgcCollectionEnablementSetting, UgcCollectionSettings, UgcDataCollectionPolicy,
+    UsageBasedPricingPolicy, UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy,
+    Workspace, WorkspaceInviteCode, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceSettings,
+    WorkspaceSizePolicy,
 };
 use crate::ai::blocklist::usage::conversation_usage_view::ConversationUsageInfo;
 use crate::ai::execution_profiles::{
@@ -817,26 +816,40 @@ impl From<GqlTeamByoSettings> for TeamByoSettings {
             endpoints_enabled: gql.endpoints_enabled,
             allow_user_keys: gql.allow_user_keys,
             allow_user_endpoints: gql.allow_user_endpoints,
-            first_party: gql.first_party.into(),
+            first_party_providers: gql
+                .first_party_keys
+                .into_iter()
+                .map(|key| team_byo_provider_from_gql(key.provider))
+                .collect(),
             endpoints: gql.endpoints.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<GqlTeamByoFirstPartyKeys> for TeamByoFirstPartyKeys {
-    fn from(gql: GqlTeamByoFirstPartyKeys) -> Self {
-        Self {
-            openai_configured: gql.openai_configured,
-            anthropic_configured: gql.anthropic_configured,
-            google_configured: gql.google_configured,
+/// Maps the server's `LlmProvider` onto the client [`crate::ai::llms::LLMProvider`]
+/// for the team first-party key mirror. Unrecognized values map to `Unknown`,
+/// which no team-key consumer matches, so they are effectively ignored.
+fn team_byo_provider_from_gql(provider: GqlLlmProvider) -> crate::ai::llms::LLMProvider {
+    use crate::ai::llms::LLMProvider;
+    match provider {
+        GqlLlmProvider::Openai => LLMProvider::OpenAI,
+        GqlLlmProvider::Anthropic => LLMProvider::Anthropic,
+        GqlLlmProvider::Google => LLMProvider::Google,
+        GqlLlmProvider::Xai => LLMProvider::Xai,
+        GqlLlmProvider::Unknown => LLMProvider::Unknown,
+        GqlLlmProvider::Other(value) => {
+            log::warn!(
+                "Unknown LlmProvider '{value}' in team BYO first-party keys. Make sure to update client GraphQL types!"
+            );
+            LLMProvider::Unknown
         }
     }
 }
 
-impl From<GqlTeamByoEndpointMetaData> for TeamByoEndpoint {
-    fn from(gql: GqlTeamByoEndpointMetaData) -> Self {
+impl From<GqlByoEndpointMetadata> for TeamByoEndpoint {
+    fn from(gql: GqlByoEndpointMetadata) -> Self {
         Self {
-            id: gql.id,
+            uid: gql.uid.into_inner(),
             name: gql.name,
             enabled: gql.enabled,
             models: gql.models.into_iter().map(Into::into).collect(),
@@ -844,8 +857,8 @@ impl From<GqlTeamByoEndpointMetaData> for TeamByoEndpoint {
     }
 }
 
-impl From<GqlTeamByoEndpointModelMetaData> for TeamByoEndpointModel {
-    fn from(gql: GqlTeamByoEndpointModelMetaData) -> Self {
+impl From<GqlByoEndpointModelMetadata> for TeamByoEndpointModel {
+    fn from(gql: GqlByoEndpointModelMetadata) -> Self {
         Self {
             config_key: gql.config_key,
             slug: gql.slug,

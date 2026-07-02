@@ -108,20 +108,20 @@ fn team_byo_graphql_payload_parses_into_secretless_model() {
     use warp_graphql::workspace::TeamByoSettings as GqlTeamByoSettings;
 
     // A teamByo projection exactly as the server ships it (camelCase GraphQL
-    // JSON): one enabled endpoint with one enabled model.
+    // JSON): one configured first-party key and one enabled endpoint with one
+    // enabled model. `firstPartyKeys` mirrors the server list shape; the
+    // admin-only credentialUid handles are not selected by the client query.
     let payload = r#"{
         "firstPartyEnabled": true,
         "endpointsEnabled": true,
         "allowUserKeys": false,
         "allowUserEndpoints": true,
-        "firstParty": {
-            "openaiConfigured": true,
-            "anthropicConfigured": false,
-            "googleConfigured": false
-        },
+        "firstPartyKeys": [
+            { "provider": "OPENAI" }
+        ],
         "endpoints": [
             {
-                "id": "endpoint-1",
+                "uid": "endpoint-1",
                 "name": "Team GPU",
                 "enabled": true,
                 "models": [
@@ -148,13 +148,14 @@ fn team_byo_graphql_payload_parses_into_secretless_model() {
     assert!(settings.endpoints_enabled);
     assert!(!settings.allow_user_keys);
     assert!(settings.allow_user_endpoints);
-    assert!(settings.first_party.openai_configured);
-    assert!(!settings.first_party.anthropic_configured);
-    assert!(!settings.first_party.google_configured);
+    assert_eq!(settings.first_party_providers, vec![LLMProvider::OpenAI]);
+    assert!(settings.has_first_party_key(&LLMProvider::OpenAI));
+    assert!(!settings.has_first_party_key(&LLMProvider::Anthropic));
+    assert!(!settings.has_first_party_key(&LLMProvider::Google));
 
     assert_eq!(settings.endpoints.len(), 1);
     let endpoint = &settings.endpoints[0];
-    assert_eq!(endpoint.id, "endpoint-1");
+    assert_eq!(endpoint.uid, "endpoint-1");
     assert_eq!(endpoint.name, "Team GPU");
     assert!(endpoint.enabled);
 
@@ -184,10 +185,10 @@ fn team_byo_endpoint_name_for_model_matches_config_key() {
         endpoints_enabled: true,
         allow_user_keys: false,
         allow_user_endpoints: false,
-        first_party: TeamByoFirstPartyKeys::default(),
+        first_party_providers: vec![],
         endpoints: vec![
             TeamByoEndpoint {
-                id: "ep-1".into(),
+                uid: "ep-1".into(),
                 name: "Team GPU".into(),
                 enabled: true,
                 models: vec![TeamByoEndpointModel {
@@ -199,7 +200,7 @@ fn team_byo_endpoint_name_for_model_matches_config_key() {
                 }],
             },
             TeamByoEndpoint {
-                id: "ep-2".into(),
+                uid: "ep-2".into(),
                 name: "Team CPU".into(),
                 enabled: true,
                 models: vec![TeamByoEndpointModel {
@@ -229,13 +230,13 @@ fn team_byo_serialized_form_carries_no_secret_keys() {
         endpoints_enabled: true,
         allow_user_keys: true,
         allow_user_endpoints: true,
-        first_party: TeamByoFirstPartyKeys {
-            openai_configured: true,
-            anthropic_configured: true,
-            google_configured: true,
-        },
+        first_party_providers: vec![
+            LLMProvider::OpenAI,
+            LLMProvider::Anthropic,
+            LLMProvider::Google,
+        ],
         endpoints: vec![TeamByoEndpoint {
-            id: "ep".into(),
+            uid: "ep".into(),
             name: "Team".into(),
             enabled: true,
             models: vec![TeamByoEndpointModel {
