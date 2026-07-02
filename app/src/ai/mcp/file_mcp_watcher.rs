@@ -17,8 +17,10 @@ use warp_core::safe_warn;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::HomeDirectoryWatcherEvent;
 
-use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
-use crate::ai::mcp::{home_config_file_path, MCPProvider, ParsedTemplatableMCPServerResult};
+use crate::ai::mcp::{
+    home_config_file_path, parsing::normalize_codex_toml_to_json, ConfigParseError,
+    ConfigParseStage, MCPProvider, ParsedTemplatableMCPServerResult,
+};
 use crate::warp_managed_paths_watcher::{
     warp_managed_mcp_config_path, WarpManagedPathsWatcher, WarpManagedPathsWatcherEvent,
 };
@@ -549,10 +551,12 @@ impl FileMCPWatcher {
         let _ = ctx.spawn(
             async move { parse_mcp_config_file(&config_path, provider).await },
             move |_me, parsed, ctx| {
+                let (servers, error) = split_parse_result(parsed);
                 ctx.emit(FileMCPWatcherEvent::ConfigParsed {
                     root_path: root_path_for_callback,
                     provider,
-                    servers: parsed,
+                    servers,
+                    error,
                 });
             },
         );
@@ -570,12 +574,14 @@ impl FileMCPWatcher {
         let config_file_path = config_file_path.to_path_buf();
         let _ = ctx.spawn(
             async move { parse_mcp_config_file(&config_file_path, provider).await },
-            move |me, servers, ctx| {
+            move |me, parsed, ctx| {
                 let repo_path_for_countdown = root_path.clone();
+                let (servers, error) = split_parse_result(parsed);
                 ctx.emit(FileMCPWatcherEvent::ConfigParsed {
                     root_path,
                     provider,
                     servers,
+                    error,
                 });
                 if let Some(count) = me.cloud_env_pending.get_mut(&repo_path_for_countdown) {
                     *count = count.saturating_sub(1);
@@ -589,6 +595,21 @@ impl FileMCPWatcher {
                 }
             },
         );
+    }
+}
+
+/// Unwraps the parser's `Result` into the `(servers, error)` shape carried by
+/// [`FileMCPWatcherEvent::ConfigParsed`]. On failure the server list is empty
+/// so downstream "clear all servers for this slot" behavior is preserved.
+fn split_parse_result(
+    parsed: Result<Vec<ParsedTemplatableMCPServerResult>, ConfigParseError>,
+) -> (
+    Vec<ParsedTemplatableMCPServerResult>,
+    Option<ConfigParseError>,
+) {
+    match parsed {
+        Ok(servers) => (servers, None),
+        Err(err) => (vec![], Some(err)),
     }
 }
 
@@ -639,14 +660,18 @@ fn substitute_env_vars(json_content: &str) -> Result<String, anyhow::Error> {
 
 /// Asynchronously reads and parses an MCP config file and returns parsed MCP servers.
 /// Dispatches to the appropriate parser based on `provider` rather than inferring from path.
-/// Returns an empty vec if the file doesn't exist or parsing fails.
+///
+/// Returns `Ok(vec![])` if the file doesn't exist (a normal state for a provider
+/// the user hasn't configured). Returns `Err(ConfigParseError)` for any other
+/// failure so the watcher can surface it to the UI rather than silently
+/// dropping the config's servers.
 async fn parse_mcp_config_file(
     file_path: &Path,
     provider: MCPProvider,
-) -> Vec<ParsedTemplatableMCPServerResult> {
+) -> Result<Vec<ParsedTemplatableMCPServerResult>, ConfigParseError> {
     let file_contents = match async_fs::read_to_string(file_path).await {
         Ok(contents) => contents,
-        Err(err) if err.kind() == ErrorKind::NotFound => return vec![],
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(vec![]),
         Err(err) => {
             safe_warn!(
                 safe: (
@@ -659,7 +684,12 @@ async fn parse_mcp_config_file(
                     err
                 )
             );
-            return vec![];
+            return Err(ConfigParseError {
+                path: file_path.to_path_buf(),
+                provider,
+                stage: ConfigParseStage::Read,
+                message: err.to_string(),
+            });
         }
     };
 
@@ -678,7 +708,12 @@ async fn parse_mcp_config_file(
                         err
                     )
                 );
-                return vec![];
+                return Err(ConfigParseError {
+                    path: file_path.to_path_buf(),
+                    provider,
+                    stage: ConfigParseStage::TomlNormalize,
+                    message: format!("{err:#}"),
+                });
             }
         },
         MCPProvider::Claude | MCPProvider::Warp | MCPProvider::Agents => file_contents,
@@ -698,12 +733,17 @@ async fn parse_mcp_config_file(
                     err
                 )
             );
-            return vec![];
+            return Err(ConfigParseError {
+                path: file_path.to_path_buf(),
+                provider,
+                stage: ConfigParseStage::EnvSubstitute,
+                message: err.to_string(),
+            });
         }
     };
 
     match ParsedTemplatableMCPServerResult::from_config_file_json(&resolved_contents) {
-        Ok(parsed_servers) => parsed_servers,
+        Ok(parsed_servers) => Ok(parsed_servers),
         Err(err) => {
             safe_warn!(
                 safe: (
@@ -716,18 +756,27 @@ async fn parse_mcp_config_file(
                     err
                 )
             );
-            vec![]
+            Err(ConfigParseError {
+                path: file_path.to_path_buf(),
+                provider,
+                stage: ConfigParseStage::JsonParse,
+                message: format!("{err:#}"),
+            })
         }
     }
 }
 
 /// Events sent from [`FileMCPWatcher`] to [`FileBasedMCPManager`] via the watcher channel.
 pub enum FileMCPWatcherEvent {
-    /// A config file was successfully parsed; delivers the full snapshot for `(root_path, provider)`.
+    /// A config file was processed. `servers` carries the parsed snapshot for
+    /// `(root_path, provider)` on success, or is empty when `error` is `Some`.
+    /// Subscribers should treat the two fields as mutually exclusive — the
+    /// downstream manager clears servers for this slot in both branches.
     ConfigParsed {
         root_path: PathBuf,
         provider: MCPProvider,
         servers: Vec<ParsedTemplatableMCPServerResult>,
+        error: Option<ConfigParseError>,
     },
     /// A config file was deleted; all servers for `(root_path, provider)` should be removed.
     ConfigRemoved {
