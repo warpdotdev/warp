@@ -1061,15 +1061,16 @@ impl EditorElement {
                     // Ensure cursor position is always cached when local
                     if is_local_replica {
                         let cursor_size = vec2f(block_cursor_width, line_parameters.cursor_height);
+                        let cursor_rect = RectF::new(cursor_origin, cursor_size);
                         ctx.position_cache.cache_position_indefinitely(
                             position_id_for_cursor(view_snapshot.view_id),
-                            RectF::new(cursor_origin, cursor_size),
+                            cursor_rect,
                         );
 
                         if i == 0 {
                             ctx.position_cache.cache_position_indefinitely(
                                 position_id_for_first_cursor(view_snapshot.view_id),
-                                RectF::new(cursor_origin, cursor_size),
+                                cursor_rect,
                             );
                         }
                     }

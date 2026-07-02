@@ -12,7 +12,9 @@ use super::model::grid::RespectDisplayedOutput;
 use super::model::image_map::StoredImageMetadata;
 use super::model::SecretHandle;
 use crate::settings::EnforceMinimumContrast;
-use crate::terminal::grid_renderer::{render_cursor, render_grid, CellGlyphCache};
+use crate::terminal::grid_renderer::{
+    cache_cursor_position, render_cursor, render_grid, CellGlyphCache,
+};
 use crate::terminal::model::blockgrid::{BlockGrid, CursorDisplayPoint};
 use crate::terminal::model::grid::grid_handler::Link;
 use crate::terminal::model::index::Point;
@@ -150,6 +152,32 @@ impl BlockGrid {
             ctx,
             app,
         )
+    }
+
+    /// Updates the cursor position cache without visually rendering the cursor.
+    ///
+    /// Cursor position cache is still depended upon for some things even when the cursor is hidden,
+    /// i.e. when [`TermMode::SHOW_CURSOR`] is false.
+    pub fn cache_cursor_position(
+        &self,
+        grid_origin: Vector2F,
+        grid_render_params: &GridRenderParams,
+        ctx: &mut PaintContext,
+        terminal_view_id: EntityId,
+    ) {
+        let cursor_display_point = match self.cursor_display_point() {
+            Some(CursorDisplayPoint::Visible(pt) | CursorDisplayPoint::HiddenCache(pt)) => pt,
+            None => return,
+        };
+        cache_cursor_position(
+            grid_render_params,
+            cursor_display_point,
+            self.grid_handler().is_cursor_on_wide_char(),
+            grid_render_params.size_info.padding_x_px(),
+            grid_origin,
+            ctx,
+            terminal_view_id,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -2607,24 +2607,31 @@ impl BlockListElement {
             // Only render the cursor in the command grid if the command grid is active and if it's
             // long running. This is to avoid jitter where a cursor just flickers while the pty is
             // initializing.
-            if block.is_active_and_long_running()
-                && block.is_command_grid_active()
-                // Check if the "hide cursor" escape sequence is present.
-                && block.is_mode_set(TermMode::SHOW_CURSOR)
-            {
-                block.prompt_and_command_grid().draw_cursor(
-                    command_origin,
-                    &block_grid_params.grid_render_params,
-                    ctx,
-                    terminal_view_id,
-                    None,
-                    block_grid_params
-                        .grid_render_params
-                        .warp_theme
-                        .cursor()
-                        .into(),
-                    app,
-                );
+            if block.is_active_and_long_running() && block.is_command_grid_active() {
+                if block.is_mode_set(TermMode::SHOW_CURSOR) {
+                    block.prompt_and_command_grid().draw_cursor(
+                        command_origin,
+                        &block_grid_params.grid_render_params,
+                        ctx,
+                        terminal_view_id,
+                        None,
+                        block_grid_params
+                            .grid_render_params
+                            .warp_theme
+                            .cursor()
+                            .into(),
+                        app,
+                    );
+                } else {
+                    // Keep position cache current even when cursor is hidden. IME position depends
+                    // on it.
+                    block.prompt_and_command_grid().cache_cursor_position(
+                        command_origin,
+                        &block_grid_params.grid_render_params,
+                        ctx,
+                        terminal_view_id,
+                    );
+                }
             }
 
             // Update grid_origin & draw output
@@ -2707,41 +2714,49 @@ impl BlockListElement {
                 app,
             );
 
-            if block.is_active_and_long_running()
-            // Check if the "hide cursor" escape sequence is present.
-            && block.is_mode_set(TermMode::SHOW_CURSOR)
-            // Don't draw the Warp cursor when rich input is hiding
-            // the CLI agent's cursor cell — agents like OpenCode and Codex
-            // rely on Warp's cursor, so we suppress it here too.
-            && !block_grid_params.grid_render_params.hide_cursor_cell
-            {
-                block.output_grid().draw_cursor(
-                    *grid_origin,
-                    &block_grid_params.grid_render_params,
-                    ctx,
-                    terminal_view_id,
-                    cursor_hint_text,
-                    if block.is_agent_blocked() {
-                        AnsiColorIdentifier::Yellow
-                            .to_ansi_color(
-                                &block_grid_params
-                                    .grid_render_params
-                                    .warp_theme
-                                    .terminal_colors()
-                                    .normal,
-                            )
-                            .into()
-                    } else if block.is_agent_in_control() {
-                        ai_brand_color(&block_grid_params.grid_render_params.warp_theme)
-                    } else {
-                        block_grid_params
-                            .grid_render_params
-                            .warp_theme
-                            .cursor()
-                            .into()
-                    },
-                    app,
-                );
+            if block.is_active_and_long_running() {
+                let show_cursor = block.is_mode_set(TermMode::SHOW_CURSOR);
+                // Don't draw the Warp cursor when rich input is hiding the CLI agent's cursor cell.
+                // Agents like OpenCode and Codex rely on Warp's cursor, so we suppress it here too.
+                let hide_for_rich_input = block_grid_params.grid_render_params.hide_cursor_cell;
+                if show_cursor && !hide_for_rich_input {
+                    block.output_grid().draw_cursor(
+                        *grid_origin,
+                        &block_grid_params.grid_render_params,
+                        ctx,
+                        terminal_view_id,
+                        cursor_hint_text,
+                        if block.is_agent_blocked() {
+                            AnsiColorIdentifier::Yellow
+                                .to_ansi_color(
+                                    &block_grid_params
+                                        .grid_render_params
+                                        .warp_theme
+                                        .terminal_colors()
+                                        .normal,
+                                )
+                                .into()
+                        } else if block.is_agent_in_control() {
+                            ai_brand_color(&block_grid_params.grid_render_params.warp_theme)
+                        } else {
+                            block_grid_params
+                                .grid_render_params
+                                .warp_theme
+                                .cursor()
+                                .into()
+                        },
+                        app,
+                    );
+                } else if !hide_for_rich_input {
+                    // The terminal program has hidden its cursor, i.e. [`TermMode::SHOW_CURSOR`]
+                    // is false. We still need to keep the position cache updated, e.g. for the IME
+                    block.output_grid().cache_cursor_position(
+                        *grid_origin,
+                        &block_grid_params.grid_render_params,
+                        ctx,
+                        terminal_view_id,
+                    );
+                }
             }
 
             // Offset the origin by the height of the output grid.
