@@ -269,7 +269,16 @@ impl TuiTerminalSessionView {
         if !self.cancel_active_conversation(ctx) {
             self.input_view.update(ctx, |input, ctx| input.clear(ctx));
         }
-        self.arm_exit_confirmation(now, ctx);
+
+        // Arm (or re-arm) the confirmation, and disarm + repaint when the
+        // window lapses. A re-arm supersedes this (now stale) timer, making
+        // its `disarm_expired` a no-op rather than clearing the newer window.
+        let window_expires_at = self.exit_confirmation.arm(now);
+        ctx.spawn(Timer::after(CTRL_C_EXIT_WINDOW), move |view, _, ctx| {
+            if view.exit_confirmation.disarm_expired(window_expires_at) {
+                ctx.notify();
+            }
+        });
         ctx.notify();
     }
 
@@ -298,19 +307,6 @@ impl TuiTerminalSessionView {
             );
             true
         })
-    }
-
-    /// Arms (or re-arms) the exit confirmation window starting at `now`.
-    fn arm_exit_confirmation(&mut self, now: Instant, ctx: &mut ViewContext<Self>) {
-        let expires_at = self.exit_confirmation.arm(now);
-        // Disarm + repaint when the window lapses. A re-arm supersedes this
-        // (now stale) timer, making its `expire` a no-op rather than clearing
-        // the newer window.
-        ctx.spawn(Timer::after(CTRL_C_EXIT_WINDOW), move |view, _, ctx| {
-            if view.exit_confirmation.expire(expires_at) {
-                ctx.notify();
-            }
-        });
     }
 
     /// Builds the status footer under the input box. The left slot shows the

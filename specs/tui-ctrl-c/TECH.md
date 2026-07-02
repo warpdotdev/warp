@@ -26,7 +26,7 @@ The constructor now accepts the child as an already-boxed trait object (callers 
 A small, context-free module so the timing logic is directly unit-testable:
 
 - `CTRL_C_EXIT_WINDOW: Duration = 1s` (GUI parity).
-- `ExitConfirmation { expires_at: Option<Instant> }` with `is_armed()`, `should_exit(now)`, `arm(now) -> expires_at`, `disarm()`, and `expire(expires_at)` (stale-timer-safe: a re-arm supersedes an earlier timer, whose `expire` becomes a no-op).
+- `ExitConfirmation { expires_at: Option<Instant> }` with `is_armed()`, `should_exit(now)`, `arm(now) -> expires_at`, `disarm()`, and `disarm_expired(window_expires_at)` (stale-timer-safe: a re-arm supersedes an earlier timer, whose `disarm_expired` becomes a no-op).
 
 ### 4. Session-level ctrl-c handling (`crates/warp_tui/src/terminal_session_view.rs`)
 
@@ -34,9 +34,9 @@ A small, context-free module so the timing logic is directly unit-testable:
 - `handle_interrupt`:
   1. If `exit_confirmation.should_exit(now)` → `ctx.terminate_app(ForceTerminate, None)`. The `TuiDriverHandle`'s guards restore raw mode / the alternate screen on teardown.
   2. Else `cancel_active_conversation(ctx)` — cancels the surface's active conversation when it is non-empty (a fresh conversation defaults to `InProgress` before any exchange exists, mirroring the GUI's `is_empty()` guard) and `is_in_progress() || is_blocked()`; falls back to clearing the input via the new `TuiInputView::clear`.
-  3. Always re-arms the confirmation and spawns a `Timer::after(CTRL_C_EXIT_WINDOW)` that calls `expire(expires_at)` + `notify()` to hide the hint when the window lapses.
+  3. Always re-arms the confirmation and spawns a `Timer::after(CTRL_C_EXIT_WINDOW)` that calls `disarm_expired(window_expires_at)` + `notify()` to hide the hint when the window lapses.
 - Disarm on typing: a `subscribe_to_model` on the input's `CodeEditorModel` disarms the confirmation on `ContentChanged` when the buffer becomes non-empty. The ctrl-c clear itself leaves the buffer empty, so the window it arms survives its own clear.
-- Footer: `render_footer()` appends a one-row dim `TuiText` below the input box showing `ctrl-c again to exit` while armed (a single space otherwise, keeping the row height stable). It is a placeholder for the fuller footer design (left contextual hints + right status section).
+- Footer: `render_footer(ctx)` renders the one-row status footer below the input box — the `ctrl-c again to exit` hint occupies the left slot while armed (contextual key hints will live there later), with the active model and working directory pushed to the right edge behind a flex spacer.
 
 ### 5. Root-level exit fallback (`crates/warp_tui/src/root_view.rs`)
 

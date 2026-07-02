@@ -36,11 +36,11 @@ fn rearm_supersedes_stale_timer() {
     let second_expiry = confirmation.arm(now + Duration::from_millis(300));
 
     assert!(
-        !confirmation.expire(first_expiry),
+        !confirmation.disarm_expired(first_expiry),
         "the superseded window's timer must not disarm the newer window"
     );
     assert!(confirmation.is_armed());
-    assert!(confirmation.expire(second_expiry));
+    assert!(confirmation.disarm_expired(second_expiry));
     assert!(!confirmation.is_armed());
 }
 

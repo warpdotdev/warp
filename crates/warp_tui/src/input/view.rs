@@ -48,12 +48,16 @@ const WHEEL_STEP: isize = 2;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Registers the input view's editing keybindings (the readline/chord
-/// table). Called once at TUI startup from `keybindings::init`.
+/// table). Called once at TUI startup from `keybindings::init` — these
+/// bindings exist only in the TUI process; the GUI never registers them.
 ///
 /// Each command is an [`EditableBinding`] named `tui:input:*`, so it is
-/// user-remappable by name; commands with multiple default keys register
-/// one binding per key under the same name. Printable-character insertion
-/// is not a binding — it stays element-level in
+/// user-remappable by name (via `keybindings.yaml`, once the TUI loads
+/// overrides — a follow-up). Commands with multiple default keys register one
+/// binding per key under the same name, which the keymap supports directly:
+/// it tracks every binding registered under a name, and a custom-trigger
+/// override replaces the trigger on all of them. Printable-character
+/// insertion is not a binding — it stays element-level in
 /// `TuiInputElement::dispatch_event`, matching the GUI.
 pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([

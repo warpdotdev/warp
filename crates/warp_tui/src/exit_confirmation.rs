@@ -33,7 +33,8 @@ impl ExitConfirmation {
     }
 
     /// Arms (or re-arms) the window starting at `now`, returning the instant
-    /// it expires so a deferred [`Self::expire`] can identify its own window.
+    /// it expires so a deferred [`Self::disarm_expired`] can identify its own
+    /// window.
     pub(crate) fn arm(&mut self, now: Instant) -> Instant {
         let expires_at = now + CTRL_C_EXIT_WINDOW;
         self.expires_at = Some(expires_at);
@@ -45,10 +46,15 @@ impl ExitConfirmation {
         self.expires_at.take().is_some()
     }
 
-    /// Disarms the window expiring at `expires_at`, returning whether it was
-    /// still armed. A stale timer (superseded by a re-arm) is a no-op.
-    pub(crate) fn expire(&mut self, expires_at: Instant) -> bool {
-        if self.expires_at == Some(expires_at) {
+    /// Disarms the confirmation if the currently armed window is the one
+    /// expiring at `window_expires_at`, returning whether it disarmed.
+    ///
+    /// Called by the deferred expiry timer, which identifies its own window by
+    /// the expiry instant [`Self::arm`] returned: a timer belonging to a
+    /// superseded (re-armed) window no longer matches and no-ops instead of
+    /// clearing the newer window.
+    pub(crate) fn disarm_expired(&mut self, window_expires_at: Instant) -> bool {
+        if self.expires_at == Some(window_expires_at) {
             self.expires_at = None;
             true
         } else {
