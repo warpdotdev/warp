@@ -220,16 +220,15 @@ impl TuiAIBlockSection {
                 // TODO: add richer rendering for each tool call type. This is just a rendering stub to build off of.
                 let text_color =
                     Fill::from(ThemeFill::from(theme.terminal_colors().bright.black)).into();
-                Box::new(
-                    TuiContainer::new(
-                        TuiText::new("executed a tool call").with_style(
-                            TuiStyle::default()
-                                .fg(text_color)
-                                .add_modifier(Modifier::DIM),
-                        ),
-                    )
-                    .with_padding_top(top_padding),
+                TuiContainer::new(
+                    TuiText::new("executed a tool call").with_style(
+                        TuiStyle::default()
+                            .fg(text_color)
+                            .add_modifier(Modifier::DIM),
+                    ),
                 )
+                .with_padding_top(top_padding)
+                .finish()
             }
         }
     }
