@@ -3846,50 +3846,13 @@ impl AIConversation {
             .flat_map(|ex| ex.added_message_ids.iter().cloned())
             .collect();
 
-        // Sub-agent call/result reconciliation. A sub-agent runs in its own
-        // subtask, linked from the root by a `tool_call` (the invocation) and a
-        // `tool_call_result` (its completion). If the rewind removes only one
-        // half (the "straddle" case: the call is before the rewind point but the
-        // result lands in a rewound turn, common for long-running terminal
-        // sub-agents), a root-only truncation would leave a dangling tool_call
-        // with no result. That both wrongly re-sends the subtask (it looks
-        // unfinished, so it stays reachable/active) and breaks the request. So
-        // if EITHER half of a sub-agent is being rewound, remove BOTH halves
-        // from the root; the now-unreferenced subtask is pruned below.
+        // Reconcile sub-agent call/result pairs so the rewind never leaves a
+        // dangling `tool_call`/`tool_call_result` half in the root (see the
+        // helper's doc comment for why). The now-unreferenced subtask is pruned
+        // below.
         if let Some(root_source) = self.task_store.root_task().and_then(Task::source) {
-            // tool_call_id -> sub-agent call message id
-            let mut subagent_call_message_ids: HashMap<String, String> = HashMap::new();
-            // tool_call_id -> tool_call_result message id
-            let mut tool_call_result_message_ids: HashMap<String, String> = HashMap::new();
-            for message in &root_source.messages {
-                if let Some(tool_call) = message.tool_call() {
-                    if let Some(subagent) = tool_call.subagent() {
-                        if !subagent.task_id.is_empty() {
-                            subagent_call_message_ids
-                                .insert(tool_call.tool_call_id.clone(), message.id.clone());
-                        }
-                    }
-                }
-                if let Some(result) = message.tool_call_result() {
-                    tool_call_result_message_ids
-                        .insert(result.tool_call_id.clone(), message.id.clone());
-                }
-            }
-            let mut extra_ids: HashSet<MessageId> = HashSet::new();
-            for (tool_call_id, call_message_id) in &subagent_call_message_ids {
-                let result_message_id = tool_call_result_message_ids.get(tool_call_id);
-                let call_rewound =
-                    message_ids_to_remove.contains(&MessageId::new(call_message_id.clone()));
-                let result_rewound = result_message_id
-                    .map(|id| message_ids_to_remove.contains(&MessageId::new(id.clone())))
-                    .unwrap_or(false);
-                if call_rewound || result_rewound {
-                    extra_ids.insert(MessageId::new(call_message_id.clone()));
-                    if let Some(result_message_id) = result_message_id {
-                        extra_ids.insert(MessageId::new(result_message_id.clone()));
-                    }
-                }
-            }
+            let extra_ids =
+                subagent_pair_message_ids_to_remove(root_source, &message_ids_to_remove);
             message_ids_to_remove.extend(extra_ids);
         }
 
@@ -3963,6 +3926,57 @@ impl AIConversation {
 
         Ok(exchanges_to_remove)
     }
+}
+
+/// Computes the additional message ids to remove during a rewind so that no
+/// sub-agent `tool_call`/`tool_call_result` pair is left dangling.
+///
+/// A sub-agent runs in its own subtask, linked from the root by a `tool_call`
+/// (the invocation) and a `tool_call_result` (its completion). If a rewind
+/// removes only one half — the "straddle" case, where the call is before the
+/// rewind point but the result lands in a rewound turn (common for
+/// long-running terminal sub-agents) — a root-only truncation would leave a
+/// dangling `tool_call` with no result. That both wrongly re-sends the subtask
+/// (it looks unfinished, so it stays reachable/active) and breaks the request.
+/// So if EITHER half of a sub-agent is already in `removed_ids`, this returns
+/// both halves' message ids; the now-unreferenced subtask is pruned separately.
+fn subagent_pair_message_ids_to_remove(
+    root_source: &api::Task,
+    removed_ids: &HashSet<MessageId>,
+) -> HashSet<MessageId> {
+    // tool_call_id -> sub-agent call message id
+    let mut subagent_call_message_ids: HashMap<String, String> = HashMap::new();
+    // tool_call_id -> tool_call_result message id
+    let mut tool_call_result_message_ids: HashMap<String, String> = HashMap::new();
+    for message in &root_source.messages {
+        if let Some(tool_call) = message.tool_call() {
+            if let Some(subagent) = tool_call.subagent() {
+                if !subagent.task_id.is_empty() {
+                    subagent_call_message_ids
+                        .insert(tool_call.tool_call_id.clone(), message.id.clone());
+                }
+            }
+        }
+        if let Some(result) = message.tool_call_result() {
+            tool_call_result_message_ids.insert(result.tool_call_id.clone(), message.id.clone());
+        }
+    }
+
+    let mut extra_ids: HashSet<MessageId> = HashSet::new();
+    for (tool_call_id, call_message_id) in &subagent_call_message_ids {
+        let result_message_id = tool_call_result_message_ids.get(tool_call_id);
+        let call_rewound = removed_ids.contains(&MessageId::new(call_message_id.clone()));
+        let result_rewound = result_message_id
+            .map(|id| removed_ids.contains(&MessageId::new(id.clone())))
+            .unwrap_or(false);
+        if call_rewound || result_rewound {
+            extra_ids.insert(MessageId::new(call_message_id.clone()));
+            if let Some(result_message_id) = result_message_id {
+                extra_ids.insert(MessageId::new(result_message_id.clone()));
+            }
+        }
+    }
+    extra_ids
 }
 
 fn parse_orchestration_harness_type(value: &str) -> Harness {
