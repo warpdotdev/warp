@@ -41,44 +41,16 @@ pub fn is_supported_on_current_platform() -> bool {
 
 #[derive(Debug, Error)]
 pub enum RecordingError {
-    #[error("Video recording is not supported on this platform.")]
-    UnsupportedPlatform,
-    #[error("Cannot start recording: DISPLAY is not set (X11 required).")]
-    MissingDisplay,
-    #[error("Failed to connect to X11: {0}")]
-    X11Connection(String),
-    #[error("Cannot start recording: invalid display dimensions {width}x{height}.")]
-    InvalidDimensions { width: u32, height: u32 },
-    #[error("Failed to create recording log file: {source}")]
-    CreateLogFile {
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("Failed to spawn ffmpeg for recording: {source}")]
-    SpawnFfmpeg {
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("Failed to poll ffmpeg: {source}")]
-    PollFfmpeg {
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("ffmpeg exited early with status {status}")]
-    FfmpegExitedEarly { status: std::process::ExitStatus },
-    #[error("timed out waiting for capture to begin")]
-    StartTimedOut,
-    #[error("ffmpeg failed to start recording: {error}{detail}")]
-    StartFailed { error: String, detail: String },
-    #[error("Failed to wait for ffmpeg to stop: {source}")]
-    WaitFfmpeg {
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("ffmpeg did not finalize the recording in time")]
-    StopTimedOut,
-    #[error("Recording produced an empty file.")]
-    EmptyOutput,
+    /// Recording can't run in this environment: unsupported platform, missing or
+    /// unreachable X11 display, unusable display dimensions, or ffmpeg not launchable.
+    #[error("Recording environment error: {reason}")]
+    Environment { reason: String },
+    /// ffmpeg was launched but capture never went live.
+    #[error("Recording failed to start: {reason}")]
+    Start { reason: String },
+    /// A live recording couldn't be finalized into a usable file.
+    #[error("Recording failed to finalize: {reason}")]
+    Finalize { reason: String },
 }
 
 /// Returns an actor that can perform actions on the computer.
@@ -249,9 +221,9 @@ pub struct RecordingConfig {
     /// Capture frame rate in frames per second.
     pub frame_rate: u32,
     /// Maximum duration before the runtime auto-stops recording.
-    pub max_duration: Option<Duration>,
-    /// Maximum output size before the runtime auto-stops recording.
-    pub max_size_bytes: Option<u64>,
+    pub max_duration: Duration,
+    /// Maximum output size in bytes before the runtime auto-stops recording.
+    pub max_size_bytes: u64,
 }
 
 impl Default for RecordingConfig {
@@ -259,10 +231,9 @@ impl Default for RecordingConfig {
         Self {
             // NOTE: 15fps keeps UI interactions readable while reducing file size and encoder load.
             frame_rate: 15,
-            // NOTE: Fallback caps bound a capture when the server omits limits, so an
-            // unattended recording can't grow without bound (~10 min / 1 GiB).
-            max_duration: Some(Duration::from_secs(10 * 60)),
-            max_size_bytes: Some(1024 * 1024 * 1024),
+            // NOTE: Bounds every capture so an unattended recording can't grow without bound (~10 min / 1 GiB).
+            max_duration: Duration::from_secs(10 * 60),
+            max_size_bytes: 1024 * 1024 * 1024,
         }
     }
 }

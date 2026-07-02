@@ -36,14 +36,18 @@ impl Recorder {
 #[async_trait]
 impl crate::Recorder for Recorder {
     async fn start(&self, config: RecordingConfig) -> Result<RecordingHandle, RecordingError> {
-        let display = std::env::var("DISPLAY").map_err(|_| RecordingError::MissingDisplay)?;
+        let display = std::env::var("DISPLAY").map_err(|_| RecordingError::Environment {
+            reason: "DISPLAY is not set (X11 required)".to_string(),
+        })?;
 
         // libx264 with yuv420p requires even dimensions.
         let (width, height) = query_display_dimensions()?;
         let width = width & !1;
         let height = height & !1;
         if width == 0 || height == 0 {
-            return Err(RecordingError::InvalidDimensions { width, height });
+            return Err(RecordingError::Environment {
+                reason: format!("invalid display dimensions {width}x{height}"),
+            });
         }
 
         let path =
@@ -51,8 +55,9 @@ impl crate::Recorder for Recorder {
         // ffmpeg's progress log goes to a file so its stderr pipe can never fill
         // and stall capture over a long recording.
         let log_path = path.with_extension("log");
-        let log_file = std::fs::File::create(&log_path)
-            .map_err(|source| RecordingError::CreateLogFile { source })?;
+        let log_file = std::fs::File::create(&log_path).map_err(|e| RecordingError::Start {
+            reason: format!("failed to create the recording log file: {e}"),
+        })?;
 
         let mut command = Command::new("ffmpeg");
         command
@@ -66,14 +71,10 @@ impl crate::Recorder for Recorder {
             .args(["-pix_fmt", "yuv420p"])
             .args(["-movflags", "+faststart"]);
         // Enforce capture limits in ffmpeg so abandoned recordings remain bounded.
-        if let Some(max_duration) = config.max_duration {
-            command
-                .arg("-t")
-                .arg(format!("{:.3}", max_duration.as_secs_f64()));
-        }
-        if let Some(max_size_bytes) = config.max_size_bytes {
-            command.arg("-fs").arg(max_size_bytes.to_string());
-        }
+        command
+            .arg("-t")
+            .arg(format!("{:.3}", config.max_duration.as_secs_f64()));
+        command.arg("-fs").arg(config.max_size_bytes.to_string());
         command
             .arg(&path)
             .stdin(Stdio::null())
@@ -81,9 +82,9 @@ impl crate::Recorder for Recorder {
             .stderr(Stdio::from(log_file))
             .kill_on_drop(true);
 
-        let mut process = command
-            .spawn()
-            .map_err(|source| RecordingError::SpawnFfmpeg { source })?;
+        let mut process = command.spawn().map_err(|e| RecordingError::Environment {
+            reason: format!("failed to spawn ffmpeg: {e}"),
+        })?;
 
         // Resolve once capture is confirmed live (the output file has grown,
         // meaning ffmpeg opened the display and the muxer is writing).
@@ -92,9 +93,8 @@ impl crate::Recorder for Recorder {
             let detail = ffmpeg_error_tail(&std::fs::read_to_string(&log_path).unwrap_or_default());
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_file(&log_path);
-            return Err(RecordingError::StartFailed {
-                error: e.to_string(),
-                detail,
+            return Err(RecordingError::Start {
+                reason: format!("{e}{detail}"),
             });
         }
         let _ = std::fs::remove_file(&log_path);
@@ -120,10 +120,9 @@ impl crate::Recorder for Recorder {
         let duration = started_at.elapsed();
 
         // Finalize gracefully: SIGINT makes ffmpeg flush and write the moov atom.
-        let completion_status = match process
-            .try_wait()
-            .map_err(|source| RecordingError::PollFfmpeg { source })?
-        {
+        let completion_status = match process.try_wait().map_err(|e| RecordingError::Finalize {
+            reason: format!("failed to poll ffmpeg: {e}"),
+        })? {
             Some(_) => RecordingCompletionStatus::StoppedEarly,
             None => {
                 let mut completion_status = RecordingCompletionStatus::Completed;
@@ -146,7 +145,9 @@ impl crate::Recorder for Recorder {
                         let _ = process.start_kill();
                         let _ = process.wait().await;
                         let _ = std::fs::remove_file(&path);
-                        return Err(RecordingError::StopTimedOut);
+                        return Err(RecordingError::Finalize {
+                            reason: "ffmpeg did not finalize the recording in time".to_string(),
+                        });
                     }
                 }
                 completion_status
@@ -156,7 +157,9 @@ impl crate::Recorder for Recorder {
         let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         if size_bytes == 0 {
             let _ = std::fs::remove_file(&path);
-            return Err(RecordingError::EmptyOutput);
+            return Err(RecordingError::Finalize {
+                reason: "recording produced an empty file".to_string(),
+            });
         }
 
         Ok(RecordingOutput {
@@ -173,7 +176,9 @@ impl crate::Recorder for Recorder {
 /// Queries the X11 root window's dimensions in physical pixels via `$DISPLAY`.
 fn query_display_dimensions() -> Result<(u32, u32), RecordingError> {
     let (conn, screen_index) =
-        RustConnection::connect(None).map_err(|e| RecordingError::X11Connection(e.to_string()))?;
+        RustConnection::connect(None).map_err(|e| RecordingError::Environment {
+            reason: format!("failed to connect to X11: {e}"),
+        })?;
     let screen = &conn.setup().roots[screen_index];
     Ok((
         screen.width_in_pixels as u32,
@@ -182,20 +187,20 @@ fn query_display_dimensions() -> Result<(u32, u32), RecordingError> {
 }
 
 /// Waits until the recording file has grown (capture is live) or ffmpeg exits.
-async fn wait_for_first_output(path: &Path, process: &mut Child) -> Result<(), RecordingError> {
+async fn wait_for_first_output(path: &Path, process: &mut Child) -> Result<(), String> {
     let deadline = Instant::now() + START_TIMEOUT;
     loop {
         if let Some(status) = process
             .try_wait()
-            .map_err(|source| RecordingError::PollFfmpeg { source })?
+            .map_err(|e| format!("failed to poll ffmpeg: {e}"))?
         {
-            return Err(RecordingError::FfmpegExitedEarly { status });
+            return Err(format!("ffmpeg exited early with status {status}"));
         }
         if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) > 0 {
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(RecordingError::StartTimedOut);
+            return Err("timed out waiting for capture to begin".to_string());
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }

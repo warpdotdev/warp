@@ -18,11 +18,15 @@ impl Recorder {
 #[async_trait]
 impl super::Recorder for Recorder {
     async fn start(&self, _config: RecordingConfig) -> Result<RecordingHandle, RecordingError> {
-        Err(RecordingError::UnsupportedPlatform)
+        Err(RecordingError::Environment {
+            reason: "video recording is not supported on this platform".to_string(),
+        })
     }
 
     async fn stop(&self, _handle: RecordingHandle) -> Result<RecordingOutput, RecordingError> {
-        Err(RecordingError::UnsupportedPlatform)
+        Err(RecordingError::Environment {
+            reason: "video recording is not supported on this platform".to_string(),
+        })
     }
 }
 
