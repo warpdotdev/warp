@@ -398,6 +398,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_pass_control_sequences_to_long_running_block);
     register_test!(test_settings_file_migration_from_native_store);
     register_test!(test_settings_file_hot_reload_applies_new_values);
+    register_test!(test_custom_lsp_enable_registers_server_in_manager);
+    register_test!(test_custom_lsp_override_yields_custom_label_in_footer);
+    register_test!(test_custom_lsp_enablement_survives_reload);
 
     register_test!(test_settings_error_banner_on_startup_with_invalid_toml);
     register_test!(test_settings_error_banner_on_startup_with_invalid_value);

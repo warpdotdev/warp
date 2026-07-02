@@ -21,13 +21,16 @@ chrono = { workspace = true }
 env_logger = { workspace = true }
 futures = { workspace = true }
 globset = { workspace = true }
+handlebars.workspace = true
 itertools.workspace = true
 jsonrpc.workspace = true
 log = { workspace = true }
 lsp-types = "0.97.0"
 node_runtime = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+shellexpand.workspace = true
 strum = { workspace = true }
 strum_macros = { workspace = true }
 warp_core = { workspace = true }
@@ -47,3 +50,6 @@ nix = { workspace = true }
 repo_metadata.workspace = true
 sha2 = { workspace = true }
 tokio = { workspace = true, features = ["process"] }
+
+[dev-dependencies]
+serial_test = "0.8.0"

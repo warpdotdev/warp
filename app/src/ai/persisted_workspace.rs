@@ -22,6 +22,7 @@ use repo_metadata::repositories::{DetectedRepositories, DetectedRepositoriesEven
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
 use serde::{Deserialize, Serialize};
+use settings::Setting as _;
 #[cfg(feature = "local_fs")]
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
@@ -40,6 +41,10 @@ use crate::ai::metadata_project_rules::read_project_rule_contents;
 use crate::ai::AIRequestUsageModel;
 #[cfg(feature = "local_fs")]
 use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager;
+#[cfg(feature = "local_fs")]
+use crate::code::lsp_dispatch::ResolvedLspServer;
+#[cfg(feature = "local_fs")]
+use crate::code::lsp_logs::custom_relative_log_path;
 #[cfg(feature = "local_fs")]
 use crate::code::lsp_telemetry::LspTelemetryEvent;
 use crate::persistence::ModelEvent;
@@ -104,6 +109,24 @@ pub enum LspRepoStatus {
     Installing { server_type: LSPServerType },
 }
 
+/// Per-repo enablement state for a user-configured custom LSP server.
+///
+/// Sibling of [`LspRepoStatus`]. Narrower because customs have no install
+/// flow — there is no `Installing`, `DisabledAndInstalled`, or
+/// `DisabledAndNotInstalled` for customs. Failures to spawn surface through
+/// the standard `LspState::Failed` path, not through this enum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CustomLspRepoStatus {
+    /// Enabled and running for this workspace.
+    Ready,
+    /// Enabled but not yet running (manager hasn't spawned, or the spawn
+    /// is in-flight).
+    Enabled,
+    /// Recognized as a possible server for this workspace (descriptor
+    /// claims the open file's filetype) but the user has not enabled it.
+    Disabled,
+}
+
 /// Global installation status for an LSP server (across all projects).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LSPInstallationStatus {
@@ -132,6 +155,11 @@ impl LspRepoStatus {
 pub struct Workspace {
     metadata: WorkspaceMetadata,
     language_servers: HashMap<LSPServerType, EnablementState>,
+    /// Enablement state for user-configured custom language servers, keyed by
+    /// the descriptor's `name`. In-memory only for now; SQLite persistence is
+    /// a later phase. The string-keyed SQLite table `workspace_language_server`
+    /// can already store these alongside built-ins without a schema change.
+    custom_language_servers: HashMap<String, EnablementState>,
 }
 
 impl Workspace {
@@ -216,6 +244,7 @@ impl PersistedWorkspace {
     pub fn new(
         metadata: Vec<WorkspaceMetadata>,
         workspace_language_servers: HashMap<PathBuf, HashMap<LSPServerType, EnablementState>>,
+        workspace_custom_language_servers: HashMap<PathBuf, HashMap<String, EnablementState>>,
         model_event_sender: Option<SyncSender<ModelEvent>>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
@@ -227,12 +256,17 @@ impl PersistedWorkspace {
                     .get(&path)
                     .cloned()
                     .unwrap_or_default();
+                let custom_language_servers = workspace_custom_language_servers
+                    .get(&path)
+                    .cloned()
+                    .unwrap_or_default();
 
                 (
                     path,
                     Workspace {
                         metadata,
                         language_servers,
+                        custom_language_servers,
                     },
                 )
             })
@@ -358,16 +392,84 @@ impl PersistedWorkspace {
         self.set_lsp_server_for_path(path, server_type, EnablementState::Yes);
     }
 
+    /// Given a repo path, enables a user-configured custom LSP server (by
+    /// descriptor `name`). In-memory only for now; SQLite persistence lands
+    /// in a later phase.
+    pub fn enable_custom_lsp_server_for_path(&mut self, path: &Path, name: &str) {
+        self.set_custom_lsp_server_for_path(path, name, EnablementState::Yes);
+    }
+
+    /// Enables the server identified by `resolved` for `repo_root` and queues
+    /// a spawn task for `file_path`. Dispatches to the kind-appropriate
+    /// enable path internally so call sites don't have to match on built-in
+    /// vs. custom.
+    #[cfg(feature = "local_fs")]
+    pub fn enable_and_spawn_lsp_server(
+        &mut self,
+        repo_root: &Path,
+        resolved: &ResolvedLspServer,
+        file_path: PathBuf,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match resolved {
+            ResolvedLspServer::BuiltIn(server_type) => {
+                self.enable_lsp_server_for_path(repo_root, *server_type);
+            }
+            ResolvedLspServer::Custom(descriptor) => {
+                self.enable_custom_lsp_server_for_path(repo_root, &descriptor.name);
+            }
+        }
+        self.execute_lsp_task(LspTask::Spawn { file_path }, ctx);
+    }
+
+    /// Installs (built-in) or enables (custom) the server identified by
+    /// `resolved`, then spawns it. Built-in install runs the existing async
+    /// `LspTask::Install` flow which fires enable + spawn on completion;
+    /// customs have no install flow, so we enable directly and spawn
+    /// immediately.
+    #[cfg(feature = "local_fs")]
+    pub fn install_and_enable_lsp_server(
+        &mut self,
+        repo_root: PathBuf,
+        resolved: &ResolvedLspServer,
+        file_path: PathBuf,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match resolved {
+            ResolvedLspServer::BuiltIn(server_type) => {
+                self.execute_lsp_task(
+                    LspTask::Install {
+                        file_path,
+                        repo_root,
+                        server_type: *server_type,
+                    },
+                    ctx,
+                );
+            }
+            ResolvedLspServer::Custom(descriptor) => {
+                self.enable_custom_lsp_server_for_path(&repo_root, &descriptor.name);
+                self.execute_lsp_task(LspTask::Spawn { file_path }, ctx);
+            }
+        }
+    }
+
+    /// Given a repo path, disables a user-configured custom LSP server.
+    pub fn disable_custom_lsp_server_for_path(&mut self, path: &Path, name: &str) {
+        self.set_custom_lsp_server_for_path(path, name, EnablementState::No);
+    }
+
     /// Given a repo path, disables the specified LSP server.
     pub fn disable_lsp_server_for_path(&mut self, path: &Path, server_type: LSPServerType) {
         self.set_lsp_server_for_path(path, server_type, EnablementState::No);
     }
 
-    /// Returns the enabled LSP server type (if any) for this file path.
+    /// Returns whether any **built-in** LSP server is enabled for this file path.
+    ///
+    /// Callers are expected to dispatch custom descriptors separately via
+    /// [`crate::code::lsp_dispatch::resolve_server_for_path`] before calling
+    /// this method; custom-claimed paths flow through
+    /// [`Self::custom_lsp_repo_status`] instead.
     pub fn has_enabled_lsp_server_for_file_path(&self, path: &Path) -> LSPEnablementResultForFile {
-        let Some(language_id) = LanguageId::from_path(path) else {
-            return LSPEnablementResultForFile::UnsupportedLanguage;
-        };
         let Some(root) = self.root_for_workspace(path) else {
             return LSPEnablementResultForFile::LSPNotEnabled { root_name: None };
         };
@@ -378,6 +480,10 @@ impl PersistedWorkspace {
                     .and_then(|s| s.to_str())
                     .map(|s| s.to_string()),
             };
+        };
+
+        let Some(language_id) = LanguageId::from_path(path) else {
+            return LSPEnablementResultForFile::UnsupportedLanguage;
         };
 
         for (language_server, enablement) in &workspace.language_servers {
@@ -443,6 +549,7 @@ impl PersistedWorkspace {
                     Workspace {
                         metadata,
                         language_servers: HashMap::from([(server_type, state)]),
+                        custom_language_servers: HashMap::new(),
                     },
                 );
             }
@@ -452,6 +559,65 @@ impl PersistedWorkspace {
         self.save_to_db(vec![ModelEvent::UpsertWorkspaceLanguageServer {
             workspace_path: path.to_path_buf(),
             lsp_type: server_type,
+            enabled: state,
+        }]);
+    }
+
+    /// Internal method to set custom LSP server state for a path. Mirrors
+    /// `set_lsp_server_for_path` but writes to the `custom_language_servers`
+    /// map and the SQLite `workspace_language_server` table with
+    /// `kind = 'Custom'`.
+    fn set_custom_lsp_server_for_path(&mut self, path: &Path, name: &str, state: EnablementState) {
+        // Check if the workspace needs to be persisted before we take a
+        // mutable borrow, so we can call save_to_db without conflicting borrows.
+        let needs_persist = self
+            .workspaces
+            .get(path)
+            .is_some_and(|ws| !ws.is_persisted());
+
+        if needs_persist {
+            // Materialize the workspace: set a timestamp and persist metadata
+            // so the FK-dependent workspace_language_server row can be written.
+            let workspace = self.workspaces.get_mut(path).unwrap();
+            workspace.metadata.modified_ts = Some(Utc::now());
+            let metadata = workspace.metadata.clone();
+            self.save_to_db(vec![ModelEvent::UpsertCodebaseIndexMetadata {
+                index_metadata: Box::new(metadata),
+            }]);
+        }
+
+        match self.workspaces.get_mut(path) {
+            Some(workspace) => {
+                workspace
+                    .custom_language_servers
+                    .insert(name.to_string(), state);
+            }
+            None => {
+                let metadata = WorkspaceMetadata {
+                    path: path.to_path_buf(),
+                    navigated_ts: None,
+                    modified_ts: Some(Utc::now()),
+                    queried_ts: None,
+                };
+
+                self.save_to_db(vec![ModelEvent::UpsertCodebaseIndexMetadata {
+                    index_metadata: Box::new(metadata.clone()),
+                }]);
+
+                self.workspaces.insert(
+                    path.to_path_buf(),
+                    Workspace {
+                        metadata,
+                        language_servers: HashMap::new(),
+                        custom_language_servers: HashMap::from([(name.to_string(), state)]),
+                    },
+                );
+            }
+        }
+
+        self.save_to_db(vec![ModelEvent::UpsertWorkspaceCustomLanguageServer {
+            workspace_path: path.to_path_buf(),
+            name: name.to_string(),
             enabled: state,
         }]);
     }
@@ -480,6 +646,43 @@ impl PersistedWorkspace {
                     }
                 })
         })
+    }
+
+    /// Returns the names of custom LSP servers (descriptor `name`) enabled
+    /// for the workspace containing `path`.
+    pub fn enabled_custom_lsp_servers(
+        &self,
+        path: &Path,
+    ) -> Option<impl Iterator<Item = &str> + use<'_>> {
+        let root = self.root_for_workspace(path)?;
+        self.workspaces.get(root).map(|workspace| {
+            workspace
+                .custom_language_servers
+                .iter()
+                .filter_map(|(name, state)| {
+                    (*state == EnablementState::Yes).then_some(name.as_str())
+                })
+        })
+    }
+
+    /// Returns true if the workspace containing `path` has at least one
+    /// enabled LSP server of either kind (built-in or custom).
+    ///
+    /// Used as the `LspTask::Spawn` early-return guard so the expensive
+    /// interactive-shell PATH capture is skipped when there is nothing to
+    /// spawn. Must consider both kinds: a custom-only workspace would
+    /// otherwise short-circuit and the user's Enable click would no-op.
+    pub fn has_any_enabled_lsp_server(&self, path: &Path) -> bool {
+        let Some(root) = self.root_for_workspace(path) else {
+            return false;
+        };
+        let has_builtin = self
+            .enabled_lsp_servers(root)
+            .is_some_and(|mut s| s.next().is_some());
+        let has_custom = self
+            .enabled_custom_lsp_servers(root)
+            .is_some_and(|mut s| s.next().is_some());
+        has_builtin || has_custom
     }
 
     /// Returns LSP servers for a given workspace path.
@@ -588,6 +791,7 @@ impl PersistedWorkspace {
                                     queried_ts: None,
                                 },
                                 language_servers: HashMap::new(),
+                                custom_language_servers: HashMap::new(),
                             });
 
                     for &server_type in &servers {
@@ -716,6 +920,7 @@ impl PersistedWorkspace {
                             queried_ts: None,
                         },
                         language_servers: HashMap::new(),
+                        custom_language_servers: HashMap::new(),
                     },
                 );
             }
@@ -793,6 +998,7 @@ impl PersistedWorkspace {
                         Workspace {
                             metadata: new_metadata,
                             language_servers: HashMap::new(),
+                            custom_language_servers: HashMap::new(),
                         },
                     );
                 }
@@ -895,6 +1101,7 @@ impl PersistedWorkspace {
             let has_persisted_servers = ws
                 .language_servers
                 .values()
+                .chain(ws.custom_language_servers.values())
                 .any(|s| *s != EnablementState::Suggested);
             if has_persisted_servers {
                 return None;
@@ -1049,15 +1256,10 @@ impl PersistedWorkspace {
             return;
         };
 
-        let Some(servers) = self.enabled_lsp_servers(workspace_root) else {
-            return;
-        };
-
-        let supported_servers = servers.collect::<Vec<LSPServerType>>();
-
-        if supported_servers.is_empty() {
-            return;
-        }
+        let supported_servers: Vec<LSPServerType> = self
+            .enabled_lsp_servers(workspace_root)
+            .map(|it| it.collect())
+            .unwrap_or_default();
 
         let mut new_servers_available_to_start = false;
         let workspace_root = workspace_root.to_path_buf();
@@ -1065,7 +1267,7 @@ impl PersistedWorkspace {
         for server in supported_servers {
             if LspManagerModel::as_ref(ctx).server_registered_and_started(
                 &workspace_root,
-                server,
+                &lsp::ServerKey::BuiltIn(server),
                 ctx,
             ) {
                 continue;
@@ -1089,7 +1291,73 @@ impl PersistedWorkspace {
             .with_log_relative_path(log_relative_path);
 
             LspManagerModel::handle(ctx).update(ctx, |manager, m_ctx| {
-                manager.register(workspace_root.clone(), config, m_ctx);
+                manager.register(
+                    workspace_root.clone(),
+                    lsp::LspServerConfigKind::BuiltIn(config),
+                    m_ctx,
+                );
+            });
+            new_servers_available_to_start = true;
+        }
+
+        // Parallel pass for user-configured custom servers. Each enabled
+        // custom name is resolved against the live `LanguageServersSettings`
+        // descriptor list; if the descriptor still exists, we materialize a
+        // `CustomLspServerConfig` and register it via the manager.
+        let custom_names: Vec<String> = self
+            .enabled_custom_lsp_servers(&workspace_root)
+            .map(|it| it.map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+        for name in custom_names {
+            let key = lsp::ServerKey::Custom(name.clone());
+            if LspManagerModel::as_ref(ctx).server_registered_and_started(
+                &workspace_root,
+                &key,
+                ctx,
+            ) {
+                continue;
+            }
+
+            let Some(descriptor) = crate::settings::LanguageServersSettings::as_ref(ctx)
+                .language_servers
+                .value()
+                .0
+                .iter()
+                .find(|d| d.name == name)
+                .cloned()
+            else {
+                log::warn!(
+                    "Enabled custom LSP \"{name}\" has no matching `[[editor.language_servers]]` entry; skipping",
+                );
+                continue;
+            };
+
+            let cache_dir = warp_core::paths::lsp_server_cache_dir(&descriptor.name);
+            let workspace_slug = warp_util::path::workspace_hash(&workspace_root);
+            let log_relative_path = custom_relative_log_path(&descriptor.name, &workspace_root);
+            log::info!(
+                "Starting custom LSP \"{}\" for {}",
+                descriptor.name,
+                workspace_root.display()
+            );
+
+            let config = lsp::CustomLspServerConfig::new(
+                descriptor,
+                workspace_root.clone(),
+                workspace_slug,
+                cache_dir,
+                path_env_var.clone(),
+                ChannelState::app_id().application_name().to_string(),
+                Arc::new(crate::code::lsp_log_redactor::AppSecretRedactor),
+            )
+            .with_log_relative_path(log_relative_path);
+
+            LspManagerModel::handle(ctx).update(ctx, |manager, m_ctx| {
+                manager.register(
+                    workspace_root.clone(),
+                    lsp::LspServerConfigKind::Custom(Box::new(config)),
+                    m_ctx,
+                );
             });
             new_servers_available_to_start = true;
         }
@@ -1134,7 +1402,7 @@ impl PersistedWorkspace {
                     {
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             let toast = DismissibleToast::error(format!(
-                                "Failed to start LSP server for {workspace_root_display} with error {e}",
+                                "Failed to start LSP server \"{server_type_name}\" for {workspace_root_display} with error {e}",
                             ));
                             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                         });
@@ -1160,11 +1428,7 @@ impl PersistedWorkspace {
         // servers for this workspace before kicking off the expensive interactive
         // shell PATH capture.
         if let LspTask::Spawn { ref file_path } = task {
-            let has_servers = self
-                .root_for_workspace(file_path)
-                .and_then(|root| self.enabled_lsp_servers(root))
-                .is_some_and(|mut servers| servers.next().is_some());
-            if !has_servers {
+            if !self.has_any_enabled_lsp_server(file_path) {
                 return;
             }
         }
@@ -1262,6 +1526,39 @@ impl PersistedWorkspace {
             }
         }
     }
+
+    /// Returns the per-repo status for a user-configured custom LSP server.
+    ///
+    /// Mirrors [`Self::detect_lsp_workspace_status`] but synchronous and
+    /// narrow: customs have no install state to detect. Resolution rules:
+    /// 1. If enabled and a server with this name is registered and running
+    ///    in the manager → [`CustomLspRepoStatus::Ready`]
+    /// 2. If enabled but no running server yet → [`CustomLspRepoStatus::Enabled`]
+    /// 3. Otherwise → [`CustomLspRepoStatus::Disabled`]
+    #[cfg(feature = "local_fs")]
+    pub fn custom_lsp_repo_status(
+        &self,
+        repo_root: &Path,
+        name: &str,
+        ctx: &AppContext,
+    ) -> CustomLspRepoStatus {
+        let is_enabled = self
+            .workspaces
+            .get(repo_root)
+            .and_then(|w| w.custom_language_servers.get(name).copied())
+            == Some(EnablementState::Yes);
+
+        if !is_enabled {
+            return CustomLspRepoStatus::Disabled;
+        }
+
+        let key = lsp::ServerKey::Custom(name.to_string());
+        if lsp::LspManagerModel::as_ref(ctx).server_registered_and_started(repo_root, &key, ctx) {
+            CustomLspRepoStatus::Ready
+        } else {
+            CustomLspRepoStatus::Enabled
+        }
+    }
 }
 
 fn send_active_indexed_repos_changed_telemetry<T: Entity>(ctx: &mut ModelContext<T>) {
@@ -1294,3 +1591,7 @@ pub fn all_working_directories(app: &AppContext) -> HashSet<PathBuf> {
     }
     working_directories
 }
+
+#[cfg(test)]
+#[path = "persisted_workspace_tests.rs"]
+mod tests;

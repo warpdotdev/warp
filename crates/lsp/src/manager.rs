@@ -3,25 +3,37 @@ use std::path::{Path, PathBuf};
 
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::config::LanguageId;
 use crate::model::LanguageServerId;
 use crate::supported_servers::LSPServerType;
-use crate::{LspEvent, LspServerConfig, LspServerModel};
+use crate::{LspEvent, LspServerConfigKind, LspServerModel};
+
+/// Uniform identity for an LSP server across both `BuiltIn` and `Custom` kinds.
+/// Used for duplicate detection in the manager and as the payload for
+/// `LspManagerModelEvent::ServerRemoved` so subscribers can tell which server
+/// went away without needing to know its kind.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum ServerKey {
+    BuiltIn(LSPServerType),
+    Custom(String),
+}
 
 #[derive(Debug)]
 pub enum LspManagerModelEvent {
     /// ServerStarted is fired when the server is successfully started and reports ready status.
     /// ServerStopped is fired when the server has completed its shutdown.
-    /// Both are routed from individual LspServerModel events.
+    /// ServerFailed is fired when the server fails to launch. Subscribers (e.g.
+    /// the code editor) use it to connect to a server that will never emit
+    /// ServerStarted, so the footer still reflects the failed state.
+    /// All are routed from individual LspServerModel events.
     ServerStarted(PathBuf),
     ServerStopped(PathBuf),
+    ServerFailed(PathBuf),
     /// ServerRemoved is fired when a server is removed from the manager.
     /// This happens when the user explicitly removes the server (e.g., from settings or footer menu).
     /// Subscribers should drop their references to the server model.
-    /// Contains the workspace path, server type, and the unique server ID.
     ServerRemoved {
         workspace_root: PathBuf,
-        server_type: LSPServerType,
+        key: ServerKey,
         server_id: LanguageServerId,
     },
 }
@@ -53,31 +65,22 @@ impl LspManagerModel {
         self.servers.get(path)
     }
 
-    /// Returns true if a server of the given type is already registered for this workspace.
-    /// This is used to prevent duplicate registrations.
-    pub fn server_registered(
-        &self,
-        path: &Path,
-        server_type: LSPServerType,
-        ctx: &AppContext,
-    ) -> bool {
+    /// Returns true if a server with the given key is already registered
+    /// for this workspace. Used to prevent duplicate registrations.
+    pub fn server_registered(&self, path: &Path, key: &ServerKey, ctx: &AppContext) -> bool {
         let Some(servers) = self.servers.get(path) else {
             return false;
         };
 
-        for server in servers {
-            if server.as_ref(ctx).server_type() == server_type {
-                return true;
-            }
-        }
-
-        false
+        servers
+            .iter()
+            .any(|server| &server.as_ref(ctx).key() == key)
     }
 
     pub fn server_registered_and_started(
         &self,
         path: &Path,
-        server_type: LSPServerType,
+        key: &ServerKey,
         ctx: &AppContext,
     ) -> bool {
         let Some(servers) = self.servers.get(path) else {
@@ -85,7 +88,7 @@ impl LspManagerModel {
         };
 
         for server in servers {
-            if server.as_ref(ctx).server_type() == server_type {
+            if &server.as_ref(ctx).key() == key {
                 return server.as_ref(ctx).has_started();
             }
         }
@@ -98,41 +101,30 @@ impl LspManagerModel {
         path: &Path,
         ctx: &AppContext,
     ) -> Option<ModelHandle<LspServerModel>> {
-        // Resolve the language ID - early return if unknown
-        let path_lang = LanguageId::from_path(path)?;
-
-        // First check if this is an external file that was registered via goto-definition
+        // Check external-file registration first.
         if let Some(server_id) = self.external_file_servers.get(path) {
             if let Some(server) = self.server_by_id(*server_id, ctx) {
-                // Validate that the server supports this file's language
-                if server.as_ref(ctx).supports_language(&path_lang) {
+                if server.as_ref(ctx).supports_path(path) {
                     return Some(server);
                 }
                 log::debug!(
-                    "External file server for {} does not support language {:?}, falling back to workspace lookup",
+                    "External file server for {} does not claim it, falling back to workspace lookup",
                     path.display(),
-                    path_lang
                 );
             }
         }
 
-        // Then try workspace-based lookup
+        // Workspace-based lookup uses `supports_path`, which considers both
+        // built-in `LanguageId` mapping and custom-descriptor filetype globs.
         let lsp_model = self.lsp_model_for_path(path)?;
-
-        for server in lsp_model {
-            let supported = server.as_ref(ctx).supports_language(&path_lang);
-
-            if supported {
-                return Some(server.clone());
-            }
+        let claimed = lsp_model
+            .iter()
+            .find(|s| s.as_ref(ctx).supports_path(path))
+            .cloned();
+        if claimed.is_none() {
+            log::debug!("No registered LSP server claims path: {}", path.display());
         }
-
-        log::debug!(
-            "LSP server found for path: {}, but language does not match",
-            path.display()
-        );
-
-        None
+        claimed
     }
 
     /// Registers an external file (outside any workspace) to be handled by a specific LSP server.
@@ -169,20 +161,24 @@ impl LspManagerModel {
     pub fn register(
         &mut self,
         path: PathBuf,
-        config: LspServerConfig,
+        config: LspServerConfigKind,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        // Check if a server of the same type is already registered for this workspace.
-        if self.server_registered(&path, config.server_type(), ctx) {
+        let key = config.key();
+        if self.server_registered(&path, &key, ctx) {
             log::debug!(
                 "LSP server {} already registered for path: {}",
-                config.server_type().binary_name(),
+                config.server_name(),
                 path.display()
             );
             return false;
         }
 
-        log::info!("Registering LSP server for path: {}", path.display());
+        log::info!(
+            "Registering LSP server {} for path: {}",
+            config.server_name(),
+            path.display()
+        );
 
         let lsp = ctx.add_model(|_| LspServerModel::new(config));
 
@@ -193,6 +189,9 @@ impl LspManagerModel {
             }
             LspEvent::Stopped => {
                 ctx.emit(LspManagerModelEvent::ServerStopped(path_clone.clone()));
+            }
+            LspEvent::Failed(_) => {
+                ctx.emit(LspManagerModelEvent::ServerFailed(path_clone.clone()));
             }
             _ => {}
         });
@@ -252,7 +251,7 @@ impl LspManagerModel {
     pub fn remove_server(
         &mut self,
         workspace_root: &Path,
-        server_type: LSPServerType,
+        key: &ServerKey,
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(servers) = self.servers.get_mut(workspace_root) else {
@@ -263,12 +262,11 @@ impl LspManagerModel {
             return;
         };
 
-        // Find and remove the server with matching type, capturing its ID first
+        // Find and remove the server with matching key, capturing its ID first.
         let mut removed_server_id: Option<LanguageServerId> = None;
         servers.retain(|server| {
             let server_ref = server.as_ref(ctx);
-            if server_ref.server_type() == server_type {
-                // Capture the server ID before removing
+            if &server_ref.key() == key {
                 removed_server_id = Some(server_ref.id());
                 // Always attempt to stop the server before removing (manually_stopped = true).
                 // The stop() method handles state checks internally.
@@ -286,13 +284,13 @@ impl LspManagerModel {
 
         if let Some(server_id) = removed_server_id {
             log::info!(
-                "Removed {} LSP server for {}",
-                server_type.binary_name(),
+                "Removed LSP server {:?} for {}",
+                key,
                 workspace_root.display()
             );
             ctx.emit(LspManagerModelEvent::ServerRemoved {
                 workspace_root: workspace_root.to_path_buf(),
-                server_type,
+                key: key.clone(),
                 server_id,
             });
         }

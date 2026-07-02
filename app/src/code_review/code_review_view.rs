@@ -65,6 +65,7 @@ use crate::ai::agent::{
     AIAgentAttachment, AgentReviewCommentBatch, CurrentHead, DiffBase, DiffSetHunk,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::appearance::Appearance;
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::comment_editor::DEFAULT_COMMENT_MAX_WIDTH;
@@ -80,6 +81,7 @@ use crate::code::global_buffer_model::GlobalBufferModel;
 use crate::code::local_code_editor::{
     render_unsaved_circle_with_tooltip, LocalCodeEditorEvent, LocalCodeEditorView,
 };
+use crate::code::lsp_dispatch::{resolve_server_for_path, ResolvedLspServer};
 use crate::code::view::PendingSaveIntent;
 use crate::code::ShowCommentEditorProvider;
 #[cfg(not(target_family = "wasm"))]
@@ -851,10 +853,14 @@ impl CodeReviewView {
                     let lsp_manager = lsp::LspManagerModel::handle(ctx);
                     if let Some(server) = lsp_manager.as_ref(ctx).server_for_path(path, ctx) {
                         let repo_root = server.as_ref(ctx).initial_workspace().to_path_buf();
-                        let server_type = server.as_ref(ctx).server_type();
-                        let log_path =
-                            crate::code::lsp_logs::log_file_path(server_type, &repo_root);
-                        ctx.emit(CodeReviewViewEvent::OpenLspLogs { log_path });
+                        // `log_file_path` is keyed by `LSPServerType` (built-in
+                        // log layout). Custom-server log routing lands with
+                        // Phase 4's broader footer/log integration.
+                        if let Some(server_type) = server.as_ref(ctx).server_type() {
+                            let log_path =
+                                crate::code::lsp_logs::log_file_path(server_type, &repo_root);
+                            ctx.emit(CodeReviewViewEvent::OpenLspLogs { log_path });
+                        }
                     }
                 }
                 let _ = path;
@@ -876,13 +882,15 @@ impl CodeReviewView {
         server_type: Option<lsp::supported_servers::LSPServerType>,
         ctx: &mut ViewContext<Self>,
     ) {
-        use crate::ai::persisted_workspace::{LspTask, PersistedWorkspace};
-
-        let server_type =
-            server_type.or_else(|| lsp::LanguageId::from_path(path).map(|id| id.server_type()));
-        let Some(server_type) = server_type else {
-            return;
+        // If the caller already resolved a built-in `server_type`, honor it
+        // (preserves the existing API). Otherwise consult the unified
+        // dispatch so customs are considered.
+        let resolved = if let Some(st) = server_type {
+            Some(ResolvedLspServer::BuiltIn(st))
+        } else {
+            resolve_server_for_path(path, ctx)
         };
+        let Some(resolved) = resolved else { return };
 
         let repo_root = PersistedWorkspace::as_ref(ctx)
             .root_for_workspace(path)
@@ -900,17 +908,8 @@ impl CodeReviewView {
             return;
         };
 
-        PersistedWorkspace::handle(ctx).update(ctx, |workspace, _ctx| {
-            workspace.enable_lsp_server_for_path(&repo_root, server_type);
-        });
-
         PersistedWorkspace::handle(ctx).update(ctx, |workspace, ctx| {
-            workspace.execute_lsp_task(
-                LspTask::Spawn {
-                    file_path: path.to_path_buf(),
-                },
-                ctx,
-            );
+            workspace.enable_and_spawn_lsp_server(&repo_root, &resolved, path.to_path_buf(), ctx);
         });
     }
 
@@ -921,13 +920,12 @@ impl CodeReviewView {
         server_type: Option<lsp::supported_servers::LSPServerType>,
         ctx: &mut ViewContext<Self>,
     ) {
-        use crate::ai::persisted_workspace::{LspTask, PersistedWorkspace};
-
-        let server_type =
-            server_type.or_else(|| lsp::LanguageId::from_path(path).map(|id| id.server_type()));
-        let Some(server_type) = server_type else {
-            return;
+        let resolved = if let Some(st) = server_type {
+            Some(ResolvedLspServer::BuiltIn(st))
+        } else {
+            resolve_server_for_path(path, ctx)
         };
+        let Some(resolved) = resolved else { return };
 
         let repo_root = PersistedWorkspace::as_ref(ctx)
             .root_for_workspace(path)
@@ -946,14 +944,7 @@ impl CodeReviewView {
         };
 
         PersistedWorkspace::handle(ctx).update(ctx, |workspace, ctx| {
-            workspace.execute_lsp_task(
-                LspTask::Install {
-                    file_path: path.to_path_buf(),
-                    repo_root,
-                    server_type,
-                },
-                ctx,
-            );
+            workspace.install_and_enable_lsp_server(repo_root, &resolved, path.to_path_buf(), ctx);
         });
     }
 

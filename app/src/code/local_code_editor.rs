@@ -13,7 +13,7 @@ use ai::diff_validation::DiffType;
 use futures::stream::AbortHandle;
 use lsp::types::FileLocation;
 use lsp::{
-    LanguageId, LanguageServerId, LspEvent, LspManagerModel, LspManagerModelEvent, LspServerModel,
+    LanguageServerId, LspEvent, LspManagerModel, LspManagerModelEvent, LspServerModel,
     ReferenceLocation,
 };
 use lsp_types::FormattingOptions;
@@ -64,6 +64,7 @@ use crate::code::editor::model::HoverableLink;
 use crate::code::editor::EditorReviewComment;
 use crate::code::footer::{CodeFooterView, CodeFooterViewEvent};
 use crate::code::global_buffer_model::{BufferState, GlobalBufferModel, GlobalBufferModelEvent};
+use crate::code::lsp_dispatch::resolve_server_for_path;
 use crate::code::{SaveOutcome, ShowFindReferencesCardProvider};
 use crate::code_review::comments::CommentId;
 use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
@@ -957,6 +958,17 @@ impl LocalCodeEditorView {
                     }
                     ctx.notify();
                 }
+                LspManagerModelEvent::ServerFailed(path) if file_path.starts_with(path) => {
+                    // A failed server never emits ServerStarted, so connect here too.
+                    // try_connect_lsp_server wires the footer to the failed server
+                    // (it explicitly handles the Failed state) so its status menu —
+                    // Restart server / Remove server — becomes reachable without
+                    // needing to reopen the file.
+                    if me.lsp_server.is_none() && me.base_content_version.is_some() {
+                        me.try_connect_lsp_server(ctx);
+                    }
+                    ctx.notify();
+                }
                 LspManagerModelEvent::ServerStopped(path) if file_path.starts_with(path) => {
                     ctx.notify();
                 }
@@ -1385,20 +1397,11 @@ impl LocalCodeEditorView {
     /// 5. Starting the LSP server via PersistedWorkspace
     #[cfg(feature = "local_fs")]
     fn enable_lsp_for_path(path: &Path, ctx: &mut ViewContext<Self>) {
-        use crate::ai::persisted_workspace::LspTask;
-
-        // Get the language ID from the file path
-        let Some(language_id) = LanguageId::from_path(path) else {
+        let Some(resolved) = resolve_server_for_path(path, ctx) else {
             log::warn!("Enable lsp for path should only work for supported file paths");
             return;
         };
 
-        // Find the appropriate LSP server type for this language
-        let lsp_server_type = language_id.server_type();
-
-        // Get the repository root from PersistedWorkspace.
-        // If it doesn't exist, try to get it from DetectedRepositories.
-        // If it also doesn't exist in DetectedRepositories, use the parent path.
         let repo_root = if let Some(workspace_root) =
             PersistedWorkspace::as_ref(ctx).root_for_workspace(path)
         {
@@ -1409,7 +1412,7 @@ impl LocalCodeEditorView {
                 .and_then(|r| PathBuf::try_from(r).ok())
             {
                 Some(root) => Some(root),
-                None => path.parent().map(|s| s.to_path_buf()), // If we can't find root, treat the parent as the root.
+                None => path.parent().map(|s| s.to_path_buf()),
             }
         };
 
@@ -1417,11 +1420,9 @@ impl LocalCodeEditorView {
             return;
         };
 
-        // Enable and start the LSP server via PersistedWorkspace
         let path = path.to_path_buf();
         PersistedWorkspace::handle(ctx).update(ctx, |workspace, ctx| {
-            workspace.enable_lsp_server_for_path(&repo_root, lsp_server_type);
-            workspace.execute_lsp_task(LspTask::Spawn { file_path: path }, ctx);
+            workspace.enable_and_spawn_lsp_server(&repo_root, &resolved, path, ctx);
         });
     }
 
@@ -1430,14 +1431,10 @@ impl LocalCodeEditorView {
     /// and emits events that are handled by handle_persisted_workspace_event.
     #[cfg(feature = "local_fs")]
     fn install_and_enable_lsp_for_path(path: &Path, ctx: &mut ViewContext<Self>) {
-        use crate::ai::persisted_workspace::LspTask;
-
-        let Some(language_id) = LanguageId::from_path(path) else {
+        let Some(resolved) = resolve_server_for_path(path, ctx) else {
             log::warn!("Install and enable lsp for path should only work for supported file paths");
             return;
         };
-
-        let lsp_server_type = language_id.server_type();
         let path = path.to_path_buf();
 
         let repo_root = if let Some(workspace_root) =
@@ -1458,16 +1455,8 @@ impl LocalCodeEditorView {
             return;
         };
 
-        // Delegate to PersistedWorkspace which uses interactive PATH and emits events
         PersistedWorkspace::handle(ctx).update(ctx, |workspace, ctx| {
-            workspace.execute_lsp_task(
-                LspTask::Install {
-                    file_path: path,
-                    repo_root,
-                    server_type: lsp_server_type,
-                },
-                ctx,
-            );
+            workspace.install_and_enable_lsp_server(repo_root, &resolved, path, ctx);
         });
     }
 
@@ -1475,8 +1464,7 @@ impl LocalCodeEditorView {
     /// Emits an event that bubbles up to Workspace which handles opening the terminal.
     #[cfg(feature = "local_fs")]
     fn open_lsp_logs_for_path(path: &Path, ctx: &mut ViewContext<Self>) {
-        // Get the language ID from the file path
-        let Some(language_id) = LanguageId::from_path(path) else {
+        let Some(resolved) = resolve_server_for_path(path, ctx) else {
             log::warn!(
                 "Could not determine language ID for path: {}",
                 path.display()
@@ -1484,12 +1472,11 @@ impl LocalCodeEditorView {
             return;
         };
 
-        // Get the workspace root from LspManagerModel (canonical source for running servers)
+        // `server_for_path` is custom-aware, so this returns the right model
+        // handle whether built-in or custom.
         let lsp_manager = LspManagerModel::handle(ctx);
-        let lsp_manager_ref = lsp_manager.as_ref(ctx);
-
-        // Find the LSP server for this path and get its workspace root
-        let repo_root = lsp_manager_ref
+        let repo_root = lsp_manager
+            .as_ref(ctx)
             .server_for_path(path, ctx)
             .map(|server| server.as_ref(ctx).initial_workspace().to_path_buf());
 
@@ -1501,11 +1488,7 @@ impl LocalCodeEditorView {
             return;
         };
 
-        // Compute the log file path (the log file is created by LspLogger when the server starts)
-        let lsp_server_type = language_id.server_type();
-        let log_path = crate::code::lsp_logs::log_file_path(lsp_server_type, &repo_root);
-
-        // Emit event to bubble up to Workspace
+        let log_path = resolved.log_file_path(&repo_root);
         ctx.emit(LocalCodeEditorEvent::OpenLspLogs { log_path });
     }
 

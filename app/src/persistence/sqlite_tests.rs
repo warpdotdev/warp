@@ -5,6 +5,7 @@ use ai::workspace::WorkspaceMetadata;
 use chrono::Utc;
 use cloud_object_persistence::to_cloud_object_permissions;
 use diesel::connection::SimpleConnection;
+use lsp::supported_servers::LSPServerType;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
@@ -12,9 +13,11 @@ use warp_graphql::scalars::time::ServerTimestamp;
 
 use super::{
     app_database_file_path, database_file_path_for_scope, decode_path, deduplicate_events,
-    encode_path, get_all_codebase_index_metadata, read_sqlite_data, save_app_state,
-    save_codebase_index_metadata, setup_database, start_writer,
+    encode_path, get_all_codebase_index_metadata, get_all_workspace_language_servers_by_workspace,
+    read_sqlite_data, save_app_state, save_codebase_index_metadata, setup_database, start_writer,
+    upsert_workspace_custom_language_server, upsert_workspace_language_server,
 };
+use crate::ai::persisted_workspace::EnablementState;
 use crate::app_state::{
     AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
     TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
@@ -938,4 +941,128 @@ fn test_sqlite_drops_too_small_bounds_on_read() {
         restored.windows[0].bounds.is_none(),
         "tiny persisted bounds must be discarded on read so users recover from a corrupt DB"
     );
+}
+
+#[test]
+fn workspace_language_server_builtin_roundtrip() {
+    // A built-in entry written via the upsert path must reappear in the
+    // `builtin` map (and not the `custom` map) on a fresh read.
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let repo = PathBuf::from("/tmp/builtin-repo");
+    save_codebase_index_metadata(&mut conn, test_codebase_metadata("/tmp/builtin-repo"))
+        .expect("workspace_metadata row should save");
+
+    upsert_workspace_language_server(
+        &mut conn,
+        &repo,
+        LSPServerType::RustAnalyzer,
+        EnablementState::Yes,
+    )
+    .expect("builtin upsert should succeed");
+
+    let servers =
+        get_all_workspace_language_servers_by_workspace(&mut conn).expect("read should succeed");
+    assert_eq!(
+        servers
+            .builtin
+            .get(&repo)
+            .and_then(|m| m.get(&LSPServerType::RustAnalyzer)),
+        Some(&EnablementState::Yes),
+    );
+    assert!(
+        !servers.custom.contains_key(&repo),
+        "custom map must not contain built-in rows"
+    );
+}
+
+#[test]
+fn workspace_language_server_custom_roundtrip() {
+    // A custom entry written via the upsert path must reappear in the
+    // `custom` map keyed by the descriptor name.
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let repo = PathBuf::from("/tmp/custom-repo");
+    save_codebase_index_metadata(&mut conn, test_codebase_metadata("/tmp/custom-repo"))
+        .expect("workspace_metadata row should save");
+
+    upsert_workspace_custom_language_server(&mut conn, &repo, "jdtls", EnablementState::Yes)
+        .expect("custom upsert should succeed");
+
+    let servers =
+        get_all_workspace_language_servers_by_workspace(&mut conn).expect("read should succeed");
+    assert_eq!(
+        servers.custom.get(&repo).and_then(|m| m.get("jdtls")),
+        Some(&EnablementState::Yes),
+    );
+    assert!(
+        !servers.builtin.contains_key(&repo),
+        "builtin map must not contain custom rows"
+    );
+}
+
+#[test]
+fn workspace_language_server_mixed_kinds_split_by_kind() {
+    // A workspace with both kinds enabled must surface both halves
+    // independently — the `kind` column is the discriminator.
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let repo = PathBuf::from("/tmp/mixed-repo");
+    save_codebase_index_metadata(&mut conn, test_codebase_metadata("/tmp/mixed-repo"))
+        .expect("workspace_metadata row should save");
+
+    upsert_workspace_language_server(
+        &mut conn,
+        &repo,
+        LSPServerType::RustAnalyzer,
+        EnablementState::Yes,
+    )
+    .expect("builtin upsert should succeed");
+    upsert_workspace_custom_language_server(&mut conn, &repo, "jdtls", EnablementState::Yes)
+        .expect("custom upsert should succeed");
+
+    let servers =
+        get_all_workspace_language_servers_by_workspace(&mut conn).expect("read should succeed");
+    assert_eq!(
+        servers
+            .builtin
+            .get(&repo)
+            .and_then(|m| m.get(&LSPServerType::RustAnalyzer)),
+        Some(&EnablementState::Yes),
+    );
+    assert_eq!(
+        servers.custom.get(&repo).and_then(|m| m.get("jdtls")),
+        Some(&EnablementState::Yes),
+    );
+}
+
+#[test]
+fn workspace_language_server_custom_upsert_updates_existing_row() {
+    // Toggling a custom from Yes to No must update the existing row,
+    // not insert a duplicate. The natural key is
+    // (workspace_id, language_server_name, kind).
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let repo = PathBuf::from("/tmp/toggle-repo");
+    save_codebase_index_metadata(&mut conn, test_codebase_metadata("/tmp/toggle-repo"))
+        .expect("workspace_metadata row should save");
+
+    upsert_workspace_custom_language_server(&mut conn, &repo, "jdtls", EnablementState::Yes)
+        .expect("first upsert should succeed");
+    upsert_workspace_custom_language_server(&mut conn, &repo, "jdtls", EnablementState::No)
+        .expect("second upsert should succeed");
+
+    let servers =
+        get_all_workspace_language_servers_by_workspace(&mut conn).expect("read should succeed");
+    let custom = servers.custom.get(&repo).expect("entry exists");
+    assert_eq!(custom.len(), 1, "must not insert a duplicate row");
+    assert_eq!(custom.get("jdtls"), Some(&EnablementState::No));
 }

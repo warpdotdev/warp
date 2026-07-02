@@ -1415,6 +1415,7 @@ pub(crate) fn initialize_app(
         mut ai_queries,
         persisted_workspaces,
         mut workspace_language_servers,
+        mut workspace_custom_language_servers,
         mut multi_agent_conversations,
         mut persisted_projects,
         mut persisted_project_rules,
@@ -1436,6 +1437,7 @@ pub(crate) fn initialize_app(
                 sqlite_data.ai_queries,
                 sqlite_data.codebase_indices,
                 sqlite_data.workspace_language_servers,
+                sqlite_data.workspace_custom_language_servers,
                 sqlite_data.multi_agent_conversations,
                 sqlite_data.projects,
                 sqlite_data.project_rules,
@@ -1446,6 +1448,7 @@ pub(crate) fn initialize_app(
         })
         .unwrap_or_else(|| {
             (
+                Default::default(),
                 Default::default(),
                 Default::default(),
                 Default::default(),
@@ -1483,6 +1486,7 @@ pub(crate) fn initialize_app(
         experiments = Default::default();
         ai_queries = Default::default();
         workspace_language_servers = Default::default();
+        workspace_custom_language_servers = Default::default();
         multi_agent_conversations = Default::default();
         persisted_projects = Default::default();
         persisted_project_rules = Default::default();
@@ -2268,6 +2272,7 @@ pub(crate) fn initialize_app(
         PersistedWorkspace::new(
             persisted_workspaces,
             workspace_language_servers,
+            workspace_custom_language_servers,
             persistence_writer.sender(),
             ctx,
         )

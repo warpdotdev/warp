@@ -131,6 +131,31 @@ fn test_project_path_for_warp_dev_app_id() {
 }
 
 #[test]
+fn lsp_server_cache_dir_hashes_name_into_segment() {
+    let dir = lsp_server_cache_dir("rust-analyzer");
+    assert_eq!(
+        dir,
+        cache_dir().join("lsp").join(short_hash("rust-analyzer"))
+    );
+    // The raw name is never used as the path segment.
+    assert_ne!(dir.file_name().unwrap(), "rust-analyzer");
+}
+
+#[test]
+fn lsp_server_cache_dir_is_safe_for_any_name() {
+    // Hashing the segment makes even names that aren't valid filesystem
+    // components resolve to a safe path.
+    for name in ["", ".", "..", "foo/bar", "foo\\bar", "with space"] {
+        let dir = lsp_server_cache_dir(name);
+        let segment = dir.file_name().and_then(|s| s.to_str()).unwrap();
+        assert_eq!(segment.len(), 16, "name {name:?} produced {segment:?}");
+        assert!(segment
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+    }
+}
+
+#[test]
 fn test_project_path_for_oss_app_id() {
     let project_dirs = project_dirs_for_app_id(AppId::new("dev", "warp", "WarpOss"), None)
         .expect("should be able to compute project dirs");

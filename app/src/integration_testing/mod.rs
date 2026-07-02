@@ -19,6 +19,7 @@ pub mod goto_line;
 pub mod input;
 pub mod keybindings;
 pub mod launch_configs;
+pub mod lsp;
 pub mod navigation_palette;
 pub mod notebook;
 pub mod pane_group;

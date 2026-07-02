@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 use cfg_if::cfg_if;
 use directories::BaseDirs;
+use warp_util::path::short_hash;
 
 use crate::channel::{Channel, ChannelState};
 use crate::AppId;
@@ -179,6 +180,19 @@ pub fn secure_state_dir() -> Option<PathBuf> {
 /// Returns the path to the directory containing the user's custom themes.
 pub fn themes_dir() -> PathBuf {
     data_dir().join("themes")
+}
+
+/// Returns the per-server cache directory for a custom LSP server. Used to
+/// resolve the `{{cache_dir}}` placeholder in `[[editor.language_servers]]`
+/// entries.
+///
+/// The server is identified by a stable hash of its `name`, so the path
+/// component is always a safe filesystem segment regardless of the name's
+/// characters (and the same `name` always resolves to the same directory).
+/// The directory is not created here; callers should `std::fs::create_dir_all`
+/// before passing the path to the spawned server.
+pub fn lsp_server_cache_dir(server_name: &str) -> PathBuf {
+    cache_dir().join("lsp").join(short_hash(server_name))
 }
 
 /// Returns the path to the directory where files can be stored for caching

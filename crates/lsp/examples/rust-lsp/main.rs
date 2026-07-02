@@ -14,7 +14,10 @@ use std::time::Duration;
 use chrono::Utc;
 use log::LevelFilter;
 use lsp::supported_servers::LSPServerType;
-use lsp::{spawn_lsp_service, LspServerConfig, LspService, LspServiceInitializationResult};
+use lsp::{
+    spawn_lsp_service, LspServerConfig, LspServerConfigKind, LspService,
+    LspServiceInitializationResult,
+};
 use lsp_types::Position;
 use warpui_core::r#async::executor::Background;
 use warpui_core::r#async::Timer;
@@ -129,7 +132,7 @@ async fn async_main(executor: Arc<Background>, workspace_root: PathBuf) -> anyho
     let LspServiceInitializationResult {
         service: lsp_service,
         channel: _rx,
-    } = spawn_lsp_service(config, executor, None).await?;
+    } = spawn_lsp_service(LspServerConfigKind::BuiltIn(config), executor, None).await?;
 
     if let Some(capabilities) = lsp_service.server_capabilities() {
         println!("Server capabilities received");
@@ -156,7 +159,7 @@ async fn async_main(executor: Arc<Background>, workspace_root: PathBuf) -> anyho
 
     lsp_service
         .text_document()
-        .did_open(&test_file, file_content.clone(), 0)
+        .did_open(&test_file, file_content.clone(), 0, "rust".to_string())
         .await?;
 
     println!("Running first goto-definition call");
