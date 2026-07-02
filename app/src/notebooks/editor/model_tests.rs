@@ -106,7 +106,7 @@ fn model_from_markdown(
         let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::Active(window_id), ctx));
         let editor_model = ctx.add_model(|ctx| {
             let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
-            NotebooksEditorModel::new(styles, window_id, ctx)
+            NotebooksEditorModel::new(styles, window_id, false, ctx)
         });
         let editor = ctx.add_typed_action_view(|ctx| {
             RichTextEditorView::new(
@@ -121,7 +121,7 @@ fn model_from_markdown(
     });
     app.add_model(|ctx| {
         let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
-        let mut model = NotebooksEditorModel::new(styles, window, ctx);
+        let mut model = NotebooksEditorModel::new(styles, window, false, ctx);
         model.reset_with_markdown(markdown, ctx);
 
         model
