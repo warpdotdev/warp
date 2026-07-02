@@ -6,7 +6,6 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::channel::ChannelState;
 use warp_core::context_flag::ContextFlag;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
 #[cfg(not(target_family = "wasm"))]
 use warp_server_client::iap::{IapCredentialsState, IapManager, IapManagerEvent};
@@ -44,7 +43,6 @@ use crate::settings::cloud_preferences::CloudPreferencesSettings;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::CustomerType;
 use crate::{report_if_error, send_telemetry_from_ctx, TelemetryEvent};
 
 const PHOTO_SIZE: f32 = 40.;
@@ -315,8 +313,6 @@ impl MainSettingsPageView {
 struct AccountWidgetStateHandles {
     upgrade_link: MouseStateHandle,
     anonymous_user_sign_up_button: MouseStateHandle,
-    enterprise_contact_us_link: MouseStateHandle,
-    stripe_billing_portal_link: MouseStateHandle,
 }
 
 #[derive(Default)]
@@ -416,7 +412,6 @@ impl AccountWidget {
         &self,
         profile_image_source: Option<&AssetSource>,
         auth_state: &AuthState,
-        app: &AppContext,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let mut user_info = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
@@ -489,126 +484,11 @@ impl AccountWidget {
             user_info.add_child(display_name);
         }
 
-        let mut plan_info = Flex::column()
-            .with_main_axis_alignment(MainAxisAlignment::SpaceEvenly)
-            .with_cross_axis_alignment(CrossAxisAlignment::End);
-        let current_user_id = auth_state.user_id().unwrap_or_default();
-        let workspaces = UserWorkspaces::as_ref(app);
-        if let Some(team) = workspaces.current_team() {
-            if team.billing_metadata.customer_type != CustomerType::Unknown {
-                plan_info.add_child(render_customer_type_badge(
-                    appearance,
-                    team.billing_metadata.customer_type.to_display_string(),
-                ));
-            }
-
-            let current_user_email = auth_state.user_email().unwrap_or_default();
-            let has_admin_permissions = team.has_admin_permissions(&current_user_email);
-            if has_admin_permissions {
-                if team.billing_metadata.customer_type == CustomerType::Enterprise {
-                    plan_info.add_child(
-                        appearance
-                            .ui_builder()
-                            .link(
-                                "Contact support".into(),
-                                Some("mailto:support@warp.dev".into()),
-                                None,
-                                self.ui_state_handles.enterprise_contact_us_link.clone(),
-                            )
-                            .soft_wrap(false)
-                            .build()
-                            .with_margin_top(8.)
-                            .finish(),
-                    );
-                } else {
-                    if team.has_billing_history {
-                        let team_uid = team.uid;
-                        plan_info.add_child(
-                            appearance
-                                .ui_builder()
-                                .link(
-                                    "Manage billing".into(),
-                                    None,
-                                    Some(Box::new(move |ctx| {
-                                        ctx.dispatch_typed_action(
-                                            MainPageAction::GenerateStripeBillingPortalLink {
-                                                team_uid,
-                                            },
-                                        );
-                                    })),
-                                    self.ui_state_handles.stripe_billing_portal_link.clone(),
-                                )
-                                .soft_wrap(false)
-                                .build()
-                                .with_margin_top(8.)
-                                .finish(),
-                        );
-                    }
-
-                    // If the team is upgradeable to self-serve tier, show them the upgrade link.
-                    if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
-                        let description = match team.billing_metadata.customer_type {
-                            CustomerType::Prosumer => "Upgrade to Turbo plan",
-                            CustomerType::Turbo => "Upgrade to Lightspeed plan",
-                            _ => "Compare plans",
-                        };
-                        let team_uid = team.uid;
-                        plan_info.add_child(
-                            appearance
-                                .ui_builder()
-                                .link(
-                                    description.into(),
-                                    None,
-                                    Some(Box::new(move |ctx| {
-                                        ctx.dispatch_typed_action(MainPageAction::Upgrade {
-                                            team_uid: Some(team_uid),
-                                            user_id: current_user_id,
-                                        });
-                                    })),
-                                    self.ui_state_handles.upgrade_link.clone(),
-                                )
-                                .soft_wrap(false)
-                                .build()
-                                .with_margin_top(8.)
-                                .finish(),
-                        );
-                    }
-                }
-            }
-        } else {
-            let plan_badge_child = render_customer_type_badge(appearance, "Free".into());
-            plan_info.add_child(plan_badge_child);
-
-            plan_info.add_child(
-                appearance
-                    .ui_builder()
-                    .link(
-                        "Compare plans".into(),
-                        None,
-                        Some(Box::new(move |ctx| {
-                            ctx.dispatch_typed_action(MainPageAction::Upgrade {
-                                team_uid: None,
-                                user_id: current_user_id,
-                            });
-                        })),
-                        self.ui_state_handles.upgrade_link.clone(),
-                    )
-                    .soft_wrap(false)
-                    .build()
-                    .with_margin_top(8.)
-                    .finish(),
-            );
-        }
-
-        let mut row = Flex::row()
+        let row = Flex::row()
             .with_child(
                 Shrinkable::new(1.0, Align::new(user_info.finish()).left().finish()).finish(),
             )
             .with_cross_axis_alignment(CrossAxisAlignment::Start);
-
-        if !FeatureFlag::UsageBasedPricing.is_enabled() {
-            row.add_child(Align::new(plan_info.finish()).right().finish());
-        }
 
         row.finish()
     }
@@ -625,7 +505,7 @@ impl SettingsWidget for AccountWidget {
         &self,
         view: &Self::View,
         appearance: &Appearance,
-        app: &AppContext,
+        _app: &AppContext,
     ) -> Box<dyn Element> {
         let account_info = if view.auth_state.is_anonymous_or_logged_out() {
             self.render_anonymous_account_info(view.auth_state.as_ref(), appearance)
@@ -636,7 +516,6 @@ impl SettingsWidget for AccountWidget {
             self.render_account_info(
                 profile_image_source.as_ref(),
                 view.auth_state.as_ref(),
-                app,
                 appearance,
             )
         };

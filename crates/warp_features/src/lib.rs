@@ -281,8 +281,6 @@ pub enum FeatureFlag {
     /// Enables reading images with the `read_files` tool.
     ReadImageFiles,
 
-    UsageBasedPricing,
-
     /// Enables cross-repo codebase context.
     CrossRepoContext,
 
