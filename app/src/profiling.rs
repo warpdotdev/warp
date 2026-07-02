@@ -24,7 +24,19 @@ cfg_if! {
         #[cfg_attr(target_vendor = "apple", export_name = "_rjem_malloc_conf")]
         #[cfg_attr(not(target_vendor = "apple"), export_name = "malloc_conf")]
         pub static MALLOC_CONF: &[u8] =
-            b"prof:true,prof_active:true,lg_prof_sample:21\0";
+            // Enable profiling with a moderate sampling rate.
+            //
+            // `dirty_decay_ms:5000` — purge dirty (recently-freed) arena pages after 5 s
+            //   instead of the default 10 s.  Dirty pages count toward macOS's
+            //   `phys_footprint` as anonymous private ("internal") memory; once purged
+            //   (via madvise MADV_FREE_REUSABLE) they move to the "purgeable" bucket,
+            //   which is *excluded* from `phys_footprint`.  Faster purging keeps the
+            //   footprint lower between bursts of tree-sitter file-parsing work.
+            //
+            // `muzzy_decay_ms:0` — release muzzy pages (kernel-reused former-dirty pages)
+            //   immediately.  The default 10 s hold adds no measurable performance benefit
+            //   in an interactive app and only inflates the reported footprint.
+            b"prof:true,prof_active:true,lg_prof_sample:21,dirty_decay_ms:5000,muzzy_decay_ms:0\0";
     }
 }
 
