@@ -556,9 +556,19 @@ impl BlocklistAIController {
                         );
                     });
                 }
+                // Unlock any pending-LRC row so it isn't left locked if the action
+                // completes without triggering a follow-up request.
+                QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.unlock_pending_lrc_rows(*conversation_id, ctx);
+                });
                 return;
             }
             me.send_follow_up_for_conversation(*conversation_id, ctx);
+            // Unlock any query queued during the pre-snapshot window now that the
+            // snapshot has been sent.
+            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.unlock_pending_lrc_rows(*conversation_id, ctx);
+            });
         });
 
         ctx.subscribe_to_model(&conversation_selection, |me, _, event, ctx| {
@@ -2597,6 +2607,11 @@ impl BlocklistAIController {
         // Discard any queued passive suggestion results for this conversation.
         self.pending_passive_suggestion_results
             .remove(&conversation_id);
+
+        // Remove any locked pending-LRC queries so they don't linger after cancellation.
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.remove_pending_lrc_rows(conversation_id, ctx);
+        });
 
         if !self
             .in_flight_response_streams

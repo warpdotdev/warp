@@ -1055,6 +1055,17 @@ impl BlocklistAIActionModel {
         }
     }
 
+    /// Returns true if the given shell command action is still running (snapshot not yet fired).
+    pub fn is_shell_command_action_pending(
+        &self,
+        action_id: &AIAgentActionId,
+        conversation_id: AIConversationId,
+    ) -> bool {
+        self.running_actions
+            .get(&conversation_id)
+            .is_some_and(|r| r.contains(action_id))
+    }
+
     /// Cancels any in-flight WaitForEvents action for the given conversation.
     pub fn cancel_wait_for_events_for_conversation(
         &mut self,
