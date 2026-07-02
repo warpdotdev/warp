@@ -339,8 +339,20 @@ impl WarpTheme {
         fg_overlay_3(self)
     }
 
+    /// A subtle foreground wash, used to indicate a view is inactive (e.g. behind a modal).
     pub fn inactive_pane_overlay(&self) -> Fill {
         fg_overlay_2(self)
+    }
+
+    /// Overlay used by the "Dim inactive panes" feature to dim a pane by `dim_strength` percent.
+    ///
+    /// We lay a translucent black scrim over the pane so its radiance is *reduced*. Overlaying
+    /// the theme foreground (as `inactive_pane_overlay` does) lightens panes in dark themes
+    /// instead of dimming them, because the foreground color is light. A black scrim darkens
+    /// consistently across both light and dark themes.
+    /// See https://github.com/warpdotdev/warp/issues/5401.
+    pub fn inactive_pane_dim_overlay(&self, dim_strength: Opacity) -> Fill {
+        Fill::Solid(ColorU::black()).with_opacity(dim_strength)
     }
 
     pub fn subshell_background(&self) -> Fill {
