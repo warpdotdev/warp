@@ -1812,6 +1812,7 @@ impl<A: Action + Clone> SubMenu<A> {
     pub fn reset_selection(&mut self, ctx: &mut ViewContext<Menu<A>>) {
         self.selected_row_index = None;
         self.selected_item_index = None;
+        self.hovered_row_index = None;
         self.last_selection_source = None;
         ctx.notify();
     }

@@ -1,4 +1,5 @@
 use warp_core::ui::appearance::Appearance;
+use warpui::geometry::vector::vec2f;
 use warpui::platform::WindowStyle;
 use warpui::{App, TypedActionView};
 
@@ -229,6 +230,44 @@ fn test_right_is_a_noop_for_leaf_items() {
                 menu.selected_item().unwrap().fields().unwrap().label(),
                 "root"
             );
+        });
+    })
+}
+
+#[test]
+fn test_reset_selection_clears_hovered_row() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+
+        let items = vec![
+            MenuItemFields::<()>::new("item1").into_item(),
+            MenuItemFields::<()>::new("item2").into_item(),
+        ];
+
+        let (_, menu) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut menu = Menu::<()>::new();
+            menu.set_items(items, ctx);
+            menu
+        });
+
+        menu.update(&mut app, |menu, ctx| {
+            menu.set_selected_by_index(0, ctx);
+            menu.handle_action(
+                &MenuAction::HoverSubmenuLeafNode {
+                    depth: 0,
+                    row_index: 1,
+                    position: vec2f(0., 0.),
+                },
+                ctx,
+            );
+
+            assert_eq!(menu.selected_index(), Some(0));
+            assert_eq!(menu.hovered_index(), Some(1));
+
+            menu.reset_selection(ctx);
+
+            assert_eq!(menu.selected_index(), None);
+            assert_eq!(menu.hovered_index(), None);
         });
     })
 }
