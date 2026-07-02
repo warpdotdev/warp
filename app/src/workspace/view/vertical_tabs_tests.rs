@@ -13,8 +13,8 @@ use super::{
     push_normalized_unique_summary_label, search_fragments_contain_query,
     select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
     sort_summary_primary_labels_status_first, summary_overflow_count,
-    summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
-    terminal_pull_request_badge_label, terminal_search_text_fragments,
+    summary_search_text_fragments, summary_status_for_title_override, terminal_kind_badge_label,
+    terminal_primary_line_data, terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
     vtab_diff_stats_text, AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons,
     TerminalAgentText, TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
@@ -1090,6 +1090,45 @@ fn sort_summary_primary_labels_moves_status_first_and_preserves_order() {
     );
 }
 
+#[test]
+fn summary_status_for_title_override_uses_first_available_status() {
+    let summary = VerticalTabsSummaryData {
+        primary_labels: vec![
+            label("plain terminal"),
+            VerticalTabsSummaryPrimaryLabel {
+                text: "first agent".to_string(),
+                status: Some(ConversationStatus::InProgress),
+            },
+            VerticalTabsSummaryPrimaryLabel {
+                text: "second agent".to_string(),
+                status: Some(ConversationStatus::Success),
+            },
+        ],
+        working_directories: vec![],
+        branch_entries: vec![],
+        has_unread_activity: false,
+    };
+
+    assert_eq!(
+        summary_status_for_title_override(&summary, true),
+        Some(ConversationStatus::InProgress)
+    );
+}
+
+#[test]
+fn summary_status_for_title_override_returns_none_when_disabled() {
+    let summary = VerticalTabsSummaryData {
+        primary_labels: vec![VerticalTabsSummaryPrimaryLabel {
+            text: "running agent".to_string(),
+            status: Some(ConversationStatus::InProgress),
+        }],
+        working_directories: vec![],
+        branch_entries: vec![],
+        has_unread_activity: false,
+    };
+
+    assert_eq!(summary_status_for_title_override(&summary, false), None);
+}
 #[test]
 fn summary_search_fragments_include_hidden_overflow_values() {
     let summary = VerticalTabsSummaryData {

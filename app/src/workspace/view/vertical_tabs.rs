@@ -1134,6 +1134,19 @@ fn summary_search_text_fragments(
     fragments
 }
 
+fn summary_status_for_title_override(
+    summary: &VerticalTabsSummaryData,
+    show_override_status: bool,
+) -> Option<ConversationStatus> {
+    if !show_override_status {
+        return None;
+    }
+    summary
+        .primary_labels
+        .iter()
+        .find_map(|label| label.status.clone())
+}
+
 fn select_summary_pane_kind_icons(
     pane_kinds: impl IntoIterator<Item = (EntityId, SummaryPaneKind)>,
 ) -> Option<SummaryPaneKindIcons> {
@@ -3866,6 +3879,11 @@ impl<'a> PaneProps<'a> {
             || (self.is_pane_being_renamed && self.pane_rename_editor.is_some())
     }
 
+    fn has_static_title_override(&self) -> bool {
+        !self.shows_inline_tab_rename_editor()
+            && (self.custom_vertical_tabs_title.is_some() || self.display_title_override.is_some())
+    }
+
     fn rendered_search_text_fragments(&self, app: &AppContext) -> Vec<String> {
         let generated_fragments = match &self.typed {
             TypedPane::Terminal(terminal_pane) => terminal_pane_search_text_fragments(
@@ -4575,6 +4593,28 @@ fn render_pane_title_slot(
         .finish()
 }
 
+fn render_summary_title_override_line(
+    title_override: Box<dyn Element>,
+    status: Option<&ConversationStatus>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let Some(status) = status else {
+        return title_override;
+    };
+
+    Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(4.)
+        .with_child(render_status_element(
+            status,
+            VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE,
+            appearance,
+        ))
+        .with_child(Shrinkable::new(1., title_override).finish())
+        .finish()
+}
+
 fn render_summary_tab_item(
     props: PaneProps<'_>,
     summary: &VerticalTabsSummaryData,
@@ -4608,10 +4648,13 @@ fn render_summary_tab_item(
         .with_cross_axis_alignment(CrossAxisAlignment::Start);
 
     // Title region. A custom-title or rename override short-circuits the per-label list and
-    // renders as a single line (no prefix slot, no overflow line).
+    // renders as a single line. Static custom titles still show the first available status pill
+    // so renamed agent tabs keep their running/blocked/done state visible.
     let mut title_region = Flex::column()
         .with_main_axis_size(MainAxisSize::Min)
         .with_cross_axis_alignment(CrossAxisAlignment::Start);
+    let title_override_status =
+        summary_status_for_title_override(summary, props.has_static_title_override());
     if let Some(title_override) = render_title_override(
         &props,
         12.,
@@ -4620,7 +4663,11 @@ fn render_summary_tab_item(
         appearance,
         app,
     ) {
-        title_region.add_child(title_override);
+        title_region.add_child(render_summary_title_override_line(
+            title_override,
+            title_override_status.as_ref(),
+            appearance,
+        ));
     } else if summary.primary_labels.is_empty() {
         title_region.add_child(render_text_line(
             &props.title,
