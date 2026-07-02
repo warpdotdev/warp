@@ -481,6 +481,12 @@ pub(super) struct AIBlockStateHandles {
     /// ReadSkill and ReadFiles action banners. Keyed by action id so that
     /// multiple skill banners in the same block don't share hover/click state.
     skill_button_handles: HashMap<AIAgentActionId, MouseStateHandle>,
+
+    /// Per-image-attachment `MouseStateHandle`s used to set a pointing-hand
+    /// cursor on clickable image chips in the query section. One handle per
+    /// image attachment, in order. Must be pre-allocated (not inline during
+    /// render) so that `Hoverable`'s hover state persists across frames.
+    pub(super) attachment_chip_handles: Vec<MouseStateHandle>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -1516,6 +1522,16 @@ impl AIBlock {
             terminal_view_handle,
             ask_user_question_view: None,
         };
+        // Pre-allocate one handle per image attachment so that the `Hoverable`
+        // wrapping each clickable chip sees the same handle across frames.
+        if FeatureFlag::ImageAsContext.is_enabled() {
+            me.state_handles.attachment_chip_handles =
+                attachment_names(me.model.inputs_to_render(ctx))
+                    .into_iter()
+                    .filter(|(attachment_type, _)| matches!(attachment_type, AttachmentType::Image))
+                    .map(|_| MouseStateHandle::default())
+                    .collect();
+        }
         me.run_secret_redaction_on_user_query(me.client_ids.conversation_id, ctx);
         me.spawn_link_detection(ctx);
 

@@ -82,14 +82,15 @@ use warpui::color::ColorU;
 use warpui::elements::{
     resizable_state_handle, Align, AnchorPair, ChildAnchor, Clipped, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, DispatchEventResult, DropTargetData, Element, EventHandler,
-    Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType,
-    ParentAnchor, ParentElement, PositionedElementOffsetBounds, PositioningAxis, Radius,
-    ResizableStateHandle, SavePosition, SelectionHandle, Text, Wrap, XAxisAnchor, YAxisAnchor,
+    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    OffsetType, ParentAnchor, ParentElement, PositionedElementOffsetBounds, PositioningAxis,
+    Radius, ResizableStateHandle, SavePosition, SelectionHandle, Text, Wrap, XAxisAnchor,
+    YAxisAnchor,
 };
 pub use warpui::elements::{ParentElement as _, Stack};
 pub use warpui::geometry::vector::{vec2f, Vector2F};
 use warpui::keymap::{BindingDescription, EditableBinding, FixedBinding, Keystroke};
-use warpui::platform::OperatingSystem;
+use warpui::platform::{Cursor, OperatingSystem};
 use warpui::presenter::ChildView;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use warpui::r#async::FutureExt as _;
@@ -1765,7 +1766,11 @@ impl AmbientAgentViewState {
 #[derive(Clone)]
 struct AttachmentChip {
     file_name: String,
+    /// Mouse state handle for the close (delete) button on the chip.
     mouse_state_handle: MouseStateHandle,
+    /// Mouse state handle for the chip body itself, used to set the pointing-hand
+    /// cursor when hovering over a clickable (image) chip.
+    body_mouse_state_handle: MouseStateHandle,
     attachment_type: AttachmentType,
     /// Index into the unified pending_attachments list for deletion.
     index: usize,
@@ -3277,6 +3282,7 @@ impl Input {
                         .map(|(i, attachment)| AttachmentChip {
                             file_name: attachment.file_name().to_string(),
                             mouse_state_handle: Default::default(),
+                            body_mouse_state_handle: Default::default(),
                             attachment_type: attachment.attachment_type(),
                             index: i,
                         })
@@ -15473,14 +15479,16 @@ impl Input {
 
         if matches!(chip.attachment_type, AttachmentType::Image) {
             let preview_chip_index = chip.index;
-            EventHandler::new(attachment_chip.finish())
-                .on_left_mouse_down(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(TerminalAction::OpenAttachmentLightbox {
-                        index: preview_chip_index,
-                    });
-                    DispatchEventResult::StopPropagation
-                })
-                .finish()
+            Hoverable::new(chip.body_mouse_state_handle.clone(), |_| {
+                attachment_chip.finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(TerminalAction::OpenAttachmentLightbox {
+                    index: preview_chip_index,
+                });
+            })
+            .finish()
         } else {
             attachment_chip.finish()
         }

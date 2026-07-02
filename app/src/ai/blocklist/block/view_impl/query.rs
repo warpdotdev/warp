@@ -6,10 +6,11 @@ use pathfinder_color::ColorU;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Container, CornerRadius, DispatchEventResult, EventHandler, Flex, MainAxisAlignment,
-    MainAxisSize, ParentElement, Radius, Shrinkable, Wrap,
+    Container, CornerRadius, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    ParentElement, Radius, Shrinkable, Wrap,
 };
 use warpui::fonts::{Properties, Style, Weight};
+use warpui::platform::Cursor;
 use warpui::ui_components::chip::Chip;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, SingletonEntity};
@@ -35,6 +36,10 @@ pub(super) struct Props<'a> {
     pub(super) is_selecting_text: bool,
     pub(super) is_ai_input_enabled: bool,
     pub(super) attachments: &'a [(AttachmentType, String)],
+    /// Pre-allocated mouse-state handles for image attachment chips, one per
+    /// image attachment in order. Used to set the pointing-hand cursor on
+    /// hover without creating new handles each render frame.
+    pub(super) attachment_chip_handles: &'a [MouseStateHandle],
     pub(super) find_context: Option<FindContext<'a>>,
 }
 
@@ -52,6 +57,7 @@ pub(super) fn maybe_render(props: Props, app: &AppContext) -> Option<Box<dyn Ele
             props.is_selecting_text,
             props.is_ai_input_enabled,
             props.attachments,
+            props.attachment_chip_handles,
             props.find_context,
             app,
         )
@@ -71,6 +77,7 @@ pub(crate) fn render_query(
     is_selecting: bool,
     is_ai_input_enabled: bool,
     attachments: &[(AttachmentType, String)],
+    attachment_chip_handles: &[MouseStateHandle],
     find_context: Option<FindContext>,
     app: &AppContext,
 ) -> Box<dyn Element> {
@@ -107,7 +114,11 @@ pub(crate) fn render_query(
     let mut query = Flex::column().with_child(text_element.finish());
 
     if FeatureFlag::ImageAsContext.is_enabled() {
-        query = query.with_child(render_attachments(attachments, appearance));
+        query = query.with_child(render_attachments(
+            attachments,
+            attachment_chip_handles,
+            appearance,
+        ));
     }
 
     Flex::row()
@@ -119,6 +130,7 @@ pub(crate) fn render_query(
 
 fn render_attachments(
     attachments: &[(AttachmentType, String)],
+    image_chip_handles: &[MouseStateHandle],
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let mut image_index = 0;
@@ -156,15 +168,21 @@ fn render_attachments(
 
         if matches!(attachment_type, AttachmentType::Image) {
             let clicked_image_index = image_index;
+            // Use a pre-allocated handle so hover state persists across render frames.
+            let handle = image_chip_handles.get(image_index).cloned();
             image_index += 1;
-            EventHandler::new(chip)
-                .on_left_mouse_down(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(AIBlockAction::OpenSubmittedAttachmentLightbox {
-                        image_index: clicked_image_index,
-                    });
-                    DispatchEventResult::StopPropagation
-                })
-                .finish()
+            if let Some(handle) = handle {
+                Hoverable::new(handle, |_| chip)
+                    .with_cursor(Cursor::PointingHand)
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(AIBlockAction::OpenSubmittedAttachmentLightbox {
+                            image_index: clicked_image_index,
+                        });
+                    })
+                    .finish()
+            } else {
+                chip
+            }
         } else {
             chip
         }
