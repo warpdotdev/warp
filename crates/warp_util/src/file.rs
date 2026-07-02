@@ -20,6 +20,8 @@ pub enum FileSaveError {
 pub enum FileLoadError {
     #[error("File does not exist")]
     DoesNotExist,
+    #[error("File is too large to open in the editor ({size_mb:.1} MB, limit is {limit_mb} MB)")]
+    FileTooLarge { size_mb: f64, limit_mb: usize },
     #[error("IO error when loading file.")]
     IOError(#[from] io::Error),
 }
