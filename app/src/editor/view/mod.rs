@@ -3191,9 +3191,6 @@ impl EditorView {
 
     pub fn set_is_ai_input(&mut self, is_ai_input: bool, ctx: &mut ViewContext<Self>) {
         self.is_ai_input = is_ai_input;
-        if !self.is_ai_input && !FeatureFlag::AtMenuOutsideOfAIMode.is_enabled() {
-            ctx.emit(Event::SetAIContextMenuOpen(false));
-        }
         ctx.notify();
     }
 

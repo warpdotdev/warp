@@ -292,9 +292,6 @@ pub enum FeatureFlag {
     /// Enables the AI context menu, or at-menu.
     AIContextMenuEnabled,
 
-    /// Enables the AI context menu outside of AI input mode.
-    AtMenuOutsideOfAIMode,
-
     /// Enables the resume button for cancelled AI conversations.
     AIResumeButton,
 
