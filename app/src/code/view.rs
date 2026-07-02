@@ -36,6 +36,7 @@ use super::diff_viewer::DiffViewer;
 use super::editor::view::{CodeEditorEvent, CodeEditorView};
 use super::editor_management::{CodeManager, CodeSource};
 use super::local_code_editor::{LocalCodeEditorEvent, LocalCodeEditorView};
+use warp_util::file::FileLoadError;
 use crate::code::editor::scroll::ScrollPosition;
 use crate::code::editor::view::CodeEditorRenderOptions;
 use crate::code::editor_management::CodeEditorStatus;
@@ -515,7 +516,11 @@ impl CodeView {
                     return;
                 }
                 log::warn!("Failed to load file. {err:?}");
-                CodeView::display_load_failure(ctx.window_id(), ctx);
+                if matches!(err.as_ref(), FileLoadError::FileTooLarge { .. }) {
+                    CodeView::display_file_too_large(ctx.window_id(), ctx);
+                } else {
+                    CodeView::display_load_failure(ctx.window_id(), ctx);
+                }
             }
             LocalCodeEditorEvent::SelectionAddedAsContext {
                 relative_file_path,
@@ -923,6 +928,16 @@ impl CodeView {
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
             let toast = DismissibleToast::error(String::from("Failed to load file."))
                 .with_object_id("failed_to_load_file".to_string());
+            toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+        });
+    }
+
+    fn display_file_too_large(window_id: WindowId, ctx: &mut ViewContext<Self>) {
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            let toast = DismissibleToast::error(String::from(
+                "File is too large to open in the editor.",
+            ))
+            .with_object_id("file_too_large".to_string());
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
     }
