@@ -2488,6 +2488,18 @@ impl AISettings {
         report_if_error!(self.spinner_verbs.set_value(SpinnerVerbsMode::Custom, ctx));
     }
 
+    /// Replaces the custom spinner verbs list without changing the active
+    /// source mode. Used when saving editor text on blur so a mode-button click
+    /// does not first persist `spinner_verbs = "custom"` before applying the
+    /// selected mode.
+    pub fn set_custom_spinner_verb_list_preserving_mode(
+        &mut self,
+        verbs: SpinnerVerbList,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        report_if_error!(self.custom_spinner_verbs.set_value(verbs, ctx));
+    }
+
     /// Appends a single verb to the custom spinner verbs list after
     /// normalization. No-op if the normalized verb is empty or would push the
     /// list past the max length.

@@ -2103,7 +2103,7 @@ impl AISettingsPageView {
             return;
         }
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            settings.set_custom_spinner_verb_list(normalized, ctx);
+            settings.set_custom_spinner_verb_list_preserving_mode(normalized, ctx);
         });
         ctx.notify();
     }

@@ -524,6 +524,32 @@ fn set_custom_spinner_verbs_normalizes_and_stores_custom_mode() {
 }
 
 #[test]
+fn set_custom_spinner_verb_list_preserving_mode_does_not_switch_mode() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings.set_spinner_verb_pack(WarpingVerbPack::Cooking, ctx);
+            settings.set_custom_spinner_verb_list_preserving_mode(
+                SpinnerVerbList::from(vec![" Braising... ".to_string()]),
+                ctx,
+            );
+        });
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            assert_eq!(*settings.spinner_verbs.value(), SpinnerVerbsMode::Cooking);
+            assert_eq!(
+                settings.custom_spinner_verbs.value().as_strings(),
+                vec!["Braising".to_string()]
+            );
+            assert_eq!(
+                settings.effective_custom_spinner_verbs(),
+                WarpingVerbPack::Cooking.verbs_as_vec()
+            );
+        });
+    });
+}
+#[test]
 fn orchestration_is_enabled_when_ai_is_enabled() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
