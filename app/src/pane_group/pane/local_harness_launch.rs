@@ -135,6 +135,11 @@ pub(super) fn build_local_codex_child_command(prompt: &str) -> String {
     format!("codex --dangerously-bypass-approvals-and-sandbox {quoted_prompt}")
 }
 
+pub(super) fn build_local_kimi_child_command(prompt: &str) -> String {
+    let quoted_prompt = shell_quote(prompt);
+    format!("kimi {quoted_prompt}")
+}
+
 pub(super) fn local_child_task_config(
     harness: Harness,
     agent_name: Option<String>,
@@ -144,7 +149,7 @@ pub(super) fn local_child_task_config(
         .and_then(normalize_orchestrator_agent_name);
     match harness {
         Harness::Oz | Harness::Unknown => None,
-        Harness::Claude | Harness::OpenCode | Harness::Gemini | Harness::Codex => {
+        Harness::Claude | Harness::OpenCode | Harness::Gemini | Harness::Codex | Harness::Kimi => {
             Some(AgentConfigSnapshot {
                 name: agent_name,
                 harness: Some(HarnessConfig::from_harness_type(harness)),
@@ -236,6 +241,11 @@ pub(super) async fn prepare_local_harness_child_launch(
             validate_cli_installed("opencode", Some("https://opencode.ai/docs"))
                 .map_err(|error: AgentDriverError| error.to_string())?;
             build_local_opencode_child_command(&prompt)
+        }
+        Harness::Kimi => {
+            validate_cli_installed("kimi", None)
+                .map_err(|error: AgentDriverError| error.to_string())?;
+            build_local_kimi_child_command(&prompt)
         }
         Harness::Gemini => unreachable!("normalize_local_child_harness filters out Gemini"),
     };

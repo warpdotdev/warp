@@ -2060,7 +2060,7 @@ fn launch_remote_child(
                 claude_auth_secret_name: None,
                 codex_auth_secret_name: Some(name.clone()),
             }),
-            Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Unknown => None,
+            Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Kimi | Harness::Unknown => None,
         });
     let spawn_request = SpawnAgentRequest {
         prompt: Some(request.prompt),
