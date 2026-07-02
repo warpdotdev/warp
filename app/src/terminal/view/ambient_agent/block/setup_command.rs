@@ -3,10 +3,12 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp_core::ui::appearance::Appearance;
 use warp_terminal::model::BlockId;
-use warpui::prelude::{Container, Empty, MouseStateHandle};
+use warpui::elements::ParentElement;
+use warpui::prelude::{ChildView, Container, Empty, Flex, MainAxisSize, MouseStateHandle};
 use warpui::scene::{CornerRadius, Radius};
 use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
 };
 
 use crate::ai::agent::icons::{failed_icon, yellow_running_icon};
@@ -21,6 +23,7 @@ use crate::terminal::view::ambient_agent::{
     AmbientAgentViewModel, AmbientAgentViewModelEvent, SetupCommandGroupId,
 };
 use crate::terminal::TerminalModel;
+use crate::view_components::{SubmittableTextInput, SubmittableTextInputEvent};
 
 enum Status {
     Running,
@@ -36,6 +39,9 @@ pub struct CloudModeSetupCommandBlock {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     is_expanded: bool,
     mouse_state: MouseStateHandle,
+    /// Input view for sending text to the running interactive command.
+    /// Only shown when the block is expanded and the command is still running.
+    input_view: ViewHandle<SubmittableTextInput>,
 }
 
 impl CloudModeSetupCommandBlock {
@@ -88,6 +94,21 @@ impl CloudModeSetupCommandBlock {
             }
         });
 
+        // Create the text input for sending stdin to interactive setup commands.
+        let input_view = ctx.add_typed_action_view(|ctx| {
+            let mut input = SubmittableTextInput::new(ctx);
+            input.set_placeholder_text("Type to send input to this command (Enter to send)", ctx);
+            input.set_outer_margins(8., 8., ctx);
+            input
+        });
+        ctx.subscribe_to_view(&input_view, |me, _, event, ctx| {
+            if let SubmittableTextInputEvent::Submit(text) = event {
+                // Append a newline so the command receives a complete line.
+                let line = format!("{text}\n");
+                ctx.emit(CloudModeSetupCommandBlockEvent::SendInputToCommand(line));
+            }
+        });
+
         let command = terminal_model
             .lock()
             .block_list()
@@ -103,6 +124,7 @@ impl CloudModeSetupCommandBlock {
             is_expanded: false,
             status: Status::Running,
             mouse_state: Default::default(),
+            input_view,
         }
     }
 }
@@ -110,6 +132,8 @@ impl CloudModeSetupCommandBlock {
 #[derive(Debug, Clone)]
 pub enum CloudModeSetupCommandBlockEvent {
     ToggleBlockVisibility(BlockId),
+    /// The user has typed input that should be forwarded to the running command's stdin.
+    SendInputToCommand(String),
 }
 
 impl Entity for CloudModeSetupCommandBlock {
@@ -169,7 +193,22 @@ impl View for CloudModeSetupCommandBlock {
             config = config.with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(8.)))
         }
 
-        let mut container = Container::new(config.render(app));
+        let header = config.render(app);
+
+        // When the block is expanded and still running, show a text input so the user
+        // can type responses to interactive prompts (e.g. "[y/n]" confirmations).
+        let show_input = self.is_expanded && matches!(self.status, Status::Running);
+
+        if show_input {
+            let column = Flex::column()
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_child(header)
+                .with_child(ChildView::new(&self.input_view).finish())
+                .finish();
+            return Container::new(column).finish();
+        }
+
+        let mut container = Container::new(header);
 
         if !self.is_expanded {
             container = super::cloud_mode_setup_row_spacing(
