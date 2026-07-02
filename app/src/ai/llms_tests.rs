@@ -359,6 +359,173 @@ fn removing_endpoint_purges_all_its_models_from_custom_llms() {
     assert_eq!(infos[0].id.as_str(), "uuid-k1");
 }
 
+// -- Disable-aware default fallback tests --
+
+fn server_llm(id: &str, disable_reason: Option<DisableReason>) -> LLMInfo {
+    LLMInfo {
+        display_name: id.to_string(),
+        base_model_name: id.to_string(),
+        id: id.into(),
+        reasoning_level: None,
+        usage_metadata: LLMUsageMetadata {
+            request_multiplier: 1,
+            credit_multiplier: None,
+        },
+        description: None,
+        disable_reason,
+        vision_supported: false,
+        spec: None,
+        provider: LLMProvider::Unknown,
+        host_configs: HashMap::new(),
+        discount_percentage: None,
+        context_window: LLMContextWindow::default(),
+    }
+}
+
+fn available(default_id: &str, choices: Vec<LLMInfo>) -> AvailableLLMs {
+    AvailableLLMs {
+        default_id: default_id.into(),
+        choices,
+        preferred_codex_model_id: None,
+    }
+}
+
+#[test]
+fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disabled() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        let custom_model_id = LLMId::from("custom-config-key");
+        ApiKeyManager::handle(&app).update(&mut app, |api_key_manager, ctx| {
+            api_key_manager.add_custom_endpoint(
+                "local".to_string(),
+                "https://example.com/v1".to_string(),
+                "test-key".to_string(),
+                vec![(
+                    "custom-model".to_string(),
+                    None,
+                    Some(custom_model_id.to_string()),
+                )],
+                ctx,
+            );
+        });
+
+        // The base/coding default is admin-disabled but another hosted choice
+        // is usable; every hosted CLI agent choice is admin-disabled.
+        let models = ModelsByFeature {
+            agent_mode: available(
+                "auto",
+                vec![
+                    server_llm("auto", Some(DisableReason::AdminDisabled)),
+                    server_llm("gpt-x", None),
+                ],
+            ),
+            coding: available(
+                "auto",
+                vec![
+                    server_llm("auto", Some(DisableReason::AdminDisabled)),
+                    server_llm("gpt-x", None),
+                ],
+            ),
+            cli_agent: Some(available(
+                "cli-agent-auto",
+                vec![server_llm(
+                    "cli-agent-auto",
+                    Some(DisableReason::AdminDisabled),
+                )],
+            )),
+            computer_use: None,
+        };
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(Ok(models), ctx);
+        });
+
+        llm_preferences.read(&app, |preferences, app| {
+            // Falls back to the first usable hosted choice.
+            assert_eq!(
+                preferences.get_active_base_model(app, None).id.as_str(),
+                "gpt-x"
+            );
+            assert_eq!(
+                preferences.get_active_coding_model(app, None).id.as_str(),
+                "gpt-x"
+            );
+            // No usable hosted CLI choice → falls back to the custom endpoint.
+            assert_eq!(
+                preferences.get_active_cli_agent_model(app, None).id,
+                custom_model_id
+            );
+        });
+    });
+}
+
+#[test]
+fn active_models_use_default_when_usable() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        let models = ModelsByFeature {
+            agent_mode: available(
+                "auto",
+                vec![server_llm("auto", None), server_llm("gpt-x", None)],
+            ),
+            coding: available("auto", vec![server_llm("auto", None)]),
+            cli_agent: Some(available(
+                "cli-agent-auto",
+                vec![server_llm("cli-agent-auto", None)],
+            )),
+            computer_use: None,
+        };
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(Ok(models), ctx);
+        });
+
+        llm_preferences.read(&app, |preferences, app| {
+            assert_eq!(
+                preferences.get_active_base_model(app, None).id.as_str(),
+                "auto"
+            );
+            assert_eq!(
+                preferences
+                    .get_active_cli_agent_model(app, None)
+                    .id
+                    .as_str(),
+                "cli-agent-auto"
+            );
+        });
+    });
+}
+
 #[test]
 fn reconcile_preserves_custom_models_saved_on_execution_profile() {
     App::test((), |mut app| async move {

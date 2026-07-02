@@ -95,6 +95,16 @@ impl DisableReason {
     }
 }
 
+/// Returns `true` when the model is usable for the current user: not disabled,
+/// or disabled for a reason that doesn't block requests (see
+/// [`DisableReason::should_clear_preference`]).
+fn is_usable_llm(info: &LLMInfo, app: &AppContext) -> bool {
+    let has_byok_key = is_using_api_key_for_provider(&info.provider, app);
+    info.disable_reason
+        .as_ref()
+        .is_none_or(|reason| !reason.should_clear_preference(has_byok_key))
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LLMSpec {
     pub cost: f32,
@@ -376,12 +386,15 @@ impl AvailableLLMs {
     /// Returns the info for the given id only if the model is usable (present
     /// and not effectively disabled for the current user).
     fn usable_info_for_id(&self, id: &LLMId, app: &AppContext) -> Option<&LLMInfo> {
-        self.info_for_id(id).filter(|info| {
-            let has_byok_key = is_using_api_key_for_provider(&info.provider, app);
-            info.disable_reason
-                .as_ref()
-                .is_none_or(|reason| !reason.should_clear_preference(has_byok_key))
-        })
+        self.info_for_id(id).filter(|info| is_usable_llm(info, app))
+    }
+
+    /// Disable-aware default: the server default when usable, otherwise the
+    /// first usable choice. `None` when no server-provided choice is usable
+    /// (e.g. an admin disabled every hosted model).
+    fn usable_default_llm_info(&self, app: &AppContext) -> Option<&LLMInfo> {
+        self.usable_info_for_id(&self.default_id, app)
+            .or_else(|| self.choices.iter().find(|info| is_usable_llm(info, app)))
     }
 
     fn default_llm_info(&self) -> &LLMInfo {
@@ -669,7 +682,22 @@ impl LLMPreferences {
                     .info_for_id(&id)
                     .or_else(|| self.custom_llm_info_for_id_if_enabled(&id, app))
             })
-            .unwrap_or_else(|| self.models_by_feature.agent_mode.default_llm_info())
+            .unwrap_or_else(|| self.fallback_llm_info(&self.models_by_feature.agent_mode, app))
+    }
+
+    /// Disable-aware fallback for when the user has no explicit (usable)
+    /// selection: the feature default when usable, else the first usable
+    /// server choice, else the user's first custom-endpoint model, else the
+    /// (possibly disabled) server default as a last resort.
+    fn fallback_llm_info<'a>(
+        &'a self,
+        available: &'a AvailableLLMs,
+        app: &AppContext,
+    ) -> &'a LLMInfo {
+        available
+            .usable_default_llm_info(app)
+            .or_else(|| self.custom_llm_choices(app).next())
+            .unwrap_or_else(|| available.default_llm_info())
     }
 
     pub fn get_active_coding_model<'a>(
@@ -698,7 +726,7 @@ impl LLMPreferences {
                     .info_for_id(&id)
                     .or_else(|| self.custom_llm_info_for_id_if_enabled(&id, app))
             })
-            .unwrap_or_else(|| self.models_by_feature.coding.default_llm_info())
+            .unwrap_or_else(|| self.fallback_llm_info(&self.models_by_feature.coding, app))
     }
 
     /// Returns the set of LLMs available for Agent Mode use.
@@ -728,9 +756,11 @@ impl LLMPreferences {
 
     /// Returns the set of LLMs available for CLI agent.
     pub fn get_cli_agent_llm_choices(&self, app: &AppContext) -> impl Iterator<Item = &LLMInfo> {
+        // Don't show admin-disabled models in the dropdown
         self.get_cli_agent_available()
             .choices
             .iter()
+            .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
             .chain(self.custom_llm_choices(app))
     }
 
@@ -752,12 +782,13 @@ impl LLMPreferences {
                     .info_for_id(&id)
                     .or_else(|| self.custom_llm_info_for_id_if_enabled(&id, app))
             })
-            .unwrap_or_else(|| available.default_llm_info())
+            .unwrap_or_else(|| self.fallback_llm_info(available, app))
     }
 
-    /// Returns the default CLI agent model as a fallback.
-    pub fn get_default_cli_agent_model(&self) -> &LLMInfo {
-        self.get_cli_agent_available().default_llm_info()
+    /// Returns the effective default CLI agent model as a fallback
+    /// (disable-aware, see [`Self::fallback_llm_info`]).
+    pub fn get_default_cli_agent_model(&self, app: &AppContext) -> &LLMInfo {
+        self.fallback_llm_info(self.get_cli_agent_available(), app)
     }
 
     /// Helper to get the AvailableLLMs for cli_agent, falling back to agent_mode.
@@ -787,12 +818,18 @@ impl LLMPreferences {
             .computer_use_model
             .clone()
             .and_then(|id| available.info_for_id(&id))
-            .unwrap_or_else(|| available.default_llm_info())
+            .unwrap_or_else(|| self.get_default_computer_use_model(app))
     }
 
-    /// Returns the default computer use model as a fallback.
-    pub fn get_default_computer_use_model(&self) -> &LLMInfo {
-        self.get_computer_use_available().default_llm_info()
+    /// Returns the effective default computer use model as a fallback: the
+    /// server default when usable, else the first usable choice, else the
+    /// (possibly disabled) server default. No custom-endpoint fallback here:
+    /// custom models aren't offered for computer use.
+    pub fn get_default_computer_use_model(&self, app: &AppContext) -> &LLMInfo {
+        let available = self.get_computer_use_available();
+        available
+            .usable_default_llm_info(app)
+            .unwrap_or_else(|| available.default_llm_info())
     }
 
     /// Helper to get the AvailableLLMs for computer_use.
@@ -934,14 +971,16 @@ impl LLMPreferences {
         }
     }
 
-    /// Returns the default base model as a fallback.
-    pub fn get_default_base_model(&self) -> &LLMInfo {
-        self.models_by_feature.agent_mode.default_llm_info()
+    /// Returns the effective default base model as a fallback
+    /// (disable-aware, see [`Self::fallback_llm_info`]).
+    pub fn get_default_base_model(&self, app: &AppContext) -> &LLMInfo {
+        self.fallback_llm_info(&self.models_by_feature.agent_mode, app)
     }
 
-    /// Returns the default coding model as a fallback.
-    pub fn get_default_coding_model(&self) -> &LLMInfo {
-        self.models_by_feature.coding.default_llm_info()
+    /// Returns the effective default coding model as a fallback
+    /// (disable-aware, see [`Self::fallback_llm_info`]).
+    pub fn get_default_coding_model(&self, app: &AppContext) -> &LLMInfo {
+        self.fallback_llm_info(&self.models_by_feature.coding, app)
     }
 
     /// Returns the preferred Codex model, if set by the server.

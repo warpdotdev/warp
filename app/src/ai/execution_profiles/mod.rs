@@ -106,7 +106,7 @@ impl AIExecutionProfileAppExt for AIExecutionProfile {
             .as_ref()
             .and_then(|id| prefs.get_llm_info(id))
             .map(|info| info.context_window.clone())
-            .unwrap_or_else(|| prefs.get_default_base_model().context_window.clone());
+            .unwrap_or_else(|| prefs.get_default_base_model(app).context_window.clone());
         if cw.is_configurable && cw.max > 0 {
             Some(cw)
         } else {

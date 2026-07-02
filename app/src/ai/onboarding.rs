@@ -26,7 +26,7 @@ pub fn build_onboarding_models(
     prefs: &LLMPreferences,
     app: &AppContext,
 ) -> (Vec<OnboardingModelInfo>, LLMId) {
-    let default_id = prefs.get_default_base_model().id.clone();
+    let default_id = prefs.get_default_base_model(app).id.clone();
     let models: Vec<OnboardingModelInfo> = prefs
         .get_base_llm_choices_for_agent_mode(app)
         .map(|llm| {
