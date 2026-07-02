@@ -356,8 +356,10 @@ if [[ "$ARTIFACT" == cli || "$ARTIFACT" == warpctrl ]]; then
 elif [[ "$ARTIFACT" == tui ]]; then
   # The TUI is a separate console crate (`warp_tui`) with its own per-channel
   # bins and a minimal feature set, so it does NOT reuse the app's accumulated
-  # FEATURES. It is inherently headless (via `warp`'s `tui` feature), so it only
-  # needs `release_bundle` to embed the channel config at build time.
+  # FEATURES. It is inherently headless (via `warp`'s `tui` feature). It needs
+  # `release_bundle` to embed the channel config, plus `standalone` so
+  # `bundled_resources_dir()` resolves the sibling `resources/` dir next to the
+  # binary (the TUI is not shipped inside a `.app` bundle).
   UNIVERSAL_BINARY=false
   OPEN_AFTER_BUNDLE=false
   case "$RELEASE_CHANNEL" in
@@ -365,7 +367,7 @@ elif [[ "$ARTIFACT" == tui ]]; then
     oss) WARP_BIN="warp-tui-oss" ;;
     *) WARP_BIN="warp-tui-$RELEASE_CHANNEL" ;;
   esac
-  WARP_TUI_FEATURES="release_bundle"
+  WARP_TUI_FEATURES="release_bundle,standalone"
 elif [[ "$ARTIFACT" == app ]]; then
   # All channels ship the v3 classifier and v2 heuristic.
   FEATURES="$FEATURES,gui,nld_classifier_v3,nld_heuristic_v2"
