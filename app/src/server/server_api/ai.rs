@@ -956,6 +956,9 @@ pub struct CreateAgentRequest {
     pub base_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment_id: Option<String>,
+    /// Default idle timeout (minutes) for runs executed by this agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_minutes: Option<i32>,
 }
 
 /// JSON payload sent to `PUT /agent/identities/{uid}`.
@@ -973,6 +976,10 @@ pub struct UpdateAgentRequest {
     pub base_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment_id: Option<String>,
+    /// Three-state update for the agent's default idle timeout (minutes):
+    /// omit to leave unchanged, `Some(None)` to clear, `Some(Some(n))` to set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_minutes: Option<Option<i32>>,
 }
 
 /// Public API representation of a named agent identity.
@@ -988,6 +995,8 @@ pub struct AgentResponse {
     pub base_model: Option<String>,
     #[serde(default)]
     pub environment_id: Option<String>,
+    #[serde(default)]
+    pub idle_timeout_minutes: Option<i32>,
 }
 
 #[derive(serde::Deserialize)]
