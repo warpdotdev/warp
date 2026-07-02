@@ -122,6 +122,14 @@ pub(super) struct State {
     /// real cell span can't be measured until it's complete — see
     /// `GridHandler::handle_indic_char`/`flush_pending_indic_cluster`.
     pending_indic_cluster: Option<PendingIndicCluster>,
+
+    /// Tracks the running natural width and cell allocation of the current
+    /// contiguous word of already-flushed Indic clusters, so each new
+    /// cluster's span quantizes the CUMULATIVE natural width rather than its
+    /// own width independently -- see `GridHandler::flush_pending_indic_cluster`.
+    /// `None` when no word is in progress (nothing flushed yet, or the last
+    /// flush ended a word).
+    indic_word_accumulator: Option<IndicWordAccumulator>,
 }
 
 /// See [`State::pending_indic_cluster`].
@@ -130,6 +138,32 @@ struct PendingIndicCluster {
     /// The base character plus every character appended to it so far.
     /// Never empty once `Some(_)`.
     text: String,
+}
+
+/// See [`State::indic_word_accumulator`]. Continuing the accumulator across
+/// flushes (rather than resetting per-cluster) is what keeps a whole word's
+/// total allocation waste under one cell instead of accumulating roughly
+/// half a cell of `ceil()` rounding slack per cluster (see the Phase 12
+/// execution log in the Telugu variable-width-cells plan for the diagnosed
+/// numbers).
+#[derive(Clone, Debug, Default)]
+struct IndicWordAccumulator {
+    /// Sum of every already-flushed cluster's real natural (unquantized)
+    /// width in this word, in pixels.
+    cum_natural_px: f32,
+    /// Sum of every already-flushed cluster's ACTUAL allocated span in this
+    /// word (post-clamp) -- not `ceil(cum_natural_px / cell_width_px)`,
+    /// since the two can diverge once the 1-8 cell clamp engages, and
+    /// subsequent spans must be computed against what was really allocated.
+    cum_allocated_cells: u16,
+    /// The cursor point this accumulator expects to see at the next flush
+    /// (immediately after the last flushed cluster). If the cursor is
+    /// anywhere else when the next flush happens -- moved by a cursor
+    /// command, scrolled, or left with a pending line wrap -- the word is
+    /// considered broken and a fresh accumulator starts instead. This is
+    /// simpler and more robust than enumerating every cursor-movement call
+    /// site that should reset it (most of which don't flush today).
+    expected_point: Point,
 }
 
 impl State {
@@ -169,6 +203,7 @@ impl State {
             keyboard_mode: KeyboardModes::NO_MODE,
             keyboard_mode_stack: BoundedVecDeque::new(super::KEYBOARD_MODE_STACK_MAX_DEPTH),
             pending_indic_cluster: None,
+            indic_word_accumulator: None,
         }
     }
 }
@@ -1493,15 +1528,89 @@ impl GridHandler {
     /// nothing is pending. Called whenever a non-Indic character arrives,
     /// and at the end of every PTY-read batch (`on_finish_byte_processing`)
     /// so a cluster can never be silently dropped if a read ends mid-cluster.
+    ///
+    /// The span isn't just this cluster's own width quantized independently
+    /// -- it continues `State::indic_word_accumulator`'s running total for
+    /// the current word, so `span = ceil(cumulative natural / cell width) -
+    /// cells already allocated to this word`. This bounds a whole word's
+    /// total rounding waste to under one cell (instead of accumulating
+    /// roughly half a cell of `ceil()` slack per cluster), while never
+    /// allocating less than any prefix's real natural width: writing
+    /// `A_k` for the cumulative allocated cells after cluster `k` and `N_k`
+    /// for the cumulative natural width, `span_k = max(1, ceil(N_k/cw) -
+    /// A_{k-1})` gives `A_k = A_{k-1} + span_k >= ceil(N_k/cw)` by
+    /// induction (the `max(1, _)` floor only ever adds cells, never removes
+    /// them), so `A_k * cw >= N_k` holds for every prefix.
     fn flush_pending_indic_cluster(&mut self) {
         let Some(pending) = self.ansi_handler_state.pending_indic_cluster.take() else {
             return;
         };
-        let span = self
+        let cell_width_px = self.ansi_handler_state.cell_width_px;
+        let natural_width_px = self
             .cluster_measurer
-            .measure_cells(&pending.text, self.ansi_handler_state.cell_width_px)
-            .clamp(1, 8);
+            .natural_width_px(&pending.text, cell_width_px);
+
+        let cursor_point = self.grid.cursor_point();
+        let cursor_needs_wrap = self.grid.cursor().input_needs_wrap;
+
+        // Continue the current word only if the cursor is exactly where
+        // the last flush left it -- any cursor motion (movement commands,
+        // scrolling) or a pending line wrap in between means this cluster
+        // starts a new word instead. Using the cursor position as the
+        // continuity check (rather than resetting at every cursor-movement
+        // call site) is simpler and can't miss a reset path, since ANY
+        // motion shows up here as a mismatch.
+        let mut acc = self
+            .ansi_handler_state
+            .indic_word_accumulator
+            .take()
+            .filter(|acc| acc.expected_point == cursor_point && !cursor_needs_wrap)
+            .unwrap_or_default();
+
+        let cumulative_span =
+            Self::quantize_indic_span(acc.cum_natural_px + natural_width_px, acc.cum_allocated_cells, cell_width_px);
+
+        // If writing at the cumulative span would need to wrap to a new
+        // line, the cumulative prefix invariant wouldn't carry over to the
+        // fresh run the renderer anchors at column 0 of the next line --
+        // fall back to measuring this cluster independently (exactly as if
+        // it started a brand-new word) so the wrap decision itself is made
+        // the same way it always was, and start the new line's word fresh.
+        // An independent span is always >= the cumulative one (the
+        // cumulative formula can only ever allocate the same or fewer
+        // cells for one cluster), so this fallback is always safe -- it
+        // can only make wrapping MORE conservative, never less.
+        let will_wrap =
+            cursor_needs_wrap || cursor_point.col + cumulative_span as usize > self.columns();
+        let span = if will_wrap {
+            acc = IndicWordAccumulator::default();
+            Self::quantize_indic_span(natural_width_px, 0, cell_width_px)
+        } else {
+            cumulative_span
+        };
+
         self.write_grapheme_cluster(&pending.text, span as usize);
+
+        acc.cum_natural_px += natural_width_px;
+        acc.cum_allocated_cells += span as u16;
+        acc.expected_point = self.grid.cursor_point();
+        self.ansi_handler_state.indic_word_accumulator = Some(acc);
+    }
+
+    /// `ceil(cumulative_natural_px / cell_width_px) - already_allocated_cells`,
+    /// floored at 1 and clamped to the 1-8 `Cell::span` encoding limit. See
+    /// `flush_pending_indic_cluster` for why this is computed cumulatively.
+    fn quantize_indic_span(
+        cumulative_natural_px: f32,
+        already_allocated_cells: u16,
+        cell_width_px: f32,
+    ) -> u8 {
+        if cell_width_px <= 0.0 {
+            return 1;
+        }
+        let needed_cells = (cumulative_natural_px / cell_width_px).ceil() as i64;
+        let span = needed_cells - already_allocated_cells as i64;
+        (span.max(1) as u8).clamp(1, 8)
     }
 
     /// Writes `text` (one or more chars forming a single grapheme cluster --

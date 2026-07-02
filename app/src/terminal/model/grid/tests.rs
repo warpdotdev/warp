@@ -1235,15 +1235,17 @@ fn test_empty_row_with_leading_wide_char_spacer_resize_panic() {
     grid.resize(SizeInfo::new_without_font_metrics(2, 4));
 }
 
-/// Reports a span equal to a cluster's codepoint count -- used to get a
-/// deterministic, real (not just 1 or 2) multi-cell span through the real
-/// `ansi::Handler::input()` buffering path, without depending on macOS-only
-/// Core Text shaping.
+/// Reports a natural width equal to a cluster's codepoint count (clamped to
+/// 1..=8) times the cell width -- used to get a deterministic, real (not
+/// just 1 or 2) multi-cell span through the real `ansi::Handler::input()`
+/// buffering path, without depending on macOS-only Core Text shaping. The
+/// clamp lives here so cumulative word-level quantization reproduces the
+/// exact same per-cluster spans as before, with zero extra slack.
 struct FixedWidthMeasurer;
 
 impl crate::terminal::model::grid::ClusterWidthMeasurer for FixedWidthMeasurer {
-    fn measure_cells(&self, cluster: &str, _cell_width_px: f32) -> u8 {
-        (cluster.chars().count() as u8).clamp(1, 8)
+    fn natural_width_px(&self, cluster: &str, cell_width_px: f32) -> f32 {
+        (cluster.chars().count() as u8).clamp(1, 8) as f32 * cell_width_px
     }
 }
 

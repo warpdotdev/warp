@@ -266,7 +266,7 @@ fn test_calculate_selection_bounds() {
 mod indic_run_tests {
     use std::sync::Arc;
 
-    use super::super::scan_indic_run;
+    use super::super::{entry_word_ids, scan_indic_run};
     use crate::terminal::event_listener::ChannelEventListener;
     use crate::terminal::model::ansi::{self, Handler as _};
     use crate::terminal::model::cell::Flags;
@@ -560,5 +560,73 @@ mod indic_run_tests {
         let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
         assert_eq!(shape.full_text, "తె");
         assert_eq!(shape.total_span, 2);
+    }
+
+    #[test]
+    fn entry_word_ids_single_word_run_has_one_word() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(10);
+        write_two_col_cluster(&mut row, 0);
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        assert_eq!(entry_word_ids(&shape), vec![0]);
+    }
+
+    #[test]
+    fn entry_word_ids_space_joined_words_get_separate_ids() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(10);
+        let col = write_two_col_cluster(&mut row, 0);
+        row[col].c = ' ';
+        write_two_col_cluster(&mut row, col + 1);
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        // cluster, space, cluster -- the space rides with word 0; the
+        // second cluster starts word 1.
+        assert_eq!(entry_word_ids(&shape), vec![0, 0, 1]);
+    }
+
+    #[test]
+    fn entry_word_ids_multiple_spaces_stay_with_preceding_word() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(10);
+        let col = write_two_col_cluster(&mut row, 0);
+        row[col].c = ' ';
+        row[col + 1].c = ' ';
+        write_two_col_cluster(&mut row, col + 2);
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        // cluster, space, space, cluster -- both spaces ride with word 0.
+        assert_eq!(entry_word_ids(&shape), vec![0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn entry_word_ids_trailing_punct_rides_with_preceding_word() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(4);
+        let col = write_two_col_cluster(&mut row, 0);
+        row[col].c = ' ';
+        row[col + 1].c = '.';
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        // cluster, space, period -- all one word (nothing follows the
+        // period to start a new one).
+        assert_eq!(entry_word_ids(&shape), vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn entry_word_ids_punct_then_space_then_more_indic_starts_new_word() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(10);
+        let col = write_two_col_cluster(&mut row, 0);
+        row[col].c = '.';
+        row[col + 1].c = ' ';
+        write_two_col_cluster(&mut row, col + 2);
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        // cluster, period, space, cluster -- period rides with word 0
+        // (immediately follows the cluster, no space between them), the
+        // space rides with word 0 too, and the second cluster starts word 1.
+        assert_eq!(entry_word_ids(&shape), vec![0, 0, 0, 1]);
     }
 }

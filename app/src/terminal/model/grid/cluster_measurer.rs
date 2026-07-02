@@ -11,26 +11,33 @@
 //! real implementation instead owns a small, independent font database
 //! dedicated to this one purpose.
 
-/// Measures the number of terminal cells (1-8, matching `Cell::span`'s
-/// encoding limit) a grapheme cluster string needs, relative to a single
-/// cell's pixel width. Font size is fixed at construction time (not passed
-/// per call): the measurer is meant to be reconstructed whenever the
-/// terminal's font/zoom changes, same as `SizeInfo`/`cell_width_px` already
-/// is, so `ansi_handler.rs`'s hot input path never needs to thread a font
-/// size value through per character.
+/// Measures a grapheme cluster's real shaped width in pixels. Font size is
+/// fixed at construction time (not passed per call): the measurer is meant
+/// to be reconstructed whenever the terminal's font/zoom changes, same as
+/// `SizeInfo`/`cell_width_px` already is, so `ansi_handler.rs`'s hot input
+/// path never needs to thread a font size value through per character.
+///
+/// Deliberately returns a pixel width, not a quantized cell count: the
+/// caller (`ansi_handler.rs::flush_pending_indic_cluster`) accumulates
+/// natural width across a whole word and quantizes the RUNNING TOTAL, so
+/// each new cluster's allocated span is `ceil(cumulative natural / cell
+/// width) − cells already allocated to this word` rather than an
+/// independent per-cluster `ceil()`. That keeps a word's total waste under
+/// one cell (instead of accumulating ~half a cell of rounding slack per
+/// cluster) while never allocating less than any prefix's real width.
 pub trait ClusterWidthMeasurer: Send + Sync {
-    fn measure_cells(&self, cluster: &str, cell_width_px: f32) -> u8;
+    fn natural_width_px(&self, cluster: &str, cell_width_px: f32) -> f32;
 }
 
-/// Always reports a single cell. Used as the default for test-only
-/// `GridHandler` constructors, and anywhere Indic shaping genuinely isn't
-/// available (e.g. non-macOS builds, before a platform-specific measurer
-/// exists).
+/// Always reports exactly one cell's worth of width. Used as the default
+/// for test-only `GridHandler` constructors, and anywhere Indic shaping
+/// genuinely isn't available (e.g. non-macOS builds, before a
+/// platform-specific measurer exists).
 pub struct NoopMeasurer;
 
 impl ClusterWidthMeasurer for NoopMeasurer {
-    fn measure_cells(&self, _cluster: &str, _cell_width_px: f32) -> u8 {
-        1
+    fn natural_width_px(&self, _cluster: &str, cell_width_px: f32) -> f32 {
+        cell_width_px
     }
 }
 
@@ -82,9 +89,9 @@ mod mac_impl {
     }
 
     impl ClusterWidthMeasurer for CoreTextClusterMeasurer {
-        fn measure_cells(&self, cluster: &str, cell_width_px: f32) -> u8 {
+        fn natural_width_px(&self, cluster: &str, cell_width_px: f32) -> f32 {
             if cell_width_px <= 0.0 || cluster.is_empty() {
-                return 1;
+                return cell_width_px.max(0.0);
             }
             let run_length_chars = cluster.chars().count();
             let line = self.font_db.layout_line(
@@ -106,19 +113,7 @@ mod mac_impl {
                 f32::MAX,
                 ClipConfig::default(),
             );
-            // `ceil()`, not `round()`: guarantees allocated width is never
-            // less than the cluster's real shaped width. Tried `round()` to
-            // shrink leftover slack at word boundaries (Phase 10 of the
-            // Telugu variable-width-cells rewrite) but reverted it -- a
-            // real-paragraph visual test caught a virama-final conjunct
-            // glyph (e.g. "శ్") whose natural width exceeded its rounded
-            // allocation, so its glyph spilled into the following space and
-            // erased the word boundary entirely (two words rendered as one,
-            // unreadable). A visually-wide gap is a much smaller defect
-            // than words silently merging, so this reverts to the safe,
-            // never-overlaps invariant.
-            let cells = (line.width / cell_width_px).ceil() as u8;
-            cells.clamp(1, 8)
+            line.width
         }
     }
 }
@@ -131,10 +126,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn noop_measurer_always_returns_one() {
+    fn noop_measurer_always_returns_one_cell_width() {
         let measurer = NoopMeasurer;
-        assert_eq!(measurer.measure_cells("ప్రభుత్వం", 10.0), 1);
-        assert_eq!(measurer.measure_cells("", 10.0), 1);
+        assert_eq!(measurer.natural_width_px("ప్రభుత్వం", 10.0), 10.0);
+        assert_eq!(measurer.natural_width_px("", 10.0), 10.0);
     }
 
     #[cfg(target_os = "macos")]
@@ -151,15 +146,21 @@ mod tests {
 
         // A multi-syllable Telugu word should need more than one narrow
         // monospace cell's worth of width.
-        let cells = measurer.measure_cells("ప్రభుత్వం", 8.0);
+        let width_px = measurer.natural_width_px("ప్రభుత్వం", 8.0);
         assert!(
-            cells >= 2,
-            "expected a multi-syllable Telugu word to need >= 2 cells at a narrow cell width, got {cells}"
+            width_px > 2.0 * 8.0,
+            "expected a multi-syllable Telugu word to need more than 2 narrow cells' worth of width, got {width_px}px"
         );
-        assert!(cells <= 8, "measured span must stay within the 1-8 encoding limit, got {cells}");
+        assert!(
+            width_px < 8.0 * 8.0,
+            "measured natural width should stay well within the 1-8 cell encoding limit, got {width_px}px"
+        );
 
-        // A single ASCII char should fit in one narrow cell already.
-        let ascii_cells = measurer.measure_cells("a", 8.0);
-        assert_eq!(ascii_cells, 1);
+        // A single ASCII char should fit in about one narrow cell already.
+        let ascii_width_px = measurer.natural_width_px("a", 8.0);
+        assert!(
+            ascii_width_px <= 8.0,
+            "a single ASCII char should need at most one cell's width, got {ascii_width_px}px"
+        );
     }
 }

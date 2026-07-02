@@ -2516,14 +2516,20 @@ fn test_full_grid_clear_resize_then_bounds_to_string_does_not_panic() {
 }
 
 /// Deterministic stand-in for `CoreTextClusterMeasurer` in tests: reports a
-/// span equal to the cluster's codepoint count (clamped to 1..=8), so tests
-/// can assert on a predictable multi-cell span without depending on real
-/// Core Text shaping (macOS-only, and not suitable for a portable unit test).
+/// natural width equal to the cluster's codepoint count (clamped to 1..=8)
+/// times the cell width, so tests can assert on a predictable multi-cell
+/// span without depending on real Core Text shaping (macOS-only, and not
+/// suitable for a portable unit test). The clamp is applied HERE (not left
+/// to the caller's cumulative-quantization math) so this reproduces the
+/// exact same per-cluster spans as before word-cumulative allocation existed
+/// -- every codepoint-count cluster maps to an exact integer multiple of the
+/// cell width, so cumulative quantization introduces zero extra slack and
+/// every span-dependent test using this double keeps passing unchanged.
 struct FixedWidthMeasurer;
 
 impl ClusterWidthMeasurer for FixedWidthMeasurer {
-    fn measure_cells(&self, cluster: &str, _cell_width_px: f32) -> u8 {
-        (cluster.chars().count() as u8).clamp(1, 8)
+    fn natural_width_px(&self, cluster: &str, cell_width_px: f32) -> f32 {
+        (cluster.chars().count() as u8).clamp(1, 8) as f32 * cell_width_px
     }
 }
 
@@ -2760,4 +2766,72 @@ fn test_mixed_ascii_cjk_indic_line_has_no_orphaned_spans() {
     assert_eq!(cjk_cell.c, '鳥');
     assert_eq!(row[7].c, 'b');
     assert_eq!(row[8].c, 'b');
+}
+
+/// Real-Menlo-measurer regression harness for the Phase 12 accumulated-slack
+/// bug: "జనవరి 30" (Telugu word directly followed by a non-absorbable ASCII
+/// number) used to allocate ~16 cells for "ఆయన జనవరి" (independent
+/// per-cluster `ceil()`) against a combined natural width worth ~10-11
+/// cells -- a ~5 cell gap landed right before "30". Word-cumulative
+/// allocation (`ansi_handler.rs::flush_pending_indic_cluster`) bounds a
+/// word's total waste to under one cell, so the same input should now
+/// allocate close to the natural width.
+///
+/// Uses a realistic monospace cell width (8px @ 13pt Menlo) rather than
+/// `SizeInfo::new_without_font_metrics`'s dummy 1px, since 1px next to a
+/// real 13pt-shaped cluster would make every cluster hit the 8-cell clamp
+/// regardless of any allocation bug (a false positive this test itself hit
+/// once during diagnosis).
+#[cfg(target_os = "macos")]
+#[test]
+fn real_measurer_janavari_number_boundary_is_tight() {
+    use crate::terminal::model::grid::cluster_measurer::CoreTextClusterMeasurer;
+    use warpui::fonts::Properties;
+
+    let measurer = CoreTextClusterMeasurer::new("Menlo", Properties::default(), 13.0)
+        .expect("Menlo should be resolvable");
+    let size_info = crate::terminal::SizeInfo::new(
+        pathfinder_geometry::vector::vec2f(60.0 * 8.0, 3.0 * 18.0),
+        warpui::units::Pixels::new(8.0),
+        warpui::units::Pixels::new(18.0),
+        warpui::units::Pixels::zero(),
+        warpui::units::Pixels::zero(),
+    );
+    let mut grid = GridHandler::new(
+        size_info,
+        0,
+        crate::terminal::event_listener::ChannelEventListener::new_for_test(),
+        false,
+        ObfuscateSecrets::No,
+        crate::terminal::model::grid::grid_handler::PerformResetGridChecks::No,
+        std::sync::Arc::new(measurer),
+    );
+    feed(&mut grid, "ఆయన జనవరి 30, 1936న కృష్ణా");
+
+    let mut col = 0;
+    let mut number_start_col = None;
+    while col < grid.columns() {
+        let cell = &grid.grid_storage()[VisibleRow(0)][col];
+        if cell.c == crate::terminal::model::cell::DEFAULT_CHAR {
+            break;
+        }
+        if cell.c == '3' && number_start_col.is_none() {
+            number_start_col = Some(col);
+        }
+        col += cell.span().max(1) as usize;
+    }
+
+    // "ఆయన జనవరి " (7 Telugu clusters + 2 spaces) before "30": with
+    // word-cumulative allocation this should land in the low-to-mid teens
+    // of columns, not the ~18+ columns the old independent-per-cluster
+    // `ceil()` produced. This is a regression guard, not an exact-value
+    // assertion, since real Core Text shaping can shift by a cell or two
+    // across font/OS versions.
+    let number_start_col = number_start_col.expect("'30' should appear in the fed text");
+    assert!(
+        number_start_col <= 14,
+        "expected 'ఆయన జనవరి ' to allocate no more than ~14 columns with word-cumulative \
+         quantization, but '30' started at column {number_start_col} -- an accumulated-slack \
+         regression"
+    );
 }

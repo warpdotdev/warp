@@ -634,7 +634,15 @@ fn render_grid_without_ligatures<'a>(
             if pending_run.as_ref().is_some_and(|pr| col > pr.end_col) {
                 let mut pr = pending_run.take().expect("checked Some above");
                 fill_style_run_gaps(&mut pr.style_runs, pr.shape.full_text.chars().count());
-                render_indic_run(&pr.shape.full_text, &pr.style_runs, pr.run_origin, font_size, ctx);
+                render_indic_run(
+                    &pr.shape,
+                    &pr.style_runs,
+                    pr.run_origin,
+                    pr.run_start_col,
+                    cell_size.x(),
+                    font_size,
+                    ctx,
+                );
             }
 
             let current_point = Point::new(row_idx, col);
@@ -938,7 +946,15 @@ fn render_grid_without_ligatures<'a>(
         // iteration to fire in that case).
         if let Some(mut pr) = pending_run.take() {
             fill_style_run_gaps(&mut pr.style_runs, pr.shape.full_text.chars().count());
-            render_indic_run(&pr.shape.full_text, &pr.style_runs, pr.run_origin, font_size, ctx);
+            render_indic_run(
+                &pr.shape,
+                &pr.style_runs,
+                pr.run_origin,
+                pr.run_start_col,
+                cell_size.x(),
+                font_size,
+                ctx,
+            );
         }
 
         if grid.filter_has_context_lines() {
@@ -2143,6 +2159,11 @@ struct IndicRunShape {
     /// range so the render loop's per-cell style-run accounting (one entry
     /// per non-spacer column in the run) stays in sync.
     char_ranges: Vec<Range<usize>>,
+    /// Grid column where each entry in `char_ranges` starts, parallel to it.
+    /// Used to re-anchor each word at its own logical column when drawing
+    /// (see `render_indic_run`), instead of letting the whole run's
+    /// allocation slack accumulate at its far end.
+    cols: Vec<usize>,
     /// Total grid columns (base + spacer cells + any absorbed connector
     /// cells) consumed by the whole run.
     total_span: usize,
@@ -2209,6 +2230,7 @@ fn scan_indic_run(
     let redacting_secrets = obfuscate_secrets.should_redact_secret();
     let mut full_text = String::new();
     let mut char_ranges = Vec::new();
+    let mut cols = Vec::new();
     let mut col = start_col;
     let mut committed_col = start_col;
 
@@ -2226,12 +2248,14 @@ fn scan_indic_run(
     let commit_connectors = |upto: usize,
                               full_text: &mut String,
                               char_ranges: &mut Vec<Range<usize>>,
+                              cols: &mut Vec<usize>,
                               pending: &[(usize, char)]| {
-        for &(_, c) in &pending[..upto] {
+        for &(entry_col, c) in &pending[..upto] {
             let start_char = full_text.chars().count();
             full_text.push(c);
             let end_char = full_text.chars().count();
             char_ranges.push(start_char..end_char);
+            cols.push(entry_col);
         }
     };
 
@@ -2247,13 +2271,14 @@ fn scan_indic_run(
                 break;
             }
             // Reaching Indic content commits every buffered connector.
-            commit_connectors(pending.len(), &mut full_text, &mut char_ranges, &pending);
+            commit_connectors(pending.len(), &mut full_text, &mut char_ranges, &mut cols, &pending);
             pending.clear();
 
             let start_char = full_text.chars().count();
             append_cell_display(&mut full_text, cell);
             let end_char = full_text.chars().count();
             char_ranges.push(start_char..end_char);
+            cols.push(col);
 
             col += cell.span() as usize;
             committed_col = col;
@@ -2274,7 +2299,7 @@ fn scan_indic_run(
             // Blank tail (or genuinely never-written cells) -- commit
             // everything buffered so far; nothing follows to fabricate a
             // gap against.
-            commit_connectors(pending.len(), &mut full_text, &mut char_ranges, &pending);
+            commit_connectors(pending.len(), &mut full_text, &mut char_ranges, &mut cols, &pending);
             committed_col = pending.last().map_or(committed_col, |&(c, _)| c + 1);
         } else {
             // Visible non-connector content (e.g. ASCII): commit only the
@@ -2287,7 +2312,7 @@ fn scan_indic_run(
                     commit_upto = i + 1;
                 }
             }
-            commit_connectors(commit_upto, &mut full_text, &mut char_ranges, &pending);
+            commit_connectors(commit_upto, &mut full_text, &mut char_ranges, &mut cols, &pending);
             committed_col = if commit_upto > 0 {
                 pending[commit_upto - 1].0 + 1
             } else {
@@ -2300,13 +2325,14 @@ fn scan_indic_run(
     if col >= columns {
         // Ran off the end of the row: same as an empty-cell terminator --
         // commit everything buffered.
-        commit_connectors(pending.len(), &mut full_text, &mut char_ranges, &pending);
+        commit_connectors(pending.len(), &mut full_text, &mut char_ranges, &mut cols, &pending);
         committed_col = pending.last().map_or(committed_col, |&(c, _)| c + 1);
     }
 
     IndicRunShape {
         full_text,
         char_ranges,
+        cols,
         total_span: committed_col - start_col,
     }
 }
@@ -2362,26 +2388,81 @@ fn fill_style_run_gaps(style_runs: &mut Vec<(Range<usize>, StyleAndFont)>, total
     *style_runs = filled;
 }
 
+/// Assigns each entry in `shape.char_ranges` (a real Indic cluster or an
+/// absorbed connector char) to a "word" id, so `render_indic_run` can
+/// re-anchor each word at its own grid column instead of letting a whole
+/// multi-word run's allocation slack compound across every word before it.
+///
+/// Only an actual Indic cluster can start a new word -- connectors
+/// (spaces, punctuation) never do, they always ride with whatever word is
+/// current. A new word starts at a cluster that follows at least one space
+/// since the previous cluster (i.e. two clusters joined by an absorbed
+/// space get different word ids; trailing or leading punctuation around
+/// that space rides with whichever word it's adjacent to, matching
+/// `scan_indic_run`'s own attachment rules -- it never introduces a real
+/// allocation boundary of its own, only Indic clusters do, since only
+/// clusters go through `ansi_handler.rs`'s cumulative word-allocation
+/// accounting). Pure and independent of any shaping/glyph data, so it's
+/// unit-testable on its own.
+fn entry_word_ids(shape: &IndicRunShape) -> Vec<usize> {
+    let chars: Vec<char> = shape.full_text.chars().collect();
+    let mut word_ids = Vec::with_capacity(shape.char_ranges.len());
+    let mut current_word = 0usize;
+    let mut any_cluster_seen = false;
+    let mut space_seen_since_last_cluster = false;
+    for range in &shape.char_ranges {
+        let single_char = (range.end - range.start == 1)
+            .then(|| chars.get(range.start).copied())
+            .flatten();
+        let is_space = single_char == Some(' ');
+        let is_connector = is_space || single_char.is_some_and(is_connector_punct);
+
+        if !is_connector {
+            if any_cluster_seen && space_seen_since_last_cluster {
+                current_word += 1;
+            }
+            any_cluster_seen = true;
+            space_seen_since_last_cluster = false;
+        } else if is_space {
+            space_seen_since_last_cluster = true;
+        }
+        word_ids.push(current_word);
+    }
+    word_ids
+}
+
 /// Renders a whole contiguous Indic run (possibly several syllables/words)
-/// as ONE Core Text shaping call, so inter-cluster spacing flows at the
-/// font's natural advances instead of being centred (and gapped) per
-/// cluster -- matching how a proportional rich-text renderer already draws
-/// the same text. Each style run keeps its own cluster's resolved
-/// foreground color; Core Text splits `CTRun`s at style-attribute
+/// as ONE Core Text shaping call, so inter-cluster AND inter-word spacing
+/// flows at the font's natural advances instead of being centred (and
+/// gapped) per cluster -- matching how a proportional rich-text renderer
+/// already draws the same text. Each style run keeps its own cluster's
+/// resolved foreground color; Core Text splits `CTRun`s at style-attribute
 /// boundaries on its own, so per-cluster color fidelity (search highlight,
 /// syntax color, etc.) survives being shaped together.
+///
+/// Every word is then re-anchored at its own logical grid column (rather
+/// than left at wherever continuous natural-flow positioning would put it)
+/// -- otherwise every word's small `ceil()`-rounding allocation slack
+/// (`ansi_handler.rs::flush_pending_indic_cluster`) would compound across
+/// every word in the run and surface as one large gap wherever the run
+/// ends (see the Telugu variable-width-cells plan's Phase 12 execution
+/// log for the diagnosed numbers). Re-anchoring bounds every gap to a
+/// single word's own local slack, regardless of how many words are merged
+/// into the run or what follows it.
 fn render_indic_run(
-    run_text: &str,
+    shape: &IndicRunShape,
     style_runs: &[(Range<usize>, StyleAndFont)],
     origin: Vector2F,
+    run_start_col: usize,
+    cell_width: f32,
     font_size: f32,
     ctx: &mut PaintContext,
 ) {
-    if run_text.is_empty() || style_runs.is_empty() {
+    if shape.full_text.is_empty() || style_runs.is_empty() {
         return;
     }
     let line = ctx.text_layout_cache.layout_line(
-        run_text,
+        &shape.full_text,
         LineStyle {
             font_size,
             line_height_ratio: 1.0,
@@ -2393,13 +2474,64 @@ fn render_indic_run(
         Default::default(),
         &ctx.font_cache.text_layout_system(),
     );
+
+    let word_ids = entry_word_ids(shape);
+    let num_words = word_ids.last().map_or(0, |id| id + 1);
+
+    let total_chars = shape.full_text.chars().count();
+    let mut char_idx_to_word = vec![0usize; total_chars];
+    for (entry_idx, range) in shape.char_ranges.iter().enumerate() {
+        for char_idx in range.clone() {
+            if char_idx < total_chars {
+                char_idx_to_word[char_idx] = word_ids[entry_idx];
+            }
+        }
+    }
+
+    // Leftmost natural glyph position per word (`min`, not the first glyph
+    // by string order, since Core Text can reorder glyphs within a cluster
+    // -- e.g. a pre-base vowel sign drawn before its consonant).
+    let mut natural_start = vec![f32::INFINITY; num_words];
+    for run in &line.runs {
+        for glyph in &run.glyphs {
+            let word = char_idx_to_word.get(glyph.index).copied().unwrap_or(0);
+            natural_start[word] = natural_start[word].min(glyph.position_along_baseline.x());
+        }
+    }
+
+    // First entry's grid column for each word.
+    let mut word_start_col = vec![run_start_col; num_words];
+    let mut seen = vec![false; num_words];
+    for (entry_idx, &word) in word_ids.iter().enumerate() {
+        if !seen[word] {
+            seen[word] = true;
+            word_start_col[word] = shape.cols[entry_idx];
+        }
+    }
+
+    let shifts: Vec<f32> = (0..num_words)
+        .map(|word| {
+            if !natural_start[word].is_finite() {
+                return 0.0;
+            }
+            let logical_x = (word_start_col[word] - run_start_col) as f32 * cell_width;
+            // Never negative by construction (word allocation always covers
+            // its own natural width -- see the flush_pending_indic_cluster
+            // invariant proof), but clamp defensively against float drift.
+            (logical_x - natural_start[word]).max(0.0)
+        })
+        .collect();
+
     for run in &line.runs {
         if run.glyphs.is_empty() {
             continue;
         }
         let color = run.styles.foreground_color.unwrap_or_default();
         for glyph in &run.glyphs {
-            let glyph_origin = origin + vec2f(glyph.position_along_baseline.x(), 0.0);
+            let word = char_idx_to_word.get(glyph.index).copied().unwrap_or(0);
+            let shift = shifts.get(word).copied().unwrap_or(0.0);
+            let glyph_origin =
+                origin + vec2f(glyph.position_along_baseline.x() + shift, 0.0);
             ctx.scene
                 .draw_glyph(glyph_origin, glyph.id, run.font_id, font_size, color);
         }
