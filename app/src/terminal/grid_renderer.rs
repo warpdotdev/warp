@@ -28,6 +28,7 @@ use super::block_filter::{BLOCK_FILTER_DOTTED_LINE_DASH, BLOCK_FILTER_DOTTED_LIN
 use super::blockgrid_renderer::GridRenderParams;
 use super::model::char_or_str::CharOrStr;
 use super::model::grid::grid_handler::{ContainsPoint, GridHandler, Link};
+use super::model::grid::row::Row;
 use super::model::grid::RespectDisplayedOutput;
 use super::model::image_map::{ImagePlacementData, StoredImageMetadata};
 use super::model::terminal_model::RangeInModel;
@@ -620,7 +621,21 @@ fn render_grid_without_ligatures<'a>(
             continue;
         };
 
+        let mut pending_run: Option<PendingIndicRun> = None;
+
         for col in 0..grid.columns() {
+            // Flush any Indic run whose last column has already been
+            // passed. Checking this at the top of the NEXT column's
+            // iteration (rather than right after the run's own last
+            // column) means it never depends on whether that column hit an
+            // early `continue` below (e.g. a trailing spacer cell skipped
+            // by the WIDE_CHAR_SPACER check) -- every column belonging to
+            // the run has already been fully processed by now regardless.
+            if pending_run.as_ref().is_some_and(|pr| col > pr.end_col) {
+                let pr = pending_run.take().expect("checked Some above");
+                render_indic_run(&pr.shape.full_text, &pr.style_runs, pr.run_origin, font_size, ctx);
+            }
+
             let current_point = Point::new(row_idx, col);
 
             // Skip the cursor cell when CLI agent rich input is open
@@ -790,28 +805,6 @@ fn render_grid_without_ligatures<'a>(
                 }
             }
 
-            // Indic cluster rendering: the cell's own content already holds
-            // the full cluster string (written at input time via
-            // `push_zerowidth`, see `ansi_handler.rs::write_grapheme_cluster`)
-            // and its own real measured span (`Cell::span()`) -- no look-ahead
-            // scan across neighbouring cells is needed any more.
-            //
-            // Tuple: (run_string, span_cells).
-            //   span_cells = 0 for a spacer cell (run_string is empty; its
-            //   glyph was already drawn when its cluster's base cell was
-            //   processed -- only its background/highlight still renders).
-            //   span_cells = 1..N for the base cell of an N-cell cluster.
-            let cluster_for_this_cell: Option<(String, usize)> =
-                if cell.flags().intersects(Flags::WIDE_CHAR_SPACER) {
-                    Some((String::new(), 0))
-                } else if is_indic_cell(cell) {
-                    let mut run = String::new();
-                    append_cell_display(&mut run, cell);
-                    Some((run, cell.span() as usize))
-                } else {
-                    None
-                };
-
             // Don't apply cursor contrast colouring when hide_cursor_cell
             // is active — the cursor itself won't be drawn, so the cell
             // should render with its normal colours.
@@ -819,6 +812,95 @@ fn render_grid_without_ligatures<'a>(
                 && grid.cursor_point() == Point::new(offset_row, col)
                 && visible_cursor_shape == Some(CursorShape::Block))
             .then(|| theme.cursor().into_solid());
+
+            let is_wide_char_spacer = cell.flags().intersects(Flags::WIDE_CHAR_SPACER);
+
+            // Start a new contiguous Indic run when we hit an unmerged base
+            // cell. `scan_indic_run` is a pure content scan (no color/match
+            // state) so it can safely look ahead across the whole run right
+            // away; per-cluster color is only resolved as the loop reaches
+            // each column below, and deferred-drawn as one shaped unit once
+            // the run's last column has been passed (see the flush check at
+            // the top of this loop, and after it for a row-ending run).
+            if pending_run.is_none() && !is_wide_char_spacer && is_indic_cell(cell) {
+                let shape =
+                    scan_indic_run(&row, col, grid.columns(), grid, offset_row, obfuscate_secrets);
+                if shape.total_span > 0 {
+                    let run_origin = grid_origin
+                        + cell_size * vec2f(col as f32, offset_row as f32)
+                        + baseline_position;
+                    pending_run = Some(PendingIndicRun {
+                        end_col: col + shape.total_span - 1,
+                        run_start_col: col,
+                        shape,
+                        run_origin,
+                        style_runs: Vec::new(),
+                        next_cluster_idx: 0,
+                    });
+                }
+                // If `shape.total_span == 0`, this cell can't be merged
+                // (e.g. it's secret-redacted) -- fall through below to the
+                // pre-existing independent-cluster rendering path, which
+                // defers correctly to `render_cell_glyph`'s own per-cell
+                // secret redaction.
+            }
+
+            // Tuple: (run_string, span_cells).
+            //   span_cells = 0 for a spacer cell, or for a cell whose glyph
+            //   is deferred to a merged run's `render_indic_run` call.
+            //   span_cells = 1..N for the base cell of an independently
+            //   rendered N-cell cluster (no active merged run covers it).
+            let cluster_for_this_cell: Option<(String, usize)> = if let Some(pr) =
+                pending_run.as_mut()
+            {
+                if col >= pr.run_start_col && col <= pr.end_col {
+                    if !is_wide_char_spacer {
+                        // Base cell of one cluster within the run: resolve
+                        // its real color now (this is exactly why
+                        // run-detection can't be a separate pre-pass --
+                        // `cell_colors` depends on the stateful
+                        // find-match/secret tracking above, valid only at
+                        // this column) and record it against this
+                        // cluster's char range. Its glyph draw is deferred
+                        // to `render_indic_run`.
+                        let this_cell_colors = cell_colors(
+                            cell,
+                            colors,
+                            override_colors,
+                            &cell_type,
+                            alpha,
+                            enforce_minimal_contrast,
+                            &mut minimal_contrast_cache,
+                            cursor_color,
+                            obfuscate_secrets,
+                        );
+                        let properties = FontStyle::from(cell.flags).to_properties();
+                        if let Some(range) = pr.shape.char_ranges.get(pr.next_cluster_idx) {
+                            pr.style_runs.push((
+                                range.clone(),
+                                StyleAndFont::new(
+                                    font_family,
+                                    properties,
+                                    TextStyle::new()
+                                        .with_foreground_color(this_cell_colors.foreground_color),
+                                ),
+                            ));
+                        }
+                        pr.next_cluster_idx += 1;
+                    }
+                    Some((String::new(), 0))
+                } else {
+                    None
+                }
+            } else if is_wide_char_spacer {
+                Some((String::new(), 0))
+            } else if is_indic_cell(cell) {
+                let mut run = String::new();
+                append_cell_display(&mut run, cell);
+                Some((run, cell.span() as usize))
+            } else {
+                None
+            };
             cached_background_color = render_cell(
                 grid,
                 offset_row,
@@ -848,6 +930,13 @@ fn render_grid_without_ligatures<'a>(
                 bg_color_sampler.as_deref_mut(),
                 ctx,
             );
+        }
+
+        // Flush a run that extends all the way to the row's last column
+        // (the `col > pr.end_col` check above never gets a "next column"
+        // iteration to fire in that case).
+        if let Some(pr) = pending_run.take() {
+            render_indic_run(&pr.shape.full_text, &pr.style_runs, pr.run_origin, font_size, ctx);
         }
 
         if grid.filter_has_context_lines() {
@@ -2030,6 +2119,137 @@ fn render_indic_cluster(
                 font_size,
                 foreground_color,
             );
+        }
+    }
+}
+
+/// Shape of one maximal contiguous run of Indic-script cells within a row, as
+/// scanned by `scan_indic_run`. Pure content scan (no color/match state) --
+/// built once, cheaply, when the render loop encounters the run's first
+/// (unmerged) base cell.
+struct IndicRunShape {
+    /// Concatenated cluster text for the whole run, shaped as ONE Core Text
+    /// call so inter-cluster spacing flows at the font's natural advances
+    /// instead of being centred (and gapped) per cluster.
+    full_text: String,
+    /// Char-index range into `full_text` for each cluster, in column order.
+    char_ranges: Vec<Range<usize>>,
+    /// Total grid columns (base + spacer cells) consumed by the whole run.
+    total_span: usize,
+}
+
+/// Scans forward from `start_col` collecting a maximal run of contiguous
+/// Indic cells (a base cell's own span, followed immediately by the next
+/// cluster's base cell, and so on) into one shape.
+///
+/// A candidate cluster that is secret-redacted stops the run right there
+/// (excluding it) rather than merging it in: a merged run's glyphs are drawn
+/// via `render_indic_run`, which bypasses `render_cell_glyph`'s per-cell
+/// secret-redaction check entirely, so a secret cluster must never be
+/// merged. `secret_at_displayed_point` is a stateless positional lookup (not
+/// a sequentially-advancing iterator like the find-match tracking in the
+/// caller), so it's safe to query here inside a lookahead.
+fn scan_indic_run(
+    row: &Row,
+    start_col: usize,
+    columns: usize,
+    grid: &GridHandler,
+    offset_row: usize,
+    obfuscate_secrets: ObfuscateSecrets,
+) -> IndicRunShape {
+    let redacting_secrets = obfuscate_secrets.should_redact_secret();
+    let mut full_text = String::new();
+    let mut char_ranges = Vec::new();
+    let mut col = start_col;
+
+    while col < columns {
+        let cell = &row[col];
+        if cell.flags().intersects(Flags::WIDE_CHAR_SPACER) {
+            col += 1;
+            continue;
+        }
+        if !is_indic_cell(cell) {
+            break;
+        }
+        if redacting_secrets
+            && grid
+                .secret_at_displayed_point(Point::new(offset_row, col))
+                .is_some()
+        {
+            break;
+        }
+
+        let start_char = full_text.chars().count();
+        append_cell_display(&mut full_text, cell);
+        let end_char = full_text.chars().count();
+        char_ranges.push(start_char..end_char);
+
+        col += cell.span() as usize;
+    }
+
+    IndicRunShape {
+        full_text,
+        char_ranges,
+        total_span: col - start_col,
+    }
+}
+
+/// State for a contiguous Indic run whose glyph drawing is deferred until
+/// the run's last column has been passed -- see `render_grid_without_ligatures`.
+struct PendingIndicRun {
+    shape: IndicRunShape,
+    run_start_col: usize,
+    /// Last grid column (inclusive) occupied by the run.
+    end_col: usize,
+    /// Origin (baseline position) of the run's first column, where the
+    /// whole run's shaped glyphs get drawn from.
+    run_origin: Vector2F,
+    style_runs: Vec<(Range<usize>, StyleAndFont)>,
+    /// Index into `shape.char_ranges` of the next cluster whose color has
+    /// not yet been resolved and pushed into `style_runs`.
+    next_cluster_idx: usize,
+}
+
+/// Renders a whole contiguous Indic run (possibly several syllables/words)
+/// as ONE Core Text shaping call, so inter-cluster spacing flows at the
+/// font's natural advances instead of being centred (and gapped) per
+/// cluster -- matching how a proportional rich-text renderer already draws
+/// the same text. Each style run keeps its own cluster's resolved
+/// foreground color; Core Text splits `CTRun`s at style-attribute
+/// boundaries on its own, so per-cluster color fidelity (search highlight,
+/// syntax color, etc.) survives being shaped together.
+fn render_indic_run(
+    run_text: &str,
+    style_runs: &[(Range<usize>, StyleAndFont)],
+    origin: Vector2F,
+    font_size: f32,
+    ctx: &mut PaintContext,
+) {
+    if run_text.is_empty() || style_runs.is_empty() {
+        return;
+    }
+    let line = ctx.text_layout_cache.layout_line(
+        run_text,
+        LineStyle {
+            font_size,
+            line_height_ratio: 1.0,
+            baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+            fixed_width_tab_size: None,
+        },
+        style_runs,
+        f32::MAX,
+        Default::default(),
+        &ctx.font_cache.text_layout_system(),
+    );
+    for run in &line.runs {
+        if run.glyphs.is_empty() {
+            continue;
+        }
+        let color = run.styles.foreground_color.unwrap_or_default();
+        for glyph in &run.glyphs {
+            let glyph_origin = origin + vec2f(glyph.position_along_baseline.x(), 0.0);
+            ctx.scene
+                .draw_glyph(glyph_origin, glyph.id, run.font_id, font_size, color);
         }
     }
 }

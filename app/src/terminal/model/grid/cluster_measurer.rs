@@ -106,7 +106,17 @@ mod mac_impl {
                 f32::MAX,
                 ClipConfig::default(),
             );
-            let cells = (line.width / cell_width_px).ceil() as u8;
+            // `round()` rather than `ceil()`: halves the average leftover
+            // slack per cluster (the gap between a cluster's real shaped
+            // width and its allocated cell count), which otherwise
+            // accumulates across a multi-cluster run and surfaces as an
+            // oversized gap before the next space/punctuation cell (see
+            // Phase 10 of the Telugu variable-width-cells rewrite). A
+            // cluster can now round down slightly under its natural width;
+            // the renderer already tolerates this gracefully (no clamp or
+            // panic on slight overflow into the next cell), so this trades
+            // a small, bounded overflow risk for less accumulated slack.
+            let cells = (line.width / cell_width_px).round() as u8;
             cells.clamp(1, 8)
         }
     }

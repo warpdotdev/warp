@@ -262,3 +262,141 @@ fn test_calculate_selection_bounds() {
     assert_selection_bounds(10.into_lines()); // Without scroll clipping (but on the cusp of clipping)
     assert_selection_bounds(80.into_lines()); // With scroll clipping
 }
+
+mod indic_run_tests {
+    use std::sync::Arc;
+
+    use super::super::scan_indic_run;
+    use crate::terminal::event_listener::ChannelEventListener;
+    use crate::terminal::model::ansi::{self, Handler as _};
+    use crate::terminal::model::cell::Flags;
+    use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks};
+    use crate::terminal::model::grid::row::Row;
+    use crate::terminal::model::grid::NoopMeasurer;
+    use crate::terminal::model::secrets::{self, ObfuscateSecrets};
+    use crate::terminal::SizeInfo;
+
+    fn test_grid(obfuscate: ObfuscateSecrets) -> GridHandler {
+        GridHandler::new(
+            SizeInfo::new_without_font_metrics(5, 20),
+            0,
+            ChannelEventListener::new_for_test(),
+            false,
+            obfuscate,
+            PerformResetGridChecks::No,
+            Arc::new(NoopMeasurer),
+        )
+    }
+
+    #[test]
+    fn single_cluster_run_matches_cluster_span() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(10);
+        row[0].c = 'ప';
+        row[0].push_zerowidth('్', false);
+        row[0].push_zerowidth('ర', false);
+        row[0].set_span(3);
+        row[1].flags_mut().insert(Flags::WIDE_CHAR_SPACER);
+        row[2].flags_mut().insert(Flags::WIDE_CHAR_SPACER);
+        row[3].c = 'a';
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        assert_eq!(shape.full_text, "ప్ర");
+        assert_eq!(shape.total_span, 3);
+        assert_eq!(shape.char_ranges, vec![0..shape.full_text.chars().count()]);
+    }
+
+    #[test]
+    fn multi_cluster_run_merges_whole_word() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(10);
+        // "తె" (2 cols) + "లు" (2 cols) + "గు" (2 cols) -- one word, no spaces.
+        row[0].c = 'త';
+        row[0].push_zerowidth('ె', false);
+        row[0].set_span(2);
+        row[1].flags_mut().insert(Flags::WIDE_CHAR_SPACER);
+
+        row[2].c = 'ల';
+        row[2].push_zerowidth('ు', false);
+        row[2].set_span(2);
+        row[3].flags_mut().insert(Flags::WIDE_CHAR_SPACER);
+
+        row[4].c = 'గ';
+        row[4].push_zerowidth('ు', false);
+        row[4].set_span(2);
+        row[5].flags_mut().insert(Flags::WIDE_CHAR_SPACER);
+
+        row[6].c = ' ';
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        assert_eq!(shape.full_text, "తెలుగు");
+        assert_eq!(shape.total_span, 6);
+        assert_eq!(shape.char_ranges.len(), 3);
+        assert_eq!(shape.char_ranges[0].start, 0);
+        assert_eq!(shape.char_ranges[2].end, shape.full_text.chars().count());
+        for pair in shape.char_ranges.windows(2) {
+            assert_eq!(pair[0].end, pair[1].start, "ranges must partition full_text with no gaps");
+        }
+    }
+
+    #[test]
+    fn run_stops_at_non_indic_cell() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(10);
+        row[0].c = 'త';
+        row[0].push_zerowidth('ె', false);
+        row[0].set_span(2);
+        row[1].flags_mut().insert(Flags::WIDE_CHAR_SPACER);
+        row[2].c = 'a'; // Immediately adjacent, no space.
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        assert_eq!(shape.full_text, "తె");
+        assert_eq!(shape.total_span, 2);
+    }
+
+    #[test]
+    fn run_extends_to_end_of_row() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(4);
+        row[0].c = 'త';
+        row[0].push_zerowidth('ె', false);
+        row[0].set_span(2);
+        row[1].flags_mut().insert(Flags::WIDE_CHAR_SPACER);
+        row[2].c = 'ల';
+        row[2].push_zerowidth('ు', false);
+        row[2].set_span(2);
+        row[3].flags_mut().insert(Flags::WIDE_CHAR_SPACER);
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        assert_eq!(shape.full_text, "తెలు");
+        assert_eq!(shape.total_span, 4);
+    }
+
+    #[test]
+    fn secret_redacted_cluster_is_excluded_from_run() {
+        secrets::set_user_and_enterprise_secret_regexes(
+            [&regex::Regex::new("SECRET").expect("valid regex")],
+            std::iter::empty(),
+        );
+        let mut grid = test_grid(ObfuscateSecrets::Yes);
+        for c in "SECRET".chars() {
+            grid.input(c);
+        }
+        grid.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+        // Built as a SEPARATE row -- `scan_indic_run` only consults `grid`
+        // for secret ranges by point, independent of the row argument's own
+        // content, so this validates the exclusion mechanism directly.
+        let mut row = Row::new(10);
+        row[0].c = 'త';
+        row[0].push_zerowidth('ె', false);
+        row[0].set_span(2);
+        row[1].flags_mut().insert(Flags::WIDE_CHAR_SPACER);
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::Yes);
+        assert_eq!(
+            shape.total_span, 0,
+            "secret-redacted cluster must not be merged into a run"
+        );
+    }
+}
