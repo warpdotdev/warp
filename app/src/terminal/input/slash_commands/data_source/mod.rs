@@ -257,11 +257,19 @@ impl SlashCommandDataSource {
             session_context |= Availability::REPOSITORY;
         }
 
+        // Treat an absent session type (session not yet initialized / bootstrapping) as
+        // local. This matches the permissive default already used in
+        // `ActiveSession::location_for_path` and fixes a race condition where commands
+        // that require `Availability::LOCAL` (e.g. `/orchestrate`) are missing from the
+        // slash-command menu when the user types quickly right after shell startup.
+        // Once the session finishes bootstrapping, `recompute_active_commands` is
+        // called via `ActiveSessionEvent::Bootstrapped`, so a remote session that
+        // initially had an unknown type will correctly remove the LOCAL flag.
         let is_local = self
             .active_session
             .as_ref(ctx)
             .session_type(ctx)
-            .is_some_and(|st| st == SessionType::Local);
+            .is_none_or(|st| st == SessionType::Local);
         if is_local {
             session_context |= Availability::LOCAL;
         }
