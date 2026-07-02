@@ -124,7 +124,7 @@ impl TuiView for ShowcaseView {
         let quit_for_q = self.quit.clone();
         let quit_for_esc = self.quit.clone();
         Box::new(
-            TuiEventHandler::new(TuiColumn::new().with_children(rows))
+            TuiEventHandler::new(TuiColumn::new().with_children(rows).finish())
                 .on_key("j", |_, ctx, _| ctx.dispatch_typed_action(Scroll::Down))
                 .on_key("down", |_, ctx, _| ctx.dispatch_typed_action(Scroll::Down))
                 .on_key("k", |_, ctx, _| ctx.dispatch_typed_action(Scroll::Up))

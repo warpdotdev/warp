@@ -56,3 +56,4 @@ pub use crate::terminal::{
     TerminalModel, TerminalSurface,
 };
 pub use crate::themes::default_themes::dark_theme;
+pub use crate::util::time_format::format_elapsed_seconds;

@@ -21,10 +21,6 @@ use crate::agent_block_sections::{
     render_tool_call_section, ThinkingOverrides,
 };
 
-/// Bottom padding (rows) applied beneath every rendered section, giving
-/// uniform spacing between sections and after the last one.
-const BLOCK_BOTTOM_PADDING: u16 = 1;
-
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum TuiAIBlockSection {
@@ -143,7 +139,7 @@ impl TuiAIBlock {
                         sections.push(TuiAIBlockSection::Thinking {
                             message_id: message.id.clone(),
                             finished_duration: *finished_duration,
-                            body: reasoning_body(text),
+                            body: plain_text_sections(text).collect::<Vec<_>>().join("\n"),
                         });
                     }
                     // Other message kinds are not rendered by the TUI transcript yet.
@@ -186,8 +182,9 @@ impl TuiAIBlock {
                     app,
                 ),
             };
-            column =
-                column.child(TuiContainer::new(element).with_padding_bottom(BLOCK_BOTTOM_PADDING));
+            // One row of bottom padding gives uniform spacing between sections
+            // and after the last one.
+            column = column.child(TuiContainer::new(element).with_padding_bottom(1).finish());
         }
         column.finish()
     }
@@ -204,11 +201,6 @@ fn plain_text_sections(text: &AIAgentText) -> impl Iterator<Item = &str> {
         | AIAgentTextSection::Image { .. }
         | AIAgentTextSection::MermaidDiagram { .. } => None,
     })
-}
-
-/// Joins a reasoning message's plain-text sections into a single body string.
-fn reasoning_body(text: &AIAgentText) -> String {
-    plain_text_sections(text).collect::<Vec<_>>().join("\n")
 }
 
 /// Registers the view with the TUI runtime.

@@ -49,9 +49,9 @@ impl TuiColumn {
     }
 
     /// Appends a fixed-height child, laid out against the remaining height.
-    pub fn child(mut self, child: impl TuiElement + 'static) -> Self {
+    pub fn child(mut self, child: Box<dyn TuiElement>) -> Self {
         self.children.push(ColumnChild {
-            element: Box::new(child),
+            element: child,
             flex: false,
         });
         self
@@ -59,9 +59,9 @@ impl TuiColumn {
 
     /// Appends a child that fills the height left over after the fixed children
     /// (shared evenly when there are several flex children).
-    pub fn flex_child(mut self, child: impl TuiElement + 'static) -> Self {
+    pub fn flex_child(mut self, child: Box<dyn TuiElement>) -> Self {
         self.children.push(ColumnChild {
-            element: Box::new(child),
+            element: child,
             flex: true,
         });
         self

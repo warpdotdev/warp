@@ -261,10 +261,10 @@ impl TuiView for TuiTranscriptView {
 
     fn render(&self, _app: &AppContext) -> Box<dyn TuiElement> {
         let source = TuiBlockListViewportSource::new(self.model.clone(), self.agent_blocks.clone());
-        TuiScrollable::new(
+        TuiScrollable::new(Box::new(
             TuiViewportedList::new(self.viewport.clone(), source)
                 .with_vertical_alignment(TuiViewportVerticalAlignment::GrowFromBottom),
-        )
+        ))
         .finish()
     }
 }

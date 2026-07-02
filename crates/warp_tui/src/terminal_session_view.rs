@@ -264,15 +264,17 @@ impl TuiView for TuiTerminalSessionView {
         let border_color: Color =
             CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.cyan)).into();
         let input_box = TuiConstrainedBox::new(
-            TuiContainer::new(TuiChildView::new(&self.input_view))
-                .with_border_style(TuiStyle::default().fg(border_color)),
+            TuiContainer::new(TuiChildView::new(&self.input_view).finish())
+                .with_border_style(TuiStyle::default().fg(border_color))
+                .finish(),
         )
         .with_max_rows(MAX_INPUT_TEXT_ROWS + 2);
 
         TuiContainer::new(
             TuiColumn::new()
-                .flex_child(TuiChildView::new(&self.transcript))
-                .child(input_box),
+                .flex_child(TuiChildView::new(&self.transcript).finish())
+                .child(input_box.finish())
+                .finish(),
         )
         .with_padding(2)
         .finish()

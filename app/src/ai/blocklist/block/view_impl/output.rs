@@ -21,7 +21,6 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
 use warp_core::channel::ChannelState;
-use warp_core::time_format::format_elapsed_seconds;
 use warp_core::ui::theme::color::internal_colors;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::elements::new_scrollable::SingleAxisConfig;
@@ -119,6 +118,7 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+use crate::util::time_format::format_elapsed_seconds;
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::ActionButton;
 use crate::view_components::compactible_action_button::{
