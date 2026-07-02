@@ -418,3 +418,215 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
         });
     });
 }
+
+// -- get_active_cli_agent_model fallback tests --
+
+/// Registers the singleton models needed to construct `LLMPreferences` in a
+/// test app. Handles are re-fetched in tests via `SingletonEntity::handle`.
+fn setup_llm_preferences_test(app: &mut App) {
+    initialize_settings_for_tests(app);
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(|_| NetworkStatus::new());
+    app.add_singleton_model(UserWorkspaces::default_mock);
+    app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(TeamTesterStatus::mock);
+    app.add_singleton_model(SyncQueue::mock);
+    app.add_singleton_model(UpdateManager::mock);
+    app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+    app.add_singleton_model(|ctx| {
+        AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+    });
+    app.add_singleton_model(LLMPreferences::new);
+}
+
+/// Builds a bare `LLMInfo` choice for CLI agent fallback tests.
+fn cli_llm(id: &str, disable_reason: Option<DisableReason>) -> LLMInfo {
+    LLMInfo {
+        display_name: id.to_string(),
+        base_model_name: id.to_string(),
+        id: id.into(),
+        reasoning_level: None,
+        usage_metadata: LLMUsageMetadata {
+            request_multiplier: 1,
+            credit_multiplier: None,
+        },
+        description: None,
+        disable_reason,
+        vision_supported: false,
+        spec: None,
+        provider: LLMProvider::Unknown,
+        host_configs: HashMap::new(),
+        discount_percentage: None,
+        context_window: LLMContextWindow::default(),
+    }
+}
+
+fn models_with_cli_agent(default_id: &str, choices: Vec<LLMInfo>) -> ModelsByFeature {
+    ModelsByFeature {
+        cli_agent: Some(AvailableLLMs {
+            default_id: default_id.into(),
+            choices,
+            preferred_codex_model_id: None,
+        }),
+        ..ModelsByFeature::default()
+    }
+}
+
+#[test]
+fn cli_agent_usable_stored_preference_wins() {
+    App::test((), |mut app| async move {
+        setup_llm_preferences_test(&mut app);
+
+        let models = models_with_cli_agent(
+            "cli-agent-auto",
+            vec![cli_llm("cli-agent-auto", None), cli_llm("gpt-x", None)],
+        );
+        LLMPreferences::handle(&app).update(&mut app, |prefs, ctx| {
+            prefs.update_feature_model_choices(Ok(models), ctx);
+        });
+        let profiles = AIExecutionProfilesModel::handle(&app);
+        let profile_id = profiles.read(&app, |profiles, _| profiles.default_profile_id());
+        profiles.update(&mut app, |profiles, ctx| {
+            profiles.set_cli_agent_model(profile_id, Some("gpt-x".into()), ctx);
+        });
+
+        LLMPreferences::handle(&app).read(&app, |prefs, ctx| {
+            assert_eq!(
+                prefs.get_active_cli_agent_model(ctx, None).id.as_str(),
+                "gpt-x"
+            );
+        });
+    });
+}
+
+#[test]
+fn cli_agent_disabled_stored_preference_is_skipped() {
+    App::test((), |mut app| async move {
+        setup_llm_preferences_test(&mut app);
+
+        let models = models_with_cli_agent(
+            "live-model",
+            vec![
+                cli_llm("dead-model", Some(DisableReason::AdminDisabled)),
+                cli_llm("live-model", None),
+            ],
+        );
+        LLMPreferences::handle(&app).update(&mut app, |prefs, ctx| {
+            prefs.update_feature_model_choices(Ok(models), ctx);
+        });
+        // Set the stale preference after the server update so it is exercised at
+        // read time rather than being cleared by reconciliation.
+        let profiles = AIExecutionProfilesModel::handle(&app);
+        let profile_id = profiles.read(&app, |profiles, _| profiles.default_profile_id());
+        profiles.update(&mut app, |profiles, ctx| {
+            profiles.set_cli_agent_model(profile_id, Some("dead-model".into()), ctx);
+        });
+
+        LLMPreferences::handle(&app).read(&app, |prefs, ctx| {
+            assert_eq!(
+                prefs.get_active_cli_agent_model(ctx, None).id.as_str(),
+                "live-model"
+            );
+        });
+    });
+}
+
+#[test]
+fn cli_agent_default_falls_back_to_first_usable_choice_when_disabled() {
+    App::test((), |mut app| async move {
+        setup_llm_preferences_test(&mut app);
+
+        let models = models_with_cli_agent(
+            "cli-agent-auto",
+            vec![
+                cli_llm("cli-agent-auto", Some(DisableReason::AdminDisabled)),
+                cli_llm("team-endpoint-config-key", None),
+            ],
+        );
+        LLMPreferences::handle(&app).update(&mut app, |prefs, ctx| {
+            prefs.update_feature_model_choices(Ok(models), ctx);
+        });
+
+        LLMPreferences::handle(&app).read(&app, |prefs, ctx| {
+            assert_eq!(
+                prefs.get_active_cli_agent_model(ctx, None).id.as_str(),
+                "team-endpoint-config-key"
+            );
+        });
+    });
+}
+
+#[test]
+fn cli_agent_falls_back_to_custom_endpoint_base_when_all_choices_disabled() {
+    App::test((), |mut app| async move {
+        setup_llm_preferences_test(&mut app);
+
+        let models = models_with_cli_agent(
+            "cli-agent-auto",
+            vec![cli_llm(
+                "cli-agent-auto",
+                Some(DisableReason::AdminDisabled),
+            )],
+        );
+        LLMPreferences::handle(&app).update(&mut app, |prefs, ctx| {
+            prefs.update_feature_model_choices(Ok(models), ctx);
+        });
+
+        // The user's base selection is one of their custom endpoint models.
+        let custom_model_id = LLMId::from("custom-endpoint-config-key");
+        ApiKeyManager::handle(&app).update(&mut app, |api_key_manager, ctx| {
+            api_key_manager.add_custom_endpoint(
+                "local".to_string(),
+                "https://example.com/v1".to_string(),
+                "test-key".to_string(),
+                vec![(
+                    "custom-model".to_string(),
+                    None,
+                    Some(custom_model_id.to_string()),
+                )],
+                ctx,
+            );
+        });
+        let profiles = AIExecutionProfilesModel::handle(&app);
+        let profile_id = profiles.read(&app, |profiles, _| profiles.default_profile_id());
+        profiles.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(profile_id, Some(custom_model_id.clone()), ctx);
+        });
+
+        LLMPreferences::handle(&app).read(&app, |prefs, ctx| {
+            assert_eq!(
+                prefs.get_active_cli_agent_model(ctx, None).id,
+                custom_model_id
+            );
+        });
+    });
+}
+
+#[test]
+fn cli_agent_keeps_raw_default_when_nothing_usable() {
+    App::test((), |mut app| async move {
+        setup_llm_preferences_test(&mut app);
+
+        let models = models_with_cli_agent(
+            "cli-agent-auto",
+            vec![cli_llm(
+                "cli-agent-auto",
+                Some(DisableReason::AdminDisabled),
+            )],
+        );
+        LLMPreferences::handle(&app).update(&mut app, |prefs, ctx| {
+            prefs.update_feature_model_choices(Ok(models), ctx);
+        });
+
+        // No usable choice and no custom endpoint base: legacy behavior returns
+        // the raw default so the request shape is unchanged.
+        LLMPreferences::handle(&app).read(&app, |prefs, ctx| {
+            assert_eq!(
+                prefs.get_active_cli_agent_model(ctx, None).id.as_str(),
+                "cli-agent-auto"
+            );
+        });
+    });
+}
