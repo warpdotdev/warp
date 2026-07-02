@@ -102,6 +102,23 @@ fn set_tab_color_command_requires_argument() {
 }
 
 #[test]
+fn handoff_command_inserts_into_buffer_on_selection() {
+    // `/handoff` must NOT execute on selection: selecting it from the slash menu should
+    // insert `/handoff ` into the input buffer so the user can append an optional follow-up
+    // prompt before executing (matching how other argument-taking commands like `/fork`
+    // behave). See REMOTE-2029.
+    let argument = MOVE_TO_CLOUD
+        .argument
+        .as_ref()
+        .expect("expected /handoff to declare an argument");
+
+    assert_eq!(MOVE_TO_CLOUD.name, "/handoff");
+    assert!(argument.is_optional);
+    assert!(!argument.should_execute_on_selection);
+    assert_eq!(argument.hint_text, Some("<optional follow-up prompt>"));
+}
+
+#[test]
 fn strip_command_prefix_matches_orchestrate() {
     let result = strip_command_prefix("/orchestrate deploy services", "/orchestrate");
     assert_eq!(result, Some("deploy services".to_string()));

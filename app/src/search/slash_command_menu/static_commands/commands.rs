@@ -191,11 +191,10 @@ pub static MOVE_TO_CLOUD: LazyLock<StaticCommand> = LazyLock::new(|| StaticComma
         | Availability::AI_ENABLED
         | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: false,
-    argument: Some(
-        Argument::optional()
-            .with_hint_text("<optional follow-up prompt>")
-            .with_execute_on_selection(),
-    ),
+    // No `with_execute_on_selection`: selecting `/handoff` from the menu should insert
+    // `/handoff ` into the input buffer (like `/fork`) so the user can append an optional
+    // follow-up prompt before executing, rather than firing the handoff immediately.
+    argument: Some(Argument::optional().with_hint_text("<optional follow-up prompt>")),
 });
 
 pub const OPEN_CODE_REVIEW: StaticCommand = StaticCommand {
