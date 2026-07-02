@@ -14,6 +14,7 @@ use warp::tui_export::{
     GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent, ModelEvent, PtyIntent,
     PtyIntentEvent, ShellCommandExecutorEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit,
 };
+use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     Modifier, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiStyle, TuiText,

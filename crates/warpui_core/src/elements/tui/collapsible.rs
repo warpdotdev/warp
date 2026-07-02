@@ -9,9 +9,8 @@
 //! on `mouse_state` are read at composition time and `on_toggle` fires on a
 //! header click, leaving the caller to flip its own state and re-render.
 
-use super::{
-    TuiElement, TuiEventContext, TuiFlex, TuiHoverable, TuiMouseStateHandle, TuiStyle, TuiText,
-};
+use super::{TuiElement, TuiEventContext, TuiFlex, TuiHoverable, TuiStyle, TuiText};
+use crate::elements::MouseStateHandle;
 use crate::AppContext;
 
 /// Disclosure glyph shown when the section is collapsed.
@@ -30,7 +29,7 @@ pub fn tui_collapsible(
     label: impl Into<String>,
     header_style: TuiStyle,
     header_hover_style: TuiStyle,
-    mouse_state: TuiMouseStateHandle,
+    mouse_state: MouseStateHandle,
     body: Box<dyn TuiElement>,
     on_toggle: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
 ) -> Box<dyn TuiElement> {
@@ -39,7 +38,7 @@ pub fn tui_collapsible(
     } else {
         CHEVRON_EXPANDED
     };
-    let style = if mouse_state.is_hovered() {
+    let style = if mouse_state.lock().unwrap().is_hovered() {
         header_hover_style
     } else {
         header_style

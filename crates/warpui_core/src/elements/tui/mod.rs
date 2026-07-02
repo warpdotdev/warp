@@ -52,7 +52,7 @@ pub use event::{
 pub use event_handler::TuiEventHandler;
 pub use flex::TuiFlex;
 pub use geometry::{TuiConstraint, TuiPoint, TuiPointExt, TuiRect, TuiRectExt, TuiSize};
-pub use hoverable::{TuiHoverable, TuiMouseStateHandle};
+pub use hoverable::TuiHoverable;
 pub use parent::TuiParentElement;
 pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use text::TuiText;

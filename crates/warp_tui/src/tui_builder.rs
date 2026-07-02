@@ -10,9 +10,9 @@ use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    tui_collapsible, Color, Modifier, TuiElement, TuiEventContext, TuiMouseStateHandle, TuiStyle,
+    tui_collapsible, Color, Modifier, TuiElement, TuiEventContext, TuiStyle,
 };
-use warpui_core::elements::Fill as CoreFill;
+use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
 use warpui_core::AppContext;
 
 /// Theme-derived styles and components for the TUI, mirroring the GUI's
@@ -83,7 +83,7 @@ impl TuiUiBuilder {
         &self,
         collapsed: bool,
         label: impl Into<String>,
-        mouse_state: TuiMouseStateHandle,
+        mouse_state: MouseStateHandle,
         body: Box<dyn TuiElement>,
         on_toggle: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
     ) -> Box<dyn TuiElement> {

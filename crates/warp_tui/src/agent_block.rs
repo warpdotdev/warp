@@ -16,9 +16,9 @@ use warp::tui_export::{
     AIConversationId, MessageId,
 };
 use warpui_core::elements::tui::{
-    TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiMouseStateHandle,
-    TuiParentElement, TuiSize,
+    TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiParentElement, TuiSize,
 };
+use warpui_core::elements::MouseStateHandle;
 use warpui_core::{AppContext, Entity, EntityIdMap, TuiView};
 
 use crate::agent_block_sections::{
@@ -56,9 +56,9 @@ struct ThinkingBlockState {
     /// permanently.
     collapse_override: Option<bool>,
     /// Hover state for the thinking header. Owned here (not created inline
-    /// during render) so it survives element-tree rebuilds, mirroring the
+    /// during render) so it survives element-tree rebuilds, following the
     /// GUI's `MouseStateHandle` pattern.
-    hover_state: TuiMouseStateHandle,
+    hover_state: MouseStateHandle,
 }
 
 impl ThinkingBlockStates {
@@ -82,7 +82,7 @@ impl ThinkingBlockStates {
     }
 
     /// Returns the persistent hover state handle for `message_id`.
-    pub(crate) fn hover_state(&self, message_id: &MessageId) -> TuiMouseStateHandle {
+    pub(crate) fn hover_state(&self, message_id: &MessageId) -> MouseStateHandle {
         self.states
             .borrow_mut()
             .entry(message_id.clone())

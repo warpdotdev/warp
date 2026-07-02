@@ -3,9 +3,10 @@ use std::rc::Rc;
 
 use super::tui_collapsible;
 use crate::elements::tui::{
-    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiMouseStateHandle,
-    TuiPoint, TuiRect, TuiSize, TuiStyle, TuiText,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPoint, TuiRect,
+    TuiSize, TuiStyle, TuiText,
 };
+use crate::elements::MouseStateHandle;
 use crate::event::ModifiersState;
 use crate::{App, EntityIdMap};
 
@@ -20,7 +21,7 @@ fn only_a_header_click_invokes_on_toggle() {
                 "Thinking...",
                 TuiStyle::default(),
                 TuiStyle::default(),
-                TuiMouseStateHandle::default(),
+                MouseStateHandle::default(),
                 TuiText::new("reasoning").finish(),
                 move |_, _| counter.set(counter.get() + 1),
             );

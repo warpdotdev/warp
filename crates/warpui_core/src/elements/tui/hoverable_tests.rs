@@ -1,11 +1,12 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use super::{TuiHoverable, TuiMouseStateHandle};
+use super::TuiHoverable;
 use crate::elements::tui::{
     TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPoint, TuiRect,
     TuiSize,
 };
+use crate::elements::MouseStateHandle;
 use crate::event::ModifiersState;
 use crate::{App, EntityId, EntityIdMap};
 
@@ -22,7 +23,7 @@ fn left_mouse_down(x: u16, y: u16) -> TuiEvent {
 fn mouse_moves_toggle_hover_state_and_notify_without_consuming_the_event() {
     App::test((), |app| async move {
         app.read(|app_ctx| {
-            let handle = TuiMouseStateHandle::default();
+            let handle = MouseStateHandle::default();
             let mut hoverable = TuiHoverable::new(handle.clone(), ().finish());
 
             let area = TuiRect::new(0, 0, 10, 1);
@@ -51,15 +52,15 @@ fn mouse_moves_toggle_hover_state_and_notify_without_consuming_the_event() {
             // Hover in: state flips and the view is notified, but the move
             // still propagates for sibling hoverables.
             assert_eq!(move_to(2, 0), (false, true));
-            assert!(handle.is_hovered());
+            assert!(handle.lock().unwrap().is_hovered());
 
             // A move within the area is not a transition: no notification.
             assert_eq!(move_to(4, 0), (false, false));
-            assert!(handle.is_hovered());
+            assert!(handle.lock().unwrap().is_hovered());
 
             // Hover out: state flips back and the view is notified again.
             assert_eq!(move_to(4, 3), (false, true));
-            assert!(!handle.is_hovered());
+            assert!(!handle.lock().unwrap().is_hovered());
         });
     });
 }
@@ -70,7 +71,7 @@ fn click_inside_area_runs_callback_and_reports_handled() {
         app.read(|app_ctx| {
             let hits = Rc::new(Cell::new(0u32));
             let counter = hits.clone();
-            let mut hoverable = TuiHoverable::new(TuiMouseStateHandle::default(), ().finish())
+            let mut hoverable = TuiHoverable::new(MouseStateHandle::default(), ().finish())
                 .on_click(move |_ctx, _app| {
                     counter.set(counter.get() + 1);
                 });
@@ -115,7 +116,7 @@ fn child_consumes_the_event_before_the_click_handler() {
 
             // A child that always handles the event pre-empts the wrapper's click.
             let mut hoverable =
-                TuiHoverable::new(TuiMouseStateHandle::default(), AlwaysHandles.finish()).on_click(
+                TuiHoverable::new(MouseStateHandle::default(), AlwaysHandles.finish()).on_click(
                     move |_, _| {
                         outer_counter.set(outer_counter.get() + 1);
                     },

@@ -1,15 +1,16 @@
 //! [`TuiHoverable`]: wraps a child, tracks pointer-over state on a caller-owned
-//! handle, and runs a click callback — the TUI mirror of the GUI's `Hoverable`
-//! and `MouseStateHandle` pattern, where hover *and* click gestures live on
-//! the state-owning element (the GUI `EventHandler` only exposes raw events).
+//! handle, and runs a click callback — the TUI mirror of the GUI's `Hoverable`,
+//! reusing the same [`MouseStateHandle`]/[`MouseState`] so hover *and* click
+//! gestures live on the state-owning element (the TUI's `TuiEventHandler` only
+//! exposes raw key events).
 //!
 //! # Construction
-//! The composing view owns a [`TuiMouseStateHandle`] (created once and reused
+//! The composing view owns a [`MouseStateHandle`] (created once and reused
 //! across renders, since the element tree is rebuilt every frame), reads
-//! [`is_hovered`](TuiMouseStateHandle::is_hovered) at composition time to pick
-//! styles, and wraps the element with [`TuiHoverable::new`], registering a
-//! click handler via [`on_click`](TuiHoverable::on_click). Layout, render,
-//! height, and cursor are transparent — they delegate to the wrapped child.
+//! [`MouseState::is_hovered`] at composition time to pick styles, and wraps
+//! the element with [`TuiHoverable::new`], registering a click handler via
+//! [`on_click`](TuiHoverable::on_click). Layout, render, height, and cursor
+//! are transparent — they delegate to the wrapped child.
 //!
 //! # Dispatch policy
 //! On [`MouseMoved`](TuiEvent::MouseMoved) the pointer position is compared
@@ -19,42 +20,29 @@
 //! the same event. Other events are offered to the child first; an unconsumed
 //! [`LeftMouseDown`](TuiEvent::LeftMouseDown) inside the area runs the click
 //! handler and is reported handled. (Unlike the GUI's press-then-release click
-//! pairing, a click here is simply a mouse-down within the area.)
+//! pairing, a click here is simply a mouse-down within the area; hover delays,
+//! click counts, and the other [`MouseState`] fields are unused.)
 
-use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::MutexGuard;
 
 use super::{
     TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
     TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
 };
+use crate::elements::{MouseState, MouseStateHandle};
 use crate::AppContext;
 
 type ClickCallback = Box<dyn FnMut(&mut TuiEventContext, &AppContext)>;
 
-/// Shared hover state for one hoverable region, owned by the composing view so
-/// it survives element-tree rebuilds.
-#[derive(Clone, Default)]
-pub struct TuiMouseStateHandle {
-    is_hovered: Rc<Cell<bool>>,
-}
-
-impl TuiMouseStateHandle {
-    /// Whether the pointer is currently over the associated element.
-    pub fn is_hovered(&self) -> bool {
-        self.is_hovered.get()
-    }
-}
-
 pub struct TuiHoverable {
     child: Box<dyn TuiElement>,
-    state: TuiMouseStateHandle,
+    state: MouseStateHandle,
     on_click: Option<ClickCallback>,
 }
 
 impl TuiHoverable {
     /// Wraps `child`, recording hover transitions on `state`.
-    pub fn new(state: TuiMouseStateHandle, child: Box<dyn TuiElement>) -> Self {
+    pub fn new(state: MouseStateHandle, child: Box<dyn TuiElement>) -> Self {
         Self {
             child,
             state,
@@ -70,6 +58,11 @@ impl TuiHoverable {
     ) -> Self {
         self.on_click = Some(Box::new(callback));
         self
+    }
+
+    /// Locks and returns the shared mouse state.
+    fn state(&self) -> MutexGuard<'_, MouseState> {
+        self.state.lock().unwrap()
     }
 }
 
@@ -107,8 +100,10 @@ impl TuiElement for TuiHoverable {
 
         if let TuiEvent::MouseMoved { position, .. } = event {
             let is_hovered = area.contains_point(*position);
-            if is_hovered != self.state.is_hovered() {
-                self.state.is_hovered.set(is_hovered);
+            let mut state = self.state();
+            if is_hovered != state.is_hovered() {
+                state.is_hovered = is_hovered;
+                drop(state);
                 event_ctx.notify();
             }
             // Mouse moves are never consumed so sibling hoverables can track
