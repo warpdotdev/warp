@@ -4,8 +4,6 @@ use serde_json::{json, Value};
 use strum_macros::{EnumDiscriminants, EnumIter};
 use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
 
-use crate::features::FeatureFlag;
-
 /// Health signals for the TUI auto-updater, sent once per completed (or
 /// failed) background update check. Throttled checks are not reported.
 #[derive(Debug, EnumDiscriminants)]
@@ -86,9 +84,7 @@ impl TelemetryEventDesc for TuiAutoupdateTelemetryEventDiscriminants {
     fn enablement_state(&self) -> EnablementState {
         match self {
             TuiAutoupdateTelemetryEventDiscriminants::CheckCompleted
-            | TuiAutoupdateTelemetryEventDiscriminants::CheckFailed => {
-                EnablementState::Flag(FeatureFlag::TuiAutoupdate)
-            }
+            | TuiAutoupdateTelemetryEventDiscriminants::CheckFailed => EnablementState::Always,
         }
     }
 }

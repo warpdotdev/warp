@@ -22,8 +22,8 @@
 //! Background updates only run for managed installs (i.e. when the running
 //! executable resolves into a `versions/` directory), so `cargo run` builds
 //! and legacy flat installs are unaffected. Users can opt out with the
-//! `WARP_TUI_DISABLE_AUTOUPDATE` environment variable; `warp-tui update`
-//! (see [`run_update_command`]) remains available as a manual escape hatch.
+//! `WARP_TUI_DISABLE_AUTOUPDATE` environment variable; re-running the
+//! install script remains available as a manual escape hatch.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,11 +38,10 @@ use warpui::r#async::Timer;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::channel::{Channel, ChannelState};
-use crate::features::FeatureFlag;
 use crate::tui::telemetry::TuiAutoupdateTelemetryEvent;
 
 /// Setting this environment variable (to any value) disables background
-/// auto-updates. `warp-tui update` still works.
+/// auto-updates.
 const DISABLE_ENV_VAR: &str = "WARP_TUI_DISABLE_AUTOUPDATE";
 
 /// Name of the directory holding per-version installs under the install root.
@@ -146,14 +145,11 @@ impl SingletonEntity for TuiAutoupdater {}
 
 impl TuiAutoupdater {
     /// Starts the background update loop, if this process is eligible:
-    /// a release build from a managed install, with the feature flag on and
-    /// no env opt-out. No-op otherwise.
+    /// a release build from a managed install, with no env opt-out. No-op
+    /// otherwise.
     pub(crate) fn register(ctx: &mut AppContext) {
         if std::env::var_os(DISABLE_ENV_VAR).is_some() {
             log::info!("TUI autoupdate disabled via {DISABLE_ENV_VAR}");
-            return;
-        }
-        if !FeatureFlag::TuiAutoupdate.is_enabled() {
             return;
         }
         if ChannelState::app_version().is_none() {
@@ -173,7 +169,7 @@ impl TuiAutoupdater {
     fn check_now(&mut self, layout: InstallLayout, ctx: &mut ModelContext<Self>) {
         let layout_for_next = layout.clone();
         ctx.spawn(
-            async move { update_once(layout, false).await },
+            async move { update_once(layout).await },
             move |me, result, ctx| {
                 match &result {
                     Ok(outcome) => log::info!("TUI autoupdate check finished: {outcome:?}"),
@@ -195,47 +191,6 @@ impl TuiAutoupdater {
             move |me, _, ctx| me.check_now(layout, ctx),
         );
     }
-}
-
-/// Runs the manual `warp-tui update` command: synchronously checks for the
-/// latest version and installs it if newer, printing progress to stdout.
-///
-/// Unlike the background loop this ignores the persistent check throttle and
-/// the feature flag / env opt-out, so it always works as an escape hatch —
-/// but it still requires a release build running from a managed install.
-pub(crate) fn run_update_command() -> Result<()> {
-    let current_version = ChannelState::app_version().context(
-        "this build has no release version tag; `warp-tui update` only works for \
-         installed release builds",
-    )?;
-    let layout = InstallLayout::detect().context(
-        "warp-tui is not running from a managed install; re-install it with the \
-         install script to enable updates",
-    )?;
-
-    println!("Current version: {current_version}");
-    println!("Checking for updates...");
-
-    // `Compat` provides the tokio context the HTTP client needs, since this
-    // runs before the app (and its background executor) is booted.
-    let outcome = futures::executor::block_on(async_compat::Compat::new(update_once(
-        layout, /* force */ true,
-    )))?;
-
-    match outcome {
-        UpdateOutcome::UpToDate { version } => {
-            println!("warp-tui is up to date ({version}).");
-        }
-        UpdateOutcome::Installed { version } => {
-            println!("Installed warp-tui {version}. Restart warp-tui to use it.");
-        }
-        UpdateOutcome::Locked => {
-            println!("Another warp-tui process is already installing an update.");
-        }
-        // The forced check never throttles.
-        UpdateOutcome::Throttled => unreachable!("forced update checks are not throttled"),
-    }
-    Ok(())
 }
 
 /// Maps a background check result onto its telemetry event. Throttled checks
@@ -265,10 +220,9 @@ fn telemetry_event_for(result: &Result<UpdateOutcome>) -> Option<TuiAutoupdateTe
     }
 }
 
-/// Performs a single check-and-install pass. `force` bypasses the persistent
-/// check throttle (used by `warp-tui update`).
-async fn update_once(layout: InstallLayout, force: bool) -> Result<UpdateOutcome> {
-    if !force && checked_recently(&layout) {
+/// Performs a single check-and-install pass.
+async fn update_once(layout: InstallLayout) -> Result<UpdateOutcome> {
+    if checked_recently(&layout) {
         return Ok(UpdateOutcome::Throttled);
     }
 

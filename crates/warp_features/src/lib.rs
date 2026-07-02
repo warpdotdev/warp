@@ -908,10 +908,6 @@ pub enum FeatureFlag {
     /// collapsible tree with typed colors and per-row Copy JSON, instead of
     /// a flat pretty-printed blob.
     McpJsonTreeView,
-
-    /// Enables the `warp-tui` background auto-updater, which keeps managed
-    /// (install-script) TUI installs on the channel's latest version.
-    TuiAutoupdate,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -984,7 +980,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
-    FeatureFlag::TuiAutoupdate,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

@@ -848,15 +848,6 @@ pub fn run_tui(mount: TuiMountFn) -> Result<()> {
     run_internal(LaunchMode::Tui { mount })
 }
 
-/// Runs the `warp-tui update` command: synchronously checks for the latest
-/// TUI version and installs it if newer, without booting the app. Invoked by
-/// the `warp_tui` crate when the binary is launched as `warp-tui update`.
-#[cfg(feature = "tui")]
-pub fn run_tui_update() -> Result<()> {
-    features::init_feature_flags();
-    crate::tui::autoupdate::run_update_command()
-}
-
 /// Dispatches a worker command when the current executable was re-invoked for one.
 #[cfg(feature = "tui")]
 pub fn run_tui_worker_if_requested() -> Option<Result<()>> {
