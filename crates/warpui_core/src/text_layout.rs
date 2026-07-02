@@ -11,9 +11,10 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use rangemap::RangeMap;
 use smallvec::SmallVec;
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 
-use crate::elements::{Fill, DEFAULT_UI_LINE_HEIGHT_RATIO};
+use crate::Scene;
+use crate::elements::{DEFAULT_UI_LINE_HEIGHT_RATIO, Fill};
 use crate::fonts::{
     Cache as FontCache, FamilyId, FontId, GlyphId, Properties, RequestedFallbackFontSource,
     TextLayoutSystem,
@@ -22,7 +23,6 @@ use crate::geometry::rect::RectF;
 use crate::geometry::vector::vec2f;
 use crate::platform::LineStyle;
 use crate::scene::{Border, CornerRadius, Dash, GlyphFade};
-use crate::Scene;
 
 type StyleRun = (Range<usize>, StyleAndFont);
 
@@ -64,6 +64,16 @@ struct TextCache<T> {
     curr_frame: RwLock<HashMap<CacheKeyValue, Arc<T>>>,
 }
 
+/// Maximum number of entries allowed in each frame of the text layout cache.
+///
+/// Each cached entry stores full glyph positioning and caret data (Vec<Glyph>,
+/// Vec<CaretPosition>) which can be significant per line. Without a cap, very
+/// large documents (long AI conversations, huge terminal scrollback, big code
+/// files) cause the cache to grow to multiple gigabytes. 50,000 entries is
+/// enough for typical use (several thousand visible lines across multiple
+/// windows) while preventing pathological growth.
+const TEXT_CACHE_MAX_ENTRIES: usize = 50_000;
+
 impl<T> TextCache<T> {
     pub fn new() -> Self {
         Self {
@@ -87,7 +97,10 @@ impl<T> TextCache<T> {
 
         let mut curr_frame = RwLockUpgradableReadGuard::upgrade(curr_frame);
         if let Some((key, val)) = self.prev_frame.lock().remove_entry(key) {
-            curr_frame.insert(key, val.clone());
+            // Respect the cap even when promoting from prev_frame.
+            if curr_frame.len() < TEXT_CACHE_MAX_ENTRIES {
+                curr_frame.insert(key, val.clone());
+            }
             Some(val)
         } else {
             None
@@ -96,7 +109,12 @@ impl<T> TextCache<T> {
 
     pub fn insert(&self, key: CacheKeyValue, val: Arc<T>) {
         let mut curr_frame = self.curr_frame.write();
-        curr_frame.insert(key, val);
+        // Skip insertion when the cache is at capacity. The entry won't be
+        // cached for this frame but will be recomputed if needed, trading a
+        // small performance cost for bounded memory usage.
+        if curr_frame.len() < TEXT_CACHE_MAX_ENTRIES {
+            curr_frame.insert(key, val);
+        }
     }
 
     pub fn remove(&self, key: &dyn CacheKey) {
