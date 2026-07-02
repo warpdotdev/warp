@@ -9,7 +9,7 @@ use itertools::Itertools;
 use markdown_parser::{Hyperlink, TableAlignment};
 use num_traits::SaturatingSub;
 use rangemap::RangeSet;
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use string_offset::{ByteOffset, CharOffset};
 use urlocator::{UrlLocation, UrlLocator};
 use vec1::Vec1;
@@ -29,7 +29,6 @@ use super::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
 use super::text::{
     BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache,
 };
-use crate::parallel_util::Last;
 use crate::render::layout::{InlineTextLayoutInput, TextLayout, add_link_to_style_and_font};
 use crate::render::model::{
     BlockItem, BlockLocation, BlockSpacing, CellLayout, Cursor, Decoration, FrameOffset,
@@ -499,6 +498,12 @@ impl LayOutArgs {
     }
 }
 
+// Maximum number of layout tasks to execute in parallel at once. Running all tasks in
+// parallel on large documents causes memory spikes from simultaneous CoreText layout
+// allocations across all rayon worker threads. Sequential chunking bounds peak memory
+// to CHUNK_SIZE tasks at a time while preserving parallelism within each chunk.
+const MAX_PARALLEL_LAYOUT_TASKS: usize = 8;
+
 impl EditDelta {
     /// Lay out the given EditDelta into TextFrames.
     /// If hidden_lines is provided, lines within hidden ranges will be laid out as BlockItem::Hidden.
@@ -541,13 +546,14 @@ impl EditDelta {
             .collect();
 
         let last_task = layout_tasks.len().saturating_sub(1);
+        let old_offset = self.old_offset.clone();
 
-        // Then, run each task in parallel, collecting (a) the laid out BlockItems and (b) whether
-        // or not the last item ends with a newline.
-        let (block_items, has_trailing_newline): (Vec<_>, Last<_>) = layout_tasks
-            .into_par_iter()
+        // Pre-annotate each task with its global BlockLocation so it can be computed
+        // before we split into chunks (the global index is lost inside each chunk).
+        let annotated_tasks: Vec<(LayoutTask, bool, BlockLocation)> = layout_tasks
+            .into_iter()
             .enumerate()
-            .filter_map(|(idx, (task, is_hidden))| {
+            .map(|(idx, (task, is_hidden))| {
                 let location = if idx == 0 {
                     BlockLocation::Start
                 } else if idx >= last_task {
@@ -555,20 +561,42 @@ impl EditDelta {
                 } else {
                     BlockLocation::Middle
                 };
-
-                match task.run(layout, location, is_hidden) {
-                    Ok(result) => Some(result),
-                    Err(e) => {
-                        log::error!(
-                            "Failed to lay out BlockItem at offset {:?}: {:?}",
-                            self.old_offset,
-                            e
-                        );
-                        None
-                    }
-                }
+                (task, is_hidden, location)
             })
-            .unzip();
+            .collect();
+
+        // Run tasks in sequential parallel chunks to bound peak memory. See APP-4686.
+        // Without chunking, all tasks run simultaneously, causing 9+ GB memory spikes
+        // on large documents from concurrent CoreText layout allocations.
+        let mut all_results: Vec<(BlockItem, bool)> = Vec::with_capacity(annotated_tasks.len());
+        for chunk in &annotated_tasks
+            .into_iter()
+            .chunks(MAX_PARALLEL_LAYOUT_TASKS)
+        {
+            let chunk: Vec<_> = chunk.collect();
+            let chunk_results: Vec<_> = chunk
+                .into_par_iter()
+                .filter_map(|(task, is_hidden, location)| {
+                    match task.run(layout, location, is_hidden) {
+                        Ok(result) => Some(result),
+                        Err(e) => {
+                            log::error!(
+                                "Failed to lay out BlockItem at offset {:?}: {:?}",
+                                old_offset,
+                                e
+                            );
+                            None
+                        }
+                    }
+                })
+                .collect();
+            all_results.extend(chunk_results);
+        }
+        let has_trailing_newline = all_results
+            .last()
+            .map(|(_, has_newline)| *has_newline)
+            .unwrap_or(true);
+        let block_items: Vec<_> = all_results.into_iter().map(|(item, _)| item).collect();
 
         // Iterate through block_items, and collapse adjacent Hidden items.
         let block_items = block_items.into_iter().fold(Vec::new(), |mut acc, item| {
@@ -586,10 +614,6 @@ impl EditDelta {
             acc
         });
 
-        // Trailing newline is default to true. This default value is used when
-        // edit delta has no new line, which means one or multiple entire lines have
-        // been deleted. We should still leave a trailing newline in this case.
-        let has_trailing_newline = has_trailing_newline.into_inner().unwrap_or(true);
         let rich_text_styles = layout.rich_text_styles();
 
         LaidOutRenderDelta {
@@ -630,10 +654,12 @@ pub fn layout_temporary_blocks(
 
     let last_task = layout_tasks.len().saturating_sub(1);
 
-    let results: Vec<_> = layout_tasks
-        .into_par_iter()
+    // Pre-annotate with location and process in sequential parallel chunks
+    // to bound peak memory (same rationale as EditDelta::layout_delta).
+    let annotated: Vec<(LayoutTask, LineCount, BlockLocation)> = layout_tasks
+        .into_iter()
         .enumerate()
-        .filter_map(|(idx, (task, line_count))| {
+        .map(|(idx, (task, line_count))| {
             let location = if idx == 0 {
                 BlockLocation::Start
             } else if idx >= last_task {
@@ -641,16 +667,27 @@ pub fn layout_temporary_blocks(
             } else {
                 BlockLocation::Middle
             };
-
-            match task.run(layout, location, false) {
-                Ok(result) => Some((line_count, result.0)),
-                Err(e) => {
-                    log::error!("Failed to lay out temporary blocks: {e:?}");
-                    None
-                }
-            }
+            (task, line_count, location)
         })
         .collect();
+
+    let mut results: Vec<(LineCount, BlockItem)> = Vec::with_capacity(annotated.len());
+    for chunk in &annotated.into_iter().chunks(MAX_PARALLEL_LAYOUT_TASKS) {
+        let chunk: Vec<_> = chunk.collect();
+        let chunk_results: Vec<_> = chunk
+            .into_par_iter()
+            .filter_map(
+                |(task, line_count, location)| match task.run(layout, location, false) {
+                    Ok(result) => Some((line_count, result.0)),
+                    Err(e) => {
+                        log::error!("Failed to lay out temporary blocks: {e:?}");
+                        None
+                    }
+                },
+            )
+            .collect();
+        results.extend(chunk_results);
+    }
 
     results.into_iter().into_group_map()
 }
