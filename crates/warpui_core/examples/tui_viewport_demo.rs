@@ -223,7 +223,8 @@ impl TuiView for ViewportDemoView {
                         .truncate(),
                     ))
                     .with_child(Box::new(TuiText::new("──── transcript ────").truncate()))
-                    .with_child(Box::new(list)),
+                    .with_child(Box::new(list))
+                    .finish(),
             )
             .on_key("x", |_, ctx, _| {
                 ctx.dispatch_typed_action(DemoAction::RemoveFront)

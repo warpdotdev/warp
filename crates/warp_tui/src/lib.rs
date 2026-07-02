@@ -14,6 +14,8 @@ pub mod session;
 mod ui;
 
 mod conversation_selection;
+mod exit_confirmation;
+mod keybindings;
 mod terminal_block;
 mod terminal_session_view;
 mod transcript_view;

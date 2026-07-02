@@ -67,6 +67,9 @@ impl ShellView {
     fn new(quit: Rc<Cell<bool>>, ctx: &mut ViewContext<Self>) -> Self {
         let terminal_width = 80_u16;
         let input_model = ctx.add_model(|ctx| CodeEditorModel::new_tui(terminal_width, ctx));
+        // The editing chords are dispatched through the keymap pass (see
+        // `TuiInputView::init` in `main`), which consults the focused view's
+        // responder chain — so the input view must hold focus.
 
         // Re-render the shell whenever the input's content changes. The child input
         // view re-renders itself on edits, but the shell's "(N visual rows)" status
@@ -82,6 +85,7 @@ impl ShellView {
         let input_view =
             ctx.add_typed_action_tui_view(move |ctx| TuiInputView::new(input_model, ctx));
         ctx.subscribe_to_view(&input_view, Self::handle_input_view_event);
+        ctx.focus(&input_view);
 
         Self {
             input_view,
@@ -157,10 +161,12 @@ impl TuiView for ShellView {
             &self.input_view,
         )));
 
-        // ── Escape handler (quit) ─────────────────────────────────────────────
-        Box::new(TuiEventHandler::new(column).on_key("escape", |_, ctx, _| {
-            ctx.dispatch_typed_action(ShellAction::Quit)
-        }))
+        // ── Escape handler (quit) ─────────────────────────────────────────
+        TuiEventHandler::new(column.finish())
+            .on_key("escape", |_, ctx, _| {
+                ctx.dispatch_typed_action(ShellAction::Quit)
+            })
+            .finish()
     }
 
     fn child_view_ids(&self, _ctx: &AppContext) -> Vec<warpui_core::EntityId> {
@@ -207,6 +213,9 @@ fn main() {
         let quit_for_view = quit.clone();
 
         let (window_id, root) = app.update(|ctx| {
+            // Register the input view's `tui:input:*` editing keybindings;
+            // they dispatch through the keymap pass in the TUI runtime.
+            TuiInputView::init(ctx);
             ctx.add_tui_window(
                 AddWindowOptions {
                     window_style: WindowStyle::NotStealFocus,

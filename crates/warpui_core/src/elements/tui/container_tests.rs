@@ -137,7 +137,7 @@ fn dispatch_event_forwards_to_the_child_inside_the_inset() {
             let hits = Rc::new(Cell::new(0u32));
             let counter = hits.clone();
             let mut container = TuiContainer::new(
-                TuiEventHandler::new(TuiText::new("X"))
+                TuiEventHandler::new(TuiText::new("X").finish())
                     .on_key("enter", move |_, _, _| counter.set(counter.get() + 1)),
             )
             .with_border()

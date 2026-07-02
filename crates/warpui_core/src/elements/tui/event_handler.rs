@@ -35,9 +35,9 @@ pub struct TuiEventHandler {
 }
 
 impl TuiEventHandler {
-    pub fn new(child: impl TuiElement + 'static) -> Self {
+    pub fn new(child: Box<dyn TuiElement>) -> Self {
         Self {
-            child: Box::new(child),
+            child,
             bindings: Vec::new(),
         }
     }

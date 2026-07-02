@@ -289,14 +289,16 @@ fn dispatch_event_offers_children_in_order_and_stops_when_handled() {
             let mut column = TuiFlex::column()
                 .with_child(Box::new(TuiText::new("header")))
                 .with_child(Box::new(
-                    TuiEventHandler::new(TuiText::new("first")).on_key("x", move |_, _, _| {
-                        first_counter.set(first_counter.get() + 1)
-                    }),
+                    TuiEventHandler::new(TuiText::new("first").finish())
+                        .on_key("x", move |_, _, _| {
+                            first_counter.set(first_counter.get() + 1)
+                        }),
                 ))
                 .with_child(Box::new(
-                    TuiEventHandler::new(TuiText::new("second")).on_key("x", move |_, _, _| {
-                        second_counter.set(second_counter.get() + 1)
-                    }),
+                    TuiEventHandler::new(TuiText::new("second").finish())
+                        .on_key("x", move |_, _, _| {
+                            second_counter.set(second_counter.get() + 1)
+                        }),
                 ));
 
             // Layout must run before dispatch so TuiFlex.child_sizes is populated.

@@ -15849,6 +15849,7 @@ dependencies = [
  "anyhow",
  "command",
  "dirs 6.0.0",
+ "instant",
  "log",
  "num-traits",
  "parking_lot",

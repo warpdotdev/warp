@@ -29,7 +29,7 @@ fn invokes_callback_on_matching_key_and_reports_handled() {
             let hits = Rc::new(Cell::new(0u32));
             let counter = hits.clone();
             let mut handler =
-                TuiEventHandler::new(()).on_key("enter", move |_event, _ctx, _app| {
+                TuiEventHandler::new(().finish()).on_key("enter", move |_event, _ctx, _app| {
                     counter.set(counter.get() + 1);
                 });
 
@@ -68,10 +68,10 @@ fn child_consumes_the_event_before_the_wrapper() {
             let inner_counter = inner_hits.clone();
             let outer_counter = outer_hits.clone();
 
-            let inner = TuiEventHandler::new(()).on_key("enter", move |_, _, _| {
+            let inner = TuiEventHandler::new(().finish()).on_key("enter", move |_, _, _| {
                 inner_counter.set(inner_counter.get() + 1)
             });
-            let mut outer = TuiEventHandler::new(inner).on_key("enter", move |_, _, _| {
+            let mut outer = TuiEventHandler::new(inner.finish()).on_key("enter", move |_, _, _| {
                 outer_counter.set(outer_counter.get() + 1)
             });
 
@@ -105,7 +105,7 @@ fn present_recurses_into_the_wrapped_child() {
         let mut rendered_views = EntityIdMap::default();
         let mut ctx = TuiPresentationContext::new(root, &mut rendered_views, &mut parent_by_child);
         let child_node = TuiChildView::from_rendered(embedded, Box::new(()), ctx.rendered_views);
-        let mut handler = TuiEventHandler::new(child_node);
+        let mut handler = TuiEventHandler::new(child_node.finish());
         handler.present(&mut ctx);
     }
 

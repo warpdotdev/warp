@@ -8,7 +8,8 @@ pub use crate::ai::agent::task::TaskId;
 pub use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentInput,
     AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentPtyWriteMode,
-    AIAgentText, AIAgentTextSection, MessageId, ServerOutputId, Shared, UserQueryMode,
+    AIAgentText, AIAgentTextSection, CancellationReason, MessageId, ServerOutputId, Shared,
+    UserQueryMode,
 };
 pub use crate::ai::blocklist::agent_view::{
     AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,

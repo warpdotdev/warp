@@ -146,7 +146,12 @@ fn key_name(code: KeyCode, modifiers: KeyModifiers) -> Option<String> {
         KeyCode::Esc => Some("escape".to_owned()),
         KeyCode::F(number) if number <= 20 => Some(format!("f{number}")),
         KeyCode::Char(' ') => Some(" ".to_owned()),
-        KeyCode::Char(char) if modifiers.contains(KeyModifiers::SHIFT) => Some(char.to_string()),
+        // Align with `Keystroke::parse` conventions: shift + letter is
+        // represented as the uppercase letter. Terminals differ on whether a
+        // shifted letter is reported upper- or lowercase, so normalize here.
+        KeyCode::Char(char) if modifiers.contains(KeyModifiers::SHIFT) => {
+            Some(char.to_uppercase().to_string())
+        }
         KeyCode::Char(char) => Some(char.to_lowercase().to_string()),
         KeyCode::Null
         | KeyCode::CapsLock
