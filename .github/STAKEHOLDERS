@@ -37,11 +37,6 @@
 /crates/lsp/ @kevinyang372 @moirahuang
 /crates/repo_metadata/ @kevinyang372
 
-# Settings and keybindings
-/app/src/settings/ @lucieleblanc
-/app/src/settings_view/ @lucieleblanc
-/app/src/resource_center/keybindings_page.rs @lucieleblanc
-
 # Input editor / window, tab, and pane management / grep tool call
 /app/src/terminal/input/ @vkodithala
 /app/src/pane_group/ @vkodithala
@@ -160,9 +155,6 @@
 /app/src/terminal/writeable_pty/bootstrap_file/windows.rs @acarl005
 /app/assets/bundled/bootstrap/pwsh.ps1 @acarl005
 /app/assets/bundled/bootstrap/pwsh_init_shell.ps1 @acarl005
-
-# /pr-comments
-/app/src/search/slash_command_menu/static_commands/commands.rs @lucieleblanc
 
 # Grep tool call UI
 /app/src/ai/blocklist/action_model/execute/grep.rs @vkodithala
