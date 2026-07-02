@@ -349,9 +349,6 @@ pub enum FeatureFlag {
     /// Enables new Search Codebase UI
     SearchCodebaseUI,
 
-    /// Enables us to render linked code blocks
-    LinkedCodeBlocks,
-
     /// Enables the tabbed file viewer
     TabbedEditorView,
 
