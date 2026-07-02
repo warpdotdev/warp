@@ -158,9 +158,11 @@ impl TuiView for ShellView {
         )));
 
         // ── Escape handler (quit) ─────────────────────────────────────────────
-        Box::new(TuiEventHandler::new(column).on_key("escape", |_, ctx, _| {
-            ctx.dispatch_typed_action(ShellAction::Quit)
-        }))
+        Box::new(
+            TuiEventHandler::new(column.finish()).on_key("escape", |_, ctx, _| {
+                ctx.dispatch_typed_action(ShellAction::Quit)
+            }),
+        )
     }
 
     fn child_view_ids(&self, _ctx: &AppContext) -> Vec<warpui_core::EntityId> {

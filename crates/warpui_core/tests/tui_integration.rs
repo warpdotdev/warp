@@ -135,7 +135,7 @@ impl TuiView for ExplorerView {
         // polls.
         let quit_for_q = self.quit.clone();
         let quit_for_esc = self.quit.clone();
-        let handler = TuiEventHandler::new(body)
+        let handler = TuiEventHandler::new(body.finish())
             .on_key("j", |_, ctx, _| {
                 ctx.dispatch_typed_action(NavAction::SelectNext)
             })

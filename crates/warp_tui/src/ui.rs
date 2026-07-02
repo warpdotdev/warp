@@ -5,9 +5,9 @@ use warpui_core::elements::tui::{Modifier, TuiColumn, TuiElement, TuiStyle, TuiT
 /// Vertically centers `content` by padding above and below with flex spacers.
 pub(crate) fn centered(content: TuiColumn) -> Box<dyn TuiElement> {
     TuiColumn::new()
-        .flex_child(TuiColumn::new())
-        .child(content)
-        .flex_child(TuiColumn::new())
+        .flex_child(TuiColumn::new().finish())
+        .child(content.finish())
+        .flex_child(TuiColumn::new().finish())
         .finish()
 }
 
@@ -18,33 +18,38 @@ pub(crate) fn login_placeholder(
     user_code: Option<&str>,
 ) -> Box<dyn TuiElement> {
     let dim = TuiStyle::default().add_modifier(Modifier::DIM);
-    let mut content = TuiColumn::new().child(TuiText::new("Sign in to continue").truncate());
+    let mut content =
+        TuiColumn::new().child(TuiText::new("Sign in to continue").truncate().finish());
     match (verification_uri, user_code) {
         (Some(uri), Some(code)) => {
             content = content
                 .child(
                     TuiText::new(format!("Open {uri} in your browser"))
                         .with_style(dim)
-                        .truncate(),
+                        .truncate()
+                        .finish(),
                 )
                 .child(
                     TuiText::new(format!("and enter code: {code}"))
                         .with_style(dim)
-                        .truncate(),
+                        .truncate()
+                        .finish(),
                 );
         }
         (Some(uri), None) => {
             content = content.child(
                 TuiText::new(format!("Open {uri} in your browser"))
                     .with_style(dim)
-                    .truncate(),
+                    .truncate()
+                    .finish(),
             );
         }
         _ => {
             content = content.child(
                 TuiText::new("Opening your browser…")
                     .with_style(dim)
-                    .truncate(),
+                    .truncate()
+                    .finish(),
             );
         }
     }
@@ -58,7 +63,8 @@ pub(crate) fn terminal_starting() -> Box<dyn TuiElement> {
         TuiColumn::new().child(
             TuiText::new("Starting terminal…")
                 .with_style(dim)
-                .truncate(),
+                .truncate()
+                .finish(),
         ),
     )
 }
@@ -67,11 +73,16 @@ pub(crate) fn terminal_starting() -> Box<dyn TuiElement> {
 pub(crate) fn login_failed(message: &str) -> Box<dyn TuiElement> {
     let dim = TuiStyle::default().add_modifier(Modifier::DIM);
     let content = TuiColumn::new()
-        .child(TuiText::new(format!("Login failed: {message}")).truncate())
+        .child(
+            TuiText::new(format!("Login failed: {message}"))
+                .truncate()
+                .finish(),
+        )
         .child(
             TuiText::new("Press Ctrl-C to exit.")
                 .with_style(dim)
-                .truncate(),
+                .truncate()
+                .finish(),
         );
     centered(content)
 }

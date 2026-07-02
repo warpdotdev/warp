@@ -151,7 +151,7 @@ impl TuiView for BumpChildView {
 
     fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
         Box::new(
-            TuiEventHandler::new(TuiText::new("child"))
+            TuiEventHandler::new(TuiText::new("child").finish())
                 .on_key("b", |_, ctx, _| ctx.dispatch_typed_action(Bump)),
         )
     }

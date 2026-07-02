@@ -131,7 +131,7 @@ impl TuiView for FileView {
 
         // ── Wire up key handlers ────────────────────────────────────────────
         Box::new(
-            TuiEventHandler::new(TuiColumn::new().with_children(rows))
+            TuiEventHandler::new(TuiColumn::new().with_children(rows).finish())
                 .on_key("j", |_, ctx, _| ctx.dispatch_typed_action(Nav::LineDown))
                 .on_key("down", |_, ctx, _| ctx.dispatch_typed_action(Nav::LineDown))
                 .on_key("k", |_, ctx, _| ctx.dispatch_typed_action(Nav::LineUp))
