@@ -5,6 +5,7 @@
 //! orchestration pill bar so other surfaces (e.g. keyboard navigation and
 //! the agent-mode usage footer's credit rollup) can walk and order the same
 //! tree without duplicating the logic.
+use std::collections::HashSet;
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
@@ -54,6 +55,48 @@ pub fn descendant_conversation_ids_in_spawn_order(
     let mut descendants = Vec::new();
     collect_descendant_conversation_ids_in_spawn_order(history, parent_id, &mut descendants);
     descendants
+}
+
+/// Returns true when any loaded descendant of `parent_id` is actively running.
+///
+/// Unlike [`aggregated_orchestrator_status`], this excludes `parent_id` and
+/// ignores display-specific status precedence.
+pub fn has_in_progress_descendant_conversation(
+    history: &BlocklistAIHistoryModel,
+    parent_id: AIConversationId,
+) -> bool {
+    if history.child_conversation_ids_of(&parent_id).is_empty() {
+        return false;
+    }
+    any_descendant_conversation_id(history, parent_id, |descendant_id| {
+        history
+            .conversation(&descendant_id)
+            .is_some_and(|conversation| {
+                conversation.status().is_in_progress() || conversation.status().is_transient_error()
+            })
+    })
+}
+
+/// Returns whether any descendant matches `predicate`, stopping at the first match.
+fn any_descendant_conversation_id(
+    history: &BlocklistAIHistoryModel,
+    parent_id: AIConversationId,
+    mut predicate: impl FnMut(AIConversationId) -> bool,
+) -> bool {
+    let mut pending = vec![parent_id];
+    let mut visited = HashSet::from([parent_id]);
+    while let Some(current_id) = pending.pop() {
+        for descendant_id in history.child_conversation_ids_of(&current_id) {
+            if !visited.insert(*descendant_id) {
+                continue;
+            }
+            if predicate(*descendant_id) {
+                return true;
+            }
+            pending.push(*descendant_id);
+        }
+    }
+    false
 }
 
 /// Recursive worker for [`descendant_conversation_ids_in_spawn_order`]. Kept

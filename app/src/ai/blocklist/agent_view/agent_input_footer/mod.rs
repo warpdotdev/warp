@@ -51,6 +51,7 @@ pub(crate) use self::environment_selector::{
 };
 use crate::ai::blocklist::agent_view::is_in_cloud_context;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::blocklist::orchestration_topology::has_in_progress_descendant_conversation;
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::usage::icon_for_context_window_usage;
 use crate::ai::blocklist::BlocklistAIInputModel;
@@ -123,6 +124,9 @@ const FAST_FORWARD_LOCKED_TOOLTIP: &str =
 
 const START_REMOTE_CONTROL_TOOLTIP: &str = "Start remote control";
 const START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP: &str = "Log in to use /remote-control";
+const HANDOFF_TO_CLOUD_TOOLTIP: &str = "Hand off to cloud (or type &)";
+const HANDOFF_CHILD_AGENTS_IN_PROGRESS_TOOLTIP: &str =
+    "Hand off is disabled while child agents are in progress.";
 
 const CLOUD_MODE_V2_FOOTER_GAP: f32 = 4.;
 
@@ -376,9 +380,10 @@ impl AgentInputFooter {
         let handoff_to_cloud_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::UploadCloud)
-                .with_tooltip("Hand off to cloud (or type &)")
+                .with_tooltip(HANDOFF_TO_CLOUD_TOOLTIP)
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
+                .with_disabled_theme(AgentInputButtonTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(AgentInputFooterAction::HandoffChipClicked);
                 })
@@ -772,6 +777,16 @@ impl AgentInputFooter {
                     .terminal_surface_id()
                     .is_some_and(|id| id != me.terminal_view_id)
                 {
+                    if matches!(
+                        event,
+                        BlocklistAIHistoryEvent::StartedNewConversation { .. }
+                            | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
+                            | BlocklistAIHistoryEvent::RemoveConversation { .. }
+                            | BlocklistAIHistoryEvent::DeletedConversation { .. }
+                            | BlocklistAIHistoryEvent::RestoredConversations { .. }
+                    ) {
+                        me.sync_handoff_to_cloud_button(ctx);
+                    }
                     return;
                 }
 
@@ -781,14 +796,27 @@ impl AgentInputFooter {
                     | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
                     | BlocklistAIHistoryEvent::ClearedConversationsForTerminalSurface { .. }
                     | BlocklistAIHistoryEvent::RemoveConversation { .. }
-                    | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. } => {
+                    | BlocklistAIHistoryEvent::DeletedConversation { .. }
+                    | BlocklistAIHistoryEvent::RestoredConversations { .. } => {
+                        me.sync_fast_forward_button(ctx);
+                        me.sync_handoff_to_cloud_button(ctx);
+                        me.update_context_window_button(ctx);
+                        me.model_selector.update(ctx, |_, ctx| ctx.notify());
+                        ctx.notify();
+                    }
+                    BlocklistAIHistoryEvent::UpdatedConversationStatus { .. } => {
+                        me.sync_handoff_to_cloud_button(ctx);
+                        me.update_context_window_button(ctx);
+                        me.model_selector.update(ctx, |_, ctx| ctx.notify());
+                        ctx.notify();
+                    }
+                    BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. } => {
                         me.sync_fast_forward_button(ctx);
                         me.update_context_window_button(ctx);
                         me.model_selector.update(ctx, |_, ctx| ctx.notify());
                         ctx.notify();
                     }
                     BlocklistAIHistoryEvent::UpdatedTodoList { .. }
-                    | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
                     | BlocklistAIHistoryEvent::AppendedExchange { .. }
                     | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. } => {
                         me.update_context_window_button(ctx);
@@ -869,6 +897,7 @@ impl AgentInputFooter {
         };
         me.sync_fast_forward_button(ctx);
         me.sync_remote_control_button(ctx);
+        me.sync_handoff_to_cloud_button(ctx);
         me.update_context_window_button(ctx);
         me.update_display_chips(&prompt, ctx);
         me
@@ -1964,6 +1993,33 @@ impl AgentInputFooter {
         });
     }
 
+    /// Returns true when this footer's active conversation has running child agents.
+    fn active_conversation_has_in_progress_children(&self, app: &AppContext) -> bool {
+        let history = BlocklistAIHistoryModel::as_ref(app);
+        history
+            .active_conversation_id(self.terminal_view_id)
+            .is_some_and(|conversation_id| {
+                has_in_progress_descendant_conversation(history, conversation_id)
+            })
+    }
+
+    /// Updates the handoff chip disabled state and tooltip from child-agent status.
+    fn sync_handoff_to_cloud_button(&self, ctx: &mut ViewContext<Self>) {
+        let disabled = self.active_conversation_has_in_progress_children(ctx);
+        if self.handoff_to_cloud_button.as_ref(ctx).is_disabled() == disabled {
+            return;
+        }
+        let tooltip = if disabled {
+            HANDOFF_CHILD_AGENTS_IN_PROGRESS_TOOLTIP
+        } else {
+            HANDOFF_TO_CLOUD_TOOLTIP
+        };
+        self.handoff_to_cloud_button.update(ctx, |button, ctx| {
+            button.set_disabled(disabled, ctx);
+            button.set_tooltip(Some(tooltip), ctx);
+        });
+    }
+
     fn update_context_window_button(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).active_conversation(self.terminal_view_id)
@@ -2520,6 +2576,9 @@ impl TypedActionView for AgentInputFooter {
                 });
             }
             AgentInputFooterAction::HandoffChipClicked => {
+                if self.active_conversation_has_in_progress_children(ctx) {
+                    return;
+                }
                 if FeatureFlag::OzHandoff.is_enabled()
                     && FeatureFlag::HandoffLocalCloud.is_enabled()
                     && cfg!(all(feature = "local_fs", not(target_family = "wasm")))

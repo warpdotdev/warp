@@ -1,7 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use ai::agent::action::FileEdit;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use chrono::Local;
 use pane_group::{NotebookPane, PaneState, SplitPaneState, TerminalPaneId};
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
@@ -17,12 +21,22 @@ use terminal::view::ActiveSessionState;
 use warp_editor::editor::NavigationKey;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use warp_util::standardized_path::StandardizedPath;
 use warpui::platform::WindowStyle;
-use warpui::{AddSingletonModel, App, ViewHandle};
+use warpui::{AddSingletonModel, App, EntityId, ViewHandle};
 use watcher::HomeDirectoryWatcher;
 
 use super::*;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::agent::task::TaskId;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchange, AIAgentExchangeId,
+    AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentOutputStatus,
+    FinishedAIAgentOutput, MessageId, Shared,
+};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::agent_tips::AITipModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
@@ -32,6 +46,8 @@ use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::facts::manager::AIFactManager;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::llms::LLMId;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::mcp::gallery::MCPGalleryManager;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
@@ -323,6 +339,93 @@ fn transferred_tab_workspace(
         )
     });
     workspace
+}
+
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+fn create_file_exchange(action_id: &str, path: &str) -> AIAgentExchange {
+    let action = AIAgentAction {
+        id: AIAgentActionId::from(action_id.to_string()),
+        task_id: TaskId::new(format!("task-{action_id}")),
+        action: AIAgentActionType::RequestFileEdits {
+            file_edits: vec![FileEdit::Create {
+                file: Some(path.to_string()),
+                content: Some(String::new()),
+            }],
+            title: None,
+        },
+        requires_result: false,
+    };
+    let output = AIAgentOutput {
+        messages: vec![AIAgentOutputMessage {
+            id: MessageId::new(format!("message-{action_id}")),
+            message: AIAgentOutputMessageType::Action(action),
+            citations: vec![],
+        }],
+        ..Default::default()
+    };
+
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input: vec![],
+        output_status: AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success {
+                output: Shared::new(output),
+            },
+        },
+        added_message_ids: HashSet::new(),
+        start_time: Local::now(),
+        finish_time: None,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from("test-model"),
+        request_cost: None,
+        coding_model_id: LLMId::from("test-coding-model"),
+        cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+        computer_use_model_id: LLMId::from("test-computer-use-model"),
+        response_initiator: None,
+    }
+}
+
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+#[test]
+fn handoff_snapshot_paths_include_loaded_child_conversations() {
+    App::test((), |mut app| async move {
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+        let parent_path = "/tmp/warp-parent-workset/src/lib.rs";
+        let child_path = "/tmp/warp-child-workset/src/main.rs";
+
+        let snapshot_paths = history_model.update(&mut app, |history_model, ctx| {
+            let parent_id =
+                history_model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            let child_id =
+                history_model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            history_model.set_parent_for_conversation(child_id, parent_id);
+            history_model
+                .conversation_mut(&parent_id)
+                .expect("parent conversation exists")
+                .append_root_exchange_for_test(create_file_exchange("parent", parent_path));
+            history_model
+                .conversation_mut(&child_id)
+                .expect("child conversation exists")
+                .append_root_exchange_for_test(create_file_exchange("child", child_path));
+
+            let source_conversation = history_model
+                .conversation(&parent_id)
+                .expect("parent conversation exists")
+                .clone();
+            handoff_snapshot_paths_for_conversation_workset(history_model, &source_conversation)
+        });
+        let snapshot_paths = snapshot_paths.into_iter().collect::<HashSet<_>>();
+
+        assert_eq!(
+            snapshot_paths,
+            HashSet::from([
+                StandardizedPath::try_new(parent_path).expect("valid parent path"),
+                StandardizedPath::try_new(child_path).expect("valid child path"),
+            ])
+        );
+    });
 }
 
 #[test]

@@ -194,6 +194,10 @@ use crate::ai::blocklist::handoff::touched_repos::extract_paths_from_conversatio
 use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
 use crate::ai::blocklist::history_model::{load_conversation_from_server, CloudConversationData};
 use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::blocklist::orchestration_topology::{
+    descendant_conversation_ids_in_spawn_order, has_in_progress_descendant_conversation,
+};
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::{
     SuggestedAgentModeWorkflowAndId, SuggestedAgentModeWorkflowModal,
     SuggestedAgentModeWorkflowModalEvent,
@@ -803,6 +807,24 @@ impl LocalToCloudHandoffIntent {
             } => Some(conversation_id),
         }
     }
+}
+
+/// Collects snapshot paths from the source conversation and loaded descendants.
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+fn handoff_snapshot_paths_for_conversation_workset(
+    history_model: &BlocklistAIHistoryModel,
+    source_conversation: &AIConversation,
+) -> Vec<StandardizedPath> {
+    let mut paths = extract_paths_from_conversation(source_conversation);
+    for descendant_id in
+        descendant_conversation_ids_in_spawn_order(history_model, source_conversation.id())
+    {
+        let Some(descendant_conversation) = history_model.conversation(&descendant_id) else {
+            continue;
+        };
+        paths.extend(extract_paths_from_conversation(descendant_conversation));
+    }
+    paths
 }
 
 /// Categorization of how the tab bar should be rendered.
@@ -15421,6 +15443,31 @@ impl Workspace {
             }
         };
 
+        if source_conversation.as_ref().is_some_and(|conversation| {
+            has_in_progress_descendant_conversation(
+                BlocklistAIHistoryModel::as_ref(ctx),
+                conversation.id(),
+            )
+        }) {
+            if show_user_feedback {
+                Self::restore_source_handoff_draft(&source_view, launch, environment_id, ctx);
+                let window_id = ctx.window_id();
+                WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::error(
+                            "Hand off is disabled while child agents are in progress. Wait for them to finish, then try again."
+                                .to_owned(),
+                        ),
+                        window_id,
+                        ctx,
+                    );
+                });
+            } else {
+                Self::record_automatic_handoff_failed(intent, ctx);
+            }
+            return;
+        }
+
         // Chip, `&` Enter, and `/handoff` with no arg dispatch `launch: None`;
         // synthesize an empty `PendingCloudLaunch` so auto-submit fires. The
         // empty-prompt substitution happens in `build_handoff_spawn_request`.
@@ -15767,7 +15814,10 @@ impl Workspace {
             .as_ref(ctx)
             .active_block_session_id()
             .unwrap_or_default();
-        let mut paths = extract_paths_from_conversation(&source_conversation);
+        let mut paths = handoff_snapshot_paths_for_conversation_workset(
+            history_model.as_ref(ctx),
+            &source_conversation,
+        );
         if let Some(ref pwd) = source_pwd {
             if let Ok(sp) = StandardizedPath::try_new(pwd) {
                 paths.push(sp);
