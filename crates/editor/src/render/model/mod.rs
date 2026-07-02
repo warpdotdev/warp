@@ -2921,18 +2921,26 @@ impl RenderState {
                 new_tree.describe()
             );
 
-            for item in pending_edit.laid_out_line {
-                let offset = new_tree.extent::<CharOffset>() + 1;
-                // If the item should be hidden (but it's not labelled as hidden), don't push it to the sumtree.
-                if !matches!(item, BlockItem::Hidden(_))
-                    && hidden_range_clone
-                        .as_ref()
-                        .map(|hr| hr.contains(&offset))
-                        .unwrap_or(false)
-                {
-                    continue;
+            if hidden_range_clone.is_none() {
+                // Fast path: no hidden ranges to filter, so use the more efficient `extend()`.
+                // This batches items into full leaf nodes before merging, reducing the number
+                // of intermediate tree rebalancing operations for large edits such as initial
+                // file loads.
+                new_tree.extend(pending_edit.laid_out_line);
+            } else {
+                for item in pending_edit.laid_out_line {
+                    let offset = new_tree.extent::<CharOffset>() + 1;
+                    // If the item should be hidden (but it's not labelled as hidden), don't push it to the sumtree.
+                    if !matches!(item, BlockItem::Hidden(_))
+                        && hidden_range_clone
+                            .as_ref()
+                            .map(|hr| hr.contains(&offset))
+                            .unwrap_or(false)
+                    {
+                        continue;
+                    }
+                    new_tree.push(item);
                 }
-                new_tree.push(item);
             }
 
             // TODO(CLD-558): Ideally, we'd use the content-level offset as is.
