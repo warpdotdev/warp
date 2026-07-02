@@ -511,7 +511,7 @@ impl RequestedCommandView {
                             AIAgentActionResultType::RequestCommandOutput(command_result) => {
                                 if matches!(
                                     command_result,
-                                    RequestCommandOutputResult::CancelledBeforeExecution
+                                    RequestCommandOutputResult::CancelledBeforeExecution { .. }
                                 ) {
                                     let terminal_model = me.terminal_model.lock();
                                     if terminal_model
@@ -1381,7 +1381,9 @@ impl RequestedCommandView {
                                 // All completed commands are expandable (including interrupted ones)
                                 RequestCommandOutputResult::Completed { .. } => true,
                                 // Cancelled before execution are not expandable
-                                RequestCommandOutputResult::CancelledBeforeExecution => false,
+                                RequestCommandOutputResult::CancelledBeforeExecution { .. } => {
+                                    false
+                                }
                                 _ => result.result.is_successful() || result.result.is_failed(),
                             }
                         }
