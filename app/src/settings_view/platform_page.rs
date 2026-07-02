@@ -914,7 +914,7 @@ impl SettingsPageMeta for PlatformPageView {
             .get()
             .is_anonymous_or_logged_out();
 
-        !is_anonymous && FeatureFlag::APIKeyManagement.is_enabled()
+        !is_anonymous
     }
 
     fn on_page_selected(&mut self, _allow_steal_focus: bool, ctx: &mut ViewContext<Self>) {

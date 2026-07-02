@@ -415,9 +415,6 @@ pub enum FeatureFlag {
     /// Enables API key authentication for Agent SDK
     APIKeyAuthentication,
 
-    /// Enables API key management UI in settings
-    APIKeyManagement,
-
     /// Enables OAuth support for MCP.
     McpOauth,
 

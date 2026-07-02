@@ -205,12 +205,7 @@ fn dispatch_command(
             }
             artifact::run(ctx, global_options, artifact_cmd)
         }
-        CliCommand::ApiKey(api_key_cmd) => {
-            if !FeatureFlag::APIKeyManagement.is_enabled() {
-                return Err(anyhow::anyhow!("invalid value 'api-key'"));
-            }
-            api_key::run(ctx, global_options, api_key_cmd)
-        }
+        CliCommand::ApiKey(api_key_cmd) => api_key::run(ctx, global_options, api_key_cmd),
     }
 }
 
