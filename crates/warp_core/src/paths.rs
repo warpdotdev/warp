@@ -299,7 +299,10 @@ pub fn app_group_container_path() -> Option<PathBuf> {
 /// stored on the filesystem alongside the rest of Warp.
 ///
 /// ## macOS
-/// The resources directory is `$APP_DIR/Contents/Resources` (e.g. `/Applications/Warp.app/Contents/Resources`).
+/// For the `.app` bundle, the resources directory is `$APP_DIR/Contents/Resources`
+/// (e.g. `/Applications/Warp.app/Contents/Resources`). For the standalone CLI build the
+/// binary is not inside a `.app` bundle, and its resources live in a sibling `resources`
+/// directory next to the binary (e.g. `$INSTALL_DIR/resources`), matching the Linux/Windows layout.
 ///
 /// ## Linux
 /// The resources directory is `$INSTALL_DIR/resources`, where `$INSTALL_DIR` depends on the
@@ -311,12 +314,9 @@ pub fn app_group_container_path() -> Option<PathBuf> {
 pub fn bundled_resources_dir() -> Option<PathBuf> {
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            crate::macos::get_bundle_path().ok()
-                .map(|bundle_path| {
-                    PathBuf::from(bundle_path)
-                        .join("Contents")
-                        .join("Resources")
-                })
+            let bundle_path = crate::macos::get_bundle_path().ok().map(PathBuf::from);
+            let executable_dir = current_executable_dir();
+            macos_bundled_resources_dir(bundle_path.as_deref(), executable_dir.as_deref())
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             std::env::current_exe()
                 .ok()
@@ -330,6 +330,40 @@ pub fn bundled_resources_dir() -> Option<PathBuf> {
         } else {
             None
         }
+    }
+}
+
+/// Returns the directory containing the currently-running executable, with any
+/// symlinks resolved. Returns `None` if the path can't be determined.
+#[cfg(target_os = "macos")]
+fn current_executable_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|executable| std::fs::canonicalize(executable).ok())
+        .and_then(|executable| executable.parent().map(Path::to_path_buf))
+}
+
+/// Computes the macOS bundled resources directory from the main bundle path and
+/// the directory containing the running executable.
+///
+/// For the standard `.app` bundle the resources live in
+/// `<App>.app/Contents/Resources`. For the standalone CLI build the binary is
+/// not inside a `.app` bundle and its resources live in a sibling `resources`
+/// directory next to the binary, so we fall back to `<executable_dir>/resources`
+/// (matching the Linux/Windows layout).
+#[cfg(any(target_os = "macos", all(test, feature = "local_fs")))]
+fn macos_bundled_resources_dir(
+    bundle_path: Option<&Path>,
+    executable_dir: Option<&Path>,
+) -> Option<PathBuf> {
+    match bundle_path {
+        // A real `.app` bundle: resources live inside `Contents/Resources`.
+        Some(bundle_path) if bundle_path.extension() == Some(std::ffi::OsStr::new("app")) => {
+            Some(bundle_path.join("Contents").join("Resources"))
+        }
+        // Standalone CLI build (or an undeterminable bundle path): resources are
+        // in a sibling `resources` directory next to the binary.
+        Some(_) | None => executable_dir.map(|dir| dir.join("resources")),
     }
 }
 

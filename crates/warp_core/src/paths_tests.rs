@@ -131,6 +131,50 @@ fn test_project_path_for_warp_dev_app_id() {
 }
 
 #[test]
+fn test_macos_bundled_resources_dir_app_bundle() {
+    // For a real `.app` bundle, resources live in `Contents/Resources` inside
+    // the bundle, regardless of where the executable is.
+    let bundle_path = PathBuf::from("/Applications/Warp.app");
+    let executable_dir = PathBuf::from("/Applications/Warp.app/Contents/MacOS");
+    assert_eq!(
+        macos_bundled_resources_dir(Some(&bundle_path), Some(&executable_dir)),
+        Some(PathBuf::from("/Applications/Warp.app/Contents/Resources"))
+    );
+}
+
+#[test]
+fn test_macos_bundled_resources_dir_standalone_cli() {
+    // For the standalone CLI build the binary is not inside a `.app` bundle, so
+    // `NSBundle.mainBundle` reports the directory containing the binary. Resources
+    // live in a sibling `resources` directory next to the binary, not in
+    // `Contents/Resources`.
+    let bundle_path = PathBuf::from("/opt/warp/bin");
+    let executable_dir = PathBuf::from("/opt/warp/bin");
+    assert_eq!(
+        macos_bundled_resources_dir(Some(&bundle_path), Some(&executable_dir)),
+        Some(PathBuf::from("/opt/warp/bin/resources"))
+    );
+}
+
+#[test]
+fn test_macos_bundled_resources_dir_no_bundle_path() {
+    // If the bundle path can't be determined, fall back to the sibling
+    // `resources` directory next to the executable.
+    let executable_dir = PathBuf::from("/opt/warp/bin");
+    assert_eq!(
+        macos_bundled_resources_dir(None, Some(&executable_dir)),
+        Some(PathBuf::from("/opt/warp/bin/resources"))
+    );
+}
+
+#[test]
+fn test_macos_bundled_resources_dir_no_paths() {
+    // With neither a bundle path nor an executable directory, there's nothing to
+    // resolve.
+    assert_eq!(macos_bundled_resources_dir(None, None), None);
+}
+
+#[test]
 fn test_project_path_for_oss_app_id() {
     let project_dirs = project_dirs_for_app_id(AppId::new("dev", "warp", "WarpOss"), None)
         .expect("should be able to compute project dirs");
