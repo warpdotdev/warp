@@ -426,6 +426,19 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     warp_git () {
       GIT_OPTIONAL_LOCKS=0 command git "$@"
     }
+    # Reads process substitution outputs into caller-local variables. Passing all
+    # process substitutions in one function call starts their commands in parallel
+    # before this function begins reading.
+    warp_read_parallel_outputs () {
+      local output_var
+      local output_path
+      while (( $# > 0 )); do
+        output_var=$1
+        output_path=$2
+        IFS= read -r -d '' "$output_var" < "$output_path" || true
+        shift 2
+      done
+    }
 
     # Note that this is very performance sensitive code, so try not to
     # invoke any external commands in here.
@@ -565,19 +578,14 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         local escaped_git_branch=""
         local git_head=""
         local git_branch=""
+        local node_cache_key=""
+        local escaped_git_values=""
 
         # Only fill these fields once we've finished bootstrapping, as the
         # blocks created during the bootstrap process don't have visible
         # prompts, and we don't want to invoke `git` before we've sourced the
         # user's rcfiles and have a fully-populated PATH.
         if [[ -n "$WARP_BOOTSTRAPPED" ]]; then
-          if [[ -n "$VIRTUAL_ENV" ]] && [ "$WARP_IN_MSYS2" = false ]; then
-              escaped_virtual_env=$(warp_escape_json "$VIRTUAL_ENV")
-          fi
-
-          if [[ -n "$CONDA_DEFAULT_ENV" ]] && [ "$WARP_IN_MSYS2" = false ]; then
-              escaped_conda_env=$(warp_escape_json "$CONDA_DEFAULT_ENV")
-          fi
 
           # Get the Node.js version, but only when the Node.js Version chip is enabled.
           # Warp sets WARP_PROMPT_NODE_VERSION_ENABLED to "0" when the chip is not in the
@@ -619,17 +627,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
                       # `node --version` when the directory or PATH changes (PATH changes
                       # on `nvm use`). The cache vars are global (no `local`) so they
                       # persist across precmd invocations.
-                      local node_cache_key="$PWD:$PATH"
-                      if [[ "$node_cache_key" == "$_WARP_NODE_VERSION_CACHE_KEY" ]]; then
-                          escaped_node_version="$_WARP_NODE_VERSION_CACHE_VALUE"
-                      else
-                          local node_version=$(node --version 2>/dev/null)
-                          if [[ -n "$node_version" ]]; then
-                              escaped_node_version=$(warp_escape_json "$node_version")
-                          fi
-                          _WARP_NODE_VERSION_CACHE_KEY="$node_cache_key"
-                          _WARP_NODE_VERSION_CACHE_VALUE="$escaped_node_version"
-                      fi
+                      node_cache_key="$PWD:$PATH"
                   fi
               fi
           fi
@@ -639,14 +637,42 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           # default PATH. Instead, we rely on the active PATH, as if the user doesn't have git
           # available to their session, it is unlikely they will be looking for git branch
           # information from the prompt.
-          if command -v git >/dev/null 2>&1; then
+          if [ "$WARP_IN_MSYS2" = true ] && command -v git >/dev/null 2>&1; then
             git_branch=$(warp_git symbolic-ref --short HEAD 2> /dev/null)
             # The git branch the user is on, or the git commit hash if they're not on a branch.
             git_head="${git_branch:-$(warp_git rev-parse --short HEAD 2> /dev/null)}"
           fi
           if [ "$WARP_IN_MSYS2" = false ]; then
-            escaped_git_head=$(warp_escape_json "$git_head")
-            escaped_git_branch=$(warp_escape_json "$git_branch")
+            warp_read_parallel_outputs \
+              escaped_virtual_env <(warp_escape_json_if_nonempty "${VIRTUAL_ENV:-}") \
+              escaped_conda_env <(warp_escape_json_if_nonempty "${CONDA_DEFAULT_ENV:-}") \
+              escaped_node_version <(
+                if [[ -n $node_cache_key ]]; then
+                  if [[ "$node_cache_key" == "$_WARP_NODE_VERSION_CACHE_KEY" ]]; then
+                    printf '%s' "$_WARP_NODE_VERSION_CACHE_VALUE"
+                  else
+                    warp_escape_json_if_nonempty "$(node --version 2>/dev/null)"
+                  fi
+                fi
+              ) \
+              escaped_git_values <(
+                git_branch=""
+                git_head=""
+                if command -v git >/dev/null 2>&1; then
+                  git_branch=$(warp_git symbolic-ref --short HEAD 2> /dev/null)
+                  # The git branch the user is on, or the git commit hash if they're not on a branch.
+                  git_head="${git_branch:-$(warp_git rev-parse --short HEAD 2> /dev/null)}"
+                fi
+                warp_escape_json_if_nonempty "$git_head"
+                printf '\n'
+                warp_escape_json_if_nonempty "$git_branch"
+              )
+            if [[ -n $node_cache_key ]]; then
+              _WARP_NODE_VERSION_CACHE_KEY="$node_cache_key"
+              _WARP_NODE_VERSION_CACHE_VALUE="$escaped_node_version"
+            fi
+            escaped_git_head=${escaped_git_values%%$'\n'*}
+            escaped_git_branch=${escaped_git_values#*$'\n'}
           fi
         fi
 
@@ -730,6 +756,11 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         #
         # We also use 'command sed' to ensure that we aren't accidentally executing an alias or function named 'sed'
         command -p sed -E 's/(["\\])/\\\1/g; s/'$'\b''/\\b/g; s/'$'\t''/\\t/g; s/'$'\f''/\\f/g; s/'$'\r''/\\r/g; $!s/$/\\n/' <<<"$*" | command -p tr -d '\n'
+    }
+    warp_escape_json_if_nonempty () {
+      if [[ -n $1 ]]; then
+        warp_escape_json "$1"
+      fi
     }
 
     # Turns out that the processed prompt is a complicated data structure that includes lots of 
