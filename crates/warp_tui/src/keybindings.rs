@@ -1,11 +1,12 @@
 //! TUI keybinding registration and cross-surface validation.
 //!
-//! Mirrors the GUI convention: each TUI view exposes an `init(app)` that
-//! registers its keybindings, aggregated here and called once at TUI startup
-//! (from [`crate::session`]'s mount). Fixed bindings are reserved keys
-//! (ctrl-c); editable bindings are named `tui:*` so they are user-remappable
-//! by name via `keybindings.yaml` (loading overrides in the TUI process is a
-//! follow-up — the names registered here are the stable contract).
+//! Mirrors the GUI convention: each TUI view module exposes a top-level
+//! `init(app)` that registers its keybindings, aggregated here and called once
+//! at TUI startup (from [`crate::session`]'s mount). Fixed bindings are
+//! reserved keys (ctrl-c); editable bindings are named `tui:*` so they are
+//! user-remappable by name via `keybindings.yaml` (loading overrides in the
+//! TUI process is a follow-up — the names registered here are the stable
+//! contract).
 //!
 //! # Cross-surface isolation
 //! GUI bindings cannot fire in the TUI even though the TUI process registers
@@ -33,9 +34,9 @@ pub(crate) const TUI_BINDING_GROUP: &str = "tui";
 /// Registers all TUI view keybindings and the cross-surface binding
 /// validators. Called once at TUI startup, before the driver starts.
 pub(crate) fn init(app: &mut AppContext) {
-    RootTuiView::init(app);
-    TuiTerminalSessionView::init(app);
-    TuiInputView::init(app);
+    crate::root_view::init(app);
+    crate::terminal_session_view::init(app);
+    crate::input::init(app);
 
     register_binding_validators(app);
 }

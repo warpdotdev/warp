@@ -215,7 +215,7 @@ fn main() {
         let (window_id, root) = app.update(|ctx| {
             // Register the input view's `tui:input:*` editing keybindings;
             // they dispatch through the keymap pass in the TUI runtime.
-            TuiInputView::init(ctx);
+            warp_tui::input::init(ctx);
             ctx.add_tui_window(
                 AddWindowOptions {
                     window_style: WindowStyle::NotStealFocus,

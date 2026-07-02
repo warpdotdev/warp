@@ -41,18 +41,18 @@ pub struct RootTuiView {
     state: RootTuiState,
 }
 
-impl RootTuiView {
-    /// Registers the root view's keybindings. Called once at TUI startup from
-    /// `keybindings::init`.
-    pub fn init(app: &mut AppContext) {
-        app.register_fixed_bindings([FixedBinding::new(
-            "ctrl-c",
-            RootTuiAction::ExitApp,
-            id!(Self::ui_name()),
-        )
-        .with_group(TUI_BINDING_GROUP)]);
-    }
+/// Registers the root view's keybindings. Called once at TUI startup from
+/// `keybindings::init`.
+pub fn init(app: &mut AppContext) {
+    app.register_fixed_bindings([FixedBinding::new(
+        "ctrl-c",
+        RootTuiAction::ExitApp,
+        id!(RootTuiView::ui_name()),
+    )
+    .with_group(TUI_BINDING_GROUP)]);
+}
 
+impl RootTuiView {
     pub(crate) fn new() -> Self {
         Self {
             state: RootTuiState::Auth,

@@ -91,19 +91,19 @@ pub(crate) struct TuiTerminalSessionView {
     exit_confirmation: ExitConfirmation,
 }
 
-impl TuiTerminalSessionView {
-    /// Registers the session surface's keybindings. Called once at TUI startup
-    /// from `keybindings::init`. Ctrl-c is a fixed (non-remappable) binding,
-    /// mirroring peer agent CLIs that treat it as reserved.
-    pub(crate) fn init(app: &mut AppContext) {
-        app.register_fixed_bindings([FixedBinding::new(
-            "ctrl-c",
-            TuiTerminalSessionAction::Interrupt,
-            id!(Self::ui_name()),
-        )
-        .with_group(TUI_BINDING_GROUP)]);
-    }
+/// Registers the session surface's keybindings. Called once at TUI startup
+/// from `keybindings::init`. Ctrl-c is a fixed (non-remappable) binding,
+/// mirroring peer agent CLIs that treat it as reserved.
+pub(crate) fn init(app: &mut AppContext) {
+    app.register_fixed_bindings([FixedBinding::new(
+        "ctrl-c",
+        TuiTerminalSessionAction::Interrupt,
+        id!(TuiTerminalSessionView::ui_name()),
+    )
+    .with_group(TUI_BINDING_GROUP)]);
+}
 
+impl TuiTerminalSessionView {
     /// Builds the transcript-capable terminal surface for a manager-backed session.
     pub(crate) fn new(surface_init: TerminalSurfaceInit, ctx: &mut ViewContext<Self>) -> Self {
         let TerminalSurfaceInit {
