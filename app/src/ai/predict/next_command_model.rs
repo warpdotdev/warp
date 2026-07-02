@@ -15,7 +15,6 @@ use warp_completer::completer::{
 use warp_completer::meta::Spanned;
 use warp_completer::parsers::hir::{Command, Expression, FlagType};
 use warp_completer::parsers::ParsedExpression;
-use warp_core::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
@@ -748,9 +747,6 @@ pub async fn is_command_valid(
     ctx: Option<&SessionContext>,
     session_env_vars: Option<&HashMap<String, String>>,
 ) -> bool {
-    if !FeatureFlag::ValidateAutosuggestions.is_enabled() {
-        return true;
-    }
     let Some(ctx) = ctx else {
         return true;
     };
