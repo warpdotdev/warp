@@ -876,7 +876,7 @@ fn test_should_include_path_respects_gitignore() {
 
         for path in excluded_paths {
             assert!(
-                LocalRepoMetadataModel::path_is_ignored(&path, &gitignores),
+                LocalRepoMetadataModel::path_matches_gitignore_set(&path, &gitignores),
                 "Path should be excluded by gitignore: {path:?}"
             );
         }
@@ -891,7 +891,7 @@ fn test_should_include_path_respects_gitignore() {
 
         for path in included_paths {
             assert!(
-                !LocalRepoMetadataModel::path_is_ignored(&path, &gitignores),
+                !LocalRepoMetadataModel::path_matches_gitignore_set(&path, &gitignores),
                 "Path should be included: {path:?}"
             );
         }
@@ -1092,7 +1092,7 @@ Thumbs.db
         ];
 
         for (path, should_include) in test_cases {
-            let actual = !LocalRepoMetadataModel::path_is_ignored(&path, &gitignores);
+            let actual = !LocalRepoMetadataModel::path_matches_gitignore_set(&path, &gitignores);
             assert_eq!(
                 actual, should_include,
                 "Path {path:?} - expected: {should_include}, actual: {actual}"
@@ -1116,21 +1116,21 @@ fn test_git_directory_exclusion() {
         let gitignores = vec![]; // Empty gitignore rules
 
         // .git directory and its contents should be excluded
-        assert!(LocalRepoMetadataModel::path_is_ignored(
+        assert!(LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join(".git"),
             &gitignores
         ));
-        assert!(LocalRepoMetadataModel::path_is_ignored(
+        assert!(LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join(".git").join("config"),
             &gitignores
         ));
-        assert!(LocalRepoMetadataModel::path_is_ignored(
+        assert!(LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join(".git").join("objects").join("abc123"),
             &gitignores
         ));
 
         // Regular files should be included
-        assert!(!LocalRepoMetadataModel::path_is_ignored(
+        assert!(!LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join("src").join("main.rs"),
             &gitignores
         ));
@@ -1163,15 +1163,15 @@ fn test_nested_gitignore_rules() {
         let gitignores = vec![root_gitignore, frontend_gitignore];
 
         // Test that nested gitignore rules are respected
-        assert!(LocalRepoMetadataModel::path_is_ignored(
+        assert!(LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join("frontend").join("dist").join("bundle.js"),
             &gitignores
         ));
-        assert!(LocalRepoMetadataModel::path_is_ignored(
+        assert!(LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join("backend").join("target").join("binary"),
             &gitignores
         ));
-        assert!(!LocalRepoMetadataModel::path_is_ignored(
+        assert!(!LocalRepoMetadataModel::path_matches_gitignore_set(
             &repo_path.join("frontend").join("src").join("main.ts"),
             &gitignores
         ));
@@ -2874,13 +2874,6 @@ fn lazy_root_created_directory_inserted_as_placeholder() {
     });
 }
 
-/// BUG BASH regression: a file that is ignored ONLY by a nested (per-directory)
-/// `.gitignore` must be tagged `is_ignored = true` when added incrementally via
-/// the watcher, matching the initial index. Previously
-/// `compute_file_tree_mutations` classified with only the repo-root + global
-/// gitignores, so a live-created `sub/new.log` rendered un-dimmed next to the
-/// dimmed `sub/existing.log`. The incremental classifier now consults nested
-/// `.gitignore` files along the added path's ancestor chain.
 #[test]
 fn bugbash_incremental_add_respects_nested_gitignore() {
     VirtualFS::test("bugbash_nested_gitignore", |dirs, mut vfs| {
@@ -2928,10 +2921,6 @@ fn bugbash_incremental_add_respects_nested_gitignore() {
     });
 }
 
-/// BUG BASH companion: a file created directly inside a directory ignored by the
-/// repo-ROOT `.gitignore` (`node_modules/`). This isolates whether the
-/// incremental classifier honors ancestor matches at all. Asserts the correct
-/// behavior (ignored=true).
 #[test]
 fn bugbash_incremental_add_direct_child_of_root_ignored_dir() {
     VirtualFS::test("bugbash_root_ignored_dir_child", |dirs, mut vfs| {

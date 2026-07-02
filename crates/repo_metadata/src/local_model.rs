@@ -586,8 +586,14 @@ impl LocalRepoMetadataModel {
         // Phase 2 (main thread callback): apply mutations directly to the tree — no clone needed.
         for (repo_path, repo_scoped_update) in repo_updates {
             if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(&repo_path) {
+                let Some(repo_root_local) = repo_path.to_local_path() else {
+                    log::warn!(
+                        "Skipping watcher update for {repo_path}: path is not representable \
+                         on the local filesystem"
+                    );
+                    continue;
+                };
                 let repo_path_clone = repo_path.clone();
-                let repo_root_local = repo_path.to_local_path().unwrap_or_default();
                 let gitignores_clone = state.gitignores.clone();
                 let force_included_paths = self.force_included_paths.clone();
                 let standing_query_definitions = self.standing_query_definitions.clone();
@@ -1120,7 +1126,11 @@ impl LocalRepoMetadataModel {
         let Some(local) = dir_path.to_local_path() else {
             return false;
         };
-        Self::path_is_ignored(&local, &state.gitignores)
+        // Mirror the watcher's descend filter (`repo_watch_filter`), which keys
+        // off only the repo-root + global gitignores — not nested per-directory
+        // `.gitignore` files — so this watch decision stays consistent with what
+        // the filter actually prunes.
+        Self::path_matches_gitignore_set(&local, &state.gitignores)
     }
 
     /// Checks whether the parent directory of `path` is loaded in the given entry.
@@ -1447,8 +1457,17 @@ impl LocalRepoMetadataModel {
         root_entry.ensure_parent_directories_exist(target_parent);
     }
 
-    /// Checks if a path matches any of the gitignore patterns
-    fn path_is_ignored(path: &Path, gitignores: &[Gitignore]) -> bool {
+    /// Returns whether `path` is ignored **by the provided gitignore set only**
+    /// (plus the always-ignored `.git` directory).
+    ///
+    /// This is a flat match: it checks `path` against exactly the `gitignores`
+    /// passed in and does NOT read nested per-directory `.gitignore` files from
+    /// disk. Callers classifying a live-added path (which must match the initial
+    /// index and therefore account for nested `.gitignore` files) should use
+    /// [`Self::incremental_path_is_ignored`] instead. The one intentional flat
+    /// caller is [`Self::dir_pruned_from_root_watch`], which must mirror the
+    /// watcher's descend filter (root + global gitignores only).
+    fn path_matches_gitignore_set(path: &Path, gitignores: &[Gitignore]) -> bool {
         // Check if any component of the path is .git
         if path
             .components()
@@ -1462,7 +1481,8 @@ impl LocalRepoMetadataModel {
         matches_gitignores(path, is_dir, gitignores, true)
     }
 
-    /// Classifies whether an incrementally-added `path` is gitignored.
+    /// Classifies whether an incrementally-added `path` is gitignored, the
+    /// repo-aware counterpart to [`Self::path_matches_gitignore_set`].
     ///
     /// In addition to the cached repo-root + global `base_gitignores`
     /// (`state.gitignores`), this reads nested (per-directory) `.gitignore` files
@@ -1476,7 +1496,7 @@ impl LocalRepoMetadataModel {
         path: &Path,
         base_gitignores: &[Gitignore],
     ) -> bool {
-        if Self::path_is_ignored(path, base_gitignores) {
+        if Self::path_matches_gitignore_set(path, base_gitignores) {
             return true;
         }
         let nested = nested_gitignores_for_path(repo_root, path);
