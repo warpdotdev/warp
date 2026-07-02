@@ -7419,14 +7419,29 @@ impl Input {
         }
     }
 
-    pub fn reset_after_cloud_followup_submission(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Enable the cloud-followup input WITHOUT clearing any draft the user already typed.
+    /// Resets the frozen/pending viewer visual state (interaction state + text colors) but
+    /// preserves the buffer contents. Use this when merely (re)enabling the followup input
+    /// (e.g. on session teardown). Clearing is only correct once a followup has actually been
+    /// submitted — see [`Self::reset_after_cloud_followup_submission`].
+    pub fn enable_cloud_followup_input(&mut self, ctx: &mut ViewContext<Self>) {
         self.editor.update(ctx, |editor, ctx| {
             editor.set_interaction_state(InteractionState::Editable, ctx);
-            editor.clear_buffer_and_reset_undo_stack(ctx);
 
             let appearance: &Appearance = Appearance::as_ref(ctx);
             editor.set_text_colors(TextColors::from_appearance(appearance), ctx);
         });
+    }
+
+    /// Reset the input after a cloud followup has actually been submitted: clears the buffer
+    /// (and undo stack) and then re-enables the followup input. For the non-destructive enable
+    /// transition that must preserve an un-submitted draft, use
+    /// [`Self::enable_cloud_followup_input`] instead.
+    pub fn reset_after_cloud_followup_submission(&mut self, ctx: &mut ViewContext<Self>) {
+        self.editor.update(ctx, |editor, ctx| {
+            editor.clear_buffer_and_reset_undo_stack(ctx);
+        });
+        self.enable_cloud_followup_input(ctx);
     }
 
     /// Cancel any active agent conversation in a shared session
