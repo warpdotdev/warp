@@ -238,12 +238,25 @@ impl RequestParams {
 
             let servers: Vec<MCPServer> = active_servers
                 .into_iter()
-                .map(|server| MCPServer {
-                    name: server.name().to_string(),
-                    description: server.description().unwrap_or_default().to_string(),
-                    id: server.installation_id().to_string(),
-                    resources: server.resources().to_vec(),
-                    tools: server.tools().to_vec(),
+                .map(|server| {
+                    let installation_id = server.installation_id();
+                    let allowed = templatable_manager
+                        .get_installed_server(&installation_id)
+                        .and_then(|inst| {
+                            crate::ai::mcp::templatable_manager::extract_allowed_tools_from_json(
+                                inst.template_json(),
+                            )
+                        });
+                    MCPServer {
+                        name: server.name().to_string(),
+                        description: server.description().unwrap_or_default().to_string(),
+                        id: installation_id.to_string(),
+                        resources: server.resources().to_vec(),
+                        tools: crate::ai::mcp::templatable_manager::filter_tools(
+                            server.tools(),
+                            allowed.as_ref(),
+                        ),
+                    }
                 })
                 .collect();
 
@@ -264,7 +277,7 @@ impl RequestParams {
                 .resources()
                 .cloned()
                 .collect::<Vec<_>>();
-            let tools = templatable_mcp_manager.tools().cloned().collect::<Vec<_>>();
+            let tools = templatable_mcp_manager.tools_with_allowed_filter();
 
             #[allow(deprecated)]
             (!resources.is_empty() || !tools.is_empty()).then_some(MCPContext {

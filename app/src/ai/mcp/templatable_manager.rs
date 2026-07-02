@@ -7,6 +7,44 @@ use std::collections::{HashMap, HashSet};
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
+/// Extracts the `allowed_tools` list from a server's template JSON.
+///
+/// Template JSON is always wrapped as `{"<server-name>": { ... }}`. Returns
+/// `Some` with the set of allowed tool names when the field is present and
+/// non-empty, or `None` when the field is absent (meaning all tools are
+/// allowed).
+pub fn extract_allowed_tools_from_json(template_json: &str) -> Option<HashSet<String>> {
+    let json: serde_json::Value = serde_json::from_str(template_json).ok()?;
+    let server_config = json.as_object()?.values().next()?;
+    let allowed = server_config.get("allowed_tools")?.as_array()?;
+    if allowed.is_empty() {
+        return None;
+    }
+    Some(
+        allowed
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_owned()))
+            .collect(),
+    )
+}
+
+/// Returns a filtered copy of `tools`, keeping only those whose names appear
+/// in `allowed`. When `allowed` is `None`, all tools are returned unchanged.
+pub fn filter_tools(
+    tools: &[rmcp::model::Tool],
+    allowed: Option<&HashSet<String>>,
+) -> Vec<rmcp::model::Tool> {
+    match allowed {
+        Some(set) => tools
+            .iter()
+            // `t.name` is `Cow<str>`; deref-coerce to `&str` for the lookup.
+            .filter(|t| set.contains(&*t.name))
+            .cloned()
+            .collect(),
+        None => tools.to_vec(),
+    }
+}
+
 #[cfg(not(target_family = "wasm"))]
 use diesel::SqliteConnection;
 use futures_util::stream::AbortHandle;
@@ -179,10 +217,23 @@ impl TemplatableMCPServerManager {
             .flat_map(|server| server.resources().iter())
     }
 
-    pub fn tools(&self) -> impl Iterator<Item = &rmcp::model::Tool> {
+    /// Returns tools from all active servers, applying each server's
+    /// `allowed_tools` filter when configured.
+    ///
+    /// When a server's installation specifies `allowed_tools`, only tools
+    /// whose names appear in that list are included. When `allowed_tools` is
+    /// absent or empty, all tools from that server are included.
+    pub fn tools_with_allowed_filter(&self) -> Vec<rmcp::model::Tool> {
         self.active_servers
-            .values()
-            .flat_map(|server| server.tools().iter())
+            .iter()
+            .flat_map(|(uuid, server)| {
+                let allowed = self
+                    .locally_installed_servers
+                    .get(uuid)
+                    .and_then(|inst| extract_allowed_tools_from_json(inst.template_json()));
+                filter_tools(server.tools(), allowed.as_ref())
+            })
+            .collect()
     }
 
     /// Returns a reconnecting peer for a server that has the given resource.
