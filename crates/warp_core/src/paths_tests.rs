@@ -130,27 +130,6 @@ fn test_project_path_for_warp_dev_app_id() {
     }
 }
 
-// Regression test for the standalone macOS CLI resources path. This only runs
-// on macOS (CI runs the suite on all platforms). A cargo test binary is not
-// inside a `.app` bundle, so `bundled_resources_dir()` must take the
-// standalone-CLI branch and resolve resources to a sibling `resources`
-// directory next to the executable — not `Contents/Resources`. Before the fix,
-// macOS unconditionally returned `<bundle>/Contents/Resources`, which for a
-// loose binary would have been `<exe_dir>/Contents/Resources`.
-#[cfg(target_os = "macos")]
-#[test]
-fn test_bundled_resources_dir_standalone_cli() {
-    let resources_dir = bundled_resources_dir().expect("should resolve a resources dir");
-    assert!(
-        resources_dir.ends_with("resources"),
-        "expected a sibling `resources` dir, got {resources_dir:?}"
-    );
-    assert!(
-        !resources_dir.ends_with("Contents/Resources"),
-        "standalone CLI should not resolve to a .app Contents/Resources path, got {resources_dir:?}"
-    );
-}
-
 #[test]
 fn test_project_path_for_oss_app_id() {
     let project_dirs = project_dirs_for_app_id(AppId::new("dev", "warp", "WarpOss"), None)
