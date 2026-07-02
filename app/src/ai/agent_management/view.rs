@@ -973,9 +973,7 @@ impl AgentManagementView {
                     })
                     .flatten();
                 let mut config = Self::action_buttons_config_for_entry(&entry, None, copy_link_url);
-                if FeatureFlag::AgentManagementDetailsView.is_enabled() {
-                    config.view_details_item_id = Some(item_id);
-                }
+                config.view_details_item_id = Some(item_id);
 
                 CardData {
                     item_id,
