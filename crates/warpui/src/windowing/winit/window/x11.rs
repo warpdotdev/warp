@@ -23,6 +23,8 @@ struct Atoms {
     net_supporting_wm_check: u32,
     /// For the `_NET_WM_NAME` property.
     net_wm_name: u32,
+    /// For the `_NET_WM_WINDOW_OPACITY` property used to set per-window opacity.
+    net_wm_window_opacity: u32,
 }
 
 /// An X11 client so that we can talk to an Xorg server for more advanced functionality from a
@@ -54,6 +56,10 @@ impl X11Manager {
             .reply()?
             .atom;
         let net_wm_name = conn.intern_atom(true, b"_NET_WM_NAME")?.reply()?.atom;
+        let net_wm_window_opacity = conn
+            .intern_atom(false, b"_NET_WM_WINDOW_OPACITY")?
+            .reply()?
+            .atom;
 
         Ok(Self {
             conn,
@@ -62,6 +68,7 @@ impl X11Manager {
                 net_active_window,
                 net_supporting_wm_check,
                 net_wm_name,
+                net_wm_window_opacity,
                 utf8_string,
             },
         })
@@ -132,6 +139,29 @@ impl X11Manager {
             ))?;
 
         Ok((i, monitor_bounds))
+    }
+
+    /// Sets per-window opacity via the `_NET_WM_WINDOW_OPACITY` EWMH hint.
+    ///
+    /// Honoured by compositing window managers on X11 (Mutter/GNOME, KWin/KDE,
+    /// Openbox with a compositor, etc.). `alpha` is clamped to `[0.0, 1.0]`;
+    /// `0.0` is fully transparent and `1.0` is fully opaque. The property holds
+    /// a `CARDINAL` in `[0, 0xFFFF_FFFF]`.
+    ///
+    /// This is a no-op on Wayland because the `X11Manager` is only created when a
+    /// connection to an Xorg server succeeds.
+    pub(super) fn set_window_opacity(&self, x11_window: u32, alpha: f32) -> anyhow::Result<()> {
+        let opacity = (alpha.clamp(0.0, 1.0) * u32::MAX as f64) as u32;
+        self.conn
+            .change_property32(
+                xproto::PropMode::REPLACE,
+                x11_window,
+                self.atoms.net_wm_window_opacity,
+                AtomEnum::CARDINAL,
+                &[opacity],
+            )?
+            .check()?;
+        Ok(())
     }
 
     pub(super) fn list_monitor_bounds(&self) -> anyhow::Result<Box<[PhysicalMonitorBounds]>> {

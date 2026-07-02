@@ -276,8 +276,18 @@ impl platform::WindowManager for WindowManager {
     }
 
     fn set_window_alpha(&self, window_id: WindowId, alpha: f32) {
-        if let Some(window) = self.windows.get(&window_id) {
-            window.set_alpha(alpha);
+        let Some(window) = self.windows.get(&window_id) else {
+            return;
+        };
+        window.set_alpha(alpha); // Windows-specific; no-op on other platforms
+
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        if let Some(x11_manager) = &self.x11_manager {
+            if let Some(x11_id) = window.x11_window_id() {
+                if let Err(err) = x11_manager.set_window_opacity(x11_id, alpha) {
+                    log::warn!("tab_drag: failed to set X11 window opacity: {err:#}");
+                }
+            }
         }
     }
 
@@ -1220,6 +1230,20 @@ impl Window {
         }
     }
 
+    /// Returns the raw X11 window ID for this window, or `None` if the window
+    /// is not backed by an X11 (Xlib or XCB) surface (e.g. Wayland, wasm).
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    pub(super) fn x11_window_id(&self) -> Option<u32> {
+        use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+        let inner = self.inner.borrow();
+        let inner = inner.as_ref()?;
+        match inner.window.window_handle().ok()?.as_raw() {
+            RawWindowHandle::Xlib(handle) => Some(handle.window),
+            RawWindowHandle::Xcb(handle) => Some(handle.window.get()),
+            _ => None,
+        }
+    }
+
     /// Sets the window's uniform opacity, where `1.0` is fully opaque and `0.0`
     /// is fully transparent. Used to cheaply hide the cross-window tab-drag
     /// preview while hovering over a target window, without changing the
@@ -1240,7 +1264,8 @@ impl Window {
         }
         #[cfg(not(windows))]
         {
-            // No per-window opacity support (e.g. wasm); avoid unused warnings.
+            // Per-window opacity on Linux/X11 is handled at the WindowManager level
+            // via `_NET_WM_WINDOW_OPACITY`. Wayland and wasm have no equivalent.
             let _ = (window, alpha);
         }
     }
