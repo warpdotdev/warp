@@ -151,17 +151,50 @@ impl UpdateOutcome {
     }
 }
 
+/// Whether this process runs the background update loop.
+#[derive(Clone, Debug)]
+enum AutoupdateEligibility {
+    /// Eligible: a release build running from the managed versioned install
+    /// layout, without the env opt-out.
+    Enabled(InstallLayout),
+    /// Background updates are disabled for this process.
+    Disabled {
+        /// Why updates are disabled, for logging/debugging.
+        reason: &'static str,
+    },
+}
+
+impl AutoupdateEligibility {
+    /// Determines whether this process should run the background update loop.
+    fn determine() -> Self {
+        if std::env::var_os(DISABLE_ENV_VAR).is_some() {
+            return Self::Disabled {
+                reason: "opted out via the WARP_TUI_DISABLE_AUTOUPDATE environment variable",
+            };
+        }
+        if ChannelState::app_version().is_none() {
+            return Self::Disabled {
+                reason: "no release version tag baked into this build",
+            };
+        }
+        match InstallLayout::detect() {
+            Some(layout) => Self::Enabled(layout),
+            None => Self::Disabled {
+                reason: "not running from a managed install",
+            },
+        }
+    }
+}
+
 /// Singleton driving the background update loop for the TUI session.
 ///
 /// Always registered — even when this process isn't eligible for background
-/// updates — so other callsites can safely access the singleton. Eligibility
-/// is captured in [`Self::layout`]; the polling loop only runs when it is
-/// `Some`.
+/// updates — so other callsites can safely access the singleton. The polling
+/// loop only runs when [`Self::eligibility`] is
+/// [`AutoupdateEligibility::Enabled`].
 pub(crate) struct TuiAutoupdater {
-    /// The managed install layout when this process is eligible for
-    /// background updates (a release build running from the versioned
-    /// install layout, without the env opt-out); `None` disables the loop.
-    layout: Option<InstallLayout>,
+    /// Whether (and where) this process runs background updates.
+    eligibility: AutoupdateEligibility,
     /// The outcome kind last reported to telemetry. Consecutive checks
     /// usually resolve to the same outcome (e.g. `up_to_date` on every
     /// poll), so only transitions are reported.
@@ -176,16 +209,17 @@ impl SingletonEntity for TuiAutoupdater {}
 
 impl TuiAutoupdater {
     /// Registers the singleton and starts the background update loop when
-    /// this process is eligible (see [`eligible_layout`]).
+    /// this process is eligible (see [`AutoupdateEligibility::determine`]).
     pub(crate) fn register(ctx: &mut AppContext) {
-        let layout = eligible_layout();
+        let eligibility = AutoupdateEligibility::determine();
         ctx.add_singleton_model(move |_| TuiAutoupdater {
-            layout,
+            eligibility,
             last_reported_outcome: None,
         });
-        TuiAutoupdater::handle(ctx).update(ctx, |me, ctx| {
-            if let Some(layout) = me.layout.clone() {
-                me.check_now(layout, ctx);
+        TuiAutoupdater::handle(ctx).update(ctx, |me, ctx| match me.eligibility.clone() {
+            AutoupdateEligibility::Enabled(layout) => me.check_now(layout, ctx),
+            AutoupdateEligibility::Disabled { reason } => {
+                log::info!("TUI autoupdate disabled: {reason}");
             }
         });
     }
@@ -239,24 +273,6 @@ impl TuiAutoupdater {
         };
         send_telemetry_from_ctx!(event, ctx);
     }
-}
-
-/// Returns the managed install layout when this process is eligible for
-/// background updates, logging the reason when it isn't.
-fn eligible_layout() -> Option<InstallLayout> {
-    if std::env::var_os(DISABLE_ENV_VAR).is_some() {
-        log::info!("TUI autoupdate disabled via {DISABLE_ENV_VAR}");
-        return None;
-    }
-    if ChannelState::app_version().is_none() {
-        log::info!("TUI autoupdate disabled: no release version tag baked in");
-        return None;
-    }
-    let layout = InstallLayout::detect();
-    if layout.is_none() {
-        log::info!("TUI autoupdate disabled: not running from a managed install");
-    }
-    layout
 }
 
 /// Performs a single check-and-install pass.
