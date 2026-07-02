@@ -351,3 +351,48 @@ async fn num_lines_in_file_if_non_binary_errors_for_directory() {
     let result = LocalDiffStateModel::num_lines_in_file_if_non_binary(dir.path()).await;
     assert!(result.is_err());
 }
+
+#[test]
+fn compute_diff_size_for_buffer_length_flags_oversized_buffers() {
+    use crate::code_review::diff_size_limits::MAX_DIFF_SIZE;
+
+    // A small buffer is renderable and safe to parse.
+    assert_eq!(compute_diff_size_for_buffer_length(10), DiffSize::Normal);
+
+    // A buffer over the hard limit is unrenderable, so `get_file_diff` skips
+    // parsing it into owned hunks (the source of the multi-GB spike).
+    assert!(matches!(
+        compute_diff_size_for_buffer_length(MAX_DIFF_SIZE + 1),
+        DiffSize::Unrenderable(_)
+    ));
+}
+
+#[test]
+fn parse_diff_hunks_handles_multiple_hunks() {
+    let diff_output = concat!(
+        "diff --git a/file.txt b/file.txt\n",
+        "--- a/file.txt\n",
+        "+++ b/file.txt\n",
+        "@@ -1,2 +1,2 @@\n",
+        " old context\n",
+        "-old line\n",
+        "+new line\n",
+        "@@ -10,2 +10,3 @@\n",
+        " more context\n",
+        "+added line\n",
+        " unchanged\n",
+        "diff --git a/other.txt b/other.txt\n",
+    );
+
+    let hunks = LocalDiffStateModel::parse_diff_hunks(diff_output).unwrap();
+
+    assert_eq!(hunks.len(), 2);
+    assert_eq!(hunks[0].old_start_line, 1);
+    assert_eq!(hunks[0].new_start_line, 1);
+    assert_eq!(hunks[0].lines.len(), 3);
+    assert_eq!(hunks[1].old_start_line, 10);
+    assert_eq!(hunks[1].new_start_line, 10);
+    assert_eq!(hunks[1].lines.len(), 3);
+    assert_eq!(hunks[1].lines[1].line_type, DiffLineType::Add);
+    assert_eq!(hunks[1].lines[1].text, "added line");
+}

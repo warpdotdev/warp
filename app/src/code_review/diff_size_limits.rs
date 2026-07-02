@@ -118,3 +118,20 @@ pub fn compute_diff_size(diffs: &[DiffHunk], diff_size: usize) -> DiffSize {
 
     DiffSize::Normal
 }
+
+/// Categorizes a diff using only the buffered git output length, without the
+/// (potentially very large) parsed hunks. This lets callers decide whether it
+/// is safe to materialize a diff into owned `DiffHunk`/`DiffLine` structures at
+/// all: for over-limit diffs, parsing allocates several times the raw diff size
+/// (an owned `DiffLine` with a copied `String` per line), so callers skip it.
+pub fn compute_diff_size_for_buffer_length(diff_size: usize) -> DiffSize {
+    if is_diff_unrenderable(diff_size) {
+        return DiffSize::Unrenderable(UnrenderableReason::DiffTooLarge);
+    }
+
+    if is_buffer_too_large(diff_size) {
+        return DiffSize::Large;
+    }
+
+    DiffSize::Normal
+}
