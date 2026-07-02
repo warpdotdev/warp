@@ -106,17 +106,18 @@ mod mac_impl {
                 f32::MAX,
                 ClipConfig::default(),
             );
-            // `round()` rather than `ceil()`: halves the average leftover
-            // slack per cluster (the gap between a cluster's real shaped
-            // width and its allocated cell count), which otherwise
-            // accumulates across a multi-cluster run and surfaces as an
-            // oversized gap before the next space/punctuation cell (see
-            // Phase 10 of the Telugu variable-width-cells rewrite). A
-            // cluster can now round down slightly under its natural width;
-            // the renderer already tolerates this gracefully (no clamp or
-            // panic on slight overflow into the next cell), so this trades
-            // a small, bounded overflow risk for less accumulated slack.
-            let cells = (line.width / cell_width_px).round() as u8;
+            // `ceil()`, not `round()`: guarantees allocated width is never
+            // less than the cluster's real shaped width. Tried `round()` to
+            // shrink leftover slack at word boundaries (Phase 10 of the
+            // Telugu variable-width-cells rewrite) but reverted it -- a
+            // real-paragraph visual test caught a virama-final conjunct
+            // glyph (e.g. "శ్") whose natural width exceeded its rounded
+            // allocation, so its glyph spilled into the following space and
+            // erased the word boundary entirely (two words rendered as one,
+            // unreadable). A visually-wide gap is a much smaller defect
+            // than words silently merging, so this reverts to the safe,
+            // never-overlaps invariant.
+            let cells = (line.width / cell_width_px).ceil() as u8;
             cells.clamp(1, 8)
         }
     }

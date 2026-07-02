@@ -632,7 +632,8 @@ fn render_grid_without_ligatures<'a>(
             // by the WIDE_CHAR_SPACER check) -- every column belonging to
             // the run has already been fully processed by now regardless.
             if pending_run.as_ref().is_some_and(|pr| col > pr.end_col) {
-                let pr = pending_run.take().expect("checked Some above");
+                let mut pr = pending_run.take().expect("checked Some above");
+                fill_style_run_gaps(&mut pr.style_runs, pr.shape.full_text.chars().count());
                 render_indic_run(&pr.shape.full_text, &pr.style_runs, pr.run_origin, font_size, ctx);
             }
 
@@ -935,7 +936,8 @@ fn render_grid_without_ligatures<'a>(
         // Flush a run that extends all the way to the row's last column
         // (the `col > pr.end_col` check above never gets a "next column"
         // iteration to fire in that case).
-        if let Some(pr) = pending_run.take() {
+        if let Some(mut pr) = pending_run.take() {
+            fill_style_run_gaps(&mut pr.style_runs, pr.shape.full_text.chars().count());
             render_indic_run(&pr.shape.full_text, &pr.style_runs, pr.run_origin, font_size, ctx);
         }
 
@@ -2123,32 +2125,79 @@ fn render_indic_cluster(
     }
 }
 
-/// Shape of one maximal contiguous run of Indic-script cells within a row, as
-/// scanned by `scan_indic_run`. Pure content scan (no color/match state) --
-/// built once, cheaply, when the render loop encounters the run's first
-/// (unmerged) base cell.
+/// Shape of one maximal contiguous run of Indic-script cells (plus absorbed
+/// connector cells -- spaces and attached punctuation, see `scan_indic_run`)
+/// within a row. Pure content scan (no color/match state) -- built once,
+/// cheaply, when the render loop encounters the run's first (unmerged) base
+/// cell.
 struct IndicRunShape {
-    /// Concatenated cluster text for the whole run, shaped as ONE Core Text
-    /// call so inter-cluster spacing flows at the font's natural advances
-    /// instead of being centred (and gapped) per cluster.
+    /// Concatenated text for the whole run (clusters plus any absorbed
+    /// spaces/punctuation), shaped as ONE Core Text call so inter-cluster
+    /// AND inter-word spacing flows at the font's natural advances instead
+    /// of being centred (and gapped) per cluster or left as full fixed-cell
+    /// monospace gaps between words.
     full_text: String,
-    /// Char-index range into `full_text` for each cluster, in column order.
+    /// Char-index range into `full_text` for each "cluster" -- either a real
+    /// Indic grapheme cluster, or a single absorbed connector char (space or
+    /// punctuation), in column order. Connectors get their own one-char
+    /// range so the render loop's per-cell style-run accounting (one entry
+    /// per non-spacer column in the run) stays in sync.
     char_ranges: Vec<Range<usize>>,
-    /// Total grid columns (base + spacer cells) consumed by the whole run.
+    /// Total grid columns (base + spacer cells + any absorbed connector
+    /// cells) consumed by the whole run.
     total_span: usize,
+}
+
+/// A single-width, non-Indic cell that can be absorbed into an Indic run
+/// when it joins two runs (a space between two Telugu words) or trails one
+/// (punctuation directly after a Telugu word) -- so the whole segment shapes
+/// as one Core Text call, matching how a proportional rich-text renderer
+/// draws the same text (natural space width, attached punctuation).
+fn is_connector_cell(cell: &Cell) -> bool {
+    if cell.span() != 1 || cell.is_empty() {
+        return false;
+    }
+    matches!(
+        cell.content_for_display(),
+        CharOrStr::Char(c) if c == ' ' || is_connector_punct(c)
+    )
+}
+
+fn is_connector_punct(c: char) -> bool {
+    matches!(c, '.' | ',' | '!' | '?' | ':' | ';' | '"' | '\'' | '(' | ')' | '-')
 }
 
 /// Scans forward from `start_col` collecting a maximal run of contiguous
 /// Indic cells (a base cell's own span, followed immediately by the next
-/// cluster's base cell, and so on) into one shape.
+/// cluster's base cell, and so on), absorbing spaces/punctuation
+/// (`is_connector_cell`) between and after clusters where doing so can't
+/// fabricate a visual gap that wasn't already there. Candidate connectors
+/// are buffered, not committed immediately -- `total_span` only advances
+/// past a connector once it's actually included in the run:
 ///
-/// A candidate cluster that is secret-redacted stops the run right there
-/// (excluding it) rather than merging it in: a merged run's glyphs are drawn
-/// via `render_indic_run`, which bypasses `render_cell_glyph`'s per-cell
-/// secret-redaction check entirely, so a secret cluster must never be
-/// merged. `secret_at_displayed_point` is a stateless positional lookup (not
-/// a sequentially-advancing iterator like the find-match tracking in the
-/// caller), so it's safe to query here inside a lookahead.
+/// - Reaching another Indic cluster commits the whole buffer (a space
+///   between two Telugu words is absorbed only when Telugu text follows --
+///   this is what lets it shape as one continuous segment).
+/// - Reaching an empty cell or the end of the row commits the whole buffer
+///   (trailing punctuation/spaces before end-of-line attach to the last
+///   word; any leftover slack lands after everything, where nothing follows
+///   -- invisible).
+/// - Reaching a non-connector, non-empty (i.e. real ASCII/other-script)
+///   cell commits only the buffered prefix up through the last punctuation
+///   character that is itself followed (in the buffer) by a space -- so
+///   "తెలుగు abc" absorbs nothing (matches pre-Phase-11 behaviour exactly)
+///   and "ఉంది . abc" absorbs " ." (the gap lands in existing blank space
+///   before "abc", not fabricated), while "తెలుగు:abc" absorbs nothing
+///   (never invent a gap inside a tightly-glued word:token sequence).
+///
+/// A candidate cluster OR connector that is secret-redacted stops the scan
+/// right there, discarding any buffered-but-uncommitted connectors: a
+/// merged run's glyphs are drawn via `render_indic_run`, which bypasses
+/// `render_cell_glyph`'s per-cell secret-redaction check entirely, so
+/// nothing secret may ever be absorbed. `secret_at_displayed_point` is a
+/// stateless positional lookup (not a sequentially-advancing iterator like
+/// the find-match tracking in the caller), so it's safe to query here
+/// inside a lookahead.
 fn scan_indic_run(
     row: &Row,
     start_col: usize,
@@ -2161,6 +2210,30 @@ fn scan_indic_run(
     let mut full_text = String::new();
     let mut char_ranges = Vec::new();
     let mut col = start_col;
+    let mut committed_col = start_col;
+
+    // Buffered candidate connectors not yet committed to the run: each
+    // entry is (column, char).
+    let mut pending: Vec<(usize, char)> = Vec::new();
+
+    let is_secret_at = |col: usize| {
+        redacting_secrets
+            && grid
+                .secret_at_displayed_point(Point::new(offset_row, col))
+                .is_some()
+    };
+
+    let commit_connectors = |upto: usize,
+                              full_text: &mut String,
+                              char_ranges: &mut Vec<Range<usize>>,
+                              pending: &[(usize, char)]| {
+        for &(_, c) in &pending[..upto] {
+            let start_char = full_text.chars().count();
+            full_text.push(c);
+            let end_char = full_text.chars().count();
+            char_ranges.push(start_char..end_char);
+        }
+    };
 
     while col < columns {
         let cell = &row[col];
@@ -2168,29 +2241,73 @@ fn scan_indic_run(
             col += 1;
             continue;
         }
-        if !is_indic_cell(cell) {
-            break;
-        }
-        if redacting_secrets
-            && grid
-                .secret_at_displayed_point(Point::new(offset_row, col))
-                .is_some()
-        {
-            break;
+
+        if is_indic_cell(cell) {
+            if is_secret_at(col) {
+                break;
+            }
+            // Reaching Indic content commits every buffered connector.
+            commit_connectors(pending.len(), &mut full_text, &mut char_ranges, &pending);
+            pending.clear();
+
+            let start_char = full_text.chars().count();
+            append_cell_display(&mut full_text, cell);
+            let end_char = full_text.chars().count();
+            char_ranges.push(start_char..end_char);
+
+            col += cell.span() as usize;
+            committed_col = col;
+            continue;
         }
 
-        let start_char = full_text.chars().count();
-        append_cell_display(&mut full_text, cell);
-        let end_char = full_text.chars().count();
-        char_ranges.push(start_char..end_char);
+        if is_connector_cell(cell) {
+            if is_secret_at(col) {
+                break;
+            }
+            pending.push((col, cell.c));
+            col += 1;
+            continue;
+        }
 
-        col += cell.span() as usize;
+        // Terminator: an empty cell, or a real non-Indic/non-connector cell.
+        if cell.is_empty() {
+            // Blank tail (or genuinely never-written cells) -- commit
+            // everything buffered so far; nothing follows to fabricate a
+            // gap against.
+            commit_connectors(pending.len(), &mut full_text, &mut char_ranges, &pending);
+            committed_col = pending.last().map_or(committed_col, |&(c, _)| c + 1);
+        } else {
+            // Visible non-connector content (e.g. ASCII): commit only the
+            // buffered prefix through the last punctuation that is itself
+            // followed by a space in the buffer -- absorbing further would
+            // fabricate a gap where the source text had none.
+            let mut commit_upto = 0;
+            for (i, &(_, c)) in pending.iter().enumerate() {
+                if is_connector_punct(c) && pending.get(i + 1).is_some_and(|&(_, n)| n == ' ') {
+                    commit_upto = i + 1;
+                }
+            }
+            commit_connectors(commit_upto, &mut full_text, &mut char_ranges, &pending);
+            committed_col = if commit_upto > 0 {
+                pending[commit_upto - 1].0 + 1
+            } else {
+                committed_col
+            };
+        }
+        break;
+    }
+
+    if col >= columns {
+        // Ran off the end of the row: same as an empty-cell terminator --
+        // commit everything buffered.
+        commit_connectors(pending.len(), &mut full_text, &mut char_ranges, &pending);
+        committed_col = pending.last().map_or(committed_col, |&(c, _)| c + 1);
     }
 
     IndicRunShape {
         full_text,
         char_ranges,
-        total_span: col - start_col,
+        total_span: committed_col - start_col,
     }
 }
 
@@ -2208,6 +2325,41 @@ struct PendingIndicRun {
     /// Index into `shape.char_ranges` of the next cluster whose color has
     /// not yet been resolved and pushed into `style_runs`.
     next_cluster_idx: usize,
+}
+
+/// Defensive coverage guard for `style_runs` before it's handed to
+/// `layout_line`: a rare column-loop skip within a run (IME marked-text
+/// override, a hidden cursor cell) could in principle leave a char range in
+/// `full_text` with no matching style pushed. Rather than hand `layout_line`
+/// a `style_runs` list with a hole (undefined styling, or worse), fill any
+/// gap with the nearest already-resolved style so rendering degrades
+/// gracefully instead of misbehaving.
+fn fill_style_run_gaps(style_runs: &mut Vec<(Range<usize>, StyleAndFont)>, total_chars: usize) {
+    if total_chars == 0 {
+        return;
+    }
+    style_runs.sort_by_key(|(range, _)| range.start);
+    let mut filled = Vec::with_capacity(style_runs.len() + 1);
+    let mut next_start = 0usize;
+    for (range, style) in style_runs.drain(..) {
+        if range.start > next_start {
+            let fill_style = filled.last().map_or(style, |&(_, s)| s);
+            filled.push((next_start..range.start, fill_style));
+        }
+        next_start = next_start.max(range.end);
+        filled.push((range, style));
+    }
+    if next_start < total_chars {
+        // Only reachable if `style_runs` was empty on entry with
+        // `total_chars > 0`; `render_indic_run` already early-returns before
+        // ever calling this when `style_runs` is empty, so `FamilyId(0)` is
+        // never actually drawn -- present purely so this stays total.
+        let fill_style = filled
+            .last()
+            .map_or(StyleAndFont::new(FamilyId(0), Properties::default(), TextStyle::new()), |&(_, s)| s);
+        filled.push((next_start..total_chars, fill_style));
+    }
+    *style_runs = filled;
 }
 
 /// Renders a whole contiguous Indic run (possibly several syllables/words)

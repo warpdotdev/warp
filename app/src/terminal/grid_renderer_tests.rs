@@ -327,6 +327,12 @@ mod indic_run_tests {
         row[5].flags_mut().insert(Flags::WIDE_CHAR_SPACER);
 
         row[6].c = ' ';
+        // ASCII after the space, not punctuation-then-space, so the space
+        // is NOT absorbed (Phase 11 only absorbs a trailing space when
+        // nothing follows, or when it's followed by more Indic content) --
+        // this keeps the test's original intent (run stops at the word
+        // boundary) valid alongside the new connector-absorption behaviour.
+        row[7].c = 'X';
 
         let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
         assert_eq!(shape.full_text, "తెలుగు");
@@ -398,5 +404,161 @@ mod indic_run_tests {
             shape.total_span, 0,
             "secret-redacted cluster must not be merged into a run"
         );
+    }
+
+    /// Builds a 2-column Telugu cluster ("తె") at `row[start_col]`, returning
+    /// the column immediately after it.
+    fn write_two_col_cluster(row: &mut Row, start_col: usize) -> usize {
+        row[start_col].c = 'త';
+        row[start_col].push_zerowidth('ె', false);
+        row[start_col].set_span(2);
+        row[start_col + 1].flags_mut().insert(Flags::WIDE_CHAR_SPACER);
+        start_col + 2
+    }
+
+    #[test]
+    fn space_joins_two_words() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(10);
+        let col = write_two_col_cluster(&mut row, 0);
+        row[col].c = ' ';
+        write_two_col_cluster(&mut row, col + 1);
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        assert_eq!(shape.full_text, "తె తె");
+        assert_eq!(shape.total_span, 5, "both clusters plus the joining space");
+        assert_eq!(shape.char_ranges.len(), 3, "cluster, space, cluster");
+    }
+
+    #[test]
+    fn multiple_consecutive_spaces_join() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(10);
+        let col = write_two_col_cluster(&mut row, 0);
+        row[col].c = ' ';
+        row[col + 1].c = ' ';
+        write_two_col_cluster(&mut row, col + 2);
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        assert_eq!(shape.full_text, "తె  తె");
+        assert_eq!(shape.total_span, 6, "both clusters plus both joining spaces");
+        assert_eq!(shape.char_ranges.len(), 4, "cluster, space, space, cluster");
+    }
+
+    #[test]
+    fn trailing_punct_before_eol_absorbed() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(4);
+        let col = write_two_col_cluster(&mut row, 0);
+        row[col].c = ' ';
+        row[col + 1].c = '.';
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        assert_eq!(shape.full_text, "తె .");
+        assert_eq!(shape.total_span, 4, "cluster plus trailing space and period at EOL");
+    }
+
+    #[test]
+    fn space_at_eol_absorbed() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(3);
+        let col = write_two_col_cluster(&mut row, 0);
+        row[col].c = ' ';
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        assert_eq!(shape.full_text, "తె ");
+        assert_eq!(shape.total_span, 3, "cluster plus trailing space at EOL");
+    }
+
+    #[test]
+    fn space_then_ascii_backs_off() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(10);
+        let col = write_two_col_cluster(&mut row, 0);
+        row[col].c = ' ';
+        row[col + 1].c = 'a';
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        assert_eq!(shape.full_text, "తె", "space before ASCII must not be absorbed");
+        assert_eq!(shape.total_span, 2, "run ends at the word boundary, matching pre-Phase-11 behaviour");
+    }
+
+    #[test]
+    fn punct_glued_to_ascii_not_absorbed() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(10);
+        let col = write_two_col_cluster(&mut row, 0);
+        row[col].c = ':';
+        row[col + 1].c = 'a';
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        assert_eq!(
+            shape.full_text, "తె",
+            "colon directly glued to ASCII must not be absorbed -- no gap to fabricate"
+        );
+        assert_eq!(shape.total_span, 2);
+    }
+
+    #[test]
+    fn punct_then_space_then_ascii_commits_through_punct() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(10);
+        let col = write_two_col_cluster(&mut row, 0);
+        row[col].c = '.';
+        row[col + 1].c = ' ';
+        row[col + 2].c = 'a';
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        assert_eq!(
+            shape.full_text, "తె.",
+            "period followed by a space commits (gap lands in existing blank space before ASCII)"
+        );
+        assert_eq!(shape.total_span, 3);
+    }
+
+    #[test]
+    fn secret_space_stops_absorption() {
+        secrets::set_user_and_enterprise_secret_regexes(
+            [&regex::Regex::new("SECRET").expect("valid regex")],
+            std::iter::empty(),
+        );
+        let mut grid = test_grid(ObfuscateSecrets::Yes);
+        // "SECRET" matches starting at column 2, so its range (cols 2-7)
+        // covers column 2 -- the exact column our scanned row's joining
+        // space will sit at (two-col cluster at 0-1, space at 2).
+        for c in "XXSECRET".chars() {
+            grid.input(c);
+        }
+        grid.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+        // Separate row (as in `secret_redacted_cluster_is_excluded_from_run`):
+        // a Telugu cluster, then a space that the grid's own secret range
+        // covers, then another cluster -- the space must not be absorbed,
+        // since a merged run's draw bypasses per-cell secret redaction.
+        let mut row = Row::new(10);
+        let col = write_two_col_cluster(&mut row, 0);
+        row[col].c = ' ';
+        write_two_col_cluster(&mut row, col + 1);
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::Yes);
+        assert_eq!(
+            shape.total_span, 2,
+            "run stops at the first cluster; the secret-covered space is never absorbed"
+        );
+    }
+
+    #[test]
+    fn empty_cells_not_treated_as_spaces() {
+        let grid = test_grid(ObfuscateSecrets::No);
+        let mut row = Row::new(10);
+        write_two_col_cluster(&mut row, 0);
+        // Cols 2.. stay `Cell::default()` (never written) -- these must be
+        // treated as a Blank terminator via `is_empty()`, not scanned as
+        // displayable spaces (which would desync the render loop's
+        // `next_cluster_idx` accounting against columns it actually skips).
+
+        let shape = scan_indic_run(&row, 0, row.len(), &grid, 0, ObfuscateSecrets::No);
+        assert_eq!(shape.full_text, "తె");
+        assert_eq!(shape.total_span, 2);
     }
 }
