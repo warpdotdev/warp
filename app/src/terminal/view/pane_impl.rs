@@ -257,7 +257,11 @@ impl TerminalView {
             || (!is_ambient_agent && !is_transcript_viewer);
         let is_fullscreen_agent_view = self.agent_view_controller.as_ref(app).is_fullscreen();
 
-        if in_nav_stack || (is_fullscreen_agent_view && has_parent_terminal) {
+        if in_nav_stack
+            || (is_fullscreen_agent_view
+                && has_parent_terminal
+                && !self.is_terminalless_wasm_agent_view(app))
+        {
             Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(ChildView::new(&self.agent_view_back_button).finish())
