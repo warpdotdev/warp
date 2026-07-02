@@ -6,7 +6,6 @@ use parking_lot::FairMutex;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use serde::Serialize;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warpui::browser::escape_html_attribute;
 use warpui::clipboard::ClipboardContent;
@@ -1157,8 +1156,7 @@ impl View for ShareBlockModal {
 }
 
 fn should_send_title_gen_request(ctx: &ViewContext<ShareBlockModal>) -> bool {
-    FeatureFlag::SharedBlockTitleGeneration.is_enabled()
-        && AISettings::as_ref(ctx).is_shared_block_title_generation_enabled(ctx)
+    AISettings::as_ref(ctx).is_shared_block_title_generation_enabled(ctx)
         && UserWorkspaces::as_ref(ctx).ai_allowed_for_current_team()
 }
 

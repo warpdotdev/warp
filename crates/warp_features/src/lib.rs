@@ -272,9 +272,6 @@ pub enum FeatureFlag {
     /// Reload files in an AI conversation to prevent stale files.
     ReloadStaleConversationFiles,
 
-    /// Auto generate the title when creating a shared block.
-    SharedBlockTitleGeneration,
-
     /// Retry truncated file edit responses from the coding agent.
     RetryTruncatedCodeResponses,
 

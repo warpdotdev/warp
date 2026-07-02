@@ -449,8 +449,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             &(context.clone() & id!(flags::IS_ACTIVE_AI_ENABLED)),
             flags::SHARED_BLOCK_TITLE_GENERATION_FLAG,
         )
-        .with_group(bindings::BindingGroup::WarpAi)
-        .with_enabled(|| FeatureFlag::SharedBlockTitleGeneration.is_enabled())],
+        .with_group(bindings::BindingGroup::WarpAi)],
         app,
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
@@ -2773,10 +2772,9 @@ impl AISettingsPageView {
                         && ai_settings
                             .natural_language_autosuggestions_enabled_internal
                             .is_supported_on_current_platform())
-                    || (FeatureFlag::SharedBlockTitleGeneration.is_enabled()
-                        && ai_settings
-                            .shared_block_title_generation_enabled_internal
-                            .is_supported_on_current_platform())
+                    || ai_settings
+                        .shared_block_title_generation_enabled_internal
+                        .is_supported_on_current_platform()
                     || (FeatureFlag::GitOperationsInCodeReview.is_enabled()
                         && ai_settings
                             .git_operations_autogen_enabled_internal
@@ -2822,10 +2820,9 @@ impl AISettingsPageView {
                         && ai_settings
                             .natural_language_autosuggestions_enabled_internal
                             .is_supported_on_current_platform())
-                    || (FeatureFlag::SharedBlockTitleGeneration.is_enabled()
-                        && ai_settings
-                            .shared_block_title_generation_enabled_internal
-                            .is_supported_on_current_platform())
+                    || ai_settings
+                        .shared_block_title_generation_enabled_internal
+                        .is_supported_on_current_platform()
                     || (FeatureFlag::GitOperationsInCodeReview.is_enabled()
                         && ai_settings
                             .git_operations_autogen_enabled_internal
@@ -5168,10 +5165,9 @@ impl ActiveAIWidget {
 
     // TODO: Check if the user's enterprise billing policy allows toggling this feature.
     fn is_shared_block_title_generation_toggleable(&self, app: &AppContext) -> bool {
-        FeatureFlag::SharedBlockTitleGeneration.is_enabled()
-            && AISettings::as_ref(app)
-                .shared_block_title_generation_enabled_internal
-                .is_supported_on_current_platform()
+        AISettings::as_ref(app)
+            .shared_block_title_generation_enabled_internal
+            .is_supported_on_current_platform()
             && (!UserWorkspaces::as_ref(app)
                 .current_team()
                 .is_some_and(|team| {

@@ -5699,9 +5699,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ToggleNaturalLanguageAutosuggestionsSetting => {
                 EnablementState::Flag(FeatureFlag::PredictAMQueries)
             }
-            Self::ToggleSharedBlockTitleGenerationSetting => {
-                EnablementState::Flag(FeatureFlag::SharedBlockTitleGeneration)
-            }
+            Self::ToggleSharedBlockTitleGenerationSetting => EnablementState::Always,
             Self::ToggleGitOperationsAutogenSetting => {
                 EnablementState::Flag(FeatureFlag::GitOperationsInCodeReview)
             }

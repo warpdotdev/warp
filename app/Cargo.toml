@@ -546,7 +546,6 @@ default = [
     "agent_management_view",
     "agent_management_details_view",
     "interactive_conversation_management_view",
-    "shared_block_title_generation",
     "tab_close_button_on_left",
     "ai_resume_button",
     "code_find_replace",
@@ -885,7 +884,6 @@ use_tantivy_search = []
 agent_management_popup = []
 simulate_github_unauthed = []
 reload_stale_conversation_files = []
-shared_block_title_generation = []
 retry_truncated_code_responses = []
 usage_based_pricing = []
 ai_context_menu = []

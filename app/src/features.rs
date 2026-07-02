@@ -175,8 +175,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::FileRetrievalTools,
         #[cfg(feature = "reload_stale_conversation_files")]
         FeatureFlag::ReloadStaleConversationFiles,
-        #[cfg(feature = "shared_block_title_generation")]
-        FeatureFlag::SharedBlockTitleGeneration,
         #[cfg(feature = "retry_truncated_code_responses")]
         FeatureFlag::RetryTruncatedCodeResponses,
         #[cfg(feature = "read_image_files")]
