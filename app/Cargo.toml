@@ -241,6 +241,7 @@ warp_js = { workspace = true, optional = true }
 warp_search_core.workspace = true
 warp_server_auth.workspace = true
 warp_server_client.workspace = true
+warp_ssh_diagnostics.workspace = true
 warp_util.workspace = true
 warpui = { workspace = true, features = ["schema_gen", "settings_value"] }
 warpui_core.workspace = true

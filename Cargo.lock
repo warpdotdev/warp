@@ -15250,6 +15250,7 @@ dependencies = [
  "warp_search_core",
  "warp_server_auth",
  "warp_server_client",
+ "warp_ssh_diagnostics",
  "warp_terminal",
  "warp_util",
  "warp_web_event_bus",
@@ -15802,6 +15803,17 @@ dependencies = [
  "warp_server_auth",
  "warpui_core",
  "websocket",
+]
+
+[[package]]
+name = "warp_ssh_diagnostics"
+version = "0.1.0"
+dependencies = [
+ "command",
+ "instant",
+ "log",
+ "serde",
+ "tempfile",
 ]
 
 [[package]]
