@@ -152,6 +152,22 @@ mod file_search_model_tests {
         assert!(!FileSearchModel::should_skip_overly_broad_query("a*b"));
     }
 
+    #[cfg(feature = "local_fs")]
+    #[test]
+    fn test_contents_args_keeps_folders_by_default() {
+        let args = FileSearchModel::contents_args("src", true, |_| Some("src/main.rs".into()));
+
+        assert!(args.include_folders);
+    }
+
+    #[cfg(feature = "local_fs")]
+    #[test]
+    fn test_contents_args_can_exclude_folders_for_file_only_search() {
+        let args = FileSearchModel::contents_args("src", false, |_| Some("src/main.rs".into()));
+
+        assert!(!args.include_folders);
+    }
+
     #[test]
     fn test_filename_prioritization() {
         // Filename matches should score higher than path matches

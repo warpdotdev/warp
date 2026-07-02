@@ -198,21 +198,45 @@ impl FileSearchModel {
     /// root location, invalidated when the file tree changes.
     #[cfg(feature = "local_fs")]
     pub fn get_repo_contents(&self, query: &str, app: &AppContext) -> Arc<Vec<FileSearchResult>> {
+        self.get_repo_contents_with_options(query, true, app)
+    }
+
+    /// Gets repository files for the current working directory.
+    ///
+    /// This is intended for search surfaces that cannot display directories.
+    /// Keeping it separate from [`Self::get_repo_contents`] preserves directory
+    /// results for callers like the AI context menu.
+    #[cfg(feature = "local_fs")]
+    pub fn get_repo_file_contents(
+        &self,
+        query: &str,
+        app: &AppContext,
+    ) -> Arc<Vec<FileSearchResult>> {
+        self.get_repo_contents_with_options(query, false, app)
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn get_repo_contents_with_options(
+        &self,
+        query: &str,
+        include_folders: bool,
+        app: &AppContext,
+    ) -> Arc<Vec<FileSearchResult>> {
         let Some(repo_root) = self.repo_root_location(app) else {
             return Arc::new(Vec::new());
         };
 
         // Query-filtered results are query-specific, so bypass the per-repo
         // cache and traverse the in-memory index fresh.
-        if !query.is_empty() {
-            return Arc::new(self.get_contents_from_repo(&repo_root, query, app));
+        if !query.is_empty() || !include_folders {
+            return Arc::new(self.get_contents_from_repo(&repo_root, query, include_folders, app));
         }
 
         if let Some(cached) = self.repo_contents_cache.borrow().get(&repo_root) {
             return cached.clone();
         }
 
-        let contents = self.get_contents_from_repo(&repo_root, query, app);
+        let contents = self.get_contents_from_repo(&repo_root, query, include_folders, app);
 
         let arc = Arc::new(contents);
         self.repo_contents_cache
@@ -242,6 +266,16 @@ impl FileSearchModel {
         Arc::new(Vec::new())
     }
 
+    /// Gets repository files for the current working directory (WASM stub)
+    #[cfg(not(feature = "local_fs"))]
+    pub fn get_repo_file_contents(
+        &self,
+        _query: &str,
+        _app: &AppContext,
+    ) -> Arc<Vec<FileSearchResult>> {
+        Arc::new(Vec::new())
+    }
+
     /// Gets repository contents with git status information for prioritization (WASM stub)
     #[cfg(not(feature = "local_fs"))]
     pub fn get_repo_contents_with_git_status(
@@ -259,15 +293,26 @@ impl FileSearchModel {
     /// query. Pushing the query into traversal ensures the result cap applies
     /// to *matching* files rather than the first files encountered.
     #[cfg(feature = "local_fs")]
-    fn contents_args<F>(query: &str, relative_path: F) -> GetContentsArgs
+    fn contents_args<F>(query: &str, include_folders: bool, relative_path: F) -> GetContentsArgs
     where
         F: for<'a> Fn(&repo_metadata::RepoContent<'a>) -> Option<String> + Send + Sync + 'static,
     {
         if query.is_empty() {
-            return GetContentsArgs::default();
+            let args = GetContentsArgs::default();
+            return if include_folders {
+                args
+            } else {
+                args.exclude_folders()
+            };
         }
         let query = query.to_string();
-        GetContentsArgs::default().with_filter(move |content| {
+        let args = GetContentsArgs::default();
+        let args = if include_folders {
+            args
+        } else {
+            args.exclude_folders()
+        };
+        args.with_filter(move |content| {
             relative_path(content)
                 .is_some_and(|path| FileSearchModel::fuzzy_match_path(&path, &query).is_some())
         })
@@ -285,6 +330,7 @@ impl FileSearchModel {
         &self,
         repo_root: &LocalOrRemotePath,
         query: &str,
+        include_folders: bool,
         app: &AppContext,
     ) -> Vec<FileSearchResult> {
         let repo_metadata = RepoMetadataModel::as_ref(app);
@@ -297,7 +343,7 @@ impl FileSearchModel {
                 let Some(id) = RepositoryIdentifier::try_local(local_path) else {
                     return Vec::new();
                 };
-                let args = Self::contents_args(query, {
+                let args = Self::contents_args(query, include_folders, {
                     let canonical_repo_path = canonical_repo_path.clone();
                     move |content| {
                         let local = match content {
@@ -357,7 +403,7 @@ impl FileSearchModel {
             }
             LocalOrRemotePath::Remote(remote_path) => {
                 let id = RepositoryIdentifier::Remote(remote_path.clone());
-                let args = Self::contents_args(query, {
+                let args = Self::contents_args(query, include_folders, {
                     let root = remote_path.path.clone();
                     move |content| {
                         let path_std = match content {
