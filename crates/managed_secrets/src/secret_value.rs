@@ -11,6 +11,10 @@ pub enum ManagedSecretValue {
     },
     AnthropicApiKey {
         api_key: String,
+        /// Optional base URL for the Anthropic API (e.g. custom AI gateway endpoints).
+        /// When absent, the harness uses the provider's default endpoint.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base_url: Option<String>,
     },
     AnthropicBedrockAccessKey {
         aws_access_key_id: String,
@@ -40,8 +44,12 @@ impl ManagedSecretValue {
         Self::RawValue { value: s.into() }
     }
 
-    pub fn anthropic_api_key(s: impl Into<String>) -> Self {
-        Self::AnthropicApiKey { api_key: s.into() }
+    /// Construct an Anthropic API key secret value with an optional base URL.
+    pub fn anthropic_api_key(api_key: impl Into<String>, base_url: Option<String>) -> Self {
+        Self::AnthropicApiKey {
+            api_key: api_key.into(),
+            base_url,
+        }
     }
 
     /// Construct an Anthropic Bedrock access key secret from IAM credentials and AWS region.

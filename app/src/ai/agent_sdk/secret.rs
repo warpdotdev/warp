@@ -566,7 +566,7 @@ fn read_simple_secret_value(args: &ValueArgs) -> Result<Option<String>> {
 fn make_simple_secret_value(secret_type: SecretType, raw: &str) -> ManagedSecretValue {
     match secret_type {
         SecretType::RawValue => ManagedSecretValue::raw_value(raw),
-        SecretType::AnthropicApiKey => ManagedSecretValue::anthropic_api_key(raw),
+        SecretType::AnthropicApiKey => ManagedSecretValue::anthropic_api_key(raw, None),
         SecretType::AnthropicBedrockApiKey => {
             // Bedrock secrets are multi-field and handled via SecretInput::Bedrock.
             unreachable!("Bedrock secrets should not go through make_simple_secret_value")
@@ -589,7 +589,7 @@ fn make_secret_value_from_gql_type(
         ManagedSecretType::RawValue | ManagedSecretType::Dotenvx => {
             Ok(ManagedSecretValue::raw_value(raw))
         }
-        ManagedSecretType::AnthropicApiKey => Ok(ManagedSecretValue::anthropic_api_key(raw)),
+        ManagedSecretType::AnthropicApiKey => Ok(ManagedSecretValue::anthropic_api_key(raw, None)),
         ManagedSecretType::AnthropicBedrockAccessKey => {
             // Bedrock access key secrets cannot be updated through the generic raw-string path.
             Err(anyhow::anyhow!(

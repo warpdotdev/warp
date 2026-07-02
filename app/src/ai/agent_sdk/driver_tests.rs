@@ -716,7 +716,7 @@ fn anthropic_api_key_writes_anthropic_env_var() {
     std::env::remove_var("ANTHROPIC_API_KEY");
     let secrets = HashMap::from([(
         "my-custom-name".to_string(),
-        ManagedSecretValue::anthropic_api_key("sk-ant-test-key"),
+        ManagedSecretValue::anthropic_api_key("sk-ant-test-key", None),
     )]);
     let env_vars = build_secret_env_vars(&secrets);
     assert_eq!(
@@ -734,7 +734,7 @@ fn typed_secret_overrides_raw_value_with_same_env_name() {
     let secrets = HashMap::from([
         (
             "my-auth".to_string(),
-            ManagedSecretValue::anthropic_api_key(typed_key),
+            ManagedSecretValue::anthropic_api_key(typed_key, None),
         ),
         (
             "ANTHROPIC_API_KEY".to_string(),
@@ -845,7 +845,7 @@ fn worker_injected_env_wins_over_typed_secret() {
     std::env::set_var("ANTHROPIC_API_KEY", "worker-key");
     let secrets = HashMap::from([(
         "my-auth".to_string(),
-        ManagedSecretValue::anthropic_api_key("managed-key"),
+        ManagedSecretValue::anthropic_api_key("managed-key", None),
     )]);
     let env_vars = build_secret_env_vars(&secrets);
     // The typed secret should be skipped entirely; the child inherits
