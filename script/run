@@ -131,7 +131,7 @@ fi
 # the shared install_warp_skills wrapper resolved from warpdotdev/common-skills.
 # Best-effort: a missing lock or no access is a clean no-op. Surface a warning on
 # any unexpected failure, but never abort run.
-if [[ "${INSTALL_WARP_SKILLS}" -eq 1 ]]; then
+if [[ "${INSTALL_WARP_SKILLS}" -eq 1 && "${WARP_SKIP_WARP_SKILLS_INSTALL:-}" != "1" ]]; then
   if ! ./script/resolve_common_skills install_warp_skills -- --repo-root "${REPO_ROOT}" --if-needed; then
     echo "warning: warp-skills install did not complete; continuing without it." >&2
   fi

@@ -151,6 +151,9 @@ maybe_install_common_skills() {
 # any unexpected failure, but never abort bootstrap.
 maybe_install_warp_skills() {
   if [[ "${INSTALL_WARP_SKILLS}" -eq 1 ]]; then
+    if [[ "${WARP_SKIP_WARP_SKILLS_INSTALL:-}" = "1" ]]; then
+      return
+    fi
     if ! ./script/resolve_common_skills install_warp_skills -- --repo-root "${REPO_ROOT}" --if-needed; then
       echo "warning: warp-skills install did not complete; continuing without it." >&2
     fi
