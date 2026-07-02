@@ -67,8 +67,6 @@ use warpui::{
     ViewHandle, WeakViewHandle, WindowId,
 };
 
-#[cfg(feature = "agent_mode_debug")]
-use self::code_diff_view::FileDiff;
 use self::model::{AIBlockModel, AIBlockModelHelper};
 use super::action_model::{
     AIActionStatus, BlocklistAIActionEvent, RequestFileEditsExecutor,
@@ -111,6 +109,8 @@ use crate::ai::blocklist::block::keyboard_navigable_buttons::{
     KeyboardNavigableButtonBuilder, KeyboardNavigableButtons,
 };
 use crate::ai::blocklist::context_model::AttachmentType;
+#[cfg(feature = "agent_mode_debug")]
+use crate::ai::blocklist::diff_types::FileDiff;
 use crate::ai::blocklist::inline_action::ask_user_question_view::{
     self, AskUserQuestionView, AskUserQuestionViewEvent,
 };
@@ -1221,6 +1221,21 @@ impl AIBlock {
         );
 
         Self::register_action_model_subscription(&action_model, ctx);
+
+        // Feed prepared file-edit diffs to their review views as the executor
+        // resolves them. One block-level subscription serves every edit action;
+        // views are looked up in `requested_edits` by the prepared action's ID.
+        let file_edits_executor = action_model.as_ref(ctx).request_file_edits_executor(ctx);
+        ctx.subscribe_to_model(&file_edits_executor, |me, executor, event, ctx| {
+            let RequestFileEditsExecutorEvent::DiffsPrepared(action_id) = event;
+            if let Some(view) = me
+                .requested_edits
+                .get(action_id)
+                .map(|edit| edit.view.clone())
+            {
+                Self::feed_prepared_diffs_to_view(&executor, action_id, &view, ctx);
+            }
+        });
 
         ctx.subscribe_to_model(&active_session, |me, _, event, ctx| match event {
             ActiveSessionEvent::UpdatedPwd => {
@@ -3196,16 +3211,9 @@ impl AIBlock {
             });
         } else {
             // The executor resolves diffs asynchronously during preprocess. Feed them to the
-            // view now if already prepared, and subscribe to feed them once they are.
+            // view now if already prepared; otherwise the block-level executor subscription
+            // (registered in `new`) feeds them once they are, via `requested_edits`.
             Self::feed_prepared_diffs_to_view(&executor, action_id, &view, ctx);
-            let feed_action_id = action_id.clone();
-            let feed_view = view.clone();
-            ctx.subscribe_to_model(&executor, move |_me, executor, event, ctx| {
-                let RequestFileEditsExecutorEvent::DiffsPrepared(prepared_id) = event;
-                if *prepared_id == feed_action_id {
-                    Self::feed_prepared_diffs_to_view(&executor, &feed_action_id, &feed_view, ctx);
-                }
-            });
         }
 
         let action_id_clone = action_id.clone();

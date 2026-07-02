@@ -48,9 +48,7 @@ pub(super) use read_files::ReadFilesExecutor;
 use read_mcp_resource::ReadMCPResourceExecutor;
 use read_skill::ReadSkillExecutor;
 use request_computer_use::RequestComputerUseExecutor;
-pub(crate) use request_file_edits::{
-    apply_edits, FileReadResult, MalformedFinalLineProxyEvent, PersistDiffModel, ResolvedFileEdit,
-};
+pub(crate) use request_file_edits::{apply_edits, FileReadResult, MalformedFinalLineProxyEvent};
 pub use request_file_edits::{
     EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent, EditResolvedEvent, EditStats,
     RequestFileEditsExecutor, RequestFileEditsExecutorEvent, RequestFileEditsFormatKind,

@@ -146,6 +146,7 @@ pub use ai::agent::{AIAgentActionResultType, FileEdit, TodoOperation};
 use ai::agent_conversations_model::AgentConversationsModel;
 use ai::agent_management::AgentNotificationsModel;
 use ai::ambient_agents::scheduled::ScheduledAgentManager;
+use ai::blocklist::persist_diff_model::PersistDiffModel;
 use ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -1880,6 +1881,9 @@ pub(crate) fn initialize_app(
     );
     #[cfg(feature = "local_fs")]
     ctx.add_singleton_model(FileModel::new);
+    // The shared writer for accepted AI file edits. Registered after FileModel,
+    // whose save events it subscribes to on non-wasm targets.
+    ctx.add_singleton_model(PersistDiffModel::new);
     ctx.add_singleton_model(GlobalBufferModel::new);
     #[cfg(windows)]
     ctx.add_singleton_model(util::traffic_lights::windows::RendererState::new);

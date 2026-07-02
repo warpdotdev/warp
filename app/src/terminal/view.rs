@@ -235,7 +235,8 @@ use crate::ai::blocklist::block::{AIBlockAction, FinishReason};
 use crate::ai::blocklist::codebase_index_speedbump_banner::{
     CodebaseIndexSpeedbumpBannerAction, CodebaseIndexSpeedbumpBannerState, VisibilityState,
 };
-use crate::ai::blocklist::inline_action::code_diff_view::{CodeDiffView, FileDiff};
+use crate::ai::blocklist::diff_types::FileDiff;
+use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
 use crate::ai::blocklist::model::{
     AIBlockModel, AIBlockModelHelper, AIBlockModelImpl, AIBlockOutputStatus,
 };
@@ -15346,10 +15347,10 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         let action_id = AIAgentActionId::from(uuid::Uuid::new_v4().to_string());
-        use crate::ai::agent::AIIdentifiers;
+        use crate::ai::agent::{AIIdentifiers, RequestFileEditsResult};
         use crate::ai::blocklist::diff_types::DiffSessionType;
         use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffViewEvent;
-        use crate::ai::blocklist::{PersistDiffModel, ResolvedFileEdit};
+        use crate::ai::blocklist::persist_diff_model::PersistDiffModel;
 
         let identifiers = AIIdentifiers::default();
         let title_for_result = title.clone();
@@ -15372,13 +15373,11 @@ impl TerminalView {
             )
         });
 
-        // Keep a copy of the resolved diffs so the passive accept flow can persist them,
-        // and a shared persistence model to write them through on accept.
+        // Keep a copy of the resolved diffs so the passive accept flow can persist them.
         let persist_source_diffs = diffs.clone();
         diff_view.update(ctx, |view, ctx| {
             view.set_candidate_diffs(diffs, ctx);
         });
-        let persist_model = ctx.add_model(PersistDiffModel::new);
 
         let wrapper_view = {
             let diff_view_for_wrapper = diff_view.clone();
@@ -15402,32 +15401,38 @@ impl TerminalView {
             match event {
                 CodeDiffViewEvent::TryAccept => {
                     // Persist the accepted (possibly edited) passive suggestion via the shared
-                    // PersistDiffModel. Passive suggestions are local and fire-and-forget here:
-                    // the write happens; the result isn't surfaced to the LLM on this path.
-                    let reviewed: std::collections::HashMap<String, String> = view
-                        .as_ref(ctx)
-                        .reviewed_file_contents(ctx)
-                        .into_iter()
-                        .collect();
+                    // PersistDiffModel. The result isn't surfaced to the LLM on this path, but
+                    // a failed write still surfaces a toast to the user.
+                    let reviewed = view.as_ref(ctx).reviewed_file_contents(ctx);
                     view.update(ctx, |diff_view, ctx| {
                         diff_view.send_malformed_line_telemetry(ctx);
                     });
-                    let resolved: Vec<ResolvedFileEdit> = persist_source_diffs
-                        .iter()
-                        .map(|file_diff| ResolvedFileEdit {
-                            path: file_diff.file_path(),
-                            base_content: file_diff.base.content.clone(),
-                            op: file_diff.diff_type.clone(),
-                            final_content: reviewed
-                                .get(&file_diff.file_path())
-                                .cloned()
-                                .unwrap_or_default(),
-                        })
-                        .collect();
-                    let persist_future = persist_model.update(ctx, |model, ctx| {
-                        model.persist(resolved, DiffSessionType::Local, ctx)
+                    let persist_future = PersistDiffModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.resolve_and_persist(
+                            persist_source_diffs.clone(),
+                            reviewed,
+                            DiffSessionType::Local,
+                            ctx,
+                        )
                     });
-                    ctx.spawn(persist_future, |_me, _result, _ctx| {});
+                    ctx.spawn(persist_future, |_me, result, ctx| {
+                        if let RequestFileEditsResult::DiffApplicationFailed { error } = &result {
+                            crate::safe_error!(
+                                safe: ("Failed to save accepted passive code diff"),
+                                full: ("Failed to save accepted passive code diff: {error}")
+                            );
+                            let window_id = ctx.window_id();
+                            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                                toast_stack.add_ephemeral_toast(
+                                    DismissibleToast::error(
+                                        "Failed to save file edits".to_string(),
+                                    ),
+                                    window_id,
+                                    ctx,
+                                );
+                            });
+                        }
+                    });
                     ctx.notify();
                 }
                 CodeDiffViewEvent::CancelPassive => {

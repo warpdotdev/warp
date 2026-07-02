@@ -46,15 +46,16 @@ use warpui::{
 
 use super::malformed_line_heuristics::has_malformed_terminal_correction_signal;
 use crate::ai::agent::icons::{self, yellow_stop_icon};
-use crate::ai::agent::{AIAgentActionId, AIIdentifiers, FileEdit, ServerOutputId};
+use crate::ai::agent::{
+    AIAgentActionId, AIAgentActionResultType, AIIdentifiers, FileEdit, RequestFileEditsResult,
+    ServerOutputId,
+};
 use crate::ai::blocklist::action_model::{
     AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel,
     EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent, EditResolvedEvent, EditStats,
     MalformedFinalLineProxyEvent, RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent,
 };
-// Diff data types live in a neutral, non-GUI module; re-exported here so existing
-// `code_diff_view::{FileDiff, DiffSessionType}` paths keep resolving.
-pub(crate) use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff};
+use crate::ai::blocklist::diff_types::{changed_lines_from_op, DiffSessionType, FileDiff};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::inline_action_header::INLINE_ACTION_HORIZONTAL_PADDING;
 use crate::ai::blocklist::inline_action::inline_action_icons::{
@@ -571,6 +572,24 @@ impl CodeDiffView {
         ctx.subscribe_to_model(
             &action_model,
             move |me, action_model, event, ctx| match event {
+                // The user accepted, but persistence failed after the fact. The LLM is
+                // informed via the action result; surface the save-failure toast the
+                // user would otherwise never see (the diff already shows as accepted).
+                BlocklistAIActionEvent::FinishedAction { action_id, .. }
+                    if *action_id == me.action_id
+                        && matches!(me.state, CodeDiffState::Accepted) =>
+                {
+                    if let Some(AIActionStatus::Finished(result)) =
+                        action_model.as_ref(ctx).get_action_status(&me.action_id)
+                    {
+                        if let AIAgentActionResultType::RequestFileEdits(
+                            RequestFileEditsResult::DiffApplicationFailed { error },
+                        ) = &result.result
+                        {
+                            me.show_save_failure_toast(error, ctx);
+                        }
+                    }
+                }
                 BlocklistAIActionEvent::FinishedAction { action_id, .. } if !me.is_complete() => {
                     match action_model.as_ref(ctx).get_action_status(&me.action_id) {
                         Some(AIActionStatus::Blocked) => {
@@ -2129,9 +2148,9 @@ impl CodeDiffView {
         );
     }
 
-    /// Extracts the final editor-buffer content per file so a review surface can
-    /// hand it to the executor. Deleted files are skipped (no meaningful content).
-    pub fn reviewed_file_contents(&self, app: &AppContext) -> Vec<(String, String)> {
+    /// Extracts the final editor-buffer content per file path so a review surface
+    /// can hand it to the executor. Deleted files are skipped (no meaningful content).
+    pub fn reviewed_file_contents(&self, app: &AppContext) -> HashMap<String, String> {
         self.pending_diffs
             .iter()
             .filter_map(|diff| {
@@ -2152,6 +2171,22 @@ impl CodeDiffView {
                 Some((path, content))
             })
             .collect()
+    }
+
+    /// Shows the save-failure toast for edits that failed to persist after accept.
+    fn show_save_failure_toast(&self, error: &str, ctx: &mut ViewContext<Self>) {
+        crate::safe_error!(
+            safe: ("Failed to save accepted AgentMode diffs"),
+            full: ("Failed to save accepted AgentMode diffs: {error}")
+        );
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::error("Failed to save file edits".to_string()),
+                window_id,
+                ctx,
+            );
+        });
     }
 
     /// Emits the malformed-final-line proxy telemetry, computed from editor state
@@ -2983,30 +3018,7 @@ fn changed_lines_for_result(
             .collect();
     }
 
-    match diff_type {
-        Some(DiffType::Create { delta }) => inserted_content_range(1, &delta.insertion)
-            .into_iter()
-            .collect(),
-        Some(DiffType::Update { deltas, .. }) => deltas
-            .iter()
-            .filter_map(changed_line_range_for_delta)
-            .collect(),
-        Some(DiffType::Delete { .. }) | None => vec![],
-    }
-}
-
-fn changed_line_range_for_delta(delta: &DiffDelta) -> Option<Range<usize>> {
-    let replacement_range = &delta.replacement_line_range;
-    if replacement_range.start == replacement_range.end {
-        return inserted_content_range(replacement_range.start.max(1), &delta.insertion);
-    }
-
-    Some(replacement_range.clone())
-}
-
-fn inserted_content_range(start: usize, content: &str) -> Option<Range<usize>> {
-    let line_count = content.lines().count();
-    (line_count > 0).then_some(start..start + line_count)
+    diff_type.map(changed_lines_from_op).unwrap_or_default()
 }
 
 fn editor_range_to_file_context_range(range: Range<usize>) -> Range<usize> {

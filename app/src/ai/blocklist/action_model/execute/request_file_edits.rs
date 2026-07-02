@@ -1,12 +1,11 @@
 mod apply_diff_model;
 mod diff_application;
-mod persist_diff_model;
 mod telemetry;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use ai::diff_validation::{AIRequestedCodeDiff, DiffDelta, DiffType};
+use ai::diff_validation::AIRequestedCodeDiff;
 use apply_diff_model::ApplyDiffModel;
 use diff_application::DiffApplicationError;
 pub(crate) use diff_application::{apply_edits, FileReadResult};
@@ -14,7 +13,6 @@ use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use itertools::Itertools;
-pub(crate) use persist_diff_model::{PersistDiffModel, ResolvedFileEdit};
 pub(crate) use telemetry::MalformedFinalLineProxyEvent;
 #[allow(unused_imports)]
 pub use telemetry::{EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent};
@@ -30,16 +28,15 @@ use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessA
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
-    AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, AnyFileContent, FileContext,
-    FileLocations, RequestFileEditsResult, UpdatedFileContext,
+    AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, RequestFileEditsResult,
 };
 use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff};
+use crate::ai::blocklist::persist_diff_model::PersistDiffModel;
 use crate::ai::blocklist::{BlocklistAIPermissions, RequestedEditResolution};
 use crate::ai::paths::host_native_absolute_path;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::SessionType;
 use crate::{safe_warn, BlocklistAIHistoryModel};
-const APPLY_DIFF_RESULT_CONTEXT_LINES: usize = 10;
 
 /// Events emitted by the file-edits executor for review surfaces to observe.
 pub enum RequestFileEditsExecutorEvent {
@@ -57,7 +54,7 @@ enum PendingFileEdits {
     Prepared {
         diffs: Vec<FileDiff>,
         session_type: DiffSessionType,
-        reviewed: Option<Vec<(String, String)>>,
+        reviewed: Option<HashMap<String, String>>,
     },
     /// Diff application failed during preprocess; `execute` reports it to the LLM.
     Failed(Vec1<DiffApplicationError>),
@@ -66,7 +63,6 @@ enum PendingFileEdits {
 pub struct RequestFileEditsExecutor {
     active_session: ModelHandle<ActiveSession>,
     apply_diff_model: ModelHandle<ApplyDiffModel>,
-    persist_diff_model: ModelHandle<PersistDiffModel>,
     /// Per-action state produced by preprocess and consumed by execute.
     pending: HashMap<AIAgentActionId, PendingFileEdits>,
     terminal_view_id: EntityId,
@@ -79,11 +75,9 @@ impl RequestFileEditsExecutor {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let apply_diff_model = ctx.add_model(|_| ApplyDiffModel::new(active_session.clone()));
-        let persist_diff_model = ctx.add_model(PersistDiffModel::new);
         Self {
             active_session,
             apply_diff_model,
-            persist_diff_model,
             pending: HashMap::new(),
             terminal_view_id,
         }
@@ -144,7 +138,7 @@ impl RequestFileEditsExecutor {
     pub fn set_reviewed_content(
         &mut self,
         action_id: &AIAgentActionId,
-        files: Vec<(String, String)>,
+        files: HashMap<String, String>,
     ) {
         if let Some(PendingFileEdits::Prepared { reviewed, .. }) = self.pending.get_mut(action_id) {
             *reviewed = Some(files);
@@ -204,17 +198,6 @@ impl RequestFileEditsExecutor {
             }
         };
 
-        // GUI review supplies final content per path; headless applies the diff deltas.
-        let reviewed: HashMap<String, String> = reviewed.unwrap_or_default().into_iter().collect();
-        let resolved = match build_resolved_edits(diffs, &reviewed) {
-            Ok(resolved) => resolved,
-            Err(error) => {
-                return ActionExecution::Sync(AIAgentActionResultType::RequestFileEdits(
-                    RequestFileEditsResult::DiffApplicationFailed { error },
-                ));
-            }
-        };
-
         let identifiers = self
             .generate_ai_identifiers(&input.conversation_id, id, ctx)
             .unwrap_or_else(|| AIIdentifiers {
@@ -224,9 +207,11 @@ impl RequestFileEditsExecutor {
         let passive_diff = BlocklistAIHistoryModel::as_ref(ctx)
             .is_entirely_passive_conversation(&input.conversation_id);
 
-        let result_future = self
-            .persist_diff_model
-            .update(ctx, |model, ctx| model.persist(resolved, session_type, ctx));
+        // GUI review supplies final content per path; headless applies the diff deltas.
+        let reviewed = reviewed.unwrap_or_default();
+        let result_future = PersistDiffModel::handle(ctx).update(ctx, |model, ctx| {
+            model.resolve_and_persist(diffs, reviewed, session_type, ctx)
+        });
 
         ActionExecution::new_async(result_future, move |result, ctx| {
             if let RequestFileEditsResult::Success {
@@ -416,143 +401,6 @@ impl RequestFileEditsExecutor {
     }
 }
 
-fn updated_file_contexts_from_editor_buffers(
-    updated_files: &[(FileLocations, bool)],
-    content_map: &HashMap<String, String>,
-) -> Vec<UpdatedFileContext> {
-    updated_files
-        .iter()
-        .flat_map(|(file_location, was_edited)| {
-            let content = content_map
-                .get(&file_location.name)
-                .cloned()
-                .unwrap_or_default();
-            let line_count = content.lines().count();
-
-            let mut file_location = file_location.clone();
-            file_location.expand_surrounding_context(APPLY_DIFF_RESULT_CONTEXT_LINES);
-            clamp_to_file_context_range_start(&mut file_location);
-
-            if file_location.lines.is_empty() {
-                return vec![UpdatedFileContext {
-                    was_edited_by_user: *was_edited,
-                    file_context: FileContext {
-                        file_name: file_location.name,
-                        content: AnyFileContent::StringContent(content),
-                        line_range: None,
-                        last_modified: None,
-                        line_count,
-                    },
-                }];
-            }
-
-            let lines = content.lines().collect_vec();
-            file_location
-                .lines
-                .into_iter()
-                .map(|range| {
-                    let start = range.start.saturating_sub(1).min(lines.len());
-                    let end = range.end.saturating_sub(1).min(lines.len());
-                    let fragment = if start >= end {
-                        String::new()
-                    } else {
-                        lines[start..end].join("\n")
-                    };
-
-                    UpdatedFileContext {
-                        was_edited_by_user: *was_edited,
-                        file_context: FileContext {
-                            file_name: file_location.name.clone(),
-                            content: AnyFileContent::StringContent(fragment),
-                            line_range: Some(range),
-                            last_modified: None,
-                            line_count,
-                        },
-                    }
-                })
-                .collect_vec()
-        })
-        .collect()
-}
-
-fn clamp_to_file_context_range_start(file_location: &mut FileLocations) {
-    for range in &mut file_location.lines {
-        range.start = range.start.max(1);
-        range.end = range.end.max(range.start);
-    }
-}
-
-/// Builds resolved file edits, using GUI-reviewed content per path when present
-/// and otherwise applying the diff's deltas to the base content.
-fn build_resolved_edits(
-    diffs: Vec<FileDiff>,
-    reviewed: &HashMap<String, String>,
-) -> Result<Vec<ResolvedFileEdit>, String> {
-    let mut resolved = Vec::with_capacity(diffs.len());
-    for diff in diffs {
-        let path = diff.file_path();
-        let base_content = diff.base.content;
-        let op = diff.diff_type;
-        let final_content = match reviewed.get(&path) {
-            Some(content) => content.clone(),
-            None => final_content_from_op(&base_content, &op)?,
-        };
-        resolved.push(ResolvedFileEdit {
-            path,
-            base_content,
-            op,
-            final_content,
-        });
-    }
-    Ok(resolved)
-}
-
-/// Derives the final on-disk content for a diff from its base content and deltas.
-fn final_content_from_op(base_content: &str, op: &DiffType) -> Result<String, String> {
-    match op {
-        DiffType::Create { delta } => Ok(delta.insertion.clone()),
-        DiffType::Update { deltas, .. } => apply_deltas_to_content(base_content, deltas),
-        DiffType::Delete { .. } => Ok(String::new()),
-    }
-}
-
-/// Applies line-range replacement deltas to `content`, producing the new content.
-fn apply_deltas_to_content(content: &str, deltas: &[DiffDelta]) -> Result<String, String> {
-    let mut lines = split_lines_preserving_newlines(content);
-    let mut deltas = deltas.to_vec();
-    deltas.sort_by_key(|delta| delta.replacement_line_range.start);
-
-    for delta in deltas.into_iter().rev() {
-        let start = delta.replacement_line_range.start.saturating_sub(1);
-        let end = delta.replacement_line_range.end.saturating_sub(1);
-        if start > lines.len() || end > lines.len() || start > end {
-            return Err(format!(
-                "Diff range {:?} is out of bounds for file with {} lines",
-                delta.replacement_line_range,
-                lines.len()
-            ));
-        }
-        let replacement = split_lines_preserving_newlines(&delta.insertion);
-        lines.splice(start..end, replacement);
-    }
-
-    Ok(lines.concat())
-}
-
-/// Splits content into lines while keeping trailing newlines, so reassembly via
-/// `concat` reproduces the original byte-for-byte.
-fn split_lines_preserving_newlines(content: &str) -> Vec<String> {
-    if content.is_empty() {
-        Vec::new()
-    } else {
-        content.split_inclusive('\n').map(str::to_string).collect()
-    }
-}
-
 impl Entity for RequestFileEditsExecutor {
     type Event = RequestFileEditsExecutorEvent;
 }
-
-#[cfg(test)]
-#[path = "request_file_edits_tests.rs"]
-mod tests;

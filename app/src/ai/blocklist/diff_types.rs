@@ -1,9 +1,12 @@
-//! Plain data types describing a resolved file diff.
+//! Plain data types describing a resolved file diff, plus small pure helpers
+//! over them.
 //!
 //! These live outside the GUI `code_diff_view` module so that the shared,
 //! surface-agnostic executor and persistence models can name them without
 //! depending on any GUI view.
-use ai::diff_validation::DiffType;
+use std::ops::Range;
+
+use ai::diff_validation::{DiffDelta, DiffType};
 use warp_core::HostId;
 
 /// The base content and file path for a diff.
@@ -46,4 +49,33 @@ impl FileDiff {
 pub enum DiffSessionType {
     Local,
     Remote(HostId),
+}
+
+/// Derives the 1-indexed changed line ranges described by a diff's deltas.
+pub(crate) fn changed_lines_from_op(diff_type: &DiffType) -> Vec<Range<usize>> {
+    match diff_type {
+        DiffType::Create { delta } => inserted_content_range(1, &delta.insertion)
+            .into_iter()
+            .collect(),
+        DiffType::Update { deltas, .. } => deltas
+            .iter()
+            .filter_map(changed_line_range_for_delta)
+            .collect(),
+        DiffType::Delete { .. } => vec![],
+    }
+}
+
+/// Maps a single delta to the line range it changed.
+fn changed_line_range_for_delta(delta: &DiffDelta) -> Option<Range<usize>> {
+    let replacement_range = &delta.replacement_line_range;
+    if replacement_range.start == replacement_range.end {
+        return inserted_content_range(replacement_range.start.max(1), &delta.insertion);
+    }
+    Some(replacement_range.clone())
+}
+
+/// Returns the line range covered by inserted content starting at `start`.
+fn inserted_content_range(start: usize, content: &str) -> Option<Range<usize>> {
+    let line_count = content.lines().count();
+    (line_count > 0).then_some(start..start + line_count)
 }
