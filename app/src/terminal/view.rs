@@ -11047,9 +11047,9 @@ impl TerminalView {
                         && ai_metadata
                             .long_running_control_state()
                             .is_some_and(|state| {
-                                state
-                                    .user_take_over_reason()
-                                    .is_some_and(|reason| !reason.is_stop())
+                                state.user_take_over_reason().is_some_and(|reason| {
+                                    !reason.is_stop() && !reason.is_transfer_from_agent()
+                                })
                             }) =>
                 {
                     Some(*ai_metadata.conversation_id())
