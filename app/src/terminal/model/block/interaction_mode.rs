@@ -156,16 +156,17 @@ impl Block {
         }
     }
 
-    /// Sets control to user with Stop reason if a long-running control state exists.
-    pub fn set_user_control_with_stop_reason(&mut self) {
-        if let InteractionMode::Agent(AgentInteractionMetadata {
-            long_running_control_state: Some(ref mut state),
-            ..
-        }) = self.interaction_mode
-        {
-            *state = LongRunningCommandControlState::User {
-                reason: UserTakeOverReason::Stop,
-            };
+    /// Hands control to the user with the `Stop` reason and suppresses auto-resume of the
+    /// conversation once the command completes. Used by teardown paths (rewind, stop) where
+    /// the conversation has been cancelled and should not resume on its own.
+    pub fn set_user_control_and_suppress_auto_resume(&mut self) {
+        if let InteractionMode::Agent(metadata) = &mut self.interaction_mode {
+            metadata.suppress_auto_resume = true;
+            if let Some(state) = &mut metadata.long_running_control_state {
+                *state = LongRunningCommandControlState::User {
+                    reason: UserTakeOverReason::Stop,
+                };
+            }
         }
     }
 
@@ -235,6 +236,7 @@ impl Block {
             long_running_control_state: None,
             has_agent_written_to_block: false,
             should_hide_block: true,
+            suppress_auto_resume: false,
         })
     }
 
@@ -366,6 +368,7 @@ impl InteractionMode {
             }),
             has_agent_written_to_block: false,
             should_hide_block: false,
+            suppress_auto_resume: false,
         }))
     }
 
@@ -490,6 +493,10 @@ pub struct AgentInteractionMetadata {
     /// `true` if this block should be hidden from the user (as is the case with AI-requested
     /// commands, for example).
     should_hide_block: bool,
+
+    /// `true` if the conversation must not auto-resume when this command completes, even though
+    /// the user is in control. Set by teardown paths (rewind, stop) that cancel the conversation.
+    suppress_auto_resume: bool,
 }
 
 impl AgentInteractionMetadata {
@@ -509,6 +516,7 @@ impl AgentInteractionMetadata {
             long_running_control_state,
             has_agent_written_to_block,
             should_hide_block,
+            suppress_auto_resume: false,
         }
     }
 
@@ -555,6 +563,14 @@ impl AgentInteractionMetadata {
 
     pub fn should_hide_block(&self) -> bool {
         self.should_hide_block
+    }
+
+    pub fn should_suppress_auto_resume(&self) -> bool {
+        self.suppress_auto_resume
+    }
+
+    pub fn set_suppress_auto_resume(&mut self) {
+        self.suppress_auto_resume = true;
     }
 }
 
