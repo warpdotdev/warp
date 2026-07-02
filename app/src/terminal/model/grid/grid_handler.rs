@@ -2581,7 +2581,7 @@ impl GridHandler {
     /// If the written text wraps to a new line, the WRAPLINE flag will be set
     /// appropriately.
     #[cfg(test)]
-    pub(super) fn input_at_cursor(&mut self, text: &str) {
+    pub(crate) fn input_at_cursor(&mut self, text: &str) {
         use warp_terminal::model::VisiblePoint;
 
         let columns = self.columns();
