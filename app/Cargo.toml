@@ -549,7 +549,6 @@ default = [
     "shared_block_title_generation",
     "tab_close_button_on_left",
     "ai_resume_button",
-    "code_find_replace",
     "ai_context_menu_code",
     "agent_decides_command_execution",
     "linked_code_blocks",
@@ -892,7 +891,6 @@ ai_context_menu = []
 at_menu_outside_of_ai_mode = []
 agent_decides_command_execution = []
 fast_forward_autoexecute_button = []
-code_find_replace = []
 command_palette_file_search = []
 conversation_filter = []
 ai_context_menu_commands = []
