@@ -2535,3 +2535,21 @@ fn test_full_grid_clear_resize_then_bounds_to_string_does_not_panic() {
         );
     }
 }
+
+#[test]
+fn test_delete_chars_count_exceeding_eol_does_not_erase_before_cursor() {
+    let mut grid = GridHandler::new_for_test(1, 5);
+    grid.input('a');
+    grid.input('b');
+    grid.input('c');
+    grid.input('d');
+    grid.input('e');
+    grid.goto(VisibleRow(0), 3);
+    grid.delete_chars(10);
+    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][0].c, 'a', "chars before cursor must be preserved");
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][1].c, 'b', "chars before cursor must be preserved");
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][2].c, 'c', "chars before cursor must be preserved");
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][3].c, ' ', "cells at/after cursor must be blanked when count exceeds EOL");
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][4].c, ' ', "cells at/after cursor must be blanked when count exceeds EOL");
+}

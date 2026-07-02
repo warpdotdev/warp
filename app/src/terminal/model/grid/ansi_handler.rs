@@ -672,8 +672,10 @@ impl ansi::Handler for GridHandler {
         let cursor = &self.grid.cursor();
         let bg = cursor.template.bg;
 
-        // Ensure deleting within terminal bounds.
-        let count = min(count, cols);
+        // Ensure deleting within terminal bounds. Count is clamped to cells
+        // remaining from cursor to end-of-line (not full row width), otherwise
+        // the trailing blank-fill can erase cells before the cursor.
+        let count = min(count, cols - cursor.point.col);
 
         let start = cursor.point.col;
         let end = min(start + count, cols - 1);
