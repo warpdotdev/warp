@@ -1694,8 +1694,7 @@ fn launch_local_no_harness_child(
                     // so the share-reporter in
                     // `local_tty/terminal_manager.rs` can resolve it from
                     // the selected conversation when the share handshake
-                    // succeeds. Mirrors the pattern used by
-                    // `OrchestrationViewerModel::apply_children_fetch`.
+                    // succeeds.
                     BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
                         if let Some(conversation) = model.conversation_mut(&conversation_id) {
                             conversation.set_task_id(child_task_id);

@@ -419,10 +419,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::IncrementalAutoReload,
         #[cfg(feature = "run_agents_tool")]
         FeatureFlag::RunAgentsTool,
-        #[cfg(feature = "orchestration_viewer_streamer")]
-        FeatureFlag::OrchestrationViewerStreamer,
-        #[cfg(feature = "owner_orchestration_ancestor_streamer")]
-        FeatureFlag::OwnerOrchestrationAncestorStreamer,
         #[cfg(feature = "wait_for_events_parent_registration")]
         FeatureFlag::WaitForEventsParentRegistration,
         #[cfg(feature = "pending_user_query_indicator")]

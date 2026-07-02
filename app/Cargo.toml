@@ -679,8 +679,6 @@ default = [
     "oz_handoff",
     "handoff_local_cloud",
     "run_agents_tool",
-    "orchestration_viewer_streamer",
-    "owner_orchestration_ancestor_streamer",
     "pending_user_query_indicator",
     "queue_slash_command",
     "queued_prompts_v2",
@@ -983,8 +981,6 @@ skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
 run_agents_tool = []
-orchestration_viewer_streamer = []
-owner_orchestration_ancestor_streamer = []
 wait_for_events_parent_registration = []
 pending_user_query_indicator = []
 queue_slash_command = []

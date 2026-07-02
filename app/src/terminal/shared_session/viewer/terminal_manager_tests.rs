@@ -137,8 +137,6 @@ fn on_view_detached_closed_clears_orchestration_viewer_model_slot() {
     // Regression: closing a viewer pane must drop the OVM and release its
     // streamer registration so the ancestor SSE can be torn down.
     App::test((), |mut app| async move {
-        let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-
         initialize_app_for_terminal_view(&mut app);
 
         let (manager, parent) = build_manager_with_registered_ovm(&mut app);
@@ -180,8 +178,6 @@ fn on_view_detached_hidden_for_close_keeps_orchestration_viewer_model_alive() {
     // window. OVM (and the ancestor SSE registration) must stay alive so
     // the pill bar restores seamlessly if the user undoes the close.
     App::test((), |mut app| async move {
-        let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-
         initialize_app_for_terminal_view(&mut app);
 
         let (manager, parent) = build_manager_with_registered_ovm(&mut app);
@@ -210,8 +206,6 @@ fn on_view_detached_moved_keeps_orchestration_viewer_model_alive() {
     // to a new pane group. Tearing down the OVM would orphan the pill
     // bar on the moved pane.
     App::test((), |mut app| async move {
-        let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-
         initialize_app_for_terminal_view(&mut app);
 
         let (manager, parent) = build_manager_with_registered_ovm(&mut app);
