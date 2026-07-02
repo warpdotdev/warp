@@ -346,8 +346,8 @@ fn manual_expand_override_shows_finished_reasoning_body() {
             });
             // A manual expand wins over the collapsed-when-finished default.
             block
-                .thinking_collapse_overrides
-                .set(MessageId::new("reasoning-1".to_owned()), false);
+                .thinking_states
+                .set_collapsed(MessageId::new("reasoning-1".to_owned()), false);
 
             let rendered = render_block_lines(&block, 40, app_ctx);
             assert_eq!(rendered[0], "Thought for 2 seconds ▾");
@@ -397,7 +397,7 @@ fn header_click_records_a_manual_collapse_override() {
             // override that wins over the expanded-while-streaming default.
             let message_id = MessageId::new("reasoning-1".to_owned());
             assert!(block
-                .thinking_collapse_overrides
+                .thinking_states
                 .is_collapsed(&message_id, false));
         });
     });

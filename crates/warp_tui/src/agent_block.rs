@@ -40,29 +40,54 @@ enum TuiAIBlockSection {
     },
 }
 
-/// Manual collapse overrides for thinking blocks, keyed by reasoning message.
-/// Absence means the default: collapsed iff reasoning has finished, so a block
-/// streams expanded and auto-collapses on finish unless the user has toggled
-/// it — a recorded override wins permanently.
+/// Per-message UI state for thinking blocks, keyed by reasoning message.
 #[derive(Clone, Default)]
-pub(crate) struct ThinkingCollapseOverrides {
-    overrides: Rc<RefCell<HashMap<MessageId, bool>>>,
+pub(crate) struct ThinkingBlockStates {
+    states: Rc<RefCell<HashMap<MessageId, ThinkingBlockState>>>,
 }
 
-impl ThinkingCollapseOverrides {
+/// UI state for a single thinking block.
+#[derive(Default)]
+struct ThinkingBlockState {
+    /// Manual collapse override. `None` means the default: collapsed iff
+    /// reasoning has finished, so a block streams expanded and auto-collapses
+    /// on finish unless the user has toggled it — a recorded override wins
+    /// permanently.
+    collapse_override: Option<bool>,
+    /// Hover state for the thinking header. Owned here (not created inline
+    /// during render) so it survives element-tree rebuilds, mirroring the
+    /// GUI's `MouseStateHandle` pattern.
+    hover_state: TuiMouseStateHandle,
+}
+
+impl ThinkingBlockStates {
     /// Whether the thinking block for `message_id` is collapsed: the manual
     /// override if one was recorded, else collapsed iff `finished`.
     pub(crate) fn is_collapsed(&self, message_id: &MessageId, finished: bool) -> bool {
-        self.overrides
+        self.states
             .borrow()
             .get(message_id)
-            .copied()
+            .and_then(|state| state.collapse_override)
             .unwrap_or(finished)
     }
 
     /// Records a manual collapse override for `message_id`.
-    pub(crate) fn set(&self, message_id: MessageId, collapsed: bool) {
-        self.overrides.borrow_mut().insert(message_id, collapsed);
+    pub(crate) fn set_collapsed(&self, message_id: MessageId, collapsed: bool) {
+        self.states
+            .borrow_mut()
+            .entry(message_id)
+            .or_default()
+            .collapse_override = Some(collapsed);
+    }
+
+    /// Returns the persistent hover state handle for `message_id`.
+    pub(crate) fn hover_state(&self, message_id: &MessageId) -> TuiMouseStateHandle {
+        self.states
+            .borrow_mut()
+            .entry(message_id.clone())
+            .or_default()
+            .hover_state
+            .clone()
     }
 }
 
@@ -74,12 +99,8 @@ pub(super) struct TuiAIBlock {
     conversation_id: AIConversationId,
     exchange_id: AIAgentExchangeId,
     model: Rc<dyn AIBlockModel<View = Self>>,
-    /// Manual collapse overrides for this exchange's thinking blocks.
-    thinking_collapse_overrides: ThinkingCollapseOverrides,
-    /// Hover state for each thinking header, keyed by reasoning message. Owned
-    /// here (not created inline during render) so it survives element-tree
-    /// rebuilds, mirroring the GUI's `MouseStateHandle` pattern.
-    thinking_hover_states: RefCell<HashMap<MessageId, TuiMouseStateHandle>>,
+    /// Per-message UI state for this exchange's thinking blocks.
+    thinking_states: ThinkingBlockStates,
 }
 
 /// Extracts model state into renderable agent block sections.
@@ -94,8 +115,7 @@ impl TuiAIBlock {
             conversation_id,
             exchange_id,
             model,
-            thinking_collapse_overrides: Default::default(),
-            thinking_hover_states: Default::default(),
+            thinking_states: Default::default(),
         }
     }
 
@@ -229,22 +249,13 @@ impl TuiAIBlock {
                     message_id,
                     finished_duration,
                     body,
-                } => {
-                    let hover_state = self
-                        .thinking_hover_states
-                        .borrow_mut()
-                        .entry(message_id.clone())
-                        .or_default()
-                        .clone();
-                    render_thinking_section(
-                        &self.thinking_collapse_overrides,
-                        hover_state,
-                        message_id,
-                        *finished_duration,
-                        body,
-                        app,
-                    )
-                }
+                } => render_thinking_section(
+                    &self.thinking_states,
+                    message_id,
+                    *finished_duration,
+                    body,
+                    app,
+                ),
             };
 
             // One row of bottom padding gives uniform spacing between sections

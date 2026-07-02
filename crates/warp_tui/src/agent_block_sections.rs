@@ -1,7 +1,7 @@
 //! Pure render functions for each agent block section kind.
 //!
 //! Each render function takes a section's data (plus the block's thinking
-//! collapse overrides for collapse state) and returns its element. Spacing
+//! block states for collapse/hover state) and returns its element. Spacing
 //! between sections is owned by the composer in `agent_block.rs`, not by these
 //! renderers.
 
@@ -14,13 +14,12 @@ use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
-    tui_collapsible, Modifier, TuiContainer, TuiElement, TuiFlex, TuiMouseStateHandle, TuiStyle,
-    TuiText,
+    tui_collapsible, Modifier, TuiContainer, TuiElement, TuiFlex, TuiStyle, TuiText,
 };
 use warpui_core::elements::Fill;
 use warpui_core::AppContext;
 
-use crate::agent_block::ThinkingCollapseOverrides;
+use crate::agent_block::ThinkingBlockStates;
 
 const INPUT_PREFIX: &str = "≫ ";
 
@@ -81,10 +80,9 @@ pub(crate) fn render_tool_call_section(app: &AppContext) -> Box<dyn TuiElement> 
 }
 
 /// Renders a reasoning message as a collapsible thinking block. The header
-/// turns white and bold while `hover_state` reports it hovered.
+/// turns white and bold while the block's hover state reports it hovered.
 pub(crate) fn render_thinking_section(
-    overrides: &ThinkingCollapseOverrides,
-    hover_state: TuiMouseStateHandle,
+    states: &ThinkingBlockStates,
     message_id: &MessageId,
     finished_duration: Option<Duration>,
     body: &str,
@@ -106,18 +104,18 @@ pub(crate) fn render_thinking_section(
     let body_element = TuiContainer::new(TuiText::new(body.to_owned()).with_style(style).finish())
         .with_padding_left(4);
 
-    let collapsed = overrides.is_collapsed(message_id, finished_duration.is_some());
-    let toggle_overrides = overrides.clone();
+    let collapsed = states.is_collapsed(message_id, finished_duration.is_some());
+    let toggle_states = states.clone();
     let toggle_message_id = message_id.clone();
     tui_collapsible(
         collapsed,
         header,
         style,
         hover_style,
-        hover_state,
+        states.hover_state(message_id),
         body_element.finish(),
         move |event_ctx, _app| {
-            toggle_overrides.set(toggle_message_id.clone(), !collapsed);
+            toggle_states.set_collapsed(toggle_message_id.clone(), !collapsed);
             event_ctx.notify();
         },
     )
