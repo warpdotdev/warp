@@ -274,6 +274,42 @@ pub fn test_session_context_lists_directory_entries_remotely() {
     });
 }
 
+#[cfg(unix)]
+#[test]
+pub fn test_session_context_lists_directory_symlinks_remotely() {
+    App::test((), |app| async move {
+        VirtualFS::test(
+            "test_session_context_lists_directory_symlinks_remotely",
+            |dirs, mut sandbox| {
+                sandbox.mkdir("real_dir");
+                sandbox.touch(vec![Stub::EmptyFile("real_file")]);
+                sandbox.ln("real_dir", "dir_link");
+                sandbox.ln("real_file", "file_link");
+
+                let cwd = TypedPathBuf::from(dirs.tests().to_string_lossy().as_bytes());
+                let ctx = test_session_context(Session::test_remote(), cwd.clone(), &app);
+
+                let mut entries = HashSet::<EngineDirEntry>::from_iter(Arc::unwrap_or_clone(
+                    warpui::r#async::block_on(ctx.list_directory_entries(cwd)),
+                ));
+                // TODO(CORE-2000): The ls script we use to list entries in remote
+                // sessions adds a spurious "." directory when run in the VirtualFS.
+                // As a temporary workaround, we remove this file in the test.
+                entries.remove(&EngineDirEntry::test_dir("."));
+
+                assert_eq!(
+                    entries,
+                    HashSet::from_iter([
+                        EngineDirEntry::test_dir("dir_link"),
+                        EngineDirEntry::test_dir("real_dir"),
+                        EngineDirEntry::test_file("file_link"),
+                        EngineDirEntry::test_file("real_file"),
+                    ])
+                );
+            },
+        );
+    });
+}
 fn perform_special_characters_in_path_test(session: Session, file_names: Vec<&str>) {
     let file_names = file_names
         .iter()
