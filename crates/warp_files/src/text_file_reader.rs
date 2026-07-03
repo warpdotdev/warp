@@ -129,14 +129,15 @@ impl TextFileAccumulator {
     /// Emits a [`TextFileSegment`] for the current range (if non-empty, or if
     /// this is the final flush of a whole-file read) and resets per-range state.
     fn flush_range(&mut self, final_flush: bool) {
-        let should_emit = !self.buf.is_empty() || (final_flush && self.whole_file);
+        let should_emit =
+            !self.buf.is_empty() || self.truncated || (final_flush && self.whole_file);
 
         if should_emit {
             let range = self.effective_ranges[self.range_idx].clone();
             let line_range = if self.whole_file && !self.truncated {
                 None
             } else if self.truncated {
-                Some(range.start..self.last_line)
+                Some(range.start..self.last_line.max(range.start))
             } else {
                 Some(range)
             };
