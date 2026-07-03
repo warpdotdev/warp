@@ -20,8 +20,8 @@ use watcher::BulkFilesystemWatcherEvent;
 use crate::entry::{DirectoryEntry, Entry, FileMetadata};
 use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
 use crate::local_model::{
-    BuildTaskKey, GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoUpdate,
-    RepositoryMetadataEvent, RootWatchMode,
+    GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoUpdate, RepositoryMetadataEvent,
+    RootWatchMode,
 };
 use crate::repositories::DetectedRepositories;
 use crate::watcher::DirectoryWatcher;
@@ -36,7 +36,6 @@ impl LocalRepoMetadataModel {
             standing_results: HashMap::new(),
             lazy_loaded_paths: Default::default(),
             build_tasks: Default::default(),
-            next_build_task_generation: 0,
             #[cfg(feature = "local_fs")]
             watcher: Default::default(),
             emit_incremental_updates: false,
@@ -76,7 +75,7 @@ async fn await_build_tasks_for_repo(
             model
                 .build_tasks
                 .iter()
-                .filter(|(key, _)| key.repo_root() == repo_path)
+                .filter(|(path, _)| path.starts_with(repo_path))
                 .map(|(_, task)| task.handle.future_id())
                 .collect::<Vec<_>>()
         });
@@ -255,7 +254,6 @@ fn remove_repository_aborts_and_drops_build_tasks() {
             model
                 .repositories
                 .insert(repo_path.clone(), IndexedRepoState::pending());
-            let generation = model.next_build_task_generation();
             let handle = ctx.spawn(
                 async move {
                     let _ = release_rx.await;
@@ -263,18 +261,12 @@ fn remove_repository_aborts_and_drops_build_tasks() {
                 |_, _, _| {},
             );
             let future_id = handle.future_id();
-            model.track_build_task(
-                BuildTaskKey::Repository(repo_path.clone()),
-                generation,
-                handle,
-            );
+            model.track_build_task(repo_path.clone(), handle);
             future_id
         });
 
         model_handle.read(&app, |model, _ctx| {
-            assert!(model
-                .build_tasks
-                .contains_key(&BuildTaskKey::Repository(repo_path.clone())));
+            assert!(model.build_tasks.contains_key(&repo_path));
         });
 
         model_handle.update(&mut app, |model, ctx| {
@@ -288,24 +280,20 @@ fn remove_repository_aborts_and_drops_build_tasks() {
             .await;
 
         model_handle.read(&app, |model, _ctx| {
-            assert!(!model
-                .build_tasks
-                .contains_key(&BuildTaskKey::Repository(repo_path.clone())));
+            assert!(!model.build_tasks.contains_key(&repo_path));
         });
     });
 }
 
 #[test]
-fn stale_build_generation_does_not_finish_newer_task() {
+fn stale_build_future_id_does_not_finish_newer_task() {
     let repo_path = StandardizedPath::try_new("/repo_with_replaced_build").unwrap();
-    let task_key = BuildTaskKey::Repository(repo_path);
 
     App::test((), |mut app| async move {
         let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
         let (_old_release_tx, old_release_rx) = oneshot::channel::<()>();
         let (_new_release_tx, new_release_rx) = oneshot::channel::<()>();
         let (old_future_id, new_future_id) = model_handle.update(&mut app, |model, ctx| {
-            let old_generation = model.next_build_task_generation();
             let old_handle = ctx.spawn(
                 async move {
                     let _ = old_release_rx.await;
@@ -313,9 +301,9 @@ fn stale_build_generation_does_not_finish_newer_task() {
                 |_, _, _| {},
             );
             let old_future_id = old_handle.future_id();
-            model.track_build_task(task_key.clone(), old_generation, old_handle);
+            model.track_build_task(repo_path.clone(), old_handle);
+            model.abort_builds_for_repo(&repo_path);
 
-            let new_generation = model.next_build_task_generation();
             let new_handle = ctx.spawn(
                 async move {
                     let _ = new_release_rx.await;
@@ -323,18 +311,20 @@ fn stale_build_generation_does_not_finish_newer_task() {
                 |_, _, _| {},
             );
             let new_future_id = new_handle.future_id();
-            model.track_build_task(task_key.clone(), new_generation, new_handle);
+            model.track_build_task(repo_path.clone(), new_handle);
 
-            assert!(model.finish_build_task(&task_key, old_generation).is_none());
+            assert!(model
+                .finish_build_task(&repo_path, Some(old_future_id))
+                .is_none());
             let task = model
                 .build_tasks
-                .get(&task_key)
+                .get(&repo_path)
                 .expect("newer task should remain tracked");
-            assert_eq!(task.generation, new_generation);
+            assert_eq!(task.handle.future_id(), new_future_id);
 
             let task = model
-                .finish_build_task(&task_key, new_generation)
-                .expect("newer generation should finish");
+                .finish_build_task(&repo_path, Some(new_future_id))
+                .expect("newer task should finish");
             task.handle.abort();
             (old_future_id, new_future_id)
         });
@@ -800,7 +790,6 @@ fn test_index_directory_path_upgrades_pending_lazy_loaded_non_git_path() {
                         repo_root_for_index.clone(),
                         IndexedRepoState::pending(),
                     );
-                    let generation = model.next_build_task_generation();
                     let handle = ctx.spawn(
                         async move {
                             let _ = release_rx.await;
@@ -808,11 +797,7 @@ fn test_index_directory_path_upgrades_pending_lazy_loaded_non_git_path() {
                         |_, _, _| {},
                     );
                     let future_id = handle.future_id();
-                    model.track_build_task(
-                        BuildTaskKey::Repository(repo_root_for_index.clone()),
-                        generation,
-                        handle,
-                    );
+                    model.track_build_task(repo_root_for_index.clone(), handle);
                     future_id
                 });
 
@@ -822,9 +807,7 @@ fn test_index_directory_path_upgrades_pending_lazy_loaded_non_git_path() {
                         model.repository_state(&repo_root_for_index),
                         Some(IndexedRepoState::Pending(_))
                     ));
-                    assert!(model
-                        .build_tasks
-                        .contains_key(&BuildTaskKey::Repository(repo_root_for_index.clone())));
+                    assert!(model.build_tasks.contains_key(&repo_root_for_index));
                 });
 
                 model_handle.update(&mut app, |model, ctx| {
@@ -847,9 +830,7 @@ fn test_index_directory_path_upgrades_pending_lazy_loaded_non_git_path() {
                     assert!(state
                         .entry
                         .contains(&StandardizedPath::try_from_local(&source_file).unwrap()));
-                    assert!(!model
-                        .build_tasks
-                        .contains_key(&BuildTaskKey::Repository(repo_root_for_index.clone())));
+                    assert!(!model.build_tasks.contains_key(&repo_root_for_index));
                 });
             });
         },
@@ -2514,10 +2495,7 @@ fn load_directory_with_completion_coalesces_duplicate_inflight_load() {
                         .expect("duplicate load should wait for the in-flight task");
                     let task = model
                         .build_tasks
-                        .get(&BuildTaskKey::Directory {
-                            repo_root: root.clone(),
-                            dir_path: sub.clone(),
-                        })
+                        .get(&sub)
                         .expect("directory load should be tracked");
                     assert_eq!(task.completion_waiters.len(), 1);
                     (completion, duplicate_completion)
@@ -2530,10 +2508,7 @@ fn load_directory_with_completion_coalesces_duplicate_inflight_load() {
                 .expect("duplicate load should complete");
 
             model_handle.read(&app, |model, _ctx| {
-                assert!(!model.build_tasks.contains_key(&BuildTaskKey::Directory {
-                    repo_root: root.clone(),
-                    dir_path: sub.clone(),
-                }));
+                assert!(!model.build_tasks.contains_key(&sub));
             });
         });
     });

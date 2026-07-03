@@ -4,17 +4,19 @@
 //! This module provides a singleton model that manages repository metadata across
 //! all repositories tracked by Warp.
 
-use std::collections::HashMap;
 #[cfg(feature = "local_fs")]
-use std::collections::HashSet;
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "local_fs")]
+use std::rc::Rc;
 use std::sync::Arc;
 
 use futures::channel::oneshot;
 use futures::future::{self, BoxFuture, FutureExt as _};
 use warp_core::{safe_warn, send_telemetry_from_ctx};
 use warp_util::sync::Condition;
-use warpui_core::r#async::SpawnedFutureHandle;
+use warpui_core::r#async::{FutureId, SpawnedFutureHandle};
 use warpui_core::ModelHandle;
 
 /// Represents either a file or directory in a repository.
@@ -211,28 +213,7 @@ struct RepoWatch {
     extra_dirs: HashSet<StandardizedPath>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum BuildTaskKey {
-    Repository(StandardizedPath),
-    Directory {
-        repo_root: StandardizedPath,
-        dir_path: StandardizedPath,
-    },
-}
-
-impl BuildTaskKey {
-    fn repo_root(&self) -> &StandardizedPath {
-        match self {
-            Self::Repository(repo_root) | Self::Directory { repo_root, .. } => repo_root,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct BuildTaskGeneration(u64);
-
 struct BuildTask {
-    generation: BuildTaskGeneration,
     handle: SpawnedFutureHandle,
     completion_waiters: Vec<oneshot::Sender<Result<(), String>>>,
 }
@@ -251,9 +232,8 @@ pub struct LocalRepoMetadataModel {
     standing_results: HashMap<StandardizedPath, StandingQueryResults>,
     /// Refcounts for lazily-loaded standalone paths tracked in the model.
     lazy_loaded_paths: HashMap<StandardizedPath, usize>,
-    /// Spawned filesystem tree build tasks keyed by the tree target being built.
-    build_tasks: HashMap<BuildTaskKey, BuildTask>,
-    next_build_task_generation: u64,
+    /// Spawned filesystem tree build tasks keyed by the directory path being built.
+    build_tasks: HashMap<StandardizedPath, BuildTask>,
     /// File system watcher for monitoring changes.
     #[cfg(feature = "local_fs")]
     watcher: Option<ModelHandle<BulkFilesystemWatcher>>,
@@ -370,7 +350,6 @@ impl LocalRepoMetadataModel {
             standing_results: HashMap::new(),
             lazy_loaded_paths: HashMap::new(),
             build_tasks: HashMap::new(),
-            next_build_task_generation: 0,
             #[cfg(feature = "local_fs")]
             watcher: None,
             emit_incremental_updates: false,
@@ -736,22 +715,14 @@ impl LocalRepoMetadataModel {
         }
     }
 
-    fn next_build_task_generation(&mut self) -> BuildTaskGeneration {
-        let generation = BuildTaskGeneration(self.next_build_task_generation);
-        self.next_build_task_generation += 1;
-        generation
-    }
-
-    fn track_build_task(
-        &mut self,
-        key: BuildTaskKey,
-        generation: BuildTaskGeneration,
-        handle: SpawnedFutureHandle,
-    ) {
+    fn track_build_task(&mut self, path: StandardizedPath, handle: SpawnedFutureHandle) {
+        debug_assert!(
+            !self.build_tasks.contains_key(&path),
+            "duplicate build tasks should subscribe to the existing task or abort it first"
+        );
         if let Some(existing_task) = self.build_tasks.insert(
-            key,
+            path,
             BuildTask {
-                generation,
                 handle,
                 completion_waiters: Vec::new(),
             },
@@ -766,20 +737,22 @@ impl LocalRepoMetadataModel {
 
     fn finish_build_task(
         &mut self,
-        key: &BuildTaskKey,
-        generation: BuildTaskGeneration,
+        path: &StandardizedPath,
+        future_id: Option<FutureId>,
     ) -> Option<BuildTask> {
-        match self.build_tasks.get(key) {
-            Some(task) if task.generation == generation => self.build_tasks.remove(key),
+        match (future_id, self.build_tasks.get(path)) {
+            (Some(future_id), Some(task)) if task.handle.future_id() == future_id => {
+                self.build_tasks.remove(path)
+            }
             _ => None,
         }
     }
 
     fn subscribe_to_build_task(
         &mut self,
-        key: &BuildTaskKey,
+        path: &StandardizedPath,
     ) -> Option<oneshot::Receiver<Result<(), String>>> {
-        let task = self.build_tasks.get_mut(key)?;
+        let task = self.build_tasks.get_mut(path)?;
         let (completion_tx, completion_rx) = oneshot::channel();
         task.completion_waiters.push(completion_tx);
         Some(completion_rx)
@@ -807,14 +780,14 @@ impl LocalRepoMetadataModel {
     }
 
     fn abort_builds_for_repo(&mut self, repo_path: &StandardizedPath) {
-        let task_keys = self
+        let task_paths = self
             .build_tasks
             .keys()
-            .filter(|key| key.repo_root() == repo_path)
+            .filter(|path| path.starts_with(repo_path))
             .cloned()
             .collect::<Vec<_>>();
-        for key in task_keys {
-            if let Some(task) = self.build_tasks.remove(&key) {
+        for path in task_paths {
+            if let Some(task) = self.build_tasks.remove(&path) {
                 task.handle.abort();
                 Self::notify_completion_waiters(
                     task.completion_waiters,
@@ -1040,10 +1013,11 @@ impl LocalRepoMetadataModel {
         self.lazy_loaded_paths.insert(path.clone(), 1);
         self.replace_repository_state(path.clone(), IndexedRepoState::pending());
 
-        let task_key = BuildTaskKey::Repository(path.clone());
-        let task_generation = self.next_build_task_generation();
+        let task_path = path.clone();
+        let task_future_id = Rc::new(Cell::new(None));
         let path_for_build = path.clone();
-        let task_key_for_completion = task_key.clone();
+        let task_path_for_completion = task_path.clone();
+        let task_future_id_for_completion = task_future_id.clone();
         let force_included_paths = self.force_included_paths.clone();
         let standing_query_definitions = self.standing_query_definitions.clone();
         let build_handle = ctx.spawn(
@@ -1074,7 +1048,10 @@ impl LocalRepoMetadataModel {
             },
             move |model, (path, build_result, standing_results), ctx| {
                 if model
-                    .finish_build_task(&task_key_for_completion, task_generation)
+                    .finish_build_task(
+                        &task_path_for_completion,
+                        task_future_id_for_completion.get(),
+                    )
                     .is_none()
                 {
                     return;
@@ -1119,7 +1096,8 @@ impl LocalRepoMetadataModel {
                 }
             },
         );
-        self.track_build_task(task_key, task_generation, build_handle);
+        task_future_id.set(Some(build_handle.future_id()));
+        self.track_build_task(task_path, build_handle);
         Ok(())
     }
 
@@ -1169,11 +1147,8 @@ impl LocalRepoMetadataModel {
         dir_path: &StandardizedPath,
         ctx: &mut ModelContext<Self>,
     ) -> Result<BoxFuture<'static, Result<(), RepoMetadataError>>, RepoMetadataError> {
-        let task_key = BuildTaskKey::Directory {
-            repo_root: repo_root.clone(),
-            dir_path: dir_path.clone(),
-        };
-        if let Some(completion_rx) = self.subscribe_to_build_task(&task_key) {
+        let task_path = dir_path.clone();
+        if let Some(completion_rx) = self.subscribe_to_build_task(&task_path) {
             return Ok(Self::wait_for_build_task(completion_rx));
         }
 
@@ -1190,8 +1165,9 @@ impl LocalRepoMetadataModel {
         let dir_path_for_build = dir_path.to_local_path_lossy();
         let repo_root_for_build = repo_root.clone();
         let dir_path_for_completion = dir_path.clone();
-        let task_generation = self.next_build_task_generation();
-        let task_key_for_completion = task_key.clone();
+        let task_path_for_completion = task_path.clone();
+        let task_future_id = Rc::new(Cell::new(None));
+        let task_future_id_for_completion = task_future_id.clone();
         let (completion_tx, completion_rx) = oneshot::channel();
         let build_handle = ctx.spawn(
             async move {
@@ -1211,9 +1187,10 @@ impl LocalRepoMetadataModel {
                 (repo_root_for_build, dir_path_for_completion, result)
             },
             move |model, (repo_root, dir_path, build_result), ctx| {
-                let completion = if let Some(task) =
-                    model.finish_build_task(&task_key_for_completion, task_generation)
-                {
+                let completion = if let Some(task) = model.finish_build_task(
+                    &task_path_for_completion,
+                    task_future_id_for_completion.get(),
+                ) {
                     let completion = match build_result {
                         Ok(entry) => {
                             if let Some(IndexedRepoState::Indexed(state)) =
@@ -1258,7 +1235,8 @@ impl LocalRepoMetadataModel {
                 let _ = completion_tx.send(completion);
             },
         );
-        self.track_build_task(task_key, task_generation, build_handle);
+        task_future_id.set(Some(build_handle.future_id()));
+        self.track_build_task(task_path, build_handle);
         Ok(async move {
             completion_rx
                 .await
@@ -1782,8 +1760,8 @@ impl LocalRepoMetadataModel {
         // Collect gitignore files from the repository
         let gitignores = gitignores_for_directory(&local_path);
         self.abort_builds_for_repo(&std_path);
-        let task_key = BuildTaskKey::Repository(std_path.clone());
-        let task_generation = self.next_build_task_generation();
+        let task_path = std_path.clone();
+        let task_future_id = Rc::new(Cell::new(None));
 
         // Mark the repository as pending to prevent duplicate work. When upgrading an
         // already-pending lazy build, keep the existing condition so waiters continue waiting for
@@ -1805,7 +1783,8 @@ impl LocalRepoMetadataModel {
         let standing_query_definitions = self.standing_query_definitions.clone();
         let repo_path_str_for_log = std_path.to_string();
         let std_path_for_completion = std_path.clone();
-        let task_key_for_completion = task_key.clone();
+        let task_path_for_completion = task_path.clone();
+        let task_future_id_for_completion = task_future_id.clone();
         let repository_handle_for_completion = repository_handle.clone();
 
         let build_handle = ctx.spawn(
@@ -1868,7 +1847,10 @@ impl LocalRepoMetadataModel {
                   ): (Result<Entry, _>, Vec<crate::entry::FileMetadata>, _, String, StandardizedPath, ModelHandle<Repository>, bool, StandingQueryResults),
                   ctx| {
                 if model
-                    .finish_build_task(&task_key_for_completion, task_generation)
+                    .finish_build_task(
+                        &task_path_for_completion,
+                        task_future_id_for_completion.get(),
+                    )
                     .is_none()
                 {
                     return;
@@ -1919,7 +1901,8 @@ impl LocalRepoMetadataModel {
                 }
             },
         );
-        self.track_build_task(task_key, task_generation, build_handle);
+        task_future_id.set(Some(build_handle.future_id()));
+        self.track_build_task(task_path, build_handle);
 
         Ok(())
     }
