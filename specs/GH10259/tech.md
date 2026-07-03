@@ -49,13 +49,27 @@ In `crates/markdown_parser/src/html_parser.rs`, handle `details`/`summary` eleme
 
 ### 4. Rendering and editor mapping
 
-In `crates/editor/src/content/markdown.rs`:
+The buffer round-trip follows the `FormattedTable` mechanism exactly. Tables survive the flat buffer model as dedicated internal code blocks (`TABLE_BLOCK_MARKDOWN_LANG = "warp-markdown-table"`, markdown_parser.rs:39, with `to_internal_format`/`from_internal_format`, lib.rs:361-430); details blocks get the analogous `DETAILS_BLOCK_MARKDOWN_LANG = "warp-markdown-details"` internal representation:
 
-- New `BufferBlockStyle::Details { default_open }` mapping, with the summary as the block's first line and body lines following, mirroring how `Table` blocks carry structured payloads.
-- Serialization back to markdown (`to_markdown`) emits `<details>`/`<summary>` markup, adding ` open` when `default_open` (invariant 10).
+- **Internal format**: line 1 is a header carrying the `open` flag and the summary serialized as inline markdown (tab-separated, like the table format); lines 2..N are the body's markdown source verbatim — including any nested `<details>` markup as literal text. `FormattedDetails::to_internal_format`/`from_internal_format` in `crates/markdown_parser/src/lib.rs` own this, mirroring `FormattedTable`.
+- **Boundaries**: the enclosing internal code block's fence delimits the details region in the buffer, so body boundaries are exact regardless of body content. When the body itself contains code fences, the outer fence uses the standard CommonMark longer-fence rule (as `to_markdown` already must for code blocks).
+- **Nesting**: nested details exist inside the buffer only as literal markdown text within the parent's internal block; they are re-materialized by `parse_markdown` on conversion back to `FormattedText` (`from_internal_format` → recursive parse, subject to the same `MAX_DETAILS_DEPTH`). This means nesting depth never multiplies buffer block types and the flat buffer model is untouched.
+- In `crates/editor/src/content/markdown.rs`: `to_formatted_text` (lines ~416-520) maps `warp-markdown-details` code blocks to `FormattedTextLine::Details`, exactly where `BufferBlockStyle::Table` is handled today (line ~489); `to_markdown` (lines ~61-160) emits `<details>`/`<summary>` markup, adding ` open` when `default_open` (invariant 10).
 - The disclosure widget itself (collapse/expand, focus, click, Enter/Space handling, renderer-generated accessibility IDs) lives in the block renderer layer. Open/collapsed is per-view UI state initialized from `default_open`, not part of `FormattedDetails` equality — so toggling does not dirty the text delta.
 
-**Open question for maintainers:** whether the renderer should reuse the existing block-folding interaction machinery (as used for command blocks) or introduce a dedicated disclosure component; the spec constrains behavior (product invariants 1-3, 11), not the component choice. Similarly, the exact list of non-interactive preview call sites (invariant 11) needs a maintainer-confirmed enumeration; candidates are the conversation/agent-history preview renderers that already render markdown without hit-testing.
+### 5. Rendering surfaces (product invariant 11)
+
+`FormattedTextLine::Details` flows to every `parse_markdown` consumer; the rendering tier is decided per surface, with the static fallback as the default so no consumer renders in an undefined state.
+
+**Interactive tier (initial implementation)** — the agent conversation block path: `app/src/ai/agent/util.rs:35` (`parse_markdown_into_text_and_code_sections`, via `parse_markdown_with_gfm_tables` at util.rs:189). This is where agent output renders and where the disclosure widget is implemented.
+
+**Static-fallback tier** — all other current `parse_markdown` call sites render summary-then-body expanded with no widget. Enumerated at time of writing:
+- `app/src/ai/blocklist/inline_action/inline_action_header.rs:232` (action titles), `.../requested_command_attribution.rs:60`, `.../ask_user_question_view.rs:1913` (option text), `app/src/ai/blocklist/block/numbered_button.rs:151` (button labels) — single-line label contexts; a block-level details cannot meaningfully collapse here.
+- `app/src/ai/blocklist/agent_view/zero_state_block.rs:628`, `app/src/changelog_model.rs:83,188`, `app/src/settings_view/mcp_servers/installation_modal.rs:334`, `app/src/workspace/view/launch_modal/mod.rs:406`, `app/src/ai_assistant/utils.rs:403` — static content panels.
+
+Promoting any fallback surface to the interactive tier later is additive and needs no parser or spec change.
+
+**Open question for maintainers:** whether the interactive tier reuses the existing block-folding interaction machinery (as used for command blocks) or introduces a dedicated disclosure component — the spec constrains behavior (product invariants 1-3, 11), not the component choice.
 
 ### Tradeoffs considered
 
@@ -75,10 +89,13 @@ Unit tests in `crates/markdown_parser/src/markdown_parser_tests.rs` (parser) and
 | 6 | depth 9 falls back to plain text; depth 8 still renders; content identical either way (`raw_text` equality) |
 | 7 | 512th widget renders, 513th falls back; deterministic across repeated parses |
 | 8a | unclosed `<details>` consumes to end of input; unclosed nested consumes to parent close |
-| 8b | stray `</details>` / `<summary>` render as plain text (existing-behavior regression test) |
+| 8b | stray `</details>` / `<summary>` outside a details body render as plain text (existing-behavior regression test) |
 | 8c | mid-line `<details>` stays plain text |
+| 8d | unclosed `<summary>` consumes the rest of the details body as summary; body empty; `raw_text` preserved |
+| 8e | `</summary>` without opener inside a body renders as body plain text |
+| 8f | `<summary>` attributes ignored; multi-line summary collapses line breaks; code fence / nested `<details>` inside summary render as literal inline text |
 | 9 | `raw_text()` includes summary + body; `LineCount` independent of open state |
-| 10 | markdown round-trip preserves tags and `open` attribute (editor `to_markdown` test) |
+| 10 | markdown round-trip preserves tags and `open` attribute (editor `to_markdown` test); `warp-markdown-details` internal format round-trips `FormattedDetails` including a nested details (parse → buffer → markdown → parse equality) |
 | 12 | `compute_formatted_text_delta` over successive streaming snapshots keeps `common_prefix_lines` stable for lines above the details block |
 
 Interaction/accessibility invariants (3, 11) are validated with renderer-level tests in the block renderer's existing test harness, plus manual testing evidence (screen recording of toggle via mouse and keyboard, VoiceOver announcement) attached to the implementation PR as required by CONTRIBUTING.md.
