@@ -22,11 +22,14 @@ Add to `crates/markdown_parser/src/lib.rs`:
 ```rust
 pub struct FormattedDetails {
     pub summary: FormattedTextInline,     // parsed inline markdown; "Details" literal if absent
-    pub body: FormattedText,              // recursively parsed markdown
+    pub body: FormattedText,              // recursively parsed markdown (rendering model)
+    pub body_source: String,              // verbatim markdown source of the body (serialization model)
     pub default_open: bool,               // `open` attribute present
 }
 // FormattedTextLine::Details(FormattedDetails)
 ```
+
+`body_source` is the verbatim input slice between the end of the summary and the closing tag. It exists so the buffer/markdown round-trip (§4) serializes the body exactly, without reconstructing markdown from parsed `FormattedText`; `body` is derived from it (`parse_markdown(body_source)`) and used only for rendering. Cost: one extra copy of the body text per details block, bounded by input size. `PartialEq` derives over all fields; equal `body_source` implies equal `body`, so streaming delta comparisons stay consistent.
 
 The whole `<details>…</details>` region becomes a single `FormattedTextLine`, like `Table`. Rationale over start/end marker lines: markers would let intervening edits produce unbalanced documents, and every renderer/serializer consumer would need to track container state; a single variant keeps the flat model's invariants intact.
 
@@ -39,7 +42,7 @@ The whole `<details>…</details>` region becomes a single `FormattedTextLine`, 
 Add `parse_details` to the `alt((...))` block chain in `crates/markdown_parser/src/markdown_parser.rs`, before `parse_paragraph`:
 
 - Matches only at block start (spec invariant 8c): optional leading spaces, `<details` + optional attributes (`open` recognized, others ignored) + `>`.
-- Scans forward for the matching `</details>` with a tag-balance counter; on success, extracts the first top-level `<summary>…</summary>` (invariant 4) and recursively calls `parse_markdown` on the body with a `depth` parameter.
+- **Fence-aware matching (invariant 8g)**: the closing `</details>` is not found by raw text scan. The body region is delimited line-by-line with the same fence tracking the block parser already performs: the delimiter walks lines, toggling an in-fence flag on code-fence lines (the ` ``` `/`~~~` recognition `parse_code_block` uses), and recognizes `<details`/`</details>` tags only on lines outside a fence and only at line start. Tags on fenced lines are body content and never affect the balance counter. The verbatim region so delimited becomes `body_source`; `parse_markdown` is then applied to it recursively with a `depth` parameter. Extracting the first top-level `<summary>…</summary>` (invariant 4) happens on the same fence-aware walk.
 - Depth and count limits (invariants 6-7): `const MAX_DETAILS_DEPTH: usize = 8; const MAX_DETAILS_PER_DOC: usize = 512;` threaded through the existing parse context. On exceeding either, the branch returns `nom::Err::Error` so the input deterministically falls through to `parse_paragraph` (plain text) — no panic path, bounded recursion.
 - Unclosed `<details>` (invariant 8a): treat rest of the current parse input as body. Because parsing is re-run on streaming updates, a still-streaming block naturally renders progressively (invariant 12); `compute_formatted_text_delta` sees the growing `Details` line as the changed suffix, so preceding lines keep their prefix identity.
 
@@ -59,15 +62,14 @@ The buffer round-trip follows the `FormattedTable` mechanism exactly. Tables sur
 
 ### 5. Rendering surfaces (product invariant 11)
 
-`FormattedTextLine::Details` flows to every `parse_markdown` consumer; the rendering tier is decided per surface, with the static fallback as the default so no consumer renders in an undefined state.
+The static fallback is not an enumerated per-surface obligation — it is implemented once, at the two sinks all consumers render through, so every current and future consumer gets defined behavior by construction:
 
-**Interactive tier (initial implementation)** — the agent conversation block path: `app/src/ai/agent/util.rs:35` (`parse_markdown_into_text_and_code_sections`, via `parse_markdown_with_gfm_tables` at util.rs:189). This is where agent output renders and where the disclosure widget is implemented.
+1. **`FormattedTextElement`** (`crates/warpui_core/src/elements/gui/formatted_text_element.rs:144`) — the shared GUI element that lays out `FormattedText` for the app's markdown surfaces (modals, banners, changelog, settings pages, conversation list, etc.). It gains layout for the `Details` variant: summary line, then body lines, expanded, no disclosure indicator — the invariant-11 fallback. The interactive widget is an opt-in builder method on this element (consistent with its existing `with_*`/`disable_mouse_interaction` builder API), enabled only by the agent conversation block path (`app/src/ai/agent/util.rs:35`, `parse_markdown_into_text_and_code_sections` via `parse_markdown_with_gfm_tables` at util.rs:189).
+2. **The editor buffer conversion** (`crates/editor/src/content/markdown.rs`) — consumers that push `FormattedText` into editor buffers get the §4 `warp-markdown-details` mapping.
 
-**Static-fallback tier** — all other current `parse_markdown` call sites render summary-then-body expanded with no widget. Enumerated at time of writing:
-- `app/src/ai/blocklist/inline_action/inline_action_header.rs:232` (action titles), `.../requested_command_attribution.rs:60`, `.../ask_user_question_view.rs:1913` (option text), `app/src/ai/blocklist/block/numbered_button.rs:151` (button labels) — single-line label contexts; a block-level details cannot meaningfully collapse here.
-- `app/src/ai/blocklist/agent_view/zero_state_block.rs:628`, `app/src/changelog_model.rs:83,188`, `app/src/settings_view/mcp_servers/installation_modal.rs:334`, `app/src/workspace/view/launch_modal/mod.rs:406`, `app/src/ai_assistant/utils.rs:403` — static content panels.
+Additionally, adding a variant to `FormattedTextLine` is a compile-time forcing function: every exhaustive `match` on the enum fails to compile until the new variant is handled, so no consumer can silently mis-render. The implementation audits the non-parser match sites (57 non-test files reference `FormattedTextLine` outside `crates/markdown_parser` at time of writing) and routes each to sink 1 or 2; sites that only pattern-match specific variants (e.g. hyperlink extraction) need no change.
 
-Promoting any fallback surface to the interactive tier later is additive and needs no parser or spec change.
+For completeness, the current non-test `parse_markdown`/`parse_markdown_with_gfm_tables` call sites (18 files): `app/src/ai/agent/{mod,util}.rs`, `app/src/ai/blocklist/agent_view/zero_state_block.rs`, `app/src/ai/blocklist/block/numbered_button.rs`, `app/src/ai/blocklist/inline_action/{ask_user_question_view,inline_action_header,requested_command_attribution}.rs`, `app/src/ai_assistant/utils.rs`, `app/src/changelog_model.rs`, `app/src/code/language_server_extension.rs`, `app/src/notebooks/{editor/view,mod}.rs`, `app/src/settings_view/mcp_servers/installation_modal.rs`, `app/src/terminal/cli_agent.rs`, `app/src/workspace/view/launch_modal/mod.rs`, `crates/editor/src/content/text.rs`, `crates/editor/src/model.rs`, `crates/warpui/examples/formatted-text/root_view.rs`. Only the agent path opts into the widget; the rest render through the sinks above. Promoting any surface to the interactive tier later is additive and needs no parser or spec change.
 
 **Open question for maintainers:** whether the interactive tier reuses the existing block-folding interaction machinery (as used for command blocks) or introduces a dedicated disclosure component — the spec constrains behavior (product invariants 1-3, 11), not the component choice.
 
@@ -94,8 +96,9 @@ Unit tests in `crates/markdown_parser/src/markdown_parser_tests.rs` (parser) and
 | 8d | unclosed `<summary>` consumes the rest of the details body as summary; body empty; `raw_text` preserved |
 | 8e | `</summary>` without opener inside a body renders as body plain text |
 | 8f | `<summary>` attributes ignored; multi-line summary collapses line breaks; code fence / nested `<details>` inside summary render as literal inline text |
+| 8g | `</details>` / `<details>` / `<summary>` inside a fenced code block in the body are code content: balance unchanged, tags appear verbatim in the rendered code block; `</details>` mid-paragraph does not close the container |
 | 9 | `raw_text()` includes summary + body; `LineCount` independent of open state |
-| 10 | markdown round-trip preserves tags and `open` attribute (editor `to_markdown` test); `warp-markdown-details` internal format round-trips `FormattedDetails` including a nested details (parse → buffer → markdown → parse equality) |
+| 10 | markdown round-trip preserves tags and `open` attribute (editor `to_markdown` test); `warp-markdown-details` internal format round-trips `FormattedDetails` byte-exactly via `body_source`, including a nested details and a body containing code fences (parse → buffer → markdown → parse equality) |
 | 12 | `compute_formatted_text_delta` over successive streaming snapshots keeps `common_prefix_lines` stable for lines above the details block |
 
 Interaction/accessibility invariants (3, 11) are validated with renderer-level tests in the block renderer's existing test harness, plus manual testing evidence (screen recording of toggle via mouse and keyboard, VoiceOver announcement) attached to the implementation PR as required by CONTRIBUTING.md.
