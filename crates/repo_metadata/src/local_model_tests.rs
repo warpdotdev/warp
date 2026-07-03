@@ -40,6 +40,8 @@ impl LocalRepoMetadataModel {
             lazy_loaded_paths: Default::default(),
             build_tasks: Default::default(),
             #[cfg(feature = "local_fs")]
+            watcher_update_tasks: Default::default(),
+            #[cfg(feature = "local_fs")]
             watcher: Default::default(),
             emit_incremental_updates: false,
             force_included_paths: Default::default(),
@@ -284,6 +286,74 @@ fn remove_repository_aborts_and_drops_build_tasks() {
 
         model_handle.read(&app, |model, _ctx| {
             assert!(!model.build_tasks.contains_key(&repo_path));
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn remove_repository_aborts_and_drops_watcher_update_tasks() {
+    let repo_path = StandardizedPath::try_new("/watcher_update_removed_repo").unwrap();
+
+    App::test((), |mut app| async move {
+        let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+        let (_first_release_tx, first_release_rx) = oneshot::channel::<()>();
+        let (_second_release_tx, second_release_rx) = oneshot::channel::<()>();
+        let (first_future_id, second_future_id) = model_handle.update(&mut app, |model, ctx| {
+            model.repositories.insert(
+                repo_path.clone(),
+                IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+            );
+
+            let first_handle = ctx.spawn(
+                async move {
+                    let _ = first_release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let first_future_id = first_handle.future_id();
+            model.track_watcher_update_task(repo_path.clone(), first_handle);
+
+            let second_handle = ctx.spawn(
+                async move {
+                    let _ = second_release_rx.await;
+                },
+                |_, _, _| {},
+            );
+            let second_future_id = second_handle.future_id();
+            model.track_watcher_update_task(repo_path.clone(), second_handle);
+
+            (first_future_id, second_future_id)
+        });
+
+        model_handle.read(&app, |model, _ctx| {
+            assert_eq!(
+                model
+                    .watcher_update_tasks
+                    .get(&repo_path)
+                    .expect("watcher tasks should be tracked")
+                    .len(),
+                2
+            );
+        });
+
+        model_handle.update(&mut app, |model, ctx| {
+            model
+                .remove_repository(&repo_path, ctx)
+                .expect("repository should be removed");
+        });
+
+        model_handle
+            .update(&mut app, |_, ctx| ctx.await_spawned_future(first_future_id))
+            .await;
+        model_handle
+            .update(&mut app, |_, ctx| {
+                ctx.await_spawned_future(second_future_id)
+            })
+            .await;
+
+        model_handle.read(&app, |model, _ctx| {
+            assert!(!model.watcher_update_tasks.contains_key(&repo_path));
         });
     });
 }

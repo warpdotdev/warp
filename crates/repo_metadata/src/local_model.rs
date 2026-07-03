@@ -234,6 +234,9 @@ pub struct LocalRepoMetadataModel {
     lazy_loaded_paths: HashMap<StandardizedPath, usize>,
     /// Spawned filesystem tree build tasks keyed by the directory path being built.
     build_tasks: HashMap<StandardizedPath, BuildTask>,
+    /// Spawned watcher update tasks keyed by repository root, then spawned future.
+    #[cfg(feature = "local_fs")]
+    watcher_update_tasks: HashMap<StandardizedPath, HashMap<FutureId, SpawnedFutureHandle>>,
     /// File system watcher for monitoring changes.
     #[cfg(feature = "local_fs")]
     watcher: Option<ModelHandle<BulkFilesystemWatcher>>,
@@ -350,6 +353,8 @@ impl LocalRepoMetadataModel {
             standing_results: HashMap::new(),
             lazy_loaded_paths: HashMap::new(),
             build_tasks: HashMap::new(),
+            #[cfg(feature = "local_fs")]
+            watcher_update_tasks: HashMap::new(),
             #[cfg(feature = "local_fs")]
             watcher: None,
             emit_incremental_updates: false,
@@ -603,7 +608,10 @@ impl LocalRepoMetadataModel {
                 let force_included_paths = self.force_included_paths.clone();
                 let standing_query_definitions = self.standing_query_definitions.clone();
                 let lazy_load = self.lazy_loaded_paths.contains_key(&repo_path);
-                std::mem::drop(ctx.spawn(
+                let task_repo_path = repo_path.clone();
+                let task_future_id = Rc::new(Cell::new(None));
+                let task_future_id_for_completion = task_future_id.clone();
+                let update_handle = ctx.spawn(
                     async move {
                         let (mutations, standing_results, removed_roots) =
                             Self::compute_file_tree_mutations(
@@ -625,6 +633,16 @@ impl LocalRepoMetadataModel {
                     move |model,
                           (mutations, discovered_results, removed_roots, repo_path, lazy_load),
                           ctx| {
+                        if model
+                            .finish_watcher_update_task(
+                                &repo_path,
+                                task_future_id_for_completion.get(),
+                            )
+                            .is_none()
+                        {
+                            return;
+                        }
+
                         if let Some(IndexedRepoState::Indexed(state)) =
                             model.repositories.get_mut(&repo_path)
                         {
@@ -668,7 +686,9 @@ impl LocalRepoMetadataModel {
                             model.unwatch_removed_subtree(&repo_path, removed, ctx);
                         }
                     },
-                ));
+                );
+                task_future_id.set(Some(update_handle.future_id()));
+                self.track_watcher_update_task(task_repo_path, update_handle);
             }
         }
     }
@@ -779,6 +799,58 @@ impl LocalRepoMetadataModel {
         }
     }
 
+    #[cfg(feature = "local_fs")]
+    fn track_watcher_update_task(
+        &mut self,
+        repo_path: StandardizedPath,
+        handle: SpawnedFutureHandle,
+    ) {
+        let future_id = handle.future_id();
+        if let Some(existing_task) = self
+            .watcher_update_tasks
+            .entry(repo_path)
+            .or_default()
+            .insert(future_id, handle)
+        {
+            existing_task.abort();
+        }
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn finish_watcher_update_task(
+        &mut self,
+        repo_path: &StandardizedPath,
+        future_id: Option<FutureId>,
+    ) -> Option<SpawnedFutureHandle> {
+        let future_id = future_id?;
+        let (handle, remove_repo_entry) = {
+            let tasks = self.watcher_update_tasks.get_mut(repo_path)?;
+            let handle = tasks.remove(&future_id)?;
+            (handle, tasks.is_empty())
+        };
+        if remove_repo_entry {
+            self.watcher_update_tasks.remove(repo_path);
+        }
+        Some(handle)
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn abort_watcher_update_tasks_for_repo(&mut self, repo_path: &StandardizedPath) {
+        let task_repo_paths = self
+            .watcher_update_tasks
+            .keys()
+            .filter(|path| path.starts_with(repo_path))
+            .cloned()
+            .collect::<Vec<_>>();
+        for task_repo_path in task_repo_paths {
+            if let Some(tasks) = self.watcher_update_tasks.remove(&task_repo_path) {
+                for handle in tasks.into_values() {
+                    handle.abort();
+                }
+            }
+        }
+    }
+
     fn abort_builds_for_repo(&mut self, repo_path: &StandardizedPath) {
         let task_paths = self
             .build_tasks
@@ -795,6 +867,8 @@ impl LocalRepoMetadataModel {
                 );
             }
         }
+        #[cfg(feature = "local_fs")]
+        self.abort_watcher_update_tasks_for_repo(repo_path);
     }
 
     /// Adds or updates a repository's file tree state.
